@@ -120,6 +120,79 @@ export interface POSInterfaceProps {
    productPrices?: ProductPrice[];
 }
 
+type ProductionAreaConfig = {
+   id: string;
+   nombre?: string;
+   modo_salida?: 'KDS' | 'PRINTER' | 'AMBOS' | string;
+   target_terminal_id?: string;
+   kds_host?: string;
+   kds_port?: string | number;
+   printer_ip?: string;
+};
+
+const DEFAULT_KDS_PORT = '8001';
+
+const normalizeProductionMode = (value: unknown): 'KDS' | 'PRINTER' | 'AMBOS' => {
+   const normalized = String(value || '').trim().toUpperCase();
+   if (normalized === 'PRINTER' || normalized === 'TICKET') return 'PRINTER';
+   if (normalized === 'AMBOS' || normalized === 'BOTH') return 'AMBOS';
+   return 'KDS';
+};
+
+const buildKdsBaseUrl = (area: ProductionAreaConfig): string | null => {
+   const rawHost = String(area.kds_host || '').trim();
+   if (!rawHost) return null;
+
+   if (/^https?:\/\//i.test(rawHost)) {
+      return rawHost.replace(/\/+$/, '');
+   }
+
+   const host = rawHost.replace(/^\/+|\/+$/g, '');
+   const port = String(area.kds_port || DEFAULT_KDS_PORT).trim();
+   const hasExplicitPort = /:\d+$/.test(host);
+   return `http://${host}${hasExplicitPort ? '' : `:${port}`}`;
+};
+
+const postJsonWithTimeout = async (url: string, payload: unknown, timeoutMs = 5000) => {
+   const controller = new AbortController();
+   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
+   try {
+      const response = await fetch(url, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify(payload),
+         signal: controller.signal,
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+         throw new Error(data?.message || data?.error || `HTTP ${response.status}`);
+      }
+      return data;
+   } finally {
+      window.clearTimeout(timeoutId);
+   }
+};
+
+const queuePendingKdsDispatch = async (payload: Record<string, unknown>) => {
+   try {
+      const existing = await db.get('kdsDispatchQueue' as any).catch(() => []) as any;
+      const queue = Array.isArray(existing) ? existing : [];
+      await db.save('kdsDispatchQueue' as any, [
+         ...queue,
+         {
+            id: `kdsq_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            status: 'PENDING',
+            attempts: 0,
+            createdAt: new Date().toISOString(),
+            ...payload,
+         }
+      ]);
+   } catch (error) {
+      console.warn('No se pudo guardar la comanda KDS pendiente:', error);
+   }
+};
+
 const productSalesIdentityKey = (product: Product): string => {
    const operationalId = resolveOperationalProductId(product);
    if (operationalId) return `op:${operationalId}`;
@@ -2974,37 +3047,123 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const orderId = activeTable?.currentOrderId || `P-${Date.now()}`;
 
       try {
-         // 1. Group items by production area for separate tickets
-         const areas: Record<string, { title: string, items: CartItem[] }> = {};
-         newItems.forEach(item => {
-            const areaId = item.production_area_id || 'GENERAL';
-            const targetAreas = areaId === 'MIXTO' ? ['COCINA', 'BAR'] : [areaId];
+         const configuredAreas = await db.get('productionAreas' as any).catch(() => []) as any;
+         const productionAreas: ProductionAreaConfig[] = Array.isArray(configuredAreas) ? configuredAreas : [];
+         const areaById = new Map(productionAreas.map(area => [String(area.id), area]));
 
-            targetAreas.forEach(tid => {
-               if (!areas[tid]) {
-                  areas[tid] = {
-                     title: tid === 'COCINA' ? 'COCINA' : tid === 'BAR' ? 'BAR' : tid === 'KDS' ? 'KDS / COCINA' : 'ORDEN',
-                     items: []
-                  };
-               }
-               areas[tid].items.push(item);
-            });
+         // 1. Group only routed items by production area for separate tickets/KDS screens.
+         const areas: Record<string, { area: ProductionAreaConfig, title: string, items: CartItem[] }> = {};
+         newItems.forEach(item => {
+            const areaId = String(item.production_area_id || '').trim();
+            if (!areaId) return;
+
+            const configuredArea = areaById.get(areaId);
+            if (!configuredArea) {
+               console.warn('[KDS] Producto con centro de producción no configurado en POS:', {
+                  itemId: item.id,
+                  itemName: item.name,
+                  areaId,
+               });
+               return;
+            }
+
+            if (!areas[areaId]) {
+               areas[areaId] = {
+                  area: configuredArea,
+                  title: configuredArea.nombre || areaId,
+                  items: []
+               };
+            }
+            areas[areaId].items.push(item);
          });
 
-         // 2. Print physical tickets per area
+         const areaEntries = Object.entries(areas);
+         if (areaEntries.length === 0) {
+            alert("No hay ítems con centro de producción configurado para enviar.");
+            return;
+         }
+
+         let printedCount = 0;
+         let sentKdsCount = 0;
+         let queuedKdsCount = 0;
+         const dispatchedCartIds = new Set<string>();
+
+         // 2. Print and/or send to KDS per configured area.
          for (const [areaId, areaData] of Object.entries(areas)) {
-            await printComanda(config, {
-               items: areaData.items,
-               table: activeTable || undefined,
-               orderNumber: orderId,
-               customerName: selectedCustomer?.name,
-               areaTitle: areaData.title,
-               productionAreaId: areaId
+            const mode = normalizeProductionMode(areaData.area.modo_salida);
+            const shouldPrint = mode === 'PRINTER' || mode === 'AMBOS';
+            const shouldSendKds = mode === 'KDS' || mode === 'AMBOS';
+
+            if (shouldPrint) {
+               const printed = await printComanda(config, {
+                  items: areaData.items,
+                  table: activeTable || undefined,
+                  orderNumber: orderId,
+                  customerName: selectedCustomer?.name,
+                  areaTitle: areaData.title,
+                  productionAreaId: areaId
+               });
+               if (printed) printedCount += 1;
+            }
+
+            if (shouldSendKds) {
+               const kdsBaseUrl = buildKdsBaseUrl(areaData.area);
+               const kdsPayload = {
+                  orderId,
+                  displayId: orderId,
+                  date: new Date().toISOString(),
+                  terminalId: activeTerminalId,
+                  userName: currentUser.name,
+                  customerName: selectedCustomer?.name || 'Cliente General',
+                  table: activeTable ? {
+                     id: activeTable.id,
+                     name: activeTable.name || activeTable.nombre,
+                  } : null,
+                  area: {
+                     id: areaId,
+                     name: areaData.title,
+                     targetTerminalId: areaData.area.target_terminal_id || null,
+                  },
+                  items: areaData.items,
+               };
+
+               if (!kdsBaseUrl) {
+                  queuedKdsCount += 1;
+                  await queuePendingKdsDispatch({
+                     reason: 'KDS_HOST_NOT_CONFIGURED',
+                     areaId,
+                     areaName: areaData.title,
+                     payload: kdsPayload,
+                  });
+               } else {
+                  try {
+                     const endpoint = `${kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(orderId)}`;
+                     await postJsonWithTimeout(endpoint, kdsPayload);
+                     sentKdsCount += 1;
+                  } catch (kdsError: any) {
+                     queuedKdsCount += 1;
+                     console.warn('[KDS] No se pudo enviar comanda al KDS LAN:', kdsError);
+                     await queuePendingKdsDispatch({
+                        reason: kdsError?.message || 'KDS_UNREACHABLE',
+                        kdsBaseUrl,
+                        areaId,
+                        areaName: areaData.title,
+                        payload: kdsPayload,
+                     });
+                  }
+               }
+            }
+
+            areaData.items.forEach(item => {
+               dispatchedCartIds.add(item.cartId || `${item.id}:${item.name}`);
             });
          }
 
          // 3. Mark items as dispatched in state
-         const updatedCart = cart.map(item => ({ ...item, dispatched: true }));
+         const updatedCart = cart.map(item => {
+            const key = item.cartId || `${item.id}:${item.name}`;
+            return dispatchedCartIds.has(key) ? { ...item, dispatched: true } : item;
+         });
          onUpdateCart(updatedCart);
 
          // 4. Save state to DB (Parking)
@@ -3012,21 +3171,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             await handleParkCurrentTicket();
          }
 
-         // 5. Send to KDS (If available)
-         try {
-            const response = await fetch(`http://localhost:8001/api/ordenes/enviar-comanda/${orderId}`, {
-               method: 'POST',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ items: newItems })
-            });
-            const result = await response.json();
-            if (result.status === 'success') {
-               setSuccessToast(`Comanda enviada a Cocina/Bar`);
-            }
-         } catch (kdsError) {
-            console.warn("KDS Service not available, but physical tickets printed.");
-            setSuccessToast(`Tickets impresos (KDS Offline)`);
-         }
+         const parts = [
+            printedCount > 0 ? `${printedCount} ticket(s)` : '',
+            sentKdsCount > 0 ? `${sentKdsCount} KDS` : '',
+            queuedKdsCount > 0 ? `${queuedKdsCount} KDS pendiente(s)` : '',
+         ].filter(Boolean);
+         setSuccessToast(parts.length > 0 ? `Comanda procesada: ${parts.join(' · ')}` : 'Comanda procesada');
 
       } catch (e) {
          console.error("Dispatch error:", e);

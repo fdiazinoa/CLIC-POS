@@ -9,6 +9,8 @@ interface ProductionArea {
     nombre: string;
     modo_salida: 'KDS' | 'PRINTER' | 'AMBOS';
     target_terminal_id?: string;
+    kds_host?: string;
+    kds_port?: string;
     printer_ip?: string;
 }
 
@@ -136,7 +138,8 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
         const newArea: ProductionArea = {
             id: `pa_${Date.now()}`,
             nombre: 'Nueva Área',
-            modo_salida: 'KDS'
+            modo_salida: 'KDS',
+            kds_port: '8001'
         };
         setAreas([...areas, newArea]);
     };
@@ -161,7 +164,11 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
         try {
             const normalizedArea: ProductionArea = {
                 ...area,
-                nombre: area.nombre?.trim() || 'Nueva Área'
+                nombre: area.nombre?.trim() || 'Nueva Área',
+                target_terminal_id: area.target_terminal_id?.trim() || undefined,
+                kds_host: area.kds_host?.trim() || undefined,
+                kds_port: String(area.kds_port || '').trim() || '8001',
+                printer_ip: area.printer_ip?.trim() || undefined
             };
             const nextAreas = areas.some(existing => existing.id === normalizedArea.id)
                 ? areas.map(existing => existing.id === normalizedArea.id ? normalizedArea : existing)
@@ -277,19 +284,42 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                                         onChange={(e) => handleUpdateArea(area.id, { target_terminal_id: e.target.value })}
                                         className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl px-4 py-3 text-sm font-bold text-slate-700 focus:border-blue-500 outline-none"
                                     >
-                                        <option value="">Seleccionar terminal...</option>
-                                        {kdsTerminals.length === 0 && (
-                                            <option value="" disabled>No hay pantallas KDS configuradas</option>
-                                        )}
+                                        <option value="">Manual por IP / sin terminal ERP</option>
                                         {kdsTerminals.map(t => (
                                             <option key={t.id} value={t.id}>{t.config?.terminalName || t.name || t.nombre || t.id} (KDS)</option>
                                         ))}
                                     </select>
                                     {kdsTerminals.length === 0 && (
                                         <p className="mt-2 text-[11px] font-bold text-amber-600">
-                                            Configura una terminal como Pantalla de Cocina en ERP y sincroniza la configuración.
+                                            No hay terminales KDS sincronizadas. Puedes usar el modo manual colocando IP/Host del equipo KDS.
                                         </p>
                                     )}
+                                    <div className="mt-3 grid grid-cols-[1fr_6rem] gap-2">
+                                        <div>
+                                            <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">IP / Host del KDS</label>
+                                            <input
+                                                type="text"
+                                                value={area.kds_host || ''}
+                                                onChange={(e) => handleUpdateArea(area.id, { kds_host: e.target.value })}
+                                                className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl px-4 py-3 text-sm font-black text-slate-700 focus:border-blue-500 outline-none"
+                                                placeholder="Ej: 192.168.1.50"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">Puerto</label>
+                                            <input
+                                                type="text"
+                                                inputMode="numeric"
+                                                value={area.kds_port || '8001'}
+                                                onChange={(e) => handleUpdateArea(area.id, { kds_port: e.target.value })}
+                                                className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl px-3 py-3 text-sm font-black text-slate-700 focus:border-blue-500 outline-none"
+                                                placeholder="8001"
+                                            />
+                                        </div>
+                                    </div>
+                                    <p className="mt-2 text-[10px] font-bold leading-relaxed text-slate-400">
+                                        La terminal ERP identifica la pantalla; la IP/Host es la ruta LAN para enviar la comanda a ese equipo.
+                                    </p>
                                 </div>
                             )}
 
