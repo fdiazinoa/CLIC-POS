@@ -80,6 +80,7 @@ import TerminalModeSelector from './components/TerminalModeSelector';
 import TerminalBindingScreen from './components/TerminalBindingScreen';
 import CustomerVisor from './components/CustomerVisor';
 import { visorSync } from './utils/visorSync';
+import { setPosSaleActivity } from './utils/posSaleActivity';
 
 // Layout imports
 import StandardPOSLayout from './components/layouts/StandardPOSLayout';
@@ -1547,6 +1548,11 @@ const AppContent: React.FC = () => {
   const [kioskRedeemedCoupon, setKioskRedeemedCoupon] = useState<RedeemedCouponRef | null>(null);
   const [kioskCouponBenefit, setKioskCouponBenefit] = useState<KioskCouponBenefit | null>(null);
   useEffect(() => {
+    setPosSaleActivity({ active: cart.length > 0, cartCount: cart.length });
+    return () => setPosSaleActivity({ active: false, cartCount: 0 });
+  }, [cart.length]);
+
+  useEffect(() => {
     if (!selectedCustomer?.id) return;
     const refreshedCustomer = customers.find(customer => customer.id === selectedCustomer.id);
     if (!refreshedCustomer || refreshedCustomer === selectedCustomer) return;
@@ -2882,6 +2888,58 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     // --- SYNC EVENT LISTENERS (For Slave Terminals) ---
+    let catalogRefreshTimer: any = null;
+    const pendingCatalogRefresh = {
+      products: false,
+      productStocks: false,
+    };
+
+    const flushCatalogRefresh = async () => {
+      const startedAt = posCatalogDebugNow();
+      catalogRefreshTimer = null;
+
+      if (pendingCatalogRefresh.productStocks) {
+        const freshStocks = await db.get('productStocks') as ProductStock[];
+        setProductStocks(Array.isArray(freshStocks) ? freshStocks : []);
+      }
+
+      if (pendingCatalogRefresh.products || pendingCatalogRefresh.productStocks) {
+        const freshProducts = await db.get('products') as Product[];
+        setProducts(Array.isArray(freshProducts) ? freshProducts : []);
+
+        const matching = Array.isArray(freshProducts)
+          ? (freshProducts as unknown as Record<string, unknown>[])
+              .filter((item) => posCatalogDebugMatchesRaw(item))
+              .map((item) => posCatalogDebugSummarizeItem(item))
+          : [];
+        if (matching.length > 0) {
+          posCatalogDebugLog('App: catalog refresh → setProducts', {
+            count: Array.isArray(freshProducts) ? freshProducts.length : 0,
+            elapsedMs: posCatalogDebugElapsedMs(startedAt),
+            matching,
+          });
+          void posCatalogDebugLogDbRows('App catalog refresh after setProducts');
+        }
+      }
+
+      pendingCatalogRefresh.products = false;
+      pendingCatalogRefresh.productStocks = false;
+    };
+
+    const scheduleCatalogRefresh = (eventType: string) => {
+      if (eventType === 'productsUpdated') pendingCatalogRefresh.products = true;
+      if (eventType === 'productStocksUpdated') pendingCatalogRefresh.productStocks = true;
+
+      if (catalogRefreshTimer) {
+        clearTimeout(catalogRefreshTimer);
+      }
+      catalogRefreshTimer = setTimeout(() => {
+        void flushCatalogRefresh().catch((error) => {
+          console.error('Failed to refresh catalog after sync update:', error);
+        });
+      }, 300);
+    };
+
     const handleSyncUpdate = async (event: Event) => {
       const startedAt = posCatalogDebugNow();
       const collection = event.type.replace('Updated', '');
@@ -2920,21 +2978,25 @@ const AppContent: React.FC = () => {
         case 'cashMovements': setCashMovements(freshData as CashMovement[]); break;
         case 'zReports': setZReports(freshData as ZReport[]); break;
         case 'warehouses': setWarehouses(Array.isArray(freshData) ? freshData as Warehouse[] : []); break;
-        case 'productStocks':
-          setProductStocks(freshData as ProductStock[]);
-          // CRITICAL: When detailed stocks change, we should also refresh products 
-          // because they contain the aggregated stockBalances
-          const freshProducts = await db.get('products') as Product[];
-          setProducts(freshProducts);
-          break;
       }
     };
 
+    const handleSyncEvent = (event: Event) => {
+      if (event.type === 'productsUpdated' || event.type === 'productStocksUpdated') {
+        scheduleCatalogRefresh(event.type);
+        return;
+      }
+      void handleSyncUpdate(event).catch((error) => {
+        console.error(`Failed to handle ${event.type}:`, error);
+      });
+    };
+
     const syncEvents = ['productsUpdated', 'customersUpdated', 'suppliersUpdated', 'usersUpdated', 'rolesUpdated', 'purchaseOrdersUpdated', 'transfersUpdated', 'internalSequencesUpdated', 'transactionsUpdated', 'cashMovementsUpdated', 'zReportsUpdated', 'warehousesUpdated', 'productStocksUpdated', 'tablesUpdated'];
-    syncEvents.forEach(e => window.addEventListener(e, handleSyncUpdate));
+    syncEvents.forEach(e => window.addEventListener(e, handleSyncEvent));
 
     return () => {
-      syncEvents.forEach(e => window.removeEventListener(e, handleSyncUpdate));
+      if (catalogRefreshTimer) clearTimeout(catalogRefreshTimer);
+      syncEvents.forEach(e => window.removeEventListener(e, handleSyncEvent));
     };
   }, []);
 

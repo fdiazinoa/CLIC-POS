@@ -9,6 +9,7 @@ import {
   deriveWarehouseIdsFromStockBalances,
   deriveWarehouseIdsFromSettings,
 } from '../../utils/masterIdentity';
+import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from '../../utils/posSaleActivity';
 import { extractWarehouseStockBalances, productIdentityCandidates } from '../../utils/productReferences';
 
 type IncomingProduct = Partial<Product> & Record<string, any>;
@@ -130,6 +131,9 @@ const resolveIncomingTaxIds = (item: IncomingProduct, localProduct?: Product): s
 class ProductImageCacheService {
   private readonly imageFolder = 'product-images';
   private readonly logger = console;
+  private productsUpdatedTimer: any = null;
+  private deferredSnapshotItems = new Map<string, IncomingProduct>();
+  private deferredFlushListenerAttached = false;
 
   private isNativeAndroid(): boolean {
     return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -580,6 +584,40 @@ class ProductImageCacheService {
     return true;
   }
 
+  private scheduleProductsUpdatedDispatch(): void {
+    if (this.productsUpdatedTimer) {
+      clearTimeout(this.productsUpdatedTimer);
+    }
+
+    this.productsUpdatedTimer = setTimeout(() => {
+      this.productsUpdatedTimer = null;
+      window.dispatchEvent(new CustomEvent('productsUpdated'));
+    }, 1000);
+  }
+
+  private deferSnapshotItems(items: IncomingProduct[]): void {
+    for (const item of items) {
+      const key =
+        asString(item.id) ||
+        asString(item.sku) ||
+        asString(item.code) ||
+        asString(item.item_code);
+      if (!key) continue;
+      this.deferredSnapshotItems.set(key, item);
+    }
+
+    if (this.deferredFlushListenerAttached) return;
+    this.deferredFlushListenerAttached = true;
+    window.addEventListener(POS_SALE_ACTIVITY_EVENT, () => {
+      if (isPosSaleActive() || this.deferredSnapshotItems.size === 0) return;
+      const pending = Array.from(this.deferredSnapshotItems.values());
+      this.deferredSnapshotItems.clear();
+      void this.syncSnapshotItems(pending).catch((error) => {
+        this.logger.warn('[ProductImageCacheService] Deferred image sync failed:', error);
+      });
+    });
+  }
+
   async syncSnapshotItems(items: IncomingProduct[]): Promise<{
     scanned: number;
     queued: number;
@@ -592,6 +630,11 @@ class ProductImageCacheService {
       return { scanned: 0, queued: 0, downloaded: 0, skipped: 0, failed: 0 };
     }
 
+    if (isPosSaleActive()) {
+      this.deferSnapshotItems(incoming);
+      return { scanned: incoming.length, queued: 0, downloaded: 0, skipped: incoming.length, failed: 0 };
+    }
+
     const lookups = await this.getLocalProductLookups();
     let queued = 0;
     let downloaded = 0;
@@ -599,7 +642,14 @@ class ProductImageCacheService {
     let failed = 0;
     let touched = 0;
 
-    for (const rawItem of incoming) {
+    for (let index = 0; index < incoming.length; index += 1) {
+      const rawItem = incoming[index];
+      if (isPosSaleActive()) {
+        skipped += incoming.length - index;
+        this.deferSnapshotItems(incoming.slice(index));
+        break;
+      }
+
       const itemId = asString(rawItem?.id);
       if (!itemId) {
         skipped += 1;
@@ -652,7 +702,7 @@ class ProductImageCacheService {
     }
 
     if (touched > 0) {
-      window.dispatchEvent(new CustomEvent('productsUpdated'));
+      this.scheduleProductsUpdatedDispatch();
     }
 
     return {
