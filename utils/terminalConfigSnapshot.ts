@@ -38,6 +38,13 @@ const asObject = (value: unknown): Record<string, any> => {
 
 const asArray = <T = any>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
 const asString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+const asRefString = (value: unknown): string => (
+  typeof value === 'string'
+    ? value.trim()
+    : typeof value === 'number' && Number.isFinite(value)
+      ? String(value)
+      : ''
+);
 const asNumber = (value: unknown, fallback = 0): number => {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -388,6 +395,52 @@ const POS_PROMO_TYPES: PromotionType[] = [
   'BUNDLE',
 ];
 
+const collectPromotionRefs = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectPromotionRefs(entry));
+  }
+
+  if (value && typeof value === 'object') {
+    const obj = asObject(value);
+    return [
+      obj.id,
+      obj.value,
+      obj.code,
+      obj.sku,
+      obj.barcode,
+      obj.itemId,
+      obj.item_id,
+      obj.productId,
+      obj.product_id,
+      obj.sourceProductId,
+      obj.source_product_id,
+      obj.erpProductId,
+      obj.erp_product_id,
+      obj.sourceItemId,
+      obj.source_item_id,
+      obj.categoryId,
+      obj.category_id,
+      obj.name,
+      obj.label,
+    ].flatMap((entry) => collectPromotionRefs(entry));
+  }
+
+  const ref = asRefString(value);
+  return ref ? [ref] : [];
+};
+
+const uniquePromotionRefs = (values: string[]): string[] => {
+  const seen = new Set<string>();
+  const refs: string[] = [];
+  values.forEach((value) => {
+    const key = value.trim().toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    refs.push(value.trim());
+  });
+  return refs;
+};
+
 const normalizePromotionTargetType = (raw: unknown): PromotionTargetType => {
   const t = asString(raw).toUpperCase();
   const allowed: PromotionTargetType[] = ['ALL', 'PRODUCT', 'CATEGORY', 'GROUP', 'SEASON'];
@@ -400,11 +453,18 @@ const normalizePromotionFromErpPayload = (raw: unknown): Promotion | null => {
   const id = asString(data.id);
   if (!id) return null;
 
-  const typeRaw = asString(data.type).toUpperCase();
+  const typeRaw = asString(data.type ?? data.promotionType ?? data.promotion_type).toUpperCase();
   const type = (POS_PROMO_TYPES.includes(typeRaw as PromotionType) ? typeRaw : 'DISCOUNT') as PromotionType;
 
   const sched = asObject(data.schedule);
-  const days = asArray<string>(sched.days).map((d) => asString(d)).filter(Boolean);
+  const days = asArray<string>(
+    sched.days ??
+    sched.weekDays ??
+    sched.week_days ??
+    data.days ??
+    data.weekDays ??
+    data.week_days
+  ).map((d) => asString(d)).filter(Boolean);
   const defaultDays = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
 
   const triggerRaw = asObject(data.trigger);
@@ -431,25 +491,39 @@ const normalizePromotionFromErpPayload = (raw: unknown): Promotion | null => {
       }
       : undefined;
 
-  const targetTypeRaw = data.targetType ?? data.target_type;
+  const targetTypeRaw =
+    data.targetType ??
+    data.target_type ??
+    (data.categoryId != null || data.category_id != null || data.categoryName != null || data.category_name != null || data.categoryIds != null || data.category_ids != null
+      ? 'CATEGORY'
+      : data.groupId != null || data.group_id != null
+        ? 'GROUP'
+        : data.seasonId != null || data.season_id != null
+          ? 'SEASON'
+          : undefined);
   const targetValueRaw =
     data.targetValue ??
     data.target_value ??
     data.targetId ??
     data.target_id ??
     data.categoryId ??
-    data.category_id;
+    data.category_id ??
+    data.categoryName ??
+    data.category_name ??
+    data.groupId ??
+    data.group_id ??
+    data.seasonId ??
+    data.season_id;
   const targetRefs = [
-    ...asArray<string>(data.targetRefs ?? data.target_refs),
-    ...asArray<string>(data.productIds ?? data.product_ids),
-    ...asArray<string>(data.itemIds ?? data.item_ids),
-    ...asArray<string>(data.categoryIds ?? data.category_ids),
-    ...asArray<string>(data.targetIds ?? data.target_ids),
-    ...asArray<string>(data.targetValues ?? data.target_values),
-    ...asArray<string>(data.targets),
-  ]
-    .map((x) => asString(x))
-    .filter(Boolean);
+    data.targetRefs ?? data.target_refs,
+    data.productIds ?? data.product_ids,
+    data.itemIds ?? data.item_ids,
+    data.categoryIds ?? data.category_ids,
+    data.categoryNames ?? data.category_names,
+    data.targetIds ?? data.target_ids,
+    data.targetValues ?? data.target_values,
+    data.targets,
+  ].flatMap((entry) => collectPromotionRefs(entry));
 
   return {
     id,
@@ -458,22 +532,30 @@ const normalizePromotionFromErpPayload = (raw: unknown): Promotion | null => {
     priority: asNumber(data.priority, 1),
     trigger,
     targetType: normalizePromotionTargetType(targetTypeRaw),
-    targetValue: targetValueRaw != null ? asString(targetValueRaw) : undefined,
+    targetValue: targetValueRaw != null ? asRefString(targetValueRaw) : undefined,
     targetLabel: asString(data.targetLabel || data.target_label) || undefined,
-    targetRefs,
+    targetRefs: uniquePromotionRefs(targetRefs),
     targetStrategy,
-    benefitValue: asNumber(data.benefitValue ?? data.benefit_value, 0),
+    benefitType: (asString(data.benefitType ?? data.benefit_type) || undefined) as Promotion['benefitType'],
+    benefitValue: asNumber(
+      data.benefitValue ??
+      data.benefit_value ??
+      data.discountPercent ??
+      data.discount_percent ??
+      data.discountValue ??
+      data.discount_value ??
+      data.value,
+      0
+    ),
     schedule: {
       days: days.length > 0 ? days : defaultDays,
-      startTime: asString(sched.startTime || sched.start_time) || '00:00',
-      endTime: asString(sched.endTime || sched.end_time) || '23:59',
-      startDate: sched.startDate || sched.start_date ? asString(sched.startDate || sched.start_date) : undefined,
-      endDate: sched.endDate || sched.end_date ? asString(sched.endDate || sched.end_date) : undefined,
-      isActive: asBoolean(sched.isActive ?? sched.is_active, true),
+      startTime: asString(sched.startTime ?? sched.start_time ?? data.startTime ?? data.start_time) || '00:00',
+      endTime: asString(sched.endTime ?? sched.end_time ?? data.endTime ?? data.end_time) || '23:59',
+      startDate: sched.startDate || sched.start_date || data.startDate || data.start_date ? asString(sched.startDate ?? sched.start_date ?? data.startDate ?? data.start_date) : undefined,
+      endDate: sched.endDate || sched.end_date || data.endDate || data.end_date ? asString(sched.endDate ?? sched.end_date ?? data.endDate ?? data.end_date) : undefined,
+      isActive: asBoolean(sched.isActive ?? sched.is_active ?? data.isActive ?? data.is_active ?? data.active ?? data.enabled, true),
     },
-    terminalIds: asArray<string>(data.terminalIds ?? data.terminal_ids)
-      .map((x) => asString(x))
-      .filter(Boolean),
+    terminalIds: uniquePromotionRefs(collectPromotionRefs(data.terminalIds ?? data.terminal_ids)),
   };
 };
 
@@ -482,15 +564,31 @@ const normalizeProductGroupFromErpPayload = (raw: unknown, index: number): Produ
   const id = asString(data.id || data.groupId || data.group_id || `group-${index + 1}`);
   if (!id) return null;
 
-  const productIds = asArray<any>(data.productIds ?? data.product_ids ?? data.items ?? data.products)
-    .map((entry) => {
+  const productIds = uniquePromotionRefs(asArray<any>(data.productIds ?? data.product_ids ?? data.items ?? data.products)
+    .flatMap((entry) => {
       if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
         const obj = asObject(entry);
-        return asString(obj.id || obj.productId || obj.product_id);
+        return collectPromotionRefs([
+          obj.id,
+          obj.productId,
+          obj.product_id,
+          obj.itemId,
+          obj.item_id,
+          obj.sourceProductId,
+          obj.source_product_id,
+          obj.erpProductId,
+          obj.erp_product_id,
+          obj.sourceItemId,
+          obj.source_item_id,
+          obj.sku,
+          obj.code,
+          obj.item_code,
+          obj.barcode,
+        ]);
       }
-      return asString(entry);
+      return collectPromotionRefs(entry);
     })
-    .filter(Boolean);
+    .filter(Boolean));
 
   return {
     id,
@@ -507,15 +605,31 @@ const normalizeSeasonFromErpPayload = (raw: unknown, index: number): Season | nu
   const id = asString(data.id || data.seasonId || data.season_id || `season-${index + 1}`);
   if (!id) return null;
 
-  const productIds = asArray<any>(data.productIds ?? data.product_ids ?? data.items ?? data.products)
-    .map((entry) => {
+  const productIds = uniquePromotionRefs(asArray<any>(data.productIds ?? data.product_ids ?? data.items ?? data.products)
+    .flatMap((entry) => {
       if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
         const obj = asObject(entry);
-        return asString(obj.id || obj.productId || obj.product_id);
+        return collectPromotionRefs([
+          obj.id,
+          obj.productId,
+          obj.product_id,
+          obj.itemId,
+          obj.item_id,
+          obj.sourceProductId,
+          obj.source_product_id,
+          obj.erpProductId,
+          obj.erp_product_id,
+          obj.sourceItemId,
+          obj.source_item_id,
+          obj.sku,
+          obj.code,
+          obj.item_code,
+          obj.barcode,
+        ]);
       }
-      return asString(entry);
+      return collectPromotionRefs(entry);
     })
-    .filter(Boolean);
+    .filter(Boolean));
 
   const affectedCategories = asArray<any>(data.affectedCategories ?? data.affected_categories ?? data.categories)
     .map((entry) => {

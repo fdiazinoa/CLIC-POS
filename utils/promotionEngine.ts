@@ -17,11 +17,55 @@ const normalizeMatchToken = (value: unknown): string => {
         .toLowerCase();
 };
 
-const asReferenceList = (values: unknown[]): string[] => (
-    values
-        .map((value) => (typeof value === 'string' ? value.trim() : value != null ? String(value).trim() : ''))
-        .filter(Boolean)
-);
+const extractReferenceStrings = (value: unknown): string[] => {
+    if (Array.isArray(value)) {
+        return value.flatMap((entry) => extractReferenceStrings(entry));
+    }
+
+    if (value && typeof value === 'object') {
+        const record = value as Record<string, unknown>;
+        return [
+            record.id,
+            record.value,
+            record.code,
+            record.sku,
+            record.barcode,
+            record.itemId,
+            record.item_id,
+            record.productId,
+            record.product_id,
+            record.sourceProductId,
+            record.source_product_id,
+            record.erpProductId,
+            record.erp_product_id,
+            record.sourceItemId,
+            record.source_item_id,
+            record.name,
+            record.label,
+            record.category,
+            record.categoria,
+            record.categoryId,
+            record.category_id,
+        ].flatMap((entry) => extractReferenceStrings(entry));
+    }
+
+    const trimmed = typeof value === 'string' ? value.trim() : value != null ? String(value).trim() : '';
+    return trimmed ? [trimmed] : [];
+};
+
+const uniqueReferences = (values: string[]): string[] => {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    values.forEach((value) => {
+        const token = normalizeMatchToken(value);
+        if (!token || seen.has(token)) return;
+        seen.add(token);
+        result.push(value);
+    });
+    return result;
+};
+
+const asReferenceList = (values: unknown[]): string[] => uniqueReferences(values.flatMap((value) => extractReferenceStrings(value)));
 
 const productReferenceTokens = (product: any): Set<string> => (
     new Set(getProductReferenceCandidates(product).map(normalizeMatchToken).filter(Boolean))
@@ -80,8 +124,10 @@ const terminalReferenceCandidates = (config: BusinessConfig, terminalId: string)
         const erpTerminalId = String(terminal?.config?.erpTerminalId || terminal?.config?.erpBinding?.terminalId || '').trim();
         const terminalName = String(terminal?.config?.terminalName || terminal?.config?.erpBinding?.terminalName || '').trim();
         const stationNumber = String(terminal?.config?.stationNumber || terminal?.config?.erpBinding?.stationNumber || '').trim();
+        const terminalConfig = terminal?.config as any;
+        const deviceId = String(terminalConfig?.currentDeviceId || terminalConfig?.deviceId || terminalConfig?.erpBinding?.deviceId || '').trim();
 
-        return [localId, erpTerminalId, terminalName, stationNumber].filter(Boolean).includes(normalizedRequestedId);
+        return [localId, erpTerminalId, terminalName, stationNumber, deviceId].filter(Boolean).includes(normalizedRequestedId);
     });
 
     if (!matchedTerminal) {
@@ -94,9 +140,15 @@ const terminalReferenceCandidates = (config: BusinessConfig, terminalId: string)
         String(matchedTerminal.config?.erpTerminalId || '').trim(),
         String(matchedTerminal.config?.terminalName || '').trim(),
         String(matchedTerminal.config?.stationNumber || '').trim(),
+        String((matchedTerminal as any).name || '').trim(),
+        String((matchedTerminal as any).label || '').trim(),
+        String((matchedTerminal as any).code || '').trim(),
+        String(matchedTerminal.config?.currentDeviceId || '').trim(),
+        String((matchedTerminal.config as any)?.deviceId || '').trim(),
         String(matchedTerminal.config?.erpBinding?.terminalId || '').trim(),
         String(matchedTerminal.config?.erpBinding?.terminalName || '').trim(),
         String(matchedTerminal.config?.erpBinding?.stationNumber || '').trim(),
+        String((matchedTerminal.config?.erpBinding as any)?.deviceId || '').trim(),
     ].filter(Boolean);
 };
 
@@ -105,13 +157,9 @@ const promotionMatchesTerminalScope = (promotion: Promotion, config: BusinessCon
         return true;
     }
 
-    const promotionTerminalIds = new Set(
-        promotion.terminalIds
-            .map((value) => String(value).trim())
-            .filter(Boolean)
-    );
+    const promotionTerminalIds = new Set(asReferenceList(promotion.terminalIds).map(normalizeMatchToken));
 
-    return terminalReferenceCandidates(config, terminalId).some((candidate) => promotionTerminalIds.has(candidate));
+    return terminalReferenceCandidates(config, terminalId).some((candidate) => promotionTerminalIds.has(normalizeMatchToken(candidate)));
 };
 
 const promotionMatchesResolvedRefs = (promotion: Promotion, product: any): boolean => {
@@ -122,6 +170,7 @@ const promotionMatchesResolvedRefs = (promotion: Promotion, product: any): boole
 
 const promotionMatchesTargetReference = (promotion: Promotion, product: any): boolean => (
     productMatchesAnyReference(product, [promotion.targetValue])
+    || productMatchesAnyReference(product, [promotion.targetLabel])
     || promotionMatchesResolvedRefs(promotion, product)
 );
 
@@ -135,19 +184,173 @@ const productBelongsToReferenceGroup = (product: any, productIds?: unknown[]): b
     productMatchesReferenceList(product, Array.isArray(productIds) ? productIds : [])
 );
 
+const entityReferenceCandidates = (entity: any): string[] => (
+    asReferenceList([
+        entity?.id,
+        entity?.code,
+        entity?.name,
+        entity?.label,
+        entity?.externalCode,
+        entity?.external_code,
+        entity?.erpId,
+        entity?.erp_id,
+    ])
+);
+
+const promotionTargetCandidateRefs = (promotion: Promotion): string[] => (
+    asReferenceList([promotion.targetValue, promotion.targetLabel])
+);
+
+const entityMatchesPromotionTarget = (entity: any, promotion: Promotion): boolean => {
+    const entityTokens = new Set(entityReferenceCandidates(entity).map(normalizeMatchToken));
+    if (entityTokens.size === 0) return false;
+    return promotionTargetCandidateRefs(promotion).some((ref) => entityTokens.has(normalizeMatchToken(ref)));
+};
+
+const findPromotionGroup = (promotion: Promotion, config: BusinessConfig): any | undefined => (
+    (config.productGroups || []).find((group: any) => entityMatchesPromotionTarget(group, promotion))
+);
+
+const findPromotionSeason = (promotion: Promotion, config: BusinessConfig): any | undefined => (
+    (config.seasons || []).find((season: any) => entityMatchesPromotionTarget(season, promotion))
+);
+
+const normalizeScheduleDayKey = (value: unknown): string => {
+    const token = normalizeMatchToken(value);
+    const map: Record<string, string> = {
+        '0': 'D',
+        '1': 'L',
+        '2': 'M',
+        '3': 'X',
+        '4': 'J',
+        '5': 'V',
+        '6': 'S',
+        d: 'D',
+        dom: 'D',
+        domingo: 'D',
+        sunday: 'D',
+        sun: 'D',
+        l: 'L',
+        lun: 'L',
+        lunes: 'L',
+        monday: 'L',
+        mon: 'L',
+        m: 'M',
+        mar: 'M',
+        martes: 'M',
+        tuesday: 'M',
+        tue: 'M',
+        x: 'X',
+        mie: 'X',
+        miercoles: 'X',
+        wednesday: 'X',
+        wed: 'X',
+        j: 'J',
+        jue: 'J',
+        jueves: 'J',
+        thursday: 'J',
+        thu: 'J',
+        v: 'V',
+        vie: 'V',
+        viernes: 'V',
+        friday: 'V',
+        fri: 'V',
+        s: 'S',
+        sab: 'S',
+        sabado: 'S',
+        saturday: 'S',
+        sat: 'S',
+    };
+    return map[token] || '';
+};
+
+const promotionMatchesCurrentDay = (promotion: Promotion): boolean => {
+    const days = Array.isArray(promotion.schedule?.days) ? promotion.schedule.days : [];
+    const normalizedDays = days
+        .map((day) => normalizeScheduleDayKey(day))
+        .filter(Boolean);
+
+    if (normalizedDays.length === 0) return true;
+
+    const today = new Date();
+    const daysMap = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
+    return normalizedDays.includes(daysMap[today.getDay()]);
+};
+
+const minutesFromTime = (value: unknown): number | null => {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    const match = raw.match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return null;
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+        return null;
+    }
+    return hours * 60 + minutes;
+};
+
+const promotionMatchesCurrentTime = (promotion: Promotion): boolean => {
+    const start = minutesFromTime(promotion.schedule?.startTime);
+    const end = minutesFromTime(promotion.schedule?.endTime);
+    if (start == null || end == null) return true;
+
+    const today = new Date();
+    const now = today.getHours() * 60 + today.getMinutes();
+    return start <= end
+        ? now >= start && now <= end
+        : now >= start || now <= end;
+};
+
+const promotionMatchesDateRange = (promotion: Promotion): boolean => {
+    const today = new Date();
+    if (promotion.schedule?.startDate) {
+        const startDate = new Date(promotion.schedule.startDate);
+        if (!Number.isNaN(startDate.getTime())) {
+            startDate.setHours(0, 0, 0, 0);
+            if (today < startDate) return false;
+        }
+    }
+    if (promotion.schedule?.endDate) {
+        const endDate = new Date(promotion.schedule.endDate);
+        if (!Number.isNaN(endDate.getTime())) {
+            endDate.setHours(23, 59, 59, 999);
+            if (today > endDate) return false;
+        }
+    }
+    return true;
+};
+
+const promotionIsCurrentlyEligible = (promotion: Promotion, config: BusinessConfig, terminalId: string, customer?: Customer): boolean => {
+    if (!isPromotionActive(promotion)) return false;
+    if (!promotionMatchesCurrentDay(promotion)) return false;
+    if (!promotionMatchesCurrentTime(promotion)) return false;
+    if (!promotionMatchesDateRange(promotion)) return false;
+    if (!promotionMatchesTerminalScope(promotion, config, terminalId)) return false;
+
+    if (promotion.conditions && promotion.conditions.length > 0) {
+        for (const condition of promotion.conditions) {
+            if (condition.type === 'HAS_WALLET' && (!customer || !customer.wallet || customer.wallet.status !== 'ACTIVE')) return false;
+            if (condition.type === 'CUSTOMER_TIER' && (!customer || customer.tier !== condition.value)) return false;
+            if (condition.type === 'HAS_POINTS_MIN' && (!customer || (customer.loyaltyPoints || 0) < parseInt(condition.value, 10))) return false;
+        }
+    }
+
+    return true;
+};
+
 const promotionTargetsProduct = (promotion: Promotion, product: any, config: BusinessConfig): boolean => {
     if (promotion.targetType === 'ALL') return true;
     if (promotion.targetType === 'PRODUCT') return promotionMatchesTargetReference(promotion, product);
     if (promotion.targetType === 'CATEGORY') return promotionMatchesCategoryTarget(promotion, product);
 
     if (promotion.targetType === 'GROUP') {
-        const group = config.productGroups?.find((g) => normalizeMatchToken(g.id) === normalizeMatchToken(promotion.targetValue));
+        const group = findPromotionGroup(promotion, config);
         if (group && productBelongsToReferenceGroup(product, group.productIds)) return true;
         return promotionMatchesTargetReference(promotion, product);
     }
 
     if (promotion.targetType === 'SEASON') {
-        const season = config.seasons?.find((s) => normalizeMatchToken(s.id) === normalizeMatchToken(promotion.targetValue));
+        const season = findPromotionSeason(promotion, config);
         if (season && productBelongsToReferenceGroup(product, season.productIds)) return true;
         return promotionMatchesTargetReference(promotion, product);
     }
@@ -158,57 +361,7 @@ const promotionTargetsProduct = (promotion: Promotion, product: any, config: Bus
 const isPromotionActive = (promotion: Promotion): boolean => promotion.schedule?.isActive !== false;
 
 export const applyPromotions = (cart: CartItem[], config: BusinessConfig, terminalId: string, customer?: Customer): CartItem[] => {
-    const activePromotions = config.promotions?.filter(p => {
-        // 1. Check Active Status
-        if (!isPromotionActive(p)) return false;
-
-        // 2. Check Schedule (Day of Week)
-        const today = new Date();
-        const daysMap = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
-        const currentDayKey = daysMap[today.getDay()];
-        if (!p.schedule.days.includes(currentDayKey)) return false;
-
-        // 3. Check Time Range
-        const now = today.getHours() * 60 + today.getMinutes();
-        const [startH, startM] = p.schedule.startTime.split(':').map(Number);
-        const [endH, endM] = p.schedule.endTime.split(':').map(Number);
-        const start = startH * 60 + startM;
-        const end = endH * 60 + endM;
-        if (now < start || now > end) return false;
-
-        // 3.5 Check Date Range (NEW)
-        if (p.schedule.startDate) {
-            const startDate = new Date(p.schedule.startDate);
-            startDate.setHours(0, 0, 0, 0);
-            if (today < startDate) return false;
-        }
-        if (p.schedule.endDate) {
-            const endDate = new Date(p.schedule.endDate);
-            endDate.setHours(23, 59, 59, 999);
-            if (today > endDate) return false;
-        }
-
-        // 4. Check Terminal Scope
-        if (!promotionMatchesTerminalScope(p, config, terminalId)) return false;
-
-        // 5. Check Loyalty Conditions (NEW)
-        if (p.conditions && p.conditions.length > 0) {
-            for (const condition of p.conditions) {
-                if (condition.type === 'HAS_WALLET') {
-                    if (!customer || !customer.wallet || customer.wallet.status !== 'ACTIVE') return false;
-                }
-                if (condition.type === 'CUSTOMER_TIER') {
-                    if (!customer || customer.tier !== condition.value) return false;
-                }
-                if (condition.type === 'HAS_POINTS_MIN') {
-                    const minPoints = parseInt(condition.value, 10);
-                    if (!customer || (customer.loyaltyPoints || 0) < minPoints) return false;
-                }
-            }
-        }
-
-        return true;
-    }) || [];
+    const activePromotions = config.promotions?.filter(p => promotionIsCurrentlyEligible(p, config, terminalId, customer)) || [];
 
     if (activePromotions.length === 0) return cart;
 
@@ -378,39 +531,7 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
 export const hasProductPromotion = (product: any, config: BusinessConfig, terminalId: string): boolean => {
     if (!config.promotions) return false;
 
-    // 1. Filter Active Promotions (Same logic as above)
-    const activePromotions = config.promotions.filter(p => {
-        if (!isPromotionActive(p)) return false;
-
-        const today = new Date();
-        const daysMap = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
-        const currentDayKey = daysMap[today.getDay()];
-        if (!p.schedule.days.includes(currentDayKey)) return false;
-
-        const now = today.getHours() * 60 + today.getMinutes();
-        const [startH, startM] = p.schedule.startTime.split(':').map(Number);
-        const [endH, endM] = p.schedule.endTime.split(':').map(Number);
-        const start = startH * 60 + startM;
-        const end = endH * 60 + endM;
-        if (now < start || now > end) return false;
-
-        // Date Range (NEW)
-        if (p.schedule.startDate) {
-            const startDate = new Date(p.schedule.startDate);
-            startDate.setHours(0, 0, 0, 0);
-            if (today < startDate) return false;
-        }
-        if (p.schedule.endDate) {
-            const endDate = new Date(p.schedule.endDate);
-            endDate.setHours(23, 59, 59, 999);
-            if (today > endDate) return false;
-        }
-
-        // Terminal scope check
-        if (!promotionMatchesTerminalScope(p, config, terminalId)) return false;
-
-        return true;
-    });
+    const activePromotions = config.promotions.filter(p => promotionIsCurrentlyEligible(p, config, terminalId));
 
     // 2. Check if any active promotion targets this product
     return activePromotions.some(p => {
