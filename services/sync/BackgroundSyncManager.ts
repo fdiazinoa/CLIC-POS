@@ -211,7 +211,7 @@ class BackgroundSyncManager {
      * Main sync loop
      */
     async sync() {
-        if (this.isProcessing || !navigator.onLine) return;
+        if (this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
 
         // We only sync if we are a SLAVE or if we are a MASTER that needs to push to a central server
         // (In this architecture, Master also pushes to its own server to keep db.json as source of truth)
@@ -371,6 +371,11 @@ class BackgroundSyncManager {
         });
 
         for (const item of pending) {
+            if (isPosSaleActive()) {
+                console.log(`⏸️ BackgroundSyncManager: ${collectionName} paused for active POS input.`);
+                return;
+            }
+
             try {
                 // Mark as syncing
                 item.syncStatus = 'SYNCING';

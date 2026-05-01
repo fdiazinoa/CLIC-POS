@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { Delete, Lock, Fingerprint } from 'lucide-react';
 import { User as UserType, TerminalConfig } from '../types';
@@ -29,6 +29,13 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
   const [isHardwareAvailable, setIsHardwareAvailable] = useState(false);
   const [buildVersion, setBuildVersion] = useState<string>('');
   const pinInputRef = useRef<HTMLInputElement>(null);
+  const usersByPin = useMemo(() => {
+    const map = new Map<string, UserType>();
+    for (const user of availableUsers) {
+      if (user.pin && !map.has(user.pin)) map.set(user.pin, user);
+    }
+    return map;
+  }, [availableUsers]);
 
   const focusPinInput = useCallback(() => {
     if (suppressNativeSoftKeyboardForPin) return;
@@ -83,7 +90,7 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
   }, []);
 
   const checkLogin = useCallback((inputPin: string) => {
-    const user = availableUsers.find((candidate) => candidate.pin === inputPin);
+    const user = selectedUser?.pin === inputPin ? selectedUser : usersByPin.get(inputPin);
     if (user) {
       window.setTimeout(() => onLogin(user), 200);
     } else {
@@ -92,7 +99,7 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
         setPin('');
       }, 300);
     }
-  }, [availableUsers, onLogin]);
+  }, [onLogin, selectedUser, usersByPin]);
 
   const handleKeyPress = useCallback((key: string) => {
     setError(false);

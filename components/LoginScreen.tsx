@@ -1,9 +1,12 @@
 
 import React, { useState, useRef } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { Delete, KeyRound, Lock, User, UserCircle, Globe, ChevronDown, Fingerprint } from 'lucide-react';
 import { User as UserType, TerminalConfig } from '../types';
 import { biometricService } from '../services/BiometricAuthService';
 import AccessibilityToggle from './AccessibilityToggle';
+
+const suppressNativeSoftKeyboardForPin = Capacitor.isNativePlatform();
 
 interface LoginScreenProps {
   onLogin: (user: UserType) => void;
@@ -21,8 +24,16 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
   const [isHardwareAvailable, setIsHardwareAvailable] = useState(false);
   const [buildVersion, setBuildVersion] = useState<string>('');
   const pinInputRef = useRef<HTMLInputElement>(null);
+  const usersByPin = React.useMemo(() => {
+    const map = new Map<string, UserType>();
+    for (const user of availableUsers) {
+      if (user.pin && !map.has(user.pin)) map.set(user.pin, user);
+    }
+    return map;
+  }, [availableUsers]);
 
   const focusPinInput = React.useCallback(() => {
+    if (suppressNativeSoftKeyboardForPin) return;
     window.requestAnimationFrame(() => {
       pinInputRef.current?.focus();
     });
@@ -78,19 +89,16 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
   }, []);
 
   const checkLogin = React.useCallback((inputPin: string) => {
-    console.log(`🔐 Login Attempt: PIN=${inputPin}, AvailableUsers=${availableUsers.length}`);
-    const user = availableUsers.find(u => u.pin === inputPin);
+    const user = selectedUser?.pin === inputPin ? selectedUser : usersByPin.get(inputPin);
     if (user) {
-      console.log(`✅ Login Success: User=${user.name}`);
       setTimeout(() => onLogin(user), 200);
     } else {
-      console.warn(`❌ Login Failed: PIN ${inputPin} not found in available users.`);
       setTimeout(() => {
         setError(true);
         setPin('');
       }, 300);
     }
-  }, [availableUsers, onLogin]);
+  }, [onLogin, selectedUser, usersByPin]);
 
   const handleKeyPress = React.useCallback((key: string) => {
     setError(false);
@@ -124,7 +132,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
 
   // Handle physical keyboard input
   const handleKeyDown = React.useCallback((e: KeyboardEvent) => {
-    if (document.activeElement === pinInputRef.current) {
+    if (document.activeElement === pinInputRef.current && !suppressNativeSoftKeyboardForPin) {
       return;
     }
 
@@ -277,12 +285,13 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
         )}
 
         {/* PIN Display */}
-        <div className="mb-5 sm:mb-8 relative" onClick={focusPinInput}>
+        <div className="mb-5 sm:mb-8 relative" onClick={suppressNativeSoftKeyboardForPin ? undefined : focusPinInput}>
           <input
             ref={pinInputRef}
-            type="tel"
-            inputMode="numeric"
-            pattern="[0-9]*"
+            type={suppressNativeSoftKeyboardForPin ? 'text' : 'tel'}
+            inputMode={suppressNativeSoftKeyboardForPin ? 'none' : 'numeric'}
+            pattern={suppressNativeSoftKeyboardForPin ? undefined : '[0-9]*'}
+            readOnly={suppressNativeSoftKeyboardForPin}
             autoComplete="off"
             enterKeyHint="done"
             value={pin}
