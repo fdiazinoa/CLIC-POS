@@ -1,17 +1,56 @@
 import { CartItem, BusinessConfig, Promotion, Customer } from '../types';
+import { productReferenceCandidates as getProductReferenceCandidates } from './productReferences';
 
 const round4 = (value: number): number => Math.round((value + Number.EPSILON) * 10000) / 10000;
 const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
 
-const productReferenceCandidates = (product: any): string[] => (
-    [
-        typeof product?.id === 'string' ? product.id.trim() : String(product?.id || '').trim(),
-        typeof product?.barcode === 'string' ? product.barcode.trim() : String(product?.barcode || '').trim(),
-        typeof product?.sku === 'string' ? product.sku.trim() : String(product?.sku || '').trim(),
-        typeof product?.item_code === 'string' ? product.item_code.trim() : String(product?.item_code || '').trim(),
-        typeof product?.code === 'string' ? product.code.trim() : String(product?.code || '').trim(),
-    ].filter(Boolean)
+const normalizeMatchToken = (value: unknown): string =>
+    typeof value === 'string'
+        ? value.trim().toLowerCase()
+        : value != null
+            ? String(value).trim().toLowerCase()
+            : '';
+
+const asReferenceList = (values: unknown[]): string[] => (
+    values
+        .map((value) => (typeof value === 'string' ? value.trim() : value != null ? String(value).trim() : ''))
+        .filter(Boolean)
 );
+
+const productReferenceTokens = (product: any): Set<string> => (
+    new Set(getProductReferenceCandidates(product).map(normalizeMatchToken).filter(Boolean))
+);
+
+const productMatchesAnyReference = (product: any, values: unknown[]): boolean => {
+    const productTokens = productReferenceTokens(product);
+    if (productTokens.size === 0) return false;
+
+    return asReferenceList(values).some((value) => productTokens.has(normalizeMatchToken(value)));
+};
+
+const productMatchesReferenceList = (product: any, values?: unknown[]): boolean => {
+    if (!Array.isArray(values) || values.length === 0) return false;
+    return productMatchesAnyReference(product, values);
+};
+
+const productCategoryCandidates = (product: any): string[] => (
+    asReferenceList([
+        product?.category,
+        product?.categoria,
+        product?.posCategoryName,
+        product?.pos_category_name,
+        product?.posCategoryId,
+        product?.pos_category_id,
+        product?.categoryId,
+        product?.category_id,
+    ])
+);
+
+const productMatchesCategory = (product: any, categoryRef: unknown): boolean => {
+    const target = normalizeMatchToken(categoryRef);
+    if (!target) return false;
+    return productCategoryCandidates(product).some((candidate) => normalizeMatchToken(candidate) === target);
+};
 
 const terminalReferenceCandidates = (config: BusinessConfig, terminalId: string): string[] => {
     const normalizedRequestedId = String(terminalId || '').trim();
@@ -58,8 +97,36 @@ const promotionMatchesTerminalScope = (promotion: Promotion, config: BusinessCon
 const promotionMatchesResolvedRefs = (promotion: Promotion, product: any): boolean => {
     const refs = Array.isArray(promotion.targetRefs) ? promotion.targetRefs.filter(Boolean) : [];
     if (refs.length === 0) return false;
-    const refSet = new Set(refs.map((value) => String(value).trim()).filter(Boolean));
-    return productReferenceCandidates(product).some((candidate) => refSet.has(candidate));
+    return productMatchesReferenceList(product, refs);
+};
+
+const promotionMatchesTargetReference = (promotion: Promotion, product: any): boolean => (
+    productMatchesAnyReference(product, [promotion.targetValue])
+    || promotionMatchesResolvedRefs(promotion, product)
+);
+
+const productBelongsToReferenceGroup = (product: any, productIds?: unknown[]): boolean => (
+    productMatchesReferenceList(product, Array.isArray(productIds) ? productIds : [])
+);
+
+const promotionTargetsProduct = (promotion: Promotion, product: any, config: BusinessConfig): boolean => {
+    if (promotion.targetType === 'ALL') return true;
+    if (promotion.targetType === 'PRODUCT') return promotionMatchesTargetReference(promotion, product);
+    if (promotion.targetType === 'CATEGORY') return productMatchesCategory(product, promotion.targetValue);
+
+    if (promotion.targetType === 'GROUP') {
+        const group = config.productGroups?.find((g) => normalizeMatchToken(g.id) === normalizeMatchToken(promotion.targetValue));
+        if (group && productBelongsToReferenceGroup(product, group.productIds)) return true;
+        return promotionMatchesTargetReference(promotion, product);
+    }
+
+    if (promotion.targetType === 'SEASON') {
+        const season = config.seasons?.find((s) => normalizeMatchToken(s.id) === normalizeMatchToken(promotion.targetValue));
+        if (season && productBelongsToReferenceGroup(product, season.productIds)) return true;
+        return promotionMatchesTargetReference(promotion, product);
+    }
+
+    return false;
 };
 
 const isPromotionActive = (promotion: Promotion): boolean => promotion.schedule?.isActive !== false;
@@ -129,24 +196,7 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
     processedCart = processedCart.map(item => {
         // Find ALL applicable promotions for this item
         const applicablePromos = activePromotions.filter(p => {
-            if (p.targetType === 'ALL') return true;
-            if (p.targetType === 'PRODUCT' && (p.targetValue === item.id || promotionMatchesResolvedRefs(p, item))) return true;
-            if (p.targetType === 'CATEGORY' && p.targetValue === item.category) return true;
-
-
-            if (p.targetType === 'GROUP') {
-                const group = config.productGroups?.find(g => g.id === p.targetValue);
-                if (group && group.productIds.includes(item.id)) return true;
-                if (promotionMatchesResolvedRefs(p, item)) return true;
-            }
-
-            if (p.targetType === 'SEASON') {
-                const season = config.seasons?.find(s => s.id === p.targetValue);
-                if (season && season.productIds.includes(item.id)) return true;
-                if (promotionMatchesResolvedRefs(p, item)) return true;
-            }
-
-            return false;
+            return promotionTargetsProduct(p, item, config);
         });
 
         if (
@@ -338,22 +388,6 @@ export const hasProductPromotion = (product: any, config: BusinessConfig, termin
 
     // 2. Check if any active promotion targets this product
     return activePromotions.some(p => {
-        if (p.targetType === 'ALL') return true;
-        if (p.targetType === 'PRODUCT' && (p.targetValue === product.id || promotionMatchesResolvedRefs(p, product))) return true;
-        if (p.targetType === 'CATEGORY' && p.targetValue === product.category) return true;
-
-        if (p.targetType === 'GROUP') {
-            const group = config.productGroups?.find(g => g.id === p.targetValue);
-            if (group && group.productIds.includes(product.id)) return true;
-            if (promotionMatchesResolvedRefs(p, product)) return true;
-        }
-
-        if (p.targetType === 'SEASON') {
-            const season = config.seasons?.find(s => s.id === p.targetValue);
-            if (season && season.productIds.includes(product.id)) return true;
-            if (promotionMatchesResolvedRefs(p, product)) return true;
-        }
-
-        return false;
+        return promotionTargetsProduct(p, product, config);
     });
 };
