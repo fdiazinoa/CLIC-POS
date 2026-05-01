@@ -25,6 +25,13 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
     const [kitchenEnabled, setKitchenEnabled] = useState(false);
     const kdsTerminals = terminals.filter((terminal) => {
         const terminalConfig = terminal?.config || {};
+        const terminalSnapshots = (config as any)?.terminalSnapshots || {};
+        const erpTerminalId = terminalConfig.erpTerminalId || terminalConfig.erpBinding?.terminalId;
+        const snapshot = terminalSnapshots[terminal?.id] || (erpTerminalId ? terminalSnapshots[erpTerminalId] : null) || terminalConfig.erpSnapshot;
+        const snapshotConfig = snapshot?.config || {};
+        const snapshotResolved = snapshot?.resolved || {};
+        const snapshotIdentity = snapshotResolved?.identity || {};
+        const snapshotTerminal = snapshotResolved?.terminal || {};
         const role = resolveDeviceRoleValue([
             terminalConfig.deviceRole,
             terminalConfig.deviceRole?.role,
@@ -38,6 +45,29 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
             terminal?.role_code,
             terminal?.device_role_code,
             terminal?.role,
+            snapshot?.deviceRole,
+            snapshot?.device_role,
+            snapshot?.role_code,
+            snapshot?.device_role_code,
+            snapshot?.role,
+            snapshotConfig?.deviceRole,
+            snapshotConfig?.device_role,
+            snapshotConfig?.role_code,
+            snapshotConfig?.device_role_code,
+            snapshotConfig?.role,
+            snapshotResolved?.deviceRole,
+            snapshotResolved?.device_role,
+            snapshotResolved?.role_code,
+            snapshotResolved?.device_role_code,
+            snapshotResolved?.role,
+            snapshotIdentity?.deviceRole,
+            snapshotIdentity?.device_role,
+            snapshotIdentity?.role_code,
+            snapshotIdentity?.device_role_code,
+            snapshotTerminal?.deviceRole,
+            snapshotTerminal?.device_role,
+            snapshotTerminal?.role_code,
+            snapshotTerminal?.device_role_code,
         ]);
         return role === DeviceRole.KITCHEN_DISPLAY;
     });
