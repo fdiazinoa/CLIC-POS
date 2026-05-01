@@ -9,6 +9,15 @@ const normalizeString = (value: unknown): string | undefined => {
     return trimmed.length > 0 ? trimmed : undefined;
 };
 
+const pickGatewayString = (source: Record<string, any>, keys: string[]): string | undefined => {
+    for (const key of keys) {
+        const value = source?.[key];
+        if (typeof value === 'string' && value.trim()) return value.trim();
+        if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+    }
+    return undefined;
+};
+
 const round4 = (value: number): number => Math.round((value + Number.EPSILON) * 10000) / 10000;
 const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
 const normalizeNumber = (value: unknown): number | undefined => {
@@ -108,6 +117,27 @@ const normalizePaymentEntries = (
         const changeCurrencyCode =
             normalizeString(payment?.change_currency_code) ||
             normalizeString(payment?.changeCurrencyCode);
+        const gatewayAuthorizationCode = pickGatewayString(payment, [
+            'gatewayAuthorizationCode',
+            'authorizationCode',
+            'authCode',
+            'authorizationNumber',
+            'AuthorizationNumber',
+            'authorization_number',
+            'HostAuthorizationCode',
+            'hostAuthorizationCode',
+            'AUT',
+        ]);
+        const gatewayReference = pickGatewayString(payment, [
+            'gatewayReference',
+            'referenceNumber',
+            'transactionReference',
+            'gatewayTransactionReference',
+            'reference',
+            'reference_no',
+            'referenceNo',
+            'REF',
+        ]);
 
         // Sync only the minimal payment shape required by master/ERP.
         // Integrated card metadata stays in the local sale, but should not block
@@ -130,6 +160,25 @@ const normalizePaymentEntries = (
             changeAmount,
             changeCurrencyCode,
             amountApplied: appliedAmount,
+            gatewayProvider: payment?.gatewayProvider,
+            gatewayIntegrationId: normalizeString(payment?.gatewayIntegrationId),
+            gatewayTransactionType: payment?.gatewayTransactionType,
+            gatewayStatus: normalizeString(payment?.gatewayStatus),
+            gatewayResponseCode: normalizeString(payment?.gatewayResponseCode),
+            gatewayResponseMessage: normalizeString(payment?.gatewayResponseMessage),
+            gatewayAuthorizationCode,
+            gatewayReference,
+            gatewaySequenceNumber: normalizeString(payment?.gatewaySequenceNumber),
+            gatewayInvoiceNumber: normalizeString(payment?.gatewayInvoiceNumber),
+            gatewayBatchNumber: normalizeString(payment?.gatewayBatchNumber),
+            gatewayMerchantId: normalizeString(payment?.gatewayMerchantId),
+            gatewayTerminalId: normalizeString(payment?.gatewayTerminalId),
+            gatewayOrderNumber: normalizeString(payment?.gatewayOrderNumber),
+            gatewayProcessedAmount: normalizeNumber(payment?.gatewayProcessedAmount),
+            gatewayProcessedTaxAmount: normalizeNumber(payment?.gatewayProcessedTaxAmount),
+            gatewayMaskedPan: normalizeString(payment?.gatewayMaskedPan),
+            gatewayCardBrand: normalizeString(payment?.gatewayCardBrand),
+            gatewayEntryMode: normalizeString(payment?.gatewayEntryMode),
         };
 
         return {

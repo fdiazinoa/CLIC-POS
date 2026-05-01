@@ -132,6 +132,49 @@ const extractGatewayOrderNumber = (payment: PaymentEntry): string => {
    return /^\d+$/.test(rawOrderNumber) ? rawOrderNumber : '';
 };
 
+const pickGatewayPaymentString = (payment: Partial<PaymentEntry> | Record<string, any>, keys: string[]): string => {
+   for (const key of keys) {
+      const value = (payment as Record<string, any>)?.[key];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+      if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+   }
+   return '';
+};
+
+const resolveGatewayAuthorizationCode = (payment: Partial<PaymentEntry> | Record<string, any>): string => (
+   pickGatewayPaymentString(payment, [
+      'gatewayAuthorizationCode',
+      'authorizationCode',
+      'authCode',
+      'authorizationNumber',
+      'AuthorizationNumber',
+      'authorization_number',
+      'HostAuthorizationCode',
+      'hostAuthorizationCode',
+      'AUT',
+   ])
+);
+
+const resolveGatewayReferenceNumber = (payment: Partial<PaymentEntry> | Record<string, any>): string => (
+   pickGatewayPaymentString(payment, [
+      'gatewayReference',
+      'referenceNumber',
+      'transactionReference',
+      'gatewayTransactionReference',
+      'reference',
+      'reference_no',
+      'referenceNo',
+      'REF',
+   ])
+);
+
+const resolveGatewayProviderLabel = (payment: Partial<PaymentEntry> | Record<string, any>): string => {
+   const provider = pickGatewayPaymentString(payment, ['gatewayProvider', 'provider']).toUpperCase();
+   if (provider === 'AZUL') return 'AZUL';
+   if (provider === 'INGENICO_AZUL_WEBAPI') return 'Ingenico Azul';
+   return provider || '';
+};
+
 const resolveAzulVoidResolution = (
    transaction: Transaction,
    refundItems: CartItem[],
@@ -200,7 +243,7 @@ const resolveAzulVoidResolution = (
       };
    }
 
-   const authorizationNumber = String(salePayment.gatewayAuthorizationCode || '').trim();
+   const authorizationNumber = resolveGatewayAuthorizationCode(salePayment);
    if (!authorizationNumber) {
       return {
          mode: 'BLOCK',
@@ -864,10 +907,13 @@ const TicketDetailDrawer: React.FC<{
                         ) : (
                            payments.map((payment: any, index: number) => {
                               const settlementLine = paymentLineById.get(payment?.id);
+                              const gatewayProviderLabel = resolveGatewayProviderLabel(payment);
+                              const gatewayAuthorizationCode = resolveGatewayAuthorizationCode(payment);
+                              const gatewayReference = resolveGatewayReferenceNumber(payment);
                               const showAzulRefs =
-                                 payment?.gatewayProvider === 'AZUL' ||
-                                 payment?.gatewayAuthorizationCode ||
-                                 payment?.gatewayReference;
+                                 Boolean(gatewayProviderLabel) ||
+                                 Boolean(gatewayAuthorizationCode) ||
+                                 Boolean(gatewayReference);
                               const paymentCurrencyCode = settlementLine?.currencyCode || payment?.currencyCode || baseCurrency.code;
                               const paymentCurrencySymbol = resolveCurrencySymbol(config, paymentCurrencyCode, config.currencySymbol);
                               const receivedOriginal = settlementLine?.receivedOriginal ?? Number(payment?.amountOriginal || payment?.amount || 0);
@@ -915,16 +961,22 @@ const TicketDetailDrawer: React.FC<{
                                                 {config.currencySymbol}{changeBase.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                              </p>
                                           ) : null}
-                                          {payment?.gatewayAuthorizationCode ? (
+                                          {gatewayProviderLabel ? (
                                              <p className="text-[11px] text-gray-700">
-                                                <span className="font-semibold text-gray-500">AUT No.:</span>{' '}
-                                                <span className="font-mono">{payment.gatewayAuthorizationCode}</span>
+                                                <span className="font-semibold text-gray-500">Procesador:</span>{' '}
+                                                <span className="font-mono">{gatewayProviderLabel}</span>
                                              </p>
                                           ) : null}
-                                          {payment?.gatewayReference ? (
+                                          {gatewayAuthorizationCode ? (
+                                             <p className="text-[11px] text-gray-700">
+                                                <span className="font-semibold text-gray-500">AUT No.:</span>{' '}
+                                                <span className="font-mono">{gatewayAuthorizationCode}</span>
+                                             </p>
+                                          ) : null}
+                                          {gatewayReference ? (
                                              <p className="text-[11px] text-gray-700">
                                                 <span className="font-semibold text-gray-500">Ref No.:</span>{' '}
-                                                <span className="font-mono">{payment.gatewayReference}</span>
+                                                <span className="font-mono">{gatewayReference}</span>
                                              </p>
                                           ) : null}
                                        </div>

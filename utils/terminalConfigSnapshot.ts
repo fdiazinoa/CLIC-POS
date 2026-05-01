@@ -428,8 +428,18 @@ const normalizePromotionFromErpPayload = (raw: unknown): Promotion | null => {
           filterValue: stratRaw.filterValue as string | number | undefined,
           tieBreaker: stratRaw.tieBreaker as NonNullable<Promotion['targetStrategy']>['tieBreaker'],
           allowSelfTrigger: stratRaw.allowSelfTrigger as boolean | undefined,
-        }
+      }
       : undefined;
+
+  const targetRefs = [
+    ...asArray<string>(data.targetRefs ?? data.target_refs),
+    ...asArray<string>(data.productIds ?? data.product_ids),
+    ...asArray<string>(data.itemIds ?? data.item_ids),
+    ...asArray<string>(data.targetIds ?? data.target_ids),
+    ...asArray<string>(data.targets),
+  ]
+    .map((x) => asString(x))
+    .filter(Boolean);
 
   return {
     id,
@@ -440,9 +450,7 @@ const normalizePromotionFromErpPayload = (raw: unknown): Promotion | null => {
     targetType: normalizePromotionTargetType(data.targetType),
     targetValue: data.targetValue != null ? asString(data.targetValue) : undefined,
     targetLabel: asString(data.targetLabel || data.target_label) || undefined,
-    targetRefs: asArray<string>(data.targetRefs ?? data.target_refs)
-      .map((x) => asString(x))
-      .filter(Boolean),
+    targetRefs,
     targetStrategy,
     benefitValue: asNumber(data.benefitValue ?? data.benefit_value, 0),
     schedule: {
