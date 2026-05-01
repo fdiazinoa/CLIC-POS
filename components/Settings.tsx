@@ -486,6 +486,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
             </button>
             <ProductionAreaManager
               terminals={props.config.terminals}
+              config={props.config}
+              onUpdateConfig={props.onUpdateConfig}
             />
           </div>
         );
