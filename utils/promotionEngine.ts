@@ -4,12 +4,18 @@ import { productReferenceCandidates as getProductReferenceCandidates } from './p
 const round4 = (value: number): number => Math.round((value + Number.EPSILON) * 10000) / 10000;
 const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
 
-const normalizeMatchToken = (value: unknown): string =>
-    typeof value === 'string'
-        ? value.trim().toLowerCase()
+const normalizeMatchToken = (value: unknown): string => {
+    const raw = typeof value === 'string'
+        ? value.trim()
         : value != null
-            ? String(value).trim().toLowerCase()
+            ? String(value).trim()
             : '';
+
+    return raw
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+};
 
 const asReferenceList = (values: unknown[]): string[] => (
     values
@@ -46,10 +52,24 @@ const productCategoryCandidates = (product: any): string[] => (
     ])
 );
 
+const comparableCategoryTokens = (value: unknown): string[] => {
+    const token = normalizeMatchToken(value);
+    if (!token) return [];
+
+    const singularOrPlural = token.length > 3
+        ? (token.endsWith('s') ? token.slice(0, -1) : `${token}s`)
+        : token;
+
+    return Array.from(new Set([token, singularOrPlural].filter(Boolean)));
+};
+
 const productMatchesCategory = (product: any, categoryRef: unknown): boolean => {
-    const target = normalizeMatchToken(categoryRef);
-    if (!target) return false;
-    return productCategoryCandidates(product).some((candidate) => normalizeMatchToken(candidate) === target);
+    const targetTokens = new Set(comparableCategoryTokens(categoryRef));
+    if (targetTokens.size === 0) return false;
+
+    return productCategoryCandidates(product).some((candidate) => (
+        comparableCategoryTokens(candidate).some((token) => targetTokens.has(token))
+    ));
 };
 
 const terminalReferenceCandidates = (config: BusinessConfig, terminalId: string): string[] => {
@@ -105,6 +125,12 @@ const promotionMatchesTargetReference = (promotion: Promotion, product: any): bo
     || promotionMatchesResolvedRefs(promotion, product)
 );
 
+const promotionMatchesCategoryTarget = (promotion: Promotion, product: any): boolean => (
+    productMatchesCategory(product, promotion.targetValue)
+    || productMatchesCategory(product, promotion.targetLabel)
+    || (Array.isArray(promotion.targetRefs) && promotion.targetRefs.some((ref) => productMatchesCategory(product, ref)))
+);
+
 const productBelongsToReferenceGroup = (product: any, productIds?: unknown[]): boolean => (
     productMatchesReferenceList(product, Array.isArray(productIds) ? productIds : [])
 );
@@ -112,7 +138,7 @@ const productBelongsToReferenceGroup = (product: any, productIds?: unknown[]): b
 const promotionTargetsProduct = (promotion: Promotion, product: any, config: BusinessConfig): boolean => {
     if (promotion.targetType === 'ALL') return true;
     if (promotion.targetType === 'PRODUCT') return promotionMatchesTargetReference(promotion, product);
-    if (promotion.targetType === 'CATEGORY') return productMatchesCategory(product, promotion.targetValue);
+    if (promotion.targetType === 'CATEGORY') return promotionMatchesCategoryTarget(promotion, product);
 
     if (promotion.targetType === 'GROUP') {
         const group = config.productGroups?.find((g) => normalizeMatchToken(g.id) === normalizeMatchToken(promotion.targetValue));
