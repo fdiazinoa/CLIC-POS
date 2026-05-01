@@ -420,22 +420,32 @@ const normalizePromotionFromErpPayload = (raw: unknown): Promotion | null => {
         }
       : undefined;
 
-  const stratRaw = asObject(data.targetStrategy);
+  const stratRaw = asObject(data.targetStrategy ?? data.target_strategy);
   const targetStrategy =
-    stratRaw && (stratRaw.mode != null || stratRaw.filterValue != null)
+    stratRaw && (stratRaw.mode != null || stratRaw.filterValue != null || stratRaw.filter_value != null)
       ? {
           mode: (asString(stratRaw.mode) || 'CHEAPEST_ITEM') as NonNullable<Promotion['targetStrategy']>['mode'],
-          filterValue: stratRaw.filterValue as string | number | undefined,
-          tieBreaker: stratRaw.tieBreaker as NonNullable<Promotion['targetStrategy']>['tieBreaker'],
-          allowSelfTrigger: stratRaw.allowSelfTrigger as boolean | undefined,
+          filterValue: (stratRaw.filterValue ?? stratRaw.filter_value) as string | number | undefined,
+          tieBreaker: (stratRaw.tieBreaker ?? stratRaw.tie_breaker) as NonNullable<Promotion['targetStrategy']>['tieBreaker'],
+          allowSelfTrigger: (stratRaw.allowSelfTrigger ?? stratRaw.allow_self_trigger) as boolean | undefined,
       }
       : undefined;
 
+  const targetTypeRaw = data.targetType ?? data.target_type;
+  const targetValueRaw =
+    data.targetValue ??
+    data.target_value ??
+    data.targetId ??
+    data.target_id ??
+    data.categoryId ??
+    data.category_id;
   const targetRefs = [
     ...asArray<string>(data.targetRefs ?? data.target_refs),
     ...asArray<string>(data.productIds ?? data.product_ids),
     ...asArray<string>(data.itemIds ?? data.item_ids),
+    ...asArray<string>(data.categoryIds ?? data.category_ids),
     ...asArray<string>(data.targetIds ?? data.target_ids),
+    ...asArray<string>(data.targetValues ?? data.target_values),
     ...asArray<string>(data.targets),
   ]
     .map((x) => asString(x))
@@ -447,8 +457,8 @@ const normalizePromotionFromErpPayload = (raw: unknown): Promotion | null => {
     type,
     priority: asNumber(data.priority, 1),
     trigger,
-    targetType: normalizePromotionTargetType(data.targetType),
-    targetValue: data.targetValue != null ? asString(data.targetValue) : undefined,
+    targetType: normalizePromotionTargetType(targetTypeRaw),
+    targetValue: targetValueRaw != null ? asString(targetValueRaw) : undefined,
     targetLabel: asString(data.targetLabel || data.target_label) || undefined,
     targetRefs,
     targetStrategy,
