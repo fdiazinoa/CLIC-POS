@@ -160,6 +160,7 @@ import {
 } from './utils/fiscal/fiscalHelpers';
 import { getFiscalDocumentStatus, issueFiscalDocument } from './services/fiscal/fiscalService';
 import { azulMcmService } from './services/payments/AzulMcmService';
+import { ingenicoAzulWebApiService } from './services/payments/IngenicoAzulWebApiService';
 import { couponService } from './utils/couponService';
 
 type ReceivableRepairSummary = {
@@ -5425,6 +5426,7 @@ const AppContent: React.FC = () => {
             onOpenCustomers={() => setCurrentView('CUSTOMERS')}
             onOpenHistory={() => setCurrentView('HISTORY')}
             onOpenFinance={() => handleViewChange('FINANCE')}
+            onOpenZReport={() => handleViewChange('Z_REPORT')}
             onOpenInventoryTracking={(productId) => handleViewChange('TRACKING', { productId })}
             onOpenAudit={() => handleViewChange('INVENTORY_AUDIT')}
             onOpenTableMap={() => handleViewChange('TABLE_MAP')}
@@ -6184,43 +6186,50 @@ const AppContent: React.FC = () => {
                     throw new Error(`El medio de pago ${method.label} no tiene una integración válida asignada.`);
                   }
 
-                  if (assignedIntegration.provider !== 'AZUL') {
-                    throw new Error(`La integración ${assignedIntegration.provider} todavía no está soportada en self checkout.`);
-                  }
-
                   const gatewayOrderNumber = createKioskGatewayOrderNumber();
-                  const azulResponse = await azulMcmService.sale(assignedIntegration, {
-                    amount: total,
-                    itbis: tax,
-                    orderNumber: gatewayOrderNumber,
-                    installment: '0',
-                  });
+                  const gatewayResult = assignedIntegration.provider === 'AZUL'
+                    ? await azulMcmService.sale(assignedIntegration, {
+                      amount: total,
+                      itbis: tax,
+                      orderNumber: gatewayOrderNumber,
+                      installment: '0',
+                    })
+                    : assignedIntegration.provider === 'INGENICO_AZUL_WEBAPI'
+                      ? await ingenicoAzulWebApiService.sale(assignedIntegration, {
+                        amount: total,
+                      })
+                      : (() => {
+                        throw new Error(`La integración ${assignedIntegration.provider} todavía no está soportada en self checkout.`);
+                      })();
+                  const gatewayReference = 'referenceNumber' in gatewayResult
+                    ? gatewayResult.referenceNumber
+                    : ('transactionReference' in gatewayResult ? gatewayResult.transactionReference : undefined);
 
                   gatewayPaymentFields = {
-                    gatewayProvider: 'AZUL',
+                    gatewayProvider: assignedIntegration.provider,
                     gatewayIntegrationId: assignedIntegration.id,
                     gatewayTransactionType: 'SALE',
-                    gatewayStatus: azulResponse.approved ? 'APPROVED' : 'DECLINED',
-                    gatewayResponseCode: azulResponse.responseCode,
-                    gatewayResponseMessage: azulResponse.responseMessage,
-                    gatewayOrderNumber: azulResponse.orderNumber || gatewayOrderNumber,
+                    gatewayStatus: gatewayResult.approved ? 'APPROVED' : 'DECLINED',
+                    gatewayResponseCode: gatewayResult.responseCode,
+                    gatewayResponseMessage: gatewayResult.responseMessage,
+                    gatewayOrderNumber: 'orderNumber' in gatewayResult ? (gatewayResult.orderNumber || gatewayOrderNumber) : gatewayOrderNumber,
                     gatewayProcessedAmount: total,
-                    gatewayProcessedTaxAmount: tax,
-                    gatewayAuthorizationCode: azulResponse.authorizationCode,
-                    gatewayReference: azulResponse.referenceNumber,
-                    gatewaySequenceNumber: azulResponse.sequenceNumber,
-                    gatewayInvoiceNumber: azulResponse.invoiceNumber,
-                    gatewayBatchNumber: azulResponse.batchNumber,
-                    gatewayMerchantId: azulResponse.merchantId,
-                    gatewayTerminalId: azulResponse.terminalId,
-                    gatewayMaskedPan: azulResponse.maskedPan,
-                    gatewayCardBrand: azulResponse.cardBrand,
-                    gatewayEntryMode: azulResponse.entryMode,
-                    gatewayReceiptMerchant: azulResponse.receiptMerchant,
-                    gatewayReceiptClient: azulResponse.receiptClient,
-                    gatewaySignatureData: azulResponse.signatureData,
-                    gatewayRequireSignature: azulResponse.requireSignature,
-                    gatewayRawResponse: azulResponse.rawResponse,
+                    gatewayProcessedTaxAmount: assignedIntegration.provider === 'AZUL' ? tax : 0,
+                    gatewayAuthorizationCode: gatewayResult.authorizationCode,
+                    gatewayReference,
+                    gatewaySequenceNumber: 'sequenceNumber' in gatewayResult ? gatewayResult.sequenceNumber : undefined,
+                    gatewayInvoiceNumber: gatewayResult.invoiceNumber,
+                    gatewayBatchNumber: gatewayResult.batchNumber,
+                    gatewayMerchantId: gatewayResult.merchantId,
+                    gatewayTerminalId: gatewayResult.terminalId,
+                    gatewayMaskedPan: gatewayResult.maskedPan,
+                    gatewayCardBrand: gatewayResult.cardBrand,
+                    gatewayEntryMode: gatewayResult.entryMode,
+                    gatewayReceiptMerchant: gatewayResult.receiptMerchant,
+                    gatewayReceiptClient: gatewayResult.receiptClient,
+                    gatewaySignatureData: 'signatureData' in gatewayResult ? gatewayResult.signatureData : undefined,
+                    gatewayRequireSignature: 'requireSignature' in gatewayResult ? gatewayResult.requireSignature : false,
+                    gatewayRawResponse: gatewayResult.rawResponse,
                   };
                 }
 
