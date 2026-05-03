@@ -2068,6 +2068,7 @@ export type Permission =
   | 'POS_NEW_SALE'
   | 'POS_CHANGE_TARIFF'
   | 'POS_CLOSE_Z'
+  | 'POS_REPEAT_Z_REPORT'
   | 'POS_VIEW_ACTIVE_CASH'
   | 'POS_MANAGE_PARKED'
 
@@ -2207,6 +2208,14 @@ export interface ZReportSyncAudit {
   last_ticket_id: string | null;
 }
 
+export interface ZReportDenominationLine {
+  denomination: number;
+  quantity: number;
+  total: number;
+}
+
+export type ZReportDenominationBreakdown = Record<string, ZReportDenominationLine[]>;
+
 export interface ZReport {
   id: string;
   terminalId: string;
@@ -2230,6 +2239,8 @@ export interface ZReport {
   cashExpected: Record<string, number>;
   cashCounted: Record<string, number>;
   cashDiscrepancy: Record<string, number>;
+  denominationBreakdown?: ZReportDenominationBreakdown;
+  denomination_breakdown?: ZReportDenominationBreakdown;
 
   // Movements
   cashSales: number;

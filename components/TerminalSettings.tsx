@@ -428,6 +428,14 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  icon={ListChecks}
                                  disabled={isReadOnly}
                               />
+                              <Toggle
+                                 label="Conteo por Denominación"
+                                 description="Exige declarar cantidades por billete/moneda durante el Cierre Z."
+                                 checked={Boolean(activeTerminal.config.workflow.session.forceDenominationCount)}
+                                 onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'forceDenominationCount', v)}
+                                 icon={Coins}
+                                 disabled={isReadOnly}
+                              />
                            </div>
                         )}
 

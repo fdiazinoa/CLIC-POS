@@ -401,6 +401,7 @@ export const AVAILABLE_PERMISSIONS = [
   // --- CASH & FINANCE ---
   { key: 'POS_OPEN_DRAWER', label: 'Abrir Cajón', description: 'Sin venta', category: 'CASH' },
   { key: 'POS_CLOSE_Z', label: 'Cierre Z (Corte)', description: 'Realizar cierre de caja', category: 'CASH' },
+  { key: 'POS_REPEAT_Z_REPORT', label: 'Repetir Cierre Z', description: 'Permite repetir/imprimir un cierre Z desde el historial', category: 'CASH' },
   { key: 'POS_VIEW_X_REPORT', label: 'Ver Reporte X', description: 'Consultar ventas en Monitor (Reporte X)', category: 'CASH' },
   { key: 'POS_VIEW_ACTIVE_CASH', label: 'Ver Efectivo Actual', description: 'Auditoría de caja en tiempo real', category: 'CASH' },
   { key: 'CASH_IN_OUT', label: 'Entrada/Salida Efectivo', description: 'Registrar entradas y salidas de caja', category: 'CASH' },

@@ -18,13 +18,20 @@
   right: 2rem;
   z-index: 20;
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.6rem 0.9rem;
-  border-radius: 999px;
+  gap: 0.18rem;
+  padding: 0.62rem 1rem;
+  border-radius: 1.25rem;
   background: rgba(15, 23, 42, 0.78);
   border: 1px solid rgba(148, 163, 184, 0.18);
   box-shadow: 0 10px 30px rgba(2, 6, 23, 0.35);
+}
+
+.modern-login-brand-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
   letter-spacing: 0.18em;
   font-weight: 800;
   font-size: 0.78rem;
@@ -36,6 +43,14 @@
 
 .modern-login-brand-pos {
   color: #38bdf8;
+}
+
+.modern-login-brand-time {
+  color: rgba(226, 232, 240, 0.82);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .modern-login-card {
@@ -311,6 +326,10 @@
   .modern-login-brand {
     top: 1rem;
     right: 1rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .modern-login-brand-wordmark {
     font-size: 0.72rem;
   }
 
