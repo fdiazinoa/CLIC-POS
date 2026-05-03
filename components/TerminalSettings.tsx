@@ -144,6 +144,12 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
          !activeTerminal.config.isPrimaryNode;
    }, [activeTerminal, currentDeviceId]);
 
+   const clampInteger = (rawValue: string, min: number, max?: number) => {
+      const parsed = Number.parseInt(rawValue || String(min), 10);
+      const safeValue = Number.isFinite(parsed) ? parsed : min;
+      return typeof max === 'number' ? Math.max(min, Math.min(max, safeValue)) : Math.max(min, safeValue);
+   };
+
    const handleUpdateActiveConfig = (sectionPath: string, key: string, value: any) => {
       if (!activeTerminal) return;
       setTerminals(prev => prev.map(t => {
@@ -411,31 +417,112 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
 
                         {activeTab === 'SESSION' && (
                            <div className="space-y-6">
-                              <h3 className="text-2xl font-black text-slate-800 flex items-center gap-3"><Clock className="text-purple-500" /> Sesión</h3>
-                              <Toggle
-                                 label="Cierre Ciego"
-                                 description="Permite cerrar la caja sin exigir arqueo visible al cajero."
-                                 checked={activeTerminal.config.workflow.session.blindClose}
-                                 onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'blindClose', v)}
-                                 icon={ShieldQuestion}
-                                 disabled={isReadOnly}
-                              />
-                              <Toggle
-                                 label="Validar Mesas"
-                                 description="Verifica órdenes abiertas o pendientes antes del cierre operativo."
-                                 checked={activeTerminal.config.workflow.session.checkOpenOrders}
-                                 onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'checkOpenOrders', v)}
-                                 icon={ListChecks}
-                                 disabled={isReadOnly}
-                              />
-                              <Toggle
-                                 label="Conteo por Denominación"
-                                 description="Exige declarar cantidades por billete/moneda durante el Cierre Z."
-                                 checked={Boolean(activeTerminal.config.workflow.session.forceDenominationCount)}
-                                 onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'forceDenominationCount', v)}
-                                 icon={Coins}
-                                 disabled={isReadOnly}
-                              />
+                              <h3 className="text-2xl font-black text-slate-800 flex items-center gap-3"><Clock className="text-purple-500" /> Sesión y Cierre Z</h3>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                 <Toggle
+                                    label="Requiere apertura de sesión"
+                                    description="La terminal debe abrir turno antes de vender."
+                                    checked={activeTerminal.config.workflow.session.allowSalesWithOpenZ === false}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'allowSalesWithOpenZ', !v)}
+                                    icon={Power}
+                                    disabled={isReadOnly}
+                                 />
+                                 <Toggle
+                                    label="Permitir reporte X parcial"
+                                    description="Muestra el monitor Reporte X en Finanzas y permite asignar su serie."
+                                    checked={activeTerminal.config.workflow.session.allowPartialXReport !== false}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'allowPartialXReport', v)}
+                                    icon={FileText}
+                                    disabled={isReadOnly}
+                                 />
+                                 <Toggle
+                                    label="Requiere cierre Z"
+                                    description="Marca el cierre formal como obligatorio antes de terminar jornada."
+                                    checked={Boolean(activeTerminal.config.workflow.session.forceZChange)}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'forceZChange', v)}
+                                    icon={Lock}
+                                    disabled={isReadOnly}
+                                 />
+                                 <Toggle
+                                    label="Impresión automática del Z"
+                                    description="Tras confirmar el cierre Z, envía el reporte a la impresora configurada."
+                                    checked={Boolean(activeTerminal.config.workflow.session.autoPrintZReport)}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'autoPrintZReport', v)}
+                                    icon={Printer}
+                                    disabled={isReadOnly}
+                                 />
+                                 <Toggle
+                                    label="Enviar Z por correo"
+                                    description="Habilita el envío por email según los destinatarios configurados."
+                                    checked={Boolean(activeTerminal.config.workflow.session.emailZReport)}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'emailZReport', v)}
+                                    icon={Mail}
+                                    disabled={isReadOnly}
+                                 />
+                                 <Toggle
+                                    label="Cierre Ciego"
+                                    description="Permite cerrar la caja sin exigir arqueo visible al cajero."
+                                    checked={activeTerminal.config.workflow.session.blindClose}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'blindClose', v)}
+                                    icon={ShieldQuestion}
+                                    disabled={isReadOnly}
+                                 />
+                                 <Toggle
+                                    label="Validar Mesas"
+                                    description="Verifica órdenes abiertas o pendientes antes del cierre operativo."
+                                    checked={activeTerminal.config.workflow.session.checkOpenOrders}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'checkOpenOrders', v)}
+                                    icon={ListChecks}
+                                    disabled={isReadOnly}
+                                 />
+                                 <Toggle
+                                    label="Conteo por Denominación"
+                                    description="Exige declarar cantidades por billete/moneda durante el Cierre Z."
+                                    checked={Boolean(activeTerminal.config.workflow.session.forceDenominationCount)}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'forceDenominationCount', v)}
+                                    icon={Coins}
+                                    disabled={isReadOnly}
+                                 />
+                              </div>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                 <label className="p-5 bg-slate-50 rounded-3xl border border-slate-100 space-y-3">
+                                    <span className="block text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Hora inicio jornada (0-23)</span>
+                                    <input
+                                       type="number"
+                                       min="0"
+                                       max="23"
+                                       value={activeTerminal.config.workflow.session.businessStartHour ?? 0}
+                                       onChange={(e) => handleUpdateActiveConfig('workflow.session', 'businessStartHour', clampInteger(e.target.value, 0, 23))}
+                                       disabled={isReadOnly}
+                                       className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-lg font-black text-slate-800 outline-none focus:border-blue-500 disabled:opacity-50"
+                                    />
+                                    <p className="text-xs font-medium text-slate-500">Delimita el día operativo para cierres Z.</p>
+                                 </label>
+                                 <label className="p-5 bg-slate-50 rounded-3xl border border-slate-100 space-y-3">
+                                    <span className="block text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Auto Lock (minutos)</span>
+                                    <input
+                                       type="number"
+                                       min="0"
+                                       value={activeTerminal.config.security.autoLogoutMinutes ?? 15}
+                                       onChange={(e) => handleUpdateActiveConfig('security', 'autoLogoutMinutes', clampInteger(e.target.value, 0))}
+                                       disabled={isReadOnly}
+                                       className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-lg font-black text-slate-800 outline-none focus:border-blue-500 disabled:opacity-50"
+                                    />
+                                    <p className="text-xs font-medium text-slate-500">0 desactiva el bloqueo automático.</p>
+                                 </label>
+                                 <label className="md:col-span-2 p-5 bg-slate-50 rounded-3xl border border-slate-100 space-y-3">
+                                    <span className="block text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Correos para reporte Z</span>
+                                    <textarea
+                                       value={activeTerminal.config.workflow.session.zReportEmails || ''}
+                                       onChange={(e) => handleUpdateActiveConfig('workflow.session', 'zReportEmails', e.target.value)}
+                                       disabled={isReadOnly || !activeTerminal.config.workflow.session.emailZReport}
+                                       placeholder="admin@empresa.com, supervisor@empresa.com"
+                                       rows={2}
+                                       className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 disabled:opacity-50"
+                                    />
+                                    <p className="text-xs font-medium text-slate-500">Separar múltiples destinatarios con coma.</p>
+                                 </label>
+                              </div>
                            </div>
                         )}
 

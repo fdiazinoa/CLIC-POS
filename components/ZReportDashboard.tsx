@@ -638,16 +638,19 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                                  </div>
                                  {useDenominationCount ? (
                                     <div className="space-y-3">
-                                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                                       <div className="overflow-hidden rounded-2xl border border-gray-100 bg-gray-50">
+                                          <div className="grid grid-cols-[1fr_120px] gap-3 px-4 py-2 text-[10px] font-black uppercase tracking-wider text-gray-400">
+                                             <span>Denominación</span>
+                                             <span className="text-right">Cantidad</span>
+                                          </div>
                                           {getDenominationsForCurrency(currencyCode).map((denomination, denominationIndex) => {
                                              const denominationKey = String(denomination);
                                              const quantity = denominationCounts[currencyCode]?.[denominationKey] || '';
-                                             const lineTotal = (Number(quantity) || 0) * denomination;
 
                                              return (
-                                                <label key={`${currencyCode}-${denominationKey}`} className="p-3 rounded-2xl border border-gray-100 bg-gray-50 space-y-2">
-                                                   <span className="block text-[10px] font-black text-gray-500 uppercase tracking-wider">
-                                                      {symbol}{formatDenomination(denomination)}
+                                                <label key={`${currencyCode}-${denominationKey}`} className="grid grid-cols-[1fr_120px] items-center gap-3 border-t border-gray-100 bg-white px-4 py-2">
+                                                   <span className="text-xl font-black text-gray-800">
+                                                      {formatDenomination(denomination)}.
                                                    </span>
                                                    <input
                                                       autoFocus={index === 0 && denominationIndex === 0}
@@ -664,11 +667,8 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                                                          }
                                                       }))}
                                                       placeholder="Cant."
-                                                      className="w-full px-3 py-2 text-lg font-black border-2 border-gray-200 rounded-xl focus:border-blue-500 outline-none transition-colors"
+                                                      className="w-full rounded-xl border-2 border-gray-200 px-3 py-2 text-right text-xl font-black outline-none transition-colors focus:border-blue-500"
                                                    />
-                                                   <span className="block text-right text-[11px] font-bold text-gray-500">
-                                                      {symbol}{lineTotal.toFixed(2)}
-                                                   </span>
                                                 </label>
                                              );
                                           })}
