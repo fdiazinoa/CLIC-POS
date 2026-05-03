@@ -2,19 +2,21 @@ import React, { useState, useEffect } from 'react';
 import {
     ArrowLeft, Calendar, Clock, DollarSign, FileText,
     Printer, Mail, ChevronRight, Search, AlertTriangle,
-    Banknote, CheckCircle
+    Banknote, CheckCircle, RefreshCw
 } from 'lucide-react';
-import { ZReport, BusinessConfig } from '../types';
+import { ZReport, BusinessConfig, User, RoleDefinition } from '../types';
 import { db } from '../utils/db';
 import { ThermalPrinterService } from '../services/printer/ThermalPrinterService';
 import { ZReportRecoveryService } from '../services/recovery/ZReportRecoveryService';
 
 interface ZReportHistoryProps {
     config: BusinessConfig;
+    currentUser?: User | null;
+    roles?: RoleDefinition[];
     onClose: () => void;
 }
 
-const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
+const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, roles = [], onClose }) => {
     const [reports, setReports] = useState<ZReport[]>([]);
     const [selectedReport, setSelectedReport] = useState<ZReport | null>(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -132,12 +134,24 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
         return `${currency}${amount.toFixed(2)}`;
     };
 
+    const hasPermission = (permission: string): boolean => {
+        if (!currentUser) return false;
+        const roleId = currentUser.roleId || currentUser.role;
+        const role = roles.find(r => r.id === roleId);
+        if (!role) return false;
+        return role.permissions.includes('ALL') || role.permissions.includes(permission as any);
+    };
+
+    const canRepeatZReport = hasPermission('POS_REPEAT_Z_REPORT');
+
     // --- DETAIL VIEW ---
     if (selectedReport) {
         const r = selectedReport;
         const cashDiscrepancy = r.cashDiscrepancy || {};
         const totalDiscrepancy = Object.values(cashDiscrepancy).reduce((a, b) => a + (b as number), 0);
         const hasDiscrepancy = Math.abs(totalDiscrepancy) > 0.01;
+        const denominationBreakdown = r.denominationBreakdown || (r as any).denomination_breakdown || {};
+        const hasDenominationBreakdown = Object.values(denominationBreakdown).some((lines: any) => Array.isArray(lines) && lines.length > 0);
 
         return (
             <div className="fixed inset-0 z-50 bg-gray-50 flex flex-col min-h-0 animate-in slide-in-from-right duration-300">
@@ -165,14 +179,16 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
                     </div>
 
                     <div className="flex gap-2">
-                        <button
-                            onClick={() => ThermalPrinterService.printZReport(r, [], config)}
-                            className="px-4 py-2 bg-gray-100 hover:bg-blue-600 hover:text-white rounded-xl text-gray-600 transition-all font-bold text-sm flex items-center gap-2 shadow-sm"
-                            title="Imprimir"
-                        >
-                            <Printer size={18} />
-                            <span className="hidden sm:inline">Imprimir</span>
-                        </button>
+                        {canRepeatZReport && (
+                            <button
+                                onClick={() => ThermalPrinterService.printZReport(r, [], config)}
+                                className="px-4 py-2 bg-blue-50 hover:bg-blue-600 hover:text-white rounded-xl text-blue-700 transition-all font-bold text-sm flex items-center gap-2 shadow-sm"
+                                title="Repetir cierre Z"
+                            >
+                                <RefreshCw size={18} />
+                                <span className="hidden sm:inline">Repetir Z</span>
+                            </button>
+                        )}
                         <button
                             onClick={async () => {
                                 // Try to get emails from the first terminal's workflow config or fallback to default
@@ -299,6 +315,33 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
                                 })}
                             </div>
                         </div>
+
+                        {hasDenominationBreakdown && (
+                            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                                <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 font-bold text-gray-700 flex items-center gap-2">
+                                    <Printer size={18} /> Desglose de Denominaciones
+                                </div>
+                                <div className="p-4 space-y-4">
+                                    {Object.entries(denominationBreakdown).map(([currency, lines]) => (
+                                        <div key={currency} className="space-y-2">
+                                            <p className="text-xs font-black uppercase tracking-wider text-gray-500">{currency}</p>
+                                            <div className="grid grid-cols-3 gap-3 text-xs font-bold text-gray-500 px-2">
+                                                <span>Denominación</span>
+                                                <span className="text-right">Cantidad</span>
+                                                <span className="text-right">Total</span>
+                                            </div>
+                                            {(Array.isArray(lines) ? lines : []).map((line: any) => (
+                                                <div key={`${currency}-${line.denomination}`} className="grid grid-cols-3 gap-3 py-2 border-t border-gray-100 px-2 text-sm">
+                                                    <span className="font-bold text-gray-800">{Number(line.denomination).toFixed(Number.isInteger(Number(line.denomination)) ? 0 : 2)}</span>
+                                                    <span className="text-right text-gray-600">{line.quantity}</span>
+                                                    <span className="text-right font-bold text-gray-800">{Number(line.total || 0).toFixed(2)}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
 
                         {/* Payment Methods */}
                         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">

@@ -73,8 +73,22 @@ const SlideButton: React.FC<{ onComplete: () => void; label: string; colorClass:
    );
 };
 
+const DENOMINATIONS_BY_CURRENCY: Record<string, number[]> = {
+   DOP: [2000, 1000, 500, 200, 100, 50, 25, 10, 5, 1],
+   USD: [100, 50, 20, 10, 5, 2, 1, 0.25, 0.1, 0.05, 0.01],
+   EUR: [500, 200, 100, 50, 20, 10, 5, 2, 1, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01],
+};
+
+const getDenominationsForCurrency = (currencyCode: string) =>
+   DENOMINATIONS_BY_CURRENCY[currencyCode] || [1000, 500, 200, 100, 50, 20, 10, 5, 1];
+
+const formatDenomination = (value: number) => (
+   Number.isInteger(value) ? value.toString() : value.toFixed(2)
+);
+
 const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashMovements, config, userName, currentUser, roles, onClose, onConfirmClose, terminalId, collections }) => {
    const [cashCountedByCurrency, setCashCountedByCurrency] = useState<Record<string, string>>({});
+   const [denominationCounts, setDenominationCounts] = useState<Record<string, Record<string, string>>>({});
    const [declaredCard, setDeclaredCard] = useState('');
    const [declaredOther, setDeclaredOther] = useState('');
    const [notes, setNotes] = useState('');
@@ -93,7 +107,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    // Permission checker
    const hasPermission = (permission: string): boolean => {
       if (!currentUser) return false;
-      const userRole = roles.find(r => r.id === currentUser.role);
+      const userRole = roles.find(r => r.id === (currentUser.roleId || currentUser.role));
       if (!userRole) return false;
       if (userRole.permissions.includes('ALL')) return true;
       return userRole.permissions.includes(permission as any);
@@ -103,6 +117,58 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const activeTerminal = config.terminals?.find(t => t.id === terminalId) || config.terminals?.[0];
    const activeTerminalConfig = activeTerminal?.config;
    const currentTerminalId = activeTerminal?.id || 'T1';
+   const useDenominationCount = Boolean(activeTerminalConfig?.workflow?.session?.forceDenominationCount);
+
+   const getDeclaredCashForCurrency = (currencyCode: string): number => {
+      if (!useDenominationCount) {
+         return parseFloat(cashCountedByCurrency[currencyCode]) || 0;
+      }
+
+      const counts = denominationCounts[currencyCode] || {};
+      return getDenominationsForCurrency(currencyCode).reduce((sum, denomination) => {
+         const quantity = parseFloat(counts[String(denomination)] || '0');
+         return sum + (Number.isFinite(quantity) ? quantity * denomination : 0);
+      }, 0);
+   };
+
+   const hasDeclaredCashForCurrency = (currencyCode: string): boolean => {
+      if (!useDenominationCount) {
+         const value = cashCountedByCurrency[currencyCode];
+         return value !== undefined && value !== '' && parseFloat(value) >= 0;
+      }
+
+      const counts = denominationCounts[currencyCode] || {};
+      return Object.values(counts).some(value => value !== '' && Number(value) >= 0);
+   };
+
+   const buildDenominationBreakdown = () => {
+      if (!useDenominationCount) return undefined;
+
+      return currenciesRequiringCashCount.reduce<Record<string, { denomination: number; quantity: number; total: number }[]>>((acc, currencyCode) => {
+         const counts = denominationCounts[currencyCode] || {};
+         const lines = getDenominationsForCurrency(currencyCode)
+            .map(denomination => {
+               const quantity = Number(counts[String(denomination)] || 0);
+               return {
+                  denomination,
+                  quantity: Number.isFinite(quantity) ? quantity : 0,
+                  total: Number.isFinite(quantity) ? denomination * quantity : 0,
+               };
+            })
+            .filter(line => line.quantity > 0);
+
+         acc[currencyCode] = lines;
+         return acc;
+      }, {});
+   };
+
+   const buildCashCountedData = () => {
+      const data: Record<string, number> = {};
+      currenciesRequiringCashCount.forEach((currencyCode) => {
+         data[currencyCode] = getDeclaredCashForCurrency(currencyCode);
+      });
+      return data;
+   };
 
    // FILTER: Solo data pendiente de esta terminal.
    const normalizeTerminalId = (value?: string | null) => (value || '').trim().toLowerCase();
@@ -123,13 +189,10 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
 
    const handleStartClosing = () => {
       const hasCashToCount = currenciesRequiringCashCount.length > 0;
-      const hasAnyCashCounted = currenciesRequiringCashCount.some(currencyCode => {
-         const value = cashCountedByCurrency[currencyCode];
-         return value !== undefined && value !== '' && parseFloat(value) >= 0;
-      });
+      const hasAllCashCounted = currenciesRequiringCashCount.every(currencyCode => hasDeclaredCashForCurrency(currencyCode));
 
-      if (hasCashToCount && !hasAnyCashCounted) {
-         alert("Por favor, ingresa el conteo físico antes de cerrar.");
+      if (hasCashToCount && !hasAllCashCounted) {
+         alert("Por favor, ingresa el conteo físico de cada moneda antes de cerrar.");
          return;
       }
 
@@ -145,6 +208,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
             // Step 1: Impresión
             setCurrentStep(1);
             if (activeTerminalConfig?.workflow?.session?.autoPrintZReport) {
+               const previewCashCountedData = buildCashCountedData();
                // Construct temporary report object for printing
                const tempReport: any = {
                   sequenceNumber: 'PRE-CLOSE', // Will be updated on save, but good for preview
@@ -154,8 +218,9 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                   baseCurrency: baseCurrencyCode,
                   totalsByMethod: {}, // Calculated below
                   cashExpected: expectedCashByCurrency,
-                  cashCounted: cashCountedByCurrency,
+                  cashCounted: previewCashCountedData,
                   cashDiscrepancy: cashDiscrepancyByCurrency,
+                  denominationBreakdown: buildDenominationBreakdown(),
                   transactionCount: filteredTransactions.length,
                   stats: calculateZReportStats(filteredTransactions, filteredCollections)
                };
@@ -171,13 +236,8 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                });
                tempReport.totalsByMethod = totalsByMethod;
 
-               // Convert cash counted strings to numbers
-               const cashCountedNums: Record<string, number> = {};
-               Object.entries(cashCountedByCurrency).forEach(([k, v]) => cashCountedNums[k] = parseFloat(v) || 0);
-               tempReport.cashCounted = cashCountedNums;
-
                // Get hidden modules from current user role
-               const userRole = roles.find(r => r.id === currentUser?.role);
+               const userRole = roles.find(r => r.id === (currentUser?.roleId || currentUser?.role));
                const hiddenModules = userRole?.zReportConfig?.hiddenModules || [];
 
                try {
@@ -191,11 +251,8 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
             }
             await new Promise(r => setTimeout(r, 1000));
 
-            // Convert cashCountedByCurrency to numbers
-            const cashCountedData: Record<string, number> = {};
-            Object.entries(cashCountedByCurrency).forEach(([curr, val]) => {
-               cashCountedData[curr] = parseFloat(val) || 0;
-            });
+            // Convert declared cash to numbers. In denomination mode, totals are derived from bills/coins.
+            const cashCountedData = buildCashCountedData();
 
             // Calculate final stats and totals once to ensure consistency
             const finalTotalsByMethod: Record<string, number> = {};
@@ -225,6 +282,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                   cashExpected: expectedCashByCurrency,
                   cashCounted: cashCountedData,
                   cashDiscrepancy: cashDiscrepancyByCurrency,
+                  denominationBreakdown: buildDenominationBreakdown(),
                   transactionCount: finalTxCount,
                   stats: finalStats,
                   companyName: config.companyInfo.name,
@@ -272,12 +330,13 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                expectedCardTotal,
                expectedOtherTotal,
                totalsByMethod: finalTotalsByMethod,
+               denominationBreakdown: buildDenominationBreakdown(),
                stats: finalStats,
                transactionCount: finalTxCount,
                collectionIds: filteredCollections.map(c => c.id)
             };
 
-            Promise.resolve(onConfirmClose(parseFloat(cashCountedByCurrency[baseCurrencyCode]) || 0, notes, reportData))
+            Promise.resolve(onConfirmClose(getDeclaredCashForCurrency(baseCurrencyCode), notes, reportData))
                .catch((closeError) => {
                   // Non-blocking by design: App.tsx also handles/report errors.
                   console.error('❌ onConfirmClose background error:', closeError);
@@ -357,7 +416,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    // Calculate discrepancies per currency
    const cashDiscrepancyByCurrency: Record<string, number> = {};
    Object.keys(expectedCashByCurrency).forEach(currency => {
-      const counted = parseFloat(cashCountedByCurrency[currency]) || 0;
+      const counted = getDeclaredCashForCurrency(currency);
       const expected = expectedCashByCurrency[currency] || 0;
       cashDiscrepancyByCurrency[currency] = counted - expected;
    });
@@ -388,7 +447,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
 
 
    if (showHistory) {
-      return <ZReportHistory config={config} onClose={() => setShowHistory(false)} />;
+      return <ZReportHistory config={config} currentUser={currentUser} roles={roles} onClose={() => setShowHistory(false)} />;
    }
 
    return (
@@ -567,8 +626,9 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                            const currencyInfo = activeCurrencies.find(c => c.code === currencyCode) || baseCurrency;
                            const symbol = currencyInfo?.symbol || currencyCode;
                            const counted = cashCountedByCurrency[currencyCode] || '';
+                           const denominationTotal = getDeclaredCashForCurrency(currencyCode);
                            const discrepancy = cashDiscrepancyByCurrency[currencyCode] || 0;
-                           const hasValue = counted !== '';
+                           const hasValue = hasDeclaredCashForCurrency(currencyCode);
 
                            return (
                               <div key={currencyCode} className="space-y-2 pb-4 border-b last:border-b-0 border-gray-100 last:pb-0">
@@ -576,18 +636,62 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                                     <div className="w-2 h-2 rounded-full bg-blue-500"></div>
                                     <span className="font-black text-xs uppercase tracking-wider text-gray-700">{currencyCode}</span>
                                  </div>
-                                 <div className="relative">
-                                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-lg">{symbol}</span>
-                                    <input
-                                       autoFocus={index === 0}
-                                       type="number"
-                                       step="0.01"
-                                       value={counted}
-                                       onChange={(e) => setCashCountedByCurrency(prev => ({ ...prev, [currencyCode]: e.target.value }))}
-                                       placeholder="0.00"
-                                       className="w-full pl-16 pr-4 py-3 text-2xl font-bold border-2 border-gray-200 rounded-2xl focus:border-blue-500 outline-none transition-colors"
-                                    />
-                                 </div>
+                                 {useDenominationCount ? (
+                                    <div className="space-y-3">
+                                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                                          {getDenominationsForCurrency(currencyCode).map((denomination, denominationIndex) => {
+                                             const denominationKey = String(denomination);
+                                             const quantity = denominationCounts[currencyCode]?.[denominationKey] || '';
+                                             const lineTotal = (Number(quantity) || 0) * denomination;
+
+                                             return (
+                                                <label key={`${currencyCode}-${denominationKey}`} className="p-3 rounded-2xl border border-gray-100 bg-gray-50 space-y-2">
+                                                   <span className="block text-[10px] font-black text-gray-500 uppercase tracking-wider">
+                                                      {symbol}{formatDenomination(denomination)}
+                                                   </span>
+                                                   <input
+                                                      autoFocus={index === 0 && denominationIndex === 0}
+                                                      type="number"
+                                                      inputMode="numeric"
+                                                      min="0"
+                                                      step="1"
+                                                      value={quantity}
+                                                      onChange={(e) => setDenominationCounts(prev => ({
+                                                         ...prev,
+                                                         [currencyCode]: {
+                                                            ...(prev[currencyCode] || {}),
+                                                            [denominationKey]: e.target.value.replace(/[^\d]/g, '')
+                                                         }
+                                                      }))}
+                                                      placeholder="Cant."
+                                                      className="w-full px-3 py-2 text-lg font-black border-2 border-gray-200 rounded-xl focus:border-blue-500 outline-none transition-colors"
+                                                   />
+                                                   <span className="block text-right text-[11px] font-bold text-gray-500">
+                                                      {symbol}{lineTotal.toFixed(2)}
+                                                   </span>
+                                                </label>
+                                             );
+                                          })}
+                                       </div>
+                                       <div className="flex items-center justify-between rounded-2xl bg-blue-50 border border-blue-100 px-4 py-3">
+                                          <span className="text-xs font-black uppercase tracking-wider text-blue-500">Total contado {currencyCode}</span>
+                                          <span className="text-xl font-black text-blue-700">{symbol}{denominationTotal.toFixed(2)}</span>
+                                       </div>
+                                    </div>
+                                 ) : (
+                                    <div className="relative">
+                                       <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-lg">{symbol}</span>
+                                       <input
+                                          autoFocus={index === 0}
+                                          type="number"
+                                          step="0.01"
+                                          value={counted}
+                                          onChange={(e) => setCashCountedByCurrency(prev => ({ ...prev, [currencyCode]: e.target.value }))}
+                                          placeholder="0.00"
+                                          className="w-full pl-16 pr-4 py-3 text-2xl font-bold border-2 border-gray-200 rounded-2xl focus:border-blue-500 outline-none transition-colors"
+                                       />
+                                    </div>
+                                 )}
 
                                  {/* Per-currency discrepancy */}
                                  {hasValue && (
@@ -602,7 +706,11 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                               </div>
                            );
                         })}
-                        <p className="text-xs text-gray-400 mt-2">Ingresa el total de efectivo contado por cada moneda.</p>
+                        <p className="text-xs text-gray-400 mt-2">
+                           {useDenominationCount
+                              ? 'Ingresa la cantidad por denominación. El total se calcula automáticamente.'
+                              : 'Ingresa el total de efectivo contado por cada moneda.'}
+                        </p>
                      </div>
                   ) : (
                      <p className="text-sm text-gray-400 text-center py-4">No hay efectivo pendiente por contar. Puedes cerrar la caja directamente.</p>
@@ -694,10 +802,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
          <div className="shrink-0 p-6 bg-white border-t border-gray-200 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] flex flex-col items-center">
             <SlideButton
                label="Desliza para Cerrar Caja"
-               disabled={currenciesRequiringCashCount.length > 0 && !currenciesRequiringCashCount.some(currencyCode => {
-                  const value = cashCountedByCurrency[currencyCode];
-                  return value !== undefined && value !== '' && parseFloat(value) >= 0;
-               })}
+               disabled={currenciesRequiringCashCount.length > 0 && !currenciesRequiringCashCount.every(currencyCode => hasDeclaredCashForCurrency(currencyCode))}
                colorClass={config.themeColor === 'orange' ? 'bg-orange-500' : 'bg-blue-500'}
                onComplete={handleStartClosing}
             />

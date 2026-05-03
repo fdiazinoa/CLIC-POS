@@ -28,6 +28,7 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
   const [biometricFailCount, setBiometricFailCount] = useState(0);
   const [isHardwareAvailable, setIsHardwareAvailable] = useState(false);
   const [buildVersion, setBuildVersion] = useState<string>('');
+  const [currentDateTime, setCurrentDateTime] = useState(() => new Date());
   const pinInputRef = useRef<HTMLInputElement>(null);
   const usersByPin = useMemo(() => {
     const map = new Map<string, UserType>();
@@ -88,6 +89,19 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
 
     void loadBuildVersion();
   }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setCurrentDateTime(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const dateTimeLabel = useMemo(() => currentDateTime.toLocaleString('es-DO', {
+    weekday: 'short',
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit'
+  }), [currentDateTime]);
 
   const checkLogin = useCallback((inputPin: string) => {
     const user = selectedUser?.pin === inputPin ? selectedUser : usersByPin.get(inputPin);
@@ -208,8 +222,11 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
   return (
     <div className="modern-login-container">
       <div className="modern-login-brand">
-        <span className="modern-login-brand-mark">CLIC</span>
-        <span className="modern-login-brand-pos">POS</span>
+        <div className="modern-login-brand-wordmark">
+          <span className="modern-login-brand-mark">CLIC</span>
+          <span className="modern-login-brand-pos">POS</span>
+        </div>
+        <span className="modern-login-brand-time">{dateTimeLabel}</span>
       </div>
 
       <div className={`modern-login-card animate-fade-in ${error ? 'animate-shake' : ''}`}>
@@ -326,9 +343,9 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
               <p className="modern-biometrics-text italic">{loginFooterText}</p>
             )}
 
-            <div className="mt-6 text-center text-xs text-gray-500 opacity-60">
+            <div className="mt-6 text-center text-xs text-slate-300/85">
               <p>Terminal ID: POS-001</p>
-              {buildVersion && <p className="mt-1">Versión: {buildVersion}</p>}
+              {buildVersion && <p className="mt-1 text-sky-200/95 font-semibold">Versión: {buildVersion}</p>}
             </div>
           </div>
         </div>

@@ -4691,6 +4691,8 @@ const AppContent: React.FC = () => {
         cashExpected: reportData?.expectedCashByCurrency || {},
         cashCounted: reportData?.cashCountedByCurrency || {},
         cashDiscrepancy: reportData?.cashDiscrepancyByCurrency || {},
+        denominationBreakdown: reportData?.denominationBreakdown,
+        denomination_breakdown: reportData?.denominationBreakdown,
         cashSales: reportData?.cashSalesTotal || 0,
         cashIn: reportData?.cashIn || 0,
         cashOut: reportData?.cashOut || 0,

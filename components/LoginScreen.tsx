@@ -357,9 +357,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
           </button>
         </div>
 
-        <div className="text-center text-gray-500 text-xs mt-auto pt-2">
+        <div className="text-center text-gray-300/85 text-xs mt-auto pt-2">
           <p>Terminal ID: POS-001</p>
-          {buildVersion && <p className="mt-1">Versión: {buildVersion}</p>}
+          {buildVersion && <p className="mt-1 text-blue-200 font-semibold">Versión: {buildVersion}</p>}
         </div>
 
       </div>
