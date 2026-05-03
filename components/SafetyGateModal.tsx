@@ -58,8 +58,8 @@ const SafetyGateModal: React.FC<SafetyGateModalProps> = ({
                         </button>
                         <button
                             onClick={() => {
-                                onConfirm();
                                 onClose();
+                                window.setTimeout(onConfirm, 0);
                             }}
                             className={`py-3.5 px-4 rounded-xl text-white font-black shadow-lg active:scale-95 transition-all text-sm flex items-center justify-center gap-2 ${isCritical
                                     ? 'bg-red-600 hover:bg-red-700 shadow-red-200'

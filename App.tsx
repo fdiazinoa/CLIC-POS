@@ -5426,7 +5426,10 @@ const AppContent: React.FC = () => {
             onOpenCustomers={() => setCurrentView('CUSTOMERS')}
             onOpenHistory={() => setCurrentView('HISTORY')}
             onOpenFinance={() => handleViewChange('FINANCE')}
-            onOpenZReport={() => handleViewChange('Z_REPORT')}
+            onOpenZReport={() => {
+              setViewData(undefined);
+              setCurrentView('Z_REPORT');
+            }}
             onOpenInventoryTracking={(productId) => handleViewChange('TRACKING', { productId })}
             onOpenAudit={() => handleViewChange('INVENTORY_AUDIT')}
             onOpenTableMap={() => handleViewChange('TABLE_MAP')}
