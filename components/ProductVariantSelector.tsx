@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { X, ShoppingCart, Check, AlertCircle, Layers } from 'lucide-react';
-import { Product } from '../types';
+import { Product, ProductVariant } from '../types';
 
 // Mapeo de colores en español para visualización CSS
 const COLOR_MAP: Record<string, string> = {
@@ -40,7 +40,7 @@ interface ProductVariantSelectorProps {
    product: Product | null;
    currencySymbol: string;
    onClose: () => void;
-   onConfirm: (product: Product, selectedModifiers: string[], finalPrice: number) => void;
+   onConfirm: (product: Product, selectedModifiers: string[], finalPrice: number, selectedVariant?: ProductVariant, variantInfo?: string) => void;
 }
 
 const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
@@ -52,44 +52,96 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
    const [selections, setSelections] = useState<Record<string, VariantOption>>({});
    const [groups, setGroups] = useState<VariantGroup[]>([]);
 
+   const variants = useMemo(() => (
+      Array.isArray(product?.variants) ? product!.variants.filter(Boolean) : []
+   ), [product]);
+
+   const getVariantAttributeValue = (variant: ProductVariant, key: string) => {
+      const values = variant.attributeValues || {};
+      return values[key] || values[key.toLowerCase()] || values[key.toUpperCase()];
+   };
+
    useEffect(() => {
       if (!product) return;
 
-      let mockGroups: VariantGroup[] = [];
+      let nextGroups: VariantGroup[] = [];
 
-      // Mapeo de atributos desde la data del producto
-      if (product.attributes && product.attributes.length > 0) {
-         mockGroups = product.attributes.map(attr => ({
-            id: attr.id,
-            name: attr.name,
-            type: (attr.name || '').toLowerCase().includes('color') ? 'COLOR' : 'TEXT',
-            options: attr.options.map((optName, oIdx) => {
-               let colorVal = optName;
-               if ((attr.name || '').toLowerCase().includes('color')) {
-                  colorVal = COLOR_MAP[optName] || optName;
-               }
-               return {
-                  id: `${attr.id}-opt-${oIdx}`,
-                  label: optName,
-                  value: colorVal,
-                  stock: 99, // Simulado
+      const variantAttributeKeys = Array.from(new Set(
+         variants.flatMap(variant => Object.keys(variant.attributeValues || {})).filter(Boolean)
+      ));
+
+      if (product.attributes?.length > 0) {
+         nextGroups = product.attributes.map(attr => {
+            const variantValues = new Set<string>();
+            variants.forEach(variant => {
+               const value = getVariantAttributeValue(variant, attr.name) || getVariantAttributeValue(variant, attr.id);
+               if (value) variantValues.add(value);
+            });
+            const optionLabels = variantValues.size > 0 ? Array.from(variantValues) : (attr.options || []);
+            const groupType: VariantGroup['type'] = (attr.name || '').toLowerCase().includes('color') ? 'COLOR' : 'TEXT';
+            return {
+               id: attr.id || attr.name,
+               name: attr.name,
+               type: groupType,
+               options: optionLabels.map((optName, oIdx) => {
+                  const colorValue = (attr.name || '').toLowerCase().includes('color')
+                     ? COLOR_MAP[optName] || optName
+                     : optName;
+                  return {
+                     id: `${attr.id || attr.name}-opt-${oIdx}`,
+                     label: optName,
+                     value: colorValue,
+                     stock: 99,
+                     priceModifier: 0
+                  };
+               })
+            };
+         }).filter(group => group.options.length > 0);
+      } else if (variantAttributeKeys.length > 0) {
+         nextGroups = variantAttributeKeys.map(key => {
+            const labels = Array.from(new Set(
+               variants.map(variant => getVariantAttributeValue(variant, key)).filter(Boolean)
+            ));
+            const groupType: VariantGroup['type'] = key.toLowerCase().includes('color') ? 'COLOR' : 'TEXT';
+            return {
+               id: key,
+               name: key,
+               type: groupType,
+               options: labels.map((label, idx) => ({
+                  id: `${key}-opt-${idx}`,
+                  label,
+                  value: key.toLowerCase().includes('color') ? COLOR_MAP[label] || label : label,
+                  stock: 99,
                   priceModifier: 0
-               };
-            })
-         }));
+               }))
+            };
+         });
+      } else if (variants.length > 0) {
+         nextGroups = [{
+            id: 'variant',
+            name: 'Variante',
+            type: 'TEXT',
+            options: variants.map((variant, idx) => ({
+               id: variant.sku || `variant-${idx}`,
+               label: variant.sku || `Variante ${idx + 1}`,
+               value: variant.sku || `Variante ${idx + 1}`,
+               stock: typeof variant.initialStock === 'number' ? variant.initialStock : 99,
+               priceModifier: 0
+            }))
+         }];
       }
 
-      setGroups(mockGroups);
+      setGroups(nextGroups);
 
       // Auto-seleccionar primera opción disponible para cada grupo
       const initialSelections: Record<string, VariantOption> = {};
-      mockGroups.forEach(g => {
+      nextGroups.forEach(g => {
          const firstAvailable = g.options.find(o => o.stock > 0);
          if (firstAvailable) initialSelections[g.id] = firstAvailable;
       });
       setSelections(initialSelections);
 
-   }, [product]);
+   }, [product, variants]);
 
    const handleSelect = (groupId: string, option: VariantOption) => {
       if (option.stock <= 0) return;
@@ -98,10 +150,35 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
 
    const calculateTotal = () => {
       if (!product) return 0;
-      const basePrice = product.price;
+      const selectedVariant = getSelectedVariant();
+      const basePrice = selectedVariant?.price ?? product.price;
       const modifiersPrice = Object.values(selections).reduce((acc: number, opt: VariantOption) => acc + opt.priceModifier, 0);
       return basePrice + modifiersPrice;
    };
+
+   const getSelectedVariant = (): ProductVariant | undefined => {
+      if (!product || variants.length === 0) return undefined;
+      if (groups.length === 1 && groups[0].id === 'variant') {
+         const selected = selections.variant;
+         return variants.find(variant => variant.sku === selected?.label);
+      }
+      return variants.find(variant => groups.every(group => {
+         const selected = selections[group.id]?.label;
+         if (!selected) return false;
+         const variantValue = getVariantAttributeValue(variant, group.name) || getVariantAttributeValue(variant, group.id);
+         return variantValue === selected;
+      }));
+   };
+
+   const buildVariantInfo = () => (
+      groups
+         .map(group => {
+            const selected = selections[group.id]?.label;
+            return selected ? `${group.name}: ${selected}` : '';
+         })
+         .filter(Boolean)
+         .join(' / ')
+   );
 
    const handleConfirmSelection = () => {
       if (!product) return;
@@ -109,7 +186,7 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
       if (!allSelected) return;
 
       const modifiersList = Object.values(selections).map((opt: VariantOption) => opt.label);
-      onConfirm(product, modifiersList, calculateTotal());
+      onConfirm(product, modifiersList, calculateTotal(), getSelectedVariant(), buildVariantInfo());
    };
 
    if (!product) return null;
