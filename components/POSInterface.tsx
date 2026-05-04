@@ -19,7 +19,7 @@ import { Html5Qrcode } from "html5-qrcode";
 import {
    BusinessConfig, User as UserType, RoleDefinition,
    Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType, FiscalDocumentCode,
-   PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, Tariff, RedeemedCouponRef
+   PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, Tariff, RedeemedCouponRef, ProductVariant
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import { getFiscalComplianceConfig, getDefaultFiscalProvider, getFiscalReserveAlert, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
@@ -1608,7 +1608,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
 
-   const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[]) => {
+   const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string) => {
       if (!canAddItemToCart(product, quantity)) return;
 
       // TRACEABILITY INTERCEPTION
@@ -1619,8 +1619,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return;
       }
 
-      const finalPrice = priceOverride || getProductPrice(product);
+      const finalPrice = priceOverride ?? selectedVariant?.price ?? getProductPrice(product);
       const modifiersString = buildModifierSignature(modifiers);
+      const variantSku = selectedVariant?.sku;
       const effectiveTaxIds = resolveEffectiveTaxIds(product.appliedTaxIds, activeTerminalConfig);
       const taxSignature = effectiveTaxIds.slice().sort().join('|');
 
@@ -1629,7 +1630,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const existing = (cart || []).find(i => {
          const iMods = buildModifierSignature(i.modifiers);
          const existingTaxSignature = resolveEffectiveTaxIds(i.appliedTaxIds, activeTerminalConfig).slice().sort().join('|');
-         return i.id === product.id && iMods === modifiersString && i.price === finalPrice && existingTaxSignature === taxSignature;
+         return i.id === product.id && (i.variantSku || '') === (variantSku || '') && iMods === modifiersString && i.price === finalPrice && existingTaxSignature === taxSignature;
       });
 
       let targetCartId: string;
@@ -1649,6 +1650,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             quantity,
             price: finalPrice,
             modifiers,
+            variantSku,
+            variantInfo,
             appliedTaxIds: effectiveTaxIds,
             originalPrice: getProductPrice(product),
             trackingData
@@ -1670,7 +1673,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const productName = product.name || '';
       const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
-      const hasVariants = product.attributes && product.attributes.length > 0;
+      const hasVariants = (product.variants || []).length > 0 || (product.attributes || []).length > 0;
       const hasModifiers = (product.availableModifiers || []).length > 0;
       const requiresConfigurationBeforeAdd = isWeighted || hasVariants || hasModifiers;
 
@@ -4904,7 +4907,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} salesUsers={salesUsers} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
-         {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr) => { addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}
+         {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, selectedVariant, variantInfo) => { addToCart(p, 1, pr, m, undefined, selectedVariant, variantInfo); setSelectedProductForVariants(null); }} />}
          {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(w) => { addToCart(productForScale, w); setProductForScale(null); }} />}
          {
             showGlobalDiscount && <GlobalDiscountModal currentSubtotal={cartSubtotal} currencySymbol={baseCurrency.symbol} initialValue={globalDiscount.value.toString()} initialType={globalDiscount.type} themeColor={config.themeColor} onClose={() => setShowGlobalDiscount(false)} onConfirm={async (val, type) => {

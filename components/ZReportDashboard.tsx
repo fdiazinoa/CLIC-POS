@@ -525,7 +525,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
             </div>
          </div>
 
-         <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain touch-pan-y p-6 space-y-6 max-w-4xl mx-auto w-full">
+         <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain touch-pan-y p-4 md:p-6 space-y-6 max-w-6xl mx-auto w-full">
 
             {/* Summary Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -615,10 +615,24 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                )}
 
                {/* Manual Count - Multi-Currency */}
-               <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-                  <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                     <Banknote size={18} className="text-gray-400" /> Conteo Físico
-                  </h3>
+               <div className={`bg-white ${useDenominationCount ? 'p-4' : 'p-6'} rounded-3xl shadow-sm border border-gray-100`}>
+                  <div className="mb-4 flex items-start justify-between gap-3">
+                     <div>
+                        <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                           <Banknote size={18} className="text-gray-400" /> Conteo Físico
+                        </h3>
+                        {useDenominationCount && (
+                           <p className="mt-1 text-[11px] font-bold text-gray-400">
+                              Digita cantidades por billete/moneda. El total y el descuadre se calculan solos.
+                           </p>
+                        )}
+                     </div>
+                     {useDenominationCount && (
+                        <span className="shrink-0 rounded-full bg-blue-50 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-blue-600">
+                           Denominaciones
+                        </span>
+                     )}
+                  </div>
 
                   {currenciesRequiringCashCount.length > 0 ? (
                      <div className="space-y-5">
@@ -638,8 +652,8 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                                  </div>
                                  {useDenominationCount ? (
                                     <div className="space-y-3">
-                                       <div className="overflow-hidden rounded-2xl border border-gray-100 bg-gray-50">
-                                          <div className="grid grid-cols-[1fr_120px] gap-3 px-4 py-2 text-[10px] font-black uppercase tracking-wider text-gray-400">
+                                       <div className="max-h-[42vh] overflow-y-auto rounded-2xl border border-gray-100 bg-gray-50">
+                                          <div className="sticky top-0 z-10 grid grid-cols-[1fr_96px] gap-3 bg-gray-50 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-gray-400">
                                              <span>Denominación</span>
                                              <span className="text-right">Cantidad</span>
                                           </div>
@@ -648,8 +662,8 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                                              const quantity = denominationCounts[currencyCode]?.[denominationKey] || '';
 
                                              return (
-                                                <label key={`${currencyCode}-${denominationKey}`} className="grid grid-cols-[1fr_120px] items-center gap-3 border-t border-gray-100 bg-white px-4 py-2">
-                                                   <span className="text-xl font-black text-gray-800">
+                                                <label key={`${currencyCode}-${denominationKey}`} className="grid grid-cols-[1fr_96px] items-center gap-3 border-t border-gray-100 bg-white px-3 py-1.5">
+                                                   <span className="text-lg font-black text-gray-800">
                                                       {formatDenomination(denomination)}.
                                                    </span>
                                                    <input
@@ -667,15 +681,21 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                                                          }
                                                       }))}
                                                       placeholder="Cant."
-                                                      className="w-full rounded-xl border-2 border-gray-200 px-3 py-2 text-right text-xl font-black outline-none transition-colors focus:border-blue-500"
+                                                      className="w-full rounded-xl border-2 border-gray-200 px-3 py-1.5 text-right text-lg font-black outline-none transition-colors focus:border-blue-500"
                                                    />
                                                 </label>
                                              );
                                           })}
                                        </div>
-                                       <div className="flex items-center justify-between rounded-2xl bg-blue-50 border border-blue-100 px-4 py-3">
-                                          <span className="text-xs font-black uppercase tracking-wider text-blue-500">Total contado {currencyCode}</span>
-                                          <span className="text-xl font-black text-blue-700">{symbol}{denominationTotal.toFixed(2)}</span>
+                                       <div className="grid grid-cols-2 gap-2">
+                                          <div className="rounded-2xl bg-blue-50 border border-blue-100 px-4 py-3">
+                                             <span className="block text-[10px] font-black uppercase tracking-wider text-blue-500">Total contado</span>
+                                             <span className="text-xl font-black text-blue-700">{symbol}{denominationTotal.toFixed(2)}</span>
+                                          </div>
+                                          <div className={`rounded-2xl border px-4 py-3 ${!hasValue ? 'bg-gray-50 border-gray-100' : Math.abs(discrepancy) <= 0.01 ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
+                                             <span className={`block text-[10px] font-black uppercase tracking-wider ${!hasValue ? 'text-gray-400' : Math.abs(discrepancy) <= 0.01 ? 'text-emerald-600' : 'text-red-600'}`}>Diferencia</span>
+                                             <span className={`text-xl font-black ${!hasValue ? 'text-gray-500' : Math.abs(discrepancy) <= 0.01 ? 'text-emerald-700' : 'text-red-700'}`}>{hasValue ? `${discrepancy > 0 ? '+' : ''}${symbol}${discrepancy.toFixed(2)}` : 'Pendiente'}</span>
+                                          </div>
                                        </div>
                                     </div>
                                  ) : (
@@ -694,7 +714,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                                  )}
 
                                  {/* Per-currency discrepancy */}
-                                 {hasValue && (
+                                 {hasValue && !useDenominationCount && (
                                     <div className={`mt-2 p-3 rounded-xl border flex items-center gap-2 ${discrepancy === 0 ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-red-50 border-red-100 text-red-700'}`}>
                                        {discrepancy === 0 ? <CheckCircle size={20} /> : <AlertTriangle size={20} />}
                                        <div className="flex-1">

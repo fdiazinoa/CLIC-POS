@@ -23,6 +23,7 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
     const [searchTerm, setSearchTerm] = useState('');
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
+    const [reprintingReportId, setReprintingReportId] = useState<string | null>(null);
 
     const sortReportsByDate = (data: ZReport[]) =>
         [...(data || [])].sort((a, b) =>
@@ -144,6 +145,27 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
 
     const canRepeatZReport = hasPermission('POS_REPEAT_Z_REPORT');
 
+    const handleRepeatZReport = async (report: ZReport) => {
+        if (reprintingReportId) return;
+        setReprintingReportId(report.id);
+        try {
+            const roleId = currentUser?.roleId || currentUser?.role;
+            const role = roles.find(r => r.id === roleId);
+            const hiddenModules = role?.zReportConfig?.hiddenModules || [];
+            const printed = await ThermalPrinterService.printZReport(report, hiddenModules, config);
+            if (printed === false) {
+                alert('No se pudo repetir el Z. Verifica la impresora configurada.');
+                return;
+            }
+            alert(`Reporte ${report.sequenceNumber} enviado a impresión.`);
+        } catch (error) {
+            console.error('❌ Error repitiendo Z:', error);
+            alert('No se pudo repetir el Z. Verifica la impresora configurada.');
+        } finally {
+            setReprintingReportId(null);
+        }
+    };
+
     // --- DETAIL VIEW ---
     if (selectedReport) {
         const r = selectedReport;
@@ -181,12 +203,13 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
                     <div className="flex gap-2">
                         {canRepeatZReport && (
                             <button
-                                onClick={() => ThermalPrinterService.printZReport(r, [], config)}
-                                className="px-4 py-2 bg-blue-50 hover:bg-blue-600 hover:text-white rounded-xl text-blue-700 transition-all font-bold text-sm flex items-center gap-2 shadow-sm"
+                                onClick={() => handleRepeatZReport(r)}
+                                disabled={reprintingReportId === r.id}
+                                className="px-4 py-2 bg-blue-50 hover:bg-blue-600 hover:text-white rounded-xl text-blue-700 transition-all font-bold text-sm flex items-center gap-2 shadow-sm disabled:opacity-60 disabled:cursor-wait"
                                 title="Repetir cierre Z"
                             >
-                                <RefreshCw size={18} />
-                                <span className="hidden sm:inline">Repetir Z</span>
+                                <RefreshCw size={18} className={reprintingReportId === r.id ? 'animate-spin' : ''} />
+                                <span className="hidden sm:inline">{reprintingReportId === r.id ? 'Enviando...' : 'Repetir Z'}</span>
                             </button>
                         )}
                         <button
