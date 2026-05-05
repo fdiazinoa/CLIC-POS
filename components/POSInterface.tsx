@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback, useDeferredValue } from 'react';
 import { Capacitor } from '@capacitor/core';
 import {
    Search, Trash2, MoreVertical,
@@ -63,7 +63,6 @@ import ModifierModal from './ModifierModal';
 import { visorSync } from '../utils/visorSync';
 import { maybeAutoLaunchCustomerDisplay } from '../utils/customerDisplay';
 import ProductQuickActions from './ProductQuickActions';
-import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import ActionGrid from './ActionGrid';
 import SupervisorAuthModal from './SupervisorAuthModal';
 import VirtualKeyboard from './VirtualKeyboard';
@@ -316,7 +315,7 @@ const ProductGridCard = React.memo(({
 }: ProductGridCardProps) => {
    const productName = product.name || '';
    const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
-   const hasVariants = product.attributes && product.attributes.length > 0;
+   const hasVariants = (product.variants || []).length > 0 || (product.attributes || []).length > 0;
    const isCompactMobileCard = isMobile && !usesExpandedCatalog;
    const warehouseSaleBlocked = isProductWarehouseBlockedForSale(product);
    const imageSrc = showProductImages ? resolveProductImageSrc(product) : '';
@@ -732,87 +731,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // --- DETECT KIOSK / SELF CHECKOUT ---
    const isKioskMode = activeTerminalConfig?.deviceRole?.role === 'SELF_CHECKOUT';
 
-   // --- KIOSK MODE & GLOBAL SCANNER ---
-   // Managed globally in App.tsx (if currentView !== 'POS').
-   // However, when in POS view, we need local scanning for Returns/etc.
-   useBarcodeScanner({
-      onScan: (code) => {
-         // 1. Try JSON/Smart QR first
-         const trimmed = code.trim();
-         try {
-            if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-               const data = JSON.parse(trimmed);
-               if (data.type === 'RESERVATION_NOTE' && (data.id || data.code)) {
-                  const found = (reservations || []).find(r => r.id === data.id || r.code === data.code);
-                  if (found) {
-                     handleRecoverReservation(found);
-                     setSuccessToast('Reserva Recuperada');
-                     return;
-                  }
-               }
-               if (data.type === 'INVOICE_RETURN' && data.id) {
-                  setReturnInvoiceId(data.id);
-                  setShowReturnModal(true);
-                  setSuccessToast('Factura Identificada');
-                  return;
-               }
-            }
-         } catch (e) { }
-
-         // 2. Try Transaction Search via ID
-         const txnFound = (transactions || []).find(t => t.displayId === trimmed || t.id === trimmed);
-         if (txnFound) {
-            setReturnInvoiceId(txnFound.id);
-            setShowReturnModal(true);
-            setSuccessToast('Factura Identificada');
-            return;
-         }
-
-         // 3. Try Product Search (Barcode or ID)
-         const product = (products || []).find(p => p.barcode === trimmed || p.id === trimmed);
-
-         if (product) {
-            // Check availability
-            const isWeighted = product.type === 'SERVICE' || product.name.toLowerCase().includes('(peso)');
-            const hasVariants = product.attributes && product.attributes.length > 0;
-
-            if (isWeighted) {
-               setProductForScale(product);
-            } else if (hasVariants) {
-               setSelectedProductForVariants(product);
-            } else {
-               // Direct add
-               addToCart(product);
-               setSuccessToast(`${product.name} Agregado`);
-            }
-            return;
-         }
-
-         // 4. Try Scale Parser (Weight barcodes)
-         if (config.scaleLabelConfig?.isEnabled) {
-            const scaleItem = parseScaleBarcode(trimmed, config.scaleLabelConfig);
-            if (scaleItem) {
-               const prodScale = (products || []).find(p => p.barcode === scaleItem.plu || p.id === scaleItem.plu);
-               if (prodScale) {
-                  if (scaleItem.type === 'WEIGHT') {
-                     addToCart(prodScale, scaleItem.value);
-                     setSuccessToast(`${prodScale.name} (${scaleItem.value.toFixed(3)}kg)`);
-                  } else {
-                     const unitPrice = getProductPrice(prodScale);
-                     const weight = unitPrice > 0 ? scaleItem.value / unitPrice : 1;
-                     addToCart(prodScale, weight);
-                     setSuccessToast(`${prodScale.name} ($${scaleItem.value})`);
-                  }
-                  return;
-               }
-            }
-         }
-
-         // If nothing found
-         setSuccessToast(`Código no encontrado: ${code}`);
-      }
-   });
-
    // --- AUTO-HYDRATION FOR TABLES ---
    // --- SMART TABLE HYDRATION ---
    // Automatically load order when entering via Table Map
@@ -1004,6 +922,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const activeTariff = useMemo(() => (config.tariffs || []).find(t => t.id === activeTariffId), [config.tariffs, activeTariffId]);
 
    const [searchTerm, setSearchTerm] = useState('');
+   const deferredSearchTerm = useDeferredValue(searchTerm);
    const [categoryFilter, setCategoryFilter] = useState('ALL');
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
 
@@ -1443,8 +1362,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const getProductPrice = useCallback((p: Product) => getTariffPrice(p) ?? 0, [getTariffPrice]);
 
    const productCodeIndex = useMemo(() => {
-      const index = new Map<string, { product: Product; price: number; modifiers: string[] }>();
-      const addCode = (code: unknown, value: { product: Product; price: number; modifiers: string[] }) => {
+      const index = new Map<string, { product: Product; price: number; modifiers: string[]; selectedVariant?: ProductVariant; variantInfo?: string }>();
+      const addCode = (code: unknown, value: { product: Product; price: number; modifiers: string[]; selectedVariant?: ProductVariant; variantInfo?: string }) => {
+         if (Array.isArray(code)) {
+            code.forEach((entry) => addCode(entry, value));
+            return;
+         }
          const normalized = String(code || '').trim();
          if (!normalized || index.has(normalized)) return;
          index.set(normalized, value);
@@ -1461,10 +1384,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          for (const variant of product.variants || []) {
             const modifiersList = Object.values(variant.attributeValues || {}).map((value) => String(value || ''));
+            const variantInfo = Object.entries(variant.attributeValues || {})
+               .map(([key, value]) => `${key}: ${value}`)
+               .join(' · ');
             const variantMatch = {
                product,
                price: variant.price || baseMatch.price,
                modifiers: modifiersList,
+               selectedVariant: variant,
+               variantInfo,
             };
             addCode(variant.sku, variantMatch);
             addCode(variant.barcode, variantMatch);
@@ -1771,6 +1699,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             quantity,
             price: indexedMatch.price,
             modifiers: indexedMatch.modifiers,
+            selectedVariant: indexedMatch.selectedVariant,
+            variantInfo: indexedMatch.variantInfo,
          };
       }
 
@@ -1781,7 +1711,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                if ((v.sku === searchCode || (v.barcode && v.barcode.includes(searchCode))) && productHasActiveTariff(p)) {
                   // Map attribute values to a simple list of modifiers
                   const modifiersList = Object.entries(v.attributeValues || {}).map(([_, val]) => val);
-                  return { product: p, quantity, price: v.price || getProductPrice(p), modifiers: modifiersList };
+                  const variantInfo = Object.entries(v.attributeValues || {})
+                     .map(([key, value]) => `${key}: ${value}`)
+                     .join(' · ');
+                  return { product: p, quantity, price: v.price || getProductPrice(p), modifiers: modifiersList, selectedVariant: v, variantInfo };
                }
             }
          }
@@ -1804,14 +1737,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'Enter') {
-         const match = findProductByAnyCode(searchTerm || '');
+         const rawValue = e.currentTarget.value || searchTerm || '';
+         const match = findProductByAnyCode(rawValue);
          if (match) {
-            addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers);
+            addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo);
             setSearchTerm('');
             setErrorToast(null);
             // Ensure focus stays on search bar
             searchInputRef.current?.focus();
-         } else if (searchTerm && searchTerm.trim()) {
+         } else if (rawValue.trim()) {
             setErrorToast("Código no encontrado");
             setTimeout(() => setErrorToast(null), 2000);
          }
@@ -1881,14 +1815,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
       }
 
-      // 2. Normal Barcode Search
-      const product = (products || []).find(p => p.barcode === trimmed);
-      if (product) {
-         handleProductClick(product);
-         setErrorToast(`Producto agregado: ${product.name}`);
+      // 2. Normal Barcode Search. Use the memoized code index instead of scanning
+      // the whole catalog on every hardware scan.
+      const match = findProductByAnyCode(trimmed);
+      if (match) {
+         const hasConfiguredVariant = Boolean(match.selectedVariant || match.modifiers?.length);
+         if (!hasConfiguredVariant && ((match.product.variants || []).length > 0 || (match.product.attributes || []).length > 0)) {
+            handleProductClick(match.product);
+         } else {
+            addToCart(match.product, match.quantity, match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo);
+         }
+         setErrorToast(`Producto agregado: ${match.product.name}`);
          setTimeout(() => setErrorToast(null), 1500);
       }
-   }, [config, products, handleProductClick, getProductPrice, canAddItemToCart, transactions, reservations, handleRecoverReservation]);
+   }, [addToCart, config, products, handleProductClick, getProductPrice, transactions, reservations, handleRecoverReservation, findProductByAnyCode]);
 
    const isAnyModalOpen = !!(
       showPaymentModal ||
@@ -1911,10 +1851,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       supervisorModalProps.isOpen
    );
 
-   useBarcodeScanner({
-      onScan: processBarcode,
-      enabled: !isAnyModalOpen
-   });
+   useEffect(() => {
+      if (isAnyModalOpen) return;
+
+      const handleCentralBarcodeScan = (event: Event) => {
+         const barcode = (event as CustomEvent<{ barcode?: string }>).detail?.barcode;
+         if (!barcode) return;
+         processBarcode(barcode);
+      };
+
+      window.addEventListener('barcodeScanned', handleCentralBarcodeScan as EventListener);
+      return () => window.removeEventListener('barcodeScanned', handleCentralBarcodeScan as EventListener);
+   }, [isAnyModalOpen, processBarcode]);
 
    const fiscalCompliance = useMemo(() => getFiscalComplianceConfig(config), [config.fiscalCompliance]);
    const fiscalCartGrossTotal = useMemo(
@@ -2077,7 +2025,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const erpWarehouses = resolveProductActiveWarehouseIds(p, warehouses);
          const hasErpWarehouse = erpWarehouses.length > 0;
          const productName = String(p.name || '').toLowerCase();
-         const normalizedSearch = searchTerm.trim().toLowerCase();
+         const normalizedSearch = deferredSearchTerm.trim().toLowerCase();
          const searchableCodes = [
             typeof p.barcode === 'string' ? p.barcode.toLowerCase() : String(p.barcode || '').toLowerCase(),
             typeof (p as any).sku === 'string' ? (p as any).sku.toLowerCase() : String((p as any).sku || '').toLowerCase(),
@@ -2114,10 +2062,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             seenIds.add(p.id);
             return true;
          });
-   }, [salesCatalogProducts, searchTerm, categoryFilter, canonicalizeCategory, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]);
+   }, [salesCatalogProducts, deferredSearchTerm, categoryFilter, canonicalizeCategory, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]);
 
-   const handleRetailSearchSubmit = useCallback(() => {
-      const trimmed = (searchTerm || '').trim();
+   const handleRetailSearchSubmit = useCallback((rawTerm?: string) => {
+      const trimmed = (rawTerm ?? searchTerm ?? '').trim();
       if (!trimmed) {
          retailSearchInputRef.current?.focus();
          return;
@@ -2125,7 +2073,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const match = findProductByAnyCode(trimmed);
       if (match) {
-         addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers);
+         addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo);
          setSearchTerm('');
          setErrorToast(null);
          retailSearchInputRef.current?.focus();
@@ -4026,7 +3974,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <div className="relative min-w-0 max-w-xl flex-1 group">
                         <button
                            type="button"
-                           onClick={handleRetailSearchSubmit}
+                           onClick={() => handleRetailSearchSubmit()}
                            className="absolute left-2 top-1/2 -translate-y-1/2 flex h-9 w-9 items-center justify-center rounded-lg text-gray-400 transition-all hover:bg-purple-50 hover:text-purple-600"
                            title="Buscar"
                         >
@@ -4045,7 +3993,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            onChange={(e) => setSearchTerm(e.target.value)}
                            onKeyDown={(e) => {
                               if (e.key === 'Enter') {
-                                 handleRetailSearchSubmit();
+                                 handleRetailSearchSubmit(e.currentTarget.value);
                               }
                            }}
                            autoFocus
