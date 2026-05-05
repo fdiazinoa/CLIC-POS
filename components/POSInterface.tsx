@@ -136,6 +136,9 @@ const buildModifierSignature = (modifiers?: unknown[]): string => {
    return modifiers.map((modifier) => String(modifier ?? '')).sort().join('|');
 };
 
+const looksLikeDocumentScan = (code: string): boolean =>
+   /^(TCK|INV|B0[1-4]|E3[1245]|NC|ZS|ZR|REC|TXN-)/i.test(code.trim());
+
 const normalizeProductionMode = (value: unknown): 'KDS' | 'PRINTER' | 'AMBOS' => {
    const normalized = String(value || '').trim().toUpperCase();
    if (normalized === 'PRINTER' || normalized === 'TICKET') return 'PRINTER';
@@ -1236,6 +1239,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return (reservations || []).filter(r => r.status === 'ACTIVE');
    }, [reservations]);
 
+   const activeReservationByScanCode = useMemo(() => {
+      const index = new Map<string, Reservation>();
+      for (const reservation of activeReservations || []) {
+         if (reservation.id) index.set(String(reservation.id), reservation);
+         if (reservation.code) index.set(String(reservation.code), reservation);
+      }
+      return index;
+   }, [activeReservations]);
+
+   const transactionByScanCode = useMemo(() => {
+      const index = new Map<string, Transaction>();
+      for (const transaction of transactions || []) {
+         if (transaction.id) index.set(String(transaction.id), transaction);
+         if (transaction.displayId) index.set(String(transaction.displayId), transaction);
+         if ((transaction as any).ncf) index.set(String((transaction as any).ncf), transaction);
+         if ((transaction as any).electronicNcf) index.set(String((transaction as any).electronicNcf), transaction);
+      }
+      return index;
+   }, [transactions]);
+
    const selectedCustomerActiveReservationsCount = useMemo(() => {
       if (!selectedCustomer) return 0;
       return activeReservations.filter(r => r.customerId === selectedCustomer.id).length;
@@ -1761,7 +1784,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
             const data = JSON.parse(trimmed);
             if (data.type === 'RESERVATION_NOTE' && (data.id || data.code)) {
-               const found = (reservations || []).find(r => r.id === data.id || r.code === data.code);
+               const found = activeReservationByScanCode.get(String(data.id || ''))
+                  || activeReservationByScanCode.get(String(data.code || ''));
                if (found) {
                   handleRecoverReservation(found);
                   return;
@@ -1777,19 +1801,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // Not a JSON or invalid
       }
 
-      // 0.1 Try Transaction Search (Direct bypass for TCK... barcodes)
-      const txnFound = (transactions || []).find(t => t.displayId === trimmed || t.id === trimmed);
-      if (txnFound) {
-         setReturnInvoiceId(txnFound.id);
-         setShowReturnModal(true);
-         return;
-      }
-
       // 1. Try Scale Parser
       if (config.scaleLabelConfig?.isEnabled) {
          const scaleItem = parseScaleBarcode(trimmed, config.scaleLabelConfig);
          if (scaleItem) {
-            const product = (products || []).find(p => p.barcode === scaleItem.plu || p.id === scaleItem.plu);
+            const product = productCodeIndex.get(scaleItem.plu)?.product;
 
             if (product) {
                if (scaleItem.type === 'WEIGHT') {
@@ -1827,8 +1843,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
          setErrorToast(`Producto agregado: ${match.product.name}`);
          setTimeout(() => setErrorToast(null), 1500);
+         return;
       }
-   }, [addToCart, config, products, handleProductClick, getProductPrice, transactions, reservations, handleRecoverReservation, findProductByAnyCode]);
+
+      // 3. Try Transaction Search only for document-looking scans. Product
+      // barcodes should not pay the cost of scanning large ticket histories.
+      if (looksLikeDocumentScan(trimmed)) {
+         const txnFound = transactionByScanCode.get(trimmed);
+         if (txnFound) {
+            setReturnInvoiceId(txnFound.id);
+            setShowReturnModal(true);
+         }
+      }
+   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, transactionByScanCode]);
 
    const isAnyModalOpen = !!(
       showPaymentModal ||
