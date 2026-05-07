@@ -139,6 +139,11 @@ export const DEFAULT_TERMINAL_CONFIG = {
       printCopies: 1,
       requireAdvance: false,
       minimumAdvancePercent: 20
+    },
+    deliveryAlerts: {
+      isDeliveryTerminal: false,
+      showUberEatsToast: true,
+      autoOpenUberEatsModal: false
     }
   },
   ux: {
