@@ -1339,7 +1339,8 @@ class ApiSyncAdapter {
     private async postLocalSalesTransactionWithSmartAuth(
         normalizedTransaction: any,
         txId: string,
-        itemsCount: number | string
+        itemsCount: number | string,
+        skipErpForward = false
     ): Promise<Response> {
         await this.ensurePushReady('sales');
         const erpBaseUrl = this.resolveClientErpBaseUrlForInbox();
@@ -1371,7 +1372,8 @@ class ApiSyncAdapter {
                 },
                 body: JSON.stringify({
                     items: [normalizedTransaction],
-                    ...(erpBaseUrl ? { erp_base_url: erpBaseUrl } : {})
+                    ...(erpBaseUrl ? { erp_base_url: erpBaseUrl } : {}),
+                    ...(skipErpForward ? { skip_erp_forward: true } : {})
                 })
             }, 2, 500, 'sales');
 
@@ -1385,6 +1387,13 @@ class ApiSyncAdapter {
         throw new Error('ERP transaction sync failed: request was not attempted');
     }
 
+    private shouldSkipErpSaleSync(transaction: any): boolean {
+        return Boolean(
+            transaction?.skipErpSaleSync
+            || transaction?.marketplaceSourceChannel === 'UBER_EATS'
+        );
+    }
+
     async pushTransaction(transaction: any): Promise<void> {
         try {
             const normalizedTransaction = buildErpSalePayload(transaction);
@@ -1395,8 +1404,13 @@ class ApiSyncAdapter {
                 : typeof (normalizedTransaction as any).items === 'string'
                   ? `string(len=${String((normalizedTransaction as any).items).length})`
                   : 'none';
+            const skipErpSaleSync = this.shouldSkipErpSaleSync(normalizedTransaction);
 
             if (operationalTarget && !operationalTarget.useLocalTarget) {
+                if (skipErpSaleSync) {
+                    console.log(`[SYNC_TX_PUSH] ERP direct skipped for tx=${txId} marketplace=${normalizedTransaction.marketplaceSourceChannel || 'n/a'}`);
+                    return;
+                }
                 console.log(
                     `[SYNC_TX_PUSH] ERP direct start base=${operationalTarget.baseUrl} terminal=${operationalTarget.terminalId} tx=${txId} items=${itemsCount}`
                 );
@@ -1431,7 +1445,12 @@ class ApiSyncAdapter {
             console.log(
                 `[SYNC_TX_PUSH] pre-auth masterUrl=${this.config?.masterUrl || 'n/a'} terminalId=${this.config?.terminalId || 'n/a'} hasToken=${!!this.authToken}`
             );
-            const response = await this.postLocalSalesTransactionWithSmartAuth(normalizedTransaction, txId, itemsCount);
+            const response = await this.postLocalSalesTransactionWithSmartAuth(
+                normalizedTransaction,
+                txId,
+                itemsCount,
+                skipErpSaleSync
+            );
 
             if (!response.ok) {
                 const errorText = await response.text();
