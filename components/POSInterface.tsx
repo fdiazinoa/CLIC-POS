@@ -599,8 +599,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return index;
    }, [products]);
    const marketplaceProductLookup = useMemo(() => {
-      const byReference = new Map<string, Product>();
-      const byName = new Map<string, Product>();
+      const byReference = new Map<string, Product[]>();
+      const byName = new Map<string, Product[]>();
       const rankedProducts = [...(products || [])].sort(
          (left, right) => scoreProductForSales(right, warehouses) - scoreProductForSales(left, warehouses)
       );
@@ -617,14 +617,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          ].map(normalizeSearchToken).filter(Boolean));
 
          tokens.forEach((token) => {
-            if (!byReference.has(token)) {
-               byReference.set(token, product);
-            }
+            byReference.set(token, [...(byReference.get(token) || []), product]);
          });
 
          const nameKey = normalizeSearchToken(product.name);
-         if (nameKey && !byName.has(nameKey)) {
-            byName.set(nameKey, product);
+         if (nameKey) {
+            byName.set(nameKey, [...(byName.get(nameKey) || []), product]);
          }
       }
 
@@ -1354,6 +1352,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       });
    }, [transactions]);
 
+   const pickBestUberProductCandidate = useCallback((candidates: Product[] = []): Product | null => {
+      if (!Array.isArray(candidates) || candidates.length === 0) return null;
+      const terminalCompatible = candidates.find((candidate) => productMatchesTerminalWarehouse(candidate));
+      return terminalCompatible || candidates[0] || null;
+   }, [productMatchesTerminalWarehouse]);
+
    const resolveUberDraftProduct = useCallback((draftItem: UberEatsPosDraft['items'][number]): Product | null => {
       const rawItem = draftItem?.raw && typeof draftItem.raw === 'object' ? draftItem.raw : {};
       const externalDataRaw = typeof (rawItem as any).external_data === 'string'
@@ -1389,12 +1393,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          .filter(Boolean);
 
       for (const token of candidateTokens) {
-         const matched = marketplaceProductLookup.byReference.get(token);
+         const matched = pickBestUberProductCandidate(marketplaceProductLookup.byReference.get(token) || []);
          if (matched) return matched;
       }
 
-      return marketplaceProductLookup.byName.get(normalizeSearchToken(draftItem.name)) || null;
-   }, [marketplaceProductLookup]);
+      return pickBestUberProductCandidate(
+         marketplaceProductLookup.byName.get(normalizeSearchToken(draftItem.name)) || []
+      );
+   }, [marketplaceProductLookup, pickBestUberProductCandidate]);
 
    const persistUberConfirmationState = useCallback(async (
       transaction: Transaction,
