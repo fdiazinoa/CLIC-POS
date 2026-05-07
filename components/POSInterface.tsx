@@ -1392,14 +1392,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          .map(normalizeSearchToken)
          .filter(Boolean);
 
+      let fallbackMatch: Product | null = null;
+
       for (const token of candidateTokens) {
-         const matched = pickBestUberProductCandidate(marketplaceProductLookup.byReference.get(token) || []);
-         if (matched) return matched;
+         const candidates = marketplaceProductLookup.byReference.get(token) || [];
+         const compatibleMatch = candidates.find((candidate) => productMatchesTerminalWarehouse(candidate)) || null;
+         if (compatibleMatch) return compatibleMatch;
+         if (!fallbackMatch) {
+            fallbackMatch = pickBestUberProductCandidate(candidates);
+         }
       }
 
-      return pickBestUberProductCandidate(
-         marketplaceProductLookup.byName.get(normalizeSearchToken(draftItem.name)) || []
-      );
+      const nameCandidates = marketplaceProductLookup.byName.get(normalizeSearchToken(draftItem.name)) || [];
+      const compatibleNameMatch = nameCandidates.find((candidate) => productMatchesTerminalWarehouse(candidate)) || null;
+      if (compatibleNameMatch) return compatibleNameMatch;
+
+      return fallbackMatch || pickBestUberProductCandidate(nameCandidates);
    }, [marketplaceProductLookup, pickBestUberProductCandidate]);
 
    const persistUberConfirmationState = useCallback(async (
