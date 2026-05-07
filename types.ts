@@ -777,7 +777,7 @@ export interface CurrencyAuditLog {
   terminalId?: string;             // Terminal donde se hizo el cambio
 }
 
-export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'WALLET' | 'ADVANCE' | 'OTHER' | 'CREDIT' | 'STORE_CREDIT';
+export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'WALLET' | 'ADVANCE' | 'OTHER' | 'CREDIT' | 'STORE_CREDIT' | 'UBER_EATS';
 export type PaymentIntegrationProvider =
   | 'AZUL'
   | 'INGENICO_AZUL_WEBAPI'
@@ -1510,6 +1510,16 @@ export interface Transaction {
   // Restaurant fields
   serviceChargeAmount?: number;     // Propina Legal (10%)
   voluntaryTipAmount?: number;      // Propina Voluntaria
+  marketplaceSourceChannel?: 'UBER_EATS';
+  marketplaceSourceOrderId?: string;
+  marketplaceSourceStoreId?: string;
+  marketplaceTenantId?: string;
+  marketplaceCompanyId?: string;
+  marketplaceStoreId?: string;
+  skipErpSaleSync?: boolean;
+  erpConfirmationStatus?: 'PENDING' | 'SYNCED' | 'ERROR';
+  erpConfirmationError?: string;
+  erpConfirmedAt?: string;
 }
 
 export type ViewState =
@@ -1832,6 +1842,19 @@ export interface Reservation {
   cloudSyncStatus?: CloudSyncStatus;
   cloudSyncError?: string;
   cloudSyncedAt?: string;
+  sourceChannel?: 'UBER_EATS';
+  sourceOrderId?: string;
+  sourceStoreId?: string;
+  tenantId?: string;
+  companyId?: string;
+  storeId?: string;
+  sourceStatus?: string;
+  prepaidPayment?: {
+    method: PaymentMethod;
+    label: string;
+    amount: number;
+    externalReference?: string;
+  };
 }
 
 export interface PaymentEntry {

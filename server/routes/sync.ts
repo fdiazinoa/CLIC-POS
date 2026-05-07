@@ -869,13 +869,14 @@ const enqueueErpForward = (
     transactions: any[],
     options: { erpBaseUrlOverride?: string | null; authTerminalId?: string | null }
 ): number => {
-    if (!transactions.length) return 0;
+    const forwardableTransactions = transactions.filter((txn: any) => !shouldSkipErpForward(txn));
+    if (!forwardableTransactions.length) return 0;
 
     const now = new Date().toISOString();
     const queue = asPendingErpForwardArray();
     const queueById = new Map(queue.map((entry) => [entry.id, entry]));
 
-    transactions.forEach((txn: any) => {
+    forwardableTransactions.forEach((txn: any) => {
         const id = resolveErpForwardId(txn);
         const existing = queueById.get(id);
 
@@ -894,8 +895,16 @@ const enqueueErpForward = (
 
     savePendingErpForwardArray(Array.from(queueById.values()));
     scheduleErpForwardFlush(0);
-    return transactions.length;
+    return forwardableTransactions.length;
 };
+
+const shouldSkipErpForward = (txn: any): boolean =>
+    Boolean(
+        txn?.skipErpSaleSync
+        || txn?.skip_erp_sale_sync
+        || txn?.marketplaceSourceChannel === 'UBER_EATS'
+        || txn?.marketplace_source_channel === 'UBER_EATS'
+    );
 
 const isForwardableSaleTransaction = (txn: any): boolean => {
     if (!txn || typeof txn !== 'object') return false;
@@ -924,6 +933,7 @@ const requeueLegacyErpForwardTransactions = (): number => {
 
     const addCandidate = (txn: any) => {
         if (!isForwardableSaleTransaction(txn)) return;
+        if (shouldSkipErpForward(txn)) return;
         const id = resolveErpForwardId(txn);
         if (existingIds.has(id) || candidates.has(id)) return;
         candidates.set(id, coerceTransactionItemsForErp(txn));
@@ -2028,17 +2038,20 @@ router.post('/transactions', async (req, res) => {
             typeof req.body?.erp_base_url === 'string' && req.body.erp_base_url.trim()
                 ? String(req.body.erp_base_url).trim()
                 : '';
+        const skipErpForward = req.body?.skip_erp_forward === true;
         console.log(
-            `[SYNC_TX_POST] persisted_local items=${items.length} erp_base_url_from_client=${erpBaseFromBody ? 'yes' : 'no'} auth_terminal=${authenticatedTerminalId || 'none'}`
+            `[SYNC_TX_POST] persisted_local items=${items.length} erp_base_url_from_client=${erpBaseFromBody ? 'yes' : 'no'} auth_terminal=${authenticatedTerminalId || 'none'} skip_erp_forward=${skipErpForward ? 'yes' : 'no'}`
         );
 
         const normalizedForErp = normalizedItems.map((txn: any) =>
             coerceTransactionItemsForErp(txn)
         );
-        const erpQueuedCount = enqueueErpForward(normalizedForErp, {
-            erpBaseUrlOverride: erpBaseFromBody || null,
-            authTerminalId: authenticatedTerminalId || null
-        });
+        const erpQueuedCount = skipErpForward
+            ? 0
+            : enqueueErpForward(normalizedForErp, {
+                erpBaseUrlOverride: erpBaseFromBody || null,
+                authTerminalId: authenticatedTerminalId || null
+            });
         console.log(`[SYNC_TX_POST] returning 200 after local persist; queued ERP forward count=${erpQueuedCount}`);
 
         res.json({

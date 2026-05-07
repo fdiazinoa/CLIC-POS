@@ -77,8 +77,16 @@ import { resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
 import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
-import { productIdentityCandidates, resolveOperationalProductId } from '../utils/productReferences';
+import { productIdentityCandidates, productReferenceCandidates, resolveOperationalProductId } from '../utils/productReferences';
 import { resolveKdsBaseUrl } from '../utils/kdsRouting';
+import {
+   confirmUberEatsPosInvoice,
+   fetchUberEatsOrderDraft,
+   fetchUberEatsPendingOrders,
+   resolveUberEatsPosContext,
+   type UberEatsPendingOrder,
+   type UberEatsPosDraft,
+} from '../services/uberEatsPosService';
 
 // ... existing imports
 
@@ -428,6 +436,29 @@ const ProductGridCard = React.memo(({
 
 ProductGridCard.displayName = 'ProductGridCard';
 
+type RecoverableOrderEntry =
+   | { kind: 'RESERVATION'; reservation: Reservation }
+   | { kind: 'UBER_EATS'; order: UberEatsPendingOrder };
+
+const normalizeSearchToken = (value: unknown): string =>
+   typeof value === 'string' ? value.trim().toLowerCase() : value != null ? String(value).trim().toLowerCase() : '';
+
+const isUberRecoveredReservation = (reservation: Reservation | null | undefined): boolean =>
+   reservation?.sourceChannel === 'UBER_EATS' && Boolean(reservation?.sourceOrderId);
+
+const buildUberRecoveredPayment = (reservation: Reservation, amount: number): PaymentEntry | null => {
+   const prepaidPayment = reservation.prepaidPayment;
+   if (!prepaidPayment) return null;
+
+   return {
+      id: `UBER-${reservation.sourceOrderId || reservation.id}-${Date.now()}`,
+      method: prepaidPayment.method,
+      methodLabel: prepaidPayment.label,
+      amount: Math.max(0, Number(amount || prepaidPayment.amount || 0)),
+      timestamp: new Date(),
+   };
+};
+
 const POSInterface: React.FC<POSInterfaceProps> = ({
    config,
    currentUser,
@@ -553,6 +584,38 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       return index;
    }, [products]);
+   const marketplaceProductLookup = useMemo(() => {
+      const byReference = new Map<string, Product>();
+      const byName = new Map<string, Product>();
+      const rankedProducts = [...(products || [])].sort(
+         (left, right) => scoreProductForSales(right, warehouses) - scoreProductForSales(left, warehouses)
+      );
+
+      for (const product of rankedProducts) {
+         const tokens = new Set<string>([
+            ...productReferenceCandidates(product),
+            ...productIdentityCandidates(product),
+            resolveOperationalProductId(product),
+            product.barcode || '',
+            (product as any).sku || '',
+            (product as any).code || '',
+            (product as any).item_code || '',
+         ].map(normalizeSearchToken).filter(Boolean));
+
+         tokens.forEach((token) => {
+            if (!byReference.has(token)) {
+               byReference.set(token, product);
+            }
+         });
+
+         const nameKey = normalizeSearchToken(product.name);
+         if (nameKey && !byName.has(nameKey)) {
+            byName.set(nameKey, product);
+         }
+      }
+
+      return { byReference, byName };
+   }, [products, warehouses]);
    const salesUsers = useMemo(() => getTerminalSnapshotSellers(config, terminalId), [config, terminalId]);
    const resolveSalespersonLabel = useCallback((salespersonId?: string | null) => {
       return resolveTerminalSellerName(salespersonId, config, terminalId, users) || 'Vendedor';
@@ -1117,6 +1180,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [reservationSearchTerm, setReservationSearchTerm] = useState<string>('');
    const [reservationCustomerFilterId, setReservationCustomerFilterId] = useState<string | null>(null);
    const [activeRecoveredReservation, setActiveRecoveredReservation] = useState<Reservation | null>(null);
+   const [uberPendingOrders, setUberPendingOrders] = useState<UberEatsPendingOrder[]>([]);
+   const [isLoadingUberPendingOrders, setIsLoadingUberPendingOrders] = useState(false);
+   const [uberPendingOrdersError, setUberPendingOrdersError] = useState<string | null>(null);
    const [committedByProduct, setCommittedByProduct] = useState<Record<string, number>>({});
 
    useBottomSafeOffset({
@@ -1221,6 +1287,127 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setShowRecoverReservationModal(true);
    }, [selectedCustomer, openRecoverReservationModal]);
 
+   const showShortErrorToast = useCallback((message: string) => {
+      setErrorToast(message);
+      window.setTimeout(() => setErrorToast(null), 4000);
+   }, []);
+
+   const blockRecoveredUberOrderMutation = useCallback((actionLabel: string) => {
+      if (!isUberRecoveredReservation(activeRecoveredReservation)) return false;
+      showShortErrorToast(`El pedido Uber Eats recuperado no permite ${actionLabel}. Factúralo directamente para mantener la trazabilidad.`);
+      return true;
+   }, [activeRecoveredReservation, showShortErrorToast]);
+
+   const loadUberPendingOrders = useCallback(async () => {
+      setIsLoadingUberPendingOrders(true);
+      setUberPendingOrdersError(null);
+
+      try {
+         const context = resolveUberEatsPosContext(config, activeTerminalId);
+         const orders = await fetchUberEatsPendingOrders(context, 25);
+         setUberPendingOrders(orders);
+      } catch (error: any) {
+         console.warn('⚠️ POSInterface: No se pudieron cargar órdenes Uber Eats pendientes:', error);
+         setUberPendingOrders([]);
+         setUberPendingOrdersError(error?.message || 'No se pudieron cargar los pedidos Uber Eats.');
+      } finally {
+         setIsLoadingUberPendingOrders(false);
+      }
+   }, [activeTerminalId, config]);
+
+   const findUberTransactionByOrderId = useCallback((sourceOrderId: string): Transaction | undefined => {
+      const normalizedOrderId = String(sourceOrderId || '').trim();
+      if (!normalizedOrderId) return undefined;
+
+      return (transactions || []).find((transaction) => {
+         const orderId = String(transaction.marketplaceSourceOrderId || transaction.reservationId || '').trim();
+         const channel = String(transaction.marketplaceSourceChannel || '').trim().toUpperCase();
+         if (!orderId || orderId !== normalizedOrderId) return false;
+         if (channel && channel !== 'UBER_EATS') return false;
+         return true;
+      });
+   }, [transactions]);
+
+   const resolveUberDraftProduct = useCallback((draftItem: UberEatsPosDraft['items'][number]): Product | null => {
+      const rawItem = draftItem?.raw && typeof draftItem.raw === 'object' ? draftItem.raw : {};
+      const externalDataRaw = typeof (rawItem as any).external_data === 'string'
+         ? String((rawItem as any).external_data)
+         : '';
+      let externalData: Record<string, unknown> = {};
+
+      if (externalDataRaw) {
+         try {
+            const parsed = JSON.parse(externalDataRaw);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+               externalData = parsed as Record<string, unknown>;
+            }
+         } catch {
+            // Ignore malformed external_data payloads.
+         }
+      }
+
+      const candidateTokens = [
+         draftItem.external_item_id,
+         draftItem.erp_item_id,
+         draftItem.sku,
+         (rawItem as any).id,
+         (rawItem as any).sku,
+         (rawItem as any).code,
+         (rawItem as any).item_code,
+         externalData.item_id,
+         externalData.erp_item_id,
+         externalData.external_code,
+         externalData.sku,
+      ]
+         .map(normalizeSearchToken)
+         .filter(Boolean);
+
+      for (const token of candidateTokens) {
+         const matched = marketplaceProductLookup.byReference.get(token);
+         if (matched) return matched;
+      }
+
+      return marketplaceProductLookup.byName.get(normalizeSearchToken(draftItem.name)) || null;
+   }, [marketplaceProductLookup]);
+
+   const persistUberConfirmationState = useCallback(async (
+      transaction: Transaction,
+      status: NonNullable<Transaction['erpConfirmationStatus']>,
+      errorMessage?: string
+   ) => {
+      try {
+         await db.saveDocument('transactions', {
+            ...transaction,
+            erpConfirmationStatus: status,
+            erpConfirmationError: errorMessage,
+            erpConfirmedAt: status === 'SYNCED' ? new Date().toISOString() : transaction.erpConfirmedAt,
+         });
+      } catch (error) {
+         console.warn('⚠️ POSInterface: No se pudo persistir estado de confirmación Uber Eats:', error);
+      }
+   }, []);
+
+   const confirmExistingUberTransaction = useCallback(async (
+      sourceOrderId: string,
+      transaction: Transaction
+   ): Promise<boolean> => {
+      try {
+         const context = resolveUberEatsPosContext(config, activeTerminalId);
+         await confirmUberEatsPosInvoice(context, sourceOrderId, {
+            id: transaction.id,
+            displayId: transaction.displayId,
+         });
+         await persistUberConfirmationState(transaction, 'SYNCED');
+         setSuccessToast(`ERP confirmado para Uber Eats ${transaction.displayId || sourceOrderId}`);
+         await loadUberPendingOrders();
+         return true;
+      } catch (error: any) {
+         await persistUberConfirmationState(transaction, 'ERROR', error?.message || 'No se pudo confirmar la factura Uber Eats.');
+         showShortErrorToast(error?.message || 'No se pudo confirmar la factura Uber Eats en ERP.');
+         return false;
+      }
+   }, [activeTerminalId, config, loadUberPendingOrders, persistUberConfirmationState, showShortErrorToast]);
+
    const handleRecoverReservation = useCallback((reservation: Reservation) => {
       const hydratedItems = (reservation.items || []).map((item, idx) => ({
          ...item,
@@ -1235,9 +1422,123 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setSuccessToast(`Reserva ${reservation.code} cargada`);
    }, [customers, onSelectCustomer, onUpdateCart, closeRecoverReservationModal]);
 
+   const handleRecoverUberOrder = useCallback(async (order: UberEatsPendingOrder) => {
+      const existingTransaction = findUberTransactionByOrderId(order.uberOrderId);
+      if (existingTransaction) {
+         const confirmed = await confirmExistingUberTransaction(order.uberOrderId, existingTransaction);
+         if (confirmed) {
+            closeRecoverReservationModal();
+         }
+         return;
+      }
+
+      setIsLoadingUberPendingOrders(true);
+      try {
+         const context = resolveUberEatsPosContext(config, activeTerminalId);
+         const draft = await fetchUberEatsOrderDraft(context, order.uberOrderId);
+
+         if (context.storeId && draft.store_id && context.storeId !== draft.store_id) {
+            throw new Error('La orden Uber Eats pertenece a otra tienda ERP y no puede facturarse en esta caja.');
+         }
+
+         const unmatchedItems: string[] = [];
+         const hydratedItems = draft.items.map((item, idx) => {
+            const localProduct = resolveUberDraftProduct(item);
+            if (!localProduct) {
+               unmatchedItems.push(item.name || `Línea ${idx + 1}`);
+               return null;
+            }
+
+            const modifierNames = Array.isArray(item.modifiers)
+               ? item.modifiers.map((modifier) => String(modifier?.name || '').trim()).filter(Boolean)
+               : [];
+
+            return {
+               ...localProduct,
+               cartId: `UBER-${draft.source_order_id}-${idx}-${Date.now()}`,
+               name: item.name || localProduct.name,
+               price: Number(item.unit_price || localProduct.price || 0),
+               originalPrice: Number(item.unit_price || localProduct.price || 0),
+               quantity: Number(item.quantity || 0),
+               note: `Uber Eats ${order.displayId || draft.source_order_id}`,
+               modifiers: modifierNames,
+            };
+         }).filter(Boolean) as CartItem[];
+
+         if (unmatchedItems.length > 0) {
+            throw new Error(`Faltan artículos en POS para facturar Uber Eats: ${unmatchedItems.join(', ')}`);
+         }
+
+         const total = Number(draft.totals?.total || hydratedItems.reduce((sum, item) => sum + (item.price * item.quantity), 0));
+         const displayCode = order.displayId || draft.source_order_id.slice(-5).toUpperCase();
+         const now = new Date().toISOString();
+         const prepaidPayment = draft.payments?.[0];
+         const recoveredOrder: Reservation = {
+            id: `UBER-${draft.source_order_id}`,
+            code: `UE-${displayCode}`,
+            qrPayload: JSON.stringify({ type: 'UBER_EATS_ORDER', orderId: draft.source_order_id, displayId: displayCode }),
+            customerId: draft.source_order_id,
+            customerName: draft.customer?.name || 'Cliente Uber Eats',
+            total,
+            balancePaid: total,
+            expiryDate: now,
+            status: 'ACTIVE',
+            items: hydratedItems,
+            terminalId,
+            createdById: currentUser.id,
+            createdByName: currentUser.name,
+            createdAt: now,
+            updatedAt: now,
+            sourceChannel: 'UBER_EATS',
+            sourceOrderId: draft.source_order_id,
+            sourceStoreId: draft.source_store_id,
+            tenantId: draft.tenant_id,
+            companyId: draft.company_id,
+            storeId: draft.store_id,
+            sourceStatus: draft.status,
+            prepaidPayment: {
+               method: 'UBER_EATS',
+               label: prepaidPayment?.label || 'Uber Eats',
+               amount: Number(prepaidPayment?.amount || total),
+               externalReference: prepaidPayment?.external_reference || draft.source_order_id,
+            },
+         };
+
+         onUpdateCart(hydratedItems);
+         onSelectCustomer(null);
+         setActiveRecoveredReservation(recoveredOrder);
+         setRightSidebarTab('CART');
+         closeRecoverReservationModal();
+         setSuccessToast(`Pedido Uber Eats ${displayCode} cargado`);
+      } catch (error: any) {
+         showShortErrorToast(error?.message || 'No se pudo cargar la orden Uber Eats.');
+      } finally {
+         setIsLoadingUberPendingOrders(false);
+      }
+   }, [
+      activeTerminalId,
+      closeRecoverReservationModal,
+      config,
+      confirmExistingUberTransaction,
+      currentUser.id,
+      currentUser.name,
+      onSelectCustomer,
+      onUpdateCart,
+      resolveUberDraftProduct,
+      setRightSidebarTab,
+      showShortErrorToast,
+      terminalId,
+      findUberTransactionByOrderId,
+   ]);
+
    const activeReservations = useMemo(() => {
       return (reservations || []).filter(r => r.status === 'ACTIVE');
    }, [reservations]);
+
+   useEffect(() => {
+      if (!showRecoverReservationModal) return;
+      loadUberPendingOrders().catch(console.error);
+   }, [showRecoverReservationModal, loadUberPendingOrders]);
 
    const activeReservationByScanCode = useMemo(() => {
       const index = new Map<string, Reservation>();
@@ -1287,7 +1588,32 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       );
    }, [activeReservations, reservationSearchTerm, reservationCustomerFilterId]);
 
+   const filteredUberPendingOrders = useMemo(() => {
+      if (reservationCustomerFilterId) return [];
+
+      const term = reservationSearchTerm.trim().toLowerCase();
+      if (!term) return uberPendingOrders;
+
+      return uberPendingOrders.filter((order) => {
+         return [
+            order.customerName,
+            order.displayId,
+            order.uberOrderId,
+            order.status,
+         ].some((value) => normalizeSearchToken(value).includes(term));
+      });
+   }, [reservationCustomerFilterId, reservationSearchTerm, uberPendingOrders]);
+
+   const recoverableOrders = useMemo<RecoverableOrderEntry[]>(() => {
+      return [
+         ...filteredUberPendingOrders.map((order) => ({ kind: 'UBER_EATS' as const, order })),
+         ...filteredActiveReservations.map((reservation) => ({ kind: 'RESERVATION' as const, reservation })),
+      ];
+   }, [filteredActiveReservations, filteredUberPendingOrders]);
+
    const handleRedeemCoupon = () => {
+      if (blockRecoveredUberOrderMutation('aplicar cupones')) return;
+
       const normalizedCouponCode = couponCode.trim().toUpperCase();
       if (!normalizedCouponCode) return;
 
@@ -1560,6 +1886,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
 
    const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string) => {
+      if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
       if (!canAddItemToCart(product, quantity)) return;
 
       // TRACEABILITY INTERCEPTION
@@ -1612,7 +1939,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
       setLastAddedCartId(targetCartId);
-   }, [canAddItemToCart, getProductPrice, onUpdateCart, cart, activeTerminalConfig]); // Added cart to dependencies
+   }, [blockRecoveredUberOrderMutation, canAddItemToCart, getProductPrice, onUpdateCart, cart, activeTerminalConfig]); // Added cart to dependencies
 
    const handleProductClick = useCallback((product: Product) => {
       // MOBILE INTERCEPTION
@@ -2311,10 +2638,27 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const lineTaxAmount = Math.abs(lineTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0));
       return `${lineTaxBreakdown.map((tax) => formatTaxLineLabel(tax)).join(' + ')} (${baseCurrency.symbol}${lineTaxAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`;
    }, [config, isTaxIncluded, activeTerminalConfig, baseCurrency.symbol]);
-   const reservationAdvanceApplied = activeRecoveredReservation ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal) : 0;
-   const reservationBalanceDue = Math.max(0, cartTotal - reservationAdvanceApplied);
-   const amountDueNow = activeRecoveredReservation ? reservationBalanceDue : cartTotal;
-   const isEditingRecoveredReservation = !!activeRecoveredReservation;
+   const isRecoveredUberOrder = isUberRecoveredReservation(activeRecoveredReservation);
+   const reservationAdvanceApplied = activeRecoveredReservation
+      ? (isRecoveredUberOrder
+         ? Math.min(activeRecoveredReservation.prepaidPayment?.amount || activeRecoveredReservation.balancePaid || 0, cartTotal)
+         : Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal))
+      : 0;
+   const reservationBalanceDue = isRecoveredUberOrder
+      ? 0
+      : Math.max(0, cartTotal - reservationAdvanceApplied);
+   const amountDueNow = activeRecoveredReservation
+      ? (isRecoveredUberOrder ? 0 : reservationBalanceDue)
+      : cartTotal;
+   const checkoutActionLabel = !fiscalStatus.hasNCF
+      ? 'Sin Secuencia'
+      : isRecoveredUberOrder
+         ? 'FACTURAR UBER'
+         : activeRecoveredReservation
+            ? 'COBRAR SALDO'
+            : 'COBRAR';
+   const editableRecoveredReservation = isRecoveredUberOrder ? null : activeRecoveredReservation;
+   const isEditingRecoveredReservation = !!editableRecoveredReservation;
 
    useEffect(() => {
       const orderId = activeTable?.currentOrderId;
@@ -2409,10 +2753,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const expiryDate = new Date(now);
       expiryDate.setDate(expiryDate.getDate() + Math.max(1, reservationPolicy.validityDays || 7));
 
-      const reservationId = activeRecoveredReservation?.id || `RSV-${Date.now()}`;
-      const reservationCode = activeRecoveredReservation?.code || `RSV-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-      const qrPayload = activeRecoveredReservation?.qrPayload || JSON.stringify({ type: 'RESERVATION_NOTE', id: reservationId, code: reservationCode });
-      const warehouseId = activeRecoveredReservation?.warehouseId || defaultSalesWarehouseId || 'wh_central';
+      const reservationId = editableRecoveredReservation?.id || `RSV-${Date.now()}`;
+      const reservationCode = editableRecoveredReservation?.code || `RSV-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+      const qrPayload = editableRecoveredReservation?.qrPayload || JSON.stringify({ type: 'RESERVATION_NOTE', id: reservationId, code: reservationCode });
+      const warehouseId = editableRecoveredReservation?.warehouseId || defaultSalesWarehouseId || 'wh_central';
       const reservationItems = processedCart.filter(i => (i.quantity || 0) > 0).map(item => ({ ...item }));
 
       if (reservationItems.length === 0) {
@@ -2428,22 +2772,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          customerName: customer.name,
          total: cartTotal,
          balancePaid: advance,
-         expiryDate: activeRecoveredReservation?.expiryDate || expiryDate.toISOString(),
+         expiryDate: editableRecoveredReservation?.expiryDate || expiryDate.toISOString(),
          status: 'ACTIVE',
          items: reservationItems,
          warehouseId,
          deliveryDate: reservationDeliveryDate ? new Date(`${reservationDeliveryDate}T00:00:00`).toISOString() : undefined,
          terminalId,
-         createdById: activeRecoveredReservation?.createdById || currentUser.id,
-         createdByName: activeRecoveredReservation?.createdByName || currentUser.name,
-         createdAt: activeRecoveredReservation?.createdAt || now.toISOString(),
+         createdById: editableRecoveredReservation?.createdById || currentUser.id,
+         createdByName: editableRecoveredReservation?.createdByName || currentUser.name,
+         createdAt: editableRecoveredReservation?.createdAt || now.toISOString(),
          updatedAt: now.toISOString()
       };
 
       await db.saveDocument('reservations', reservation);
-      if (activeRecoveredReservation) {
-         const previousWarehouseId = activeRecoveredReservation.warehouseId || defaultSalesWarehouseId || 'wh_central';
-         await transferStockToCommitted(activeRecoveredReservation.items || [], previousWarehouseId, products, 'RELEASE');
+      if (editableRecoveredReservation) {
+         const previousWarehouseId = editableRecoveredReservation.warehouseId || defaultSalesWarehouseId || 'wh_central';
+         await transferStockToCommitted(editableRecoveredReservation.items || [], previousWarehouseId, products, 'RELEASE');
          await transferStockToCommitted(reservation.items, warehouseId, products, 'COMMIT');
       } else {
          await transferStockToCommitted(reservation.items, warehouseId, products, 'COMMIT');
@@ -2512,6 +2856,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
    const updateCartItem = async (updatedItem: CartItem | null, cartIdToDelete?: string) => {
+      if (blockRecoveredUberOrderMutation('editar el pedido')) return;
+
       let newCart: CartItem[] = [];
 
       if (cartIdToDelete || updatedItem === null) {
@@ -2581,7 +2927,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       try {
          const terminalId = activeTerminalId || 't1';
          const fiscalCompliance = getFiscalComplianceConfig(config);
-         const customerForCheckout = effectiveSelectedCustomer;
+         const uberRecoveredOrder = isUberRecoveredReservation(activeRecoveredReservation) ? activeRecoveredReservation : null;
+         const customerForCheckout = uberRecoveredOrder ? null : effectiveSelectedCustomer;
          const couponAssignedTo = redeemedCoupon?.assignedTo?.trim();
          if (couponAssignedTo && couponAssignedTo !== customerForCheckout?.id) {
             alert('El cupón aplicado está asignado a un cliente específico. Seleccione ese cliente antes de finalizar la venta.');
@@ -2677,7 +3024,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             finalNcfType = fiscalStatus.type;
          }
 
-         const reservationAdvance = activeRecoveredReservation ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal) : 0;
+         const reservationAdvance = activeRecoveredReservation && !uberRecoveredOrder
+            ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal)
+            : 0;
          const reservationAdvancePayment: PaymentEntry = {
             id: `ADV-${Date.now()}`,
             method: 'ADVANCE',
@@ -2908,7 +3257,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   terminalId: terminalId,
                   status: !isRefundOnly && creditAmount > 0 ? 'PENDING' : 'COMPLETED',
                   customerId: customerForCheckout?.id,
-                  customerName: customerForCheckout?.name,
+                  customerName: customerForCheckout?.name || activeRecoveredReservation?.customerName,
                   pendingBalance: creditAmount > 0 ? creditAmount : undefined,
                   dueDate: creditAmount > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined, // Default 30 days
                   ncf: finalNcf,
@@ -2927,12 +3276,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      address: customerForCheckout.address,
                      phone: customerForCheckout.phone,
                      email: customerForCheckout.email
+                  } : activeRecoveredReservation ? {
+                     name: activeRecoveredReservation.customerName
                   } : undefined,
                   isTaxIncluded: isTaxIncluded,
                   authorizedById: hasReturns ? refundAuthorizedBy?.id : undefined,
                   authorizedByName: hasReturns ? refundAuthorizedBy?.name : undefined,
-                  reservationId: activeRecoveredReservation?.id,
-                  reservationCode: activeRecoveredReservation?.code,
+                  reservationId: uberRecoveredOrder?.sourceOrderId || activeRecoveredReservation?.id,
+                  reservationCode: uberRecoveredOrder?.code || activeRecoveredReservation?.code,
                   priorAdvancePaid: reservationAdvance > 0 ? reservationAdvance : undefined,
                   balanceDueAtSale: creditAmount > 0
                      ? creditAmount
@@ -2940,7 +3291,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
                   walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined,
                   serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
-                  voluntaryTipAmount: voluntaryTip
+                  voluntaryTipAmount: voluntaryTip,
+                  marketplaceSourceChannel: uberRecoveredOrder ? 'UBER_EATS' : undefined,
+                  marketplaceSourceOrderId: uberRecoveredOrder?.sourceOrderId,
+                  marketplaceSourceStoreId: uberRecoveredOrder?.sourceStoreId,
+                  marketplaceTenantId: uberRecoveredOrder?.tenantId,
+                  marketplaceCompanyId: uberRecoveredOrder?.companyId,
+                  marketplaceStoreId: uberRecoveredOrder?.storeId,
+                  skipErpSaleSync: Boolean(uberRecoveredOrder),
+                  erpConfirmationStatus: uberRecoveredOrder ? 'PENDING' : undefined,
+                  observations: uberRecoveredOrder
+                     ? `Uber Eats ${uberRecoveredOrder.code} / ${uberRecoveredOrder.sourceOrderId}`
+                     : undefined
                }), 25000, 'TIMEOUT_CREATE_TRANSACTION');
 
                // Ensure seriesId is preserved (Backend might not return it in the root object)
@@ -2973,7 +3335,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   onTransactionComplete(finalTxn);
                }
 
-               if (activeRecoveredReservation) {
+               if (activeRecoveredReservation && !uberRecoveredOrder) {
                   const warehouseId = activeRecoveredReservation.warehouseId || defaultSalesWarehouseId || 'wh_central';
                   await withTimeout(
                      transferStockToCommitted(activeRecoveredReservation.items || [], warehouseId, products, 'RELEASE'),
@@ -2988,6 +3350,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      updatedAt: new Date().toISOString()
                   }), 6000, 'TIMEOUT_SAVE_RESERVATION_INVOICE');
                   await withTimeout(reloadReservations(), 6000, 'TIMEOUT_RELOAD_RESERVATIONS');
+               }
+
+               if (uberRecoveredOrder?.sourceOrderId) {
+                  await confirmExistingUberTransaction(uberRecoveredOrder.sourceOrderId, finalTxn);
+                  await loadUberPendingOrders();
                }
 
                // --- CRITICAL: Ticket Closing Logic ---
@@ -3079,7 +3446,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       if (activeRecoveredReservation && amountDueNow <= 0.0001) {
-         handlePaymentConfirm([]).catch(console.error);
+         const marketplacePayment = isRecoveredUberOrder
+            ? buildUberRecoveredPayment(activeRecoveredReservation, cartTotal)
+            : null;
+         handlePaymentConfirm(marketplacePayment ? [marketplacePayment] : []).catch(console.error);
          return;
       }
       setShowPaymentModal(true);
@@ -3256,6 +3626,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const openReservationModal = () => {
+      if (blockRecoveredUberOrderMutation('convertirlo en reserva')) return;
+
       const formatDateForInput = (value?: string) => {
          if (!value) return '';
          const d = new Date(value);
@@ -3266,10 +3638,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return `${yyyy}-${mm}-${dd}`;
       };
       const today = new Date().toISOString().slice(0, 10);
-      if (activeRecoveredReservation) {
-         setReservationCustomerId(activeRecoveredReservation.customerId || selectedCustomer?.id || '');
-         setReservationAdvanceInput(String(activeRecoveredReservation.balancePaid || 0));
-         setReservationDeliveryDate(formatDateForInput(activeRecoveredReservation.deliveryDate) || today);
+      if (editableRecoveredReservation) {
+         setReservationCustomerId(editableRecoveredReservation.customerId || selectedCustomer?.id || '');
+         setReservationAdvanceInput(String(editableRecoveredReservation.balancePaid || 0));
+         setReservationDeliveryDate(formatDateForInput(editableRecoveredReservation.deliveryDate) || today);
       } else {
          setReservationCustomerId(selectedCustomer?.id || '');
          setReservationAdvanceInput('0');
@@ -3311,6 +3683,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const handleParkCurrentTicket = async (aliasInput?: string) => {
+      if (blockRecoveredUberOrderMutation('guardarlo como ticket en espera')) return;
       if (cart.length === 0) return;
       const parkedTicketId = activeTable?.currentOrderId || `P-${Date.now()}`;
       const existingParked = (Array.isArray(parkedTickets) ? parkedTickets : []).find((ticket) => ticket.id === parkedTicketId);
@@ -3368,6 +3741,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const handleSendAndExit = async () => {
+      if (blockRecoveredUberOrderMutation('enviarlo a espera')) return;
+
       // 1. If table is empty, auto-release to avoid ghost occupied tables.
       const releasedEmptyTable = await releaseActiveEmptyTable();
 
@@ -3390,6 +3765,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const handleBackToMap = async () => {
+      if (blockRecoveredUberOrderMutation('enviarlo a espera')) return;
+
       const releasedEmptyTable = await releaseActiveEmptyTable();
 
       // Ensure we park if there's something to park and no auto-release happened
@@ -3520,12 +3897,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // --- ACTION GRID HANDLER ---
    const handleGridAction = (action: string) => {
       switch (action) {
-         case 'DISCOUNT': setShowGlobalDiscount(true); break;
-         case 'COUPON': setShowCouponModal(true); break;
+         case 'DISCOUNT':
+            if (blockRecoveredUberOrderMutation('aplicar descuentos')) return;
+            setShowGlobalDiscount(true);
+            break;
+         case 'COUPON':
+            if (blockRecoveredUberOrderMutation('aplicar cupones')) return;
+            setShowCouponModal(true);
+            break;
          case 'PARK_LIST': setShowParkedList((prev: any) => !prev); break;
          case 'RESERVATION': openReservationModal(); break;
          case 'RECOVER_RESERVATION': openRecoverReservationModal(); break;
          case 'RETURN':
+            if (blockRecoveredUberOrderMutation('mezclar devoluciones con este pedido')) return;
             if (!isReturnMode) {
                const hasPermission = (currentUser as any).permissions?.includes('CAN_REFUND') ||
                   ['ADMIN', 'MANAGER'].includes(currentUser.role);
@@ -4493,11 +4877,25 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {activeRecoveredReservation && (
                <div className="mx-4 mb-3 p-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-800">
-                  <p className="text-[10px] font-black uppercase tracking-widest">Reserva Recuperada</p>
+                  <div className="flex items-center gap-2">
+                     <p className="text-[10px] font-black uppercase tracking-widest">
+                        {isRecoveredUberOrder ? 'Pedido Recuperado' : 'Reserva Recuperada'}
+                     </p>
+                     {isRecoveredUberOrder && (
+                        <span className="inline-flex items-center rounded-full bg-black px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.2em] text-white">
+                           Uber Eats
+                        </span>
+                     )}
+                  </div>
                   <p className="text-xs font-bold mt-1">{activeRecoveredReservation.code} • {activeRecoveredReservation.customerName}</p>
                   <p className="text-[11px] mt-1">
                      Total: {baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | Anticipo: {baseCurrency.symbol}{reservationAdvanceApplied.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | Saldo: {baseCurrency.symbol}{reservationBalanceDue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </p>
+                  {isRecoveredUberOrder && (
+                     <p className="text-[11px] mt-1 font-semibold text-amber-700">
+                        Pedido bloqueado para cambios manuales. Debe convertirse en venta POS para confirmar Uber Eats.
+                     </p>
+                  )}
                </div>
             )}
 
@@ -4589,7 +4987,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  disabled={cart.length === 0 || !fiscalStatus.hasNCF}
                                  className={`h-14 min-w-[228px] px-6 rounded-2xl font-black text-lg shadow-xl hover:scale-[1.05] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 shrink-0 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
                               >
-                                 <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : (activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR')}</span>
+                                 <span>{checkoutActionLabel}</span>
                                  <ArrowRight size={24} />
                               </button>
                            </div>
@@ -4719,7 +5117,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           disabled={cart.length === 0 || !fiscalStatus.hasNCF}
                                           className={`w-full max-w-[188px] justify-self-end py-3.5 rounded-2xl font-black text-lg shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
                                        >
-                                          <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : (activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR')}</span>
+                                          <span>{checkoutActionLabel}</span>
                                           <ArrowRight size={24} />
                                        </button>
                                     </>
@@ -4789,11 +5187,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                >
                   <div className="flex justify-between items-center mb-4 px-2">
                      <div className="flex gap-4">
-                        <button onClick={() => setShowGlobalDiscount(true)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-pink-500">
+                        <button onClick={() => {
+                           if (blockRecoveredUberOrderMutation('aplicar descuentos')) return;
+                           setShowGlobalDiscount(true);
+                        }} className="flex flex-col items-center gap-1 text-gray-400 hover:text-pink-500">
                            <Percent size={18} />
                            <span className="text-[9px] font-bold uppercase">Desc.</span>
                         </button>
-                        <button onClick={() => setShowCouponModal(true)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-cyan-500">
+                        <button onClick={() => {
+                           if (blockRecoveredUberOrderMutation('aplicar cupones')) return;
+                           setShowCouponModal(true);
+                        }} className="flex flex-col items-center gap-1 text-gray-400 hover:text-cyan-500">
                            <QrCode size={18} />
                            <span className="text-[9px] font-bold uppercase">Cupón</span>
                         </button>
@@ -4851,7 +5255,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         disabled={cart.length === 0 || !fiscalStatus.hasNCF}
                         className="bg-blue-600 text-white px-8 py-4 rounded-2xl font-black text-lg shadow-lg shadow-blue-200 active:scale-95 transition-all flex items-center gap-2"
                      >
-                        <span>{activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR'}</span>
+                        <span>{isRecoveredUberOrder ? 'FACTURAR UBER' : activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR'}</span>
                         <ArrowRight size={20} />
                      </button>
                   </div>
@@ -5039,7 +5443,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <div className="p-6 border-b bg-teal-50 flex justify-between items-center">
                         <h3 className="font-black text-xl text-teal-900 flex items-center gap-2">
                            <QrCode size={20} />
-                           Recuperar Reserva
+                           Reservas y Pedidos
                         </h3>
                         <button onClick={closeRecoverReservationModal} className="p-2 hover:bg-teal-100 rounded-full text-teal-700">
                            <X size={18} />
@@ -5053,10 +5457,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  type="text"
                                  value={reservationSearchTerm}
                                  onChange={(e) => setReservationSearchTerm(e.target.value)}
-                                 placeholder="Buscar por cliente, código o ID..."
+                                 placeholder="Buscar por cliente, código, display o ID..."
                                  className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-gray-200 font-bold text-sm outline-none focus:ring-2 focus:ring-teal-100"
                               />
                            </div>
+                           <button
+                              onClick={() => loadUberPendingOrders().catch(console.error)}
+                              className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 font-bold hover:bg-slate-50"
+                           >
+                              Actualizar
+                           </button>
                            <button
                               onClick={() => {
                                  if (isMobile) {
@@ -5080,7 +5490,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  Desktop
                               </p>
                               <p className="mt-1 text-xs font-semibold text-sky-900">
-                                 El lector QR funciona como teclado. No hace falta abrir la cámara para recuperar la reserva.
+                                 El lector QR funciona como teclado. No hace falta abrir la cámara para recuperar reservas o pedidos Uber Eats.
                               </p>
                            </div>
                         )}
@@ -5099,31 +5509,88 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            </div>
                         )}
 
+                        {!reservationCustomerFilterId && (
+                           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                              <span className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">
+                                 Uber Eats
+                              </span>
+                              <span className="rounded-full bg-black px-2 py-0.5 text-[10px] font-black text-white">
+                                 {uberPendingOrders.length}
+                              </span>
+                              {isLoadingUberPendingOrders && (
+                                 <span className="text-[11px] font-bold text-slate-500">Cargando pedidos...</span>
+                              )}
+                              {!isLoadingUberPendingOrders && uberPendingOrdersError && (
+                                 <span className="text-[11px] font-bold text-red-500">{uberPendingOrdersError}</span>
+                              )}
+                           </div>
+                        )}
+
                         <div className="max-h-[45vh] overflow-y-auto space-y-2">
-                           {filteredActiveReservations.map(reservation => (
-                              <button
-                                 key={reservation.id}
-                                 onClick={() => handleRecoverReservation(reservation)}
-                                 className="w-full text-left p-4 rounded-xl border border-gray-100 hover:border-teal-300 hover:bg-teal-50 transition-all"
-                              >
-                                 <div className="flex justify-between items-start gap-2">
-                                    <div>
-                                       <p className="font-black text-gray-800">{reservation.customerName}</p>
-                                       <p className="text-[11px] font-bold text-gray-500 mt-0.5">{reservation.code}</p>
+                           {recoverableOrders.map((entry) => {
+                              if (entry.kind === 'UBER_EATS') {
+                                 const order = entry.order;
+                                 const existingTransaction = findUberTransactionByOrderId(order.uberOrderId);
+
+                                 return (
+                                    <button
+                                       key={order.id || order.uberOrderId}
+                                       onClick={() => { void handleRecoverUberOrder(order); }}
+                                       className="w-full text-left p-4 rounded-xl border border-gray-100 hover:border-slate-900 hover:bg-slate-50 transition-all"
+                                    >
+                                       <div className="flex justify-between items-start gap-2">
+                                          <div>
+                                             <div className="flex items-center gap-2">
+                                                <span className="inline-flex items-center rounded-full bg-black px-2.5 py-0.5 text-[10px] font-black uppercase tracking-[0.18em] text-white">
+                                                   Uber Eats
+                                                </span>
+                                                <span className="text-[11px] font-black text-slate-500">{order.displayId || order.uberOrderId}</span>
+                                             </div>
+                                             <p className="mt-2 font-black text-gray-800">{order.customerName || 'Cliente Uber Eats'}</p>
+                                             <p className="text-[11px] font-bold text-gray-500 mt-0.5">
+                                                Estado: {order.status} • POS: {order.posSyncStatus}
+                                             </p>
+                                          </div>
+                                          <div className="text-right">
+                                             <p className="text-xs font-black text-gray-800">{baseCurrency.symbol}{order.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                                             <p className="text-[11px] text-gray-500">{order.itemCount} artículo(s)</p>
+                                          </div>
+                                       </div>
+                                       <p className="text-[11px] text-gray-500 mt-2">
+                                          {existingTransaction
+                                             ? `Factura local detectada: ${existingTransaction.displayId || existingTransaction.id}. Toque para reconfirmar ERP.`
+                                             : 'Toque para cargar el pedido y convertirlo en factura local POS.'}
+                                       </p>
+                                    </button>
+                                 );
+                              }
+
+                              const reservation = entry.reservation;
+                              return (
+                                 <button
+                                    key={reservation.id}
+                                    onClick={() => handleRecoverReservation(reservation)}
+                                    className="w-full text-left p-4 rounded-xl border border-gray-100 hover:border-teal-300 hover:bg-teal-50 transition-all"
+                                 >
+                                    <div className="flex justify-between items-start gap-2">
+                                       <div>
+                                          <p className="font-black text-gray-800">{reservation.customerName}</p>
+                                          <p className="text-[11px] font-bold text-gray-500 mt-0.5">{reservation.code}</p>
+                                       </div>
+                                       <div className="text-right">
+                                          <p className="text-xs font-black text-gray-800">{baseCurrency.symbol}{reservation.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                                          <p className="text-[11px] text-gray-500">Abono: {baseCurrency.symbol}{(reservation.balancePaid || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                                       </div>
                                     </div>
-                                    <div className="text-right">
-                                       <p className="text-xs font-black text-gray-800">{baseCurrency.symbol}{reservation.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                                       <p className="text-[11px] text-gray-500">Abono: {baseCurrency.symbol}{(reservation.balancePaid || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                                    </div>
-                                 </div>
-                                 <p className="text-[11px] text-gray-500 mt-2">
-                                    Vence: {new Date(reservation.expiryDate).toLocaleDateString()} {reservation.deliveryDate ? `• Entrega: ${new Date(reservation.deliveryDate).toLocaleDateString()}` : ''}
-                                 </p>
-                              </button>
-                           ))}
-                           {filteredActiveReservations.length === 0 && (
+                                    <p className="text-[11px] text-gray-500 mt-2">
+                                       Vence: {new Date(reservation.expiryDate).toLocaleDateString()} {reservation.deliveryDate ? `• Entrega: ${new Date(reservation.deliveryDate).toLocaleDateString()}` : ''}
+                                    </p>
+                                 </button>
+                              );
+                           })}
+                           {recoverableOrders.length === 0 && (
                               <div className="p-8 rounded-xl border border-dashed border-gray-200 text-center text-sm text-gray-400">
-                                 No hay reservas activas para mostrar.
+                                 No hay reservas ni pedidos Uber Eats pendientes para mostrar.
                               </div>
                            )}
                         </div>

@@ -335,7 +335,17 @@ class TransactionService {
             settlement_change_base: data.settlement_change_base,
             settlement_change_currency_code: data.settlement_change_currency_code,
             walletDepositAmount: data.walletDepositAmount,
-            walletPaymentAmount: data.walletPaymentAmount
+            walletPaymentAmount: data.walletPaymentAmount,
+            marketplaceSourceChannel: data.marketplaceSourceChannel,
+            marketplaceSourceOrderId: data.marketplaceSourceOrderId,
+            marketplaceSourceStoreId: data.marketplaceSourceStoreId,
+            marketplaceTenantId: data.marketplaceTenantId,
+            marketplaceCompanyId: data.marketplaceCompanyId,
+            marketplaceStoreId: data.marketplaceStoreId,
+            skipErpSaleSync: data.skipErpSaleSync,
+            erpConfirmationStatus: data.erpConfirmationStatus,
+            erpConfirmationError: data.erpConfirmationError,
+            erpConfirmedAt: data.erpConfirmedAt
         };
 
         const normalizedTransaction = normalizeTransactionForSync(transaction);
