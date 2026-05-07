@@ -259,6 +259,24 @@ const productBusinessKeys = (product: Product): string[] => {
    return Array.from(keys);
 };
 
+const removeSeedCatalogDuplicates = (catalogProducts: Product[]): Product[] => {
+   const nonSeedBusinessKeys = new Set<string>();
+
+   for (const product of catalogProducts) {
+      if (!product || typeof product !== 'object' || Array.isArray(product)) continue;
+      if (isSeedCatalogProduct(product)) continue;
+      productBusinessKeys(product).forEach((key) => nonSeedBusinessKeys.add(key));
+   }
+
+   return catalogProducts.filter((product) => {
+      if (!product || typeof product !== 'object' || Array.isArray(product)) return false;
+      if (!isSeedCatalogProduct(product)) return true;
+
+      const businessKeys = productBusinessKeys(product);
+      return !businessKeys.some((key) => nonSeedBusinessKeys.has(key));
+   });
+};
+
 const scoreProductForSales = (product: Product, warehouses: Warehouse[]): number => {
    const activeWarehouses = resolveProductActiveWarehouseIds(product, warehouses).length;
    const stockBalanceCount = Object.keys(product.stockBalances || {}).length;
@@ -274,6 +292,18 @@ const scoreProductForSales = (product: Product, warehouses: Warehouse[]): number
       updatedAtScore / 1_000_000_000_000
    );
 };
+
+const dedupeProductsForSales = (catalogProducts: Product[], warehouses: Warehouse[]): Product[] =>
+   Array.from(
+      removeSeedCatalogDuplicates(catalogProducts).reduce((map, product) => {
+         const key = productSalesIdentityKey(product);
+         const existing = map.get(key);
+         if (!existing || scoreProductForSales(product, warehouses) > scoreProductForSales(existing, warehouses)) {
+            map.set(key, product);
+         }
+         return map;
+      }, new Map<string, Product>()).values()
+   );
 
 const buildCartDigest = (items: CartItem[] = []): string =>
    items
@@ -601,7 +631,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const marketplaceProductLookup = useMemo(() => {
       const byReference = new Map<string, Product[]>();
       const byName = new Map<string, Product[]>();
-      const rankedProducts = [...(products || [])].sort(
+      const rankedProducts = [...dedupeProductsForSales(products || [], warehouses)].sort(
          (left, right) => scoreProductForSales(right, warehouses) - scoreProductForSales(left, warehouses)
       );
 
@@ -2442,36 +2472,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
 
    const salesCatalogProducts = useMemo(() => {
-      const nonSeedBusinessKeys = new Set<string>();
-
-      for (const product of products) {
-         if (!product || typeof product !== 'object' || Array.isArray(product)) continue;
-         if (isSeedCatalogProduct(product)) continue;
-         productBusinessKeys(product).forEach((key) => nonSeedBusinessKeys.add(key));
-      }
-
-      return products.filter((product) => {
-         if (!product || typeof product !== 'object' || Array.isArray(product)) return false;
-         if (!isSeedCatalogProduct(product)) return true;
-
-         const businessKeys = productBusinessKeys(product);
-         return !businessKeys.some((key) => nonSeedBusinessKeys.has(key));
-      });
+      return removeSeedCatalogDuplicates(products);
    }, [products]);
 
    const filteredProducts = useMemo(() => {
-      const dedupedProducts = Array.from(
-         salesCatalogProducts.reduce((map, product) => {
-            if (!product || typeof product !== 'object' || Array.isArray(product)) return map;
-
-            const key = productSalesIdentityKey(product);
-            const existing = map.get(key);
-            if (!existing || scoreProductForSales(product, warehouses) > scoreProductForSales(existing, warehouses)) {
-               map.set(key, product);
-            }
-            return map;
-         }, new Map<string, Product>()).values()
-      );
+      const dedupedProducts = dedupeProductsForSales(salesCatalogProducts, warehouses);
 
       const normalizedCategoryFilter = categoryFilter === 'ALL'
          ? 'ALL'
@@ -2554,18 +2559,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [searchTerm, findProductByAnyCode, addToCart, isReturnMode, filteredProducts, handleProductClick]);
 
    const categories = useMemo(() => {
-      const dedupedProducts = Array.from(
-         salesCatalogProducts.reduce((map, product) => {
-            if (!product || typeof product !== 'object' || Array.isArray(product)) return map;
-
-            const key = productSalesIdentityKey(product);
-            const existing = map.get(key);
-            if (!existing || scoreProductForSales(product, warehouses) > scoreProductForSales(existing, warehouses)) {
-               map.set(key, product);
-            }
-            return map;
-         }, new Map<string, Product>()).values()
-      );
+      const dedupedProducts = dedupeProductsForSales(salesCatalogProducts, warehouses);
 
       const allowedDisplayCategories = Array.from(
          new Set(Array.from(effectiveAllowedCategorySet).map((category) => displayCategory(category)).filter(Boolean))
