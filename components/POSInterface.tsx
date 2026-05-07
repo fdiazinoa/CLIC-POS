@@ -19,7 +19,7 @@ import { Html5Qrcode } from "html5-qrcode";
 import {
    BusinessConfig, User as UserType, RoleDefinition,
    Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType, FiscalDocumentCode,
-   PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, Tariff, RedeemedCouponRef, ProductVariant
+   PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, RedeemedCouponRef, ProductVariant
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import { getFiscalComplianceConfig, getDefaultFiscalProvider, getFiscalReserveAlert, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
@@ -479,6 +479,59 @@ const normalizeLooseNameToken = (value: unknown): string =>
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9]+/g, '');
 
+const resolveActiveTariffPrice = (
+   product: Product,
+   activeTokens: ReadonlySet<string>,
+   productPriceIndex: Map<string, number>
+): number | null => {
+   const productTokens = new Set(
+      [
+         product.id,
+         resolveOperationalProductId(product),
+         ...productIdentityCandidates(product),
+      ]
+         .map(normalizeSearchToken)
+         .filter(Boolean)
+   );
+
+   for (const productToken of productTokens) {
+      for (const activeToken of activeTokens) {
+         const indexedPrice = productPriceIndex.get(`${productToken}::${activeToken}`);
+         if (typeof indexedPrice === 'number' && Number.isFinite(indexedPrice)) {
+            return indexedPrice;
+         }
+      }
+   }
+
+   const matchedEntry = (product.tariffs || []).find((entry: any) => {
+      const entryTokens = [
+         entry?.tariffId,
+         entry?.tariff_id,
+         entry?.id,
+         entry?.code,
+         entry?.tariffCode,
+         entry?.tariff_code,
+      ]
+         .map(normalizeSearchToken)
+         .filter(Boolean);
+
+      return entryTokens.some((token) => activeTokens.has(token));
+   });
+
+   const tariffPrice = matchedEntry?.price;
+   return typeof tariffPrice === 'number' && Number.isFinite(tariffPrice) ? tariffPrice : null;
+};
+
+type SalesCatalogProductEntry = {
+   product: Product;
+   displayCategory: string;
+   hasActiveTariff: boolean;
+   hasErpWarehouse: boolean;
+   isSellable: boolean;
+   normalizedCategory: string;
+   searchText: string;
+};
+
 const isUberRecoveredReservation = (reservation: Reservation | null | undefined): boolean =>
    reservation?.sourceChannel === 'UBER_EATS' && Boolean(reservation?.sourceOrderId);
 
@@ -800,9 +853,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return activeWarehouses.some((warehouseId) => effectiveWarehouseKeys.has(warehouseId));
    }, [effectiveWarehouseKeys, normalizeScopeKey, warehouses]);
    /** Tarifa OK en ERP pero almacenes activos no intersectan la caja: se muestra atenuado y no deja vender. */
+   const productWarehouseBlockedById = useMemo(() => {
+      const index = new Map<string, boolean>();
+      for (const product of products || []) {
+         if (!product?.id) continue;
+         index.set(product.id, !productMatchesTerminalWarehouse(product));
+      }
+      return index;
+   }, [productMatchesTerminalWarehouse, products]);
+
    const isProductWarehouseBlockedForSale = useCallback(
-      (product: Product) => !productMatchesTerminalWarehouse(product),
-      [productMatchesTerminalWarehouse]
+      (product: Product) => {
+         if (product?.id && productWarehouseBlockedById.has(product.id)) {
+            return productWarehouseBlockedById.get(product.id) ?? true;
+         }
+         return !productMatchesTerminalWarehouse(product);
+      },
+      [productMatchesTerminalWarehouse, productWarehouseBlockedById]
    );
    const getScopedProductStock = useCallback((product: Product) => {
       const stockEntries = Object.entries(product.stockBalances || {});
@@ -1052,6 +1119,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [searchTerm, setSearchTerm] = useState('');
    const deferredSearchTerm = useDeferredValue(searchTerm);
    const [categoryFilter, setCategoryFilter] = useState('ALL');
+   const deferredCategoryFilter = useDeferredValue(categoryFilter);
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
 
    const [showDiscountModal, setShowDiscountModal] = useState(false);
@@ -1837,51 +1905,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
-   const getTariffPrice = useCallback((p: Product) => {
-      const selectedTariff = (config.tariffs || []).find((tariff) => tariff.id === activeTariffId) as Tariff | undefined;
-      const activeTokens = new Set(
-         [activeTariffId, selectedTariff?.id, (selectedTariff as any)?.code]
-            .map((value) => (typeof value === 'string' ? value.trim().toLowerCase() : ''))
-            .filter(Boolean)
-      );
+   const activeTariffTokens = useMemo(
+      () => new Set([activeTariffId, activeTariff?.id, (activeTariff as any)?.code].map(normalizeSearchToken).filter(Boolean)),
+      [activeTariffId, activeTariff]
+   );
 
-      const productTokens = new Set(
-         [
-            p.id,
-            resolveOperationalProductId(p),
-            ...productIdentityCandidates(p),
-         ]
-            .map((value) => (typeof value === 'string' ? value.trim().toLowerCase() : ''))
-            .filter(Boolean)
-      );
-
-      for (const productToken of productTokens) {
-         for (const activeToken of activeTokens) {
-            const indexedPrice = productPriceIndex.get(`${productToken}::${activeToken}`);
-            if (typeof indexedPrice === 'number' && Number.isFinite(indexedPrice)) {
-               return indexedPrice;
-            }
-         }
+   const productTariffPriceById = useMemo(() => {
+      const index = new Map<string, number | null>();
+      for (const product of products || []) {
+         if (!product?.id) continue;
+         index.set(product.id, resolveActiveTariffPrice(product, activeTariffTokens, productPriceIndex));
       }
+      return index;
+   }, [activeTariffTokens, productPriceIndex, products]);
 
-      const matchedEntry = (p.tariffs || []).find((entry: any) => {
-         const entryTokens = [
-            entry?.tariffId,
-            entry?.tariff_id,
-            entry?.id,
-            entry?.code,
-            entry?.tariffCode,
-            entry?.tariff_code,
-         ]
-            .map((value) => (typeof value === 'string' ? value.trim().toLowerCase() : ''))
-            .filter(Boolean);
-
-         return entryTokens.some((token) => activeTokens.has(token));
-      });
-
-      const tariffPrice = matchedEntry?.price;
-      return typeof tariffPrice === 'number' && Number.isFinite(tariffPrice) ? tariffPrice : null;
-   }, [activeTariffId, config.tariffs, productPriceIndex]);
+   const getTariffPrice = useCallback((p: Product) => {
+      if (p?.id && productTariffPriceById.has(p.id)) {
+         return productTariffPriceById.get(p.id) ?? null;
+      }
+      return resolveActiveTariffPrice(p, activeTariffTokens, productPriceIndex);
+   }, [activeTariffTokens, productPriceIndex, productTariffPriceById]);
 
    const productHasActiveTariff = useCallback((p: Product) => getTariffPrice(p) !== null, [getTariffPrice]);
 
@@ -2520,56 +2563,75 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return removeSeedCatalogDuplicates(products);
    }, [products]);
 
-   const filteredProducts = useMemo(() => {
-      const dedupedProducts = dedupeProductsForSales(salesCatalogProducts, warehouses);
+   const dedupedSalesCatalogProducts = useMemo(() => {
+      const rankedByIdentity = new Map<string, { product: Product; score: number }>();
 
-      const normalizedCategoryFilter = categoryFilter === 'ALL'
-         ? 'ALL'
-         : canonicalizeCategory(categoryFilter);
+      for (const product of salesCatalogProducts) {
+         if (!product || typeof product !== 'object' || Array.isArray(product)) continue;
 
-      const filtered = dedupedProducts.filter(p => {
-         if (!p || typeof p !== 'object' || Array.isArray(p)) return false;
-         const erpWarehouses = resolveProductActiveWarehouseIds(p, warehouses);
-         const hasErpWarehouse = erpWarehouses.length > 0;
-         const productName = String(p.name || '').toLowerCase();
-         const normalizedSearch = deferredSearchTerm.trim().toLowerCase();
+         const key = productSalesIdentityKey(product);
+         const score = scoreProductForSales(product, warehouses);
+         const existing = rankedByIdentity.get(key);
+         if (!existing || score > existing.score) {
+            rankedByIdentity.set(key, { product, score });
+         }
+      }
+
+      return Array.from(rankedByIdentity.values(), (entry) => entry.product);
+   }, [salesCatalogProducts, warehouses]);
+
+   const salesCatalogProductEntries = useMemo<SalesCatalogProductEntry[]>(() => {
+      return dedupedSalesCatalogProducts.map((product) => {
          const searchableCodes = [
-            typeof p.barcode === 'string' ? p.barcode.toLowerCase() : String(p.barcode || '').toLowerCase(),
-            typeof (p as any).sku === 'string' ? (p as any).sku.toLowerCase() : String((p as any).sku || '').toLowerCase(),
-            typeof (p as any).item_code === 'string' ? (p as any).item_code.toLowerCase() : String((p as any).item_code || '').toLowerCase(),
-            typeof (p as any).code === 'string' ? (p as any).code.toLowerCase() : String((p as any).code || '').toLowerCase(),
-         ].filter(Boolean);
-         const variantCodes = Array.isArray((p as any).variants)
-            ? (p as any).variants.flatMap((variant: any) => [
-               typeof variant?.sku === 'string' ? variant.sku.toLowerCase() : String(variant?.sku || '').toLowerCase(),
-               typeof variant?.barcode === 'string' ? variant.barcode.toLowerCase() : String(variant?.barcode || '').toLowerCase(),
-            ]).filter(Boolean)
+            product.barcode,
+            (product as any).sku,
+            (product as any).item_code,
+            (product as any).code,
+         ];
+         const variantCodes = Array.isArray((product as any).variants)
+            ? (product as any).variants.flatMap((variant: any) => [variant?.sku, variant?.barcode])
             : [];
+
+         return {
+            product,
+            displayCategory: displayCategory(product.category),
+            hasActiveTariff: productHasActiveTariff(product),
+            hasErpWarehouse: resolveProductActiveWarehouseIds(product, warehouses).length > 0,
+            isSellable: product.is_sellable !== false,
+            normalizedCategory: canonicalizeCategory(product.category),
+            searchText: [product.name, ...searchableCodes, ...variantCodes]
+               .map(normalizeSearchToken)
+               .filter(Boolean)
+               .join(' '),
+         };
+      });
+   }, [canonicalizeCategory, dedupedSalesCatalogProducts, displayCategory, productHasActiveTariff, warehouses]);
+
+   const filteredProducts = useMemo(() => {
+      const normalizedCategoryFilter = deferredCategoryFilter === 'ALL'
+         ? 'ALL'
+         : canonicalizeCategory(deferredCategoryFilter);
+      const normalizedSearch = deferredSearchTerm.trim().toLowerCase();
+
+      const filtered = salesCatalogProductEntries.filter((entry) => {
          const matchSearch = !normalizedSearch
-            || productName.includes(normalizedSearch)
-            || searchableCodes.some((code) => code.includes(normalizedSearch))
-            || variantCodes.some((code) => code.includes(normalizedSearch));
+            || entry.searchText.includes(normalizedSearch);
 
-         // Category Scope Check
-         const normalizedProductCategory = canonicalizeCategory(p.category);
-         const matchCat = normalizedCategoryFilter === 'ALL' || normalizedProductCategory === normalizedCategoryFilter;
-         const matchAllowedCat = effectiveAllowedCategorySet.size === 0 || effectiveAllowedCategorySet.has(normalizedProductCategory);
-
-         const isSellable = p.is_sellable !== false;
-         const hasActiveTariff = productHasActiveTariff(p);
+         const matchCat = normalizedCategoryFilter === 'ALL' || entry.normalizedCategory === normalizedCategoryFilter;
+         const matchAllowedCat = effectiveAllowedCategorySet.size === 0 || effectiveAllowedCategorySet.has(entry.normalizedCategory);
 
          // Tarifa activa de la caja debe existir en datos ERP; almacén en grid no tiene que coincidir con la terminal (la venta se bloquea en canAddItemToCart).
-         return matchSearch && matchCat && matchAllowedCat && isSellable && hasActiveTariff && hasErpWarehouse;
+         return matchSearch && matchCat && matchAllowedCat && entry.isSellable && entry.hasActiveTariff && entry.hasErpWarehouse;
       });
 
       // Defensive: Ensure unique IDs to prevent React key warnings
       const seenIds = new Set();
-         return filtered.filter(p => {
+         return filtered.map((entry) => entry.product).filter(p => {
             if (seenIds.has(p.id)) return false;
             seenIds.add(p.id);
             return true;
          });
-   }, [salesCatalogProducts, deferredSearchTerm, categoryFilter, canonicalizeCategory, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]);
+   }, [salesCatalogProductEntries, deferredCategoryFilter, deferredSearchTerm, canonicalizeCategory, effectiveAllowedCategorySet]);
 
    const handleRetailSearchSubmit = useCallback((rawTerm?: string) => {
       const trimmed = (rawTerm ?? searchTerm ?? '').trim();
@@ -2604,27 +2666,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [searchTerm, findProductByAnyCode, addToCart, isReturnMode, filteredProducts, handleProductClick]);
 
    const categories = useMemo(() => {
-      const dedupedProducts = dedupeProductsForSales(salesCatalogProducts, warehouses);
-
       const allowedDisplayCategories = Array.from(
          new Set(Array.from(effectiveAllowedCategorySet).map((category) => displayCategory(category)).filter(Boolean))
       );
-      const availableProducts = dedupedProducts.filter(p => {
-         if (!p || p.is_sellable === false) return false;
-         if (!productHasActiveTariff(p)) return false;
-         const erpWh = resolveProductActiveWarehouseIds(p, warehouses);
-         if (erpWh.length === 0) return false;
+      const availableProducts = salesCatalogProductEntries.filter((entry) => {
+         if (!entry.isSellable || !entry.hasActiveTariff || !entry.hasErpWarehouse) return false;
          if (effectiveAllowedCategorySet.size > 0) {
-            const normalizedCategory = canonicalizeCategory(p.category);
-            if (!effectiveAllowedCategorySet.has(normalizedCategory)) return false;
+            if (!effectiveAllowedCategorySet.has(entry.normalizedCategory)) return false;
          }
          return true;
       });
 
       const availableCategoryMap = new Map<string, string>();
-      for (const product of availableProducts) {
-         const normalizedCategory = canonicalizeCategory(product?.category);
-         const rawCategory = displayCategory(product?.category);
+      for (const entry of availableProducts) {
+         const normalizedCategory = entry.normalizedCategory;
+         const rawCategory = entry.displayCategory;
          if (!rawCategory || availableCategoryMap.has(normalizedCategory)) continue;
          availableCategoryMap.set(normalizedCategory, rawCategory);
       }
@@ -2637,9 +2693,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          : productCategories;
 
       const cats = ['ALL', ...scopedCategories];
-      console.log('[POS] Categories:', cats);
       return cats;
-   }, [salesCatalogProducts, canonicalizeCategory, displayCategory, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]);
+   }, [displayCategory, effectiveAllowedCategorySet, salesCatalogProductEntries]);
 
    useEffect(() => {
       if (categoryFilter !== 'ALL' && !categories.includes(categoryFilter)) {
