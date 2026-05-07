@@ -208,17 +208,20 @@ export const confirmUberEatsPosInvoice = async (
   transaction: Pick<Transaction, 'id' | 'displayId'>
 ): Promise<void> => {
   const url = `${context.baseUrl}/api/uber-eats/orders/${encodeURIComponent(uberOrderId)}/pos-invoice`;
+  const documentCode = normalizeString(transaction.displayId) || normalizeString(transaction.id);
+  const internalDocumentId = normalizeString(transaction.id) || documentCode;
   await fetchJson(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      pos_transaction_id: transaction.id,
-      document_code: transaction.displayId || transaction.id,
+      pos_transaction_id: documentCode,
+      document_code: documentCode,
       application_result: {
-        document_id: transaction.id,
-        document_code: transaction.displayId || transaction.id,
+        document_id: internalDocumentId,
+        document_code: documentCode,
+        pos_transaction_id: documentCode,
       },
     }),
   });

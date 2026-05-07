@@ -58,7 +58,7 @@ import PromoBottomSheet from './PromoBottomSheet';
 import { backgroundSyncManager, SyncState } from '../services/sync/BackgroundSyncManager';
 import ProductTableSupermarket from './ProductTableSupermarket';
 import BarcodeScannerModal from './BarcodeScannerModal';
-import { printComanda, printPrecuenta } from '../utils/printer';
+import { printComanda, printPrecuenta, printTicket } from '../utils/printer';
 import ModifierModal from './ModifierModal';
 import { visorSync } from '../utils/visorSync';
 import { maybeAutoLaunchCustomerDisplay } from '../utils/customerDisplay';
@@ -1057,6 +1057,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showDiscountModal, setShowDiscountModal] = useState(false);
    const [showSplitModal, setShowSplitModal] = useState(false);
    const [showPaymentModal, setShowPaymentModal] = useState(false);
+   const [completedDirectTransaction, setCompletedDirectTransaction] = useState<Transaction | null>(null);
    const [showTicketOptions, setShowTicketOptions] = useState(false);
    const [showParkedList, setShowParkedList] = useState(false);
    const [showParkAliasModal, setShowParkAliasModal] = useState(false);
@@ -2362,6 +2363,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const isAnyModalOpen = !!(
       showPaymentModal ||
+      !!completedDirectTransaction ||
       showSplitModal ||
       showTicketOptions ||
       showParkedList ||
@@ -3597,7 +3599,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const marketplacePayment = isRecoveredUberOrder
             ? buildUberRecoveredPayment(activeRecoveredReservation, cartTotal)
             : null;
-         handlePaymentConfirm(marketplacePayment ? [marketplacePayment] : []).catch(console.error);
+         handlePaymentConfirm(marketplacePayment ? [marketplacePayment] : [])
+            .then((transaction) => {
+               if (transaction) setCompletedDirectTransaction(transaction);
+            })
+            .catch(console.error);
          return;
       }
       setShowPaymentModal(true);
@@ -5432,6 +5438,46 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             />
          )}
          {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} />}
+         {completedDirectTransaction && (
+            <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+               <div className="w-full max-w-sm rounded-[2rem] bg-white p-6 shadow-2xl border border-slate-100 text-center">
+                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+                     <Check size={34} strokeWidth={3} />
+                  </div>
+                  <p className="text-xs font-black uppercase tracking-[0.24em] text-emerald-600">Venta guardada</p>
+                  <h3 className="mt-2 text-2xl font-black text-slate-900">
+                     {completedDirectTransaction.displayId || completedDirectTransaction.id}
+                  </h3>
+                  {completedDirectTransaction.marketplaceSourceChannel === 'UBER_EATS' && (
+                     <p className="mt-2 text-sm font-semibold text-slate-500">
+                        Pedido Uber Eats confirmado en ERP.
+                     </p>
+                  )}
+                  <div className="mt-6 grid grid-cols-2 gap-3">
+                     <button
+                        onClick={async () => {
+                           const printed = await printTicket(completedDirectTransaction, config);
+                           if (!printed) {
+                              setErrorToast('No se pudo imprimir el ticket. Verifica la impresora configurada.');
+                              window.setTimeout(() => setErrorToast(null), 3500);
+                           }
+                        }}
+                        className="flex items-center justify-center gap-2 rounded-xl bg-slate-100 py-3 text-sm font-black text-slate-700 hover:bg-slate-200 transition-colors"
+                     >
+                        <Printer size={18} />
+                        Ticket
+                     </button>
+                     <button
+                        onClick={() => setCompletedDirectTransaction(null)}
+                        className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 py-3 text-sm font-black text-white hover:bg-black transition-colors"
+                     >
+                        <ArrowRight size={18} />
+                        Nueva venta
+                     </button>
+                  </div>
+               </div>
+            </div>
+         )}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} salesUsers={salesUsers} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, selectedVariant, variantInfo) => { addToCart(p, 1, pr, m, undefined, selectedVariant, variantInfo); setSelectedProductForVariants(null); }} />}
