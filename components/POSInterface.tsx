@@ -634,6 +634,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       return index;
    }, [products]);
+   const productByNormalizedId = useMemo(() => {
+      const index = new Map<string, Product>();
+      for (const product of products || []) {
+         const normalizedId = normalizeSearchToken(product?.id);
+         if (normalizedId) index.set(normalizedId, product);
+      }
+      return index;
+   }, [products]);
    const marketplaceProductLookup = useMemo(() => {
       const byReference = new Map<string, Product[]>();
       const byName = new Map<string, Product[]>();
@@ -1435,6 +1443,25 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          .filter(Boolean);
 
       let fallbackMatch: Product | null = null;
+      const exactProductIdTokens = [
+         draftItem.erp_item_id,
+         externalData.item_id,
+         externalData.product_id,
+         externalData.productId,
+         externalData.erp_product_id,
+         externalData.erpProductId,
+         externalData.pos_product_id,
+         externalData.posProductId,
+      ]
+         .map(normalizeSearchToken)
+         .filter(Boolean);
+
+      for (const token of exactProductIdTokens) {
+         const exactProduct = productByNormalizedId.get(token) || null;
+         if (!exactProduct) continue;
+         if (productMatchesTerminalWarehouse(exactProduct)) return exactProduct;
+         if (!fallbackMatch) fallbackMatch = exactProduct;
+      }
 
       for (const token of candidateTokens) {
          const candidates = marketplaceProductLookup.byReference.get(token) || [];
@@ -1454,7 +1481,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (compatibleLooseNameMatch) return compatibleLooseNameMatch;
 
       return fallbackMatch || pickBestUberProductCandidate(nameCandidates) || pickBestUberProductCandidate(looseNameCandidates);
-   }, [marketplaceProductLookup, pickBestUberProductCandidate]);
+   }, [marketplaceProductLookup, pickBestUberProductCandidate, productByNormalizedId, productMatchesTerminalWarehouse]);
 
    const persistUberConfirmationState = useCallback(async (
       transaction: Transaction,
@@ -3101,6 +3128,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (!sourceProduct) {
                alert(`No se pudo validar el artículo ${item.name}. Refresque la lista e intente nuevamente.`);
                return null;
+            }
+            if (uberRecoveredOrder) {
+               const activeWarehouses = resolveProductActiveWarehouseIds(sourceProduct, warehouses);
+               if (activeWarehouses.length === 0 || !productMatchesTerminalWarehouse(sourceProduct)) {
+                  alert(`El artículo "${sourceProduct.name}" no tiene un almacén válido para esta terminal. Corrija la ficha del producto antes de continuar.`);
+                  return null;
+               }
+               continue;
             }
             if (!canAddItemToCart(sourceProduct, 0)) {
                alert(`El artículo "${sourceProduct.name}" no tiene un almacén válido para esta terminal. Corrija la ficha del producto antes de continuar.`);
