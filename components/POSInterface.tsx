@@ -473,6 +473,12 @@ type RecoverableOrderEntry =
 const normalizeSearchToken = (value: unknown): string =>
    typeof value === 'string' ? value.trim().toLowerCase() : value != null ? String(value).trim().toLowerCase() : '';
 
+const normalizeLooseNameToken = (value: unknown): string =>
+   normalizeSearchToken(value)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '');
+
 const isUberRecoveredReservation = (reservation: Reservation | null | undefined): boolean =>
    reservation?.sourceChannel === 'UBER_EATS' && Boolean(reservation?.sourceOrderId);
 
@@ -631,6 +637,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const marketplaceProductLookup = useMemo(() => {
       const byReference = new Map<string, Product[]>();
       const byName = new Map<string, Product[]>();
+      const byLooseName = new Map<string, Product[]>();
       const rankedProducts = [...dedupeProductsForSales(products || [], warehouses)].sort(
          (left, right) => scoreProductForSales(right, warehouses) - scoreProductForSales(left, warehouses)
       );
@@ -654,9 +661,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (nameKey) {
             byName.set(nameKey, [...(byName.get(nameKey) || []), product]);
          }
+
+         const looseNameKey = normalizeLooseNameToken(product.name);
+         if (looseNameKey) {
+            byLooseName.set(looseNameKey, [...(byLooseName.get(looseNameKey) || []), product]);
+         }
       }
 
-      return { byReference, byName };
+      return { byReference, byName, byLooseName };
    }, [products, warehouses]);
    const salesUsers = useMemo(() => getTerminalSnapshotSellers(config, terminalId), [config, terminalId]);
    const resolveSalespersonLabel = useCallback((salespersonId?: string | null) => {
@@ -1437,7 +1449,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const compatibleNameMatch = nameCandidates.find((candidate) => productMatchesTerminalWarehouse(candidate)) || null;
       if (compatibleNameMatch) return compatibleNameMatch;
 
-      return fallbackMatch || pickBestUberProductCandidate(nameCandidates);
+      const looseNameCandidates = marketplaceProductLookup.byLooseName.get(normalizeLooseNameToken(draftItem.name)) || [];
+      const compatibleLooseNameMatch = looseNameCandidates.find((candidate) => productMatchesTerminalWarehouse(candidate)) || null;
+      if (compatibleLooseNameMatch) return compatibleLooseNameMatch;
+
+      return fallbackMatch || pickBestUberProductCandidate(nameCandidates) || pickBestUberProductCandidate(looseNameCandidates);
    }, [marketplaceProductLookup, pickBestUberProductCandidate]);
 
    const persistUberConfirmationState = useCallback(async (
