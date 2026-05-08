@@ -25,6 +25,18 @@ const getActiveContext = () => {
 
 const logPerf = (label: string, payload: PerfDetail = {}) => {
   if (!POS_PERF_DEBUG) return;
+  try {
+    const bridge = (window as any)?.AndroidPrinter;
+    if (bridge && typeof bridge.debugLog === 'function') {
+      bridge.debugLog(JSON.stringify({
+        tag: 'ClicPOSPerf',
+        message: `[POS PERF] ${label}`,
+        data: payload,
+      }));
+    }
+  } catch {
+    // Native logging is best-effort; console output still works in browser DevTools.
+  }
   // eslint-disable-next-line no-console
   console.log(`[POS PERF] ${label}`, payload);
 };
