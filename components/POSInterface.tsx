@@ -317,9 +317,8 @@ const buildCartDigest = (items: CartItem[] = []): string =>
       )
       .join('||');
 
-const CATALOG_INITIAL_RENDER_LIMIT = 96;
-const CATALOG_RENDER_INCREMENT = 96;
 const SEARCH_DROPDOWN_RENDER_LIMIT = 24;
+const SEARCH_GRID_RENDER_LIMIT = 96;
 
 interface ProductGridCardProps {
    product: Product;
@@ -1131,8 +1130,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [searchTerm, setSearchTerm] = useState('');
    const deferredSearchTerm = useDeferredValue(searchTerm);
    const [categoryFilter, setCategoryFilter] = useState('ALL');
-   const deferredCategoryFilter = useDeferredValue(categoryFilter);
-   const [catalogRenderLimit, setCatalogRenderLimit] = useState(CATALOG_INITIAL_RENDER_LIMIT);
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
 
    const [showDiscountModal, setShowDiscountModal] = useState(false);
@@ -2621,9 +2618,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [canonicalizeCategory, dedupedSalesCatalogProducts, displayCategory, productHasActiveTariff, warehouses]);
 
    const filteredProducts = useMemo(() => {
-      const normalizedCategoryFilter = deferredCategoryFilter === 'ALL'
+      const normalizedCategoryFilter = categoryFilter === 'ALL'
          ? 'ALL'
-         : canonicalizeCategory(deferredCategoryFilter);
+         : canonicalizeCategory(categoryFilter);
       const normalizedSearch = deferredSearchTerm.trim().toLowerCase();
 
       const filtered = salesCatalogProductEntries.filter((entry) => {
@@ -2644,15 +2641,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             seenIds.add(p.id);
             return true;
          });
-   }, [salesCatalogProductEntries, deferredCategoryFilter, deferredSearchTerm, canonicalizeCategory, effectiveAllowedCategorySet]);
+   }, [salesCatalogProductEntries, categoryFilter, deferredSearchTerm, canonicalizeCategory, effectiveAllowedCategorySet]);
 
-   useEffect(() => {
-      setCatalogRenderLimit(CATALOG_INITIAL_RENDER_LIMIT);
-   }, [deferredCategoryFilter, deferredSearchTerm, usesExpandedCatalog, usesSupermarketLayout]);
-
-   const visibleProducts = useMemo(
-      () => filteredProducts.slice(0, catalogRenderLimit),
-      [catalogRenderLimit, filteredProducts]
+   const gridProducts = useMemo(
+      () => deferredSearchTerm.trim()
+         ? filteredProducts.slice(0, SEARCH_GRID_RENDER_LIMIT)
+         : filteredProducts,
+      [deferredSearchTerm, filteredProducts]
    );
 
    const visibleSearchResults = useMemo(
@@ -2660,7 +2655,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       [filteredProducts]
    );
 
-   const hiddenProductCount = Math.max(0, filteredProducts.length - visibleProducts.length);
    const hiddenSearchResultCount = Math.max(0, filteredProducts.length - visibleSearchResults.length);
 
    const handleSearchTermChange = useCallback((value: string) => {
@@ -2681,10 +2675,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const handleVirtualKeyboardDelete = useCallback(() => {
       setSearchTerm((prev) => prev.slice(0, -1));
-   }, []);
-
-   const handleShowMoreProducts = useCallback(() => {
-      setCatalogRenderLimit((current) => current + CATALOG_RENDER_INCREMENT);
    }, []);
 
    const handleRetailSearchSubmit = useCallback((rawTerm?: string) => {
@@ -4473,7 +4463,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   style={bottomAwareScrollStyle}
                >
                   <div className={gridClass}>
-                     {visibleProducts.map((product, idx) => (
+                     {gridProducts.map((product, idx) => (
                         <ProductGridCard
                            key={product.id || `prod-${idx}`}
                            product={product}
@@ -4496,17 +4486,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         />
                      ))}
                   </div>
-                  {hiddenProductCount > 0 && (
-                     <div className="flex justify-center px-4 py-6">
-                        <button
-                           type="button"
-                           onClick={handleShowMoreProducts}
-                           className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-xs font-black uppercase tracking-widest text-slate-600 shadow-sm hover:border-blue-300 hover:text-blue-700"
-                        >
-                           Mostrar {Math.min(CATALOG_RENDER_INCREMENT, hiddenProductCount)} más
-                        </button>
-                     </div>
-                  )}
                </div>
                {/* VIRTUAL KEYBOARD SLOT */}
                {showVirtualKeyboard && (
