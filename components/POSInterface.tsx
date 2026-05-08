@@ -537,6 +537,7 @@ type SalesCatalogProductEntry = {
    isSellable: boolean;
    normalizedCategory: string;
    searchText: string;
+   looseSearchText: string;
 };
 
 const isUberRecoveredReservation = (reservation: Reservation | null | undefined): boolean =>
@@ -2591,41 +2592,64 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [salesCatalogProducts, warehouses]);
 
    const salesCatalogProductEntries = useMemo<SalesCatalogProductEntry[]>(() => {
-      return dedupedSalesCatalogProducts.map((product) => {
-         const searchableCodes = [
-            product.barcode,
-            (product as any).sku,
-            (product as any).item_code,
-            (product as any).code,
-         ];
-         const variantCodes = Array.isArray((product as any).variants)
-            ? (product as any).variants.flatMap((variant: any) => [variant?.sku, variant?.barcode])
-            : [];
+         return dedupedSalesCatalogProducts.map((product) => {
+            const searchableCodes = [
+               product.barcode,
+               (product as any).sku,
+               (product as any).item_code,
+               (product as any).code,
+            ];
+            const searchableDescriptions = [
+               product.name,
+               product.description,
+               product.category,
+               (product as any).nombre,
+               (product as any).descripcion,
+               (product as any).description,
+               (product as any).displayName,
+               (product as any).item_name,
+               (product as any).itemName,
+               (product as any).short_name,
+               (product as any).shortName,
+            ];
+            const variantCodes = Array.isArray((product as any).variants)
+               ? (product as any).variants.flatMap((variant: any) => [variant?.sku, variant?.barcode])
+               : [];
+            const variantDescriptions = Array.isArray((product as any).variants)
+               ? (product as any).variants.flatMap((variant: any) => [variant?.name, variant?.nombre, variant?.description, variant?.descripcion])
+               : [];
+            const searchTokens = [...searchableDescriptions, ...searchableCodes, ...variantDescriptions, ...variantCodes];
 
-         return {
-            product,
-            displayCategory: displayCategory(product.category),
+            return {
+               product,
+               displayCategory: displayCategory(product.category),
             hasActiveTariff: productHasActiveTariff(product),
-            hasErpWarehouse: resolveProductActiveWarehouseIds(product, warehouses).length > 0,
-            isSellable: product.is_sellable !== false,
-            normalizedCategory: canonicalizeCategory(product.category),
-            searchText: [product.name, ...searchableCodes, ...variantCodes]
-               .map(normalizeSearchToken)
-               .filter(Boolean)
-               .join(' '),
-         };
-      });
+               hasErpWarehouse: resolveProductActiveWarehouseIds(product, warehouses).length > 0,
+               isSellable: product.is_sellable !== false,
+               normalizedCategory: canonicalizeCategory(product.category),
+               searchText: searchTokens
+                  .map(normalizeSearchToken)
+                  .filter(Boolean)
+                  .join(' '),
+               looseSearchText: searchTokens
+                  .map(normalizeLooseNameToken)
+                  .filter(Boolean)
+                  .join(' '),
+            };
+         });
    }, [canonicalizeCategory, dedupedSalesCatalogProducts, displayCategory, productHasActiveTariff, warehouses]);
 
    const filteredProducts = useMemo(() => {
-      const normalizedCategoryFilter = categoryFilter === 'ALL'
-         ? 'ALL'
-         : canonicalizeCategory(categoryFilter);
-      const normalizedSearch = deferredSearchTerm.trim().toLowerCase();
+         const normalizedCategoryFilter = categoryFilter === 'ALL'
+            ? 'ALL'
+            : canonicalizeCategory(categoryFilter);
+         const normalizedSearch = deferredSearchTerm.trim().toLowerCase();
+         const looseSearch = normalizeLooseNameToken(deferredSearchTerm);
 
-      const filtered = salesCatalogProductEntries.filter((entry) => {
-         const matchSearch = !normalizedSearch
-            || entry.searchText.includes(normalizedSearch);
+         const filtered = salesCatalogProductEntries.filter((entry) => {
+            const matchSearch = !normalizedSearch
+               || entry.searchText.includes(normalizedSearch)
+               || (Boolean(looseSearch) && entry.looseSearchText.includes(looseSearch));
 
          const matchCat = normalizedCategoryFilter === 'ALL' || entry.normalizedCategory === normalizedCategoryFilter;
          const matchAllowedCat = effectiveAllowedCategorySet.size === 0 || effectiveAllowedCategorySet.has(entry.normalizedCategory);
