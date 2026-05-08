@@ -1572,18 +1572,24 @@ const AppContent: React.FC = () => {
     ]);
     if (!inputSensitiveViews.has(currentView)) return;
 
-    const markInteraction = () => markPosInteractionActivity(1500);
+    const markInteraction = () => markPosInteractionActivity(3500);
     const pointerOptions: AddEventListenerOptions = { capture: true, passive: true };
     const keyOptions: AddEventListenerOptions = { capture: true };
 
     window.addEventListener('pointerdown', markInteraction, pointerOptions);
     window.addEventListener('touchstart', markInteraction, pointerOptions);
     window.addEventListener('keydown', markInteraction, keyOptions);
+    window.addEventListener('beforeinput', markInteraction, keyOptions);
+    window.addEventListener('input', markInteraction, keyOptions);
+    window.addEventListener('compositionstart', markInteraction, keyOptions);
 
     return () => {
       window.removeEventListener('pointerdown', markInteraction, pointerOptions);
       window.removeEventListener('touchstart', markInteraction, pointerOptions);
       window.removeEventListener('keydown', markInteraction, keyOptions);
+      window.removeEventListener('beforeinput', markInteraction, keyOptions);
+      window.removeEventListener('input', markInteraction, keyOptions);
+      window.removeEventListener('compositionstart', markInteraction, keyOptions);
     };
   }, [currentView]);
 
