@@ -329,10 +329,10 @@ interface ProductGridCardProps {
    isNativeAndroid: boolean;
    showProductImages: boolean;
    baseCurrencySymbol: string;
-   isProductWarehouseBlockedForSale: (product: Product) => boolean;
-   getTerminalWarehouseName: () => string;
-   getProductPrice: (product: Product) => number;
-   hasPromotionForProduct: (product: Product) => boolean;
+   warehouseSaleBlocked: boolean;
+   terminalWarehouseName: string;
+   price: number;
+   hasPromotion: boolean;
    onProductClick: (product: Product) => void;
    onOpenPromotion: (product: Product) => void;
    onProductTouchStart: (product: Product, clientX: number, clientY: number) => void;
@@ -341,7 +341,7 @@ interface ProductGridCardProps {
    onProductContextMenu: (product: Product, event: React.MouseEvent<HTMLDivElement>) => void;
 }
 
-const ProductGridCard = React.memo(({
+const ProductGridCardComponent: React.FC<ProductGridCardProps> = ({
    product,
    usesSupermarketLayout,
    usesExpandedCatalog,
@@ -349,26 +349,22 @@ const ProductGridCard = React.memo(({
    isNativeAndroid,
    showProductImages,
    baseCurrencySymbol,
-   isProductWarehouseBlockedForSale,
-   getTerminalWarehouseName,
-   getProductPrice,
-   hasPromotionForProduct,
+   warehouseSaleBlocked,
+   terminalWarehouseName,
+   price,
+   hasPromotion,
    onProductClick,
    onOpenPromotion,
    onProductTouchStart,
    onProductTouchMove,
    onProductTouchEnd,
    onProductContextMenu,
-}: ProductGridCardProps) => {
-   useRenderPerfDebug('ProductGridCard', { productId: product.id });
+}) => {
    const productName = product.name || '';
    const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
    const hasVariants = (product.variants || []).length > 0 || (product.attributes || []).length > 0;
    const isCompactMobileCard = isMobile && !usesExpandedCatalog;
-   const warehouseSaleBlocked = isProductWarehouseBlockedForSale(product);
    const imageSrc = showProductImages ? resolveProductImageSrc(product) : '';
-   const hasPromotion = hasPromotionForProduct(product);
-   const price = getProductPrice(product);
    const interactionClass = warehouseSaleBlocked
       ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
       : isNativeAndroid
@@ -397,7 +393,7 @@ const ProductGridCard = React.memo(({
       <div
          title={
             warehouseSaleBlocked
-               ? `No vendible en ${getTerminalWarehouseName()}: habilite este artículo en el almacén de ventas de esta caja (ERP).`
+               ? `No vendible en ${terminalWarehouseName}: habilite este artículo en el almacén de ventas de esta caja (ERP).`
                : undefined
          }
          onClick={() => onProductClick(product)}
@@ -471,9 +467,76 @@ const ProductGridCard = React.memo(({
          )}
       </div>
    );
-});
+};
+
+const ProductGridCard = React.memo(ProductGridCardComponent, (prev, next) => (
+   prev.product === next.product
+   && prev.usesSupermarketLayout === next.usesSupermarketLayout
+   && prev.usesExpandedCatalog === next.usesExpandedCatalog
+   && prev.isMobile === next.isMobile
+   && prev.isNativeAndroid === next.isNativeAndroid
+   && prev.showProductImages === next.showProductImages
+   && prev.baseCurrencySymbol === next.baseCurrencySymbol
+   && prev.warehouseSaleBlocked === next.warehouseSaleBlocked
+   && prev.terminalWarehouseName === next.terminalWarehouseName
+   && prev.price === next.price
+   && prev.hasPromotion === next.hasPromotion
+));
 
 ProductGridCard.displayName = 'ProductGridCard';
+
+const syncStateEquals = (left: SyncState, right: SyncState) => (
+   left.pendingCount === right.pendingCount
+   && left.isSyncing === right.isSyncing
+   && left.hasError === right.hasError
+   && left.lastSyncTime === right.lastSyncTime
+);
+
+const SyncStatusPill: React.FC = React.memo(() => {
+   const [localSyncState, setLocalSyncState] = useState<SyncState>(backgroundSyncManager.getState());
+
+   useEffect(() => {
+      return backgroundSyncManager.subscribe((nextState) => {
+         setLocalSyncState((currentState) => (
+            syncStateEquals(currentState, nextState) ? currentState : nextState
+         ));
+      });
+   }, []);
+
+   return (
+      <div className="flex items-center gap-2 px-3 md:px-4 py-2 rounded-2xl bg-gray-50 border border-gray-100 shadow-inner shrink-0">
+         {localSyncState.isSyncing ? (
+            <RefreshCw size={18} className="text-amber-500 animate-spin" />
+         ) : !navigator.onLine ? (
+            <CloudOff size={18} className="text-red-500" />
+         ) : (
+            <Cloud size={18} className={localSyncState.hasError || localSyncState.pendingCount > 0 ? 'text-amber-500' : 'text-emerald-500'} />
+         )}
+         <div className="flex flex-col leading-none">
+            <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest hidden md:block">Sincronización</span>
+            <span className={`text-[10px] font-bold ${
+               localSyncState.isSyncing
+                  ? 'text-amber-600'
+                  : !navigator.onLine
+                     ? 'text-red-600'
+                     : localSyncState.hasError || localSyncState.pendingCount > 0
+                        ? 'text-amber-600'
+                        : 'text-emerald-600'
+            }`}>
+               {localSyncState.isSyncing
+                  ? 'Sincronizando'
+                  : !navigator.onLine
+                     ? 'Offline'
+                     : localSyncState.pendingCount > 0
+                        ? `Online · ${localSyncState.pendingCount}`
+                        : 'Online'}
+            </span>
+         </div>
+      </div>
+   );
+});
+
+SyncStatusPill.displayName = 'SyncStatusPill';
 
 type RecoverableOrderEntry =
    | { kind: 'RESERVATION'; reservation: Reservation }
@@ -1174,12 +1237,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showCouponModal, setShowCouponModal] = useState(false);
    const [couponCode, setCouponCode] = useState('');
    const [redeemedCoupon, setRedeemedCoupon] = useState<RedeemedCouponRef | null>(null);
-
-   const [syncState, setSyncState] = useState<SyncState>(backgroundSyncManager.getState());
-
-   useEffect(() => {
-      return backgroundSyncManager.subscribe(setSyncState);
-   }, []);
 
    useEffect(() => {
       if (!canChangeTariff && showTariffSelector) {
@@ -4392,35 +4449,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                </div>
 
-               <div className="flex items-center gap-2 px-3 md:px-4 py-2 rounded-2xl bg-gray-50 border border-gray-100 shadow-inner shrink-0">
-                  {syncState.isSyncing ? (
-                     <RefreshCw size={18} className="text-amber-500 animate-spin" />
-                  ) : !navigator.onLine ? (
-                     <CloudOff size={18} className="text-red-500" />
-                  ) : (
-                     <Cloud size={18} className={syncState.hasError || syncState.pendingCount > 0 ? 'text-amber-500' : 'text-emerald-500'} />
-                  )}
-                  <div className="flex flex-col leading-none">
-                     <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest hidden md:block">Sincronización</span>
-                     <span className={`text-[10px] font-bold ${
-                        syncState.isSyncing
-                           ? 'text-amber-600'
-                           : !navigator.onLine
-                              ? 'text-red-600'
-                              : syncState.hasError || syncState.pendingCount > 0
-                                 ? 'text-amber-600'
-                                 : 'text-emerald-600'
-                     }`}>
-                        {syncState.isSyncing
-                           ? 'Sincronizando'
-                           : !navigator.onLine
-                              ? 'Offline'
-                              : syncState.pendingCount > 0
-                                 ? `Online · ${syncState.pendingCount}`
-                                 : 'Online'}
-                     </span>
-                  </div>
-               </div>
+               <SyncStatusPill />
 
 
                <div className="w-full md:flex-1 flex flex-wrap items-center gap-2 md:gap-4 md:min-w-0">
@@ -4544,10 +4573,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            isNativeAndroid={isNativeAndroid}
                            showProductImages={uxConfig.showProductImages}
                            baseCurrencySymbol={baseCurrency.symbol}
-                           isProductWarehouseBlockedForSale={isProductWarehouseBlockedForSale}
-                           getTerminalWarehouseName={getTerminalWarehouseName}
-                           getProductPrice={getProductPrice}
-                           hasPromotionForProduct={hasPromotionForProduct}
+                           warehouseSaleBlocked={isProductWarehouseBlockedForSale(product)}
+                           terminalWarehouseName={getTerminalWarehouseName()}
+                           price={getProductPrice(product)}
+                           hasPromotion={hasPromotionForProduct(product)}
                            onProductClick={handleProductCardClick}
                            onOpenPromotion={openProductPromotionSheet}
                            onProductTouchStart={handleProductCardTouchStart}
