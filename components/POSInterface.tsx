@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback, useDeferredValue } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
 import {
    Search, Trash2, MoreVertical,
@@ -485,6 +485,29 @@ const normalizeLooseNameToken = (value: unknown): string =>
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9]+/g, '');
+
+const SEARCH_VALUE_SKIP_KEY = /(image|photo|picture|base64|blob|payload|html|stockbalances|warehousesettings|recipedetails)/i;
+
+const collectPrimitiveSearchValues = (value: unknown, key = '', depth = 0): unknown[] => {
+   if (SEARCH_VALUE_SKIP_KEY.test(key) || value == null || depth > 2) return [];
+   if (typeof value === 'string') return value.length <= 500 ? [value] : [];
+   if (typeof value === 'number' || typeof value === 'boolean') return [value];
+   if (Array.isArray(value)) {
+      return value.flatMap((entry) => collectPrimitiveSearchValues(entry, key, depth + 1));
+   }
+   if (typeof value === 'object') {
+      return Object.entries(value as Record<string, unknown>).flatMap(([childKey, childValue]) =>
+         collectPrimitiveSearchValues(childValue, childKey, depth + 1)
+      );
+   }
+   return [];
+};
+
+const collectProductSearchValues = (product: Product): unknown[] => {
+   const values = collectPrimitiveSearchValues(product);
+   values.push(product.name, product.description, product.category, product.barcode);
+   return values;
+};
 
 const resolveActiveTariffPrice = (
    product: Product,
@@ -1126,12 +1149,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [isReturnMode, setIsReturnMode] = useState(false);
    const [errorToast, setErrorToast] = useState<string | null>(null);
 
-   const activeTariff = useMemo(() => (config.tariffs || []).find(t => t.id === activeTariffId), [config.tariffs, activeTariffId]);
+	   const activeTariff = useMemo(() => (config.tariffs || []).find(t => t.id === activeTariffId), [config.tariffs, activeTariffId]);
 
-   const [searchTerm, setSearchTerm] = useState('');
-   const deferredSearchTerm = useDeferredValue(searchTerm);
-   const [categoryFilter, setCategoryFilter] = useState('ALL');
-   const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
+	   const [searchTerm, setSearchTerm] = useState('');
+	   const [categoryFilter, setCategoryFilter] = useState('ALL');
+	   const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
 
    const [showDiscountModal, setShowDiscountModal] = useState(false);
    const [showSplitModal, setShowSplitModal] = useState(false);
@@ -2591,36 +2613,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return Array.from(rankedByIdentity.values(), (entry) => entry.product);
    }, [salesCatalogProducts, warehouses]);
 
-   const salesCatalogProductEntries = useMemo<SalesCatalogProductEntry[]>(() => {
-         return dedupedSalesCatalogProducts.map((product) => {
-            const searchableCodes = [
-               product.barcode,
-               (product as any).sku,
-               (product as any).item_code,
-               (product as any).code,
-            ];
-            const searchableDescriptions = [
-               product.name,
-               product.description,
-               product.category,
-               (product as any).nombre,
-               (product as any).descripcion,
-               (product as any).description,
-               (product as any).displayName,
-               (product as any).item_name,
-               (product as any).itemName,
-               (product as any).short_name,
-               (product as any).shortName,
-            ];
-            const variantCodes = Array.isArray((product as any).variants)
-               ? (product as any).variants.flatMap((variant: any) => [variant?.sku, variant?.barcode])
-               : [];
-            const variantDescriptions = Array.isArray((product as any).variants)
-               ? (product as any).variants.flatMap((variant: any) => [variant?.name, variant?.nombre, variant?.description, variant?.descripcion])
-               : [];
-            const searchTokens = [...searchableDescriptions, ...searchableCodes, ...variantDescriptions, ...variantCodes];
+	   const salesCatalogProductEntries = useMemo<SalesCatalogProductEntry[]>(() => {
+	      return dedupedSalesCatalogProducts.map((product) => {
+	         const searchTokens = collectProductSearchValues(product);
 
-            return {
+	         return {
                product,
                displayCategory: displayCategory(product.category),
             hasActiveTariff: productHasActiveTariff(product),
@@ -2640,11 +2637,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [canonicalizeCategory, dedupedSalesCatalogProducts, displayCategory, productHasActiveTariff, warehouses]);
 
    const filteredProducts = useMemo(() => {
-         const normalizedCategoryFilter = categoryFilter === 'ALL'
-            ? 'ALL'
-            : canonicalizeCategory(categoryFilter);
-         const normalizedSearch = deferredSearchTerm.trim().toLowerCase();
-         const looseSearch = normalizeLooseNameToken(deferredSearchTerm);
+	      const normalizedCategoryFilter = categoryFilter === 'ALL'
+	         ? 'ALL'
+	         : canonicalizeCategory(categoryFilter);
+	      const normalizedSearch = searchTerm.trim().toLowerCase();
+	      const looseSearch = normalizeLooseNameToken(searchTerm);
 
          const filtered = salesCatalogProductEntries.filter((entry) => {
             const matchSearch = !normalizedSearch
@@ -2663,16 +2660,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return filtered.map((entry) => entry.product).filter(p => {
             if (seenIds.has(p.id)) return false;
             seenIds.add(p.id);
-            return true;
-         });
-   }, [salesCatalogProductEntries, categoryFilter, deferredSearchTerm, canonicalizeCategory, effectiveAllowedCategorySet]);
+	            return true;
+	         });
+	   }, [salesCatalogProductEntries, categoryFilter, searchTerm, canonicalizeCategory, effectiveAllowedCategorySet]);
 
-   const gridProducts = useMemo(
-      () => deferredSearchTerm.trim()
-         ? filteredProducts.slice(0, SEARCH_GRID_RENDER_LIMIT)
-         : filteredProducts,
-      [deferredSearchTerm, filteredProducts]
-   );
+	   const gridProducts = useMemo(
+	      () => searchTerm.trim()
+	         ? filteredProducts.slice(0, SEARCH_GRID_RENDER_LIMIT)
+	         : filteredProducts,
+	      [searchTerm, filteredProducts]
+	   );
 
    const visibleSearchResults = useMemo(
       () => filteredProducts.slice(0, SEARCH_DROPDOWN_RENDER_LIMIT),
