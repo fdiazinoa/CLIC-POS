@@ -317,11 +317,16 @@ const buildCartDigest = (items: CartItem[] = []): string =>
       )
       .join('||');
 
+const CATALOG_INITIAL_RENDER_LIMIT = 96;
+const CATALOG_RENDER_INCREMENT = 96;
+const SEARCH_DROPDOWN_RENDER_LIMIT = 24;
+
 interface ProductGridCardProps {
    product: Product;
    usesSupermarketLayout: boolean;
    usesExpandedCatalog: boolean;
    isMobile: boolean;
+   isNativeAndroid: boolean;
    showProductImages: boolean;
    baseCurrencySymbol: string;
    isProductWarehouseBlockedForSale: (product: Product) => boolean;
@@ -341,6 +346,7 @@ const ProductGridCard = React.memo(({
    usesSupermarketLayout,
    usesExpandedCatalog,
    isMobile,
+   isNativeAndroid,
    showProductImages,
    baseCurrencySymbol,
    isProductWarehouseBlockedForSale,
@@ -362,6 +368,12 @@ const ProductGridCard = React.memo(({
    const imageSrc = showProductImages ? resolveProductImageSrc(product) : '';
    const hasPromotion = hasPromotionForProduct(product);
    const price = getProductPrice(product);
+   const interactionClass = warehouseSaleBlocked
+      ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
+      : isNativeAndroid
+         ? 'cursor-pointer active:opacity-90'
+         : 'cursor-pointer hover:border-purple-300 hover:-translate-y-1 active:scale-95';
+   const compactCardShadowClass = isNativeAndroid || warehouseSaleBlocked ? '' : 'hover:shadow-xl';
 
    const handleTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
       const touch = e.touches[0];
@@ -394,11 +406,7 @@ const ProductGridCard = React.memo(({
          onTouchEnd={onProductTouchEnd}
          onTouchCancel={onProductTouchEnd}
          style={{ touchAction: 'manipulation' }}
-         className={`bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 transition-all group relative overflow-hidden ${
-            warehouseSaleBlocked
-               ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
-               : 'cursor-pointer hover:border-purple-300 hover:-translate-y-1 active:scale-95'
-         } ${(usesSupermarketLayout && showProductImages) ? 'rounded-[1.75rem] p-4 shadow-[0_10px_26px_rgba(15,23,42,0.08)] min-h-[256px] grid grid-rows-[56%_44%]' : (usesExpandedCatalog && showProductImages) ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[228px] grid grid-rows-[52%_48%]' : usesExpandedCatalog ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] min-h-[204px] flex flex-col h-full' : isCompactMobileCard ? `rounded-[2rem] p-3.5 min-h-[246px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}` : `rounded-[2rem] p-3 min-h-[228px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
+         className={`bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 ${isNativeAndroid ? 'transition-colors' : 'transition-all'} group relative overflow-hidden ${interactionClass} ${(usesSupermarketLayout && showProductImages) ? 'rounded-[1.75rem] p-4 shadow-[0_10px_26px_rgba(15,23,42,0.08)] min-h-[256px] grid grid-rows-[56%_44%]' : (usesExpandedCatalog && showProductImages) ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[228px] grid grid-rows-[52%_48%]' : usesExpandedCatalog ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] min-h-[204px] flex flex-col h-full' : isCompactMobileCard ? `rounded-[2rem] p-3.5 min-h-[246px] shadow-sm flex flex-col ${compactCardShadowClass}` : `rounded-[2rem] p-3 min-h-[228px] shadow-sm flex flex-col ${compactCardShadowClass}`}`}
       >
          {showProductImages && (
             <div className={`${usesSupermarketLayout ? 'h-full rounded-[1.4rem] mb-0 p-3' : usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-36 rounded-[1.5rem] mb-3 p-2.5' : 'h-28 md:h-32 rounded-[1.5rem] mb-3'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
@@ -960,6 +968,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [activeTable, parkedTickets]); // Re-run if table changes or tickets sync
 
    const isMobile = useIsMobile();
+   const isNativeAndroid = useMemo(
+      () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android',
+      []
+   );
    const tariffSelectorRef = useRef<HTMLDivElement>(null);
 
    const userPermissions = useMemo(() => {
@@ -1120,6 +1132,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const deferredSearchTerm = useDeferredValue(searchTerm);
    const [categoryFilter, setCategoryFilter] = useState('ALL');
    const deferredCategoryFilter = useDeferredValue(categoryFilter);
+   const [catalogRenderLimit, setCatalogRenderLimit] = useState(CATALOG_INITIAL_RENDER_LIMIT);
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
 
    const [showDiscountModal, setShowDiscountModal] = useState(false);
@@ -2632,6 +2645,47 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return true;
          });
    }, [salesCatalogProductEntries, deferredCategoryFilter, deferredSearchTerm, canonicalizeCategory, effectiveAllowedCategorySet]);
+
+   useEffect(() => {
+      setCatalogRenderLimit(CATALOG_INITIAL_RENDER_LIMIT);
+   }, [deferredCategoryFilter, deferredSearchTerm, usesExpandedCatalog, usesSupermarketLayout]);
+
+   const visibleProducts = useMemo(
+      () => filteredProducts.slice(0, catalogRenderLimit),
+      [catalogRenderLimit, filteredProducts]
+   );
+
+   const visibleSearchResults = useMemo(
+      () => filteredProducts.slice(0, SEARCH_DROPDOWN_RENDER_LIMIT),
+      [filteredProducts]
+   );
+
+   const hiddenProductCount = Math.max(0, filteredProducts.length - visibleProducts.length);
+   const hiddenSearchResultCount = Math.max(0, filteredProducts.length - visibleSearchResults.length);
+
+   const handleSearchTermChange = useCallback((value: string) => {
+      setSearchTerm(value);
+   }, []);
+
+   const handleSearchInputChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+      handleSearchTermChange(event.target.value);
+   }, [handleSearchTermChange]);
+
+   const handleClearSearchTerm = useCallback(() => {
+      setSearchTerm('');
+   }, []);
+
+   const handleVirtualKeyboardKeyPress = useCallback((key: string) => {
+      setSearchTerm((prev) => prev + key);
+   }, []);
+
+   const handleVirtualKeyboardDelete = useCallback(() => {
+      setSearchTerm((prev) => prev.slice(0, -1));
+   }, []);
+
+   const handleShowMoreProducts = useCallback(() => {
+      setCatalogRenderLimit((current) => current + CATALOG_RENDER_INCREMENT);
+   }, []);
 
    const handleRetailSearchSubmit = useCallback((rawTerm?: string) => {
       const trimmed = (rawTerm ?? searchTerm ?? '').trim();
@@ -4364,19 +4418,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      )}
                   </div>
 
-                  <div className="relative order-3 md:order-none w-full md:flex-1 group min-w-0 md:min-w-[300px]">
-                     <Search className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                     <input
-                        ref={searchInputRef}
-                        type="text"
-                        placeholder="Buscar..."
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        onKeyDown={handleSearchKeyDown}
-                        className="w-full pl-10 md:pl-12 pr-10 md:pr-4 py-2.5 md:py-3 bg-gray-100 rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
-                     />
-                     <button onClick={() => setIsScannerOpen(true)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
-                  </div>
+                     <div className="relative order-3 md:order-none w-full md:flex-1 group min-w-0 md:min-w-[300px]">
+                        <Search className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                        <input
+                           ref={searchInputRef}
+                           type="text"
+                           placeholder="Buscar..."
+                           value={searchTerm}
+                           onChange={handleSearchInputChange}
+                           onKeyDown={handleSearchKeyDown}
+                           className="w-full pl-10 md:pl-12 pr-10 md:pr-4 py-2.5 md:py-3 bg-gray-100 rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
+                        />
+                        <button onClick={() => setIsScannerOpen(true)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
+                     </div>
 
 
                   <SupervisorAuthModal
@@ -4414,48 +4468,60 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                ))}
             </div>
 
-            <div
-               className={`flex-1 min-h-0 overflow-y-auto bg-[#eef2f6] ${usesExpandedCatalog ? 'p-3 pl-4 pr-2' : isMobile ? 'p-4' : 'p-8'} custom-scrollbar scrollbar-thin dark:bg-slate-900`}
-               style={bottomAwareScrollStyle}
-            >
-               <div className={gridClass}>
-                  {filteredProducts.map((product, idx) => (
-                     <ProductGridCard
-                        key={product.id || `prod-${idx}`}
-                        product={product}
-                        usesSupermarketLayout={usesSupermarketLayout}
-                        usesExpandedCatalog={usesExpandedCatalog}
-                        isMobile={isMobile}
-                        showProductImages={uxConfig.showProductImages}
-                        baseCurrencySymbol={baseCurrency.symbol}
-                        isProductWarehouseBlockedForSale={isProductWarehouseBlockedForSale}
-                        getTerminalWarehouseName={getTerminalWarehouseName}
-                        getProductPrice={getProductPrice}
-                        hasPromotionForProduct={hasPromotionForProduct}
-                        onProductClick={handleProductCardClick}
-                        onOpenPromotion={openProductPromotionSheet}
-                        onProductTouchStart={handleProductCardTouchStart}
-                        onProductTouchMove={handleProductCardTouchMove}
-                        onProductTouchEnd={clearQuickActionTouchTimer}
-                        onProductContextMenu={handleProductCardContextMenu}
+               <div
+                  className={`flex-1 min-h-0 overflow-y-auto bg-[#eef2f6] ${usesExpandedCatalog ? 'p-3 pl-4 pr-2' : isMobile ? 'p-4' : 'p-8'} custom-scrollbar scrollbar-thin dark:bg-slate-900`}
+                  style={bottomAwareScrollStyle}
+               >
+                  <div className={gridClass}>
+                     {visibleProducts.map((product, idx) => (
+                        <ProductGridCard
+                           key={product.id || `prod-${idx}`}
+                           product={product}
+                           usesSupermarketLayout={usesSupermarketLayout}
+                           usesExpandedCatalog={usesExpandedCatalog}
+                           isMobile={isMobile}
+                           isNativeAndroid={isNativeAndroid}
+                           showProductImages={uxConfig.showProductImages}
+                           baseCurrencySymbol={baseCurrency.symbol}
+                           isProductWarehouseBlockedForSale={isProductWarehouseBlockedForSale}
+                           getTerminalWarehouseName={getTerminalWarehouseName}
+                           getProductPrice={getProductPrice}
+                           hasPromotionForProduct={hasPromotionForProduct}
+                           onProductClick={handleProductCardClick}
+                           onOpenPromotion={openProductPromotionSheet}
+                           onProductTouchStart={handleProductCardTouchStart}
+                           onProductTouchMove={handleProductCardTouchMove}
+                           onProductTouchEnd={clearQuickActionTouchTimer}
+                           onProductContextMenu={handleProductCardContextMenu}
+                        />
+                     ))}
+                  </div>
+                  {hiddenProductCount > 0 && (
+                     <div className="flex justify-center px-4 py-6">
+                        <button
+                           type="button"
+                           onClick={handleShowMoreProducts}
+                           className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-xs font-black uppercase tracking-widest text-slate-600 shadow-sm hover:border-blue-300 hover:text-blue-700"
+                        >
+                           Mostrar {Math.min(CATALOG_RENDER_INCREMENT, hiddenProductCount)} más
+                        </button>
+                     </div>
+                  )}
+               </div>
+               {/* VIRTUAL KEYBOARD SLOT */}
+               {showVirtualKeyboard && (
+                  <div className="flex-none z-50">
+                     <VirtualKeyboard
+                        onKeyPress={handleVirtualKeyboardKeyPress}
+                        onDelete={handleVirtualKeyboardDelete}
+                        onClear={handleClearSearchTerm}
+                        onClose={() => {
+                           setShowVirtualKeyboard(false);
+                           // Optional: trigger search enter logic if needed
+                        }}
                      />
-                  ))}
-               </div>
-            </div>
-            {/* VIRTUAL KEYBOARD SLOT */}
-            {showVirtualKeyboard && (
-               <div className="flex-none z-50">
-                  <VirtualKeyboard
-                     onKeyPress={(key) => setSearchTerm(prev => prev + key)}
-                     onDelete={() => setSearchTerm(prev => prev.slice(0, -1))}
-                     onClear={() => setSearchTerm('')}
-                     onClose={() => {
-                        setShowVirtualKeyboard(false);
-                        // Optional: trigger search enter logic if needed
-                     }}
-                  />
-               </div>
-            )}
+                  </div>
+               )}
 
             {/* --- Novedad: ActionGrid (Rediseño Adaptativo) REEMPLAZADO POR TABS EN PANEL DERECHO --- */}
             {/* (Removido para usar Option 2: Tabs) */}
@@ -4602,42 +4668,42 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </button>
                         <input
                            ref={retailSearchInputRef}
-                           type="text"
-                           placeholder="Escanear o buscar..."
-                           value={searchTerm}
-                           onFocus={() => {
-                              if (window.matchMedia('(pointer: coarse)').matches) {
-                                 setShowVirtualKeyboard(true);
-                              }
-                           }}
-                           onChange={(e) => setSearchTerm(e.target.value)}
-                           onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                 handleRetailSearchSubmit(e.currentTarget.value);
-                              }
-                           }}
-                           autoFocus
-                           className="w-full pl-12 pr-12 py-2.5 bg-gray-100 rounded-xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-purple-500 text-sm font-bold transition-all"
-                        />
-                        <button
-                           type="button"
-                           onClick={() => setSearchTerm('')}
-                           className="absolute right-2 top-1/2 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-all hover:bg-slate-200 hover:text-slate-600"
-                           title={searchTerm ? 'Limpiar búsqueda' : 'Lector silencioso activo'}
-                        >
-                           {searchTerm ? <X size={16} /> : <ScanBarcode size={16} />}
-                        </button>
+                              type="text"
+                              placeholder="Escanear o buscar..."
+                              value={searchTerm}
+                              onFocus={() => {
+                                 if (window.matchMedia('(pointer: coarse)').matches) {
+                                    setShowVirtualKeyboard(true);
+                                 }
+                              }}
+                              onChange={handleSearchInputChange}
+                              onKeyDown={(e) => {
+                                 if (e.key === 'Enter') {
+                                    handleRetailSearchSubmit(e.currentTarget.value);
+                                 }
+                              }}
+                              autoFocus
+                              className="w-full pl-12 pr-12 py-2.5 bg-gray-100 rounded-xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-purple-500 text-sm font-bold transition-all"
+                           />
+                           <button
+                              type="button"
+                              onClick={handleClearSearchTerm}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-all hover:bg-slate-200 hover:text-slate-600"
+                              title={searchTerm ? 'Limpiar búsqueda' : 'Lector silencioso activo'}
+                           >
+                              {searchTerm ? <X size={16} /> : <ScanBarcode size={16} />}
+                           </button>
 
-                        {/* SEARCH RESULTS DROPDOWN */}
-                        {searchTerm && filteredProducts.length > 0 && (
-                           <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-2xl border border-gray-100 max-h-[60vh] overflow-y-auto z-50">
-                              {filteredProducts.map((product, idx) => {
-                                 const whBlocked = isProductWarehouseBlockedForSale(product);
-                                 return (
-                                    <div
-                                       key={product.id || `search-prod-${idx}`}
-                                       title={
-                                          whBlocked
+                           {/* SEARCH RESULTS DROPDOWN */}
+                           {searchTerm && filteredProducts.length > 0 && (
+                              <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-2xl border border-gray-100 max-h-[60vh] overflow-y-auto z-50">
+                                 {visibleSearchResults.map((product, idx) => {
+                                    const whBlocked = isProductWarehouseBlockedForSale(product);
+                                    return (
+                                       <div
+                                          key={product.id || `search-prod-${idx}`}
+                                          title={
+                                             whBlocked
                                              ? `No vendible en ${getTerminalWarehouseName()}: ajuste almacenes en el ERP.`
                                              : undefined
                                        }
@@ -4676,13 +4742,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           {getProductPrice(product).toLocaleString('en-US', {
                                              minimumFractionDigits: 2,
                                              maximumFractionDigits: 2
-                                          })}
-                                       </span>
+                                             })}
+                                          </span>
+                                       </div>
+                                    );
+                                 })}
+                                 {hiddenSearchResultCount > 0 && (
+                                    <div className="border-t border-gray-100 px-3 py-2 text-center text-[10px] font-black uppercase tracking-widest text-gray-400">
+                                       Escribe más para filtrar {hiddenSearchResultCount} resultados
                                     </div>
-                                 );
-                              })}
-                           </div>
-                        )}
+                                 )}
+                              </div>
+                           )}
                      </div>
                   )}
 

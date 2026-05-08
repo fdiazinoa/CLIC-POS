@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useDeferredValue, useRef } from 'react';
 import { RefreshCw, CheckCircle2, AlertCircle, Clock, UploadCloud, DownloadCloud, Database, Server, ArrowRight, ShieldCheck, X, Wifi, WifiOff, Globe, Monitor, Laptop, Search, Filter, RotateCcw, Code, Copy, Check } from 'lucide-react';
 import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
@@ -23,6 +23,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const [connectedTerminals, setConnectedTerminals] = useState<any[]>([]);
     const [activeTab, setActiveTab] = useState<'MONITOR' | 'TERMINALS' | 'CONFIG' | 'HELP'>('MONITOR');
     const [searchTerm, setSearchTerm] = useState('');
+    const deferredSearchTerm = useDeferredValue(searchTerm);
+    const lastSearchInputAtRef = useRef(0);
     const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'ERROR'>('ALL');
     const [terminalFilter, setTerminalFilter] = useState('ALL');
     const [auditData, setAuditData] = useState<any[]>([]);
@@ -255,20 +257,26 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
 
     // Memoized Filtered Content
     const filteredAuditData = React.useMemo(() => {
+        const normalizedSearch = deferredSearchTerm.toLowerCase();
         return auditData.filter(item => {
             const itemId = String(item.id || '').toLowerCase();
-            const matchesSearch = itemId.includes(searchTerm.toLowerCase()) ||
-                (item.raw?.ncf || '').toLowerCase().includes(searchTerm.toLowerCase());
+            const matchesSearch = itemId.includes(normalizedSearch) ||
+                (item.raw?.ncf || '').toLowerCase().includes(normalizedSearch);
             const matchesStatus = statusFilter === 'ALL' || item.status === statusFilter;
             const matchesTerminal = terminalFilter === 'ALL' || item.terminalId === terminalFilter;
             return matchesSearch && matchesStatus && matchesTerminal;
         });
-    }, [auditData, searchTerm, statusFilter, terminalFilter]);
+    }, [auditData, deferredSearchTerm, statusFilter, terminalFilter]);
+
+    const handleAuditSearchChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+        lastSearchInputAtRef.current = Date.now();
+        setSearchTerm(event.target.value);
+    }, []);
 
     // Reset pagination when filters change
     useEffect(() => {
         setCurrentPage(1);
-    }, [searchTerm, statusFilter, terminalFilter, rowsPerPage]);
+    }, [deferredSearchTerm, statusFilter, terminalFilter, rowsPerPage]);
 
     const selectedJsonText = React.useMemo(() => {
         if (!selectedJson) return '';
@@ -350,7 +358,10 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
 
     // Periodic polling
     useEffect(() => {
-        const interval = setInterval(loadStatus, 5000);
+        const interval = setInterval(() => {
+            if (Date.now() - lastSearchInputAtRef.current < 1000) return;
+            loadStatus();
+        }, 5000);
         return () => clearInterval(interval);
     }, []);
 
@@ -829,13 +840,13 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                 <div className="flex flex-wrap items-center gap-4 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
                                     <div className="flex-1 min-w-[200px] relative">
                                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                                        <input
-                                            type="text"
-                                            placeholder="Buscar por ID o NCF..."
-                                            value={searchTerm}
-                                            onChange={(e) => setSearchTerm(e.target.value)}
-                                            className="w-full pl-10 pr-4 py-2 bg-gray-50 border-none rounded-xl text-sm focus:ring-2 focus:ring-blue-500 transition-all font-medium"
-                                        />
+                                            <input
+                                                type="text"
+                                                placeholder="Buscar por ID o NCF..."
+                                                value={searchTerm}
+                                                onChange={handleAuditSearchChange}
+                                                className="w-full pl-10 pr-4 py-2 bg-gray-50 border-none rounded-xl text-sm focus:ring-2 focus:ring-blue-500 transition-all font-medium"
+                                            />
                                     </div>
                                     <div className="flex items-center gap-2">
                                         <Filter size={16} className="text-gray-400" />
