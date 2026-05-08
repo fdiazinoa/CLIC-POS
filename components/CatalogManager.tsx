@@ -28,6 +28,7 @@ import {
    resolveInventoryProductStockRow,
 } from '../utils/productReferences';
 import { resolveProductImageSrc } from '../utils/entityImage';
+import { measureAsync, measureSync, setPerfContext, useRenderPerfDebug } from '../utils/perfDebug';
 
 interface CatalogManagerProps {
    products: Product[];
@@ -395,6 +396,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    purchaseOrders = [],
    suppliers = []
 }) => {
+   useRenderPerfDebug('CatalogManager', { productsCount: productsProp?.length || 0, initialTab });
    const resolveViewportWidth = () => (typeof window !== 'undefined' ? window.innerWidth : 1440);
 
    const [catalogProducts, setCatalogProducts] = useState<Product[]>(productsProp || []);
@@ -645,14 +647,14 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       [products]
    );
    const filteredProducts = useMemo(() => {
-      return products.filter(p => {
+      return measureSync('catalog.products.filter', () => products.filter(p => {
          const normalizedName = typeof p.name === 'string' ? p.name : '';
          const normalizedBarcode = typeof p.barcode === 'string' ? p.barcode : '';
          const normalizedCategory = typeof p.category === 'string' ? p.category : 'Sin categoría';
          const matchesSearch = normalizedName.toLowerCase().includes(searchTerm.toLowerCase()) || normalizedBarcode.includes(searchTerm);
          const matchesCategory = categoryFilter === 'ALL' || normalizedCategory === categoryFilter;
          return matchesSearch && matchesCategory;
-      });
+      }), { productsCount: products.length, searchLength: searchTerm.length, categoryFilter });
    }, [products, searchTerm, categoryFilter]);
 
    const emptyStateByView: Record<'PRODUCTS' | 'BI_MONITOR' | 'STOCKS' | 'TARIFFS' | 'GROUPS' | 'SEASONS', { title: string; description: string }> = {
@@ -784,6 +786,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    if (viewMode === 'CLASSIFICATIONS') return <ClassificationManager config={config} onUpdateConfig={onUpdateConfig} onClose={() => setViewMode('PRODUCTS')} />;
 
    async function handleSaveProduct(savedProduct: Product) {
+      return measureAsync('catalog.saveProduct', async () => {
+      setPerfContext('catalog.saveProduct', 6000, { productId: savedProduct.id });
       try {
          const oldProduct = products.find(p => p.id === savedProduct.id);
          const exists = !!oldProduct;
@@ -857,6 +861,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          console.error('❌ CatalogManager: Error saving product', error);
          alert('No se pudo guardar el producto. Revise la consola para más detalle.');
       }
+      }, { productId: savedProduct.id, hasStockBalances: Boolean(savedProduct.stockBalances) });
    }
 
    function handleSaveTariff(savedTariff: Tariff) {

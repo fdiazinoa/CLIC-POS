@@ -46,6 +46,7 @@ import { parseScaleBarcode } from './utils/barcodeParser';
 import { useKioskMode } from './hooks/useKioskMode';
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
 import { db } from './utils/db'; // Import Local DB
+import { initLongTaskLogger, measureAsync, setPerfContext, useRenderPerfDebug } from './utils/perfDebug';
 import { dbAdapter } from './services/db'; // Import Adapter for Healthcheck
 import { syncManager } from './services/sync/SyncManager';
 import { apiSyncAdapter } from './services/sync/ApiSyncAdapter';
@@ -710,6 +711,10 @@ const AppContent: React.FC = () => {
     const params = new URLSearchParams(window.location.search);
     return params.get('view') === 'VISOR' ? 'VISOR' : 'LOGIN';
   });
+  useRenderPerfDebug('AppContent', { currentView });
+  useEffect(() => {
+    initLongTaskLogger();
+  }, []);
   const [scanTargetTicketId, setScanTargetTicketId] = useState<string | null>(null); // NEW: Auto-select ticket from scan
   const [restoringHistory, setRestoringHistory] = useState(false);
   const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any));
@@ -1572,7 +1577,10 @@ const AppContent: React.FC = () => {
     ]);
     if (!inputSensitiveViews.has(currentView)) return;
 
-    const markInteraction = () => markPosInteractionActivity(3500);
+    const markInteraction = () => {
+      setPerfContext('app.input', 4000, { currentView, cartCount: cart.length });
+      markPosInteractionActivity(3500);
+    };
     const pointerOptions: AddEventListenerOptions = { capture: true, passive: true };
     const keyOptions: AddEventListenerOptions = { capture: true };
 
@@ -1591,7 +1599,7 @@ const AppContent: React.FC = () => {
       window.removeEventListener('input', markInteraction, keyOptions);
       window.removeEventListener('compositionstart', markInteraction, keyOptions);
     };
-  }, [currentView]);
+  }, [cart.length, currentView]);
 
   useEffect(() => {
     if (!selectedCustomer?.id) return;
@@ -4196,6 +4204,7 @@ const AppContent: React.FC = () => {
   }, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction]);
 
   const handleTransactionComplete = async (txn: Transaction) => {
+    return measureAsync('app.transactionComplete', async () => {
     // Get current terminal ID before persisting.
     const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
     const terminalId = currentTerminal?.id || 'T1';
@@ -4319,6 +4328,7 @@ const AppContent: React.FC = () => {
         console.log(`✅ Customer debt updated: ${customer.name} -> ${updatedCustomers[customerIndex].currentDebt}`);
       }
     }
+    }, { transactionId: txn.id, items: txn.items?.length || 0, total: txn.total });
   };
 
   const handleRegisterMovement = async (type: 'IN' | 'OUT', amount: number, reason: string) => {

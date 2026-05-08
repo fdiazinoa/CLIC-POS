@@ -8,6 +8,7 @@ import {
     buildErpZReportPayload
 } from './erpOutboundPayloads';
 import { permissionService } from './PermissionService';
+import { measureAsync } from '../../utils/perfDebug';
 
 /**
  * API Sync Adapter
@@ -221,6 +222,7 @@ class ApiSyncAdapter {
         const circuitBreaker = this.getCircuitBreaker(channel);
         circuitBreaker.assertAvailable();
 
+        return measureAsync('sync.api.fetchWithRetry', async () => {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000); // Reduced timeout to 5s
 
@@ -275,6 +277,7 @@ class ApiSyncAdapter {
 
             throw error;
         }
+        }, { channel, retries, method: options.method || 'GET', url: url.replace(/\?.*$/, '') });
     }
 
     private async fetchWithoutCircuitBreaker(url: string, options: RequestInit = {}, timeoutMs = 5000): Promise<Response> {
@@ -1395,6 +1398,7 @@ class ApiSyncAdapter {
     }
 
     async pushTransaction(transaction: any): Promise<void> {
+        return measureAsync('sync.api.pushTransaction', async () => {
         try {
             const normalizedTransaction = buildErpSalePayload(transaction);
             const operationalTarget = this.resolveOperationalTarget();
@@ -1540,12 +1544,18 @@ class ApiSyncAdapter {
             this.isOnline = false;
             throw error;
         }
+        }, {
+            transactionId: transaction?.id || transaction?.source_transaction_id,
+            itemsCount: Array.isArray(transaction?.items) ? transaction.items.length : undefined,
+            marketplace: transaction?.marketplaceSourceChannel,
+        });
     }
 
     /**
      * Push a single inventory movement to Master
      */
     async pushInventoryMovement(movement: any): Promise<void> {
+        return measureAsync('sync.api.pushInventoryMovement', async () => {
         try {
             const payload = buildErpInventoryLedgerPayload(movement);
             await this.postOperationalPayload('/inventory/movements', { items: [payload] });
@@ -1555,12 +1565,14 @@ class ApiSyncAdapter {
             this.isOnline = false;
             throw error;
         }
+        }, { movementId: movement?.id || movement?.source_inventory_movement_id });
     }
 
     /**
      * Push a single inventory count session to Master
      */
     async pushInventoryCount(countSession: any): Promise<void> {
+        return measureAsync('sync.api.pushInventoryCount', async () => {
         try {
             await this.ensurePushReady();
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/inventory/counts`, {
@@ -1586,6 +1598,7 @@ class ApiSyncAdapter {
             this.isOnline = false;
             throw error;
         }
+        }, { countSessionId: countSession?.id });
     }
 
     /**

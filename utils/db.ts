@@ -14,6 +14,7 @@ import {
 import { dbAdapter } from '../services/db';
 import { permissionService } from '../services/sync/PermissionService';
 import { mergeDocumentSeriesCollection } from './documentSeriesIdentity';
+import { measureAsync } from './perfDebug';
 
 const DB_KEY = 'clic_pos_db_v1';
 let initPromise: Promise<any> | null = null;
@@ -1038,34 +1039,54 @@ export const db = {
   },
 
   get: async (collection: keyof typeof SEED_DATA, queryParams?: Record<string, string>) => {
-    return await dbAdapter.getCollection(collection as string, queryParams);
+    return await measureAsync('db.getCollection', () => dbAdapter.getCollection(collection as string, queryParams), {
+      collection: String(collection),
+      hasQuery: Boolean(queryParams && Object.keys(queryParams).length > 0),
+    });
   },
 
   save: async (collection: keyof typeof SEED_DATA, payload: any) => {
     // This is tricky because legacy 'save' replaced the whole collection or object
-    await dbAdapter.saveCollection(collection as string, payload);
+    await measureAsync('db.saveCollection', () => dbAdapter.saveCollection(collection as string, payload), {
+      collection: String(collection),
+      itemsCount: Array.isArray(payload) ? payload.length : undefined,
+    });
   },
 
   bulkUpdateProducts: async (productIds: string[], updates: any, userId?: string, userName?: string) => {
-    await dbAdapter.bulkUpdateProducts(productIds, updates, userId, userName);
+    await measureAsync('db.bulkUpdateProducts', () => dbAdapter.bulkUpdateProducts(productIds, updates, userId, userName), {
+      itemsCount: productIds.length,
+      updateKeys: Object.keys(updates || {}),
+    });
   },
 
   saveDocument: async (collection: keyof typeof SEED_DATA, doc: any) => {
-    await dbAdapter.saveDocument(collection as string, doc);
+    await measureAsync('db.saveDocument', () => dbAdapter.saveDocument(collection as string, doc), {
+      collection: String(collection),
+      id: doc?.id,
+    });
   },
 
   saveDocuments: async (collection: keyof typeof SEED_DATA, docs: any[]) => {
-    for (const doc of docs) {
-      await dbAdapter.saveDocument(collection as string, doc);
-    }
+    await measureAsync('db.saveDocuments', async () => {
+      for (const doc of docs) {
+        await dbAdapter.saveDocument(collection as string, doc);
+      }
+    }, { collection: String(collection), itemsCount: docs.length });
   },
 
   deleteDocument: async (collection: keyof typeof SEED_DATA, id: string) => {
-    await dbAdapter.deleteDocument(collection as string, id);
+    await measureAsync('db.deleteDocument', () => dbAdapter.deleteDocument(collection as string, id), {
+      collection: String(collection),
+      id,
+    });
   },
 
   getDocument: async (collection: keyof typeof SEED_DATA, id: string) => {
-    return await dbAdapter.getDocument(collection as string, id);
+    return await measureAsync('db.getDocument', () => dbAdapter.getDocument(collection as string, id), {
+      collection: String(collection),
+      id,
+    });
   },
 
   processReceipt: async (payload: ProcessReceiptPayload): Promise<{
@@ -1352,6 +1373,7 @@ export const db = {
   },
 
   getNextNCF: async (type: FiscalDocumentCode, terminalId: string, _customBatchSize?: number): Promise<string | null> => {
+    return measureAsync('db.getNextNCF', async () => {
     let buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
     let buffer = (buffers || []).find((b: LocalFiscalBuffer) =>
       b.type === type && (!terminalId || !b.terminalId || normalizeSequenceKey(b.terminalId) === normalizeSequenceKey(terminalId))
@@ -1400,6 +1422,7 @@ export const db = {
     buffer.currentNumber += 1;
     await dbAdapter.saveCollection('localFiscalBuffer', buffers);
     return ncf;
+    }, { type, terminalId });
   },
 
   rehydrateOperationalDocumentState: async (
@@ -1479,6 +1502,7 @@ export const db = {
     trackingCode?: string,
     effectiveDate?: string
   ): Promise<InventoryLedgerEntry | undefined> => {
+    return measureAsync('db.recordInventoryMovement', async () => {
     await assertInventoryMovementUnlocked(warehouseId, effectiveDate);
 
     const movementTimestamp = toValidMovementIso(effectiveDate);
@@ -1527,6 +1551,7 @@ export const db = {
     });
 
     return newEntry;
+    }, { warehouseId, productId, concept, qty });
   },
 
   recordInventoryMovements: async (movements: {
@@ -1543,6 +1568,7 @@ export const db = {
     trackingCode?: string,
     effectiveDate?: string
   }[]): Promise<InventoryLedgerEntry[]> => {
+    return measureAsync('db.recordInventoryMovements', async () => {
     const newEntries: InventoryLedgerEntry[] = [];
     const products = await dbAdapter.getCollection<Product>('products') || [];
 
@@ -1598,9 +1624,11 @@ export const db = {
     });
 
     return newEntries;
+    }, { itemsCount: movements.length });
   },
 
   recalculateProductStock: async (productId: string, warehouseId: string) => {
+    return measureAsync('db.recalculateProductStock', async () => {
     if (permissionService.isSlaveTerminal()) {
       console.log(`ℹ️ Skipping stock recalculation for Product: ${productId} on Slave terminal. Preserving synced value.`);
       return;
@@ -1709,6 +1737,7 @@ export const db = {
     }
 
     console.log(`✅ Recalculation complete. Final balance: ${currentBalance}`);
+    }, { productId, warehouseId });
   },
 
   getCommittedStock: async (productId: string, warehouseId: string): Promise<number> => {
@@ -1782,10 +1811,12 @@ export const db = {
   },
 
   getNextGlobalSequence: async (): Promise<number> => {
+    return measureAsync('db.getNextGlobalSequence', async () => {
     const counter = await dbAdapter.getCollection('globalSequenceCounter') || 0;
     const next = (typeof counter === 'number' ? counter : 0) + 1;
     await dbAdapter.saveCollection('globalSequenceCounter', next as any);
     return next;
+    });
   },
 
   getNextSeriesNumber: async (seriesId: string): Promise<number> => {

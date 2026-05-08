@@ -1,5 +1,6 @@
 import React from 'react';
 import { Delete, Eraser, Check } from 'lucide-react';
+import { measureSync, setPerfContext, useRenderPerfDebug } from '../utils/perfDebug';
 
 interface VirtualKeyboardProps {
     onKeyPress: (key: string) => void;
@@ -9,6 +10,7 @@ interface VirtualKeyboardProps {
 }
 
 const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({ onKeyPress, onDelete, onClear, onClose }) => {
+    useRenderPerfDebug('VirtualKeyboard');
     const rows = [
         ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
         ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
@@ -24,7 +26,10 @@ const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({ onKeyPress, onDelete,
                         {row.map((key) => (
                             <button
                                 key={key}
-                                onClick={() => onKeyPress(key)}
+                                onClick={() => {
+                                    setPerfContext('pos.virtualKeyboardTouch', 3500, { key });
+                                    measureSync('pos.virtualKeyboard.touchKey', () => onKeyPress(key), { key });
+                                }}
                                 className="h-12 flex-1 max-w-[60px] bg-slate-700 hover:bg-slate-600 active:bg-blue-600 text-white rounded-lg font-bold text-lg shadow-sm transition-colors active:scale-95"
                             >
                                 {key}
@@ -35,7 +40,10 @@ const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({ onKeyPress, onDelete,
 
                 <div className="flex justify-center gap-2 px-2 mt-1">
                     <button
-                        onClick={onClear}
+                        onClick={() => {
+                            setPerfContext('pos.virtualKeyboardClear', 3500);
+                            measureSync('pos.virtualKeyboard.clearButton', onClear);
+                        }}
                         className="h-12 px-6 bg-red-900/50 text-red-400 hover:bg-red-900/80 rounded-lg flex items-center justify-center gap-2 font-bold shadow-sm active:scale-95"
                     >
                         <Eraser size={20} />
@@ -43,14 +51,20 @@ const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({ onKeyPress, onDelete,
                     </button>
 
                     <button
-                        onClick={() => onKeyPress(' ')}
+                        onClick={() => {
+                            setPerfContext('pos.virtualKeyboardTouch', 3500, { key: 'SPACE' });
+                            measureSync('pos.virtualKeyboard.touchKey', () => onKeyPress(' '), { key: 'SPACE' });
+                        }}
                         className="h-12 flex-[2] max-w-xs bg-slate-700 hover:bg-slate-600 active:bg-blue-600 text-white rounded-lg font-bold shadow-sm transition-colors active:scale-95"
                     >
                         SPACE
                     </button>
 
                     <button
-                        onClick={onDelete}
+                        onClick={() => {
+                            setPerfContext('pos.virtualKeyboardDelete', 3500);
+                            measureSync('pos.virtualKeyboard.deleteButton', onDelete);
+                        }}
                         className="h-12 px-6 bg-slate-600 text-white hover:bg-slate-500 rounded-lg flex items-center justify-center shadow-sm active:scale-95"
                     >
                         <Delete size={20} />

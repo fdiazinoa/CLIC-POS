@@ -4,6 +4,7 @@ import { apiSyncAdapter } from './ApiSyncAdapter';
 import { permissionService } from './PermissionService';
 import { InventoryLedgerEntry, CashMovement, ZReport, SyncStatus } from '../../types';
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from '../../utils/posSaleActivity';
+import { measureAsync, setPerfContext } from '../../utils/perfDebug';
 
 export interface SyncState {
     pendingCount: number;
@@ -212,6 +213,8 @@ class BackgroundSyncManager {
      */
     async sync() {
         if (this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
+        return measureAsync('sync.background.run', async () => {
+        setPerfContext('sync.background', 6000, { pendingCount: this.state.pendingCount });
 
         // We only sync if we are a SLAVE or if we are a MASTER that needs to push to a central server
         // (In this architecture, Master also pushes to its own server to keep db.json as source of truth)
@@ -303,6 +306,7 @@ class BackgroundSyncManager {
                 this.scheduleSync(this.nextRetryDelayMs ?? this.FAST_RETRY_DELAY_MS);
             }
         }
+        }, { pendingCount: this.state.pendingCount });
     }
 
     /**
@@ -324,6 +328,7 @@ class BackgroundSyncManager {
         collectionName: string,
         pushFn: (item: T) => Promise<void>
     ) {
+        return measureAsync('sync.background.processCollection', async () => {
         const data = await db.get(collectionName as any) as T[];
         if (!Array.isArray(data)) return;
 
@@ -425,9 +430,11 @@ class BackgroundSyncManager {
                 throw error;
             }
         }
+        }, { collectionName });
     }
 
     private async updatePendingCount(collectionOverride?: string[]) {
+        return measureAsync('sync.background.updatePendingCount', async () => {
         let count = 0;
         const collections = collectionOverride || ['inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'wallet_transactions', 'loyalty_events'];
 
@@ -444,6 +451,7 @@ class BackgroundSyncManager {
         }
 
         this.updateState({ pendingCount: count });
+        }, { collections: collectionOverride || 'default' });
     }
 
     private updateState(newState: Partial<SyncState>) {

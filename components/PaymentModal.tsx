@@ -42,6 +42,7 @@ import {
    buildPaymentSettlementSummary,
    resolveCurrencySymbol,
 } from '../utils/paymentSettlement';
+import { measureAsync, measureSync, setPerfContext, useRenderPerfDebug } from '../utils/perfDebug';
 
 interface PaymentModalProps {
    total: number;
@@ -210,6 +211,7 @@ type GatewayProgressOverlayState = {
 import SupervisorAuthModal from './SupervisorAuthModal';
 
 const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode }) => {
+   useRenderPerfDebug('PaymentModal', { itemsCount: items.length, total });
    const [payments, setPayments] = useState<PaymentEntry[]>([]);
    const [activeMethodKey, setActiveMethodKey] = useState<string>('');
    const [inputAmount, setInputAmount] = useState<string>('');
@@ -384,6 +386,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    }, [remaining, activeMethod, selectedCurrency, activeForeignCurrencyRounding, baseCurrency.code]);
 
    const handleNumPad = (key: string) => {
+      setPerfContext('paymentModal.numPad', 3500, { key });
+      measureSync('paymentModal.numPadInput', () => {
       if (key === 'C') { setInputAmount(''); setShouldClearInput(false); return; }
       if (key === 'BACK') { setInputAmount(prev => prev.slice(0, -1)); return; }
       if (shouldClearInput) {
@@ -394,6 +398,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          if (inputAmount.includes('.') && inputAmount.split('.')[1].length >= 2) return;
          setInputAmount(prev => prev + key);
       }
+      }, { key, inputLength: inputAmount.length });
    };
 
    const canBypassCreditLimit = isOverrideActive || hasPermission('POS_CREDIT_OVERRIDE');
@@ -729,6 +734,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    };
 
    const handleAddPayment = async (amountOverride?: number) => {
+      return measureAsync('paymentModal.addPayment', async () => {
+      setPerfContext('paymentModal.addPayment', 3500, { amountOverride, activeMethodKey });
       const rawAmount = amountOverride !== undefined ? amountOverride : parseFloat(inputAmount);
       const valInSelectedCurrency = roundPaymentAmountByMethod(
          rawAmount,
@@ -775,11 +782,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
       } catch (error) {
          setFinalizeError(error instanceof Error ? error.message : 'No se pudo agregar el pago.');
       }
+      }, { amountOverride, activeMethodKey, paymentsCount: payments.length });
    };
 
    const handleRemovePayment = (id: string) => { setPayments(prev => prev.filter(p => p.id !== id)); };
 
    const handleFinalize = async () => {
+      return measureAsync('paymentModal.finalize', async () => {
+      setPerfContext('paymentModal.finalize', 6000, { paymentsCount: payments.length, itemsCount: items.length, total });
       if (isFinalizing || isProcessingGateway) return;
       if (!canFinalize) {
          alert("Monto insuficiente");
@@ -880,7 +890,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
             slowProcessTimer = window.setTimeout(() => {
                setFinalizeError('El cobro está tardando más de lo esperado, espere unos segundos...');
             }, 15000);
-            const txn = await onConfirm(paymentsToConfirm, voluntaryTip);
+            const txn = await measureAsync('paymentModal.onConfirm', () => onConfirm(paymentsToConfirm, voluntaryTip), {
+               paymentsCount: paymentsToConfirm.length,
+               itemsCount: items.length,
+               total,
+            });
 
             if (txn) {
                const finalizedTransaction = txn.payments?.length
@@ -934,6 +948,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
       } finally {
          setIsFinalizing(false);
       }
+      }, { paymentsCount: payments.length, itemsCount: items.length, total });
    };
 
    const themeBgClass = { blue: 'bg-blue-600', orange: 'bg-orange-600', gray: 'bg-gray-800' }[themeColor] || 'bg-indigo-600';

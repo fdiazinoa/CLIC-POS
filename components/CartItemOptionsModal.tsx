@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { CartItem, BusinessConfig, User as UserType, RoleDefinition } from '../types';
 import { TerminalSnapshotSeller } from '../utils/terminalSnapshotSellers';
+import { measureSync, setPerfContext, useRenderPerfDebug } from '../utils/perfDebug';
 
 interface CartItemOptionsModalProps {
   item: CartItem;
@@ -30,6 +31,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   canApplyDiscount,
   canVoidItem
 }) => {
+  useRenderPerfDebug('CartItemOptionsModal', { cartId: item.cartId, productId: item.id });
   const EPSILON = 0.01;
   const [quantity, setQuantity] = useState(item.quantity);
   const [price, setPrice] = useState(item.price);
@@ -59,35 +61,47 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   }, [incomingSalesUsers, users, roles]);
 
   const handleQuantityChange = (delta: number) => {
-    const newQty = Math.max(0.001, quantity + delta);
-    setQuantity(parseFloat(newQty.toFixed(3)));
+    setPerfContext('pos.cartLineQuantity', 3500, { cartId: item.cartId, delta });
+    measureSync('pos.cartLine.quantityChange', () => {
+      const newQty = Math.max(0.001, quantity + delta);
+      setQuantity(parseFloat(newQty.toFixed(3)));
+    }, { cartId: item.cartId, delta });
   };
 
   const handleApplyDiscount = () => {
-    const val = parseFloat(discountValue);
-    if (isNaN(val) || val <= 0) {
-      setPrice(adjustmentBasePrice);
-      return;
-    }
+    setPerfContext('pos.cartLineDiscount', 3500, { cartId: item.cartId, discountType });
+    measureSync('pos.cartLine.applyDiscount', () => {
+      const val = parseFloat(discountValue);
+      if (isNaN(val) || val <= 0) {
+        setPrice(adjustmentBasePrice);
+        return;
+      }
 
-    let newPrice = adjustmentBasePrice;
-    if (discountType === 'PERCENT') {
-      newPrice = adjustmentBasePrice - (adjustmentBasePrice * (val / 100));
-    } else {
-      newPrice = Math.max(0, adjustmentBasePrice - val);
-    }
-    setPrice(parseFloat(newPrice.toFixed(2)));
+      let newPrice = adjustmentBasePrice;
+      if (discountType === 'PERCENT') {
+        newPrice = adjustmentBasePrice - (adjustmentBasePrice * (val / 100));
+      } else {
+        newPrice = Math.max(0, adjustmentBasePrice - val);
+      }
+      setPrice(parseFloat(newPrice.toFixed(2)));
+    }, { cartId: item.cartId, discountType });
   };
 
   const handlePriceManualChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value);
-    if (!isNaN(val) && val >= 0) {
-      setPrice(val);
-      setDiscountValue('');
-    }
+    const rawValue = e.target.value;
+    setPerfContext('pos.cartLinePrice', 3500, { cartId: item.cartId });
+    measureSync('pos.cartLine.priceChange', () => {
+      const val = parseFloat(rawValue);
+      if (!isNaN(val) && val >= 0) {
+        setPrice(val);
+        setDiscountValue('');
+      }
+    }, { cartId: item.cartId, length: rawValue.length });
   };
 
   const handleSave = () => {
+    setPerfContext('pos.cartLineSave', 3500, { cartId: item.cartId });
+    measureSync('pos.cartLine.save', () => {
     const nextItem: CartItem = {
       ...item,
       quantity,
@@ -149,6 +163,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
       ...nextItem
     });
     onClose();
+    }, { cartId: item.cartId, quantity, price });
   };
 
   const handleDeleteConfirm = () => {

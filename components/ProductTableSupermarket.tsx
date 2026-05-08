@@ -1,6 +1,7 @@
 import React, { CSSProperties, useEffect, useRef, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { CartItem, BusinessConfig } from '../types';
+import { useRenderPerfDebug } from '../utils/perfDebug';
 
 interface ProductTableSupermarketProps {
     cart: CartItem[];
@@ -19,6 +20,7 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
     onRemoveItem,
     containerStyle
 }) => {
+    useRenderPerfDebug('ProductTableSupermarket', { cartCount: cart.length });
     const [highlightedId, setHighlightedId] = useState<string | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 

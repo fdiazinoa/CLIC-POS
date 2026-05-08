@@ -1,5 +1,6 @@
 import { Transaction, DocumentType, DocumentSeries } from '../types';
 import { db } from '../utils/db';
+import { measureAsync } from '../utils/perfDebug';
 import { normalizeTransactionForSync } from './sync/sourceIdentity';
 import {
   isDocumentSeriesCompatibleWithType,
@@ -197,6 +198,7 @@ class TransactionService {
         displayId: string;
         seriesNumber: number;
     }> {
+        return measureAsync('transaction.generateTransactionId', async () => {
         // Get the series configuration
         const series = await db.get('internalSequences') as any[] || [];
         const seriesConfig = (series || []).find(s => s.id === seriesId);
@@ -239,6 +241,7 @@ class TransactionService {
             displayId,
             seriesNumber
         };
+        }, { documentType, seriesId });
     }
 
     /**
@@ -247,6 +250,7 @@ class TransactionService {
     async createTransaction(
         data: Partial<Transaction>
     ): Promise<Transaction> {
+        return measureAsync('transaction.createTransaction', async () => {
         // Validate required fields
         if (!data.documentType) {
             throw new Error('documentType is required');
@@ -362,6 +366,12 @@ class TransactionService {
         }
 
         return normalizedTransaction;
+        }, {
+            documentType: data.documentType,
+            seriesId: data.seriesId,
+            itemsCount: Array.isArray(data.items) ? data.items.length : 0,
+            total: data.total,
+        });
     }
 
     /**

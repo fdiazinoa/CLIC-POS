@@ -9,6 +9,7 @@ import {
 import { Warehouse, Product, StockTransfer, StockTransferItem, BusinessConfig, LedgerConcept, RoleDefinition, User } from '../types';
 import { validateTerminalDocument, validateWarehouseAccess } from '../utils/validation';
 import { db } from '../utils/db';
+import { measureAsync, measureSync, setPerfContext, useRenderPerfDebug } from '../utils/perfDebug';
 
 interface WarehouseManagerProps {
    warehouses: Warehouse[];
@@ -60,6 +61,7 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
    currentUser,
    roles
 }) => {
+   useRenderPerfDebug('WarehouseManager', { productsCount: products.length, warehousesCount: warehouses.length });
    const [activeTab, setActiveTab] = useState<Tab>('LOCATIONS');
 
    // Fallback Data Loading
@@ -126,15 +128,17 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
    }, [products]);
 
    const filteredProductsList = useMemo(() => {
-      return products.filter(p => {
+      return measureSync('warehouse.products.filter', () => products.filter(p => {
          const matchesSearch = (p.name || '').toLowerCase().includes(productSearch.toLowerCase()) ||
             (p.barcode || '').includes(productSearch);
          const matchesCategory = selectedCategory === 'Todas' || p.category === selectedCategory;
          return matchesSearch && matchesCategory;
-      });
+      }), { productsCount: products.length, searchLength: productSearch.length, selectedCategory });
    }, [products, productSearch, selectedCategory]);
 
    const handleAuditCommit = async (adjustments: { productId: string; newStock: number }[]) => {
+      return measureAsync('warehouse.auditCommit', async () => {
+      setPerfContext('warehouse.auditCommit', 6000, { adjustmentsCount: adjustments.length });
       const now = new Date().toISOString();
       const sessionItems = adjustments.map(adj => {
          const product = products.find(p => p.id === adj.productId);
@@ -176,6 +180,7 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
       onAdjustStock(normalizedAdjustments);
       setAuditWarehouseId(null);
       alert("Inventario actualizado y sesión de auditoría registrada.");
+      }, { adjustmentsCount: adjustments.length });
    };
 
    const renderInventoryList = () => (

@@ -2,6 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { DatabaseAdapter } from './DatabaseAdapter';
 import { CapacitorSQLiteAdapter } from './adapters/CapacitorSQLiteAdapter';
 import { IndexedDBAdapter } from './adapters/IndexedDBAdapter';
+import { measureAsync } from '../../utils/perfDebug';
 
 const isNativeAndroid = (): boolean => {
     return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -20,5 +21,8 @@ const getAdapter = (): DatabaseAdapter => {
 export const dbAdapter = getAdapter();
 
 export const initDatabase = async () => {
-    await dbAdapter.connect();
+    await measureAsync('db.initDatabase', () => dbAdapter.connect(), {
+        adapterType: dbAdapter.adapterType,
+        nativeAndroid: isNativeAndroid(),
+    });
 };
