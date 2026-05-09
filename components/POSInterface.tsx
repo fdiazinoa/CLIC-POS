@@ -320,6 +320,7 @@ const buildCartDigest = (items: CartItem[] = []): string =>
 
 const SEARCH_DROPDOWN_RENDER_LIMIT = 24;
 const SEARCH_GRID_RENDER_LIMIT = 96;
+const EMPTY_PRODUCT_PRICES: ProductPrice[] = [];
 
 interface ProductGridCardProps {
    product: Product;
@@ -680,7 +681,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onKioskPay,
    internalSequences,
    rooms = [],
-   productPrices: externalProductPrices = []
+   productPrices: externalProductPrices = EMPTY_PRODUCT_PRICES
 }) => {
    useRenderPerfDebug('POSInterface', {
       cartCount: cart.length,
@@ -705,7 +706,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [productPrices, setProductPrices] = useState<ProductPrice[]>(externalProductPrices);
 
    useEffect(() => {
-      setProductPrices(Array.isArray(externalProductPrices) ? externalProductPrices : []);
+      const nextProductPrices = Array.isArray(externalProductPrices) ? externalProductPrices : EMPTY_PRODUCT_PRICES;
+      setProductPrices((currentPrices) => (
+         currentPrices === nextProductPrices ? currentPrices : nextProductPrices
+      ));
    }, [externalProductPrices]);
 
    useEffect(() => {
