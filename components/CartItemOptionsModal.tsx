@@ -7,6 +7,7 @@ import {
 import { CartItem, BusinessConfig, User as UserType, RoleDefinition } from '../types';
 import { TerminalSnapshotSeller } from '../utils/terminalSnapshotSellers';
 import { markPerfInteraction, measureSync, useRenderPerfDebug, useVisualUpdatePerfDebug } from '../utils/perfDebug';
+import { useTouchInputBuffer } from '../hooks/pos/useTouchInputBuffer';
 
 interface CartItemOptionsModalProps {
   item: CartItem;
@@ -19,6 +20,8 @@ interface CartItemOptionsModalProps {
   canApplyDiscount: boolean;
   canVoidItem: boolean;
 }
+
+const TOUCH_BUTTON_CLASS = 'touch-manipulation select-none [-webkit-tap-highlight-color:transparent]';
 
 const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   item,
@@ -36,17 +39,22 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   const EPSILON = 0.01;
   const [quantity, setQuantity] = useState(item.quantity);
   const [price, setPrice] = useState(item.price);
+  const { value: priceInput, setValue: setPriceInput } = useTouchInputBuffer(String(item.price));
   const [note, setNote] = useState(item.note || '');
   const [salespersonId, setSalespersonId] = useState(item.salespersonId || '');
 
   const [discountType, setDiscountType] = useState<'PERCENT' | 'FIXED'>('PERCENT');
-  const [discountValue, setDiscountValue] = useState<string>('');
+  const { value: discountValue, setValue: setDiscountValue } = useTouchInputBuffer('');
   const [isDeleting, setIsDeleting] = useState(false);
 
   const originalPrice = item.originalPrice || item.price;
   const adjustmentBasePrice = (item.adjustmentSource === 'PROMOTION' || item.adjustmentSource === 'TARIFF')
     ? item.price
     : originalPrice;
+  const effectivePrice = useMemo(() => {
+    const parsedPrice = parseFloat(priceInput);
+    return Number.isFinite(parsedPrice) && parsedPrice >= 0 ? parsedPrice : price;
+  }, [price, priceInput]);
 
   const salesUsers = useMemo(() => {
     if (incomingSalesUsers.length > 0) {
@@ -69,34 +77,34 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
     }, { delta });
   };
 
-  const handleApplyDiscount = () => {
-    markPerfInteraction('pos.cartLineDiscount', 3500, { discountType });
+  const handleApplyDiscount = (nextDiscountType: 'PERCENT' | 'FIXED' = discountType) => {
+    markPerfInteraction('pos.cartLineDiscount', 3500, { discountType: nextDiscountType });
     measureSync('pos.cartLine.applyDiscount', () => {
       const val = parseFloat(discountValue);
       if (isNaN(val) || val <= 0) {
         setPrice(adjustmentBasePrice);
+        setPriceInput(String(adjustmentBasePrice));
         return;
       }
 
       let newPrice = adjustmentBasePrice;
-      if (discountType === 'PERCENT') {
+      if (nextDiscountType === 'PERCENT') {
         newPrice = adjustmentBasePrice - (adjustmentBasePrice * (val / 100));
       } else {
         newPrice = Math.max(0, adjustmentBasePrice - val);
       }
-      setPrice(parseFloat(newPrice.toFixed(2)));
-    }, { discountType });
+      const roundedPrice = parseFloat(newPrice.toFixed(2));
+      setPrice(roundedPrice);
+      setPriceInput(roundedPrice.toFixed(2));
+    }, { discountType: nextDiscountType });
   };
 
   const handlePriceManualChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawValue = e.target.value;
     markPerfInteraction('pos.cartLinePrice', 3500, { length: rawValue.length });
     measureSync('pos.cartLine.priceChange', () => {
-      const val = parseFloat(rawValue);
-      if (!isNaN(val) && val >= 0) {
-        setPrice(val);
-        setDiscountValue('');
-      }
+      setPriceInput(rawValue);
+      setDiscountValue('');
     }, { length: rawValue.length });
   };
 
@@ -106,30 +114,30 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
     const nextItem: CartItem = {
       ...item,
       quantity,
-      price,
+      price: effectivePrice,
       note,
       salespersonId
     };
 
     if (
-      Math.abs(price - item.price) <= EPSILON
+      Math.abs(effectivePrice - item.price) <= EPSILON
       && (item.adjustmentSource === 'MANUAL_DISCOUNT' || item.adjustmentSource === 'MANUAL_PRICE_OVERRIDE')
     ) {
       nextItem.originalPrice = item.originalPrice;
       nextItem.discountAmount = item.discountAmount;
       nextItem.discountRate = item.discountRate;
       nextItem.adjustmentSource = item.adjustmentSource;
-    } else if (price < adjustmentBasePrice - EPSILON) {
+    } else if (effectivePrice < adjustmentBasePrice - EPSILON) {
       nextItem.originalPrice = adjustmentBasePrice;
-      nextItem.discountAmount = Number(((adjustmentBasePrice - price) * quantity).toFixed(2));
+      nextItem.discountAmount = Number(((adjustmentBasePrice - effectivePrice) * quantity).toFixed(2));
       nextItem.discountRate = adjustmentBasePrice > 0
-        ? Number((((adjustmentBasePrice - price) / adjustmentBasePrice)).toFixed(4))
+        ? Number((((adjustmentBasePrice - effectivePrice) / adjustmentBasePrice)).toFixed(4))
         : undefined;
       nextItem.adjustmentSource = 'MANUAL_DISCOUNT';
       delete nextItem.appliedPromotionId;
       delete nextItem.appliedPromotionCode;
       delete nextItem.appliedPromotionName;
-    } else if (Math.abs(price - adjustmentBasePrice) > EPSILON) {
+    } else if (Math.abs(effectivePrice - adjustmentBasePrice) > EPSILON) {
       nextItem.originalPrice = adjustmentBasePrice;
       nextItem.discountAmount = undefined;
       nextItem.discountRate = undefined;
@@ -164,7 +172,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
       ...nextItem
     });
     onClose();
-    }, { changedQuantity: Math.abs(quantity - item.quantity) > EPSILON, changedPrice: Math.abs(price - item.price) > EPSILON });
+    }, { changedQuantity: Math.abs(quantity - item.quantity) > EPSILON, changedPrice: Math.abs(effectivePrice - item.price) > EPSILON });
   };
 
   const handleDeleteConfirm = () => {
@@ -218,8 +226,9 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
           {/* 1. QUANTITY STEPPER (Touch Friendly) */}
           <div className="bg-white p-4 rounded-[2rem] border border-gray-100 shadow-sm flex items-center justify-between">
             <button
+              type="button"
               onClick={() => handleQuantityChange(-1)}
-              className="w-16 h-16 rounded-2xl bg-gray-50 hover:bg-gray-100 text-gray-400 flex items-center justify-center active:scale-90 transition-all"
+              className={`${TOUCH_BUTTON_CLASS} w-16 h-16 rounded-2xl bg-gray-50 hover:bg-gray-100 text-gray-400 flex items-center justify-center active:scale-90 transition-all`}
             >
               <Minus size={28} strokeWidth={3} />
             </button>
@@ -230,8 +239,9 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
             </div>
 
             <button
+              type="button"
               onClick={() => handleQuantityChange(1)}
-              className={`w-16 h-16 rounded-2xl text-white shadow-lg shadow-blue-100 flex items-center justify-center active:scale-90 transition-all ${themeClasses}`}
+              className={`${TOUCH_BUTTON_CLASS} w-16 h-16 rounded-2xl text-white shadow-lg shadow-blue-100 flex items-center justify-center active:scale-90 transition-all ${themeClasses}`}
             >
               <Plus size={28} strokeWidth={3} />
             </button>
@@ -256,10 +266,10 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
                 <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-black text-sm">$</span>
                 <input
                   type="number"
-                  value={price}
+                  value={priceInput}
                   onChange={handlePriceManualChange}
                   disabled={!canApplyDiscount}
-                  className={`w-full pl-8 pr-4 py-4 rounded-2xl bg-gray-50 border-none font-black text-gray-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all ${!canApplyDiscount ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  className={`touch-manipulation w-full pl-8 pr-4 py-4 rounded-2xl bg-gray-50 border-none font-black text-gray-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all [-webkit-tap-highlight-color:transparent] ${!canApplyDiscount ? 'opacity-50 cursor-not-allowed' : ''}`}
                 />
               </div>
             </div>
@@ -276,20 +286,22 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
                     placeholder="0"
                     value={discountValue}
                     onChange={(e) => setDiscountValue(e.target.value)}
-                    onBlur={handleApplyDiscount}
+                    onBlur={() => handleApplyDiscount()}
                     disabled={!canApplyDiscount}
-                    className="w-full bg-gray-50 border-none rounded-l-2xl pl-4 pr-2 py-4 font-black text-gray-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all disabled:opacity-50"
+                    className="touch-manipulation w-full bg-gray-50 border-none rounded-l-2xl pl-4 pr-2 py-4 font-black text-gray-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all disabled:opacity-50 [-webkit-tap-highlight-color:transparent]"
                   />
                 </div>
                 <button
-                  onClick={() => { setDiscountType('PERCENT'); setTimeout(handleApplyDiscount, 0); }}
-                  className={`px-4 py-4 border-none font-black text-sm transition-all ${discountType === 'PERCENT' ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-400'}`}
+                  type="button"
+                  onClick={() => { setDiscountType('PERCENT'); window.setTimeout(() => handleApplyDiscount('PERCENT'), 0); }}
+                  className={`${TOUCH_BUTTON_CLASS} px-4 py-4 border-none font-black text-sm transition-all ${discountType === 'PERCENT' ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-400'}`}
                 >
                   %
                 </button>
                 <button
-                  onClick={() => { setDiscountType('FIXED'); setTimeout(handleApplyDiscount, 0); }}
-                  className={`px-4 py-4 rounded-r-2xl border-none font-black text-sm transition-all ${discountType === 'FIXED' ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-400'}`}
+                  type="button"
+                  onClick={() => { setDiscountType('FIXED'); window.setTimeout(() => handleApplyDiscount('FIXED'), 0); }}
+                  className={`${TOUCH_BUTTON_CLASS} px-4 py-4 rounded-r-2xl border-none font-black text-sm transition-all ${discountType === 'FIXED' ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-400'}`}
                 >
                   $
                 </button>
@@ -339,9 +351,10 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
 
           {/* DELETE BUTTON */}
           <button
+            type="button"
             onClick={() => setIsDeleting(true)}
             disabled={!canVoidItem}
-            className={`w-[25%] py-4 rounded-2xl font-black flex flex-col items-center justify-center gap-1 transition-all active:scale-95 ${canVoidItem ? 'bg-white border-2 border-red-50 text-red-500 hover:bg-red-50' : 'bg-gray-50 text-gray-300 opacity-50 cursor-not-allowed'}`}
+            className={`${TOUCH_BUTTON_CLASS} w-[25%] py-4 rounded-2xl font-black flex flex-col items-center justify-center gap-1 transition-all active:scale-95 ${canVoidItem ? 'bg-white border-2 border-red-50 text-red-500 hover:bg-red-50' : 'bg-gray-50 text-gray-300 opacity-50 cursor-not-allowed'}`}
           >
             <Trash2 size={24} />
             <span className="text-[8px] uppercase tracking-tighter">Eliminar</span>
@@ -349,15 +362,16 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
 
           {/* UPDATE BUTTON */}
           <button
+            type="button"
             onClick={handleSave}
-            className={`flex-1 py-4 text-white rounded-2xl font-black shadow-xl shadow-blue-100 flex items-center justify-center gap-4 active:scale-95 transition-all ${themeClasses}`}
+            className={`${TOUCH_BUTTON_CLASS} flex-1 py-4 text-white rounded-2xl font-black shadow-xl shadow-blue-100 flex items-center justify-center gap-4 active:scale-95 transition-all ${themeClasses}`}
           >
             <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
               <Save size={20} />
             </div>
             <div className="text-left">
               <span className="block text-lg leading-none mb-0.5">Actualizar Item</span>
-              <span className="text-[10px] font-bold opacity-70 uppercase tracking-wider">Total: {config.currencySymbol}{(price * quantity).toFixed(2)}</span>
+              <span className="text-[10px] font-bold opacity-70 uppercase tracking-wider">Total: {config.currencySymbol}{(effectivePrice * quantity).toFixed(2)}</span>
             </div>
           </button>
 

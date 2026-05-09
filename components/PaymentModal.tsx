@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useCallback, useState, useEffect, useMemo } from 'react';
 import {
    X, CreditCard, Banknote, QrCode, CheckCircle2,
    Trash2, Plus, Wallet, Printer, Mail, ShieldAlert,
@@ -43,6 +43,7 @@ import {
    resolveCurrencySymbol,
 } from '../utils/paymentSettlement';
 import { markPerfInteraction, measureAsync, measureSync, useRenderPerfDebug, useVisualUpdatePerfDebug } from '../utils/perfDebug';
+import { useTouchInputBuffer } from '../hooks/pos/useTouchInputBuffer';
 
 interface PaymentModalProps {
    total: number;
@@ -210,15 +211,52 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
+const TOUCH_BUTTON_CLASS = 'touch-manipulation select-none [-webkit-tap-highlight-color:transparent]';
+
+interface PaymentNumpadButtonProps {
+   value: string;
+   onPress: (value: string) => void;
+   className: string;
+   children?: React.ReactNode;
+   disabled?: boolean;
+}
+
+const PaymentNumpadButton = React.memo<PaymentNumpadButtonProps>(({
+   value,
+   onPress,
+   className,
+   children,
+   disabled = false,
+}) => {
+   const handleClick = useCallback(() => onPress(value), [onPress, value]);
+
+   return (
+      <button
+         type="button"
+         onClick={handleClick}
+         disabled={disabled}
+         className={`${TOUCH_BUTTON_CLASS} ${className}`}
+      >
+         {children ?? value}
+      </button>
+   );
+});
+
+PaymentNumpadButton.displayName = 'PaymentNumpadButton';
+
 const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode }) => {
    useRenderPerfDebug('PaymentModal', { itemsCount: items.length });
    const [payments, setPayments] = useState<PaymentEntry[]>([]);
    useVisualUpdatePerfDebug('PaymentModal', { itemsCount: items.length, paymentsCount: payments.length });
    const [activeMethodKey, setActiveMethodKey] = useState<string>('');
-   const [inputAmount, setInputAmount] = useState<string>('');
+   const {
+      value: inputAmount,
+      setValue: setInputAmount,
+      inputNumericKey,
+      setReplaceOnNextInput: setShouldClearInput,
+   } = useTouchInputBuffer('');
    const [isSuccessScreen, setIsSuccessScreen] = useState(false);
    const [completedTransaction, setCompletedTransaction] = useState<Transaction | null>(null);
-   const [shouldClearInput, setShouldClearInput] = useState(true);
    const [voluntaryTip, setVoluntaryTip] = useState(0);
    const [isFinalizing, setIsFinalizing] = useState(false);
    const [finalizeError, setFinalizeError] = useState<string | null>(null);
@@ -386,24 +424,15 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
       }
    }, [remaining, activeMethod, selectedCurrency, activeForeignCurrencyRounding, baseCurrency.code]);
 
-   const handleNumPad = (key: string) => {
+   const handleNumPad = useCallback((key: string) => {
       const keyDetail = {
          keyType: key === 'BACK' ? 'backspace' : key === 'C' ? 'clear' : key === '.' ? 'decimal' : 'digit',
       };
       markPerfInteraction('paymentModal.numPad', 3500, keyDetail);
       measureSync('paymentModal.numPadInput', () => {
-      if (key === 'C') { setInputAmount(''); setShouldClearInput(false); return; }
-      if (key === 'BACK') { setInputAmount(prev => prev.slice(0, -1)); return; }
-      if (shouldClearInput) {
-         setShouldClearInput(false);
-         setInputAmount(key === '.' ? '0.' : key);
-      } else {
-         if (key === '.' && inputAmount.includes('.')) return;
-         if (inputAmount.includes('.') && inputAmount.split('.')[1].length >= 2) return;
-         setInputAmount(prev => prev + key);
-      }
-      }, { ...keyDetail, inputLength: inputAmount.length });
-   };
+         inputNumericKey(key, { maxDecimalPlaces: 2 });
+      }, keyDetail);
+   }, [inputNumericKey]);
 
    const canBypassCreditLimit = isOverrideActive || hasPermission('POS_CREDIT_OVERRIDE');
 
@@ -1438,10 +1467,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-3 md:mt-4">
                         {denominations.map(d => (
                            <button
+                              type="button"
                               key={d}
                               onClick={() => handleAddPayment(d)}
                               disabled={isProcessingGateway || isFinalizing}
-                              className="py-2 bg-white border border-gray-200 rounded-lg md:rounded-xl text-[10px] md:text-xs font-black text-gray-600 hover:border-blue-500 hover:text-blue-600 transition-all shadow-sm"
+                              className={`${TOUCH_BUTTON_CLASS} py-2 bg-white border border-gray-200 rounded-lg md:rounded-xl text-[10px] md:text-xs font-black text-gray-600 hover:border-blue-500 hover:text-blue-600 transition-all shadow-sm`}
                            >
                               {selectedCurrency.symbol}{d}
                            </button>
@@ -1466,12 +1496,20 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
 
                {/* Numpad - Responsive grid */}
                <div className="flex-1 p-3 md:p-6 lg:p-8 grid grid-cols-4 gap-2 md:gap-3 content-stretch min-h-[32vh]">
-                  {[1, 2, 3].map(n => <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">{n}</button>)}
+                  {[1, 2, 3].map(n => (
+                     <PaymentNumpadButton
+                        key={n}
+                        value={n.toString()}
+                        onPress={handleNumPad}
+                        className="bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm"
+                     />
+                  ))}
 
                   <button
+                     type="button"
                      onClick={() => handleAddPayment()}
                      disabled={(!isOnline && !isMaster && activeRequiresOnline) || isProcessingGateway || isFinalizing}
-                     className={`row-span-2 rounded-2xl md:rounded-[2rem] font-black shadow-xl flex flex-col items-center justify-center gap-1 md:gap-2 ${(!isOnline && !isMaster && activeRequiresOnline) || isProcessingGateway || isFinalizing ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${themeBgClass} text-white active:scale-95 hover:brightness-110`}`}
+                     className={`${TOUCH_BUTTON_CLASS} row-span-2 rounded-2xl md:rounded-[2rem] font-black shadow-xl flex flex-col items-center justify-center gap-1 md:gap-2 ${(!isOnline && !isMaster && activeRequiresOnline) || isProcessingGateway || isFinalizing ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${themeBgClass} text-white active:scale-95 hover:brightness-110`}`}
                   >
                      <Plus size={28} className="md:w-8 md:h-8" />
                      <span className="text-[10px] tracking-widest uppercase">
@@ -1479,13 +1517,31 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                      </span>
                   </button>
 
-                  {[4, 5, 6].map(n => <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">{n}</button>)}
-                  {[7, 8, 9].map(n => <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">{n}</button>)}
+                  {[4, 5, 6].map(n => (
+                     <PaymentNumpadButton
+                        key={n}
+                        value={n.toString()}
+                        onPress={handleNumPad}
+                        className="bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm"
+                     />
+                  ))}
+                  {[7, 8, 9].map(n => (
+                     <PaymentNumpadButton
+                        key={n}
+                        value={n.toString()}
+                        onPress={handleNumPad}
+                        className="bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm"
+                     />
+                  ))}
 
-                  <button onClick={() => handleNumPad('BACK')} className="rounded-xl md:rounded-2xl bg-red-50 text-red-500 flex items-center justify-center active:scale-95 border border-red-100"><Trash2 size={24} className="md:w-7 md:h-7" /></button>
-                  <button onClick={() => handleNumPad('C')} className="rounded-xl md:rounded-2xl bg-gray-200 text-gray-600 font-black text-lg md:text-xl active:scale-95 transition-all shadow-inner">C</button>
-                  <button onClick={() => handleNumPad('0')} className="rounded-xl md:rounded-2xl bg-white border border-gray-100 text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">0</button>
-                  <button onClick={() => handleNumPad('.')} className="rounded-xl md:rounded-2xl bg-white border border-gray-100 text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">.</button>
+                  <PaymentNumpadButton value="BACK" onPress={handleNumPad} className="rounded-xl md:rounded-2xl bg-red-50 text-red-500 flex items-center justify-center active:scale-95 border border-red-100">
+                     <Trash2 size={24} className="md:w-7 md:h-7" />
+                  </PaymentNumpadButton>
+                  <PaymentNumpadButton value="C" onPress={handleNumPad} className="rounded-xl md:rounded-2xl bg-gray-200 text-gray-600 font-black text-lg md:text-xl active:scale-95 transition-all shadow-inner">
+                     C
+                  </PaymentNumpadButton>
+                  <PaymentNumpadButton value="0" onPress={handleNumPad} className="rounded-xl md:rounded-2xl bg-white border border-gray-100 text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm" />
+                  <PaymentNumpadButton value="." onPress={handleNumPad} className="rounded-xl md:rounded-2xl bg-white border border-gray-100 text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm" />
             </div>
          </div>
       </div>
