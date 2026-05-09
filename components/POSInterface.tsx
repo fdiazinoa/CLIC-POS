@@ -79,7 +79,7 @@ import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
 import { productIdentityCandidates, productReferenceCandidates, resolveOperationalProductId } from '../utils/productReferences';
 import { markPerfInteraction, measureAsync, measureSync, useRenderPerfDebug, useVisualUpdatePerfDebug } from '../utils/perfDebug';
-import { markPOSBusy, markPOSIdle } from '../utils/posSaleActivity';
+import { isPOSBusy, markPOSBusy, markPOSIdle } from '../utils/posSaleActivity';
 import { resolveKdsBaseUrl } from '../utils/kdsRouting';
 import {
    confirmUberEatsPosInvoice,
@@ -829,6 +829,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const lastTouchContextMenuAtRef = useRef(0);
    const lastProductTouchAtRef = useRef(0);
    const quickActionOpenedAtRef = useRef(0);
+   const deferredProductPricesRef = useRef<ProductPrice[] | null>(null);
+   const productPricesRefreshTimerRef = useRef<number | null>(null);
    const [productPrices, setProductPrices] = useState<ProductPrice[]>(externalProductPrices);
 
    useEffect(() => {
@@ -841,11 +843,39 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    useEffect(() => {
       let cancelled = false;
 
+      const clearRefreshTimer = () => {
+         if (productPricesRefreshTimerRef.current === null) return;
+         window.clearTimeout(productPricesRefreshTimerRef.current);
+         productPricesRefreshTimerRef.current = null;
+      };
+
+      const applyProductPricesWhenIdle = (fresh: ProductPrice[]) => {
+         if (cancelled) return;
+         if (isPOSBusy()) {
+            deferredProductPricesRef.current = fresh;
+            clearRefreshTimer();
+            productPricesRefreshTimerRef.current = window.setTimeout(() => {
+               const pending = deferredProductPricesRef.current;
+               if (!pending) return;
+               if (isPOSBusy()) {
+                  applyProductPricesWhenIdle(pending);
+                  return;
+               }
+               deferredProductPricesRef.current = null;
+               setProductPrices(pending);
+            }, 1200);
+            return;
+         }
+
+         deferredProductPricesRef.current = null;
+         setProductPrices(fresh);
+      };
+
       const refreshProductPrices = async () => {
          try {
             const fresh = await db.get('productPrices') as ProductPrice[] | null;
             if (!cancelled && Array.isArray(fresh)) {
-               setProductPrices(fresh);
+               applyProductPricesWhenIdle(fresh);
             }
          } catch (error) {
             console.warn('⚠️ POSInterface: Could not load productPrices collection:', error);
@@ -856,6 +886,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       window.addEventListener('productPricesUpdated', refreshProductPrices);
       return () => {
          cancelled = true;
+         clearRefreshTimer();
          window.removeEventListener('productPricesUpdated', refreshProductPrices);
       };
    }, []);

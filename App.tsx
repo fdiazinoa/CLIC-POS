@@ -72,7 +72,7 @@ import TerminalModeSelector from './components/TerminalModeSelector';
 import TerminalBindingScreen from './components/TerminalBindingScreen';
 import CustomerVisor from './components/CustomerVisor';
 import { visorSync } from './utils/visorSync';
-import { markPosInteractionActivity, setPosSaleActivity } from './utils/posSaleActivity';
+import { POS_SALE_ACTIVITY_EVENT, isPOSBusy, markPosInteractionActivity, setPosSaleActivity } from './utils/posSaleActivity';
 
 // Layout imports
 import StandardPOSLayout from './components/layouts/StandardPOSLayout';
@@ -1552,6 +1552,12 @@ const AppContent: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const deferredProductsRef = useRef<{
+    products: Product[];
+    reason: string;
+    queuedAt: number;
+  } | null>(null);
+  const deferredProductsTimerRef = useRef<number | null>(null);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   const [zReports, setZReports] = useState<ZReport[]>([]);
@@ -1576,6 +1582,78 @@ const AppContent: React.FC = () => {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [kioskRedeemedCoupon, setKioskRedeemedCoupon] = useState<RedeemedCouponRef | null>(null);
   const [kioskCouponBenefit, setKioskCouponBenefit] = useState<KioskCouponBenefit | null>(null);
+
+  const clearDeferredProductsTimer = useCallback(() => {
+    if (typeof window === 'undefined' || deferredProductsTimerRef.current === null) return;
+    window.clearTimeout(deferredProductsTimerRef.current);
+    deferredProductsTimerRef.current = null;
+  }, []);
+
+  const flushDeferredProducts = useCallback((force = false) => {
+    const pending = deferredProductsRef.current;
+    if (!pending || typeof window === 'undefined') return;
+
+    clearDeferredProductsTimer();
+    if (!force && isPOSBusy()) {
+      deferredProductsTimerRef.current = window.setTimeout(() => {
+        flushDeferredProducts(false);
+      }, 1200);
+      return;
+    }
+
+    deferredProductsRef.current = null;
+    setProducts(pending.products);
+    posCatalogDebugLog('App: deferred catalog refresh applied', {
+      count: pending.products.length,
+      reason: pending.reason,
+      deferredMs: Math.round(performance.now() - pending.queuedAt),
+    });
+  }, [clearDeferredProductsTimer]);
+
+  const applyProductsState = useCallback((
+    nextProducts: Product[] | null | undefined,
+    reason = 'catalog.refresh',
+    options?: { deferWhenBusy?: boolean }
+  ) => {
+    const normalizedProducts = Array.isArray(nextProducts) ? nextProducts : [];
+    const shouldDefer = options?.deferWhenBusy !== false && typeof window !== 'undefined' && isPOSBusy();
+
+    if (!shouldDefer) {
+      clearDeferredProductsTimer();
+      deferredProductsRef.current = null;
+      setProducts(normalizedProducts);
+      return;
+    }
+
+    deferredProductsRef.current = {
+      products: normalizedProducts,
+      reason,
+      queuedAt: performance.now(),
+    };
+    clearDeferredProductsTimer();
+    deferredProductsTimerRef.current = window.setTimeout(() => {
+      flushDeferredProducts(false);
+    }, 1200);
+    posCatalogDebugLog('App: catalog refresh deferred while POS is busy', {
+      count: normalizedProducts.length,
+      reason,
+    });
+  }, [clearDeferredProductsTimer, flushDeferredProducts]);
+
+  useEffect(() => {
+    const handleSaleActivityChanged = () => {
+      if (!isPOSBusy()) {
+        flushDeferredProducts(true);
+      }
+    };
+
+    window.addEventListener(POS_SALE_ACTIVITY_EVENT, handleSaleActivityChanged);
+    return () => {
+      clearDeferredProductsTimer();
+      window.removeEventListener(POS_SALE_ACTIVITY_EVENT, handleSaleActivityChanged);
+    };
+  }, [clearDeferredProductsTimer, flushDeferredProducts]);
+
   useEffect(() => {
     setPosSaleActivity({ active: cart.length > 0, cartCount: cart.length });
     return () => setPosSaleActivity({ active: false, cartCount: 0 });
@@ -2905,7 +2983,7 @@ const AppContent: React.FC = () => {
         const syncedProducts = await db.get('products') as Product[];
         if (syncedProducts && syncedProducts.length > 0 && syncedProducts.length !== products.length) {
           console.log(`🔄 Refreshing products list after sync: ${syncedProducts.length} products found`);
-          setProducts(syncedProducts);
+          applyProductsState(syncedProducts, 'postSync.poll.products');
         }
 
         // Refresh warehouses
@@ -2938,7 +3016,7 @@ const AppContent: React.FC = () => {
     }, 5000); // Check every 5 seconds
 
     return () => clearInterval(interval);
-  }, [users.length, products.length, warehouses.length, isDataLoaded]);
+  }, [users.length, products.length, warehouses.length, isDataLoaded, applyProductsState]);
 
   useEffect(() => {
     // Poll tables if in restaurant mode OR retail with tables enabled
@@ -2971,7 +3049,10 @@ const AppContent: React.FC = () => {
 
       if (pendingCatalogRefresh.products || pendingCatalogRefresh.productStocks) {
         const freshProducts = await db.get('products') as Product[];
-        setProducts(Array.isArray(freshProducts) ? freshProducts : []);
+        applyProductsState(
+          Array.isArray(freshProducts) ? freshProducts : [],
+          'sync.catalogRefresh'
+        );
 
         const matching = Array.isArray(freshProducts)
           ? (freshProducts as unknown as Record<string, unknown>[])
@@ -3016,7 +3097,7 @@ const AppContent: React.FC = () => {
 
       switch (collection) {
         case 'products':
-          setProducts(freshData as Product[]);
+          applyProductsState(freshData as Product[], 'sync.productsUpdated');
           {
             const matching = Array.isArray(freshData)
               ? (freshData as Record<string, unknown>[])
@@ -3064,7 +3145,7 @@ const AppContent: React.FC = () => {
       if (catalogRefreshTimer) clearTimeout(catalogRefreshTimer);
       syncEvents.forEach(e => window.removeEventListener(e, handleSyncEvent));
     };
-  }, []);
+  }, [applyProductsState]);
 
   useEffect(() => {
     const handleConfigUpdated = async (event: Event) => {
@@ -3143,7 +3224,7 @@ const AppContent: React.FC = () => {
             await syncManager.pullCatalog('products', true);
             const refreshedProducts = await db.get('products') as Product[];
             if (Array.isArray(refreshedProducts)) {
-              setProducts(refreshedProducts);
+              applyProductsState(refreshedProducts, 'configUpdated.driftRepair');
             }
           }
         }
@@ -3158,7 +3239,7 @@ const AppContent: React.FC = () => {
     return () => {
       window.removeEventListener('configUpdated', handleConfigUpdated as EventListener);
     };
-  }, [config, deviceId, syncConfigToLocalServer]);
+  }, [config, deviceId, syncConfigToLocalServer, applyProductsState]);
 
   // --- GLOBAL KEYBOARD SHORTCUT FOR ADMIN ACCESS ---
   useEffect(() => {
