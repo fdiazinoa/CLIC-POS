@@ -486,6 +486,131 @@ const ProductGridCard = React.memo(ProductGridCardComponent, (prev, next) => (
 
 ProductGridCard.displayName = 'ProductGridCard';
 
+interface CategorySelectorBarProps {
+   categories: string[];
+   categoryFilter: string;
+   className: string;
+   onCategorySelect: (category: string) => void;
+}
+
+const CategorySelectorBar: React.FC<CategorySelectorBarProps> = React.memo(({
+   categories,
+   categoryFilter,
+   className,
+   onCategorySelect,
+}) => (
+   <div className={className}>
+      {categories.map((cat, idx) => (
+         <button
+            key={cat || `cat-${idx}`}
+            type="button"
+            onClick={() => onCategorySelect(cat)}
+            className={`px-6 py-2.5 rounded-full text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap shadow-sm border touch-manipulation select-none [-webkit-tap-highlight-color:transparent] ${categoryFilter === cat
+               ? 'bg-blue-600 border-blue-500 text-white shadow-blue-200 scale-105'
+               : 'bg-white border-gray-200 text-gray-400 hover:border-blue-300 hover:text-blue-600'
+               }`}
+         >
+            {cat === 'ALL' ? 'Todas' : cat}
+         </button>
+      ))}
+   </div>
+));
+
+CategorySelectorBar.displayName = 'CategorySelectorBar';
+
+interface ProductGridItem {
+   product: Product;
+   warehouseSaleBlocked: boolean;
+   terminalWarehouseName: string;
+   price: number;
+   hasPromotion: boolean;
+}
+
+interface ProductGridPanelProps {
+   items: ProductGridItem[];
+   filteredCount: number;
+   searchLength: number;
+   categoryFilter: string;
+   gridClass: string;
+   scrollClassName: string;
+   scrollStyle: React.CSSProperties;
+   usesSupermarketLayout: boolean;
+   usesExpandedCatalog: boolean;
+   isMobile: boolean;
+   isNativeAndroid: boolean;
+   showProductImages: boolean;
+   baseCurrencySymbol: string;
+   onProductClick: (product: Product) => void;
+   onOpenPromotion: (product: Product) => void;
+   onProductTouchStart: (product: Product, clientX: number, clientY: number) => void;
+   onProductTouchMove: (clientX: number, clientY: number) => void;
+   onProductTouchEnd: () => void;
+   onProductContextMenu: (product: Product, event: React.MouseEvent<HTMLDivElement>) => void;
+}
+
+const ProductGridPanel: React.FC<ProductGridPanelProps> = React.memo(({
+   items,
+   filteredCount,
+   searchLength,
+   categoryFilter,
+   gridClass,
+   scrollClassName,
+   scrollStyle,
+   usesSupermarketLayout,
+   usesExpandedCatalog,
+   isMobile,
+   isNativeAndroid,
+   showProductImages,
+   baseCurrencySymbol,
+   onProductClick,
+   onOpenPromotion,
+   onProductTouchStart,
+   onProductTouchMove,
+   onProductTouchEnd,
+   onProductContextMenu,
+}) => {
+   useRenderPerfDebug('POSProductGrid', {
+      gridCount: items.length,
+      filteredCount,
+      searchLength,
+      categoryFilter,
+   });
+
+   return (
+      <div
+         className={scrollClassName}
+         style={scrollStyle}
+      >
+         <div className={gridClass}>
+            {items.map((item, idx) => (
+               <ProductGridCard
+                  key={item.product.id || `prod-${idx}`}
+                  product={item.product}
+                  usesSupermarketLayout={usesSupermarketLayout}
+                  usesExpandedCatalog={usesExpandedCatalog}
+                  isMobile={isMobile}
+                  isNativeAndroid={isNativeAndroid}
+                  showProductImages={showProductImages}
+                  baseCurrencySymbol={baseCurrencySymbol}
+                  warehouseSaleBlocked={item.warehouseSaleBlocked}
+                  terminalWarehouseName={item.terminalWarehouseName}
+                  price={item.price}
+                  hasPromotion={item.hasPromotion}
+                  onProductClick={onProductClick}
+                  onOpenPromotion={onOpenPromotion}
+                  onProductTouchStart={onProductTouchStart}
+                  onProductTouchMove={onProductTouchMove}
+                  onProductTouchEnd={onProductTouchEnd}
+                  onProductContextMenu={onProductContextMenu}
+               />
+            ))}
+         </div>
+      </div>
+   );
+});
+
+ProductGridPanel.displayName = 'ProductGridPanel';
+
 const syncStateEquals = (left: SyncState, right: SyncState) => (
    left.pendingCount === right.pendingCount
    && left.isSyncing === right.isSyncing
@@ -2753,12 +2878,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 	      [searchTerm, filteredProducts]
 	   );
 
-   useRenderPerfDebug('POSProductGrid', {
-      gridCount: gridProducts.length,
-      filteredCount: filteredProducts.length,
-      searchLength: searchTerm.length,
-      categoryFilter,
-   });
+   const terminalWarehouseName = useMemo(
+      () => getTerminalWarehouseName(),
+      [getTerminalWarehouseName]
+   );
+
+   const gridProductItems = useMemo<ProductGridItem[]>(() => (
+      gridProducts.map((product) => ({
+         product,
+         warehouseSaleBlocked: isProductWarehouseBlockedForSale(product),
+         terminalWarehouseName,
+         price: getProductPrice(product),
+         hasPromotion: hasPromotionForProduct(product),
+      }))
+   ), [
+      getProductPrice,
+      gridProducts,
+      hasPromotionForProduct,
+      isProductWarehouseBlockedForSale,
+      terminalWarehouseName,
+   ]);
+
+   const productGridScrollClassName = useMemo(() => (
+      `flex-1 min-h-0 overflow-y-auto bg-[#eef2f6] ${usesExpandedCatalog ? 'p-3 pl-4 pr-2' : isMobile ? 'p-4' : 'p-8'} custom-scrollbar scrollbar-thin dark:bg-slate-900`
+   ), [isMobile, usesExpandedCatalog]);
 
    const visibleSearchResults = useMemo(
       () => filteredProducts.slice(0, SEARCH_DROPDOWN_RENDER_LIMIT),
@@ -2780,6 +2923,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const handleClearSearchTerm = useCallback(() => {
       markPerfInteraction('pos.searchClear', 2000);
       measureSync('pos.search.clear', () => setSearchTerm(''));
+   }, []);
+
+   const handleCategorySelect = useCallback((category: string) => {
+      setCategoryFilter(category);
    }, []);
 
    const handleVirtualKeyboardKeyPress = useCallback((key: string) => {
@@ -4552,50 +4699,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </header>
 
             {/* --- CATEGORY SELECTOR BAR --- */}
-            <div className={categoryContainerClass}>
-               {categories.map((cat, idx) => (
-                  <button
-                     key={cat || `cat-${idx}`}
-                     onClick={() => setCategoryFilter(cat)}
-                     className={`px-6 py-2.5 rounded-full text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap shadow-sm border ${categoryFilter === cat
-                        ? 'bg-blue-600 border-blue-500 text-white shadow-blue-200 scale-105'
-                        : 'bg-white border-gray-200 text-gray-400 hover:border-blue-300 hover:text-blue-600'
-                        }`}
-                  >
-                     {cat === 'ALL' ? 'Todas' : cat}
-                  </button>
-               ))}
-            </div>
+            <CategorySelectorBar
+               categories={categories}
+               categoryFilter={categoryFilter}
+               className={categoryContainerClass}
+               onCategorySelect={handleCategorySelect}
+            />
 
-               <div
-                  className={`flex-1 min-h-0 overflow-y-auto bg-[#eef2f6] ${usesExpandedCatalog ? 'p-3 pl-4 pr-2' : isMobile ? 'p-4' : 'p-8'} custom-scrollbar scrollbar-thin dark:bg-slate-900`}
-                  style={bottomAwareScrollStyle}
-               >
-                  <div className={gridClass}>
-                     {gridProducts.map((product, idx) => (
-                        <ProductGridCard
-                           key={product.id || `prod-${idx}`}
-                           product={product}
-                           usesSupermarketLayout={usesSupermarketLayout}
-                           usesExpandedCatalog={usesExpandedCatalog}
-                           isMobile={isMobile}
-                           isNativeAndroid={isNativeAndroid}
-                           showProductImages={uxConfig.showProductImages}
-                           baseCurrencySymbol={baseCurrency.symbol}
-                           warehouseSaleBlocked={isProductWarehouseBlockedForSale(product)}
-                           terminalWarehouseName={getTerminalWarehouseName()}
-                           price={getProductPrice(product)}
-                           hasPromotion={hasPromotionForProduct(product)}
-                           onProductClick={handleProductCardClick}
-                           onOpenPromotion={openProductPromotionSheet}
-                           onProductTouchStart={handleProductCardTouchStart}
-                           onProductTouchMove={handleProductCardTouchMove}
-                           onProductTouchEnd={clearQuickActionTouchTimer}
-                           onProductContextMenu={handleProductCardContextMenu}
-                        />
-                     ))}
-                  </div>
-               </div>
+               <ProductGridPanel
+                  items={gridProductItems}
+                  filteredCount={filteredProducts.length}
+                  searchLength={searchTerm.length}
+                  categoryFilter={categoryFilter}
+                  gridClass={gridClass}
+                  scrollClassName={productGridScrollClassName}
+                  scrollStyle={bottomAwareScrollStyle}
+                  usesSupermarketLayout={usesSupermarketLayout}
+                  usesExpandedCatalog={usesExpandedCatalog}
+                  isMobile={isMobile}
+                  isNativeAndroid={isNativeAndroid}
+                  showProductImages={uxConfig.showProductImages}
+                  baseCurrencySymbol={baseCurrency.symbol}
+                  onProductClick={handleProductCardClick}
+                  onOpenPromotion={openProductPromotionSheet}
+                  onProductTouchStart={handleProductCardTouchStart}
+                  onProductTouchMove={handleProductCardTouchMove}
+                  onProductTouchEnd={clearQuickActionTouchTimer}
+                  onProductContextMenu={handleProductCardContextMenu}
+               />
                {/* VIRTUAL KEYBOARD SLOT */}
                {showVirtualKeyboard && (
                   <div className="flex-none z-50">
