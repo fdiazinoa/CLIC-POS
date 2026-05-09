@@ -5,7 +5,7 @@
  * Scan products and adjust quantities.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScanBarcode, Plus, Minus, Save, X, Camera, Cloud, Wifi, WifiOff } from 'lucide-react';
 import { Product } from '../../types';
 import BarcodeScannerModal from '../BarcodeScannerModal';
@@ -61,53 +61,79 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
     const [startedAt] = useState(() => new Date().toISOString());
     const [sessionId] = useState(() => `CNT-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
 
+    const productLookup = useMemo(() => {
+        const lookup = new Map<string, Product>();
+        const addCode = (value: unknown, product: Product) => {
+            const code = String(value || '').trim();
+            if (!code || lookup.has(code)) return;
+            lookup.set(code, product);
+        };
+
+        products.forEach(product => {
+            addCode(product.id, product);
+            addCode(product.barcode, product);
+        });
+
+        return lookup;
+    }, [products]);
+
     // Get expected qty for a product in the selected warehouse
-    const getExpectedQty = (product: Product) => {
+    const getExpectedQty = useCallback((product: Product) => {
         if (!warehouseId) return product.stock || 0;
         return product.stockBalances?.[warehouseId] ?? 0;
-    };
+    }, [warehouseId]);
 
-    // Handle scan
-    const handleScan = async () => {
-        if (!scanInput.trim()) return;
+    const recordScanLog = useCallback((productId: string, code: string) => {
+        void recordOfflineScan({
+            documentId: sessionId,
+            documentCode: sessionId,
+            warehouseId,
+            productId,
+            code
+        } as any).catch((error) => {
+            console.warn('InventoryCount: no se pudo registrar el escaneo offline:', error);
+        });
+    }, [recordOfflineScan, sessionId, warehouseId]);
 
-        const product = products.find(p =>
-            p.barcode === scanInput.trim() || p.id === scanInput.trim()
-        );
+    const addCountedProduct = useCallback((product: Product) => {
+        const expected = getExpectedQty(product);
 
-        if (product) {
-            const existing = counts.find(c => c.productId === product.id);
-            const expected = getExpectedQty(product);
+        setCounts(currentCounts => {
+            const existing = currentCounts.find(c => c.productId === product.id);
 
             if (existing) {
-                // Increment count
-                setCounts(counts.map(c =>
+                return currentCounts.map(c =>
                     c.productId === product.id
                         ? { ...c, countedQty: c.countedQty + 1, difference: c.countedQty + 1 - c.expectedQty }
                         : c
-                ));
-            } else {
-                // Add new item
-                setCounts([...counts, {
-                    productId: product.id,
-                    productName: product.name,
-                    expectedQty: expected,
-                    countedQty: 1,
-                    difference: 1 - expected
-                }]);
+                );
             }
+
+            return [...currentCounts, {
+                productId: product.id,
+                productName: product.name,
+                expectedQty: expected,
+                countedQty: 1,
+                difference: 1 - expected
+            }];
+        });
+    }, [getExpectedQty]);
+
+    // Handle scan
+    const handleScan = () => {
+        const code = scanInput.trim();
+        if (!code) return;
+
+        const product = productLookup.get(code);
+
+        if (product) {
+            addCountedProduct(product);
 
             if (onSave) {
                 // Legacy support if needed, but we prefer hook
             }
 
-            await recordOfflineScan({
-                documentId: sessionId,
-                documentCode: sessionId,
-                warehouseId,
-                productId: product.id,
-                code: scanInput.trim()
-            } as any);
+            recordScanLog(product.id, code);
 
             // Clear input
             setScanInput('');
@@ -125,39 +151,13 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
 
     // Handle camera scan
     const handleCameraScan = async (code: string): Promise<{ success: boolean; message?: string }> => {
-        const product = products.find(p =>
-            p.barcode === code.trim() || p.id === code.trim()
-        );
+        const trimmedCode = code.trim();
+        const product = productLookup.get(trimmedCode);
 
         if (product) {
-            const existing = counts.find(c => c.productId === product.id);
-            const expected = getExpectedQty(product);
+            addCountedProduct(product);
 
-            if (existing) {
-                // Increment count
-                setCounts(counts.map(c =>
-                    c.productId === product.id
-                        ? { ...c, countedQty: c.countedQty + 1, difference: c.countedQty + 1 - c.expectedQty }
-                        : c
-                ));
-            } else {
-                // Add new item
-                setCounts([...counts, {
-                    productId: product.id,
-                    productName: product.name,
-                    expectedQty: expected,
-                    countedQty: 1,
-                    difference: 1 - expected
-                }]);
-            }
-
-            await recordOfflineScan({
-                documentId: sessionId,
-                documentCode: sessionId,
-                warehouseId,
-                productId: product.id,
-                code: code.trim()
-            } as any);
+            recordScanLog(product.id, trimmedCode);
 
             return { success: true, message: `${product.name} agregado` };
         } else {
@@ -269,7 +269,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                             type="text"
                             value={scanInput}
                             onChange={(e) => setScanInput(e.target.value)}
-                            onKeyPress={(e) => e.key === 'Enter' && void handleScan()}
+                            onKeyDown={(e) => e.key === 'Enter' && handleScan()}
                             placeholder="Escanear código..."
                             className="w-full pl-10 pr-12 py-3 bg-white/10 border-2 border-white/20 rounded-xl text-white placeholder-blue-200 font-bold outline-none focus:bg-white/20"
                             autoFocus
