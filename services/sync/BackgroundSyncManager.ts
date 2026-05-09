@@ -3,7 +3,7 @@ import { dbAdapter } from '../db';
 import { apiSyncAdapter } from './ApiSyncAdapter';
 import { permissionService } from './PermissionService';
 import { InventoryLedgerEntry, CashMovement, ZReport, SyncStatus } from '../../types';
-import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from '../../utils/posSaleActivity';
+import { isPOSBusy, POS_SALE_ACTIVITY_EVENT } from '../../utils/posSaleActivity';
 import { measureAsync, setPerfContext } from '../../utils/perfDebug';
 
 export interface SyncState {
@@ -67,7 +67,7 @@ class BackgroundSyncManager {
         this.onlineHandler = () => {
             console.log('🌐 Network is back online. Triggering immediate sync...');
             apiSyncAdapter.resetCircuit();
-            this.scheduleSync(0);
+            this.scheduleSyncWhenSafe(0);
         };
 
         this.offlineHandler = () => {
@@ -78,17 +78,17 @@ class BackgroundSyncManager {
         this.focusHandler = () => {
             if (!navigator.onLine) return;
             apiSyncAdapter.resetCircuit();
-            this.scheduleSync(0);
+            this.scheduleSyncWhenSafe(0);
         };
 
         this.visibilityHandler = () => {
             if (document.hidden || !navigator.onLine) return;
             apiSyncAdapter.resetCircuit();
-            this.scheduleSync(0);
+            this.scheduleSyncWhenSafe(0);
         };
 
         this.saleActivityHandler = () => {
-            if (isPosSaleActive() || !navigator.onLine) return;
+            if (isPOSBusy() || !navigator.onLine) return;
             this.scheduleSync(1000);
         };
 
@@ -131,6 +131,16 @@ class BackgroundSyncManager {
     private scheduleWhenPosIdle() {
         if (!navigator.onLine) return;
         this.scheduleSync(this.POS_ACTIVITY_DEFER_MS);
+    }
+
+    private scheduleSyncWhenSafe(delayMs = this.FAST_RETRY_DELAY_MS) {
+        if (!navigator.onLine) return;
+        if (isPOSBusy()) {
+            this.scheduleWhenPosIdle();
+            return;
+        }
+
+        this.scheduleSync(delayMs);
     }
 
     private isRecoverableTransactionSyncError(error: unknown): boolean {
@@ -218,7 +228,7 @@ class BackgroundSyncManager {
      * Main sync loop
      */
     async sync() {
-        if (this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
+        if (this.isProcessing || !navigator.onLine || isPOSBusy()) return;
         return measureAsync('sync.background.run', async () => {
         setPerfContext('sync.background', 6000, { pendingCount: this.state.pendingCount });
 
@@ -242,14 +252,14 @@ class BackgroundSyncManager {
                 collectionErrors.push(`transactions: ${error?.message || 'unknown error'}`);
             });
 
-            if (isPosSaleActive()) {
+            if (isPOSBusy()) {
                 pausedForSaleActivity = true;
                 this.updateState({
                     isSyncing: false,
                     hasError: collectionErrors.length > 0,
                     lastSyncTime: new Date().toISOString()
                 });
-                console.log('⏸️ BackgroundSyncManager: Heavy sync paused while sale cart is active.');
+                console.log('⏸️ BackgroundSyncManager: Heavy sync paused while POS is busy.');
                 return;
             }
 
@@ -382,8 +392,8 @@ class BackgroundSyncManager {
         });
 
         for (const item of pending) {
-            if (isPosSaleActive()) {
-                console.log(`⏸️ BackgroundSyncManager: ${collectionName} paused for active POS input.`);
+            if (isPOSBusy()) {
+                console.log(`⏸️ BackgroundSyncManager: ${collectionName} paused while POS is busy.`);
                 return;
             }
 
@@ -481,8 +491,8 @@ class BackgroundSyncManager {
      * Trigger an immediate sync attempt (e.g. after creating a document)
      */
     async triggerSync() {
-        if (isPosSaleActive()) {
-            console.log('⏸️ BackgroundSyncManager: triggerSync deferred while POS input/sale is active.');
+        if (isPOSBusy()) {
+            console.log('⏸️ BackgroundSyncManager: triggerSync deferred while POS is busy.');
             this.scheduleWhenPosIdle();
             return;
         }
@@ -495,8 +505,8 @@ class BackgroundSyncManager {
     }
 
     async triggerSyncAndWait() {
-        if (isPosSaleActive()) {
-            console.log('⏸️ BackgroundSyncManager: triggerSyncAndWait deferred while POS input/sale is active.');
+        if (isPOSBusy()) {
+            console.log('⏸️ BackgroundSyncManager: triggerSyncAndWait deferred while POS is busy.');
             this.scheduleWhenPosIdle();
             return;
         }

@@ -1,6 +1,7 @@
 import React, { useCallback } from 'react';
 import { Delete, Eraser, Check } from 'lucide-react';
 import { markPerfInteraction, measureSync, useRenderPerfDebug } from '../utils/perfDebug';
+import { markPOSBusy } from '../utils/posSaleActivity';
 
 interface VirtualKeyboardProps {
     onKeyPress: (key: string) => void;
@@ -47,21 +48,25 @@ const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({ onKeyPress, onDelete,
 
     const pressCharacter = useCallback((key: string) => {
         markPerfInteraction('pos.virtualKeyboardTouch', 3500, CHARACTER_DETAIL);
+        markPOSBusy('pos.virtualKeyboardTouch', 2500);
         measureSync('pos.virtualKeyboard.touchKey', () => onKeyPress(key), CHARACTER_DETAIL);
     }, [onKeyPress]);
 
     const pressSpace = useCallback(() => {
         markPerfInteraction('pos.virtualKeyboardTouch', 3500, SPACE_DETAIL);
+        markPOSBusy('pos.virtualKeyboardTouch', 2500);
         measureSync('pos.virtualKeyboard.touchKey', () => onKeyPress(' '), SPACE_DETAIL);
     }, [onKeyPress]);
 
     const pressClear = useCallback(() => {
         markPerfInteraction('pos.virtualKeyboardClear', 3500);
+        markPOSBusy('pos.virtualKeyboardClear', 2500);
         measureSync('pos.virtualKeyboard.clearButton', onClear);
     }, [onClear]);
 
     const pressDelete = useCallback(() => {
         markPerfInteraction('pos.virtualKeyboardDelete', 3500);
+        markPOSBusy('pos.virtualKeyboardDelete', 2500);
         measureSync('pos.virtualKeyboard.deleteButton', onDelete);
     }, [onDelete]);
 

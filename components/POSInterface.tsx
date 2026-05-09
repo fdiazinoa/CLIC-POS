@@ -79,6 +79,7 @@ import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
 import { productIdentityCandidates, productReferenceCandidates, resolveOperationalProductId } from '../utils/productReferences';
 import { markPerfInteraction, measureAsync, measureSync, useRenderPerfDebug, useVisualUpdatePerfDebug } from '../utils/perfDebug';
+import { markPOSBusy, markPOSIdle } from '../utils/posSaleActivity';
 import { resolveKdsBaseUrl } from '../utils/kdsRouting';
 import {
    confirmUberEatsPosInvoice,
@@ -2338,6 +2339,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string) => {
       return measureSync('pos.cart.addProduct', () => {
       markPerfInteraction('pos.addProduct', 3500, { cartCount: cart.length });
+      markPOSBusy('pos.addProduct', 3500);
       if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
       if (!canAddItemToCart(product, quantity)) return;
 
@@ -2433,6 +2435,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const handleProductCardTouchStart = useCallback((product: Product, clientX: number, clientY: number) => {
       markPerfInteraction('pos.productTouchStart', 2500);
+      markPOSBusy('pos.productTouchStart', 2500);
       lastProductTouchAtRef.current = Date.now();
       quickActionTouchStartRef.current = { x: clientX, y: clientY, at: Date.now() };
       if (quickActionTouchTimerRef.current) {
@@ -2912,6 +2915,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const handleSearchTermChange = useCallback((value: string) => {
       markPerfInteraction('pos.searchTyping', 3500, { length: value.length });
+      markPOSBusy('pos.searchTyping', 2500);
       measureSync('pos.search.setTerm', () => setSearchTerm(value), { length: value.length });
    }, []);
 
@@ -2922,6 +2926,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const handleClearSearchTerm = useCallback(() => {
       markPerfInteraction('pos.searchClear', 2000);
+      markPOSBusy('pos.searchClear', 1500);
       measureSync('pos.search.clear', () => setSearchTerm(''));
    }, []);
 
@@ -2932,11 +2937,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const handleVirtualKeyboardKeyPress = useCallback((key: string) => {
       const keyDetail = { keyType: key === ' ' ? 'space' : 'character' };
       markPerfInteraction('pos.virtualKeyboardTyping', 3500, keyDetail);
+      markPOSBusy('pos.virtualKeyboardTyping', 2500);
       measureSync('pos.virtualKeyboard.keyPress', () => setSearchTerm((prev) => prev + key), keyDetail);
    }, []);
 
    const handleVirtualKeyboardDelete = useCallback(() => {
       markPerfInteraction('pos.virtualKeyboardDelete', 3500);
+      markPOSBusy('pos.virtualKeyboardDelete', 2500);
       measureSync('pos.virtualKeyboard.delete', () => setSearchTerm((prev) => prev.slice(0, -1)));
    }, []);
 
@@ -3373,6 +3380,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          cartId: cartIdToDelete || updatedItem?.cartId || editingItem?.cartId,
          deleting: Boolean(cartIdToDelete || updatedItem === null),
       });
+      markPOSBusy('pos.cartLineEdit', 3500);
       if (blockRecoveredUberOrderMutation('editar el pedido')) return;
 
       let newCart: CartItem[] = [];
@@ -3431,6 +3439,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
    const handlePaymentConfirm = async (payments: PaymentEntry[], voluntaryTip?: number): Promise<Transaction | null> => {
+      markPOSBusy('pos.paymentConfirm', 15000);
       return measureAsync('pos.payment.confirmSale', async () => {
       markPerfInteraction('pos.paymentConfirm', 6000, { cartCount: processedCart.length, paymentsCount: payments.length });
          const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> => {
@@ -3947,6 +3956,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          console.error('Payment confirm error:', error);
          alert(`Error al finalizar venta: ${error?.message || 'Error desconocido'}`);
          return null;
+      } finally {
+         markPOSIdle('pos.paymentConfirm');
       }
       }, { cartCount: processedCart.length, paymentsCount: payments.length });
    };
@@ -3989,6 +4000,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return;
       }
       markPerfInteraction('pos.paymentOpen', 3500, { cartCount: cart.length });
+      markPOSBusy('pos.paymentOpen', 3500);
       measureSync('pos.payment.openModal', () => setShowPaymentModal(true), { cartCount: cart.length });
    };
 
@@ -4459,6 +4471,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             setIsReturnMode(!isReturnMode);
             break;
          case 'Z_REPORT':
+            markPOSBusy('pos.zReport', 6000);
             triggerSafetyGate('Cierre Z', onOpenZReport || onOpenFinance);
             break;
          case 'LOGOUT':

@@ -17,7 +17,7 @@ import { productImageCacheService } from './ProductImageCacheService';
 import { masterDataImageCacheService, type ImageBackedCollection } from './MasterDataImageCacheService';
 import { DEFAULT_ROLES } from '../../constants';
 import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig, PurchaseOrder, StockTransfer, ProductStock, ProductPrice, TariffPrice, Warehouse, User, RoleDefinition, Permission } from '../../types';
-import { isPosSaleActive } from '../../utils/posSaleActivity';
+import { isPOSBusy } from '../../utils/posSaleActivity';
 import {
     applyTerminalConfigSnapshot,
     extractTerminalConfigSnapshot,
@@ -159,8 +159,8 @@ class SyncManager {
     public isInitialized: boolean = false;
 
     private shouldDeferForPosActivity(reason: string): boolean {
-        if (!isPosSaleActive()) return false;
-        console.log(`⏸️ SyncManager: ${reason} deferred while POS input/sale is active.`);
+        if (!isPOSBusy()) return false;
+        console.log(`⏸️ SyncManager: ${reason} deferred while POS is busy.`);
         return true;
     }
 

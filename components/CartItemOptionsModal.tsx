@@ -7,6 +7,7 @@ import {
 import { CartItem, BusinessConfig, User as UserType, RoleDefinition } from '../types';
 import { TerminalSnapshotSeller } from '../utils/terminalSnapshotSellers';
 import { markPerfInteraction, measureSync, useRenderPerfDebug, useVisualUpdatePerfDebug } from '../utils/perfDebug';
+import { markPOSBusy } from '../utils/posSaleActivity';
 import { useTouchInputBuffer } from '../hooks/pos/useTouchInputBuffer';
 
 interface CartItemOptionsModalProps {
@@ -71,6 +72,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
 
   const handleQuantityChange = (delta: number) => {
     markPerfInteraction('pos.cartLineQuantity', 3500, { delta });
+    markPOSBusy('pos.cartLineQuantity', 2500);
     measureSync('pos.cartLine.quantityChange', () => {
       const newQty = Math.max(0.001, quantity + delta);
       setQuantity(parseFloat(newQty.toFixed(3)));
@@ -79,6 +81,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
 
   const handleApplyDiscount = (nextDiscountType: 'PERCENT' | 'FIXED' = discountType) => {
     markPerfInteraction('pos.cartLineDiscount', 3500, { discountType: nextDiscountType });
+    markPOSBusy('pos.cartLineDiscount', 2500);
     measureSync('pos.cartLine.applyDiscount', () => {
       const val = parseFloat(discountValue);
       if (isNaN(val) || val <= 0) {
@@ -102,6 +105,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   const handlePriceManualChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawValue = e.target.value;
     markPerfInteraction('pos.cartLinePrice', 3500, { length: rawValue.length });
+    markPOSBusy('pos.cartLinePrice', 2500);
     measureSync('pos.cartLine.priceChange', () => {
       setPriceInput(rawValue);
       setDiscountValue('');
@@ -110,6 +114,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
 
   const handleSave = () => {
     markPerfInteraction('pos.cartLineSave', 3500);
+    markPOSBusy('pos.cartLineSave', 3500);
     measureSync('pos.cartLine.save', () => {
     const nextItem: CartItem = {
       ...item,

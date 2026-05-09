@@ -43,6 +43,7 @@ import {
    resolveCurrencySymbol,
 } from '../utils/paymentSettlement';
 import { markPerfInteraction, measureAsync, measureSync, useRenderPerfDebug, useVisualUpdatePerfDebug } from '../utils/perfDebug';
+import { markPOSBusy, markPOSIdle } from '../utils/posSaleActivity';
 import { useTouchInputBuffer } from '../hooks/pos/useTouchInputBuffer';
 
 interface PaymentModalProps {
@@ -429,6 +430,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          keyType: key === 'BACK' ? 'backspace' : key === 'C' ? 'clear' : key === '.' ? 'decimal' : 'digit',
       };
       markPerfInteraction('paymentModal.numPad', 3500, keyDetail);
+      markPOSBusy('paymentModal.numPad', 2500);
       measureSync('paymentModal.numPadInput', () => {
          inputNumericKey(key, { maxDecimalPlaces: 2 });
       }, keyDetail);
@@ -769,6 +771,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    const handleAddPayment = async (amountOverride?: number) => {
       return measureAsync('paymentModal.addPayment', async () => {
       markPerfInteraction('paymentModal.addPayment', 3500, { hasAmountOverride: amountOverride !== undefined, method: activeMethod });
+      markPOSBusy('paymentModal.addPayment', 3500);
       const rawAmount = amountOverride !== undefined ? amountOverride : parseFloat(inputAmount);
       const valInSelectedCurrency = roundPaymentAmountByMethod(
          rawAmount,
@@ -821,6 +824,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    const handleRemovePayment = (id: string) => { setPayments(prev => prev.filter(p => p.id !== id)); };
 
    const handleFinalize = async () => {
+      markPOSBusy('paymentModal.finalize', 15000);
       return measureAsync('paymentModal.finalize', async () => {
       markPerfInteraction('paymentModal.finalize', 6000, { paymentsCount: payments.length, itemsCount: items.length });
       if (isFinalizing || isProcessingGateway) return;
@@ -978,6 +982,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          setFinalizeError(message ? `Error al finalizar: ${message}` : 'Ocurrió un error al finalizar. Intente nuevamente.');
          setGatewayProgress(null);
       } finally {
+         markPOSIdle('paymentModal.finalize');
          setIsFinalizing(false);
       }
       }, { paymentsCount: payments.length, itemsCount: items.length });

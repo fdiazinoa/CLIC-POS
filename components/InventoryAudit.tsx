@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { Product } from '../types';
 import { markPerfInteraction, measureAsync, measureSync, useRenderPerfDebug, useVisualUpdatePerfDebug } from '../utils/perfDebug';
+import { markPOSBusy, markPOSIdle } from '../utils/posSaleActivity';
 
 interface InventoryAuditProps {
   products: Product[];
@@ -112,6 +113,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
   };
 
   const handleSaveDraft = async () => {
+    markPOSBusy('inventoryAudit.saveDraft', 10000);
     return measureAsync('inventoryAudit.saveDraft', async () => {
     markPerfInteraction('inventoryAudit.saveDraft', 5000, { itemsCount: auditItems.length, warehouseId });
     if (!session) return;
@@ -135,6 +137,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
     } catch (e) {
       alert('Error guardando borrador');
     } finally {
+      markPOSIdle('inventoryAudit.saveDraft');
       setIsSubmitting(false);
     }
     }, { itemsCount: auditItems.length, warehouseId });
@@ -143,6 +146,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
   // --- HANDLERS ---
   const handleScan = (code: string) => {
     markPerfInteraction('inventoryAudit.scan', 3500, { codeLength: code.length, productsCount: products.length });
+    markPOSBusy('inventoryAudit.scan', 2500);
     measureSync('inventoryAudit.scanProduct', () => {
     // 1. Find Product
     const product = products.find(p =>
@@ -187,6 +191,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
   const handleManualCountChange = (productId: string, delta: number) => {
     const editDetail = { direction: delta > 0 ? 'increase' : 'decrease', itemsCount: auditItems.length };
     markPerfInteraction('inventoryAudit.editLine', 3500, editDetail);
+    markPOSBusy('inventoryAudit.editLine', 2500);
     measureSync('inventoryAudit.manualCountChange', () => {
       setAuditItems(prev => prev.map(item => {
         if (item.product.id === productId) {
@@ -200,6 +205,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
   const handleQuantityUpdate = (productId: string, newValue: number) => {
     const editDetail = { inputLength: String(newValue).length, itemsCount: auditItems.length };
     markPerfInteraction('inventoryAudit.editLine', 3500, editDetail);
+    markPOSBusy('inventoryAudit.editLine', 2500);
     measureSync('inventoryAudit.quantityUpdate', () => {
       setAuditItems(prev => prev.map(item => {
         if (item.product.id === productId) {
@@ -217,6 +223,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
   };
 
   const handleCommit = async () => {
+    markPOSBusy('inventoryAudit.commit', 15000);
     return measureAsync('inventoryAudit.commit', async () => {
     markPerfInteraction('inventoryAudit.commit', 6000, { itemsCount: auditItems.length, warehouseId });
     if (!session) return;
@@ -242,6 +249,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
     } catch (e) {
       alert('Error de red al finalizar');
     } finally {
+      markPOSIdle('inventoryAudit.commit');
       setIsSubmitting(false);
     }
     }, { itemsCount: auditItems.length, warehouseId });
