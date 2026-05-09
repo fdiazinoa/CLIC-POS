@@ -715,6 +715,21 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     initLongTaskLogger();
   }, []);
+  useEffect(() => {
+    const root = document.documentElement;
+    const body = document.body;
+    if (isNativeAndroidRuntime()) {
+      root.classList.add('native-android');
+      body.classList.add('native-android');
+      return () => {
+        root.classList.remove('native-android');
+        body.classList.remove('native-android');
+      };
+    }
+
+    root.classList.remove('native-android');
+    body.classList.remove('native-android');
+  }, []);
   const [scanTargetTicketId, setScanTargetTicketId] = useState<string | null>(null); // NEW: Auto-select ticket from scan
   const [restoringHistory, setRestoringHistory] = useState(false);
   const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any));

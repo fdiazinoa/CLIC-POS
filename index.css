@@ -109,3 +109,73 @@ input[type='number'] {
   -moz-appearance: textfield;
   appearance: textfield;
 }
+
+.pos-touch-button,
+.pos-touch-root button,
+.pos-touch-root [role='button'] {
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.native-android {
+  overscroll-behavior: none;
+}
+
+.native-android .backdrop-blur,
+.native-android .backdrop-blur-sm,
+.native-android .backdrop-blur-md,
+.native-android .backdrop-blur-lg,
+.native-android .backdrop-blur-xl {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+.native-android .shadow-2xl {
+  --tw-shadow: 0 12px 24px rgba(15, 23, 42, 0.18) !important;
+  --tw-shadow-colored: 0 12px 24px var(--tw-shadow-color) !important;
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000),
+    var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow) !important;
+}
+
+.native-android .shadow-xl {
+  --tw-shadow: 0 8px 18px rgba(15, 23, 42, 0.16) !important;
+  --tw-shadow-colored: 0 8px 18px var(--tw-shadow-color) !important;
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000),
+    var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow) !important;
+}
+
+.native-android .pos-touch-critical {
+  transition-property: background-color, border-color, color, opacity !important;
+  transition-duration: 80ms !important;
+  transform: none !important;
+  will-change: auto !important;
+}
+
+.native-android .pos-touch-critical:active,
+.native-android .active\:scale-90:active,
+.native-android .active\:scale-95:active {
+  transform: none !important;
+}
+
+.native-android .transition-all {
+  transition-duration: 100ms !important;
+}
+
+.native-android .duration-500 {
+  transition-duration: 120ms !important;
+  animation-duration: 120ms !important;
+}
+
+.native-android .animate-in {
+  animation-duration: 120ms !important;
+}
+
+@media (hover: none) {
+  button,
+  [role='button'] {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+}

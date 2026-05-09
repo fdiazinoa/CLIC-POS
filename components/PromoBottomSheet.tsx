@@ -23,7 +23,7 @@ const PromoBottomSheet: React.FC<PromoBottomSheetProps> = ({
     const closeTransitionMs = isNativeAndroid ? 120 : 300;
     const transitionDurationClass = isNativeAndroid ? 'duration-150' : 'duration-300';
     const backdropVisualClass = isNativeAndroid ? 'bg-black/50' : 'bg-black/60 backdrop-blur-sm';
-    const sheetShadowClass = isNativeAndroid ? 'shadow-xl' : 'shadow-2xl';
+    const sheetShadowClass = isNativeAndroid ? 'shadow-lg' : 'shadow-2xl';
     const closedSheetTransformClass = isNativeAndroid ? 'translate-y-full sm:translate-y-6' : 'translate-y-full sm:translate-y-10 sm:scale-95';
     const [isVisible, setIsVisible] = useState(false);
     useRenderPerfDebug('PromoBottomSheet', { isOpen, isNativeAndroid });
@@ -87,7 +87,7 @@ const PromoBottomSheet: React.FC<PromoBottomSheetProps> = ({
                 <div className="flex flex-col items-center text-center">
 
                     {/* Promo Badge Icon */}
-                    <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4 animate-in zoom-in-50 duration-500 delay-100">
+                    <div className={`w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4 ${isNativeAndroid ? '' : 'animate-in zoom-in-50 duration-500 delay-100'}`}>
                         <Tag size={32} className="fill-current" />
                     </div>
 
@@ -134,7 +134,7 @@ const PromoBottomSheet: React.FC<PromoBottomSheetProps> = ({
                             if (product) onAddToCart(product);
                             handleClose();
                         }}
-                        className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black text-lg shadow-lg shadow-blue-200 transition-all active:scale-95 flex items-center justify-center gap-2"
+                        className="pos-touch-button pos-touch-critical w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black text-lg shadow-md shadow-blue-200 transition-all active:scale-95 flex items-center justify-center gap-2"
                     >
                         <span>Aprovechar Oferta</span>
                         <ChevronRight size={20} />

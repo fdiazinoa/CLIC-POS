@@ -212,7 +212,7 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const TOUCH_BUTTON_CLASS = 'touch-manipulation select-none [-webkit-tap-highlight-color:transparent]';
+const TOUCH_BUTTON_CLASS = 'pos-touch-button touch-manipulation select-none [-webkit-tap-highlight-color:transparent]';
 
 interface PaymentNumpadButtonProps {
    value: string;
@@ -236,7 +236,7 @@ const PaymentNumpadButton = React.memo<PaymentNumpadButtonProps>(({
          type="button"
          onClick={handleClick}
          disabled={disabled}
-         className={`${TOUCH_BUTTON_CLASS} ${className}`}
+         className={`${TOUCH_BUTTON_CLASS} pos-touch-critical ${className}`}
       >
          {children ?? value}
       </button>
@@ -1213,7 +1213,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    return (
       <>
          {gatewayProgressOverlay}
-         <div className="fixed inset-0 z-[60] flex items-end lg:items-center justify-center bg-black/60 backdrop-blur-sm">
+         <div className="pos-touch-root fixed inset-0 z-[60] flex items-end lg:items-center justify-center bg-black/60 backdrop-blur-sm">
             <div className="bg-white w-full max-w-6xl h-[100dvh] lg:h-[85vh] lg:rounded-[2.5rem] shadow-2xl flex flex-col lg:flex-row overflow-hidden">
 
             {/* SUMMARY SECTION (Collapsible/Header on mobile, Sidebar on desktop) */}
@@ -1514,7 +1514,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                      type="button"
                      onClick={() => handleAddPayment()}
                      disabled={(!isOnline && !isMaster && activeRequiresOnline) || isProcessingGateway || isFinalizing}
-                     className={`${TOUCH_BUTTON_CLASS} row-span-2 rounded-2xl md:rounded-[2rem] font-black shadow-xl flex flex-col items-center justify-center gap-1 md:gap-2 ${(!isOnline && !isMaster && activeRequiresOnline) || isProcessingGateway || isFinalizing ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${themeBgClass} text-white active:scale-95 hover:brightness-110`}`}
+                     className={`${TOUCH_BUTTON_CLASS} pos-touch-critical row-span-2 rounded-2xl md:rounded-[2rem] font-black shadow-xl flex flex-col items-center justify-center gap-1 md:gap-2 ${(!isOnline && !isMaster && activeRequiresOnline) || isProcessingGateway || isFinalizing ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${themeBgClass} text-white active:scale-95 hover:brightness-110`}`}
                   >
                      <Plus size={28} className="md:w-8 md:h-8" />
                      <span className="text-[10px] tracking-widest uppercase">

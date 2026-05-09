@@ -257,12 +257,12 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
 
   // --- RENDER ---
   return (
-    <div className="fixed inset-0 z-[100] bg-slate-900 flex flex-col md:flex-row h-screen w-screen overflow-hidden animate-in fade-in duration-200">
+    <div className="pos-touch-root fixed inset-0 z-[100] bg-slate-900 flex flex-col md:flex-row h-screen w-screen overflow-hidden animate-in fade-in duration-200">
 
       {/* RECONCILIATION MODAL */}
       {showReconciliationModal && (
         <div className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-2xl w-full overflow-hidden shadow-2xl">
+          <div className="bg-white rounded-2xl max-w-2xl w-full overflow-hidden shadow-xl">
             <div className="p-6 border-b border-gray-100 bg-gray-50">
               <h3 className="text-xl font-black text-gray-800">Ajuste de Realidad</h3>
               <p className="text-sm text-gray-500">Define cómo se aplicará este inventario al sistema.</p>
@@ -289,7 +289,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
             </div>
             <div className="p-6 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
               <button onClick={() => setShowReconciliationModal(false)} className="px-6 py-3 text-gray-500 font-bold hover:bg-gray-200 rounded-xl">Cancelar</button>
-              <button onClick={handleCommit} disabled={isSubmitting} className="px-8 py-3 bg-gray-900 text-white font-bold rounded-xl hover:bg-black shadow-lg">
+              <button onClick={handleCommit} disabled={isSubmitting} className="pos-touch-button pos-touch-critical px-8 py-3 bg-gray-900 text-white font-bold rounded-xl hover:bg-black shadow-md">
                 {isSubmitting ? 'Procesando...' : 'Confirmar Ajuste'}
               </button>
             </div>
@@ -393,7 +393,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
             <button
               onClick={() => setShowReconciliationModal(true)}
               disabled={isSubmitting || auditItems.length === 0}
-              className="px-6 py-3 bg-gray-900 text-white rounded-xl font-bold shadow-lg hover:bg-gray-800 hover:scale-[1.02] active:scale-95 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="pos-touch-button pos-touch-critical px-6 py-3 bg-gray-900 text-white rounded-xl font-bold shadow-md hover:bg-gray-800 hover:scale-[1.02] active:scale-95 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSubmitting ? <RefreshCw size={20} className="animate-spin" /> : <Save size={20} />}
               <span className="hidden sm:inline">Ajustar Stock</span>
@@ -438,7 +438,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
                   <div className="flex items-center gap-3 bg-white rounded-xl p-1 shadow-sm border border-slate-100">
                     <button
                       onClick={() => handleManualCountChange(item.product.id, -1)}
-                      className="w-10 h-10 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-600 flex items-center justify-center active:scale-90 transition-transform"
+                      className="pos-touch-button pos-touch-critical w-10 h-10 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-600 flex items-center justify-center active:scale-90 transition-transform"
                     >
                       <Minus size={20} />
                     </button>
@@ -454,7 +454,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
                     </div>
                     <button
                       onClick={() => handleManualCountChange(item.product.id, 1)}
-                      className="w-10 h-10 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center active:scale-90 transition-transform"
+                      className="pos-touch-button pos-touch-critical w-10 h-10 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center active:scale-90 transition-transform"
                     >
                       <Plus size={20} />
                     </button>

@@ -10,7 +10,7 @@ interface VirtualKeyboardProps {
     onClose: () => void;
 }
 
-const TOUCH_BUTTON_CLASS = 'touch-manipulation select-none [-webkit-tap-highlight-color:transparent]';
+const TOUCH_BUTTON_CLASS = 'pos-touch-button touch-manipulation select-none [-webkit-tap-highlight-color:transparent]';
 const CHARACTER_DETAIL = { keyType: 'character' };
 const SPACE_DETAIL = { keyType: 'space' };
 const KEY_ROWS = [
@@ -34,7 +34,7 @@ const VirtualKeyboardButton = React.memo<VirtualKeyboardButtonProps>(({ value, c
         <button
             type="button"
             onClick={handleClick}
-            className={`${TOUCH_BUTTON_CLASS} ${className}`}
+            className={`${TOUCH_BUTTON_CLASS} pos-touch-critical ${className}`}
         >
             {children ?? value}
         </button>
@@ -71,7 +71,7 @@ const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({ onKeyPress, onDelete,
     }, [onDelete]);
 
     return (
-        <div className="bg-slate-900 border-t border-slate-700 p-2 shadow-2xl animate-in slide-in-from-bottom-10 h-72 flex flex-col justify-end pb-4">
+        <div className="pos-touch-root bg-slate-900 border-t border-slate-700 p-2 shadow-xl animate-in slide-in-from-bottom-10 h-72 flex flex-col justify-end pb-4">
             <div className="flex-1 flex flex-col justify-center gap-2 max-w-5xl mx-auto w-full">
                 {KEY_ROWS.map((row, rowIndex) => (
                     <div key={rowIndex} className="flex justify-center gap-1.5 px-2">
@@ -90,7 +90,7 @@ const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({ onKeyPress, onDelete,
                     <button
                         type="button"
                         onClick={pressClear}
-                        className={`${TOUCH_BUTTON_CLASS} h-12 px-6 bg-red-900/50 text-red-400 hover:bg-red-900/80 rounded-lg flex items-center justify-center gap-2 font-bold shadow-sm active:scale-95`}
+                        className={`${TOUCH_BUTTON_CLASS} pos-touch-critical h-12 px-6 bg-red-900/50 text-red-400 hover:bg-red-900/80 rounded-lg flex items-center justify-center gap-2 font-bold shadow-sm active:scale-95`}
                     >
                         <Eraser size={20} />
                         <span className="text-xs uppercase hidden sm:inline">Borrar</span>
@@ -99,7 +99,7 @@ const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({ onKeyPress, onDelete,
                     <button
                         type="button"
                         onClick={pressSpace}
-                        className={`${TOUCH_BUTTON_CLASS} h-12 flex-[2] max-w-xs bg-slate-700 hover:bg-slate-600 active:bg-blue-600 text-white rounded-lg font-bold shadow-sm transition-colors active:scale-95`}
+                        className={`${TOUCH_BUTTON_CLASS} pos-touch-critical h-12 flex-[2] max-w-xs bg-slate-700 hover:bg-slate-600 active:bg-blue-600 text-white rounded-lg font-bold shadow-sm transition-colors active:scale-95`}
                     >
                         SPACE
                     </button>
@@ -107,7 +107,7 @@ const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({ onKeyPress, onDelete,
                     <button
                         type="button"
                         onClick={pressDelete}
-                        className={`${TOUCH_BUTTON_CLASS} h-12 px-6 bg-slate-600 text-white hover:bg-slate-500 rounded-lg flex items-center justify-center shadow-sm active:scale-95`}
+                        className={`${TOUCH_BUTTON_CLASS} pos-touch-critical h-12 px-6 bg-slate-600 text-white hover:bg-slate-500 rounded-lg flex items-center justify-center shadow-sm active:scale-95`}
                     >
                         <Delete size={20} />
                     </button>
@@ -115,7 +115,7 @@ const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({ onKeyPress, onDelete,
                     <button
                         type="button"
                         onClick={onClose}
-                        className={`${TOUCH_BUTTON_CLASS} h-12 px-8 bg-blue-600 text-white hover:bg-blue-500 rounded-lg flex items-center justify-center gap-2 font-bold shadow-lg shadow-blue-900/50 active:scale-95`}
+                        className={`${TOUCH_BUTTON_CLASS} pos-touch-critical h-12 px-8 bg-blue-600 text-white hover:bg-blue-500 rounded-lg flex items-center justify-center gap-2 font-bold shadow-md shadow-blue-900/40 active:scale-95`}
                     >
                         <Check size={24} />
                         <span className="text-xs uppercase hidden sm:inline">Listo</span>

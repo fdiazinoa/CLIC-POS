@@ -4496,7 +4496,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    return (
       <div
          ref={posRootRef}
-         className="fixed inset-0 w-full overflow-hidden bg-gray-50 flex font-sans select-none text-gray-900"
+         className="pos-touch-root fixed inset-0 w-full overflow-hidden bg-gray-50 flex font-sans select-none text-gray-900"
          style={posShellStyle}
       >
          {errorToast && (

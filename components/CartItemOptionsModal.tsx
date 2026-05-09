@@ -22,7 +22,7 @@ interface CartItemOptionsModalProps {
   canVoidItem: boolean;
 }
 
-const TOUCH_BUTTON_CLASS = 'touch-manipulation select-none [-webkit-tap-highlight-color:transparent]';
+const TOUCH_BUTTON_CLASS = 'pos-touch-button touch-manipulation select-none [-webkit-tap-highlight-color:transparent]';
 
 const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   item,
@@ -193,16 +193,16 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
 
   if (isDeleting) {
     return (
-      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in">
-        <div className="bg-white p-8 rounded-[2.5rem] shadow-2xl w-full max-w-sm text-center animate-in zoom-in-95 mx-4">
+      <div className="pos-touch-root fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in">
+        <div className="bg-white p-8 rounded-[2.5rem] shadow-xl w-full max-w-sm text-center animate-in zoom-in-95 mx-4">
           <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6 text-red-500">
             <Trash2 size={32} />
           </div>
           <h3 className="font-black text-gray-900 text-xl mb-2">¿Eliminar artículo?</h3>
           <p className="text-gray-500 font-medium mb-8">Esta acción quitará "{item.name}" del ticket actual.</p>
           <div className="flex gap-3">
-            <button onClick={() => setIsDeleting(false)} className="flex-1 py-4 bg-gray-100 font-bold text-gray-600 rounded-2xl active:scale-95 transition-all">Cancelar</button>
-            <button onClick={handleDeleteConfirm} className="flex-1 py-4 bg-red-600 font-bold text-white rounded-2xl shadow-lg shadow-red-200 active:scale-95 transition-all">Eliminar</button>
+            <button onClick={() => setIsDeleting(false)} className="pos-touch-button pos-touch-critical flex-1 py-4 bg-gray-100 font-bold text-gray-600 rounded-2xl active:scale-95 transition-all">Cancelar</button>
+            <button onClick={handleDeleteConfirm} className="pos-touch-button pos-touch-critical flex-1 py-4 bg-red-600 font-bold text-white rounded-2xl shadow-md shadow-red-200 active:scale-95 transition-all">Eliminar</button>
           </div>
         </div>
       </div>
@@ -210,8 +210,8 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-end md:items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
-      <div className="bg-white w-full md:w-[500px] md:rounded-[2.5rem] rounded-t-[2.5rem] shadow-2xl flex flex-col max-h-[95vh] overflow-hidden animate-in slide-in-from-bottom-10">
+    <div className="pos-touch-root fixed inset-0 z-[100] flex items-end md:items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
+      <div className="bg-white w-full md:w-[500px] md:rounded-[2.5rem] rounded-t-[2.5rem] shadow-xl flex flex-col max-h-[95vh] overflow-hidden animate-in slide-in-from-bottom-10">
 
         {/* Header */}
         <div className="p-6 pb-4 flex justify-between items-start">
@@ -233,7 +233,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
             <button
               type="button"
               onClick={() => handleQuantityChange(-1)}
-              className={`${TOUCH_BUTTON_CLASS} w-16 h-16 rounded-2xl bg-gray-50 hover:bg-gray-100 text-gray-400 flex items-center justify-center active:scale-90 transition-all`}
+              className={`${TOUCH_BUTTON_CLASS} pos-touch-critical w-16 h-16 rounded-2xl bg-gray-50 hover:bg-gray-100 text-gray-400 flex items-center justify-center active:scale-90 transition-all`}
             >
               <Minus size={28} strokeWidth={3} />
             </button>
@@ -246,7 +246,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
             <button
               type="button"
               onClick={() => handleQuantityChange(1)}
-              className={`${TOUCH_BUTTON_CLASS} w-16 h-16 rounded-2xl text-white shadow-lg shadow-blue-100 flex items-center justify-center active:scale-90 transition-all ${themeClasses}`}
+              className={`${TOUCH_BUTTON_CLASS} pos-touch-critical w-16 h-16 rounded-2xl text-white shadow-md shadow-blue-100 flex items-center justify-center active:scale-90 transition-all ${themeClasses}`}
             >
               <Plus size={28} strokeWidth={3} />
             </button>
@@ -299,14 +299,14 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
                 <button
                   type="button"
                   onClick={() => { setDiscountType('PERCENT'); window.setTimeout(() => handleApplyDiscount('PERCENT'), 0); }}
-                  className={`${TOUCH_BUTTON_CLASS} px-4 py-4 border-none font-black text-sm transition-all ${discountType === 'PERCENT' ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-400'}`}
+                  className={`${TOUCH_BUTTON_CLASS} pos-touch-critical px-4 py-4 border-none font-black text-sm transition-all ${discountType === 'PERCENT' ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-400'}`}
                 >
                   %
                 </button>
                 <button
                   type="button"
                   onClick={() => { setDiscountType('FIXED'); window.setTimeout(() => handleApplyDiscount('FIXED'), 0); }}
-                  className={`${TOUCH_BUTTON_CLASS} px-4 py-4 rounded-r-2xl border-none font-black text-sm transition-all ${discountType === 'FIXED' ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-400'}`}
+                  className={`${TOUCH_BUTTON_CLASS} pos-touch-critical px-4 py-4 rounded-r-2xl border-none font-black text-sm transition-all ${discountType === 'FIXED' ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-400'}`}
                 >
                   $
                 </button>
@@ -359,7 +359,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
             type="button"
             onClick={() => setIsDeleting(true)}
             disabled={!canVoidItem}
-            className={`${TOUCH_BUTTON_CLASS} w-[25%] py-4 rounded-2xl font-black flex flex-col items-center justify-center gap-1 transition-all active:scale-95 ${canVoidItem ? 'bg-white border-2 border-red-50 text-red-500 hover:bg-red-50' : 'bg-gray-50 text-gray-300 opacity-50 cursor-not-allowed'}`}
+            className={`${TOUCH_BUTTON_CLASS} pos-touch-critical w-[25%] py-4 rounded-2xl font-black flex flex-col items-center justify-center gap-1 transition-all active:scale-95 ${canVoidItem ? 'bg-white border-2 border-red-50 text-red-500 hover:bg-red-50' : 'bg-gray-50 text-gray-300 opacity-50 cursor-not-allowed'}`}
           >
             <Trash2 size={24} />
             <span className="text-[8px] uppercase tracking-tighter">Eliminar</span>
@@ -369,7 +369,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
           <button
             type="button"
             onClick={handleSave}
-            className={`${TOUCH_BUTTON_CLASS} flex-1 py-4 text-white rounded-2xl font-black shadow-xl shadow-blue-100 flex items-center justify-center gap-4 active:scale-95 transition-all ${themeClasses}`}
+            className={`${TOUCH_BUTTON_CLASS} pos-touch-critical flex-1 py-4 text-white rounded-2xl font-black shadow-md shadow-blue-100 flex items-center justify-center gap-4 active:scale-95 transition-all ${themeClasses}`}
           >
             <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
               <Save size={20} />
