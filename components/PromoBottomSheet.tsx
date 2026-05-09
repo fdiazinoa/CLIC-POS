@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { X, ShoppingCart, Clock, Tag, ChevronRight } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
+import { X, Clock, Tag, ChevronRight } from 'lucide-react';
 import { Product, BusinessConfig } from '../types';
+import { markPerfInteraction, measureSync, useRenderPerfDebug, useVisualUpdatePerfDebug } from '../utils/perfDebug';
 
 interface PromoBottomSheetProps {
     isOpen: boolean;
@@ -17,16 +19,24 @@ const PromoBottomSheet: React.FC<PromoBottomSheetProps> = ({
     onAddToCart,
     config
 }) => {
+    const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+    const closeTransitionMs = isNativeAndroid ? 120 : 300;
+    const transitionDurationClass = isNativeAndroid ? 'duration-150' : 'duration-300';
+    const backdropVisualClass = isNativeAndroid ? 'bg-black/50' : 'bg-black/60 backdrop-blur-sm';
+    const sheetShadowClass = isNativeAndroid ? 'shadow-xl' : 'shadow-2xl';
+    const closedSheetTransformClass = isNativeAndroid ? 'translate-y-full sm:translate-y-6' : 'translate-y-full sm:translate-y-10 sm:scale-95';
     const [isVisible, setIsVisible] = useState(false);
+    useRenderPerfDebug('PromoBottomSheet', { isOpen, isNativeAndroid });
+    useVisualUpdatePerfDebug('PromoBottomSheet', { isOpen, isNativeAndroid });
 
     useEffect(() => {
         if (isOpen) {
             setIsVisible(true);
         } else {
-            const timer = setTimeout(() => setIsVisible(false), 300); // Match transition duration
+            const timer = setTimeout(() => setIsVisible(false), closeTransitionMs); // Match transition duration
             return () => clearTimeout(timer);
         }
-    }, [isOpen]);
+    }, [closeTransitionMs, isOpen]);
 
     if (!isVisible && !isOpen) return null;
 
@@ -41,21 +51,25 @@ const PromoBottomSheet: React.FC<PromoBottomSheetProps> = ({
     // or we might want to show a "fake" higher price to emphasize savings if we had that data.
     // For now, let's assume product.price is the OFFER price.
     // We can simulate an "original" price for visual impact if needed, or just show the current price.
+    const handleClose = () => {
+        markPerfInteraction('promoBottomSheet.close', 2000, { isNativeAndroid });
+        measureSync('promoBottomSheet.close', onClose, { isNativeAndroid });
+    };
 
     return (
         <div className="fixed inset-0 z-[100] flex items-end justify-center sm:items-center pointer-events-none">
             {/* Backdrop */}
             <div
-                className={`absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300 pointer-events-auto ${isOpen ? 'opacity-100' : 'opacity-0'}`}
-                onClick={onClose}
+                className={`absolute inset-0 ${backdropVisualClass} transition-opacity ${transitionDurationClass} pointer-events-auto ${isOpen ? 'opacity-100' : 'opacity-0'}`}
+                onClick={handleClose}
             />
 
             {/* Sheet */}
             <div
                 className={`
-                    relative w-full max-w-lg bg-white rounded-t-[2.5rem] sm:rounded-[2.5rem] p-6 sm:p-8 shadow-2xl 
-                    transform transition-transform duration-300 ease-out pointer-events-auto
-                    ${isOpen ? 'translate-y-0 scale-100' : 'translate-y-full sm:translate-y-10 sm:scale-95'}
+                    relative w-full max-w-lg bg-white rounded-t-[2.5rem] sm:rounded-[2.5rem] p-6 sm:p-8 ${sheetShadowClass}
+                    transform transition-transform ${transitionDurationClass} ease-out pointer-events-auto
+                    ${isOpen ? 'translate-y-0 scale-100' : closedSheetTransformClass}
                 `}
             >
                 {/* Handle for mobile dragging visual cue */}
@@ -63,7 +77,7 @@ const PromoBottomSheet: React.FC<PromoBottomSheetProps> = ({
 
                 {/* Close Button */}
                 <button
-                    onClick={onClose}
+                    onClick={handleClose}
                     className="absolute top-6 right-6 p-2 bg-gray-100 rounded-full text-gray-500 hover:bg-gray-200 transition-colors"
                 >
                     <X size={20} />
@@ -118,7 +132,7 @@ const PromoBottomSheet: React.FC<PromoBottomSheetProps> = ({
                     <button
                         onClick={() => {
                             if (product) onAddToCart(product);
-                            onClose();
+                            handleClose();
                         }}
                         className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black text-lg shadow-lg shadow-blue-200 transition-all active:scale-95 flex items-center justify-center gap-2"
                     >
