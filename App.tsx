@@ -3618,9 +3618,14 @@ const AppContent: React.FC = () => {
   };
 
   const handleConfigUpdate = async (newConfig: BusinessConfig) => {
-    console.log("handleConfigUpdate called", newConfig); // Debug log
     setConfig(newConfig);
     await db.save('config', newConfig);
+    if (Array.isArray(newConfig.campaigns)) {
+      await db.save('campaigns', newConfig.campaigns);
+    }
+    if (Array.isArray(newConfig.coupons)) {
+      await db.save('coupons', newConfig.coupons);
+    }
 
     // Initial Startup Logic for Floor Plan
     const activeTerminal = (newConfig.terminals || []).find(t => t.config?.currentDeviceId === deviceId);

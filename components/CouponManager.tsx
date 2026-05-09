@@ -75,7 +75,7 @@ const CouponManager: React.FC<CouponManagerProps> = ({ config, onUpdateConfig })
         setViewMode('EDIT');
     };
 
-    const handleSave = () => {
+    const handleSave = (options?: { openGenerator?: boolean }) => {
         if (!name || benefitValue <= 0) {
             alert("Completa los campos obligatorios");
             return;
@@ -102,6 +102,10 @@ const CouponManager: React.FC<CouponManagerProps> = ({ config, onUpdateConfig })
 
         onUpdateConfig({ ...config, campaigns: updatedCampaigns });
         setViewMode('LIST');
+        if (options?.openGenerator) {
+            setSelectedCampaignForGen(newCampaign);
+            setShowGenerateModal(true);
+        }
     };
 
     const handleDelete = (id: string) => {
@@ -115,10 +119,19 @@ const CouponManager: React.FC<CouponManagerProps> = ({ config, onUpdateConfig })
 
     const handleGenerateCoupons = () => {
         if (!selectedCampaignForGen) return;
-        const newConfig = couponService.generateCoupons(selectedCampaignForGen, generateQty, config);
+        const safeQty = Number.isFinite(generateQty) ? Math.max(1, Math.floor(generateQty)) : 1;
+        const campaignsForGeneration = campaigns.some((campaign) => campaign.id === selectedCampaignForGen.id)
+            ? campaigns
+            : [...campaigns, selectedCampaignForGen];
+        const baseConfig = {
+            ...config,
+            campaigns: campaignsForGeneration
+        };
+        const newConfig = couponService.generateCoupons(selectedCampaignForGen, safeQty, baseConfig);
         onUpdateConfig(newConfig);
+        setGenerateQty(safeQty);
         setShowGenerateModal(false);
-        alert(`¡${generateQty} cupones generados exitosamente!`);
+        alert(`¡${safeQty} cupones generados exitosamente!`);
     };
 
     const toggleDay = (day: string) => {
@@ -194,7 +207,10 @@ const CouponManager: React.FC<CouponManagerProps> = ({ config, onUpdateConfig })
 
                     <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
                         <button onClick={() => setViewMode('LIST')} className="px-6 py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-colors">Cancelar</button>
-                        <button onClick={handleSave} className="px-8 py-3 rounded-xl font-bold text-white bg-blue-600 hover:bg-blue-700 shadow-lg hover:shadow-xl transition-all flex items-center gap-2">
+                        <button onClick={() => handleSave({ openGenerator: true })} className="px-6 py-3 rounded-xl font-bold text-purple-700 bg-purple-50 hover:bg-purple-100 transition-colors flex items-center gap-2">
+                            <QrCode size={20} /> Guardar y Generar
+                        </button>
+                        <button onClick={() => handleSave()} className="px-8 py-3 rounded-xl font-bold text-white bg-blue-600 hover:bg-blue-700 shadow-lg hover:shadow-xl transition-all flex items-center gap-2">
                             <Save size={20} /> Guardar Campaña
                         </button>
                     </div>
@@ -234,9 +250,22 @@ const CouponManager: React.FC<CouponManagerProps> = ({ config, onUpdateConfig })
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
                 <div className="p-6 border-b border-gray-100 flex justify-between items-center">
                     <h3 className="font-bold text-lg text-gray-800">Campañas</h3>
-                    <button onClick={handleCreateNew} className="px-4 py-2 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-colors flex items-center gap-2">
-                        <Plus size={18} /> Nueva Campaña
-                    </button>
+                    <div className="flex flex-wrap justify-end gap-2">
+                        {campaigns.length > 0 && (
+                            <button
+                                onClick={() => {
+                                    setSelectedCampaignForGen(campaigns[0]);
+                                    setShowGenerateModal(true);
+                                }}
+                                className="px-4 py-2 bg-purple-600 text-white rounded-xl font-bold text-sm hover:bg-purple-700 transition-colors flex items-center gap-2"
+                            >
+                                <QrCode size={18} /> Generar Cupones
+                            </button>
+                        )}
+                        <button onClick={handleCreateNew} className="px-4 py-2 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-colors flex items-center gap-2">
+                            <Plus size={18} /> Nueva Campaña
+                        </button>
+                    </div>
                 </div>
 
                 {campaigns.length === 0 ? (
@@ -287,6 +316,23 @@ const CouponManager: React.FC<CouponManagerProps> = ({ config, onUpdateConfig })
                         </div>
                         <div className="mb-6">
                             <p className="text-sm text-gray-500 mb-4">Generar códigos únicos para la campaña <strong className="text-gray-800">{selectedCampaignForGen.name}</strong>.</p>
+                            {campaigns.length > 1 && (
+                                <div className="mb-4">
+                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Campaña</label>
+                                    <select
+                                        value={selectedCampaignForGen.id}
+                                        onChange={(event) => {
+                                            const nextCampaign = campaigns.find((campaign) => campaign.id === event.target.value);
+                                            if (nextCampaign) setSelectedCampaignForGen(nextCampaign);
+                                        }}
+                                        className="w-full p-3 bg-gray-50 rounded-xl font-bold outline-none focus:ring-2 focus:ring-purple-500"
+                                    >
+                                        {campaigns.map((campaign) => (
+                                            <option key={campaign.id} value={campaign.id}>{campaign.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
                             <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Cantidad a Generar</label>
                             <input type="number" min="1" max="1000" value={generateQty} onChange={e => setGenerateQty(parseInt(e.target.value))} className="w-full p-3 bg-gray-50 rounded-xl font-bold text-center text-2xl outline-none focus:ring-2 focus:ring-purple-500" />
                         </div>
