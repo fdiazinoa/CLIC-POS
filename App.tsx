@@ -46,7 +46,7 @@ import { parseScaleBarcode } from './utils/barcodeParser';
 import { useKioskMode } from './hooks/useKioskMode';
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
 import { db } from './utils/db'; // Import Local DB
-import { initLongTaskLogger, measureAsync, setPerfContext, useRenderPerfDebug } from './utils/perfDebug';
+import { initLongTaskLogger, markPerfInteraction, measureAsync, useRenderPerfDebug } from './utils/perfDebug';
 import { dbAdapter } from './services/db'; // Import Adapter for Healthcheck
 import { syncManager } from './services/sync/SyncManager';
 import { apiSyncAdapter } from './services/sync/ApiSyncAdapter';
@@ -1578,7 +1578,7 @@ const AppContent: React.FC = () => {
     if (!inputSensitiveViews.has(currentView)) return;
 
     const markInteraction = () => {
-      setPerfContext('app.input', 4000, { currentView, cartCount: cart.length });
+      markPerfInteraction('app.input', 4000, { currentView, cartCount: cart.length });
       markPosInteractionActivity(3500);
     };
     const pointerOptions: AddEventListenerOptions = { capture: true, passive: true };
@@ -4328,7 +4328,7 @@ const AppContent: React.FC = () => {
         console.log(`✅ Customer debt updated: ${customer.name} -> ${updatedCustomers[customerIndex].currentDebt}`);
       }
     }
-    }, { transactionId: txn.id, items: txn.items?.length || 0, total: txn.total });
+    }, { transactionId: txn.id, itemsCount: txn.items?.length || 0 });
   };
 
   const handleRegisterMovement = async (type: 'IN' | 'OUT', amount: number, reason: string) => {

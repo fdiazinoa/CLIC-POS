@@ -78,7 +78,7 @@ import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
 import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
 import { productIdentityCandidates, productReferenceCandidates, resolveOperationalProductId } from '../utils/productReferences';
-import { measureAsync, measureSync, setPerfContext, useRenderPerfDebug } from '../utils/perfDebug';
+import { markPerfInteraction, measureAsync, measureSync, useRenderPerfDebug, useVisualUpdatePerfDebug } from '../utils/perfDebug';
 import { resolveKdsBaseUrl } from '../utils/kdsRouting';
 import {
    confirmUberEatsPosInvoice,
@@ -686,6 +686,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       cartCount: cart.length,
       productsCount: products.length,
       activeTerminalId,
+   });
+   useVisualUpdatePerfDebug('POSInterface', {
+      cartCount: cart.length,
+      productsCount: products.length,
    });
    const cartEndRef = useRef<HTMLDivElement>(null);
    const posRootRef = useRef<HTMLDivElement>(null);
@@ -2204,7 +2208,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string) => {
       return measureSync('pos.cart.addProduct', () => {
-      setPerfContext('pos.addProduct', 3500, { productId: product.id, quantity, cartCount: cart.length });
+      markPerfInteraction('pos.addProduct', 3500, { cartCount: cart.length });
       if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
       if (!canAddItemToCart(product, quantity)) return;
 
@@ -2258,7 +2262,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
       setLastAddedCartId(targetCartId);
-      }, { productId: product.id, quantity, cartCount: cart.length });
+      }, { cartCount: cart.length });
    }, [blockRecoveredUberOrderMutation, canAddItemToCart, getProductPrice, onUpdateCart, cart, activeTerminalConfig]); // Added cart to dependencies
 
    const handleProductClick = useCallback((product: Product) => {
@@ -2299,7 +2303,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, []);
 
    const handleProductCardTouchStart = useCallback((product: Product, clientX: number, clientY: number) => {
-      setPerfContext('pos.productTouchStart', 2500, { productId: product.id });
+      markPerfInteraction('pos.productTouchStart', 2500);
       lastProductTouchAtRef.current = Date.now();
       quickActionTouchStartRef.current = { x: clientX, y: clientY, at: Date.now() };
       if (quickActionTouchTimerRef.current) {
@@ -2760,7 +2764,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const hiddenSearchResultCount = Math.max(0, filteredProducts.length - visibleSearchResults.length);
 
    const handleSearchTermChange = useCallback((value: string) => {
-      setPerfContext('pos.searchTyping', 3500, { length: value.length });
+      markPerfInteraction('pos.searchTyping', 3500, { length: value.length });
       measureSync('pos.search.setTerm', () => setSearchTerm(value), { length: value.length });
    }, []);
 
@@ -2770,17 +2774,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [handleSearchTermChange]);
 
    const handleClearSearchTerm = useCallback(() => {
-      setPerfContext('pos.searchClear', 2000);
+      markPerfInteraction('pos.searchClear', 2000);
       measureSync('pos.search.clear', () => setSearchTerm(''));
    }, []);
 
    const handleVirtualKeyboardKeyPress = useCallback((key: string) => {
-      setPerfContext('pos.virtualKeyboardTyping', 3500, { key });
-      measureSync('pos.virtualKeyboard.keyPress', () => setSearchTerm((prev) => prev + key), { key });
+      const keyDetail = { keyType: key === ' ' ? 'space' : 'character' };
+      markPerfInteraction('pos.virtualKeyboardTyping', 3500, keyDetail);
+      measureSync('pos.virtualKeyboard.keyPress', () => setSearchTerm((prev) => prev + key), keyDetail);
    }, []);
 
    const handleVirtualKeyboardDelete = useCallback(() => {
-      setPerfContext('pos.virtualKeyboardDelete', 3500);
+      markPerfInteraction('pos.virtualKeyboardDelete', 3500);
       measureSync('pos.virtualKeyboard.delete', () => setSearchTerm((prev) => prev.slice(0, -1)));
    }, []);
 
@@ -2911,7 +2916,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          discountAmount,
          isTaxIncluded,
          terminalConfig: activeTerminalConfig,
-      }), { cartCount: processedCart.length, discountAmount, isTaxIncluded });
+      }), { cartCount: processedCart.length, isTaxIncluded });
    }, [processedCart, config, discountAmount, isTaxIncluded, activeTerminalConfig]);
 
    const cartTax = taxBreakdown.reduce((sum, t) => sum + t.amount, 0);
@@ -2976,7 +2981,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          netSubtotal: nextNetSubtotal,
          cartTotal: nextCartTotalWithoutTip + nextCartTip,
       };
-      }, { cartCount: processedCart.length, grossLineTotal, discountAmount, cartTax });
+      }, { cartCount: processedCart.length, isTaxIncluded, hasServiceCharge: shouldApplyServiceCharge });
    }, [cartTax, discountAmount, grossLineTotal, isTaxIncluded, serviceCharge?.percentage, shouldApplyServiceCharge]);
 
    // Alias for compatibility if needed, though netSubtotal is what we usually display as "Subtotal"
@@ -3213,7 +3218,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const updateCartItem = async (updatedItem: CartItem | null, cartIdToDelete?: string) => {
       return measureAsync('pos.cart.updateLine', async () => {
-      setPerfContext('pos.cartLineEdit', 3500, {
+      markPerfInteraction('pos.cartLineEdit', 3500, {
          cartId: cartIdToDelete || updatedItem?.cartId || editingItem?.cartId,
          deleting: Boolean(cartIdToDelete || updatedItem === null),
       });
@@ -3276,7 +3281,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const handlePaymentConfirm = async (payments: PaymentEntry[], voluntaryTip?: number): Promise<Transaction | null> => {
       return measureAsync('pos.payment.confirmSale', async () => {
-      setPerfContext('pos.paymentConfirm', 6000, { cartCount: processedCart.length, paymentsCount: payments.length, cartTotal });
+      markPerfInteraction('pos.paymentConfirm', 6000, { cartCount: processedCart.length, paymentsCount: payments.length });
          const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> => {
          let timeoutHandle: number | undefined;
          try {
@@ -3792,7 +3797,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          alert(`Error al finalizar venta: ${error?.message || 'Error desconocido'}`);
          return null;
       }
-      }, { cartCount: processedCart.length, paymentsCount: payments.length, cartTotal });
+      }, { cartCount: processedCart.length, paymentsCount: payments.length });
    };
 
    const handleSplitConfirm = (remainingItems: CartItem[], newTicketItems: CartItem[]) => {
@@ -3832,8 +3837,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             .catch(console.error);
          return;
       }
-      setPerfContext('pos.paymentOpen', 3500, { cartCount: cart.length, amountDueNow, cartTotal });
-      measureSync('pos.payment.openModal', () => setShowPaymentModal(true), { cartCount: cart.length, amountDueNow, cartTotal });
+      markPerfInteraction('pos.paymentOpen', 3500, { cartCount: cart.length });
+      measureSync('pos.payment.openModal', () => setShowPaymentModal(true), { cartCount: cart.length });
    };
 
    const handleDispatchCommand = async () => {

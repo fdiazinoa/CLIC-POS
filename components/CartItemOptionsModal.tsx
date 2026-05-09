@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { CartItem, BusinessConfig, User as UserType, RoleDefinition } from '../types';
 import { TerminalSnapshotSeller } from '../utils/terminalSnapshotSellers';
-import { measureSync, setPerfContext, useRenderPerfDebug } from '../utils/perfDebug';
+import { markPerfInteraction, measureSync, useRenderPerfDebug, useVisualUpdatePerfDebug } from '../utils/perfDebug';
 
 interface CartItemOptionsModalProps {
   item: CartItem;
@@ -31,7 +31,8 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   canApplyDiscount,
   canVoidItem
 }) => {
-  useRenderPerfDebug('CartItemOptionsModal', { cartId: item.cartId, productId: item.id });
+  useRenderPerfDebug('CartItemOptionsModal');
+  useVisualUpdatePerfDebug('CartItemOptionsModal');
   const EPSILON = 0.01;
   const [quantity, setQuantity] = useState(item.quantity);
   const [price, setPrice] = useState(item.price);
@@ -61,15 +62,15 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   }, [incomingSalesUsers, users, roles]);
 
   const handleQuantityChange = (delta: number) => {
-    setPerfContext('pos.cartLineQuantity', 3500, { cartId: item.cartId, delta });
+    markPerfInteraction('pos.cartLineQuantity', 3500, { delta });
     measureSync('pos.cartLine.quantityChange', () => {
       const newQty = Math.max(0.001, quantity + delta);
       setQuantity(parseFloat(newQty.toFixed(3)));
-    }, { cartId: item.cartId, delta });
+    }, { delta });
   };
 
   const handleApplyDiscount = () => {
-    setPerfContext('pos.cartLineDiscount', 3500, { cartId: item.cartId, discountType });
+    markPerfInteraction('pos.cartLineDiscount', 3500, { discountType });
     measureSync('pos.cartLine.applyDiscount', () => {
       const val = parseFloat(discountValue);
       if (isNaN(val) || val <= 0) {
@@ -84,23 +85,23 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
         newPrice = Math.max(0, adjustmentBasePrice - val);
       }
       setPrice(parseFloat(newPrice.toFixed(2)));
-    }, { cartId: item.cartId, discountType });
+    }, { discountType });
   };
 
   const handlePriceManualChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawValue = e.target.value;
-    setPerfContext('pos.cartLinePrice', 3500, { cartId: item.cartId });
+    markPerfInteraction('pos.cartLinePrice', 3500, { length: rawValue.length });
     measureSync('pos.cartLine.priceChange', () => {
       const val = parseFloat(rawValue);
       if (!isNaN(val) && val >= 0) {
         setPrice(val);
         setDiscountValue('');
       }
-    }, { cartId: item.cartId, length: rawValue.length });
+    }, { length: rawValue.length });
   };
 
   const handleSave = () => {
-    setPerfContext('pos.cartLineSave', 3500, { cartId: item.cartId });
+    markPerfInteraction('pos.cartLineSave', 3500);
     measureSync('pos.cartLine.save', () => {
     const nextItem: CartItem = {
       ...item,
@@ -163,7 +164,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
       ...nextItem
     });
     onClose();
-    }, { cartId: item.cartId, quantity, price });
+    }, { changedQuantity: Math.abs(quantity - item.quantity) > EPSILON, changedPrice: Math.abs(price - item.price) > EPSILON });
   };
 
   const handleDeleteConfirm = () => {

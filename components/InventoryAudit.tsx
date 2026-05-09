@@ -4,7 +4,7 @@ import {
   Save, RefreshCw, Plus, Minus, Camera, Zap, Clock, FileText, Calculator
 } from 'lucide-react';
 import { Product } from '../types';
-import { measureAsync, measureSync, setPerfContext, useRenderPerfDebug } from '../utils/perfDebug';
+import { markPerfInteraction, measureAsync, measureSync, useRenderPerfDebug, useVisualUpdatePerfDebug } from '../utils/perfDebug';
 
 interface InventoryAuditProps {
   products: Product[];
@@ -29,10 +29,11 @@ interface AuditSession {
 }
 
 const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, mode, onClose, onCommit }) => {
-  useRenderPerfDebug('InventoryAudit', { productsCount: products.length, warehouseId, mode });
+  useRenderPerfDebug('InventoryAudit', { productsCount: products.length, mode });
   // --- STATE ---
   const [session, setSession] = useState<AuditSession | null>(null);
   const [auditItems, setAuditItems] = useState<AuditItem[]>([]);
+  useVisualUpdatePerfDebug('InventoryAudit', { productsCount: products.length, itemsCount: auditItems.length, mode });
   const [searchQuery, setSearchQuery] = useState('');
   const [isCameraActive, setIsCameraActive] = useState(true);
   const [lastScannedCode, setLastScannedCode] = useState<string | null>(null);
@@ -112,7 +113,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
 
   const handleSaveDraft = async () => {
     return measureAsync('inventoryAudit.saveDraft', async () => {
-    setPerfContext('inventoryAudit.saveDraft', 5000, { itemsCount: auditItems.length, warehouseId });
+    markPerfInteraction('inventoryAudit.saveDraft', 5000, { itemsCount: auditItems.length, warehouseId });
     if (!session) return;
     setIsSubmitting(true);
     try {
@@ -141,7 +142,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
 
   // --- HANDLERS ---
   const handleScan = (code: string) => {
-    setPerfContext('inventoryAudit.scan', 3500, { codeLength: code.length, productsCount: products.length });
+    markPerfInteraction('inventoryAudit.scan', 3500, { codeLength: code.length, productsCount: products.length });
     measureSync('inventoryAudit.scanProduct', () => {
     // 1. Find Product
     const product = products.find(p =>
@@ -184,7 +185,8 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
   };
 
   const handleManualCountChange = (productId: string, delta: number) => {
-    setPerfContext('inventoryAudit.editLine', 3500, { productId, delta });
+    const editDetail = { direction: delta > 0 ? 'increase' : 'decrease', itemsCount: auditItems.length };
+    markPerfInteraction('inventoryAudit.editLine', 3500, editDetail);
     measureSync('inventoryAudit.manualCountChange', () => {
       setAuditItems(prev => prev.map(item => {
         if (item.product.id === productId) {
@@ -192,11 +194,12 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
         }
         return item;
       }));
-    }, { productId, delta, itemsCount: auditItems.length });
+    }, editDetail);
   };
 
   const handleQuantityUpdate = (productId: string, newValue: number) => {
-    setPerfContext('inventoryAudit.editLine', 3500, { productId });
+    const editDetail = { inputLength: String(newValue).length, itemsCount: auditItems.length };
+    markPerfInteraction('inventoryAudit.editLine', 3500, editDetail);
     measureSync('inventoryAudit.quantityUpdate', () => {
       setAuditItems(prev => prev.map(item => {
         if (item.product.id === productId) {
@@ -204,7 +207,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
         }
         return item;
       }));
-    }, { productId, newValue, itemsCount: auditItems.length });
+    }, editDetail);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -215,7 +218,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
 
   const handleCommit = async () => {
     return measureAsync('inventoryAudit.commit', async () => {
-    setPerfContext('inventoryAudit.commit', 6000, { itemsCount: auditItems.length, warehouseId });
+    markPerfInteraction('inventoryAudit.commit', 6000, { itemsCount: auditItems.length, warehouseId });
     if (!session) return;
     setIsSubmitting(true);
 
