@@ -34,6 +34,7 @@ class BackgroundSyncManager {
     private readonly WORKER_INTERVAL_MS = 30000;
     private readonly FAST_RETRY_DELAY_MS = 5000;
     private readonly RECOVERABLE_TRANSACTION_RETRY_DELAY_MS = 15000;
+    private readonly POS_ACTIVITY_DEFER_MS = 5000;
 
     /**
      * Initialize the background sync manager
@@ -125,6 +126,11 @@ class BackgroundSyncManager {
             this.retryTimeout = null;
             void this.sync();
         }, delayMs);
+    }
+
+    private scheduleWhenPosIdle() {
+        if (!navigator.onLine) return;
+        this.scheduleSync(this.POS_ACTIVITY_DEFER_MS);
     }
 
     private isRecoverableTransactionSyncError(error: unknown): boolean {
@@ -475,6 +481,12 @@ class BackgroundSyncManager {
      * Trigger an immediate sync attempt (e.g. after creating a document)
      */
     async triggerSync() {
+        if (isPosSaleActive()) {
+            console.log('⏸️ BackgroundSyncManager: triggerSync deferred while POS input/sale is active.');
+            this.scheduleWhenPosIdle();
+            return;
+        }
+
         await this.updatePendingCount();
         if (navigator.onLine) {
             apiSyncAdapter.resetCircuit();
@@ -483,6 +495,12 @@ class BackgroundSyncManager {
     }
 
     async triggerSyncAndWait() {
+        if (isPosSaleActive()) {
+            console.log('⏸️ BackgroundSyncManager: triggerSyncAndWait deferred while POS input/sale is active.');
+            this.scheduleWhenPosIdle();
+            return;
+        }
+
         await this.updatePendingCount();
         if (navigator.onLine) {
             apiSyncAdapter.resetCircuit();

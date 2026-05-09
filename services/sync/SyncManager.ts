@@ -17,6 +17,7 @@ import { productImageCacheService } from './ProductImageCacheService';
 import { masterDataImageCacheService, type ImageBackedCollection } from './MasterDataImageCacheService';
 import { DEFAULT_ROLES } from '../../constants';
 import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig, PurchaseOrder, StockTransfer, ProductStock, ProductPrice, TariffPrice, Warehouse, User, RoleDefinition, Permission } from '../../types';
+import { isPosSaleActive } from '../../utils/posSaleActivity';
 import {
     applyTerminalConfigSnapshot,
     extractTerminalConfigSnapshot,
@@ -152,8 +153,35 @@ class SyncManager {
     private readonly IMAGE_SYNC_INTERVAL_MS = 180000;
     private readonly IMAGE_SYNC_BATCH_SIZE = 40;
     private terminalManifestSyncInFlight = false;
+    private deferredAutoSyncTimeout: any = null;
+    private readonly POS_ACTIVITY_DEFER_MS = 5000;
 
     public isInitialized: boolean = false;
+
+    private shouldDeferForPosActivity(reason: string): boolean {
+        if (!isPosSaleActive()) return false;
+        console.log(`⏸️ SyncManager: ${reason} deferred while POS input/sale is active.`);
+        return true;
+    }
+
+    private scheduleDeferredAutoSync(delayMs = this.POS_ACTIVITY_DEFER_MS) {
+        if (this.deferredAutoSyncTimeout) return;
+        if (typeof window === 'undefined') return;
+
+        this.deferredAutoSyncTimeout = window.setTimeout(async () => {
+            this.deferredAutoSyncTimeout = null;
+            if (this.shouldDeferForPosActivity('auto-sync retry')) {
+                this.scheduleDeferredAutoSync();
+                return;
+            }
+
+            try {
+                await this.runAutoSyncCycle();
+            } catch (error) {
+                console.warn('⚠️ Auto-sync: Deferred run failed:', error);
+            }
+        }, delayMs);
+    }
 
     private resolveRuntimeWarehousesFromConfig(config: BusinessConfig | null | undefined, terminalId: string): Warehouse[] {
         if (!config || !Array.isArray(config.terminals)) {
@@ -1373,6 +1401,10 @@ class SyncManager {
             return null;
         }
 
+        if (!options?.markStartupCompleted && !options?.bootstrapBlocks && this.shouldDeferForPosActivity('terminal manifest refresh')) {
+            return null;
+        }
+
         const context = this.getActiveTerminalContext(baseConfig);
         const localTerminalId = context.localTerminalId || context.terminalId;
         if (!context.terminalId || !localTerminalId || !context.tenantId) {
@@ -1407,6 +1439,10 @@ class SyncManager {
                 if (options?.markStartupCompleted) {
                     this.markStartupManifestSyncCompleted(localTerminalId);
                 }
+                return null;
+            }
+
+            if (!options?.markStartupCompleted && !options?.bootstrapBlocks && this.shouldDeferForPosActivity('terminal manifest apply')) {
                 return null;
             }
 
@@ -3648,6 +3684,7 @@ class SyncManager {
         if (this.imageSyncInProgress) return 0;
         if (permissionService.isMasterTerminal()) return 0;
         if (!this.syncConfig?.masterUrl || !navigator.onLine) return 0;
+        if (this.shouldDeferForPosActivity('image sync')) return 0;
 
         this.imageSyncInProgress = true;
 
@@ -4020,9 +4057,15 @@ class SyncManager {
         force: boolean = false,
         options?: {
             ignoreThrottle?: boolean;
+            ignorePosActivity?: boolean;
         }
     ): Promise<number> {
         if (this.isDisabled) return 0;
+
+        const shouldHonorPosActivity = !force && !options?.ignorePosActivity;
+        if (shouldHonorPosActivity && this.shouldDeferForPosActivity(`pull ${collection}`)) {
+            return 0;
+        }
 
         // Throttling...
         // Throttling...
@@ -4060,6 +4103,10 @@ class SyncManager {
             const response = await apiSyncAdapter.pullDelta(collection, lastVersion || undefined);
             const { items, serverTime, isFullDownload, latestVersion } = response;
             let metadataCache: any = undefined;
+
+            if (shouldHonorPosActivity && this.shouldDeferForPosActivity(`apply ${collection}`)) {
+                return 0;
+            }
 
             const getMetadataOnce = async () => {
                 if (metadataCache !== undefined) return metadataCache;
@@ -4156,6 +4203,9 @@ class SyncManager {
             if (isFullDownload) {
                 // Legacy behavior for first load or force pull
                 console.log(`💾 SyncManager: Performing FULL save for ${collection}...`);
+                if (shouldHonorPosActivity && this.shouldDeferForPosActivity(`full save ${collection}`)) {
+                    return 0;
+                }
                 let cleanItems = items.map((item: any) => {
                     const { _op, ...rest } = item;
                     // Add repair logic for internalSequences
@@ -4193,6 +4243,9 @@ class SyncManager {
                 const updatedProductsForImageSync: Product[] = [];
                 const updatedMasterDataForImageSync: any[] = [];
                 for (const item of items) {
+                    if (shouldHonorPosActivity && this.shouldDeferForPosActivity(`incremental save ${collection}`)) {
+                        return 0;
+                    }
                     const op = item._op;
                     const { _op, ...cleanItem } = item;
                     if (op === 'DELETE' || item.deletedAt || item.isActive === false) {
@@ -4306,8 +4359,13 @@ class SyncManager {
     /**
      * Sync all catalogs (Master: push, Slave: pull)
      */
-    async syncAllCatalogs(): Promise<SyncStatus[]> {
+    async syncAllCatalogs(options?: { ignorePosActivity?: boolean }): Promise<SyncStatus[]> {
         if (this.isDisabled) return [];
+
+        if (!options?.ignorePosActivity && this.shouldDeferForPosActivity('sync all catalogs')) {
+            this.scheduleDeferredAutoSync();
+            return [];
+        }
 
         // Catalogs: Master PUSHES, Slaves PULL
         // Added inventoryLedger and transactions so slaves can see history from other terminals
@@ -4337,6 +4395,10 @@ class SyncManager {
         if (!permissionService.isMasterTerminal()) {
             try {
                 await this.pullConfig();
+                if (!options?.ignorePosActivity && this.shouldDeferForPosActivity('sync config metadata')) {
+                    this.scheduleDeferredAutoSync();
+                    return results;
+                }
                 const metadata = await apiSyncAdapter.getMetadata('config');
                 const localVersion = this.syncVersions.get('config') || 0;
 
@@ -4364,7 +4426,11 @@ class SyncManager {
             try {
                 // Always PULL to get updates from Server/Other Terminals
                 // (Master pushes changes via broadcastChange immediately)
-                await this.pullCatalog(collection);
+                await this.pullCatalog(collection, false, { ignorePosActivity: options?.ignorePosActivity });
+                if (!options?.ignorePosActivity && this.shouldDeferForPosActivity(`catalog metadata ${collection}`)) {
+                    this.scheduleDeferredAutoSync();
+                    return results;
+                }
 
                 const metadata = await apiSyncAdapter.getMetadata(collection);
                 const localVersion = this.syncVersions.get(collection) || 0;
@@ -4393,7 +4459,11 @@ class SyncManager {
             for (const collection of operations) {
                 try {
                     // Master pulls operations from Server to see what Slaves have sent
-                    await this.pullCatalog(collection);
+                    await this.pullCatalog(collection, false, { ignorePosActivity: options?.ignorePosActivity });
+                    if (!options?.ignorePosActivity && this.shouldDeferForPosActivity(`operation metadata ${collection}`)) {
+                        this.scheduleDeferredAutoSync();
+                        return results;
+                    }
 
                     const metadata = await apiSyncAdapter.getMetadata(collection);
                     const localVersion = this.syncVersions.get(collection) || 0;
@@ -4771,22 +4841,11 @@ class SyncManager {
         }
 
         this.autoSyncInterval = setInterval(async () => {
-            // Auto-sync for ALL terminals (including Master w/ LocalStorage)
-            // console.log('🔄 Auto-sync: Checking for updates...');
-            if (!permissionService.isMasterTerminal()) {
-                try {
-                    await this.pullConfig();
-                } catch (error) {
-                    console.warn('⚠️ Auto-sync: Failed to refresh config:', error);
-                }
+            if (this.shouldDeferForPosActivity('auto-sync')) {
+                this.scheduleDeferredAutoSync();
+                return;
             }
-
-            const updates = await this.checkForUpdates();
-
-            if (updates.length > 0) {
-                console.log(`📥 Auto-sync: Found updates for ${updates.join(', ')}`);
-                await this.syncAllCatalogs();
-            }
+            await this.runAutoSyncCycle();
         }, intervalMs);
 
         if (!permissionService.isMasterTerminal()) {
@@ -4794,6 +4853,39 @@ class SyncManager {
         }
 
         console.log(`⏰ Auto-sync started (${intervalMs / 1000}s interval)`);
+    }
+
+    private async runAutoSyncCycle() {
+        // Auto-sync for ALL terminals (including Master w/ LocalStorage)
+        // console.log('🔄 Auto-sync: Checking for updates...');
+        if (this.shouldDeferForPosActivity('auto-sync cycle')) {
+            this.scheduleDeferredAutoSync();
+            return;
+        }
+
+        if (!permissionService.isMasterTerminal()) {
+            try {
+                await this.pullConfig();
+            } catch (error) {
+                console.warn('⚠️ Auto-sync: Failed to refresh config:', error);
+            }
+        }
+
+        if (this.shouldDeferForPosActivity('auto-sync updates')) {
+            this.scheduleDeferredAutoSync();
+            return;
+        }
+
+        const updates = await this.checkForUpdates();
+
+        if (updates.length > 0) {
+            if (this.shouldDeferForPosActivity('auto-sync apply')) {
+                this.scheduleDeferredAutoSync();
+                return;
+            }
+            console.log(`📥 Auto-sync: Found updates for ${updates.join(', ')}`);
+            await this.syncAllCatalogs();
+        }
     }
 
     /**
@@ -4804,6 +4896,10 @@ class SyncManager {
             clearInterval(this.autoSyncInterval);
             this.autoSyncInterval = null;
             console.log('⏹️  Auto-sync stopped');
+        }
+        if (this.deferredAutoSyncTimeout) {
+            clearTimeout(this.deferredAutoSyncTimeout);
+            this.deferredAutoSyncTimeout = null;
         }
         if (this.imageSyncInterval) {
             clearInterval(this.imageSyncInterval);
