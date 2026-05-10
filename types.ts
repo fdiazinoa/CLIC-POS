@@ -625,6 +625,7 @@ export interface TerminalConfig {
       zReportEmails?: string;
       // New fields for Z Report Expansion
       checkOpenOrders: boolean;
+      allowZWithOpenTables: boolean;
       forceDenominationCount: boolean;
       cashVarianceThreshold: number;
       emailZReport: boolean;

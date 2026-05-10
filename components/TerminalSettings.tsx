@@ -513,6 +513,14 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     disabled={isReadOnly}
                                  />
                                  <Toggle
+                                    label="Permitir Z con mesas abiertas"
+                                    description="Permite confirmar el Cierre Z aunque existan mesas ocupadas o con orden abierta."
+                                    checked={Boolean(activeTerminal.config.workflow.session.allowZWithOpenTables)}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'allowZWithOpenTables', v)}
+                                    icon={Lock}
+                                    disabled={isReadOnly}
+                                 />
+                                 <Toggle
                                     label="Conteo por Denominación"
                                     description="Exige declarar cantidades por billete/moneda durante el Cierre Z."
                                     checked={Boolean(activeTerminal.config.workflow.session.forceDenominationCount)}

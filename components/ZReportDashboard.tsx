@@ -4,7 +4,7 @@ import {
    ArrowLeft, Receipt, CheckCircle, Banknote, Calendar,
    AlertTriangle, Lock, RefreshCw, Printer, Mail, Loader2
 } from 'lucide-react';
-import { Transaction, BusinessConfig, CashMovement, User, RoleDefinition, Collection } from '../types';
+import { Transaction, BusinessConfig, CashMovement, User, RoleDefinition, Collection, Table } from '../types';
 import { sendZReportEmail } from '../utils/email';
 import ZReportHistory from './ZReportHistory';
 import { calculateZReportStats } from '../utils/analytics';
@@ -26,6 +26,7 @@ interface ZReportDashboardProps {
    onConfirmClose: (cashCounted: number, notes: string, reportData?: any) => Promise<void> | void;
    terminalId?: string;
    collections: Collection[];
+   tables?: Table[];
 }
 
 // --- HELPER: Slide To Action Button ---
@@ -86,7 +87,7 @@ const formatDenomination = (value: number) => (
    Number.isInteger(value) ? value.toString() : value.toFixed(2)
 );
 
-const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashMovements, config, userName, currentUser, roles, onClose, onConfirmClose, terminalId, collections }) => {
+const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashMovements, config, userName, currentUser, roles, onClose, onConfirmClose, terminalId, collections, tables = [] }) => {
    const [cashCountedByCurrency, setCashCountedByCurrency] = useState<Record<string, string>>({});
    const [denominationCounts, setDenominationCounts] = useState<Record<string, Record<string, string>>>({});
    const [declaredCard, setDeclaredCard] = useState('');
@@ -118,6 +119,13 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const activeTerminalConfig = activeTerminal?.config;
    const currentTerminalId = activeTerminal?.id || 'T1';
    const useDenominationCount = Boolean(activeTerminalConfig?.workflow?.session?.forceDenominationCount);
+   const validateOpenTables = Boolean(activeTerminalConfig?.workflow?.session?.checkOpenOrders);
+   const allowZWithOpenTables = Boolean(activeTerminalConfig?.workflow?.session?.allowZWithOpenTables);
+   const openTables = tables.filter((table) => {
+      if (table.shape === 'OBSTACLE') return false;
+      return table.status === 'OCCUPIED' || table.status === 'RESERVED' || Boolean(table.currentOrderId);
+   });
+   const shouldBlockOpenTables = validateOpenTables && !allowZWithOpenTables && openTables.length > 0;
 
    const getDeclaredCashForCurrency = (currencyCode: string): number => {
       if (!useDenominationCount) {
@@ -188,6 +196,11 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    );
 
    const handleStartClosing = () => {
+      if (shouldBlockOpenTables) {
+         alert(`No se puede realizar el Cierre Z: hay ${openTables.length} mesa(s) abierta(s). Activa "Permitir Z con mesas abiertas" en Sesión y Cierre Z si deseas permitirlo.`);
+         return;
+      }
+
       const hasCashToCount = currenciesRequiringCashCount.length > 0;
       const hasAllCashCounted = currenciesRequiringCashCount.every(currencyCode => hasDeclaredCashForCurrency(currencyCode));
 
@@ -802,6 +815,25 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                </div>
             </div>
 
+            {validateOpenTables && openTables.length > 0 && (
+               <div className={`p-5 rounded-3xl border flex items-start gap-3 ${allowZWithOpenTables ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-red-50 border-red-200 text-red-900'}`}>
+                  <AlertTriangle className="mt-0.5 shrink-0" size={22} />
+                  <div className="flex-1">
+                     <h3 className="text-sm font-black uppercase tracking-widest">
+                        {allowZWithOpenTables ? 'Mesas abiertas permitidas' : 'Mesas abiertas bloquean el cierre'}
+                     </h3>
+                     <p className="mt-1 text-sm font-semibold">
+                        Hay {openTables.length} mesa(s) ocupada(s), reservada(s) o con orden abierta.
+                     </p>
+                     <p className="mt-1 text-xs font-medium opacity-80">
+                        {allowZWithOpenTables
+                           ? 'La configuración de esta terminal permite continuar con el Cierre Z.'
+                           : 'Activa "Permitir Z con mesas abiertas" en Sesión y Cierre Z para poder continuar.'}
+                     </p>
+                  </div>
+               </div>
+            )}
+
             {/* Notes Section */}
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
                <h3 className="font-bold text-gray-800 mb-2 flex items-center gap-2">
@@ -822,7 +854,10 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
          <div className="shrink-0 p-6 bg-white border-t border-gray-200 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] flex flex-col items-center">
             <SlideButton
                label="Desliza para Cerrar Caja"
-               disabled={currenciesRequiringCashCount.length > 0 && !currenciesRequiringCashCount.every(currencyCode => hasDeclaredCashForCurrency(currencyCode))}
+               disabled={
+                  shouldBlockOpenTables ||
+                  (currenciesRequiringCashCount.length > 0 && !currenciesRequiringCashCount.every(currencyCode => hasDeclaredCashForCurrency(currencyCode)))
+               }
                colorClass={config.themeColor === 'orange' ? 'bg-orange-500' : 'bg-blue-500'}
                onComplete={handleStartClosing}
             />

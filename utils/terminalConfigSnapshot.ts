@@ -115,6 +115,12 @@ const mergeWorkflowSessionFromErpConfig = (
     merged.emailZReport = emailZ;
   }
 
+  const allowZWithOpenTables =
+    erpSession.allowZWithOpenTables ?? erpSession.allow_z_with_open_tables;
+  if (typeof allowZWithOpenTables === 'boolean') {
+    merged.allowZWithOpenTables = allowZWithOpenTables;
+  }
+
   const zEmails = erpSession.zReportEmails ?? erpSession.z_report_emails;
   if (typeof zEmails === 'string') {
     merged.zReportEmails = zEmails;

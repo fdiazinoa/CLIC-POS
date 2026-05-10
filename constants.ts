@@ -87,6 +87,7 @@ export const DEFAULT_TERMINAL_CONFIG = {
       autoPrintZReport: true,
       zReportEmails: '',
       checkOpenOrders: true,
+      allowZWithOpenTables: false,
       forceDenominationCount: false,
       cashVarianceThreshold: 0,
       emailZReport: false,

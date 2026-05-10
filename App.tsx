@@ -5821,6 +5821,7 @@ const AppContent: React.FC = () => {
               roles={roles}
               onConfirmClose={handleZReport}
               terminalId={currentTerminalId}
+              tables={tables}
               onClose={() => {
                 const role = getCurrentDeviceRole();
                 if (role === DeviceRole.SELF_CHECKOUT) setCurrentView('KIOSK_WELCOME');
