@@ -946,6 +946,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const shouldAutoOpenUberModal = Boolean(
       terminalDeliveryAlerts?.isDeliveryTerminal && terminalDeliveryAlerts?.autoOpenUberEatsModal
    );
+   const uberOrdersPollingIntervalMs = terminalDeliveryAlerts?.isDeliveryTerminal ? 10000 : 30000;
    const productById = useMemo(() => {
       const index = new Map<string, Product>();
       for (const product of products || []) {
@@ -1994,6 +1995,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       let cancelled = false;
       let intervalId: number | null = null;
 
+      const notifyUberOrders = (orders: UberEatsPendingOrder[]) => {
+         if (orders.length === 0) return;
+
+         if (shouldShowUberToastAlerts) {
+            setIncomingUberToast({
+               count: orders.length,
+               displayIds: orders.map((order) => order.displayId || order.uberOrderId).filter(Boolean).slice(0, 3),
+            });
+         }
+
+         if (shouldAutoOpenUberModal && !showRecoverReservationModal) {
+            openRecoverReservationModal();
+         }
+      };
+
       const pollUberPendingOrders = async () => {
          const orders = await loadUberPendingOrders({ silent: true });
          if (cancelled || !orders) return;
@@ -2002,6 +2018,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (!uberOrdersMonitorPrimedRef.current) {
             knownUberOrderIdsRef.current = currentIds;
             uberOrdersMonitorPrimedRef.current = true;
+            if (terminalDeliveryAlerts?.isDeliveryTerminal) {
+               notifyUberOrders(orders);
+            }
             return;
          }
 
@@ -2009,17 +2028,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          knownUberOrderIdsRef.current = currentIds;
 
          if (newOrders.length === 0) return;
-
-         if (shouldShowUberToastAlerts) {
-            setIncomingUberToast({
-               count: newOrders.length,
-               displayIds: newOrders.map((order) => order.displayId || order.uberOrderId).filter(Boolean).slice(0, 3),
-            });
-         }
-
-         if (shouldAutoOpenUberModal && !showRecoverReservationModal) {
-            openRecoverReservationModal();
-         }
+         notifyUberOrders(newOrders);
       };
 
       try {
@@ -2031,7 +2040,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       void pollUberPendingOrders();
       intervalId = window.setInterval(() => {
          void pollUberPendingOrders();
-      }, 30000);
+      }, uberOrdersPollingIntervalMs);
 
       return () => {
          cancelled = true;
@@ -2045,6 +2054,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       shouldAutoOpenUberModal,
       shouldShowUberToastAlerts,
       showRecoverReservationModal,
+      terminalDeliveryAlerts?.isDeliveryTerminal,
+      uberOrdersPollingIntervalMs,
    ]);
 
    const activeReservationByScanCode = useMemo(() => {
