@@ -5016,7 +5016,8 @@ const AppContent: React.FC = () => {
     }
 
     // 2. Resolución fiscal para la nota de crédito
-    const currentTerminalId = getCurrentTerminal()?.id || config.terminals?.[0]?.id || 't1';
+    const currentTerminal = getCurrentTerminal();
+    const currentTerminalId = currentTerminal?.id || config.terminals?.[0]?.id || 't1';
     const fiscalCompliance = getFiscalComplianceConfig(config);
     const creditNoteFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
     let creditNoteNcf: string | undefined;
@@ -5026,15 +5027,53 @@ const AppContent: React.FC = () => {
       console.warn(`No se pudo generar NCF ${creditNoteFiscalType}:`, e);
     }
 
-    // 3. Document Sequence (Internal Refund Series)
-    const sequences = await db.get('internalSequences') as DocumentSeries[];
-    const refundSeries = sequences.find(s => s.id === 'REFUND');
+    // 3. Document Sequence (Terminal-assigned Refund Series)
+    const sequences = ((await db.get('internalSequences')) as DocumentSeries[]) || [];
+    const terminalSeriesList = currentTerminal?.config?.documentSeries || [];
+    const availableRefundSeries = mergeDocumentSeriesCollection([
+      ...sequences,
+      ...terminalSeriesList
+    ]);
+    const assignedRefundSeriesId = currentTerminal?.config?.documentAssignments?.['REFUND'];
+    const resolvedRefundSeriesId = resolveDocumentAssignmentId('REFUND', availableRefundSeries, assignedRefundSeriesId);
+    const refundSeries = resolvedRefundSeriesId
+      ? availableRefundSeries.find(s => s.id === resolvedRefundSeriesId)
+      : undefined;
+    let refundSeriesNumber: number | undefined;
     let displayId = `NC-${Date.now().toString().slice(-6)}`;
     if (refundSeries) {
-      displayId = `${refundSeries.prefix}${refundSeries.nextNumber.toString().padStart(refundSeries.padding, '0')}`;
-      const updatedSequences = sequences.map(s => s.id === 'REFUND' ? { ...s, nextNumber: s.nextNumber + 1 } : s);
+      const nextRefundNumber = Math.max(1, Number(refundSeries.nextNumber) || 1);
+      refundSeriesNumber = nextRefundNumber;
+      displayId = `${refundSeries.prefix}${nextRefundNumber.toString().padStart(refundSeries.padding || 6, '0')}`;
+      const updatedRefundSeries = {
+        ...refundSeries,
+        nextNumber: nextRefundNumber + 1
+      };
+      const updatedSequences = mergeDocumentSeriesCollection([
+        ...sequences,
+        updatedRefundSeries
+      ]);
       await db.save('internalSequences', updatedSequences);
       setInternalSequences(updatedSequences);
+
+      const hasTerminalSeries = terminalSeriesList.some(s => s.id === refundSeries.id);
+      const updatedTerminalSeries = hasTerminalSeries
+        ? terminalSeriesList.map(s => s.id === refundSeries.id ? updatedRefundSeries : s)
+        : [...terminalSeriesList, updatedRefundSeries];
+      const updatedTerminals = (config.terminals || []).map(terminal => (
+        terminal.id === currentTerminalId
+          ? {
+            ...terminal,
+            config: {
+              ...terminal.config,
+              documentSeries: updatedTerminalSeries
+            }
+          }
+          : terminal
+      ));
+      const updatedConfig = { ...config, terminals: updatedTerminals };
+      setConfig(updatedConfig);
+      await db.save('config', updatedConfig);
     }
 
     const refundPayments: PaymentEntry[] = options.refundPayments && options.refundPayments.length > 0
@@ -5052,6 +5091,8 @@ const AppContent: React.FC = () => {
       id: createRuntimeId('NC'),
       displayId: displayId,
       documentType: 'REFUND',
+      seriesId: refundSeries?.id,
+      seriesNumber: refundSeriesNumber,
       date: new Date().toISOString(),
       items: normalizedRefundItems,
       total: refundTotal,
@@ -5080,7 +5121,6 @@ const AppContent: React.FC = () => {
     };
 
     // 5. Persist refund, history mirror and Kardex through the standalone helper
-    const currentTerminal = getCurrentTerminal();
     const defaultWarehouseId =
       currentTerminal?.config?.inventoryScope?.defaultSalesWarehouseId ||
       (config.terminals || []).find(t => t.id === currentTerminalId)?.config?.inventoryScope?.defaultSalesWarehouseId ||
