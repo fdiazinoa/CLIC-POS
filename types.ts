@@ -1922,6 +1922,8 @@ export type RefundSettlementMode = 'WALLET' | 'CARD_VOID' | 'CARD_REFUND';
 export interface RefundProcessingOptions {
   refundPayments?: PaymentEntry[];
   settlementMode?: RefundSettlementMode;
+  customerId?: string;
+  customerName?: string;
   skipWalletDeposit?: boolean;
   autoPrintIntegratedArtifacts?: boolean;
 }

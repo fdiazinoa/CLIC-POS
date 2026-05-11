@@ -4995,18 +4995,23 @@ const AppContent: React.FC = () => {
     const newStatus = isFullRefund ? 'REFUNDED' : 'PARTIAL_REFUND';
 
     const normalizeText = (value?: string | null) => (value || '').trim().toLowerCase();
-    const matchedCustomer = originalTx.customerId
-      ? customers.find(c => c.id === originalTx.customerId)
+    const optionCustomer = options.customerId
+      ? customers.find(c => c.id === options.customerId)
+      : undefined;
+    const matchedCustomer = options.customerId
+      ? optionCustomer
+      : originalTx.customerId
+        ? customers.find(c => c.id === originalTx.customerId)
       : customers.find(c =>
         normalizeText(c.name) !== '' &&
         normalizeText(c.name) === normalizeText(originalTx.customerName)
       );
-    const resolvedCustomerId = originalTx.customerId || matchedCustomer?.id;
-    const resolvedCustomerName = originalTx.customerName || matchedCustomer?.name;
+    const resolvedCustomerId = options.customerId || originalTx.customerId || matchedCustomer?.id;
+    const resolvedCustomerName = options.customerName || optionCustomer?.name || originalTx.customerName || matchedCustomer?.name;
     const shouldGenerateWalletAdvance = options.settlementMode === 'WALLET';
 
     if (shouldGenerateWalletAdvance && !resolvedCustomerId) {
-      alert('Para generar un anticipo, la venta original debe tener un cliente asociado.');
+      alert('Selecciona un cliente para generar el anticipo.');
       return null;
     }
 
@@ -5755,6 +5760,7 @@ const AppContent: React.FC = () => {
             config={config}
             currentUser={currentUser}
             users={users}
+            customers={customers}
             roles={roles}
             initialSelectedId={scanTargetTicketId}
             onUpdateConfig={handleConfigUpdate}

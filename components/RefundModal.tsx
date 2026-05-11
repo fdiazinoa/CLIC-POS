@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, RotateCcw, AlertTriangle, Check, Archive, Trash2, Wallet, Banknote } from 'lucide-react';
-import { Transaction, CartItem, RefundProcessingOptions } from '../types';
+import { Transaction, CartItem, Customer, RefundProcessingOptions } from '../types';
 
 type RefundModalMode = 'STANDARD' | 'AZUL_GATEWAY_REFUND';
 
@@ -17,6 +17,7 @@ interface RefundModalProps {
     ) => void;
     currencySymbol: string;
     mode?: RefundModalMode;
+    customers?: Customer[];
 }
 
 export const RefundModal: React.FC<RefundModalProps> = ({
@@ -25,12 +26,15 @@ export const RefundModal: React.FC<RefundModalProps> = ({
     transaction,
     onConfirm,
     currencySymbol,
-    mode = 'STANDARD'
+    mode = 'STANDARD',
+    customers = []
 }) => {
     const [refundQuantities, setRefundQuantities] = useState<Map<string, number>>(new Map());
     const [itemConditions, setItemConditions] = useState<Map<string, 'SELLABLE' | 'DAMAGED'>>(new Map());
     const [reason, setReason] = useState('Devolución de Cliente');
     const [settlementMode, setSettlementMode] = useState<'STANDARD' | 'WALLET_ADVANCE'>('STANDARD');
+    const [customerSearch, setCustomerSearch] = useState('');
+    const [selectedAdvanceCustomerId, setSelectedAdvanceCustomerId] = useState('');
 
     useEffect(() => {
         if (isOpen && transaction) {
@@ -50,13 +54,36 @@ export const RefundModal: React.FC<RefundModalProps> = ({
             setItemConditions(initialConditions);
             setReason('');
             setSettlementMode('STANDARD');
+            setCustomerSearch('');
+            const normalizedTransactionCustomer = String(transaction.customerName || '').trim().toLowerCase();
+            const matchedCustomer = transaction.customerId
+                ? customers.find(customer => customer.id === transaction.customerId)
+                : customers.find(customer =>
+                    normalizedTransactionCustomer &&
+                    customer.name.trim().toLowerCase() === normalizedTransactionCustomer
+                );
+            setSelectedAdvanceCustomerId(matchedCustomer?.id || '');
         }
-    }, [isOpen, mode, transaction]);
+    }, [isOpen, mode, transaction, customers]);
 
     if (!isOpen || !transaction) return null;
 
     const isGatewayRefundMode = mode === 'AZUL_GATEWAY_REFUND';
-    const hasCustomer = Boolean(transaction.customerId || transaction.customerName);
+    const selectedAdvanceCustomer = customers.find(customer => customer.id === selectedAdvanceCustomerId) || null;
+    const originalCustomerName = transaction.customerName || customers.find(customer => customer.id === transaction.customerId)?.name || '';
+    const normalizedCustomerSearch = customerSearch.trim().toLowerCase();
+    const filteredCustomers = customers
+        .filter(customer => {
+            if (!normalizedCustomerSearch) return true;
+            const haystack = [
+                customer.name,
+                customer.phone,
+                customer.email,
+                customer.taxId,
+            ].filter(Boolean).join(' ').toLowerCase();
+            return haystack.includes(normalizedCustomerSearch);
+        })
+        .slice(0, 8);
 
     const handleQtyChange = (cartId: string, max: number, delta: number) => {
         if (isGatewayRefundMode) return;
@@ -91,8 +118,8 @@ export const RefundModal: React.FC<RefundModalProps> = ({
 
     const handleConfirm = () => {
         if (refundQuantities.size === 0) return;
-        if (settlementMode === 'WALLET_ADVANCE' && !hasCustomer) {
-            alert('Para generar un anticipo, la venta original debe tener un cliente asociado.');
+        if (settlementMode === 'WALLET_ADVANCE' && !selectedAdvanceCustomer) {
+            alert('Selecciona un cliente para generar el anticipo.');
             return;
         }
 
@@ -109,7 +136,11 @@ export const RefundModal: React.FC<RefundModalProps> = ({
             itemConditions,
             reason || 'Devolución General',
             settlementMode === 'WALLET_ADVANCE'
-                ? { settlementMode: 'WALLET' }
+                ? {
+                    settlementMode: 'WALLET',
+                    customerId: selectedAdvanceCustomer.id,
+                    customerName: selectedAdvanceCustomer.name,
+                }
                 : { skipWalletDeposit: true }
         );
     };
@@ -275,14 +306,11 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => hasCustomer && setSettlementMode('WALLET_ADVANCE')}
-                                    disabled={!hasCustomer}
+                                    onClick={() => setSettlementMode('WALLET_ADVANCE')}
                                     className={`p-4 rounded-2xl border text-left transition-all ${
                                         settlementMode === 'WALLET_ADVANCE'
                                             ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                                            : hasCustomer
-                                                ? 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
-                                                : 'border-gray-100 bg-gray-50 text-gray-300 cursor-not-allowed'
+                                            : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
                                     }`}
                                 >
                                     <div className="flex items-center gap-2 font-black text-sm">
@@ -290,12 +318,59 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                                         Generar Anticipo
                                     </div>
                                     <p className="text-xs mt-1 opacity-75">
-                                        {hasCustomer
-                                            ? 'Carga el valor como crédito a favor para consumo futuro.'
-                                            : 'Requiere cliente asociado a la venta original.'}
+                                        Carga el valor como crédito a favor para consumo futuro.
                                     </p>
                                 </button>
                             </div>
+                            {settlementMode === 'WALLET_ADVANCE' && (
+                                <div className="mt-3 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4">
+                                    {originalCustomerName && (
+                                        <p className="mb-3 text-xs font-semibold text-emerald-800">
+                                            Cliente de la factura: <span className="font-black">{originalCustomerName}</span>
+                                        </p>
+                                    )}
+                                    <label className="block text-xs font-bold text-emerald-700 uppercase mb-2">Cliente para el anticipo</label>
+                                    <input
+                                        type="text"
+                                        value={customerSearch}
+                                        onChange={(event) => setCustomerSearch(event.target.value)}
+                                        placeholder="Buscar por nombre, teléfono, email o RNC..."
+                                        className="w-full rounded-xl border border-emerald-100 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400"
+                                    />
+                                    <div className="mt-3 max-h-44 overflow-y-auto space-y-2">
+                                        {filteredCustomers.map(customer => (
+                                            <button
+                                                key={customer.id}
+                                                type="button"
+                                                onClick={() => {
+                                                    setSelectedAdvanceCustomerId(customer.id);
+                                                    setCustomerSearch(customer.name);
+                                                }}
+                                                className={`w-full rounded-xl border px-3 py-2 text-left transition-all ${
+                                                    selectedAdvanceCustomerId === customer.id
+                                                        ? 'border-emerald-400 bg-white text-emerald-800 shadow-sm'
+                                                        : 'border-transparent bg-white/70 text-gray-700 hover:bg-white'
+                                                }`}
+                                            >
+                                                <p className="text-sm font-black">{customer.name}</p>
+                                                <p className="text-xs text-gray-500">
+                                                    {[customer.taxId, customer.phone, customer.email].filter(Boolean).join(' · ') || 'Sin datos adicionales'}
+                                                </p>
+                                            </button>
+                                        ))}
+                                        {filteredCustomers.length === 0 && (
+                                            <p className="py-3 text-center text-xs font-semibold text-emerald-700">
+                                                No hay clientes que coincidan. Crea el cliente en Clientes y vuelve a esta devolución.
+                                            </p>
+                                        )}
+                                    </div>
+                                    {selectedAdvanceCustomer && (
+                                        <p className="mt-3 text-xs font-bold text-emerald-700">
+                                            Anticipo asociado a: {selectedAdvanceCustomer.name}
+                                        </p>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     )}
 

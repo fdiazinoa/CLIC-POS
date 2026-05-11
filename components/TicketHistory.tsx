@@ -10,6 +10,7 @@ import {
    Transaction,
    BusinessConfig,
    CartItem,
+   Customer,
    RoleDefinition,
    ZReport,
    PaymentEntry,
@@ -47,6 +48,7 @@ interface TicketHistoryProps {
    currentUser: User | null;
    onUpdateConfig: (newConfig: BusinessConfig) => void;
    users: User[];
+   customers: Customer[];
    roles: RoleDefinition[];
    onClose: () => void;
    initialSelectedId?: string | null; // NEW: For Smart Scan
@@ -1042,7 +1044,7 @@ const TicketDetailDrawer: React.FC<{
    );
 };
 
-const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, onRefundTransaction, initialSelectedId, onRetryFiscalDocument }) => {
+const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, customers, roles, onClose, onRefundTransaction, initialSelectedId, onRetryFiscalDocument }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [expandedId, setExpandedId] = useState<string | null>(null);
    const [showFilters, setShowFilters] = useState(false);
@@ -2143,6 +2145,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             onConfirm={handleConfirmRefundFromModal}
             currencySymbol={config.currencySymbol}
             mode={refundRequestMode}
+            customers={customers}
          />
 
          <SupervisorModal {...supervisorModalProps} users={users} />
