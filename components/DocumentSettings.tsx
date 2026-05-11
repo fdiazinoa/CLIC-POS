@@ -77,10 +77,86 @@ const DOCUMENT_TYPE_CONFIG: Record<string, { label: string; icon: React.Componen
    PAYMENT_OUT: { label: 'Pagos Realizados', icon: Check, color: 'fuchsia' }
 };
 
+const DOCUMENT_SERIES_GROUPS: Array<{
+   id: string;
+   label: string;
+   description: string;
+   icon: React.ComponentType<any>;
+   color: string;
+   types: readonly string[];
+}> = [
+   {
+      id: 'SALES',
+      label: 'Ventas',
+      description: 'Tickets y facturas operativas de venta.',
+      icon: Receipt,
+      color: 'blue',
+      types: ['TICKET'],
+   },
+   {
+      id: 'REFUNDS',
+      label: 'Devoluciones / Abonos',
+      description: 'Notas de crédito, devoluciones y anulaciones.',
+      icon: RotateCcw,
+      color: 'orange',
+      types: ['REFUND', 'VOID'],
+   },
+   {
+      id: 'CASH',
+      label: 'Caja y Cuentas',
+      description: 'Entradas, salidas, recibos, pagos y cuentas.',
+      icon: Landmark,
+      color: 'emerald',
+      types: ['CASH_IN', 'CASH_OUT', 'CASH_DEPOSIT', 'CASH_WITHDRAWAL', 'RECEIVABLE', 'PAYABLE', 'PAYMENT_IN', 'PAYMENT_OUT'],
+   },
+   {
+      id: 'INVENTORY',
+      label: 'Inventario',
+      description: 'Traspasos, ajustes, compras y producción.',
+      icon: Box,
+      color: 'purple',
+      types: ['TRANSFER', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT', 'PURCHASE', 'PRODUCTION'],
+   },
+   {
+      id: 'CLOSURES',
+      label: 'Sesión y Cierre',
+      description: 'Cierres Z y cortes X.',
+      icon: Save,
+      color: 'slate',
+      types: ['Z_REPORT', 'X_REPORT'],
+   },
+];
+
 const normalizeDocumentType = (value: unknown): string => {
    if (typeof value !== 'string') return '';
    return value.trim().toUpperCase().replace(/[\s-]+/g, '_');
 };
+
+const normalizeSeriesIdentity = (value: unknown): string =>
+   String(value || '').trim().toUpperCase();
+
+const findAssignedSeries = (
+   availableSeries: DocumentSeries[],
+   documentType: string,
+   assignmentId: string
+): DocumentSeries | null => {
+   const assignmentKey = normalizeSeriesIdentity(assignmentId);
+   if (!assignmentKey) return null;
+
+   const exact = availableSeries.find(series => normalizeSeriesIdentity(series.id) === assignmentKey);
+   if (exact) return exact;
+
+   const sameType = availableSeries.filter(series =>
+      normalizeDocumentType((series as any).documentType) === documentType
+   );
+   const byPrefix = sameType.find(series => normalizeSeriesIdentity(series.prefix) === assignmentKey);
+   if (byPrefix) return byPrefix;
+
+   return availableSeries.find(series => normalizeSeriesIdentity(series.prefix) === assignmentKey) || null;
+};
+
+const getDocumentTypeLabel = (documentType: string): string =>
+   DOCUMENT_TYPE_CONFIG[documentType]?.label || `Tipo ${documentType}`;
 
 const inferDocumentType = (series: any): string => {
    const explicitType = normalizeDocumentType(series?.documentType);
@@ -235,7 +311,7 @@ const FISCAL_CREDENTIAL_SOURCE_LABELS: Record<'env' | 'sqlite' | 'supabase', str
 
 const normalizeKey = (value: unknown): string => String(value || '').trim().toUpperCase();
 
-const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: configProp, terminalId }) => {
+const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: configProp, terminalId, currentDeviceId }) => {
    const [activeSubTab, setActiveSubTab] = useState<'SERIES' | 'FISCAL_POOL'>('SERIES');
 
    // Data for Series
@@ -548,21 +624,80 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       return stats;
    }, [transactions, allocationStatsByType]);
 
-   const extraDocumentTypes = useMemo(() => {
-      const extras = new Set<string>();
-      for (const series of seriesList) {
-         const normalizedType = normalizeDocumentType((series as any)?.documentType);
-         if (normalizedType && !DOCUMENT_TYPE_SET.has(normalizedType)) {
-            extras.add(normalizedType);
-         }
+   const activeTerminal = useMemo(() => {
+      const terminals = businessConfig?.terminals || [];
+      if (!Array.isArray(terminals) || terminals.length === 0) return null;
+      const requestedId = normalizeKey(resolvedTerminalId);
+      if (requestedId) {
+         const directMatch = terminals.find((terminal: any) => normalizeKey(terminal?.id) === requestedId);
+         if (directMatch) return directMatch;
       }
-      return Array.from(extras);
-   }, [seriesList]);
+      const deviceId = currentDeviceId || localStorage.getItem('pos_device_id') || localStorage.getItem('CLIC_POS_DEVICE_ID') || '';
+      return terminals.find((terminal: any) => normalizeKey(terminal?.config?.currentDeviceId) === normalizeKey(deviceId)) || terminals[0] || null;
+   }, [businessConfig, resolvedTerminalId, currentDeviceId]);
 
-   const documentTypesToRender = useMemo(
-      () => [...DOCUMENT_TYPE_ORDER, ...extraDocumentTypes],
-      [extraDocumentTypes]
-   );
+   const isTerminalSeriesGoverned = Boolean(activeTerminal?.config?.governedByMaster);
+
+   const assignedTerminalSeries = useMemo(() => {
+      const assignments = activeTerminal?.config?.documentAssignments || {};
+      const assignmentEntries = Object.entries(assignments)
+         .map(([documentType, assignmentId]) => ({
+            documentType: normalizeDocumentType(documentType),
+            assignmentId: String(assignmentId || '').trim(),
+         }))
+         .filter(entry => entry.documentType && entry.assignmentId);
+
+      if (assignmentEntries.length === 0) return [];
+
+      const availableSeries = normalizeSequenceCollection([
+         ...seriesList,
+         ...(Array.isArray(activeTerminal?.config?.documentSeries) ? activeTerminal.config.documentSeries : []),
+      ]);
+      const orderedEntries = [
+         ...DOCUMENT_TYPE_ORDER
+            .map(documentType => assignmentEntries.find(entry => entry.documentType === documentType))
+            .filter(Boolean),
+         ...assignmentEntries.filter(entry => !DOCUMENT_TYPE_SET.has(entry.documentType)),
+      ] as Array<{ documentType: string; assignmentId: string }>;
+
+      const seen = new Set<string>();
+      const assigned = orderedEntries
+         .map(entry => {
+            const matched = findAssignedSeries(availableSeries, entry.documentType, entry.assignmentId);
+            const fallback = DEFAULT_DOCUMENT_SERIES.find(series =>
+               normalizeDocumentType(series.documentType) === entry.documentType ||
+               normalizeDocumentType(series.id) === entry.documentType
+            );
+            const raw = matched || fallback || null;
+            if (!raw) return null;
+
+            const normalized = normalizeSequence({
+               ...raw,
+               id: matched?.id || entry.assignmentId,
+               documentType: entry.documentType,
+            });
+            if (!normalized) return null;
+
+            const key = `${entry.documentType}:${normalizeSeriesIdentity(normalized.id || entry.assignmentId)}`;
+            if (seen.has(key)) return null;
+            seen.add(key);
+            return normalized;
+         })
+         .filter(Boolean) as DocumentSeries[];
+
+      return assigned;
+   }, [activeTerminal, seriesList]);
+
+   const groupedTerminalSeries = useMemo(() => (
+      DOCUMENT_SERIES_GROUPS
+         .map(group => ({
+            ...group,
+            series: assignedTerminalSeries.filter(series =>
+               group.types.includes(normalizeDocumentType((series as any).documentType))
+            ),
+         }))
+         .filter(group => group.series.length > 0)
+   ), [assignedTerminalSeries]);
 
    const handleAddNewSeries = () => {
       setEditingSeries({
@@ -1000,71 +1135,88 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                {activeSubTab === 'SERIES' && (
                   <div className="space-y-6 animate-in slide-in-from-bottom-4">
                      <div className="flex justify-between items-center px-2">
-                        <h2 className="text-lg font-bold text-gray-800 uppercase tracking-widest text-xs opacity-50">Secuencias por Tipo</h2>
+                        <div>
+                           <h2 className="text-lg font-bold text-gray-800 uppercase tracking-widest text-xs opacity-50">Series asignadas a esta terminal</h2>
+                           <p className="text-xs text-gray-500 mt-1">
+                              {activeTerminal?.id
+                                 ? `Mostrando solo documentos configurados para ${(activeTerminal as any).name || activeTerminal.id}.`
+                                 : 'No se pudo resolver la terminal activa.'}
+                           </p>
+                        </div>
                         <button
                            onClick={handleAddNewSeries}
-                           className="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 flex items-center gap-2 active:scale-95 transition-all"
+                           disabled={isTerminalSeriesGoverned}
+                           title={isTerminalSeriesGoverned ? 'Esta terminal recibe sus series desde ERP > Terminales.' : undefined}
+                           className={`px-6 py-2.5 rounded-xl font-bold shadow-lg flex items-center gap-2 transition-all ${
+                              isTerminalSeriesGoverned
+                                 ? 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none'
+                                 : 'bg-blue-600 text-white hover:bg-blue-700 active:scale-95'
+                           }`}
                         >
                            <Plus size={20} /> Nueva Serie
                         </button>
                      </div>
 
+                     {isTerminalSeriesGoverned && (
+                        <div className="mx-2 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                           Esta caja está gobernada por ERP. Las series se administran en <span className="font-bold">ERP &gt; Terminales</span> y aquí se muestran solo las asignadas a la terminal activa.
+                        </div>
+                     )}
+
+                     {assignedTerminalSeries.length === 0 && (
+                        <div className="mx-2 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-800">
+                           No hay series asignadas a esta terminal. Configúralas en <span className="font-bold">ERP &gt; Terminales</span> o en Ajustes &gt; Terminales para que el POS pueda emitir documentos sin confusión.
+                        </div>
+                     )}
 
                      {/* Group by Document Type */}
-                     {documentTypesToRender.map(docType => {
-                        const typeSeries = seriesList.filter(s => normalizeDocumentType((s as any).documentType) === docType);
-
-                        // Skip if no series for this type
-                        if (typeSeries.length === 0) return null;
-
-                        const config = DOCUMENT_TYPE_CONFIG[docType] || {
-                           label: `Tipo ${docType}`,
-                           icon: FileText,
-                           color: 'slate'
-                        };
-
-                        const Icon = config.icon;
-
-
+                     {groupedTerminalSeries.map(group => {
+                        const Icon = group.icon;
                         return (
-                           <div key={docType} className="space-y-4">
+                           <div key={group.id} className="space-y-4">
                               <div className="flex items-center gap-3 px-2">
-                                 <div className={`p-2 rounded-lg bg-${config.color}-50 text-${config.color}-600`}>
+                                 <div className={`p-2 rounded-lg bg-${group.color}-50 text-${group.color}-600`}>
                                     <Icon size={20} />
                                  </div>
-                                 <h3 className="font-bold text-gray-700">{config.label}</h3>
-                                 <span className="text-xs text-gray-400">({typeSeries.length} serie{typeSeries.length !== 1 ? 's' : ''})</span>
+                                 <div>
+                                    <h3 className="font-bold text-gray-700">{group.label}</h3>
+                                    <p className="text-xs text-gray-400">{group.description}</p>
+                                 </div>
+                                 <span className="text-xs text-gray-400">({group.series.length} serie{group.series.length !== 1 ? 's' : ''})</span>
                               </div>
 
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                 {typeSeries.map((series) => (
+                                 {group.series.map((series) => {
+                                    const seriesType = normalizeDocumentType((series as any).documentType);
+                                    return (
                                     <div key={series.id} className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm hover:shadow-md transition-all flex justify-between items-center group">
                                        <div className="flex items-center gap-3">
-                                          <div className={`w-10 h-10 bg-${config.color}-50 text-${config.color}-600 rounded-lg flex items-center justify-center font-bold text-xs`}>{series.prefix}</div>
+                                          <div className={`w-10 h-10 bg-${group.color}-50 text-${group.color}-600 rounded-lg flex items-center justify-center font-bold text-xs overflow-hidden`}>{series.prefix}</div>
                                           <div>
                                              <h4 className="font-bold text-gray-800 text-sm">{series.name}</h4>
                                              <p className="text-xs text-gray-400">Próximo: <span className="font-mono font-bold text-blue-600">{series.prefix}{series.nextNumber.toString().padStart(series.padding || 1, '0')}</span></p>
+                                             <p className="text-[10px] font-bold text-gray-400 uppercase mt-1">{getDocumentTypeLabel(seriesType)}</p>
                                           </div>
                                        </div>
                                        <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
                                           <button
                                              onClick={() => setEditingSeries({ ...series })}
-                                             className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"
+                                             disabled={isTerminalSeriesGoverned}
+                                             className={`p-2 rounded-lg ${isTerminalSeriesGoverned ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400 hover:text-blue-600 hover:bg-blue-50'}`}
                                           >
                                              <Edit2 size={16} />
                                           </button>
                                           <button
                                              onClick={() => handleDeleteSeries(series.id)}
-                                             className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg"
+                                             disabled={isTerminalSeriesGoverned}
+                                             className={`p-2 rounded-lg ${isTerminalSeriesGoverned ? 'text-gray-200 cursor-not-allowed' : 'text-gray-300 hover:text-red-500 hover:bg-red-50'}`}
                                           >
                                              <Trash2 size={16} />
                                           </button>
                                        </div>
                                     </div>
-                                 ))}
-                                 {typeSeries.length === 0 && (
-                                    <div className="col-span-full py-8 text-center text-gray-400 text-sm italic">No hay series configuradas para este tipo</div>
-                                 )}
+                                    );
+                                 })}
                               </div>
                            </div>
                         );

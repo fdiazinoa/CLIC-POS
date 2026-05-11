@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, RotateCcw, AlertTriangle, Check, Archive, Trash2 } from 'lucide-react';
-import { Transaction, CartItem } from '../types';
+import { X, RotateCcw, AlertTriangle, Check, Archive, Trash2, Wallet, Banknote } from 'lucide-react';
+import { Transaction, CartItem, RefundProcessingOptions } from '../types';
 
 type RefundModalMode = 'STANDARD' | 'AZUL_GATEWAY_REFUND';
 
@@ -12,7 +12,8 @@ interface RefundModalProps {
         originalTx: Transaction,
         refundItems: CartItem[],
         conditions: Map<string, 'SELLABLE' | 'DAMAGED'>,
-        reason: string
+        reason: string,
+        options?: RefundProcessingOptions
     ) => void;
     currencySymbol: string;
     mode?: RefundModalMode;
@@ -29,6 +30,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
     const [refundQuantities, setRefundQuantities] = useState<Map<string, number>>(new Map());
     const [itemConditions, setItemConditions] = useState<Map<string, 'SELLABLE' | 'DAMAGED'>>(new Map());
     const [reason, setReason] = useState('Devolución de Cliente');
+    const [settlementMode, setSettlementMode] = useState<'STANDARD' | 'WALLET_ADVANCE'>('STANDARD');
 
     useEffect(() => {
         if (isOpen && transaction) {
@@ -47,12 +49,14 @@ export const RefundModal: React.FC<RefundModalProps> = ({
             });
             setItemConditions(initialConditions);
             setReason('');
+            setSettlementMode('STANDARD');
         }
     }, [isOpen, mode, transaction]);
 
     if (!isOpen || !transaction) return null;
 
     const isGatewayRefundMode = mode === 'AZUL_GATEWAY_REFUND';
+    const hasCustomer = Boolean(transaction.customerId || transaction.customerName);
 
     const handleQtyChange = (cartId: string, max: number, delta: number) => {
         if (isGatewayRefundMode) return;
@@ -87,6 +91,10 @@ export const RefundModal: React.FC<RefundModalProps> = ({
 
     const handleConfirm = () => {
         if (refundQuantities.size === 0) return;
+        if (settlementMode === 'WALLET_ADVANCE' && !hasCustomer) {
+            alert('Para generar un anticipo, la venta original debe tener un cliente asociado.');
+            return;
+        }
 
         const itemsToRefund = transaction.items
             .filter(item => (refundQuantities.get(item.cartId) || 0) > 0)
@@ -95,7 +103,15 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                 quantity: refundQuantities.get(item.cartId) || 0
             }));
 
-        onConfirm(transaction, itemsToRefund, itemConditions, reason || 'Devolución General');
+        onConfirm(
+            transaction,
+            itemsToRefund,
+            itemConditions,
+            reason || 'Devolución General',
+            settlementMode === 'WALLET_ADVANCE'
+                ? { settlementMode: 'WALLET' }
+                : { skipWalletDeposit: true }
+        );
     };
 
     return (
@@ -237,6 +253,51 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                             className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
                         />
                     </div>
+
+                    {!isGatewayRefundMode && (
+                        <div className="mt-6">
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Destino del Crédito</label>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <button
+                                    type="button"
+                                    onClick={() => setSettlementMode('STANDARD')}
+                                    className={`p-4 rounded-2xl border text-left transition-all ${
+                                        settlementMode === 'STANDARD'
+                                            ? 'border-red-300 bg-red-50 text-red-800'
+                                            : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                                    }`}
+                                >
+                                    <div className="flex items-center gap-2 font-black text-sm">
+                                        <Banknote size={18} />
+                                        Reembolso normal
+                                    </div>
+                                    <p className="text-xs mt-1 opacity-75">Genera la nota de crédito sin cargar anticipo al cliente.</p>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => hasCustomer && setSettlementMode('WALLET_ADVANCE')}
+                                    disabled={!hasCustomer}
+                                    className={`p-4 rounded-2xl border text-left transition-all ${
+                                        settlementMode === 'WALLET_ADVANCE'
+                                            ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                                            : hasCustomer
+                                                ? 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                                                : 'border-gray-100 bg-gray-50 text-gray-300 cursor-not-allowed'
+                                    }`}
+                                >
+                                    <div className="flex items-center gap-2 font-black text-sm">
+                                        <Wallet size={18} />
+                                        Generar Anticipo
+                                    </div>
+                                    <p className="text-xs mt-1 opacity-75">
+                                        {hasCustomer
+                                            ? 'Carga el valor como crédito a favor para consumo futuro.'
+                                            : 'Requiere cliente asociado a la venta original.'}
+                                    </p>
+                                </button>
+                            </div>
+                        </div>
+                    )}
 
                 </div>
 

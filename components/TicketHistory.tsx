@@ -1554,9 +1554,10 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       refundItems: CartItem[],
       conditions: Map<string, 'SELLABLE' | 'DAMAGED'>,
       reason: string,
-      requestMode: RefundRequestMode = 'STANDARD'
+      requestMode: RefundRequestMode = 'STANDARD',
+      processingOptions?: RefundProcessingOptions
    ) => {
-      let refundOptions: RefundProcessingOptions | undefined;
+      let refundOptions: RefundProcessingOptions | undefined = processingOptions;
 
       if (requestMode === 'AZUL_GATEWAY_REFUND') {
          const azulRefundResolution = resolveAzulRefundResolution(originalTx, refundItems, config);
@@ -1687,7 +1688,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             alert(error instanceof Error ? error.message : 'No se pudo completar el refund AZUL.');
             return;
          }
-      } else {
+      } else if (processingOptions?.settlementMode !== 'WALLET') {
          const azulResolution = resolveAzulVoidResolution(originalTx, refundItems, config);
 
          if (azulResolution.mode === 'BLOCK') {
@@ -1892,7 +1893,8 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       originalTx: Transaction,
       refundItems: CartItem[],
       conditions: Map<string, 'SELLABLE' | 'DAMAGED'>,
-      reason: string
+      reason: string,
+      processingOptions?: RefundProcessingOptions
    ) => {
       if (!originalTx || refundItems.length === 0) return;
 
@@ -1927,7 +1929,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
       if (!authorized) return;
 
-      await executeRefundFlow(originalTx, refundItems, conditions, reason || 'Devolución', refundRequestMode);
+      await executeRefundFlow(originalTx, refundItems, conditions, reason || 'Devolución', refundRequestMode, processingOptions);
    };
 
    // Calculate Refund Total

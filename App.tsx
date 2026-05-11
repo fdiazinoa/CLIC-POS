@@ -5003,6 +5003,12 @@ const AppContent: React.FC = () => {
       );
     const resolvedCustomerId = originalTx.customerId || matchedCustomer?.id;
     const resolvedCustomerName = originalTx.customerName || matchedCustomer?.name;
+    const shouldGenerateWalletAdvance = options.settlementMode === 'WALLET';
+
+    if (shouldGenerateWalletAdvance && !resolvedCustomerId) {
+      alert('Para generar un anticipo, la venta original debe tener un cliente asociado.');
+      return null;
+    }
 
     // 2. Resolución fiscal para la nota de crédito
     const currentTerminalId = getCurrentTerminal()?.id || config.terminals?.[0]?.id || 't1';
@@ -5030,8 +5036,8 @@ const AppContent: React.FC = () => {
       ? options.refundPayments
       : [{
         id: `refund-${Date.now()}`,
-        method: 'STORE_CREDIT',
-        methodLabel: 'Nota de crédito',
+        method: shouldGenerateWalletAdvance ? 'ADVANCE' : 'STORE_CREDIT',
+        methodLabel: shouldGenerateWalletAdvance ? 'Anticipo generado' : 'Nota de crédito',
         amount: refundTotal,
         timestamp: new Date(),
       }];
@@ -5064,6 +5070,7 @@ const AppContent: React.FC = () => {
       originalTransactionId: originalTx.id,
       refundReason: reason,
       isTaxIncluded: originalTx.isTaxIncluded,
+      walletDepositAmount: shouldGenerateWalletAdvance ? refundTotal : undefined,
       syncStatus: 'PENDING'
     };
 
@@ -5104,8 +5111,8 @@ const AppContent: React.FC = () => {
           remainingRefund -= debtToReduce;
         }
 
-        // Step B: If there is still a refund amount (Scenario B - pure credit or surplus), add to Wallet
-        if (!options.skipWalletDeposit && remainingRefund > 0.01) {
+        // Step B: If the operator selected "Generar Anticipo", add the refundable surplus to Wallet.
+        if (shouldGenerateWalletAdvance && !options.skipWalletDeposit && remainingRefund > 0.01) {
           try {
             await transactionService.applyRefundToWallet(
               resolvedCustomerId,
@@ -5188,7 +5195,7 @@ const AppContent: React.FC = () => {
     // Sync
     backgroundSyncManager.triggerSync().catch(console.error);
 
-    alert(`Devolución procesada correctamente.\nDocumento: ${displayId}\n${creditNoteNcf ? 'NCF: ' + creditNoteNcf : ''}${autoPrintNotice}`);
+    alert(`Devolución procesada correctamente.\nDocumento: ${displayId}\n${creditNoteNcf ? 'NCF: ' + creditNoteNcf : ''}${shouldGenerateWalletAdvance ? `\nAnticipo generado: ${config.currencySymbol || '$'}${refundTotal.toFixed(2)}` : ''}${autoPrintNotice}`);
     return finalizedCreditNote;
   };
 
