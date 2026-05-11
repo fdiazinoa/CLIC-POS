@@ -35,6 +35,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
     const [settlementMode, setSettlementMode] = useState<'STANDARD' | 'WALLET_ADVANCE'>('STANDARD');
     const [customerSearch, setCustomerSearch] = useState('');
     const [selectedAdvanceCustomerId, setSelectedAdvanceCustomerId] = useState('');
+    const [isAdvanceCustomerPickerOpen, setIsAdvanceCustomerPickerOpen] = useState(false);
 
     useEffect(() => {
         if (isOpen && transaction) {
@@ -55,6 +56,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
             setReason('');
             setSettlementMode('STANDARD');
             setCustomerSearch('');
+            setIsAdvanceCustomerPickerOpen(false);
             const normalizedTransactionCustomer = String(transaction.customerName || '').trim().toLowerCase();
             const matchedCustomer = transaction.customerId
                 ? customers.find(customer => customer.id === transaction.customerId)
@@ -84,6 +86,19 @@ export const RefundModal: React.FC<RefundModalProps> = ({
             return haystack.includes(normalizedCustomerSearch);
         })
         .slice(0, 8);
+
+    const handleSelectAdvanceSettlement = () => {
+        setSettlementMode('WALLET_ADVANCE');
+        if (!selectedAdvanceCustomer) {
+            setIsAdvanceCustomerPickerOpen(true);
+        }
+    };
+
+    const handleSelectAdvanceCustomer = (customer: Customer) => {
+        setSelectedAdvanceCustomerId(customer.id);
+        setCustomerSearch(customer.name);
+        setIsAdvanceCustomerPickerOpen(false);
+    };
 
     const handleQtyChange = (cartId: string, max: number, delta: number) => {
         if (isGatewayRefundMode) return;
@@ -119,7 +134,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
     const handleConfirm = () => {
         if (refundQuantities.size === 0) return;
         if (settlementMode === 'WALLET_ADVANCE' && !selectedAdvanceCustomer) {
-            alert('Selecciona un cliente para generar el anticipo.');
+            setIsAdvanceCustomerPickerOpen(true);
             return;
         }
 
@@ -306,7 +321,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => setSettlementMode('WALLET_ADVANCE')}
+                                    onClick={handleSelectAdvanceSettlement}
                                     className={`p-4 rounded-2xl border text-left transition-all ${
                                         settlementMode === 'WALLET_ADVANCE'
                                             ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
@@ -318,57 +333,31 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                                         Generar Anticipo
                                     </div>
                                     <p className="text-xs mt-1 opacity-75">
-                                        Carga el valor como crédito a favor para consumo futuro.
+                                        Asigna cliente y carga el valor como crédito a favor.
                                     </p>
                                 </button>
                             </div>
                             {settlementMode === 'WALLET_ADVANCE' && (
-                                <div className="mt-3 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4">
-                                    {originalCustomerName && (
-                                        <p className="mb-3 text-xs font-semibold text-emerald-800">
-                                            Cliente de la factura: <span className="font-black">{originalCustomerName}</span>
-                                        </p>
-                                    )}
-                                    <label className="block text-xs font-bold text-emerald-700 uppercase mb-2">Cliente para el anticipo</label>
-                                    <input
-                                        type="text"
-                                        value={customerSearch}
-                                        onChange={(event) => setCustomerSearch(event.target.value)}
-                                        placeholder="Buscar por nombre, teléfono, email o RNC..."
-                                        className="w-full rounded-xl border border-emerald-100 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400"
-                                    />
-                                    <div className="mt-3 max-h-44 overflow-y-auto space-y-2">
-                                        {filteredCustomers.map(customer => (
-                                            <button
-                                                key={customer.id}
-                                                type="button"
-                                                onClick={() => {
-                                                    setSelectedAdvanceCustomerId(customer.id);
-                                                    setCustomerSearch(customer.name);
-                                                }}
-                                                className={`w-full rounded-xl border px-3 py-2 text-left transition-all ${
-                                                    selectedAdvanceCustomerId === customer.id
-                                                        ? 'border-emerald-400 bg-white text-emerald-800 shadow-sm'
-                                                        : 'border-transparent bg-white/70 text-gray-700 hover:bg-white'
-                                                }`}
-                                            >
-                                                <p className="text-sm font-black">{customer.name}</p>
-                                                <p className="text-xs text-gray-500">
-                                                    {[customer.taxId, customer.phone, customer.email].filter(Boolean).join(' · ') || 'Sin datos adicionales'}
-                                                </p>
-                                            </button>
-                                        ))}
-                                        {filteredCustomers.length === 0 && (
-                                            <p className="py-3 text-center text-xs font-semibold text-emerald-700">
-                                                No hay clientes que coincidan. Crea el cliente en Clientes y vuelve a esta devolución.
-                                            </p>
-                                        )}
-                                    </div>
+                                <div className="mt-3 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4 flex items-center justify-between gap-3">
                                     {selectedAdvanceCustomer && (
-                                        <p className="mt-3 text-xs font-bold text-emerald-700">
-                                            Anticipo asociado a: {selectedAdvanceCustomer.name}
-                                        </p>
+                                        <div>
+                                            <p className="text-xs font-bold text-emerald-700 uppercase">Cliente asignado</p>
+                                            <p className="text-sm font-black text-emerald-900">{selectedAdvanceCustomer.name}</p>
+                                        </div>
                                     )}
+                                    {!selectedAdvanceCustomer && (
+                                        <div>
+                                            <p className="text-xs font-bold text-emerald-700 uppercase">Cliente requerido</p>
+                                            <p className="text-sm font-semibold text-emerald-900">Asigna un cliente al anticipo y a la nota de crédito.</p>
+                                        </div>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsAdvanceCustomerPickerOpen(true)}
+                                        className="shrink-0 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white hover:bg-emerald-700"
+                                    >
+                                        {selectedAdvanceCustomer ? 'Cambiar cliente' : 'Asignar cliente'}
+                                    </button>
                                 </div>
                             )}
                         </div>
@@ -413,6 +402,71 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                 </div>
 
             </div>
+
+            {isAdvanceCustomerPickerOpen && (
+                <div className="fixed inset-0 z-[140] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-slate-950/60" onClick={() => setIsAdvanceCustomerPickerOpen(false)} />
+                    <div className="relative w-full max-w-lg rounded-3xl bg-white shadow-2xl border border-gray-100 overflow-hidden">
+                        <div className="p-5 border-b border-gray-100 flex items-start justify-between bg-emerald-50">
+                            <div>
+                                <h3 className="text-lg font-black text-gray-900">Asignar cliente</h3>
+                                <p className="text-xs font-semibold text-emerald-800 mt-1">
+                                    Este cliente quedará asociado al anticipo y a la nota de crédito.
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setIsAdvanceCustomerPickerOpen(false)}
+                                className="p-2 rounded-full text-gray-400 hover:bg-white hover:text-gray-700"
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <div className="p-5">
+                            {originalCustomerName && (
+                                <div className="mb-4 rounded-2xl border border-emerald-100 bg-emerald-50/70 px-4 py-3 text-xs font-semibold text-emerald-800">
+                                    Cliente registrado en la factura: <span className="font-black">{originalCustomerName}</span>
+                                </div>
+                            )}
+
+                            <input
+                                type="text"
+                                autoFocus
+                                value={customerSearch}
+                                onChange={(event) => setCustomerSearch(event.target.value)}
+                                placeholder="Buscar por nombre, teléfono, email o RNC..."
+                                className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400"
+                            />
+
+                            <div className="mt-4 max-h-72 overflow-y-auto space-y-2">
+                                {filteredCustomers.map(customer => (
+                                    <button
+                                        key={customer.id}
+                                        type="button"
+                                        onClick={() => handleSelectAdvanceCustomer(customer)}
+                                        className={`w-full rounded-2xl border px-4 py-3 text-left transition-all ${
+                                            selectedAdvanceCustomerId === customer.id
+                                                ? 'border-emerald-400 bg-emerald-50 text-emerald-900'
+                                                : 'border-gray-100 bg-white text-gray-700 hover:border-emerald-200 hover:bg-emerald-50/40'
+                                        }`}
+                                    >
+                                        <p className="text-sm font-black">{customer.name}</p>
+                                        <p className="text-xs text-gray-500">
+                                            {[customer.taxId, customer.phone, customer.email].filter(Boolean).join(' · ') || 'Sin datos adicionales'}
+                                        </p>
+                                    </button>
+                                ))}
+                                {filteredCustomers.length === 0 && (
+                                    <p className="py-8 text-center text-sm font-semibold text-gray-500">
+                                        No hay clientes que coincidan. Crea el cliente en Clientes y vuelve a esta devolución.
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
