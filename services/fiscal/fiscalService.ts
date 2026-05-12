@@ -270,7 +270,10 @@ const resolveCloudMasterBase = async (): Promise<string | null> => {
     return null;
 };
 
-const buildFiscalEndpointCandidates = async (path: string): Promise<string[]> => {
+const buildFiscalEndpointCandidates = async (
+    path: string,
+    options?: { localOnly?: boolean }
+): Promise<string[]> => {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const fiscalPath = `/api/fiscal${normalizedPath}`;
     const env = (import.meta as any)?.env || {};
@@ -286,11 +289,13 @@ const buildFiscalEndpointCandidates = async (path: string): Promise<string[]> =>
     const runtimeMasterBase = normalizeBaseUrl(buildMasterUrlFromHost(window.location.hostname));
     const cloudMasterBase = await resolveCloudMasterBase();
 
-    const erpCandidates = uniqueStrings([
-        persistedErpBase ? `${persistedErpBase}${fiscalPath}` : null,
-    ]);
+    const erpCandidates = options?.localOnly
+        ? []
+        : uniqueStrings([
+            persistedErpBase ? `${persistedErpBase}${fiscalPath}` : null,
+        ]);
     const localCandidates = uniqueStrings([
-        pinnedFiscalBase ? `${pinnedFiscalBase}${fiscalPath}` : null,
+        !options?.localOnly && pinnedFiscalBase ? `${pinnedFiscalBase}${fiscalPath}` : null,
         persistedMasterBase ? `${persistedMasterBase}${fiscalPath}` : null,
         cloudMasterBase ? `${cloudMasterBase}${fiscalPath}` : null,
         runtimeMasterBase ? `${runtimeMasterBase}${fiscalPath}` : null,
@@ -464,11 +469,11 @@ const requestFiscalJson = async <T extends Record<string, any>>(
     path: string,
     init: RequestInit,
     invalidPayloadFactory: (status: number) => T,
-    options?: { delegatedToErp?: boolean }
+    options?: { delegatedToErp?: boolean; localOnly?: boolean }
 ): Promise<{ response: FiscalHttpResponse; payload: T }> => {
     const endpoints = options?.delegatedToErp
         ? await buildDelegatedFiscalEndpointCandidates(path)
-        : await buildFiscalEndpointCandidates(path);
+        : await buildFiscalEndpointCandidates(path, { localOnly: options?.localOnly });
     let lastInvalid: { response: FiscalHttpResponse; payload: T } | null = null;
     let lastError: Error | null = null;
     const timeoutMs = isNativeAndroidRuntime() ? 2200 : 5000;
@@ -496,7 +501,7 @@ const requestFiscalJson = async <T extends Record<string, any>>(
                     continue;
                 }
                 const resolvedBase = extractBaseUrlFromEndpoint(endpoint);
-                if (resolvedBase) {
+                if (resolvedBase && !options?.delegatedToErp) {
                     localStorage.setItem(FISCAL_BACKEND_BASE_KEY, resolvedBase);
                 }
                 return { response, payload };
@@ -540,6 +545,7 @@ export const issueFiscalDocument = async (
         input.companyInfo,
         input.credentialKey
     );
+    const isLocalDirectDigiFact = input.providerId === 'DIGIFACT' && Boolean(localCredential?.record.authToken);
     const isDelegatedProvider =
         input.providerId === 'DIGIFACT'
         && input.deliveryMode === 'DELEGATED_ERP'
@@ -582,7 +588,7 @@ export const issueFiscalDocument = async (
             documentCode: input.transaction.ncfType as FiscalIssueResponse['documentCode'],
             message: ''
         }),
-        { delegatedToErp: isDelegatedProvider }
+        { delegatedToErp: isDelegatedProvider, localOnly: isLocalDirectDigiFact }
     );
 
     if (!response.ok && payload?.success !== false) {
@@ -601,6 +607,7 @@ export const getFiscalDocumentStatus = async (
     deliveryMode?: FiscalProviderDeliveryMode
 ): Promise<FiscalStatusResponse> => {
     const localCredential = await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);
+    const isLocalDirectDigiFact = providerId === 'DIGIFACT' && Boolean(localCredential?.record.authToken);
     const isDelegatedProvider =
         providerId === 'DIGIFACT'
         && deliveryMode === 'DELEGATED_ERP'
@@ -628,7 +635,7 @@ export const getFiscalDocumentStatus = async (
             providerTransactionId,
             message: ''
         }),
-        { delegatedToErp: isDelegatedProvider }
+        { delegatedToErp: isDelegatedProvider, localOnly: isLocalDirectDigiFact }
     );
 
     if (!response.ok && payload?.success !== false) {
