@@ -535,14 +535,15 @@ export const issueFiscalDocument = async (
         throw new Error('Solo se pueden emitir documentos electrónicos con esta ruta.');
     }
 
-    const isDelegatedProvider = input.providerId === 'DIGIFACT' && input.deliveryMode === 'DELEGATED_ERP';
-    const localCredential = isDelegatedProvider
-        ? null
-        : await resolveLocalFiscalCredential(
-            input.providerId,
-            input.companyInfo,
-            input.credentialKey
-        );
+    const localCredential = await resolveLocalFiscalCredential(
+        input.providerId,
+        input.companyInfo,
+        input.credentialKey
+    );
+    const isDelegatedProvider =
+        input.providerId === 'DIGIFACT'
+        && input.deliveryMode === 'DELEGATED_ERP'
+        && !localCredential?.record.authToken;
 
     const { response, payload } = await requestFiscalJson<FiscalIssueResponse>(
         '/documents/issue',
@@ -599,10 +600,11 @@ export const getFiscalDocumentStatus = async (
     credentialKey?: string,
     deliveryMode?: FiscalProviderDeliveryMode
 ): Promise<FiscalStatusResponse> => {
-    const isDelegatedProvider = providerId === 'DIGIFACT' && deliveryMode === 'DELEGATED_ERP';
-    const localCredential = isDelegatedProvider
-        ? null
-        : await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);
+    const localCredential = await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);
+    const isDelegatedProvider =
+        providerId === 'DIGIFACT'
+        && deliveryMode === 'DELEGATED_ERP'
+        && !localCredential?.record.authToken;
     const params = new URLSearchParams({
         providerId,
         environment: String(environment),
