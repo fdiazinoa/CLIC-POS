@@ -67,6 +67,30 @@ const resolveDigifactUrl = (
     return `${resolveDigifactBaseUrl(request)}${path.startsWith('/') ? path : `/${path}`}`;
 };
 
+const appendDigifactPath = (baseOrUrl: string, fallbackPath: string): string => {
+    const clean = baseOrUrl.replace(/\/+$/, '');
+    if (!clean) return clean;
+    if (clean.toLowerCase().endsWith(fallbackPath.toLowerCase())) return clean;
+    if (/\/api$/i.test(clean)) return `${clean}${fallbackPath}`;
+    return `${clean}${fallbackPath}`;
+};
+
+const resolveDigifactLoginUrl = (
+    request: Pick<FiscalDocumentIssueRequest | FiscalProviderTestRequest | FiscalStatusRequest, 'environment'> & { options?: any }
+): string => {
+    const explicitLogin = cleanString(request.options?.loginUrl || process.env.DIGIFACT_LOGIN_URL);
+    if (/^https?:\/\//i.test(explicitLogin)) {
+        return appendDigifactPath(explicitLogin, '/login/get_token');
+    }
+
+    const explicitTest = cleanString(request.options?.testUrl);
+    if (/^https?:\/\//i.test(explicitTest)) {
+        return appendDigifactPath(explicitTest, '/login/get_token');
+    }
+
+    return `${resolveDigifactBaseUrl(request)}/login/get_token`;
+};
+
 const parseCredentialShape = (authToken: string): DigifactCredentialShape => {
     const raw = authToken.trim();
     if (!raw) return {};
@@ -429,7 +453,7 @@ export class DigifactFiscalProvider implements FiscalProvider {
             };
         }
 
-        const loginUrl = resolveDigifactUrl(request, 'testUrl', 'DIGIFACT_LOGIN_URL', '/login/get_token');
+        const loginUrl = resolveDigifactLoginUrl(request);
         const response = await fetch(loginUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -438,7 +462,11 @@ export class DigifactFiscalProvider implements FiscalProvider {
         const raw = await response.json().catch(() => ({}));
         const token = extractToken(raw);
         if (!response.ok || !token) {
-            throw new Error(extractMessage(raw) || `DigiFact login HTTP ${response.status}`);
+            const safeUsername = queryUsername(username) || username;
+            throw new Error(
+                `DigiFact auth HTTP ${response.status}: ${extractMessage(raw) || 'Sin mensaje devuelto por DigiFact'} ` +
+                `(ambiente=${Number(request.environment) === 1 ? 'produccion' : 'test'}, taxId=${taxId}, username=${safeUsername}, endpoint=${loginUrl})`
+            );
         }
 
         tokenCache.set(cacheKey, { token, expiresAt: Date.now() + TOKEN_CACHE_TTL_MS, username });
