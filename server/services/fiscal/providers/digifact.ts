@@ -212,7 +212,7 @@ const isDigifactFailure = (payload: any, status: string, message: string): boole
     if (/rechaz|error|failed|invalid|invalido|inválido|no coincide|esquema\s+nuc|schema/i.test(message)) return true;
     if (Array.isArray(payload?.infoDetails) && payload.infoDetails.length > 0) return true;
     const code = Number(payload?.code ?? payload?.Code);
-    return Number.isFinite(code) && code < 0;
+    return Number.isFinite(code) && code !== 1;
 };
 
 const mapPaymentMethod = (method?: string): string => {
@@ -299,7 +299,7 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
         const type = cleanString(item.type).toUpperCase() === 'SERVICE' ? 2 : 1;
         const taxIndicator = itemTaxIndicator(item) === 1 || taxAmount > 0 ? 1 : 4;
         const payloadItem: any = {
-            Type: type,
+            Type: String(type),
             Description: (cleanString(item.name || item.id) || 'Item POS').slice(0, 80),
             Qty: quantity,
             Price: unitPrice,
@@ -316,7 +316,7 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
     });
 
     const payload: any = {
-        Version: '1.00',
+        Version: '1.0',
         CountryCode: 'DO',
         Header: {
             DocType: documentTypeCode(documentCode),
@@ -340,8 +340,8 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
             QtyItems: items.length,
             TotalTaxableAmount: taxableAmount,
             TotalTaxes: taxAmount > 0
-                ? [{ Code: 'ITBIS1', TaxableAmount: taxableAmount, Rate: taxRate, Amount: taxAmount }]
-                : [{ Code: 'EXENTO', TaxableAmount: netAmount, Amount: 0 }],
+                ? { TotalTax: [{ Code: 'ITBIS1', TaxableAmount: taxableAmount, Rate: taxRate, Amount: taxAmount }] }
+                : { TotalTax: [{ Code: 'EXENTO', TaxableAmount: netAmount, Amount: 0 }] },
             GrandTotal: {
                 InvoiceTotal: total
             }

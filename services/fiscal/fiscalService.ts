@@ -626,7 +626,7 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
         const type = cleanString(item.type).toUpperCase() === 'SERVICE' ? 2 : 1;
         const taxIndicator = (Array.isArray(item.appliedTaxIds) && item.appliedTaxIds.length > 0) || taxAmount > 0 ? 1 : 4;
         const payloadItem: any = {
-            Type: type,
+            Type: String(type),
             Description: (cleanString(item.name || item.id) || 'Item POS').slice(0, 80),
             Qty: quantity,
             Price: unitPrice,
@@ -641,7 +641,7 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
     });
 
     const payload: any = {
-        Version: '1.00',
+        Version: '1.0',
         CountryCode: 'DO',
         Header: {
             DocType: directDigifactDocumentCode(documentCode),
@@ -665,8 +665,8 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
             QtyItems: items.length,
             TotalTaxableAmount: taxAmount > 0 ? netAmount : 0,
             TotalTaxes: taxAmount > 0
-                ? [{ Code: 'ITBIS1', TaxableAmount: netAmount, Rate: taxRate, Amount: taxAmount }]
-                : [{ Code: 'EXENTO', TaxableAmount: netAmount, Amount: 0 }],
+                ? { TotalTax: [{ Code: 'ITBIS1', TaxableAmount: netAmount, Rate: taxRate, Amount: taxAmount }] }
+                : { TotalTax: [{ Code: 'EXENTO', TaxableAmount: netAmount, Amount: 0 }] },
             GrandTotal: { InvoiceTotal: total }
         },
         Payments: [{
@@ -734,7 +734,7 @@ const isDirectDigifactFailure = (payload: any, message: string): boolean => {
     if (payload?.success === false || payload?.ok === false) return true;
     if (Array.isArray(payload?.infoDetails) && payload.infoDetails.length > 0) return true;
     const code = Number(payload?.code ?? payload?.Code);
-    return (Number.isFinite(code) && code < 0) ||
+    return (Number.isFinite(code) && code !== 1) ||
         /rechaz|error|failed|invalid|invalido|inválido|no coincide|esquema\s+nuc|schema/i.test(message);
 };
 
