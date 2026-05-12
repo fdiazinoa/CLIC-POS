@@ -270,41 +270,6 @@ const digifactOptionalInfoList = (items: Array<{ Name: string; Value: unknown }>
     return list.length > 0 ? list : undefined;
 };
 
-const digifactPhoneList = (phone: unknown) => {
-    const digits = String(phone || '').replace(/\D/g, '').slice(0, 15);
-    if (digits.length < 10) return undefined;
-    const formatted = digits.length === 10
-        ? `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`
-        : digits;
-    return { Phone: [formatted] };
-};
-
-const digifactEmailList = (email: unknown) => {
-    const value = cleanString(email).slice(0, 80);
-    return value.includes('@') ? { Email: [value] } : undefined;
-};
-
-const digifactContact = (phone: unknown, email: unknown) => {
-    const contact: any = {};
-    const phones = digifactPhoneList(phone);
-    const emails = digifactEmailList(email);
-    if (phones) contact.PhoneList = phones;
-    if (emails) contact.EmailList = emails;
-    return Object.keys(contact).length > 0 ? contact : undefined;
-};
-
-const digifactBranchInfo = (address: unknown) => {
-    const cleanAddress = cleanString(address).slice(0, 100);
-    if (!cleanAddress) return undefined;
-    return {
-        Name: 'POS',
-        AddressInfo: {
-            Address: cleanAddress,
-            Country: 'DO'
-        }
-    };
-};
-
 const digifactTipoIngreso = (value?: number): string => {
     const normalized = Math.trunc(Number(value || 1));
     const safe = normalized >= 1 && normalized <= 6 ? normalized : 1;
@@ -314,12 +279,6 @@ const digifactTipoIngreso = (value?: number): string => {
 const digifactIndicatorMontoGravado = (transaction: any): string => {
     const raw = transaction?.isTaxIncluded ?? transaction?.taxIncluded ?? true;
     return raw === false ? '0' : '1';
-};
-
-const assignDefined = (target: any, key: string, value: unknown) => {
-    if (value === undefined || value === null) return;
-    if (typeof value === 'string' && !value.trim()) return;
-    target[key] = value;
 };
 
 const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
@@ -333,25 +292,27 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
     const taxableAmount = taxAmount > 0 ? netAmount : 0;
     const sequence = extractSequence(eNCF, documentCode);
 
-    const items = (transaction.items || []).map((item, index) => {
+    const items = (transaction.items || []).map((item) => {
         const quantity = Math.abs(sanitizeNumber(item.quantity)) || 1;
         const unitPrice = round2(Math.abs(sanitizeNumber(item.price)));
         const lineTotal = round2(quantity * unitPrice);
         const type = cleanString(item.type).toUpperCase() === 'SERVICE' ? 2 : 1;
-        const unitCode = Number(item.fiscalUnitCode || (type === 2 ? options?.unitCodeServices || 43 : options?.unitCodeGoods || 47));
         const taxIndicator = itemTaxIndicator(item) === 1 || taxAmount > 0 ? 1 : 4;
-        return {
-            Codes: digifactInfoList([{ Name: 'Interno', Value: (cleanString(item.id) || `ITEM-${index + 1}`).slice(0, 20) }]),
+        const payloadItem: any = {
             Type: type,
             Description: (cleanString(item.name || item.id) || 'Item POS').slice(0, 80),
             Qty: quantity,
-            UnitOfMeasure: unitCode,
             Price: unitPrice,
             Totals: {
                 TotalItem: lineTotal
             },
             AdditionalInfo: digifactInfoList([{ Name: 'IndicadorFacturacion', Value: String(taxIndicator) }])
         };
+        const configuredUnitCode = Number(item.fiscalUnitCode || 0);
+        if (Number.isFinite(configuredUnitCode) && configuredUnitCode > 0) {
+            payloadItem.UnitOfMeasure = configuredUnitCode;
+        }
+        return payloadItem;
     });
 
     const payload: any = {
@@ -360,7 +321,6 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
         Header: {
             DocType: documentTypeCode(documentCode),
             IssuedDateTime: toDigifactDateTime(transaction.date),
-            Currency: 'DOP',
             AdditionalIssueDocInfo: digifactInfoList([
                 { Name: 'Secuencia', Value: sequence },
                 { Name: 'IndicadorMontoGravado', Value: digifactIndicatorMontoGravado(transaction) },
@@ -392,27 +352,17 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
         }]
     };
 
-    assignDefined(payload.Seller, 'Contact', digifactContact(companyInfo.phone, (companyInfo as any).email));
-    assignDefined(payload.Seller, 'BranchInfo', digifactBranchInfo(companyInfo.address));
-
     const buyerTaxId = normalizeTaxId((customer as any).taxId || (customer as any).rnc || (transaction as any).customerTaxId);
     const buyerName = cleanString((customer as any).name || transaction.customerName);
-    if (buyerTaxId || buyerName || total >= 250000) {
+    if (buyerTaxId || total >= 250000) {
         const buyer: any = {
             TaxID: buyerTaxId || 'NO_APLICA',
             Name: (buyerName || 'Consumidor final').slice(0, 150)
         };
-        assignDefined(buyer, 'Contact', digifactContact((customer as any).phone, (customer as any).email));
-        if (cleanString((customer as any).address)) {
-            buyer.AddressInfo = {
-                Address: cleanString((customer as any).address).slice(0, 100),
-                Country: 'DO'
-            };
-        }
         payload.Buyer = buyer;
     }
 
-    if (options?.sequenceExpiryDate) {
+    if (options?.sequenceExpiryDate && documentCode !== 'E32' && documentCode !== 'E34') {
         payload.Header.AdditionalIssueDocInfo.push({
             Name: 'FechaVencimientoSecuencia',
             Data: null,

@@ -600,41 +600,6 @@ const directDigifactOptionalInfoList = (items: Array<{ Name: string; Value: unkn
     return list.length > 0 ? list : undefined;
 };
 
-const directDigifactPhoneList = (phone: unknown) => {
-    const digits = String(phone || '').replace(/\D/g, '').slice(0, 15);
-    if (digits.length < 10) return undefined;
-    const formatted = digits.length === 10
-        ? `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`
-        : digits;
-    return { Phone: [formatted] };
-};
-
-const directDigifactEmailList = (email: unknown) => {
-    const value = cleanString(email).slice(0, 80);
-    return value.includes('@') ? { Email: [value] } : undefined;
-};
-
-const directDigifactContact = (phone: unknown, email: unknown) => {
-    const contact: any = {};
-    const phones = directDigifactPhoneList(phone);
-    const emails = directDigifactEmailList(email);
-    if (phones) contact.PhoneList = phones;
-    if (emails) contact.EmailList = emails;
-    return Object.keys(contact).length > 0 ? contact : undefined;
-};
-
-const directDigifactBranchInfo = (address: unknown) => {
-    const cleanAddress = cleanString(address).slice(0, 100);
-    if (!cleanAddress) return undefined;
-    return {
-        Name: 'POS',
-        AddressInfo: {
-            Address: cleanAddress,
-            Country: 'DO'
-        }
-    };
-};
-
 const directDigifactTipoIngreso = (value?: number): string => {
     const normalized = Math.trunc(Number(value || 1));
     const safe = normalized >= 1 && normalized <= 6 ? normalized : 1;
@@ -646,12 +611,6 @@ const directDigifactIndicatorMontoGravado = (transaction: Transaction): string =
     return raw === false ? '0' : '1';
 };
 
-const assignDefined = (target: any, key: string, value: unknown) => {
-    if (value === undefined || value === null) return;
-    if (typeof value === 'string' && !value.trim()) return;
-    target[key] = value;
-};
-
 const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
     const { companyInfo, transaction } = input;
     const documentCode = String(transaction.ncfType || '');
@@ -661,21 +620,24 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
     const taxAmount = round2(Math.abs(sanitizeNumber(transaction.taxAmount)));
     const netAmount = round2(Math.abs(sanitizeNumber(transaction.netAmount)) || Math.max(0, total - taxAmount));
     const taxRate = normalizePercentRate(input.taxRate, 18);
-    const items = (transaction.items || []).map((item: any, index: number) => {
+    const items = (transaction.items || []).map((item: any) => {
         const quantity = Math.abs(sanitizeNumber(item.quantity)) || 1;
         const unitPrice = round2(Math.abs(sanitizeNumber(item.price)));
         const type = cleanString(item.type).toUpperCase() === 'SERVICE' ? 2 : 1;
         const taxIndicator = (Array.isArray(item.appliedTaxIds) && item.appliedTaxIds.length > 0) || taxAmount > 0 ? 1 : 4;
-        return {
-            Codes: directDigifactInfoList([{ Name: 'Interno', Value: (cleanString(item.id) || `ITEM-${index + 1}`).slice(0, 20) }]),
+        const payloadItem: any = {
             Type: type,
             Description: (cleanString(item.name || item.id) || 'Item POS').slice(0, 80),
             Qty: quantity,
-            UnitOfMeasure: Number(item.fiscalUnitCode || (type === 2 ? input.unitCodeServices || 43 : input.unitCodeGoods || 47)),
             Price: unitPrice,
             Totals: { TotalItem: round2(quantity * unitPrice) },
             AdditionalInfo: directDigifactInfoList([{ Name: 'IndicadorFacturacion', Value: String(taxIndicator) }])
         };
+        const configuredUnitCode = Number(item.fiscalUnitCode || 0);
+        if (Number.isFinite(configuredUnitCode) && configuredUnitCode > 0) {
+            payloadItem.UnitOfMeasure = configuredUnitCode;
+        }
+        return payloadItem;
     });
 
     const payload: any = {
@@ -684,7 +646,6 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
         Header: {
             DocType: directDigifactDocumentCode(documentCode),
             IssuedDateTime: toDirectDigifactDateTime(transaction.date),
-            Currency: 'DOP',
             AdditionalIssueDocInfo: directDigifactInfoList([
                 { Name: 'Secuencia', Value: directDigifactSequence(eNCF, documentCode) },
                 { Name: 'IndicadorMontoGravado', Value: directDigifactIndicatorMontoGravado(transaction) },
@@ -714,27 +675,17 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
         }]
     };
 
-    assignDefined(payload.Seller, 'Contact', directDigifactContact(companyInfo.phone, (companyInfo as any).email));
-    assignDefined(payload.Seller, 'BranchInfo', directDigifactBranchInfo(companyInfo.address));
-
     const buyerTaxId = normalizeTaxId(customer.taxId || customer.rnc || (transaction as any).customerTaxId);
     const buyerName = cleanString(customer.name || transaction.customerName);
-    if (buyerTaxId || buyerName || total >= 250000) {
+    if (buyerTaxId || total >= 250000) {
         const buyer: any = {
             TaxID: buyerTaxId || 'NO_APLICA',
             Name: (buyerName || 'Consumidor final').slice(0, 150)
         };
-        assignDefined(buyer, 'Contact', directDigifactContact(customer.phone, customer.email));
-        if (cleanString(customer.address)) {
-            buyer.AddressInfo = {
-                Address: cleanString(customer.address).slice(0, 100),
-                Country: 'DO'
-            };
-        }
         payload.Buyer = buyer;
     }
 
-    if (input.sequenceExpiryDate) {
+    if (input.sequenceExpiryDate && documentCode !== 'E32' && documentCode !== 'E34') {
         payload.Header.AdditionalIssueDocInfo.push({ Name: 'FechaVencimientoSecuencia', Data: null, Value: input.sequenceExpiryDate.slice(0, 10) });
     }
 
