@@ -415,6 +415,22 @@ const extractFiscalMessage = (payload: any): string => {
     return '';
 };
 
+const joinProviderMessages = (values: unknown[]): string => {
+    const messages = values
+        .flatMap((value) => {
+            if (Array.isArray(value)) {
+                return value.map(item => typeof item === 'string' ? item : JSON.stringify(item));
+            }
+            if (typeof value === 'string') return [value];
+            if (value && typeof value === 'object') return [JSON.stringify(value)];
+            return [];
+        })
+        .map(value => value.trim())
+        .filter(Boolean);
+
+    return Array.from(new Set(messages)).join(': ');
+};
+
 type DirectDigifactCredential = {
     token?: string;
     authToken?: string;
@@ -483,17 +499,15 @@ const extractDirectDigifactToken = (payload: any): string => {
 };
 
 const extractDirectDigifactMessage = (payload: any): string => {
-    const directMessage = extractFiscalMessage(payload);
-    if (directMessage) return directMessage;
-    const candidates = [payload?.description, payload?.Description, payload?.infoDetails, payload?.error, payload?.errors];
-    for (const candidate of candidates) {
-        if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
-        if (Array.isArray(candidate) && candidate.length > 0) {
-            return candidate.map(item => typeof item === 'string' ? item : JSON.stringify(item)).join('; ');
-        }
-        if (candidate && typeof candidate === 'object') return JSON.stringify(candidate);
-    }
-    return '';
+    return joinProviderMessages([
+        extractFiscalMessage(payload),
+        payload?.description,
+        payload?.Description,
+        payload?.descripcion,
+        payload?.infoDetails,
+        payload?.error,
+        payload?.errors
+    ]);
 };
 
 const resolveDirectDigifactAuth = async (
