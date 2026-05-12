@@ -216,6 +216,18 @@ const mapPaymentMethod = (method?: string): string => {
     return '1';
 };
 
+const mapPaymentCode = (method?: string): string => {
+    const normalized = cleanString(method).toUpperCase();
+    if (['CASH', 'EFECTIVO'].includes(normalized)) return '1';
+    if (['TRANSFER', 'WIRE', 'ACH', 'CHEQUE', 'CHECK', 'DEPOSITO'].includes(normalized)) return '2';
+    if (['CARD', 'CREDIT_CARD', 'DEBIT_CARD', 'TARJETA'].includes(normalized)) return '3';
+    if (['CREDIT', 'CREDITO'].includes(normalized)) return '4';
+    if (['GIFT', 'VOUCHER', 'CERTIFICATE', 'BONO', 'REGALO'].includes(normalized)) return '5';
+    if (['BARTER', 'PERMUTA'].includes(normalized)) return '6';
+    if (['STORE_CREDIT', 'CREDIT_NOTE', 'VALE_NC', 'NOTA_CREDITO'].includes(normalized)) return '7';
+    return '8';
+};
+
 const documentTypeCode = (documentCode: ElectronicDocumentCode): string =>
     String(documentCode).replace(/^E/, '');
 
@@ -226,8 +238,14 @@ const extractSequence = (encf: string, documentCode: ElectronicDocumentCode): st
 
 const toDigifactDateTime = (value?: string): string => {
     const date = value ? new Date(value) : new Date();
-    if (Number.isNaN(date.getTime())) return new Date().toISOString();
-    return date.toISOString();
+    const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+    const pad = (number: number) => String(number).padStart(2, '0');
+    const offsetMinutes = -safeDate.getTimezoneOffset();
+    const sign = offsetMinutes >= 0 ? '+' : '-';
+    const absoluteOffset = Math.abs(offsetMinutes);
+    return `${safeDate.getFullYear()}-${pad(safeDate.getMonth() + 1)}-${pad(safeDate.getDate())}` +
+        `T${pad(safeDate.getHours())}:${pad(safeDate.getMinutes())}:${pad(safeDate.getSeconds())}` +
+        `${sign}${pad(Math.floor(absoluteOffset / 60))}:${pad(absoluteOffset % 60)}`;
 };
 
 const itemTaxIndicator = (item: any): number => {
@@ -235,20 +253,24 @@ const itemTaxIndicator = (item: any): number => {
     return 4;
 };
 
-const digifactInfoList = (items: Array<{ Name: string; Value: unknown }>) => ({
-    Info: items
+const digifactInfoList = (items: Array<{ Name: string; Value: unknown }>) =>
+    items
         .map(item => ({ Name: item.Name, Value: String(item.Value ?? '').trim() }))
         .filter(item => item.Name && item.Value)
-});
+        .map(item => ({ Name: item.Name, Data: null, Value: item.Value }));
 
 const digifactOptionalInfoList = (items: Array<{ Name: string; Value: unknown }>) => {
     const list = digifactInfoList(items);
-    return list.Info.length > 0 ? list : undefined;
+    return list.length > 0 ? list : undefined;
 };
 
 const digifactPhoneList = (phone: unknown) => {
     const digits = String(phone || '').replace(/\D/g, '').slice(0, 15);
-    return digits.length >= 7 ? { Phone: [digits] } : undefined;
+    if (digits.length < 10) return undefined;
+    const formatted = digits.length === 10
+        ? `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`
+        : digits;
+    return { Phone: [formatted] };
 };
 
 const digifactEmailList = (email: unknown) => {
@@ -313,9 +335,7 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
         const unitCode = Number(item.fiscalUnitCode || (type === 2 ? options?.unitCodeServices || 43 : options?.unitCodeGoods || 47));
         const taxIndicator = itemTaxIndicator(item) === 1 || taxAmount > 0 ? 1 : 4;
         return {
-            Codes: {
-                Code: [{ Name: 'Interno', Value: (cleanString(item.id) || `ITEM-${index + 1}`).slice(0, 20) }]
-            },
+            Codes: digifactInfoList([{ Name: 'Interno', Value: (cleanString(item.id) || `ITEM-${index + 1}`).slice(0, 20) }]),
             Type: type,
             Description: (cleanString(item.name || item.id) || 'Item POS').slice(0, 80),
             Qty: quantity,
@@ -349,17 +369,21 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
                 { Name: 'NumeroFacturaInterna', Value: cleanString(transaction.displayId || transaction.id).slice(0, 20) }
             ])
         },
-        Items: { Item: items },
+        Items: items,
         Totals: {
             QtyItems: items.length,
             TotalTaxableAmount: taxableAmount,
             TotalTaxes: taxAmount > 0
-                ? { TotalTax: [{ Code: 'ITBIS1', TaxableAmount: taxableAmount, Rate: taxRate, Amount: taxAmount }] }
-                : { TotalTax: [{ Code: 'EXENTO', TaxableAmount: netAmount, Amount: 0 }] },
+                ? [{ Code: 'ITBIS1', TaxableAmount: taxableAmount, Rate: taxRate, Amount: taxAmount }]
+                : [{ Code: 'EXENTO', TaxableAmount: netAmount, Amount: 0 }],
             GrandTotal: {
                 InvoiceTotal: total
             }
-        }
+        },
+        Payments: [{
+            Code: mapPaymentCode(transaction.payments?.[0]?.method),
+            Amount: total
+        }]
     };
 
     assignDefined(payload.Seller, 'Contact', digifactContact(companyInfo.phone, (companyInfo as any).email));
@@ -383,8 +407,9 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
     }
 
     if (options?.sequenceExpiryDate) {
-        payload.Header.AdditionalIssueDocInfo.Info.push({
+        payload.Header.AdditionalIssueDocInfo.push({
             Name: 'FechaVencimientoSecuencia',
+            Data: null,
             Value: options.sequenceExpiryDate.slice(0, 10)
         });
     }
@@ -402,7 +427,7 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
                     AditionalData: {
                         Data: [{
                             Name: 'INFORMACION_REFERENCIA',
-                            Info: referenceInfo.Info
+                            Info: referenceInfo
                         }]
                     }
                 }

@@ -559,20 +559,48 @@ const mapDirectDigifactPaymentMethod = (method?: string): string => {
     return '1';
 };
 
-const directDigifactInfoList = (items: Array<{ Name: string; Value: unknown }>) => ({
-    Info: items
+const mapDirectDigifactPaymentCode = (method?: string): string => {
+    const normalized = cleanString(method).toUpperCase();
+    if (['CASH', 'EFECTIVO'].includes(normalized)) return '1';
+    if (['TRANSFER', 'WIRE', 'ACH', 'CHEQUE', 'CHECK', 'DEPOSITO'].includes(normalized)) return '2';
+    if (['CARD', 'CREDIT_CARD', 'DEBIT_CARD', 'TARJETA'].includes(normalized)) return '3';
+    if (['CREDIT', 'CREDITO'].includes(normalized)) return '4';
+    if (['GIFT', 'VOUCHER', 'CERTIFICATE', 'BONO', 'REGALO'].includes(normalized)) return '5';
+    if (['BARTER', 'PERMUTA'].includes(normalized)) return '6';
+    if (['STORE_CREDIT', 'CREDIT_NOTE', 'VALE_NC', 'NOTA_CREDITO'].includes(normalized)) return '7';
+    return '8';
+};
+
+const toDirectDigifactDateTime = (value?: string): string => {
+    const date = value ? new Date(value) : new Date();
+    const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+    const pad = (number: number) => String(number).padStart(2, '0');
+    const offsetMinutes = -safeDate.getTimezoneOffset();
+    const sign = offsetMinutes >= 0 ? '+' : '-';
+    const absoluteOffset = Math.abs(offsetMinutes);
+    return `${safeDate.getFullYear()}-${pad(safeDate.getMonth() + 1)}-${pad(safeDate.getDate())}` +
+        `T${pad(safeDate.getHours())}:${pad(safeDate.getMinutes())}:${pad(safeDate.getSeconds())}` +
+        `${sign}${pad(Math.floor(absoluteOffset / 60))}:${pad(absoluteOffset % 60)}`;
+};
+
+const directDigifactInfoList = (items: Array<{ Name: string; Value: unknown }>) =>
+    items
         .map(item => ({ Name: item.Name, Value: String(item.Value ?? '').trim() }))
         .filter(item => item.Name && item.Value)
-});
+        .map(item => ({ Name: item.Name, Data: null, Value: item.Value }));
 
 const directDigifactOptionalInfoList = (items: Array<{ Name: string; Value: unknown }>) => {
     const list = directDigifactInfoList(items);
-    return list.Info.length > 0 ? list : undefined;
+    return list.length > 0 ? list : undefined;
 };
 
 const directDigifactPhoneList = (phone: unknown) => {
     const digits = String(phone || '').replace(/\D/g, '').slice(0, 15);
-    return digits.length >= 7 ? { Phone: [digits] } : undefined;
+    if (digits.length < 10) return undefined;
+    const formatted = digits.length === 10
+        ? `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`
+        : digits;
+    return { Phone: [formatted] };
 };
 
 const directDigifactEmailList = (email: unknown) => {
@@ -633,9 +661,7 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
         const type = cleanString(item.type).toUpperCase() === 'SERVICE' ? 2 : 1;
         const taxIndicator = (Array.isArray(item.appliedTaxIds) && item.appliedTaxIds.length > 0) || taxAmount > 0 ? 1 : 4;
         return {
-            Codes: {
-                Code: [{ Name: 'Interno', Value: (cleanString(item.id) || `ITEM-${index + 1}`).slice(0, 20) }]
-            },
+            Codes: directDigifactInfoList([{ Name: 'Interno', Value: (cleanString(item.id) || `ITEM-${index + 1}`).slice(0, 20) }]),
             Type: type,
             Description: (cleanString(item.name || item.id) || 'Item POS').slice(0, 80),
             Qty: quantity,
@@ -651,7 +677,7 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
         CountryCode: 'DO',
         Header: {
             DocType: directDigifactDocumentCode(documentCode),
-            IssuedDateTime: new Date(transaction.date || Date.now()).toISOString(),
+            IssuedDateTime: toDirectDigifactDateTime(transaction.date),
             Currency: 'DOP',
             AdditionalIssueDocInfo: directDigifactInfoList([
                 { Name: 'Secuencia', Value: directDigifactSequence(eNCF, documentCode) },
@@ -667,15 +693,19 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
                 { Name: 'NumeroFacturaInterna', Value: cleanString(transaction.displayId || transaction.id).slice(0, 20) }
             ])
         },
-        Items: { Item: items },
+        Items: items,
         Totals: {
             QtyItems: items.length,
             TotalTaxableAmount: taxAmount > 0 ? netAmount : 0,
             TotalTaxes: taxAmount > 0
-                ? { TotalTax: [{ Code: 'ITBIS1', TaxableAmount: netAmount, Rate: taxRate, Amount: taxAmount }] }
-                : { TotalTax: [{ Code: 'EXENTO', TaxableAmount: netAmount, Amount: 0 }] },
+                ? [{ Code: 'ITBIS1', TaxableAmount: netAmount, Rate: taxRate, Amount: taxAmount }]
+                : [{ Code: 'EXENTO', TaxableAmount: netAmount, Amount: 0 }],
             GrandTotal: { InvoiceTotal: total }
-        }
+        },
+        Payments: [{
+            Code: mapDirectDigifactPaymentCode(transaction.payments?.[0]?.method),
+            Amount: total
+        }]
     };
 
     assignDefined(payload.Seller, 'Contact', directDigifactContact(companyInfo.phone, (companyInfo as any).email));
@@ -699,7 +729,7 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
     }
 
     if (input.sequenceExpiryDate) {
-        payload.Header.AdditionalIssueDocInfo.Info.push({ Name: 'FechaVencimientoSecuencia', Value: input.sequenceExpiryDate.slice(0, 10) });
+        payload.Header.AdditionalIssueDocInfo.push({ Name: 'FechaVencimientoSecuencia', Data: null, Value: input.sequenceExpiryDate.slice(0, 10) });
     }
 
     if (documentCode === 'E34') {
@@ -715,7 +745,7 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
                     AditionalData: {
                         Data: [{
                             Name: 'INFORMACION_REFERENCIA',
-                            Info: referenceInfo.Info
+                            Info: referenceInfo
                         }]
                     }
                 }
