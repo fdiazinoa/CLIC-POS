@@ -204,6 +204,10 @@ export interface FiscalProviderConfig {
   environment?: FiscalProviderEnvironment;
   displayName?: string;
   deliveryMode?: FiscalProviderDeliveryMode;
+  apiBaseUrl?: string;
+  testUrl?: string;
+  issueUrl?: string;
+  statusUrl?: string;
   credentialKey?: string;
   tipoIngreso?: number;
   modificationCode?: number;
@@ -586,6 +590,10 @@ export interface TerminalConfig {
     providerId?: FiscalProviderId;
     environment?: FiscalProviderEnvironment;
     deliveryMode?: FiscalProviderDeliveryMode;
+    apiBaseUrl?: string;
+    testUrl?: string;
+    issueUrl?: string;
+    statusUrl?: string;
     credentialKey?: string;
     tipoIngreso?: number;
     modificationCode?: number;

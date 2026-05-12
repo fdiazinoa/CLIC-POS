@@ -67,6 +67,10 @@ export interface FiscalIssueOptions {
     modificationCode?: number;
     unitCodeGoods?: number;
     unitCodeServices?: number;
+    apiBaseUrl?: string;
+    testUrl?: string;
+    issueUrl?: string;
+    statusUrl?: string;
 }
 
 export interface FiscalDocumentIssueRequest {
@@ -92,6 +96,7 @@ export interface FiscalProviderTestRequest {
     companyInfo?: FiscalCompanyInfo;
     credentialKey?: string;
     authToken?: string;
+    options?: Pick<FiscalIssueOptions, 'apiBaseUrl' | 'testUrl' | 'issueUrl' | 'statusUrl'>;
 }
 
 export interface FiscalDocumentIssueResult {
@@ -122,6 +127,7 @@ export interface FiscalStatusRequest {
     companyRnc?: string;
     credentialKey?: string;
     authToken?: string;
+    options?: Pick<FiscalIssueOptions, 'apiBaseUrl' | 'testUrl' | 'issueUrl' | 'statusUrl'>;
 }
 
 export interface FiscalProvider {

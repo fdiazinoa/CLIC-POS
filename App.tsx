@@ -4118,7 +4118,11 @@ const AppContent: React.FC = () => {
         modificationCode: providerConfig.modificationCode,
         unitCodeGoods: providerConfig.unitCodeGoods,
         unitCodeServices: providerConfig.unitCodeServices,
-        deliveryMode: providerConfig.deliveryMode
+        deliveryMode: providerConfig.deliveryMode,
+        apiBaseUrl: providerConfig.apiBaseUrl,
+        testUrl: providerConfig.testUrl,
+        issueUrl: providerConfig.issueUrl,
+        statusUrl: providerConfig.statusUrl
       });
 
       const finalStatus = result.pending ? 'PENDING' : result.success ? 'SYNCED' : 'ERROR';

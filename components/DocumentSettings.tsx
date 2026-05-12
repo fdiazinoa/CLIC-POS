@@ -816,7 +816,13 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             fiscalCompliance.defaultProvider,
             environment,
             businessConfig?.companyInfo,
-            provider?.credentialKey
+            provider?.credentialKey,
+            {
+               apiBaseUrl: provider?.apiBaseUrl,
+               testUrl: provider?.testUrl,
+               issueUrl: provider?.issueUrl,
+               statusUrl: provider?.statusUrl
+            }
          );
          setFiscalFeedback({
             kind: result.success ? 'success' : 'error',
@@ -1367,7 +1373,9 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                        <div>
                                           <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Credenciales del Proveedor</p>
                                           <p className="text-sm font-bold text-slate-700">
-                                             La precedencia activa es <span className="font-mono">SQLite -&gt; Supabase -&gt; ENV</span>. El token nunca vuelve al navegador una vez guardado.
+                                             {fiscalCompliance.defaultProvider === 'DIGIFACT'
+                                                ? 'DigiFact puede usar un token vigente o credenciales JSON para renovar token localmente. El valor nunca vuelve al navegador una vez guardado.'
+                                                : <>La precedencia activa es <span className="font-mono">SQLite -&gt; Supabase -&gt; ENV</span>. El token nunca vuelve al navegador una vez guardado.</>}
                                           </p>
                                        </div>
                                        {credentialMeta?.hasCredential ? (
@@ -1407,7 +1415,9 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                           />
                                        </div>
                                        <div>
-                                          <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Authentication Token</label>
+                                          <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">
+                                             {fiscalCompliance.defaultProvider === 'DIGIFACT' ? 'Token / Credenciales DigiFact' : 'Authentication Token'}
+                                          </label>
                                           <div className="relative">
                                              <input
                                                 type={showCredentialDraft ? 'text' : 'password'}
@@ -1419,7 +1429,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                                       ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
                                                       : 'bg-slate-50 border-slate-200 text-slate-800'
                                                 }`}
-                                                placeholder={hasLockedLocalCredential ? 'Credencial local activa. Usa Eliminar Local para reemplazarla.' : 'Pega aquí el token del proveedor'}
+                                                placeholder={hasLockedLocalCredential ? 'Credencial local activa. Usa Eliminar Local para reemplazarla.' : fiscalCompliance.defaultProvider === 'DIGIFACT' ? 'Token vigente o {"username":"USER_TEST","password":"..."}' : 'Pega aquí el token del proveedor'}
                                              />
                                              <button
                                                 type="button"
@@ -1434,6 +1444,11 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                           {hasLockedLocalCredential && (
                                              <p className="mt-2 text-xs font-bold text-slate-500">
                                                 La credencial ya está guardada en SQLite. Usa <span className="font-black">Eliminar Local</span> para ingresar un nuevo token.
+                                             </p>
+                                          )}
+                                          {fiscalCompliance.defaultProvider === 'DIGIFACT' && !hasLockedLocalCredential && (
+                                             <p className="mt-2 text-xs font-bold text-slate-500">
+                                                Según la documentación DigiFact, el login usa <span className="font-mono">Username</span>/<span className="font-mono">Password</span> y el token resultante vence en 30 días.
                                              </p>
                                           )}
                                        </div>

@@ -81,7 +81,13 @@ router.post('/providers/test', async (req, res) => {
             environment,
             companyInfo,
             credentialKey: options?.credentialKey,
-            authToken
+            authToken,
+            options: {
+                apiBaseUrl: options?.apiBaseUrl,
+                testUrl: options?.testUrl,
+                issueUrl: options?.issueUrl,
+                statusUrl: options?.statusUrl
+            }
         } satisfies FiscalProviderTestRequest);
         res.json(result);
     } catch (error: any) {

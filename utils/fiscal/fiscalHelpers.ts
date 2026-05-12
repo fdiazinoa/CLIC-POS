@@ -92,6 +92,9 @@ const normalizeOptionalNumber = (value: unknown): number | undefined => {
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
+const normalizeOptionalString = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() ? value.trim() : undefined;
+
 const normalizeOptionalBoolean = (value: unknown): boolean | undefined => {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'number') return value !== 0;
@@ -145,6 +148,10 @@ const getTerminalFiscalProviderConfig = (
       ?? fiscal.providerMode
       ?? fiscal.provider_mode
     ),
+    apiBaseUrl: normalizeOptionalString(fiscal.apiBaseUrl ?? fiscal.api_base_url ?? fiscal.baseUrl ?? fiscal.base_url),
+    testUrl: normalizeOptionalString(fiscal.testUrl ?? fiscal.test_url),
+    issueUrl: normalizeOptionalString(fiscal.issueUrl ?? fiscal.issue_url),
+    statusUrl: normalizeOptionalString(fiscal.statusUrl ?? fiscal.status_url),
     credentialKey: normalizeFiscalCredentialKey(fiscal.credentialKey ?? fiscal.credential_key) || undefined,
     tipoIngreso: normalizeOptionalNumber(fiscal.tipoIngreso ?? fiscal.tipo_ingreso),
     modificationCode: normalizeOptionalNumber(fiscal.modificationCode ?? fiscal.modification_code),

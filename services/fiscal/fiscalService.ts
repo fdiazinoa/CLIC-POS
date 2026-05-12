@@ -59,6 +59,10 @@ interface IssueFiscalDocumentInput {
     unitCodeGoods?: number;
     unitCodeServices?: number;
     deliveryMode?: FiscalProviderDeliveryMode;
+    apiBaseUrl?: string;
+    testUrl?: string;
+    issueUrl?: string;
+    statusUrl?: string;
 }
 
 const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -562,7 +566,11 @@ export const issueFiscalDocument = async (
                     modificationCode: input.modificationCode,
                     unitCodeGoods: input.unitCodeGoods,
                     unitCodeServices: input.unitCodeServices,
-                    deliveryMode: input.deliveryMode
+                    deliveryMode: input.deliveryMode,
+                    apiBaseUrl: input.apiBaseUrl,
+                    testUrl: input.testUrl,
+                    issueUrl: input.issueUrl,
+                    statusUrl: input.statusUrl
                 }
             })
         },
@@ -635,7 +643,13 @@ export const testFiscalProviderConnection = async (
     providerId: FiscalProviderId,
     environment: number,
     companyInfo?: CompanyInfo,
-    credentialKey?: string
+    credentialKey?: string,
+    endpointOptions?: {
+        apiBaseUrl?: string;
+        testUrl?: string;
+        issueUrl?: string;
+        statusUrl?: string;
+    }
 ) => {
     const localCredential = await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);
     const testDirectPolaris = async () => {
@@ -695,7 +709,11 @@ export const testFiscalProviderConnection = async (
                     authToken: localCredential?.record.authToken,
                     companyInfo,
                     options: {
-                        credentialKey
+                        credentialKey,
+                        apiBaseUrl: endpointOptions?.apiBaseUrl,
+                        testUrl: endpointOptions?.testUrl,
+                        issueUrl: endpointOptions?.issueUrl,
+                        statusUrl: endpointOptions?.statusUrl
                     }
                 })
             },
