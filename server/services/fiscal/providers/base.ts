@@ -71,6 +71,9 @@ export interface FiscalIssueOptions {
     testUrl?: string;
     issueUrl?: string;
     statusUrl?: string;
+    establishmentCode?: string;
+    branchCode?: string;
+    branchName?: string;
 }
 
 export interface FiscalDocumentIssueRequest {

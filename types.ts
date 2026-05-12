@@ -209,6 +209,9 @@ export interface FiscalProviderConfig {
   issueUrl?: string;
   statusUrl?: string;
   credentialKey?: string;
+  establishmentCode?: string;
+  branchCode?: string;
+  branchName?: string;
   tipoIngreso?: number;
   modificationCode?: number;
   unitCodeGoods?: number;

@@ -95,6 +95,12 @@ const normalizeOptionalNumber = (value: unknown): number | undefined => {
 const normalizeOptionalString = (value: unknown): string | undefined =>
   typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
+const normalizeFiscalEstablishmentCode = (value: unknown): string | undefined => {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) return undefined;
+  return trimmed.replace(/[^A-Za-z0-9]/g, '').toUpperCase() || undefined;
+};
+
 const normalizeOptionalBoolean = (value: unknown): boolean | undefined => {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'number') return value !== 0;
@@ -153,11 +159,66 @@ const getTerminalFiscalProviderConfig = (
     issueUrl: normalizeOptionalString(fiscal.issueUrl ?? fiscal.issue_url),
     statusUrl: normalizeOptionalString(fiscal.statusUrl ?? fiscal.status_url),
     credentialKey: normalizeFiscalCredentialKey(fiscal.credentialKey ?? fiscal.credential_key) || undefined,
+    establishmentCode: normalizeFiscalEstablishmentCode(
+      fiscal.establishmentCode
+      ?? fiscal.establishment_code
+      ?? fiscal.digifactEstablishmentCode
+      ?? fiscal.digifact_establishment_code
+      ?? fiscal.sucursalCode
+      ?? fiscal.sucursal_code
+    ),
+    branchCode: normalizeFiscalEstablishmentCode(
+      fiscal.branchCode
+      ?? fiscal.branch_code
+      ?? fiscal.digifactBranchCode
+      ?? fiscal.digifact_branch_code
+      ?? fiscal.branchId
+      ?? fiscal.branch_id
+    ),
+    branchName: normalizeOptionalString(fiscal.branchName ?? fiscal.branch_name ?? fiscal.sucursalName ?? fiscal.sucursal_name),
     tipoIngreso: normalizeOptionalNumber(fiscal.tipoIngreso ?? fiscal.tipo_ingreso),
     modificationCode: normalizeOptionalNumber(fiscal.modificationCode ?? fiscal.modification_code),
     unitCodeGoods: normalizeOptionalNumber(fiscal.unitCodeGoods ?? fiscal.unit_code_goods),
     unitCodeServices: normalizeOptionalNumber(fiscal.unitCodeServices ?? fiscal.unit_code_services)
   };
+};
+
+export const resolveFiscalProviderEstablishmentCode = (...sources: unknown[]): string | undefined => {
+  const candidateKeys = [
+    'establishmentCode',
+    'establishment_code',
+    'digifactEstablishmentCode',
+    'digifact_establishment_code',
+    'branchCode',
+    'branch_code',
+    'digifactBranchCode',
+    'digifact_branch_code',
+    'sucursalCode',
+    'sucursal_code',
+    'branchId',
+    'branch_id'
+  ];
+  const nestedKeys = ['fiscal', 'digifact', 'providerOptions', 'options', 'metadata', 'erpBinding', 'erpSnapshot'];
+
+  const visit = (source: unknown, depth = 0): string | undefined => {
+    if (!source || depth > 2 || typeof source !== 'object') return undefined;
+    const record = source as Record<string, unknown>;
+    for (const key of candidateKeys) {
+      const normalized = normalizeFiscalEstablishmentCode(record[key]);
+      if (normalized) return normalized;
+    }
+    for (const key of nestedKeys) {
+      const normalized = visit(record[key], depth + 1);
+      if (normalized) return normalized;
+    }
+    return undefined;
+  };
+
+  for (const source of sources) {
+    const normalized = visit(source);
+    if (normalized) return normalized;
+  }
+  return undefined;
 };
 
 export const FISCAL_DOCUMENT_LABELS: Record<FiscalDocumentCode, string> = {

@@ -24,6 +24,12 @@ type DigifactCredentialShape = {
     Password?: string;
     taxId?: string;
     rnc?: string;
+    establishmentCode?: string;
+    establishment_code?: string;
+    branchCode?: string;
+    branch_code?: string;
+    digifactEstablishmentCode?: string;
+    digifactBranchCode?: string;
 };
 
 type ResolvedDigifactAuth = {
@@ -299,10 +305,35 @@ const digifactContact = (phone: unknown, email?: unknown) => {
     return contact;
 };
 
-const digifactBranchInfo = (address: unknown) => {
+const normalizeBranchCode = (value: unknown): string =>
+    String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+const resolveDigifactBranchCode = (request: FiscalDocumentIssueRequest): string => {
+    const credential = request.options?.authToken ? parseCredentialShape(request.options.authToken) : {};
+    const code = normalizeBranchCode(
+        request.options?.establishmentCode
+        || request.options?.branchCode
+        || credential.establishmentCode
+        || credential.establishment_code
+        || credential.digifactEstablishmentCode
+        || credential.branchCode
+        || credential.branch_code
+        || credential.digifactBranchCode
+        || process.env.DIGIFACT_ESTABLISHMENT_CODE
+        || process.env.DIGIFACT_BRANCH_CODE
+        || (request.companyInfo as any).establishmentCode
+        || (request.companyInfo as any).branchCode
+    );
+    if (!code) {
+        throw new Error('DigiFact requiere el código de establecimiento/sucursal configurado. Define establishmentCode/branchCode en la configuración fiscal o en la credencial.');
+    }
+    return code.slice(0, 20);
+};
+
+const digifactBranchInfo = (address: unknown, branchCode: string) => {
     const cleanAddress = cleanString(address).slice(0, 100) || 'Santo Domingo';
     return {
-        Name: '0001',
+        Name: branchCode,
         AddressInfo: {
             Address: cleanAddress,
             Country: 'DO'
@@ -323,6 +354,7 @@ const digifactIndicatorMontoGravado = (transaction: any): string => {
 
 const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
     const { companyInfo, transaction, documentCode, options } = request;
+    const branchCode = resolveDigifactBranchCode(request);
     const customer = transaction.customerSnapshot || {};
     const eNCF = cleanString(transaction.electronicNcf || transaction.ncf);
     const total = round2(Math.abs(sanitizeNumber(transaction.total)));
@@ -372,7 +404,7 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
             TaxID: normalizeTaxId(companyInfo.rnc),
             Name: cleanString(companyInfo.name).slice(0, 150),
             Contact: digifactContact(companyInfo.phone, (companyInfo as any).email),
-            BranchInfo: digifactBranchInfo(companyInfo.address),
+            BranchInfo: digifactBranchInfo(companyInfo.address, branchCode),
             AdditionalInfo: digifactInfoList([
                 { Name: 'NumeroFacturaInterna', Value: cleanString(transaction.displayId || transaction.id).slice(0, 20) }
             ])

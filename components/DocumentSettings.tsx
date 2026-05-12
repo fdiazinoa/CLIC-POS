@@ -1374,7 +1374,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                           <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Credenciales del Proveedor</p>
                                           <p className="text-sm font-bold text-slate-700">
                                              {fiscalCompliance.defaultProvider === 'DIGIFACT'
-                                                ? 'DigiFact puede usar un token vigente o credenciales JSON para renovar token localmente. El valor nunca vuelve al navegador una vez guardado.'
+                                                ? 'DigiFact puede usar un token vigente o credenciales JSON para renovar token localmente. Incluye el código de establecimiento registrado en DigiFact/Hacienda. El valor nunca vuelve al navegador una vez guardado.'
                                                 : <>La precedencia activa es <span className="font-mono">SQLite -&gt; Supabase -&gt; ENV</span>. El token nunca vuelve al navegador una vez guardado.</>}
                                           </p>
                                        </div>
@@ -1429,7 +1429,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                                       ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
                                                       : 'bg-slate-50 border-slate-200 text-slate-800'
                                                 }`}
-                                                placeholder={hasLockedLocalCredential ? 'Credencial local activa. Usa Eliminar Local para reemplazarla.' : fiscalCompliance.defaultProvider === 'DIGIFACT' ? 'Token vigente o {"username":"USER_TEST","password":"..."}' : 'Pega aquí el token del proveedor'}
+                                                placeholder={hasLockedLocalCredential ? 'Credencial local activa. Usa Eliminar Local para reemplazarla.' : fiscalCompliance.defaultProvider === 'DIGIFACT' ? 'Token o {"taxId":"132752155","username":"USER","password":"...","establishmentCode":"CODIGO"}' : 'Pega aquí el token del proveedor'}
                                              />
                                              <button
                                                 type="button"
@@ -1448,7 +1448,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                           )}
                                           {fiscalCompliance.defaultProvider === 'DIGIFACT' && !hasLockedLocalCredential && (
                                              <p className="mt-2 text-xs font-bold text-slate-500">
-                                                Según la documentación DigiFact, el login usa <span className="font-mono">Username</span>/<span className="font-mono">Password</span> y el token resultante vence en 30 días.
+                                                Según la documentación DigiFact, el login usa <span className="font-mono">Username</span>/<span className="font-mono">Password</span>; <span className="font-mono">establishmentCode</span> debe coincidir con la sucursal registrada en DigiFact/Hacienda.
                                              </p>
                                           )}
                                        </div>

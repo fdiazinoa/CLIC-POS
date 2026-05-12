@@ -63,6 +63,9 @@ interface IssueFiscalDocumentInput {
     testUrl?: string;
     issueUrl?: string;
     statusUrl?: string;
+    establishmentCode?: string;
+    branchCode?: string;
+    branchName?: string;
 }
 
 const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -441,6 +444,12 @@ type DirectDigifactCredential = {
     Password?: string;
     taxId?: string;
     rnc?: string;
+    establishmentCode?: string;
+    establishment_code?: string;
+    branchCode?: string;
+    branch_code?: string;
+    digifactEstablishmentCode?: string;
+    digifactBranchCode?: string;
 };
 
 const parseDirectDigifactCredential = (authToken: string): DirectDigifactCredential => {
@@ -534,7 +543,7 @@ const resolveDirectDigifactAuth = async (
     }
 
     if (!username || !password) {
-        throw new Error('Para DigiFact local guarda un token vigente o credenciales JSON: {"taxId":"132752155","username":"TESTUSERTIK","password":"..."}');
+        throw new Error('Para DigiFact local guarda un token vigente o credenciales JSON: {"taxId":"132752155","username":"TESTUSERTIK","password":"...","establishmentCode":"CODIGO"}');
     }
 
     const baseUrl = resolveDirectDigifactBaseUrl(input);
@@ -635,10 +644,26 @@ const directDigifactContact = (phone: unknown, email?: unknown) => {
     return contact;
 };
 
-const directDigifactBranchInfo = (address: unknown) => {
+const normalizeDirectDigifactBranchCode = (value: unknown): string =>
+    String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+const resolveDirectDigifactBranchCode = (input: IssueFiscalDocumentInput): string => {
+    const code = normalizeDirectDigifactBranchCode(
+        input.establishmentCode
+        || input.branchCode
+        || (input.companyInfo as any).establishmentCode
+        || (input.companyInfo as any).branchCode
+    );
+    if (!code) {
+        throw new Error('DigiFact requiere el código de establecimiento/sucursal configurado en la terminal fiscal o en la credencial local. Agrega establishmentCode con el código exacto registrado en DigiFact/Hacienda.');
+    }
+    return code.slice(0, 20);
+};
+
+const directDigifactBranchInfo = (address: unknown, branchCode: string) => {
     const cleanAddress = cleanString(address).slice(0, 100) || 'Santo Domingo';
     return {
-        Name: '0001',
+        Name: branchCode,
         AddressInfo: {
             Address: cleanAddress,
             Country: 'DO'
@@ -659,6 +684,7 @@ const directDigifactIndicatorMontoGravado = (transaction: Transaction): string =
 
 const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
     const { companyInfo, transaction } = input;
+    const branchCode = resolveDirectDigifactBranchCode(input);
     const documentCode = String(transaction.ncfType || '');
     const eNCF = cleanString(transaction.electronicNcf || transaction.ncf);
     const customer = (transaction.customerSnapshot || {}) as any;
@@ -703,7 +729,7 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
             TaxID: normalizeTaxId(companyInfo.rnc),
             Name: cleanString(companyInfo.name).slice(0, 150),
             Contact: directDigifactContact(companyInfo.phone, (companyInfo as any).email),
-            BranchInfo: directDigifactBranchInfo(companyInfo.address),
+            BranchInfo: directDigifactBranchInfo(companyInfo.address, branchCode),
             AdditionalInfo: directDigifactInfoList([
                 { Name: 'NumeroFacturaInterna', Value: cleanString(transaction.displayId || transaction.id).slice(0, 20) }
             ])
@@ -787,6 +813,7 @@ const issueDirectDigifactDocument = async (
     input: IssueFiscalDocumentInput,
     authToken: string
 ): Promise<FiscalIssueResponse> => {
+    const credential = parseDirectDigifactCredential(authToken);
     const auth = await resolveDirectDigifactAuth(input, authToken);
     const baseUrl = resolveDirectDigifactBaseUrl(input);
     const issueUrl = appendDigifactPath(normalizeBaseUrl(input.issueUrl || null) || baseUrl, '/v2/transform/nuc_json');
@@ -803,7 +830,11 @@ const issueDirectDigifactDocument = async (
             Accept: 'application/json',
             Authorization: auth.authorization
         },
-        data: buildDirectDigifactPayload(input),
+        data: buildDirectDigifactPayload({
+            ...input,
+            establishmentCode: input.establishmentCode || credential.establishmentCode || credential.establishment_code || credential.digifactEstablishmentCode,
+            branchCode: input.branchCode || credential.branchCode || credential.branch_code || credential.digifactBranchCode
+        }),
         connectTimeout: 10000,
         readTimeout: 30000,
         responseType: 'json'
@@ -1051,7 +1082,10 @@ export const issueFiscalDocument = async (
                     apiBaseUrl: input.apiBaseUrl,
                     testUrl: input.testUrl,
                     issueUrl: input.issueUrl,
-                    statusUrl: input.statusUrl
+                    statusUrl: input.statusUrl,
+                    establishmentCode: input.establishmentCode,
+                    branchCode: input.branchCode,
+                    branchName: input.branchName
                 }
             })
         },
