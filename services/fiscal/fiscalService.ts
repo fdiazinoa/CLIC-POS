@@ -69,6 +69,8 @@ const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.g
 const FISCAL_BACKEND_BASE_KEY = 'CLIC_POS_FISCAL_BASE_URL';
 const LOCAL_FISCAL_CREDENTIAL_COLLECTION = 'fiscalCredentials';
 const POLARIS_API_BASE = 'https://api.polarisedi.com';
+const DIGIFACT_TEST_BASE_URL = 'https://testnucdo.digifact.com/api';
+const DIGIFACT_PROD_BASE_URL = 'https://nucdo.digifact.com/api';
 
 interface LocalFiscalCredentialRecord {
     id: string;
@@ -100,6 +102,20 @@ const normalizeBaseUrl = (value?: string | null): string | null => {
 
 const uniqueStrings = (values: Array<string | null | undefined>) =>
     Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+
+const cleanString = (value: unknown): string =>
+    typeof value === 'string' ? value.trim() : '';
+
+const normalizeTaxId = (value: unknown): string =>
+    String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+const sanitizeNumber = (value: unknown): number => {
+    const parsed = Number(value || 0);
+    return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const round2 = (value: number): number =>
+    Math.round((value + Number.EPSILON) * 100) / 100;
 
 const normalizeCredentialKey = (value?: string | null) =>
     String(value || '').trim().replace(/[^A-Za-z0-9]/g, '').toUpperCase();
@@ -393,6 +409,373 @@ const extractFiscalMessage = (payload: any): string => {
     return '';
 };
 
+type DirectDigifactCredential = {
+    token?: string;
+    authToken?: string;
+    username?: string;
+    Username?: string;
+    user?: string;
+    password?: string;
+    Password?: string;
+    taxId?: string;
+    rnc?: string;
+};
+
+const parseDirectDigifactCredential = (authToken: string): DirectDigifactCredential => {
+    const raw = authToken.trim();
+    if (!raw) return {};
+    if (raw.startsWith('{')) {
+        try {
+            return JSON.parse(raw) as DirectDigifactCredential;
+        } catch {
+            return { token: raw };
+        }
+    }
+    return { token: raw };
+};
+
+const resolveDirectDigifactBaseUrl = (input: Pick<IssueFiscalDocumentInput, 'environment' | 'apiBaseUrl' | 'testUrl'>) => {
+    const explicit = normalizeBaseUrl(input.apiBaseUrl || input.testUrl || null);
+    if (explicit) return explicit.replace(/\/+$/, '');
+    return Number(input.environment) === 1 ? DIGIFACT_PROD_BASE_URL : DIGIFACT_TEST_BASE_URL;
+};
+
+const appendDigifactPath = (baseOrUrl: string, fallbackPath: string): string => {
+    const clean = baseOrUrl.replace(/\/+$/, '');
+    if (clean.toLowerCase().endsWith(fallbackPath.toLowerCase())) return clean;
+    return `${clean}${fallbackPath}`;
+};
+
+const resolveDirectDigifactUsername = (credential: DirectDigifactCredential, taxId: string): string | undefined => {
+    const rawUsername = cleanString(credential.Username || credential.username || credential.user);
+    if (!rawUsername) return undefined;
+    if (rawUsername.includes('.')) return rawUsername;
+    return `DO.${taxId}.${rawUsername}`;
+};
+
+const resolveDirectDigifactQueryUsername = (username?: string): string | undefined => {
+    if (!username) return undefined;
+    const parts = username.split('.');
+    return parts[parts.length - 1] || username;
+};
+
+const extractDirectDigifactToken = (payload: any): string => {
+    const candidates = [
+        payload?.token,
+        payload?.Token,
+        payload?.accessToken,
+        payload?.AccessToken,
+        payload?.data,
+        payload?.Data,
+        payload?.responseData,
+        payload?.responseData1
+    ];
+    for (const candidate of candidates) {
+        if (candidate != null && String(candidate).trim()) return String(candidate).trim();
+    }
+    return '';
+};
+
+const extractDirectDigifactMessage = (payload: any): string => {
+    const directMessage = extractFiscalMessage(payload);
+    if (directMessage) return directMessage;
+    const candidates = [payload?.description, payload?.Description, payload?.infoDetails, payload?.error, payload?.errors];
+    for (const candidate of candidates) {
+        if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+        if (Array.isArray(candidate) && candidate.length > 0) {
+            return candidate.map(item => typeof item === 'string' ? item : JSON.stringify(item)).join('; ');
+        }
+        if (candidate && typeof candidate === 'object') return JSON.stringify(candidate);
+    }
+    return '';
+};
+
+const resolveDirectDigifactAuth = async (
+    input: Pick<IssueFiscalDocumentInput, 'environment' | 'companyInfo' | 'credentialKey' | 'apiBaseUrl' | 'testUrl'>,
+    authToken: string
+): Promise<{ authorization: string; username?: string; taxId: string; source: 'token' | 'login' }> => {
+    const credential = parseDirectDigifactCredential(authToken);
+    const taxId = normalizeTaxId(credential.taxId || credential.rnc || input.companyInfo.rnc || input.credentialKey);
+    const inlineToken = cleanString(credential.token || credential.authToken);
+    const username = resolveDirectDigifactUsername(credential, taxId);
+    const password = cleanString(credential.Password || credential.password);
+
+    if (!taxId) {
+        throw new Error('DigiFact requiere RNC/TAXID para emitir desde el POS.');
+    }
+
+    if (inlineToken && !password) {
+        return {
+            authorization: inlineToken,
+            username: resolveDirectDigifactQueryUsername(username),
+            taxId,
+            source: 'token'
+        };
+    }
+
+    if (!username || !password) {
+        throw new Error('Para DigiFact local guarda un token vigente o credenciales JSON: {"taxId":"132752155","username":"TESTUSERTIK","password":"..."}');
+    }
+
+    const baseUrl = resolveDirectDigifactBaseUrl(input);
+    const loginUrl = appendDigifactPath(baseUrl, '/login/get_token');
+    const response = await CapacitorHttp.request({
+        url: loginUrl,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        data: { Username: username, Password: password },
+        connectTimeout: 10000,
+        readTimeout: 15000,
+        responseType: 'json'
+    });
+    const payload = response.data && typeof response.data === 'object' ? response.data : {};
+    const token = extractDirectDigifactToken(payload);
+    if (Number(response.status) >= 400 || !token) {
+        throw new Error(
+            `DigiFact auth HTTP ${response.status}: ${extractDirectDigifactMessage(payload) || 'Sin mensaje devuelto por DigiFact'} ` +
+            `(ambiente=${Number(input.environment) === 1 ? 'produccion' : 'test'}, taxId=${taxId}, username=${resolveDirectDigifactQueryUsername(username)}, endpoint=${loginUrl})`
+        );
+    }
+
+    return {
+        authorization: token,
+        username: resolveDirectDigifactQueryUsername(username),
+        taxId,
+        source: 'login'
+    };
+};
+
+const directDigifactDocumentCode = (documentCode: string) => documentCode.replace(/^E/, '');
+
+const directDigifactSequence = (encf: string, documentCode: string) => {
+    const digits = encf.replace(new RegExp(`^E?${directDigifactDocumentCode(documentCode)}`, 'i'), '').replace(/\D/g, '');
+    return (digits || encf.replace(/\D/g, '')).slice(-10).padStart(10, '0');
+};
+
+const mapDirectDigifactPaymentMethod = (method?: string): string => {
+    const normalized = cleanString(method).toUpperCase();
+    if (['CASH', 'EFECTIVO'].includes(normalized)) return '01';
+    if (['TRANSFER', 'WIRE', 'ACH', 'CHEQUE', 'CHECK', 'DEPOSITO'].includes(normalized)) return '02';
+    if (['CARD', 'CREDIT_CARD', 'DEBIT_CARD', 'TARJETA'].includes(normalized)) return '03';
+    if (['CREDIT', 'CREDITO'].includes(normalized)) return '04';
+    if (['GIFT', 'VOUCHER', 'STORE_CREDIT', 'CREDIT_NOTE', 'VALE_NC'].includes(normalized)) return '06';
+    return '07';
+};
+
+const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
+    const { companyInfo, transaction } = input;
+    const documentCode = String(transaction.ncfType || '');
+    const eNCF = cleanString(transaction.electronicNcf || transaction.ncf);
+    const customer = (transaction.customerSnapshot || {}) as any;
+    const total = round2(Math.abs(sanitizeNumber(transaction.total)));
+    const taxAmount = round2(Math.abs(sanitizeNumber(transaction.taxAmount)));
+    const discountAmount = round2(Math.abs(sanitizeNumber((transaction as any).discountAmount)));
+    const netAmount = round2(Math.abs(sanitizeNumber(transaction.netAmount)) || Math.max(0, total - taxAmount));
+    const taxRate = Number(input.taxRate ?? 18);
+    const items = (transaction.items || []).map((item: any, index: number) => {
+        const quantity = Math.abs(sanitizeNumber(item.quantity)) || 1;
+        const unitPrice = round2(Math.abs(sanitizeNumber(item.price)));
+        const type = cleanString(item.type).toUpperCase() === 'SERVICE' ? 2 : 1;
+        const taxIndicator = Array.isArray(item.appliedTaxIds) && item.appliedTaxIds.length > 0 ? 1 : 4;
+        return {
+            Number: index + 1,
+            Codes: [{ Name: 'Interno', Value: cleanString(item.id) || `ITEM-${index + 1}` }],
+            Type: type,
+            Description: cleanString(item.name || item.id) || 'Item POS',
+            Qty: quantity,
+            UnitOfMeasure: Number(item.fiscalUnitCode || (type === 2 ? input.unitCodeServices || 43 : input.unitCodeGoods || 47)),
+            Price: unitPrice,
+            Taxes: taxIndicator === 1 ? [{ Code: 'ITBIS1', Rate: taxRate }] : [],
+            Totals: { TotalItem: round2(quantity * unitPrice) },
+            AdditionalInfo: [{ Name: 'IndicadorFacturacion', Value: String(taxIndicator) }]
+        };
+    });
+
+    const payload: any = {
+        Version: '1.00',
+        CountryCode: 'DO',
+        Header: {
+            DocType: directDigifactDocumentCode(documentCode),
+            IssuedDateTime: new Date(transaction.date || Date.now()).toISOString(),
+            Currency: 'DOP',
+            AdditionalIssueDocInfo: [
+                { Name: 'Secuencia', Value: directDigifactSequence(eNCF, documentCode) },
+                { Name: 'TipoIngresos', Value: String(input.tipoIngreso || 1) },
+                { Name: 'TipoPago', Value: mapDirectDigifactPaymentMethod(transaction.payments?.[0]?.method) }
+            ]
+        },
+        Seller: {
+            TaxID: normalizeTaxId(companyInfo.rnc),
+            Name: cleanString(companyInfo.name),
+            Contact: {
+                PhoneList: cleanString(companyInfo.phone) ? [cleanString(companyInfo.phone)] : [],
+                EmailList: cleanString(companyInfo.email) ? [cleanString(companyInfo.email)] : []
+            },
+            BranchInfo: {
+                Name: 'POS',
+                AddressInfo: {
+                    Address: cleanString(companyInfo.address),
+                    Country: 'DO'
+                }
+            },
+            AdditionalInfo: [{ Name: 'NumeroFacturaInterna', Value: cleanString(transaction.displayId || transaction.id) }]
+        },
+        Buyer: {
+            TaxID: normalizeTaxId(customer.taxId),
+            Name: cleanString(customer.name || transaction.customerName) || 'Consumidor final',
+            Contact: {
+                PhoneList: cleanString(customer.phone) ? [cleanString(customer.phone)] : [],
+                EmailList: cleanString(customer.email) ? [cleanString(customer.email)] : []
+            },
+            AddressInfo: {
+                Address: cleanString(customer.address),
+                Country: 'DO'
+            }
+        },
+        Items: items,
+        Totals: {
+            QtyItems: items.length,
+            TotalTaxableAmount: taxAmount > 0 ? netAmount : 0,
+            TotalExemptAmount: taxAmount > 0 ? 0 : netAmount,
+            TotalDiscountAmount: discountAmount,
+            TotalTaxes: taxAmount > 0
+                ? [{ Code: 'ITBIS1', TaxableAmount: netAmount, Rate: taxRate, Amount: taxAmount }]
+                : [],
+            GrandTotal: { InvoiceTotal: total }
+        },
+        AdditionalData: {
+            AdditionalInfo: [
+                { Name: 'eNCF', Value: eNCF },
+                { Name: 'POSReference', Value: cleanString(transaction.id) }
+            ]
+        }
+    };
+
+    if (input.sequenceExpiryDate) {
+        payload.Header.AdditionalIssueDocInfo.push({ Name: 'FechaVencimientoSecuencia', Value: input.sequenceExpiryDate.slice(0, 10) });
+    }
+
+    if (documentCode === 'E34') {
+        payload.References = [{
+            ReferenceType: 'NCFModificado',
+            NCF: cleanString(transaction.affectedNCF || transaction.affectedInvoiceNumber),
+            Date: cleanString(transaction.affectedInvoiceDate),
+            Reason: cleanString(transaction.refundReason) || 'Nota de crédito generada desde POS',
+            ModificationCode: String(input.modificationCode || 2)
+        }];
+        payload.AdditionalData.AdditionalInfo.push(
+            { Name: 'CodigoModificacion', Value: String(input.modificationCode || 2) },
+            { Name: 'RazonModificacion', Value: cleanString(transaction.refundReason) || 'Nota de crédito generada desde POS' }
+        );
+    }
+
+    return payload;
+};
+
+const extractDirectDigifactProviderId = (payload: any, fallbackENCF?: string): string | undefined => {
+    const candidates = [
+        payload?.batch,
+        payload?.Batch,
+        payload?.eNCF,
+        payload?.encf,
+        payload?.authNumber,
+        payload?.AuthNumber,
+        payload?.authorizationNumber,
+        fallbackENCF
+    ];
+    for (const candidate of candidates) {
+        if (candidate != null && String(candidate).trim()) return String(candidate).trim();
+    }
+    return undefined;
+};
+
+const isDirectDigifactFailure = (payload: any, message: string): boolean => {
+    if (payload?.success === false || payload?.ok === false) return true;
+    if (Array.isArray(payload?.infoDetails) && payload.infoDetails.length > 0) return true;
+    const code = Number(payload?.code ?? payload?.Code);
+    return (Number.isFinite(code) && code < 0) || /rechaz|error|failed|invalid|invalido|inválido/i.test(message);
+};
+
+const issueDirectDigifactDocument = async (
+    input: IssueFiscalDocumentInput,
+    authToken: string
+): Promise<FiscalIssueResponse> => {
+    const auth = await resolveDirectDigifactAuth(input, authToken);
+    const baseUrl = resolveDirectDigifactBaseUrl(input);
+    const issueUrl = appendDigifactPath(normalizeBaseUrl(input.issueUrl || null) || baseUrl, '/v2/transform/nuc_json');
+    const url = new URL(issueUrl);
+    url.searchParams.set('TAXID', auth.taxId);
+    url.searchParams.set('FORMAT', 'XML|HTML|PDF');
+    if (auth.username) url.searchParams.set('USERNAME', auth.username);
+
+    const response = await CapacitorHttp.request({
+        url: url.toString(),
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            Authorization: auth.authorization
+        },
+        data: buildDirectDigifactPayload(input),
+        connectTimeout: 10000,
+        readTimeout: 30000,
+        responseType: 'json'
+    });
+    const raw = response.data && typeof response.data === 'object' ? response.data : {};
+    const message = extractDirectDigifactMessage(raw) || (Number(response.status) < 400 ? 'DigiFact procesó la emisión.' : `DigiFact HTTP ${response.status}`);
+    const failure = Number(response.status) >= 400 || isDirectDigifactFailure(raw, message);
+    const providerTransactionId = extractDirectDigifactProviderId(raw, cleanString(input.transaction.electronicNcf || input.transaction.ncf));
+
+    return {
+        success: !failure,
+        providerId: 'DIGIFACT',
+        environment: input.environment,
+        documentCode: input.transaction.ncfType as FiscalIssueResponse['documentCode'],
+        providerTransactionId,
+        status: failure ? 'Rechazado' : 'Aceptado',
+        message,
+        pending: false,
+        raw
+    };
+};
+
+const getDirectDigifactStatus = async (
+    providerId: FiscalProviderId,
+    environment: number,
+    providerTransactionId: string,
+    companyInfo: CompanyInfo | undefined,
+    credentialKey: string | undefined,
+    authToken: string
+): Promise<FiscalStatusResponse> => {
+    const auth = await resolveDirectDigifactAuth({ environment, companyInfo: companyInfo || {} as CompanyInfo, credentialKey }, authToken);
+    const url = new URL(`${Number(environment) === 1 ? DIGIFACT_PROD_BASE_URL : DIGIFACT_TEST_BASE_URL}/SHAREDINFO`);
+    url.searchParams.set('TAXID', auth.taxId);
+    if (auth.username) url.searchParams.set('USERNAME', auth.username);
+    url.searchParams.set('DATA1', 'SHARED_GETRESULTADOENVIO');
+    url.searchParams.set('DATA2', `ENCF|${providerTransactionId}`);
+    const response = await CapacitorHttp.request({
+        url: url.toString(),
+        method: 'GET',
+        headers: { Accept: 'application/json', Authorization: auth.authorization },
+        connectTimeout: 10000,
+        readTimeout: 15000,
+        responseType: 'json'
+    });
+    const raw = response.data && typeof response.data === 'object' ? response.data : {};
+    const message = extractDirectDigifactMessage(raw) || `DigiFact status HTTP ${response.status}`;
+    const pending = /en espera|procesando|pendiente/i.test(message);
+    return {
+        success: Number(response.status) < 400 && !isDirectDigifactFailure(raw, message),
+        providerId,
+        environment,
+        providerTransactionId,
+        status: pending ? 'Pendiente' : Number(response.status) < 400 ? 'Consultado' : 'Error',
+        message,
+        pending,
+        raw
+    };
+};
+
 type FiscalHttpResponse = {
     ok: boolean;
     status: number;
@@ -551,6 +934,10 @@ export const issueFiscalDocument = async (
         && input.deliveryMode === 'DELEGATED_ERP'
         && !localCredential?.record.authToken;
 
+    if (isLocalDirectDigiFact && isNativeAndroidRuntime() && localCredential?.record.authToken) {
+        return issueDirectDigifactDocument(input, localCredential.record.authToken);
+    }
+
     const { response, payload } = await requestFiscalJson<FiscalIssueResponse>(
         '/documents/issue',
         {
@@ -620,6 +1007,17 @@ export const getFiscalDocumentStatus = async (
     if (companyInfo?.rnc) params.set('companyRnc', companyInfo.rnc);
     if (credentialKey) params.set('credentialKey', credentialKey);
 
+    if (isLocalDirectDigiFact && isNativeAndroidRuntime() && localCredential?.record.authToken) {
+        return getDirectDigifactStatus(
+            providerId,
+            environment,
+            providerTransactionId,
+            companyInfo,
+            credentialKey,
+            localCredential.record.authToken
+        );
+    }
+
     const { response, payload } = await requestFiscalJson<FiscalStatusResponse>(
         `/documents/status?${params.toString()}`,
         {
@@ -661,6 +1059,33 @@ export const testFiscalProviderConnection = async (
     }
 ) => {
     const localCredential = await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);
+    if (providerId === 'DIGIFACT' && isNativeAndroidRuntime() && localCredential?.record.authToken) {
+        const auth = await resolveDirectDigifactAuth(
+            {
+                environment,
+                companyInfo: companyInfo || {} as CompanyInfo,
+                credentialKey,
+                apiBaseUrl: endpointOptions?.apiBaseUrl,
+                testUrl: endpointOptions?.testUrl
+            },
+            localCredential.record.authToken
+        );
+        return {
+            success: true,
+            message: auth.source === 'login'
+                ? 'Autenticación con DigiFact completada correctamente.'
+                : 'Token local DigiFact disponible. La validación final ocurre al emitir el NUC.',
+            providerId,
+            environment,
+            credentialSource: 'sqlite',
+            resolvedCredentialKey: localCredential.resolvedCredentialKey || credentialKey || normalizeTaxId(companyInfo?.rnc),
+            raw: {
+                source: auth.source,
+                taxId: auth.taxId,
+                username: auth.username || null
+            }
+        };
+    }
     const testDirectPolaris = async () => {
         if (providerId !== 'POLARIS' || !localCredential?.record.authToken) {
             throw new Error('No se pudo contactar el backend fiscal.');
