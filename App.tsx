@@ -152,7 +152,7 @@ import { posCatalogDebugElapsedMs, posCatalogDebugLog, posCatalogDebugLogDbRows,
 import { buildTerminalConfigRefreshRequest, type TerminalConfigSyncRequestDetail } from './utils/terminalConfigPushScopes';
 import {
   canRetryFiscalTransaction,
-  getFiscalComplianceConfig,
+  getEffectiveFiscalComplianceConfig,
   getFiscalProviderConfig,
   getProviderEnvironment,
   getDefaultFiscalProvider,
@@ -4086,10 +4086,10 @@ const AppContent: React.FC = () => {
     if (!electronicNcf) return;
 
     try {
-      const fiscalCompliance = getFiscalComplianceConfig(config);
+      const terminalConfig = config.terminals?.find((terminal) => terminal.id === transaction.terminalId)?.config;
+      const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, terminalConfig);
       const environment = getProviderEnvironment(fiscalCompliance, providerId);
       const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
-      const terminalConfig = config.terminals?.find((terminal) => terminal.id === transaction.terminalId)?.config;
       const fiscalSummary = calculateTransactionFiscalSummary(transaction, config, { terminalConfig });
       const baseTransaction: Transaction = {
         ...transaction,
@@ -4157,18 +4157,20 @@ const AppContent: React.FC = () => {
       throw new Error('Solo se pueden reintentar documentos electrónicos pendientes o con error.');
     }
 
-    const fiscalCompliance = getFiscalComplianceConfig(config);
+    const terminalConfig = config.terminals?.find((terminal) => terminal.id === transaction.terminalId)?.config;
+    const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, terminalConfig);
     const environment = getProviderEnvironment(fiscalCompliance, providerId);
     const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
     const shouldPollExistingAttempt = transaction.fiscalSyncStatus === 'PENDING' && Boolean(transaction.fiscalReferenceId);
+    const providerLabel = providerId === 'DIGIFACT' ? 'DigiFact' : providerId === 'POLARIS' ? 'Polaris' : 'proveedor fiscal';
     const retryingTransaction: Transaction = {
       ...transaction,
       fiscalSyncStatus: 'PENDING',
       fiscalSyncError: undefined,
       fiscalReferenceId: shouldPollExistingAttempt ? transaction.fiscalReferenceId : undefined,
       fiscalResponseMessage: shouldPollExistingAttempt
-        ? 'Consultando estado actualizado del e-CF en Polaris...'
-        : 'Reintentando envío del e-CF a Polaris...'
+        ? `Consultando estado actualizado del e-CF en ${providerLabel}...`
+        : `Reintentando envío del e-CF a ${providerLabel}...`
     };
 
     await upsertFiscalTransaction(retryingTransaction);
@@ -4888,8 +4890,9 @@ const AppContent: React.FC = () => {
     const resolvedCustomerName = originalTx.customerName || matchedCustomer?.name;
 
     // 2. Resolución fiscal para la nota de crédito
-    const currentTerminalId = getCurrentTerminal()?.id || config.terminals?.[0]?.id || 't1';
-    const fiscalCompliance = getFiscalComplianceConfig(config);
+    const currentTerminal = getCurrentTerminal();
+    const currentTerminalId = currentTerminal?.id || config.terminals?.[0]?.id || 't1';
+    const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, currentTerminal?.config);
     const creditNoteFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
     let creditNoteNcf: string | undefined;
     try {
@@ -4939,7 +4942,7 @@ const AppContent: React.FC = () => {
       legacyNcf: creditNoteFiscalType.startsWith('E') ? undefined : creditNoteNcf || undefined,
       electronicNcf: creditNoteFiscalType.startsWith('E') ? creditNoteNcf || undefined : undefined,
       fiscalMode: fiscalCompliance.mode,
-      fiscalProvider: creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
+      fiscalProvider: creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config, currentTerminal?.config) : 'NONE',
       taxAmount: refundSummary.taxAmount,
       netAmount: refundSummary.netAmount,
       affectedNCF: originalTx.ncf,

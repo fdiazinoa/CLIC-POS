@@ -9,6 +9,7 @@ import {
   FiscalProviderId,
   FiscalReserveAlertConfig,
   NCFType,
+  TerminalConfig,
   Transaction
 } from '../../types';
 
@@ -26,6 +27,16 @@ export const DEFAULT_FISCAL_PROVIDERS: FiscalProviderConfig[] = [
     enabled: true,
     environment: 0,
     displayName: 'Polaris EDI',
+    tipoIngreso: 1,
+    modificationCode: 2,
+    unitCodeGoods: 47,
+    unitCodeServices: 43
+  },
+  {
+    id: 'DIGIFACT',
+    enabled: true,
+    environment: 0,
+    displayName: 'DigiFact',
     tipoIngreso: 1,
     modificationCode: 2,
     unitCodeGoods: 47,
@@ -59,6 +70,68 @@ export const normalizeFiscalCredentialKey = (value: unknown): string =>
   typeof value === 'string'
     ? value.trim().replace(/[^A-Za-z0-9]/g, '').toUpperCase()
     : '';
+
+export const normalizeFiscalProviderId = (value: unknown): FiscalProviderId => {
+  const normalized = typeof value === 'string' ? value.trim().toUpperCase() : '';
+  if (normalized === 'POLARIS' || normalized === 'DIGIFACT' || normalized === 'NONE') {
+    return normalized;
+  }
+  return 'NONE';
+};
+
+const normalizeFiscalEnvironment = (value: unknown): FiscalProviderEnvironment => {
+  const parsed = Number(value);
+  return parsed === 0 || parsed === 1 || parsed === 2 || parsed === 3 ? parsed : 0;
+};
+
+const normalizeOptionalNumber = (value: unknown): number | undefined => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const normalizeOptionalBoolean = (value: unknown): boolean | undefined => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'si', 'sí'].includes(normalized)) return true;
+    if (['false', '0', 'no'].includes(normalized)) return false;
+  }
+  return undefined;
+};
+
+const getTerminalFiscalProviderConfig = (
+  terminalConfig?: TerminalConfig | null
+): FiscalProviderConfig | null => {
+  const fiscal = terminalConfig?.fiscal as (TerminalConfig['fiscal'] & Record<string, unknown>) | undefined;
+  if (!fiscal) return null;
+
+  const hasProviderField =
+    fiscal.providerId !== undefined ||
+    fiscal.provider_id !== undefined ||
+    fiscal.provider !== undefined;
+  const providerId = normalizeFiscalProviderId(
+    fiscal.providerId ?? fiscal.provider_id ?? fiscal.provider
+  );
+  const enabled = normalizeOptionalBoolean(fiscal.enabled);
+
+  if (enabled === false || (hasProviderField && providerId === 'NONE')) {
+    return { id: 'NONE', enabled: true, environment: 0, displayName: 'Sin proveedor' };
+  }
+
+  if (!hasProviderField || providerId === 'NONE') return null;
+
+  return {
+    id: providerId,
+    enabled: enabled ?? true,
+    environment: normalizeFiscalEnvironment(fiscal.environment),
+    credentialKey: normalizeFiscalCredentialKey(fiscal.credentialKey ?? fiscal.credential_key) || undefined,
+    tipoIngreso: normalizeOptionalNumber(fiscal.tipoIngreso ?? fiscal.tipo_ingreso),
+    modificationCode: normalizeOptionalNumber(fiscal.modificationCode ?? fiscal.modification_code),
+    unitCodeGoods: normalizeOptionalNumber(fiscal.unitCodeGoods ?? fiscal.unit_code_goods),
+    unitCodeServices: normalizeOptionalNumber(fiscal.unitCodeServices ?? fiscal.unit_code_services)
+  };
+};
 
 export const FISCAL_DOCUMENT_LABELS: Record<FiscalDocumentCode, string> = {
   B01: 'Credito Fiscal',
@@ -209,17 +282,62 @@ export const getFiscalComplianceConfig = (
   const incoming = config?.fiscalCompliance;
   if (!incoming) return DEFAULT_FISCAL_COMPLIANCE_CONFIG;
 
+  const defaultProviderIds = new Set(DEFAULT_FISCAL_PROVIDERS.map(provider => provider.id));
   const mergedProviders = DEFAULT_FISCAL_PROVIDERS.map(defaultProvider => {
     const custom = (incoming.providers || []).find(provider => provider.id === defaultProvider.id);
     return custom ? { ...defaultProvider, ...custom } : defaultProvider;
-  });
+  }).concat(
+    (incoming.providers || [])
+      .filter(provider => provider?.id && !defaultProviderIds.has(provider.id))
+      .map(provider => ({
+        ...provider,
+        id: normalizeFiscalProviderId(provider.id),
+        enabled: provider.enabled ?? true
+      }))
+      .filter(provider => provider.id !== 'NONE')
+  );
 
   return {
     mode: incoming.mode || DEFAULT_FISCAL_COMPLIANCE_CONFIG.mode,
-    defaultProvider: incoming.defaultProvider || DEFAULT_FISCAL_COMPLIANCE_CONFIG.defaultProvider,
+    defaultProvider: normalizeFiscalProviderId(incoming.defaultProvider) || DEFAULT_FISCAL_COMPLIANCE_CONFIG.defaultProvider,
     allowLegacyFallback: incoming.allowLegacyFallback ?? DEFAULT_FISCAL_COMPLIANCE_CONFIG.allowLegacyFallback,
     providers: mergedProviders,
     reserveAlert: normalizeFiscalReserveAlertConfig(incoming.reserveAlert)
+  };
+};
+
+export const getEffectiveFiscalComplianceConfig = (
+  config?: BusinessConfig | null,
+  terminalConfig?: TerminalConfig | null
+): FiscalComplianceConfig => {
+  const base = getFiscalComplianceConfig(config);
+  const terminalProvider = getTerminalFiscalProviderConfig(terminalConfig);
+
+  if (!terminalProvider) return base;
+
+  if (terminalProvider.id === 'NONE' || terminalProvider.enabled === false) {
+    return {
+      ...base,
+      mode: 'LEGACY_B',
+      defaultProvider: 'NONE'
+    };
+  }
+
+  const fallbackProvider = getFiscalProviderConfig(base, terminalProvider.id);
+  const effectiveProvider: FiscalProviderConfig = {
+    ...fallbackProvider,
+    ...terminalProvider,
+    enabled: terminalProvider.enabled ?? fallbackProvider.enabled ?? true
+  };
+  const providers = base.providers.some(provider => provider.id === effectiveProvider.id)
+    ? base.providers.map(provider => provider.id === effectiveProvider.id ? effectiveProvider : provider)
+    : [...base.providers, effectiveProvider];
+
+  return {
+    ...base,
+    mode: 'ECF',
+    defaultProvider: effectiveProvider.id,
+    providers
   };
 };
 
@@ -306,10 +424,11 @@ export const getFiscalProviderConfig = (
 
 export const getFiscalProviderCredentialKey = (
   config?: BusinessConfig | null,
-  providerId?: FiscalProviderId
+  providerId?: FiscalProviderId,
+  terminalConfig?: TerminalConfig | null
 ): string | undefined => {
   if (!providerId || providerId === 'NONE') return undefined;
-  const fiscalCompliance = getFiscalComplianceConfig(config);
+  const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, terminalConfig);
   const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
   const explicitKey = normalizeFiscalCredentialKey(providerConfig.credentialKey);
   if (explicitKey) return explicitKey;
@@ -321,5 +440,8 @@ export const getFiscalProviderCredentialKey = (
 export const shouldUseElectronicFiscalFlow = (config?: BusinessConfig | null): boolean =>
   getFiscalComplianceConfig(config).mode === 'ECF';
 
-export const getDefaultFiscalProvider = (config?: BusinessConfig | null): FiscalProviderId =>
-  getFiscalComplianceConfig(config).defaultProvider;
+export const getDefaultFiscalProvider = (
+  config?: BusinessConfig | null,
+  terminalConfig?: TerminalConfig | null
+): FiscalProviderId =>
+  getEffectiveFiscalComplianceConfig(config, terminalConfig).defaultProvider;

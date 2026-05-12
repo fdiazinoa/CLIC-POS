@@ -22,7 +22,7 @@ import {
    PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, RedeemedCouponRef, ProductVariant
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
-import { getFiscalComplianceConfig, getDefaultFiscalProvider, getFiscalReserveAlert, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
+import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
 import { calculateTransactionTaxSummary } from '../utils/taxSummary';
 import UnifiedPaymentModal from './PaymentModal';
 import {
@@ -2400,7 +2400,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return () => window.removeEventListener('barcodeScanned', handleCentralBarcodeScan as EventListener);
    }, [isAnyModalOpen, processBarcode]);
 
-   const fiscalCompliance = useMemo(() => getFiscalComplianceConfig(config), [config.fiscalCompliance]);
+   const fiscalCompliance = useMemo(
+      () => getEffectiveFiscalComplianceConfig(config, activeTerminalConfig),
+      [config, activeTerminalConfig]
+   );
    const fiscalCartGrossTotal = useMemo(
       () => (cart || []).reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0),
       [cart]
@@ -3122,7 +3125,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       try {
          const terminalId = activeTerminalId || 't1';
-         const fiscalCompliance = getFiscalComplianceConfig(config);
+         const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, activeTerminalConfig);
          const uberRecoveredOrder = isUberRecoveredReservation(activeRecoveredReservation) ? activeRecoveredReservation : null;
          const customerForCheckout = uberRecoveredOrder ? null : effectiveSelectedCustomer;
          const couponAssignedTo = redeemedCoupon?.assignedTo?.trim();
@@ -3324,7 +3327,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         legacyNcf: fiscalStatus.type.startsWith('E') ? undefined : finalNcf,
                         electronicNcf: fiscalStatus.type.startsWith('E') ? finalNcf : undefined,
                         fiscalMode: fiscalCompliance.mode,
-                        fiscalProvider: fiscalStatus.type.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
+                        fiscalProvider: fiscalStatus.type.startsWith('E') ? getDefaultFiscalProvider(config, activeTerminalConfig) : 'NONE',
                         taxAmount: saleTaxAmount,
                         netAmount: saleNetAmount,
                         pendingBalance: creditAmount || undefined,
@@ -3462,7 +3465,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   legacyNcf: finalNcfType?.startsWith('E') ? undefined : finalNcf,
                   electronicNcf: finalNcfType?.startsWith('E') ? finalNcf : undefined,
                   fiscalMode: fiscalCompliance.mode,
-                  fiscalProvider: finalNcfType?.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
+                  fiscalProvider: finalNcfType?.startsWith('E') ? getDefaultFiscalProvider(config, activeTerminalConfig) : 'NONE',
                   taxAmount: taxAmount,
                   netAmount: netAmount,
                   discountAmount: discountAmount,
@@ -4027,7 +4030,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       );
       const refundTotal = refundSummary.total;
 
-      const fiscalCompliance = getFiscalComplianceConfig(config);
+      const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, activeTerminalConfig);
       const creditNoteFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
       const creditNoteNcf = await db.getNextNCF(creditNoteFiscalType, terminalId, 50);
 
@@ -4048,7 +4051,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          originalTransactionId: originalTransaction.id,
          electronicNcf: creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
          fiscalMode: fiscalCompliance.mode,
-         fiscalProvider: creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
+         fiscalProvider: creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config, activeTerminalConfig) : 'NONE',
          taxAmount: refundSummary.taxAmount,
          netAmount: refundSummary.netAmount,
          affectedNCF: originalTransaction.ncf,
