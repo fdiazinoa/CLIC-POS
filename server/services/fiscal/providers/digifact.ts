@@ -202,8 +202,8 @@ const isPendingStatus = (value: unknown): boolean =>
 
 const isDigifactFailure = (payload: any, status: string, message: string): boolean => {
     if (payload?.success === false || payload?.ok === false) return true;
-    if (/rechaz|error|failed|invalid|invalido|inválido/i.test(status)) return true;
-    if (/rechaz|error|failed|invalid|invalido|inválido/i.test(message)) return true;
+    if (/rechaz|error|failed|invalid|invalido|inválido|no coincide|esquema\s+nuc|schema/i.test(status)) return true;
+    if (/rechaz|error|failed|invalid|invalido|inválido|no coincide|esquema\s+nuc|schema/i.test(message)) return true;
     if (Array.isArray(payload?.infoDetails) && payload.infoDetails.length > 0) return true;
     const code = Number(payload?.code ?? payload?.Code);
     return Number.isFinite(code) && code < 0;
@@ -211,12 +211,9 @@ const isDigifactFailure = (payload: any, status: string, message: string): boole
 
 const mapPaymentMethod = (method?: string): string => {
     const normalized = cleanString(method).toUpperCase();
-    if (['CASH', 'EFECTIVO'].includes(normalized)) return '01';
-    if (['TRANSFER', 'WIRE', 'ACH', 'CHEQUE', 'CHECK', 'DEPOSITO'].includes(normalized)) return '02';
-    if (['CARD', 'CREDIT_CARD', 'DEBIT_CARD', 'TARJETA'].includes(normalized)) return '03';
-    if (['CREDIT', 'CREDITO'].includes(normalized)) return '04';
-    if (['GIFT', 'VOUCHER', 'STORE_CREDIT', 'CREDIT_NOTE', 'VALE_NC'].includes(normalized)) return '06';
-    return '07';
+    if (['CREDIT', 'CREDITO'].includes(normalized)) return '2';
+    if (['GIFT', 'VOUCHER', 'STORE_CREDIT', 'CREDIT_NOTE', 'VALE_NC', 'GRATIS', 'GRATUITO'].includes(normalized)) return '3';
+    return '1';
 };
 
 const documentTypeCode = (documentCode: ElectronicDocumentCode): string =>
@@ -238,13 +235,71 @@ const itemTaxIndicator = (item: any): number => {
     return 4;
 };
 
+const digifactInfoList = (items: Array<{ Name: string; Value: unknown }>) => ({
+    Info: items
+        .map(item => ({ Name: item.Name, Value: String(item.Value ?? '').trim() }))
+        .filter(item => item.Name && item.Value)
+});
+
+const digifactOptionalInfoList = (items: Array<{ Name: string; Value: unknown }>) => {
+    const list = digifactInfoList(items);
+    return list.Info.length > 0 ? list : undefined;
+};
+
+const digifactPhoneList = (phone: unknown) => {
+    const digits = String(phone || '').replace(/\D/g, '').slice(0, 15);
+    return digits.length >= 7 ? { Phone: [digits] } : undefined;
+};
+
+const digifactEmailList = (email: unknown) => {
+    const value = cleanString(email).slice(0, 80);
+    return value.includes('@') ? { Email: [value] } : undefined;
+};
+
+const digifactContact = (phone: unknown, email: unknown) => {
+    const contact: any = {};
+    const phones = digifactPhoneList(phone);
+    const emails = digifactEmailList(email);
+    if (phones) contact.PhoneList = phones;
+    if (emails) contact.EmailList = emails;
+    return Object.keys(contact).length > 0 ? contact : undefined;
+};
+
+const digifactBranchInfo = (address: unknown) => {
+    const cleanAddress = cleanString(address).slice(0, 100);
+    if (!cleanAddress) return undefined;
+    return {
+        Name: 'POS',
+        AddressInfo: {
+            Address: cleanAddress,
+            Country: 'DO'
+        }
+    };
+};
+
+const digifactTipoIngreso = (value?: number): string => {
+    const normalized = Math.trunc(Number(value || 1));
+    const safe = normalized >= 1 && normalized <= 6 ? normalized : 1;
+    return String(safe).padStart(2, '0');
+};
+
+const digifactIndicatorMontoGravado = (transaction: any): string => {
+    const raw = transaction?.isTaxIncluded ?? transaction?.taxIncluded ?? true;
+    return raw === false ? '0' : '1';
+};
+
+const assignDefined = (target: any, key: string, value: unknown) => {
+    if (value === undefined || value === null) return;
+    if (typeof value === 'string' && !value.trim()) return;
+    target[key] = value;
+};
+
 const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
     const { companyInfo, transaction, documentCode, options } = request;
     const customer = transaction.customerSnapshot || {};
     const eNCF = cleanString(transaction.electronicNcf || transaction.ncf);
     const total = round2(Math.abs(sanitizeNumber(transaction.total)));
     const taxAmount = round2(Math.abs(sanitizeNumber(transaction.taxAmount)));
-    const discountAmount = round2(Math.abs(sanitizeNumber(transaction.discountAmount)));
     const netAmount = round2(Math.abs(sanitizeNumber(transaction.netAmount)) || Math.max(0, total - taxAmount));
     const taxRate = Number(options?.taxRate ?? 18);
     const taxableAmount = taxAmount > 0 ? netAmount : 0;
@@ -256,28 +311,20 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
         const lineTotal = round2(quantity * unitPrice);
         const type = cleanString(item.type).toUpperCase() === 'SERVICE' ? 2 : 1;
         const unitCode = Number(item.fiscalUnitCode || (type === 2 ? options?.unitCodeServices || 43 : options?.unitCodeGoods || 47));
+        const taxIndicator = itemTaxIndicator(item) === 1 || taxAmount > 0 ? 1 : 4;
         return {
-            Number: index + 1,
-            Codes: [
-                {
-                    Name: 'Interno',
-                    Value: cleanString(item.id) || `ITEM-${index + 1}`
-                }
-            ],
+            Codes: {
+                Code: [{ Name: 'Interno', Value: (cleanString(item.id) || `ITEM-${index + 1}`).slice(0, 20) }]
+            },
             Type: type,
-            Description: cleanString(item.name || item.id) || 'Item POS',
+            Description: (cleanString(item.name || item.id) || 'Item POS').slice(0, 80),
             Qty: quantity,
             UnitOfMeasure: unitCode,
             Price: unitPrice,
-            Taxes: itemTaxIndicator(item) === 1
-                ? [{ Code: 'ITBIS1', Rate: taxRate }]
-                : [],
             Totals: {
                 TotalItem: lineTotal
             },
-            AdditionalInfo: [
-                { Name: 'IndicadorFacturacion', Value: String(itemTaxIndicator(item)) }
-            ]
+            AdditionalInfo: digifactInfoList([{ Name: 'IndicadorFacturacion', Value: String(taxIndicator) }])
         };
     });
 
@@ -288,84 +335,79 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
             DocType: documentTypeCode(documentCode),
             IssuedDateTime: toDigifactDateTime(transaction.date),
             Currency: 'DOP',
-            AdditionalIssueDocInfo: [
+            AdditionalIssueDocInfo: digifactInfoList([
                 { Name: 'Secuencia', Value: sequence },
-                { Name: 'TipoIngresos', Value: String(options?.tipoIngreso || 1) },
+                { Name: 'IndicadorMontoGravado', Value: digifactIndicatorMontoGravado(transaction) },
+                { Name: 'TipoIngresos', Value: digifactTipoIngreso(options?.tipoIngreso) },
                 { Name: 'TipoPago', Value: mapPaymentMethod(transaction.payments?.[0]?.method) }
-            ].filter(info => cleanString(info.Value))
+            ])
         },
         Seller: {
             TaxID: normalizeTaxId(companyInfo.rnc),
-            Name: cleanString(companyInfo.name),
-            Contact: {
-                PhoneList: cleanString(companyInfo.phone) ? [cleanString(companyInfo.phone)] : [],
-                EmailList: cleanString(companyInfo.email) ? [cleanString(companyInfo.email)] : []
-            },
-            BranchInfo: {
-                Name: 'POS',
-                AddressInfo: {
-                    Address: cleanString(companyInfo.address),
-                    Country: 'DO'
-                }
-            },
-            AdditionalInfo: [
-                { Name: 'NumeroFacturaInterna', Value: cleanString(transaction.displayId || transaction.id) }
-            ]
+            Name: cleanString(companyInfo.name).slice(0, 150),
+            AdditionalInfo: digifactInfoList([
+                { Name: 'NumeroFacturaInterna', Value: cleanString(transaction.displayId || transaction.id).slice(0, 20) }
+            ])
         },
-        Buyer: {
-            TaxID: normalizeTaxId(customer.taxId),
-            Name: cleanString(customer.name || transaction.customerName) || 'Consumidor final',
-            Contact: {
-                PhoneList: cleanString(customer.phone) ? [cleanString(customer.phone)] : [],
-                EmailList: cleanString(customer.email) ? [cleanString(customer.email)] : []
-            },
-            AddressInfo: {
-                Address: cleanString(customer.address),
-                Country: 'DO'
-            }
-        },
-        Items: items,
+        Items: { Item: items },
         Totals: {
             QtyItems: items.length,
             TotalTaxableAmount: taxableAmount,
-            TotalExemptAmount: taxAmount > 0 ? 0 : netAmount,
-            TotalDiscountAmount: discountAmount,
             TotalTaxes: taxAmount > 0
-                ? [{ Code: 'ITBIS1', TaxableAmount: taxableAmount, Rate: taxRate, Amount: taxAmount }]
-                : [],
+                ? { TotalTax: [{ Code: 'ITBIS1', TaxableAmount: taxableAmount, Rate: taxRate, Amount: taxAmount }] }
+                : { TotalTax: [{ Code: 'EXENTO', TaxableAmount: netAmount, Amount: 0 }] },
             GrandTotal: {
                 InvoiceTotal: total
             }
-        },
-        AdditionalData: {
-            AdditionalInfo: [
-                { Name: 'eNCF', Value: eNCF },
-                { Name: 'POSReference', Value: cleanString(transaction.id) }
-            ]
         }
     };
 
+    assignDefined(payload.Seller, 'Contact', digifactContact(companyInfo.phone, (companyInfo as any).email));
+    assignDefined(payload.Seller, 'BranchInfo', digifactBranchInfo(companyInfo.address));
+
+    const buyerTaxId = normalizeTaxId((customer as any).taxId || (customer as any).rnc || (transaction as any).customerTaxId);
+    const buyerName = cleanString((customer as any).name || transaction.customerName);
+    if (buyerTaxId || buyerName || total >= 250000) {
+        const buyer: any = {
+            TaxID: buyerTaxId || 'NO_APLICA',
+            Name: (buyerName || 'Consumidor final').slice(0, 150)
+        };
+        assignDefined(buyer, 'Contact', digifactContact((customer as any).phone, (customer as any).email));
+        if (cleanString((customer as any).address)) {
+            buyer.AddressInfo = {
+                Address: cleanString((customer as any).address).slice(0, 100),
+                Country: 'DO'
+            };
+        }
+        payload.Buyer = buyer;
+    }
+
     if (options?.sequenceExpiryDate) {
-        payload.Header.AdditionalIssueDocInfo.push({
+        payload.Header.AdditionalIssueDocInfo.Info.push({
             Name: 'FechaVencimientoSecuencia',
             Value: options.sequenceExpiryDate.slice(0, 10)
         });
     }
 
     if (documentCode === 'E34') {
-        payload.References = [
-            {
-                ReferenceType: 'NCFModificado',
-                NCF: cleanString(transaction.affectedNCF || transaction.affectedInvoiceNumber),
-                Date: cleanString(transaction.affectedInvoiceDate),
-                Reason: cleanString(transaction.refundReason) || 'Nota de crédito generada desde POS',
-                ModificationCode: String(options?.modificationCode || 2)
-            }
-        ];
-        payload.AdditionalData.AdditionalInfo.push(
+        const referenceInfo = digifactOptionalInfoList([
+            { Name: 'NCFModificado', Value: cleanString(transaction.affectedNCF || transaction.affectedInvoiceNumber) },
+            { Name: 'FechaNCFModificado', Value: cleanString(transaction.affectedInvoiceDate).slice(0, 10) },
             { Name: 'CodigoModificacion', Value: String(options?.modificationCode || 2) },
-            { Name: 'RazonModificacion', Value: cleanString(transaction.refundReason) || 'Nota de crédito generada desde POS' }
-        );
+            { Name: 'RazonModificacion', Value: (cleanString(transaction.refundReason) || 'Nota de crédito generada desde POS').slice(0, 90) }
+        ]);
+        if (referenceInfo) {
+            payload.AdditionalDocumentInfo = {
+                AdditionalInfo: {
+                    AditionalData: {
+                        Data: [{
+                            Name: 'INFORMACION_REFERENCIA',
+                            Info: referenceInfo.Info
+                        }]
+                    }
+                }
+            };
+        }
     }
 
     return payload;
