@@ -49,6 +49,12 @@ const sanitizeNumber = (value: unknown): number => {
 const round2 = (value: number): number =>
     Math.round((value + Number.EPSILON) * 100) / 100;
 
+const normalizePercentRate = (value: unknown, fallback = 18): number => {
+    const parsed = sanitizeNumber(value);
+    if (parsed <= 0) return fallback;
+    return parsed <= 1 ? round2(parsed * 100) : round2(parsed);
+};
+
 const resolveDigifactBaseUrl = (request: Pick<FiscalDocumentIssueRequest | FiscalProviderTestRequest | FiscalStatusRequest, 'environment'> & { options?: any }): string => {
     const explicit = cleanString(request.options?.apiBaseUrl || process.env.DIGIFACT_API_BASE_URL || process.env.DIGIFACT_API_BASE);
     if (explicit) return explicit.replace(/\/+$/, '');
@@ -323,7 +329,7 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
     const total = round2(Math.abs(sanitizeNumber(transaction.total)));
     const taxAmount = round2(Math.abs(sanitizeNumber(transaction.taxAmount)));
     const netAmount = round2(Math.abs(sanitizeNumber(transaction.netAmount)) || Math.max(0, total - taxAmount));
-    const taxRate = Number(options?.taxRate ?? 18);
+    const taxRate = normalizePercentRate(options?.taxRate, 18);
     const taxableAmount = taxAmount > 0 ? netAmount : 0;
     const sequence = extractSequence(eNCF, documentCode);
 

@@ -117,6 +117,12 @@ const sanitizeNumber = (value: unknown): number => {
 const round2 = (value: number): number =>
     Math.round((value + Number.EPSILON) * 100) / 100;
 
+const normalizePercentRate = (value: unknown, fallback = 18): number => {
+    const parsed = sanitizeNumber(value);
+    if (parsed <= 0) return fallback;
+    return parsed <= 1 ? round2(parsed * 100) : round2(parsed);
+};
+
 const normalizeCredentialKey = (value?: string | null) =>
     String(value || '').trim().replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
@@ -654,7 +660,7 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
     const total = round2(Math.abs(sanitizeNumber(transaction.total)));
     const taxAmount = round2(Math.abs(sanitizeNumber(transaction.taxAmount)));
     const netAmount = round2(Math.abs(sanitizeNumber(transaction.netAmount)) || Math.max(0, total - taxAmount));
-    const taxRate = Number(input.taxRate ?? 18);
+    const taxRate = normalizePercentRate(input.taxRate, 18);
     const items = (transaction.items || []).map((item: any, index: number) => {
         const quantity = Math.abs(sanitizeNumber(item.quantity)) || 1;
         const unitPrice = round2(Math.abs(sanitizeNumber(item.price)));
