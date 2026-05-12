@@ -614,6 +614,38 @@ const directDigifactOptionalInfoList = (items: Array<{ Name: string; Value: unkn
     return list.length > 0 ? list : undefined;
 };
 
+const directDigifactPhone = (phone: unknown): string => {
+    const digits = String(phone || '').replace(/\D/g, '').slice(-10);
+    const safeDigits = digits.length === 10 ? digits : '8090000000';
+    return `${safeDigits.slice(0, 3)}-${safeDigits.slice(3, 6)}-${safeDigits.slice(6)}`;
+};
+
+const directDigifactContact = (phone: unknown, email?: unknown) => {
+    const contact: any = {
+        PhoneList: {
+            Phone: [directDigifactPhone(phone)]
+        }
+    };
+    const cleanEmail = cleanString(email).slice(0, 80);
+    if (cleanEmail.includes('@')) {
+        contact.EmailList = {
+            Email: [cleanEmail]
+        };
+    }
+    return contact;
+};
+
+const directDigifactBranchInfo = (address: unknown) => {
+    const cleanAddress = cleanString(address).slice(0, 100) || 'Santo Domingo';
+    return {
+        Name: '0001',
+        AddressInfo: {
+            Address: cleanAddress,
+            Country: 'DO'
+        }
+    };
+};
+
 const directDigifactTipoIngreso = (value?: number): string => {
     const normalized = Math.trunc(Number(value || 1));
     const safe = normalized >= 1 && normalized <= 6 ? normalized : 1;
@@ -670,6 +702,8 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
         Seller: {
             TaxID: normalizeTaxId(companyInfo.rnc),
             Name: cleanString(companyInfo.name).slice(0, 150),
+            Contact: directDigifactContact(companyInfo.phone, (companyInfo as any).email),
+            BranchInfo: directDigifactBranchInfo(companyInfo.address),
             AdditionalInfo: directDigifactInfoList([
                 { Name: 'NumeroFacturaInterna', Value: cleanString(transaction.displayId || transaction.id).slice(0, 20) }
             ])
@@ -691,13 +725,10 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
 
     const buyerTaxId = normalizeTaxId(customer.taxId || customer.rnc || (transaction as any).customerTaxId);
     const buyerName = cleanString(customer.name || transaction.customerName);
-    if (buyerTaxId || total >= 250000) {
-        const buyer: any = {
-            TaxID: buyerTaxId || 'NO_APLICA',
-            Name: (buyerName || 'Consumidor final').slice(0, 150)
-        };
-        payload.Buyer = buyer;
-    }
+    payload.Buyer = {
+        TaxID: buyerTaxId || 'NO_APLICA',
+        Name: (buyerName || 'Consumidor final').slice(0, 150)
+    };
 
     if (input.sequenceExpiryDate && documentCode !== 'E32' && documentCode !== 'E34') {
         payload.Header.AdditionalIssueDocInfo.push({ Name: 'FechaVencimientoSecuencia', Data: null, Value: input.sequenceExpiryDate.slice(0, 10) });
