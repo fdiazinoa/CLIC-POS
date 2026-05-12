@@ -4015,6 +4015,7 @@ const AppContent: React.FC = () => {
     environment: number,
     providerTransactionId: string,
     credentialKey?: string,
+    deliveryMode?: 'LOCAL_DIRECT' | 'DELEGATED_ERP',
     attempt = 1
   ) => {
     try {
@@ -4023,7 +4024,8 @@ const AppContent: React.FC = () => {
         environment,
         providerTransactionId,
         config.companyInfo,
-        credentialKey
+        credentialKey,
+        deliveryMode
       );
 
       const finalStatus = result.pending ? 'PENDING' : result.success ? 'SYNCED' : 'ERROR';
@@ -4046,6 +4048,7 @@ const AppContent: React.FC = () => {
             environment,
             providerTransactionId,
             credentialKey,
+            deliveryMode,
             attempt + 1
           ).catch(console.error);
         }, attempt < 3 ? 3000 : 5000);
@@ -4070,6 +4073,7 @@ const AppContent: React.FC = () => {
           environment,
           providerTransactionId,
           credentialKey,
+          deliveryMode,
           attempt + 1
         ).catch(console.error);
       }, 5000);
@@ -4113,7 +4117,8 @@ const AppContent: React.FC = () => {
         tipoIngreso: providerConfig.tipoIngreso,
         modificationCode: providerConfig.modificationCode,
         unitCodeGoods: providerConfig.unitCodeGoods,
-        unitCodeServices: providerConfig.unitCodeServices
+        unitCodeServices: providerConfig.unitCodeServices,
+        deliveryMode: providerConfig.deliveryMode
       });
 
       const finalStatus = result.pending ? 'PENDING' : result.success ? 'SYNCED' : 'ERROR';
@@ -4135,7 +4140,8 @@ const AppContent: React.FC = () => {
             providerId,
             environment,
             result.providerTransactionId!,
-            providerConfig.credentialKey
+            providerConfig.credentialKey,
+            providerConfig.deliveryMode
           ).catch(console.error);
         }, 3000);
       }
@@ -4182,6 +4188,7 @@ const AppContent: React.FC = () => {
         environment,
         transaction.fiscalReferenceId,
         providerConfig.credentialKey,
+        providerConfig.deliveryMode,
         1
       );
       return 'Consulta de estado fiscal iniciada.';

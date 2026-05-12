@@ -196,12 +196,14 @@ export type FiscalDocumentCode = NCFType | ElectronicNCFType;
 export type FiscalMode = 'LEGACY_B' | 'ECF';
 export type FiscalProviderId = 'NONE' | 'POLARIS' | 'DIGIFACT';
 export type FiscalProviderEnvironment = 0 | 1 | 2 | 3;
+export type FiscalProviderDeliveryMode = 'LOCAL_DIRECT' | 'DELEGATED_ERP';
 
 export interface FiscalProviderConfig {
   id: FiscalProviderId;
   enabled: boolean;
   environment?: FiscalProviderEnvironment;
   displayName?: string;
+  deliveryMode?: FiscalProviderDeliveryMode;
   credentialKey?: string;
   tipoIngreso?: number;
   modificationCode?: number;
@@ -583,6 +585,7 @@ export interface TerminalConfig {
     enabled?: boolean;
     providerId?: FiscalProviderId;
     environment?: FiscalProviderEnvironment;
+    deliveryMode?: FiscalProviderDeliveryMode;
     credentialKey?: string;
     tipoIngreso?: number;
     modificationCode?: number;

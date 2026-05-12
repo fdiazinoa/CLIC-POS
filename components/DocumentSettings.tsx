@@ -364,7 +364,9 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       () => fiscalCompliance.providers.find(provider => provider.id === fiscalCompliance.defaultProvider),
       [fiscalCompliance]
    );
-   const isDigiFactProvider = fiscalCompliance.defaultProvider === 'DIGIFACT';
+   const isDelegatedDigiFactProvider =
+      fiscalCompliance.defaultProvider === 'DIGIFACT'
+      && selectedFiscalProviderConfig?.deliveryMode === 'DELEGATED_ERP';
 
    const refreshCredentialMeta = async () => {
       const requestId = ++credentialMetaRequestSeq.current;
@@ -797,7 +799,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
          return;
       }
 
-      if (isDigiFactProvider) {
+      if (isDelegatedDigiFactProvider) {
          setFiscalFeedback({
             kind: 'success',
             message: 'DigiFact se valida desde ERP > Integraciones e-CF. El POS solo delega la emisión al backend ERP y no guarda token local.'
@@ -832,7 +834,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       const requestContext = getCredentialRequestContext();
       if (!requestContext) return;
 
-      if (requestContext.providerId === 'DIGIFACT') {
+      if (requestContext.providerId === 'DIGIFACT' && isDelegatedDigiFactProvider) {
          setFiscalFeedback({ kind: 'error', message: 'DigiFact no guarda token en el POS. Administra la credencial segura desde ERP > Integraciones e-CF.' });
          return;
       }
@@ -874,7 +876,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       const requestContext = getCredentialRequestContext();
       if (!requestContext) return;
 
-      if (requestContext.providerId === 'DIGIFACT') {
+      if (requestContext.providerId === 'DIGIFACT' && isDelegatedDigiFactProvider) {
          setFiscalFeedback({ kind: 'error', message: 'DigiFact no guarda token desde el POS. Administra la credencial segura desde ERP > Integraciones e-CF.' });
          return;
       }
@@ -914,7 +916,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       const requestContext = getCredentialRequestContext();
       if (!requestContext) return;
 
-      if (requestContext.providerId === 'DIGIFACT') {
+      if (requestContext.providerId === 'DIGIFACT' && isDelegatedDigiFactProvider) {
          setFiscalFeedback({ kind: 'error', message: 'DigiFact no usa credenciales locales en el POS.' });
          return;
       }
@@ -955,7 +957,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       const requestContext = getCredentialRequestContext();
       if (!requestContext) return;
 
-      if (requestContext.providerId === 'DIGIFACT') {
+      if (requestContext.providerId === 'DIGIFACT' && isDelegatedDigiFactProvider) {
          setFiscalFeedback({ kind: 'error', message: 'DigiFact no administra credenciales desde el POS.' });
          return;
       }
@@ -1203,6 +1205,20 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                               </select>
                            </div>
 
+                           {fiscalCompliance.defaultProvider === 'DIGIFACT' && (
+                              <div className="md:col-span-1">
+                                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Modo DigiFact</label>
+                                 <select
+                                    value={selectedFiscalProviderConfig?.deliveryMode || 'LOCAL_DIRECT'}
+                                    onChange={(e) => updateSelectedProvider({ deliveryMode: e.target.value as any })}
+                                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                 >
+                                    <option value="LOCAL_DIRECT">Token local directo</option>
+                                    <option value="DELEGATED_ERP">Delegado al ERP</option>
+                                 </select>
+                              </div>
+                           )}
+
                            <label className="md:col-span-1 flex items-center gap-3 p-4 bg-slate-50 border border-slate-200 rounded-2xl">
                               <input
                                  type="checkbox"
@@ -1328,7 +1344,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                     Estos defaults técnicos se envían con la venta al proveedor fiscal activo. Más adelante podremos sobrescribirlos por producto si un cliente necesita un catálogo fiscal más fino.
                                  </p>
                               </div>
-                              {isDigiFactProvider ? (
+                              {isDelegatedDigiFactProvider ? (
                                  <div className="md:col-span-4 mt-2 p-5 rounded-[1.75rem] border border-emerald-200 bg-emerald-50 shadow-sm space-y-3">
                                     <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                                        <div>

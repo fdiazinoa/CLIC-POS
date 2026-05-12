@@ -1,5 +1,5 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
-import { CompanyInfo, FiscalProviderId, Transaction } from '../../types';
+import { CompanyInfo, FiscalProviderDeliveryMode, FiscalProviderId, Transaction } from '../../types';
 import { buildMasterUrlFromHost, resolveMasterEndpointFromCloud } from '../../utils/cloudMasterRegistry';
 import { db } from '../../utils/db';
 
@@ -58,6 +58,7 @@ interface IssueFiscalDocumentInput {
     modificationCode?: number;
     unitCodeGoods?: number;
     unitCodeServices?: number;
+    deliveryMode?: FiscalProviderDeliveryMode;
 }
 
 const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -530,7 +531,7 @@ export const issueFiscalDocument = async (
         throw new Error('Solo se pueden emitir documentos electrónicos con esta ruta.');
     }
 
-    const isDelegatedProvider = input.providerId === 'DIGIFACT';
+    const isDelegatedProvider = input.providerId === 'DIGIFACT' && input.deliveryMode === 'DELEGATED_ERP';
     const localCredential = isDelegatedProvider
         ? null
         : await resolveLocalFiscalCredential(
@@ -560,7 +561,8 @@ export const issueFiscalDocument = async (
                     tipoIngreso: input.tipoIngreso,
                     modificationCode: input.modificationCode,
                     unitCodeGoods: input.unitCodeGoods,
-                    unitCodeServices: input.unitCodeServices
+                    unitCodeServices: input.unitCodeServices,
+                    deliveryMode: input.deliveryMode
                 }
             })
         },
@@ -586,9 +588,10 @@ export const getFiscalDocumentStatus = async (
     environment: number,
     providerTransactionId: string,
     companyInfo?: CompanyInfo,
-    credentialKey?: string
+    credentialKey?: string,
+    deliveryMode?: FiscalProviderDeliveryMode
 ): Promise<FiscalStatusResponse> => {
-    const isDelegatedProvider = providerId === 'DIGIFACT';
+    const isDelegatedProvider = providerId === 'DIGIFACT' && deliveryMode === 'DELEGATED_ERP';
     const localCredential = isDelegatedProvider
         ? null
         : await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);

@@ -5,6 +5,7 @@ import {
   FiscalDocumentCode,
   FiscalMode,
   FiscalProviderConfig,
+  FiscalProviderDeliveryMode,
   FiscalProviderEnvironment,
   FiscalProviderId,
   FiscalReserveAlertConfig,
@@ -27,6 +28,7 @@ export const DEFAULT_FISCAL_PROVIDERS: FiscalProviderConfig[] = [
     enabled: true,
     environment: 0,
     displayName: 'Polaris EDI',
+    deliveryMode: 'LOCAL_DIRECT',
     tipoIngreso: 1,
     modificationCode: 2,
     unitCodeGoods: 47,
@@ -37,6 +39,7 @@ export const DEFAULT_FISCAL_PROVIDERS: FiscalProviderConfig[] = [
     enabled: true,
     environment: 0,
     displayName: 'DigiFact',
+    deliveryMode: 'LOCAL_DIRECT',
     tipoIngreso: 1,
     modificationCode: 2,
     unitCodeGoods: 47,
@@ -100,6 +103,15 @@ const normalizeOptionalBoolean = (value: unknown): boolean | undefined => {
   return undefined;
 };
 
+export const normalizeFiscalProviderDeliveryMode = (value: unknown): FiscalProviderDeliveryMode | undefined => {
+  const normalized = typeof value === 'string'
+    ? value.trim().toUpperCase().replace(/[\s-]+/g, '_')
+    : '';
+  if (normalized === 'LOCAL_DIRECT' || normalized === 'LOCAL') return 'LOCAL_DIRECT';
+  if (normalized === 'DELEGATED_ERP' || normalized === 'ERP' || normalized === 'DELEGATED') return 'DELEGATED_ERP';
+  return undefined;
+};
+
 const getTerminalFiscalProviderConfig = (
   terminalConfig?: TerminalConfig | null
 ): FiscalProviderConfig | null => {
@@ -125,6 +137,14 @@ const getTerminalFiscalProviderConfig = (
     id: providerId,
     enabled: enabled ?? true,
     environment: normalizeFiscalEnvironment(fiscal.environment),
+    deliveryMode: normalizeFiscalProviderDeliveryMode(
+      fiscal.deliveryMode
+      ?? fiscal.delivery_mode
+      ?? fiscal.fiscalDeliveryMode
+      ?? fiscal.fiscal_delivery_mode
+      ?? fiscal.providerMode
+      ?? fiscal.provider_mode
+    ),
     credentialKey: normalizeFiscalCredentialKey(fiscal.credentialKey ?? fiscal.credential_key) || undefined,
     tipoIngreso: normalizeOptionalNumber(fiscal.tipoIngreso ?? fiscal.tipo_ingreso),
     modificationCode: normalizeOptionalNumber(fiscal.modificationCode ?? fiscal.modification_code),
