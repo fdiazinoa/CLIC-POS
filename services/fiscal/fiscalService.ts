@@ -438,6 +438,8 @@ const joinProviderMessages = (values: unknown[]): string => {
 type DirectDigifactCredential = {
     token?: string;
     authToken?: string;
+    environment?: string | number;
+    Environment?: string | number;
     username?: string;
     Username?: string;
     user?: string;
@@ -484,14 +486,26 @@ const resolveDirectDigifactBaseUrl = (input: Pick<IssueFiscalDocumentInput, 'env
     return Number(input.environment) === 1 ? DIGIFACT_PROD_BASE_URL : DIGIFACT_TEST_BASE_URL;
 };
 
-const isDirectDigifactTestTarget = (input: Pick<IssueFiscalDocumentInput, 'environment' | 'apiBaseUrl' | 'testUrl' | 'issueUrl'>): boolean => {
+const isDirectDigifactTestCredential = (credential?: DirectDigifactCredential): boolean => {
+    const username = cleanString(credential?.Username || credential?.username || credential?.user).toUpperCase();
+    const environment = cleanString(credential?.Environment || credential?.environment).toUpperCase();
+    return username.startsWith('TEST')
+        || username.includes('.TEST')
+        || ['0', '2', '3', 'TEST', 'SANDBOX', 'PRUEBA', 'PRUEBAS'].includes(environment);
+};
+
+const isDirectDigifactTestTarget = (
+    input: Pick<IssueFiscalDocumentInput, 'environment' | 'apiBaseUrl' | 'testUrl' | 'issueUrl'>,
+    credential?: DirectDigifactCredential
+): boolean => {
     const baseUrl = resolveDirectDigifactBaseUrl(input).toLowerCase();
     const issueUrl = cleanString(input.issueUrl).toLowerCase();
     const testUrl = cleanString(input.testUrl).toLowerCase();
     return Number(input.environment) !== 1
         || baseUrl.includes('testnucdo')
         || issueUrl.includes('testnucdo')
-        || testUrl.includes('testnucdo');
+        || testUrl.includes('testnucdo')
+        || isDirectDigifactTestCredential(credential);
 };
 
 const appendDigifactPath = (baseOrUrl: string, fallbackPath: string): string => {
@@ -670,8 +684,8 @@ const directDigifactContact = (phone: unknown, email?: unknown) => {
 const normalizeDirectDigifactBranchCode = (value: unknown): string =>
     String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
-const resolveDirectDigifactBranchCode = (input: IssueFiscalDocumentInput): string => {
-    if (isDirectDigifactTestTarget(input)) {
+const resolveDirectDigifactBranchCode = (input: IssueFiscalDocumentInput, credential?: DirectDigifactCredential): string => {
+    if (isDirectDigifactTestTarget(input, credential)) {
         return '0001';
     }
     const code = normalizeDirectDigifactBranchCode(
@@ -689,8 +703,8 @@ const resolveDirectDigifactBranchCode = (input: IssueFiscalDocumentInput): strin
 const normalizeDirectDigifactCashierCode = (value: unknown): string =>
     String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
-const resolveDirectDigifactCashierCode = (input: IssueFiscalDocumentInput): string => {
-    if (isDirectDigifactTestTarget(input)) {
+const resolveDirectDigifactCashierCode = (input: IssueFiscalDocumentInput, credential?: DirectDigifactCredential): string => {
+    if (isDirectDigifactTestTarget(input, credential)) {
         return '1';
     }
     const code = normalizeDirectDigifactCashierCode(
@@ -728,10 +742,10 @@ const directDigifactIndicatorMontoGravado = (transaction: Transaction): string =
     return raw === false ? '0' : '1';
 };
 
-const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
+const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput, credential?: DirectDigifactCredential) => {
     const { companyInfo, transaction } = input;
-    const branchCode = resolveDirectDigifactBranchCode(input);
-    const cashierCode = resolveDirectDigifactCashierCode(input);
+    const branchCode = resolveDirectDigifactBranchCode(input, credential);
+    const cashierCode = resolveDirectDigifactCashierCode(input, credential);
     const documentCode = String(transaction.ncfType || '');
     const eNCF = cleanString(transaction.electronicNcf || transaction.ncf);
     const customer = (transaction.customerSnapshot || {}) as any;
@@ -863,6 +877,7 @@ const issueDirectDigifactDocument = async (
 ): Promise<FiscalIssueResponse> => {
     const credential = parseDirectDigifactCredential(authToken);
     const auth = await resolveDirectDigifactAuth(input, authToken);
+    const isTestTarget = isDirectDigifactTestTarget(input, credential);
     const baseUrl = resolveDirectDigifactBaseUrl(input);
     const issueUrl = appendDigifactPath(normalizeBaseUrl(input.issueUrl || null) || baseUrl, '/v2/transform/nuc_json');
     const url = new URL(issueUrl);
@@ -880,9 +895,9 @@ const issueDirectDigifactDocument = async (
         },
         data: buildDirectDigifactPayload({
             ...input,
-            establishmentCode: input.establishmentCode || credential.establishmentCode || credential.establishment_code || credential.digifactEstablishmentCode,
-            branchCode: input.branchCode || credential.branchCode || credential.branch_code || credential.digifactBranchCode,
-            cashierCode: input.cashierCode
+            establishmentCode: isTestTarget ? '0001' : input.establishmentCode || credential.establishmentCode || credential.establishment_code || credential.digifactEstablishmentCode,
+            branchCode: isTestTarget ? '0001' : input.branchCode || credential.branchCode || credential.branch_code || credential.digifactBranchCode,
+            cashierCode: isTestTarget ? '1' : input.cashierCode
                 || credential.cashierCode
                 || credential.cashier_code
                 || credential.posCode
@@ -895,13 +910,14 @@ const issueDirectDigifactDocument = async (
                 || credential.cajaCode
                 || credential.caja_code
                 || credential.digifactCashierCode
-        }),
+        }, credential),
         connectTimeout: 10000,
         readTimeout: 30000,
         responseType: 'json'
     });
     const raw = response.data && typeof response.data === 'object' ? response.data : {};
-    const message = extractDirectDigifactMessage(raw) || (Number(response.status) < 400 ? 'DigiFact procesó la emisión.' : `DigiFact HTTP ${response.status}`);
+    const providerMessage = extractDirectDigifactMessage(raw) || (Number(response.status) < 400 ? 'DigiFact procesó la emisión.' : `DigiFact HTTP ${response.status}`);
+    const message = isTestTarget ? `${providerMessage} [DigiFact test: establecimiento=0001, caja=1]` : providerMessage;
     const failure = Number(response.status) >= 400 || isDirectDigifactFailure(raw, message);
     const providerTransactionId = extractDirectDigifactProviderId(raw, cleanString(input.transaction.electronicNcf || input.transaction.ncf));
 

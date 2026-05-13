@@ -17,6 +17,8 @@ const TOKEN_CACHE_TTL_MS = 29 * 24 * 60 * 60 * 1000;
 type DigifactCredentialShape = {
     token?: string;
     authToken?: string;
+    environment?: string | number;
+    Environment?: string | number;
     username?: string;
     Username?: string;
     user?: string;
@@ -79,14 +81,29 @@ const resolveDigifactBaseUrl = (request: Pick<FiscalDocumentIssueRequest | Fisca
     return Number(request.environment) === 1 ? DIGIFACT_PROD_BASE_URL : DIGIFACT_TEST_BASE_URL;
 };
 
-const isDigifactTestTarget = (request: Pick<FiscalDocumentIssueRequest | FiscalProviderTestRequest | FiscalStatusRequest, 'environment'> & { options?: any }): boolean => {
+const isDigifactTestCredential = (credential?: DigifactCredentialShape): boolean => {
+    const username = cleanString(credential?.Username || credential?.username || credential?.user).toUpperCase();
+    const environment = cleanString(credential?.Environment || credential?.environment).toUpperCase();
+    return username.startsWith('TEST')
+        || username.includes('.TEST')
+        || ['0', '2', '3', 'TEST', 'SANDBOX', 'PRUEBA', 'PRUEBAS'].includes(environment);
+};
+
+const getDigifactCredentialFromRequest = (request: { options?: any }): DigifactCredentialShape =>
+    request.options?.authToken ? parseCredentialShape(request.options.authToken) : {};
+
+const isDigifactTestTarget = (
+    request: Pick<FiscalDocumentIssueRequest | FiscalProviderTestRequest | FiscalStatusRequest, 'environment'> & { options?: any },
+    credential = getDigifactCredentialFromRequest(request)
+): boolean => {
     const baseUrl = resolveDigifactBaseUrl(request).toLowerCase();
     const issueUrl = cleanString(request.options?.issueUrl || process.env.DIGIFACT_ISSUE_URL).toLowerCase();
     const testUrl = cleanString(request.options?.testUrl).toLowerCase();
     return Number(request.environment) !== 1
         || baseUrl.includes('testnucdo')
         || issueUrl.includes('testnucdo')
-        || testUrl.includes('testnucdo');
+        || testUrl.includes('testnucdo')
+        || isDigifactTestCredential(credential);
 };
 
 const resolveDigifactUrl = (
@@ -331,10 +348,10 @@ const normalizeBranchCode = (value: unknown): string =>
     String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
 const resolveDigifactBranchCode = (request: FiscalDocumentIssueRequest): string => {
-    if (isDigifactTestTarget(request)) {
+    const credential = getDigifactCredentialFromRequest(request);
+    if (isDigifactTestTarget(request, credential)) {
         return '0001';
     }
-    const credential = request.options?.authToken ? parseCredentialShape(request.options.authToken) : {};
     const code = normalizeBranchCode(
         request.options?.establishmentCode
         || request.options?.branchCode
@@ -359,10 +376,10 @@ const normalizeCashierCode = (value: unknown): string =>
     String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
 const resolveDigifactCashierCode = (request: FiscalDocumentIssueRequest): string => {
-    if (isDigifactTestTarget(request)) {
+    const credential = getDigifactCredentialFromRequest(request);
+    if (isDigifactTestTarget(request, credential)) {
         return '1';
     }
-    const credential = request.options?.authToken ? parseCredentialShape(request.options.authToken) : {};
     const code = normalizeCashierCode(
         request.options?.cashierCode
         || credential.cashierCode
