@@ -484,9 +484,14 @@ const resolveDirectDigifactBaseUrl = (input: Pick<IssueFiscalDocumentInput, 'env
     return Number(input.environment) === 1 ? DIGIFACT_PROD_BASE_URL : DIGIFACT_TEST_BASE_URL;
 };
 
-const isDirectDigifactTestTarget = (input: Pick<IssueFiscalDocumentInput, 'environment' | 'apiBaseUrl' | 'testUrl'>): boolean => {
+const isDirectDigifactTestTarget = (input: Pick<IssueFiscalDocumentInput, 'environment' | 'apiBaseUrl' | 'testUrl' | 'issueUrl'>): boolean => {
     const baseUrl = resolveDirectDigifactBaseUrl(input).toLowerCase();
-    return Number(input.environment) !== 1 || baseUrl.includes('testnucdo');
+    const issueUrl = cleanString(input.issueUrl).toLowerCase();
+    const testUrl = cleanString(input.testUrl).toLowerCase();
+    return Number(input.environment) !== 1
+        || baseUrl.includes('testnucdo')
+        || issueUrl.includes('testnucdo')
+        || testUrl.includes('testnucdo');
 };
 
 const appendDigifactPath = (baseOrUrl: string, fallbackPath: string): string => {
