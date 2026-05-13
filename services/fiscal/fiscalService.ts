@@ -66,6 +66,7 @@ interface IssueFiscalDocumentInput {
     establishmentCode?: string;
     branchCode?: string;
     branchName?: string;
+    cashierCode?: string;
 }
 
 const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -450,6 +451,18 @@ type DirectDigifactCredential = {
     branch_code?: string;
     digifactEstablishmentCode?: string;
     digifactBranchCode?: string;
+    cashierCode?: string;
+    cashier_code?: string;
+    posCode?: string;
+    pos_code?: string;
+    pointOfSaleCode?: string;
+    point_of_sale_code?: string;
+    terminalCode?: string;
+    terminal_code?: string;
+    caja?: string;
+    cajaCode?: string;
+    caja_code?: string;
+    digifactCashierCode?: string;
 };
 
 const parseDirectDigifactCredential = (authToken: string): DirectDigifactCredential => {
@@ -543,7 +556,7 @@ const resolveDirectDigifactAuth = async (
     }
 
     if (!username || !password) {
-        throw new Error('Para DigiFact local guarda un token vigente o credenciales JSON: {"taxId":"132752155","username":"TESTUSERTIK","password":"...","establishmentCode":"CODIGO"}');
+        throw new Error('Para DigiFact local guarda un token vigente o credenciales JSON: {"taxId":"132752155","username":"TESTUSERTIK","password":"...","establishmentCode":"0001","cashierCode":"1"}');
     }
 
     const baseUrl = resolveDirectDigifactBaseUrl(input);
@@ -648,6 +661,9 @@ const normalizeDirectDigifactBranchCode = (value: unknown): string =>
     String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
 const resolveDirectDigifactBranchCode = (input: IssueFiscalDocumentInput): string => {
+    if (Number(input.environment) !== 1) {
+        return '0001';
+    }
     const code = normalizeDirectDigifactBranchCode(
         input.establishmentCode
         || input.branchCode
@@ -658,6 +674,26 @@ const resolveDirectDigifactBranchCode = (input: IssueFiscalDocumentInput): strin
         throw new Error('DigiFact requiere el código de establecimiento/sucursal configurado en la terminal fiscal o en la credencial local. Agrega establishmentCode con el código exacto registrado en DigiFact/Hacienda.');
     }
     return code.slice(0, 20);
+};
+
+const normalizeDirectDigifactCashierCode = (value: unknown): string =>
+    String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+const resolveDirectDigifactCashierCode = (input: IssueFiscalDocumentInput): string => {
+    if (Number(input.environment) !== 1) {
+        return '1';
+    }
+    const code = normalizeDirectDigifactCashierCode(
+        input.cashierCode
+        || (input.companyInfo as any).cashierCode
+        || (input.companyInfo as any).posCode
+        || (input.companyInfo as any).terminalCode
+        || (input.companyInfo as any).caja
+    );
+    if (!code) {
+        throw new Error('DigiFact requiere el código de caja/punto de emisión configurado en la terminal fiscal o en la credencial local.');
+    }
+    return code.slice(0, 60);
 };
 
 const directDigifactBranchInfo = (address: unknown, branchCode: string) => {
@@ -685,6 +721,7 @@ const directDigifactIndicatorMontoGravado = (transaction: Transaction): string =
 const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
     const { companyInfo, transaction } = input;
     const branchCode = resolveDirectDigifactBranchCode(input);
+    const cashierCode = resolveDirectDigifactCashierCode(input);
     const documentCode = String(transaction.ncfType || '');
     const eNCF = cleanString(transaction.electronicNcf || transaction.ncf);
     const customer = (transaction.customerSnapshot || {}) as any;
@@ -731,6 +768,7 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput) => {
             Contact: directDigifactContact(companyInfo.phone, (companyInfo as any).email),
             BranchInfo: directDigifactBranchInfo(companyInfo.address, branchCode),
             AdditionalInfo: directDigifactInfoList([
+                { Name: 'CodigoVendedor', Value: cashierCode },
                 { Name: 'NumeroFacturaInterna', Value: cleanString(transaction.displayId || transaction.id).slice(0, 20) }
             ])
         },
@@ -833,7 +871,20 @@ const issueDirectDigifactDocument = async (
         data: buildDirectDigifactPayload({
             ...input,
             establishmentCode: input.establishmentCode || credential.establishmentCode || credential.establishment_code || credential.digifactEstablishmentCode,
-            branchCode: input.branchCode || credential.branchCode || credential.branch_code || credential.digifactBranchCode
+            branchCode: input.branchCode || credential.branchCode || credential.branch_code || credential.digifactBranchCode,
+            cashierCode: input.cashierCode
+                || credential.cashierCode
+                || credential.cashier_code
+                || credential.posCode
+                || credential.pos_code
+                || credential.pointOfSaleCode
+                || credential.point_of_sale_code
+                || credential.terminalCode
+                || credential.terminal_code
+                || credential.caja
+                || credential.cajaCode
+                || credential.caja_code
+                || credential.digifactCashierCode
         }),
         connectTimeout: 10000,
         readTimeout: 30000,
@@ -1085,7 +1136,8 @@ export const issueFiscalDocument = async (
                     statusUrl: input.statusUrl,
                     establishmentCode: input.establishmentCode,
                     branchCode: input.branchCode,
-                    branchName: input.branchName
+                    branchName: input.branchName,
+                    cashierCode: input.cashierCode
                 }
             })
         },

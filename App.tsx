@@ -157,6 +157,7 @@ import {
   getProviderEnvironment,
   getDefaultFiscalProvider,
   resolveFiscalProviderEstablishmentCode,
+  resolveFiscalProviderCashierCode,
   resolveCreditNoteFiscalCode
 } from './utils/fiscal/fiscalHelpers';
 import { getFiscalDocumentStatus, issueFiscalDocument } from './services/fiscal/fiscalService';
@@ -4096,6 +4097,7 @@ const AppContent: React.FC = () => {
       const environment = getProviderEnvironment(fiscalCompliance, providerId);
       const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
       const establishmentCode = resolveFiscalProviderEstablishmentCode(providerConfig, fiscalCompliance, terminalConfig, config);
+      const cashierCode = resolveFiscalProviderCashierCode(providerConfig, fiscalCompliance, terminalConfig, config);
       const fiscalSummary = calculateTransactionFiscalSummary(transaction, config, { terminalConfig });
       const baseTransaction: Transaction = {
         ...transaction,
@@ -4127,7 +4129,8 @@ const AppContent: React.FC = () => {
         statusUrl: providerConfig.statusUrl,
         establishmentCode,
         branchCode: providerConfig.branchCode || establishmentCode,
-        branchName: providerConfig.branchName
+        branchName: providerConfig.branchName,
+        cashierCode
       });
 
       const finalStatus = result.pending ? 'PENDING' : result.success ? 'SYNCED' : 'ERROR';

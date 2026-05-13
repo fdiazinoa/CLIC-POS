@@ -212,6 +212,7 @@ export interface FiscalProviderConfig {
   establishmentCode?: string;
   branchCode?: string;
   branchName?: string;
+  cashierCode?: string;
   tipoIngreso?: number;
   modificationCode?: number;
   unitCodeGoods?: number;
@@ -598,6 +599,10 @@ export interface TerminalConfig {
     issueUrl?: string;
     statusUrl?: string;
     credentialKey?: string;
+    establishmentCode?: string;
+    branchCode?: string;
+    branchName?: string;
+    cashierCode?: string;
     tipoIngreso?: number;
     modificationCode?: number;
     unitCodeGoods?: number;

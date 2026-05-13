@@ -74,6 +74,7 @@ export interface FiscalIssueOptions {
     establishmentCode?: string;
     branchCode?: string;
     branchName?: string;
+    cashierCode?: string;
 }
 
 export interface FiscalDocumentIssueRequest {

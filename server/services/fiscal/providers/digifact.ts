@@ -30,6 +30,18 @@ type DigifactCredentialShape = {
     branch_code?: string;
     digifactEstablishmentCode?: string;
     digifactBranchCode?: string;
+    cashierCode?: string;
+    cashier_code?: string;
+    posCode?: string;
+    pos_code?: string;
+    pointOfSaleCode?: string;
+    point_of_sale_code?: string;
+    terminalCode?: string;
+    terminal_code?: string;
+    caja?: string;
+    cajaCode?: string;
+    caja_code?: string;
+    digifactCashierCode?: string;
 };
 
 type ResolvedDigifactAuth = {
@@ -309,6 +321,9 @@ const normalizeBranchCode = (value: unknown): string =>
     String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
 const resolveDigifactBranchCode = (request: FiscalDocumentIssueRequest): string => {
+    if (Number(request.environment) !== 1) {
+        return '0001';
+    }
     const credential = request.options?.authToken ? parseCredentialShape(request.options.authToken) : {};
     const code = normalizeBranchCode(
         request.options?.establishmentCode
@@ -328,6 +343,41 @@ const resolveDigifactBranchCode = (request: FiscalDocumentIssueRequest): string 
         throw new Error('DigiFact requiere el código de establecimiento/sucursal configurado. Define establishmentCode/branchCode en la configuración fiscal o en la credencial.');
     }
     return code.slice(0, 20);
+};
+
+const normalizeCashierCode = (value: unknown): string =>
+    String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+const resolveDigifactCashierCode = (request: FiscalDocumentIssueRequest): string => {
+    if (Number(request.environment) !== 1) {
+        return '1';
+    }
+    const credential = request.options?.authToken ? parseCredentialShape(request.options.authToken) : {};
+    const code = normalizeCashierCode(
+        request.options?.cashierCode
+        || credential.cashierCode
+        || credential.cashier_code
+        || credential.digifactCashierCode
+        || credential.posCode
+        || credential.pos_code
+        || credential.pointOfSaleCode
+        || credential.point_of_sale_code
+        || credential.terminalCode
+        || credential.terminal_code
+        || credential.caja
+        || credential.cajaCode
+        || credential.caja_code
+        || process.env.DIGIFACT_CASHIER_CODE
+        || process.env.DIGIFACT_POS_CODE
+        || (request.companyInfo as any).cashierCode
+        || (request.companyInfo as any).posCode
+        || (request.companyInfo as any).terminalCode
+        || (request.companyInfo as any).caja
+    );
+    if (!code) {
+        throw new Error('DigiFact requiere el código de caja/punto de emisión configurado. Define cashierCode en la configuración fiscal o en la credencial.');
+    }
+    return code.slice(0, 60);
 };
 
 const digifactBranchInfo = (address: unknown, branchCode: string) => {
@@ -355,6 +405,7 @@ const digifactIndicatorMontoGravado = (transaction: any): string => {
 const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
     const { companyInfo, transaction, documentCode, options } = request;
     const branchCode = resolveDigifactBranchCode(request);
+    const cashierCode = resolveDigifactCashierCode(request);
     const customer = transaction.customerSnapshot || {};
     const eNCF = cleanString(transaction.electronicNcf || transaction.ncf);
     const total = round2(Math.abs(sanitizeNumber(transaction.total)));
@@ -406,6 +457,7 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
             Contact: digifactContact(companyInfo.phone, (companyInfo as any).email),
             BranchInfo: digifactBranchInfo(companyInfo.address, branchCode),
             AdditionalInfo: digifactInfoList([
+                { Name: 'CodigoVendedor', Value: cashierCode },
                 { Name: 'NumeroFacturaInterna', Value: cleanString(transaction.displayId || transaction.id).slice(0, 20) }
             ])
         },

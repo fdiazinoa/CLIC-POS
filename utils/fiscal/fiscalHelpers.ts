@@ -101,6 +101,12 @@ const normalizeFiscalEstablishmentCode = (value: unknown): string | undefined =>
   return trimmed.replace(/[^A-Za-z0-9]/g, '').toUpperCase() || undefined;
 };
 
+const normalizeFiscalCashierCode = (value: unknown): string | undefined => {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) return undefined;
+  return trimmed.replace(/[^A-Za-z0-9]/g, '').toUpperCase() || undefined;
+};
+
 const normalizeOptionalBoolean = (value: unknown): boolean | undefined => {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'number') return value !== 0;
@@ -176,6 +182,21 @@ const getTerminalFiscalProviderConfig = (
       ?? fiscal.branch_id
     ),
     branchName: normalizeOptionalString(fiscal.branchName ?? fiscal.branch_name ?? fiscal.sucursalName ?? fiscal.sucursal_name),
+    cashierCode: normalizeFiscalCashierCode(
+      fiscal.cashierCode
+      ?? fiscal.cashier_code
+      ?? fiscal.digifactCashierCode
+      ?? fiscal.digifact_cashier_code
+      ?? fiscal.posCode
+      ?? fiscal.pos_code
+      ?? fiscal.pointOfSaleCode
+      ?? fiscal.point_of_sale_code
+      ?? fiscal.terminalCode
+      ?? fiscal.terminal_code
+      ?? fiscal.caja
+      ?? fiscal.cajaCode
+      ?? fiscal.caja_code
+    ),
     tipoIngreso: normalizeOptionalNumber(fiscal.tipoIngreso ?? fiscal.tipo_ingreso),
     modificationCode: normalizeOptionalNumber(fiscal.modificationCode ?? fiscal.modification_code),
     unitCodeGoods: normalizeOptionalNumber(fiscal.unitCodeGoods ?? fiscal.unit_code_goods),
@@ -205,6 +226,45 @@ export const resolveFiscalProviderEstablishmentCode = (...sources: unknown[]): s
     const record = source as Record<string, unknown>;
     for (const key of candidateKeys) {
       const normalized = normalizeFiscalEstablishmentCode(record[key]);
+      if (normalized) return normalized;
+    }
+    for (const key of nestedKeys) {
+      const normalized = visit(record[key], depth + 1);
+      if (normalized) return normalized;
+    }
+    return undefined;
+  };
+
+  for (const source of sources) {
+    const normalized = visit(source);
+    if (normalized) return normalized;
+  }
+  return undefined;
+};
+
+export const resolveFiscalProviderCashierCode = (...sources: unknown[]): string | undefined => {
+  const candidateKeys = [
+    'cashierCode',
+    'cashier_code',
+    'digifactCashierCode',
+    'digifact_cashier_code',
+    'posCode',
+    'pos_code',
+    'pointOfSaleCode',
+    'point_of_sale_code',
+    'terminalCode',
+    'terminal_code',
+    'caja',
+    'cajaCode',
+    'caja_code'
+  ];
+  const nestedKeys = ['fiscal', 'digifact', 'providerOptions', 'options', 'metadata', 'erpBinding', 'erpSnapshot'];
+
+  const visit = (source: unknown, depth = 0): string | undefined => {
+    if (!source || depth > 2 || typeof source !== 'object') return undefined;
+    const record = source as Record<string, unknown>;
+    for (const key of candidateKeys) {
+      const normalized = normalizeFiscalCashierCode(record[key]);
       if (normalized) return normalized;
     }
     for (const key of nestedKeys) {
