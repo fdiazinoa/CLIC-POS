@@ -79,6 +79,16 @@ const resolveDigifactBaseUrl = (request: Pick<FiscalDocumentIssueRequest | Fisca
     return Number(request.environment) === 1 ? DIGIFACT_PROD_BASE_URL : DIGIFACT_TEST_BASE_URL;
 };
 
+const isDigifactTestTarget = (request: Pick<FiscalDocumentIssueRequest | FiscalProviderTestRequest | FiscalStatusRequest, 'environment'> & { options?: any }): boolean => {
+    const baseUrl = resolveDigifactBaseUrl(request).toLowerCase();
+    const issueUrl = cleanString(request.options?.issueUrl || process.env.DIGIFACT_ISSUE_URL).toLowerCase();
+    const testUrl = cleanString(request.options?.testUrl).toLowerCase();
+    return Number(request.environment) !== 1
+        || baseUrl.includes('testnucdo')
+        || issueUrl.includes('testnucdo')
+        || testUrl.includes('testnucdo');
+};
+
 const resolveDigifactUrl = (
     request: Pick<FiscalDocumentIssueRequest | FiscalProviderTestRequest | FiscalStatusRequest, 'environment'> & { options?: any },
     optionKey: 'testUrl' | 'issueUrl' | 'statusUrl',
@@ -321,7 +331,7 @@ const normalizeBranchCode = (value: unknown): string =>
     String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
 const resolveDigifactBranchCode = (request: FiscalDocumentIssueRequest): string => {
-    if (Number(request.environment) !== 1) {
+    if (isDigifactTestTarget(request)) {
         return '0001';
     }
     const credential = request.options?.authToken ? parseCredentialShape(request.options.authToken) : {};
@@ -349,7 +359,7 @@ const normalizeCashierCode = (value: unknown): string =>
     String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
 const resolveDigifactCashierCode = (request: FiscalDocumentIssueRequest): string => {
-    if (Number(request.environment) !== 1) {
+    if (isDigifactTestTarget(request)) {
         return '1';
     }
     const credential = request.options?.authToken ? parseCredentialShape(request.options.authToken) : {};

@@ -484,6 +484,11 @@ const resolveDirectDigifactBaseUrl = (input: Pick<IssueFiscalDocumentInput, 'env
     return Number(input.environment) === 1 ? DIGIFACT_PROD_BASE_URL : DIGIFACT_TEST_BASE_URL;
 };
 
+const isDirectDigifactTestTarget = (input: Pick<IssueFiscalDocumentInput, 'environment' | 'apiBaseUrl' | 'testUrl'>): boolean => {
+    const baseUrl = resolveDirectDigifactBaseUrl(input).toLowerCase();
+    return Number(input.environment) !== 1 || baseUrl.includes('testnucdo');
+};
+
 const appendDigifactPath = (baseOrUrl: string, fallbackPath: string): string => {
     const clean = baseOrUrl.replace(/\/+$/, '');
     if (clean.toLowerCase().endsWith(fallbackPath.toLowerCase())) return clean;
@@ -661,7 +666,7 @@ const normalizeDirectDigifactBranchCode = (value: unknown): string =>
     String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
 const resolveDirectDigifactBranchCode = (input: IssueFiscalDocumentInput): string => {
-    if (Number(input.environment) !== 1) {
+    if (isDirectDigifactTestTarget(input)) {
         return '0001';
     }
     const code = normalizeDirectDigifactBranchCode(
@@ -680,7 +685,7 @@ const normalizeDirectDigifactCashierCode = (value: unknown): string =>
     String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
 const resolveDirectDigifactCashierCode = (input: IssueFiscalDocumentInput): string => {
-    if (Number(input.environment) !== 1) {
+    if (isDirectDigifactTestTarget(input)) {
         return '1';
     }
     const code = normalizeDirectDigifactCashierCode(
