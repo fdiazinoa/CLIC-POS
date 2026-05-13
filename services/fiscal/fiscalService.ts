@@ -514,6 +514,17 @@ const appendDigifactPath = (baseOrUrl: string, fallbackPath: string): string => 
     return `${clean}${fallbackPath}`;
 };
 
+const resolveDirectDigifactIssueUrl = (
+    input: Pick<IssueFiscalDocumentInput, 'environment' | 'apiBaseUrl' | 'testUrl' | 'issueUrl'>,
+    credential?: DirectDigifactCredential
+): string => {
+    if (isDirectDigifactTestTarget(input, credential)) {
+        return `${DIGIFACT_TEST_BASE_URL}/v2/transform/nuc_json`;
+    }
+    const baseUrl = resolveDirectDigifactBaseUrl(input);
+    return appendDigifactPath(normalizeBaseUrl(input.issueUrl || null) || baseUrl, '/v2/transform/nuc_json');
+};
+
 const resolveDirectDigifactUsername = (credential: DirectDigifactCredential, taxId: string): string | undefined => {
     const rawUsername = cleanString(credential.Username || credential.username || credential.user);
     if (!rawUsername) return undefined;
@@ -878,8 +889,7 @@ const issueDirectDigifactDocument = async (
     const credential = parseDirectDigifactCredential(authToken);
     const auth = await resolveDirectDigifactAuth(input, authToken);
     const isTestTarget = isDirectDigifactTestTarget(input, credential);
-    const baseUrl = resolveDirectDigifactBaseUrl(input);
-    const issueUrl = appendDigifactPath(normalizeBaseUrl(input.issueUrl || null) || baseUrl, '/v2/transform/nuc_json');
+    const issueUrl = resolveDirectDigifactIssueUrl(input, credential);
     const url = new URL(issueUrl);
     url.searchParams.set('TAXID', auth.taxId);
     url.searchParams.set('FORMAT', 'XML|HTML|PDF');
@@ -917,7 +927,7 @@ const issueDirectDigifactDocument = async (
     });
     const raw = response.data && typeof response.data === 'object' ? response.data : {};
     const providerMessage = extractDirectDigifactMessage(raw) || (Number(response.status) < 400 ? 'DigiFact procesó la emisión.' : `DigiFact HTTP ${response.status}`);
-    const message = isTestTarget ? `${providerMessage} [DigiFact test: establecimiento=0001, caja=1]` : providerMessage;
+    const message = isTestTarget ? `${providerMessage} [DigiFact test: endpoint=oficial, establecimiento=0001, caja=1]` : providerMessage;
     const failure = Number(response.status) >= 400 || isDirectDigifactFailure(raw, message);
     const providerTransactionId = extractDirectDigifactProviderId(raw, cleanString(input.transaction.electronicNcf || input.transaction.ncf));
 

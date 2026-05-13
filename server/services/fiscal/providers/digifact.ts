@@ -118,6 +118,13 @@ const resolveDigifactUrl = (
     return `${resolveDigifactBaseUrl(request)}${path.startsWith('/') ? path : `/${path}`}`;
 };
 
+const resolveDigifactIssueUrl = (request: FiscalDocumentIssueRequest): string => {
+    if (isDigifactTestTarget(request)) {
+        return `${DIGIFACT_TEST_BASE_URL}/v2/transform/nuc_json`;
+    }
+    return resolveDigifactUrl(request, 'issueUrl', 'DIGIFACT_ISSUE_URL', '/v2/transform/nuc_json');
+};
+
 const appendDigifactPath = (baseOrUrl: string, fallbackPath: string): string => {
     const clean = baseOrUrl.replace(/\/+$/, '');
     if (!clean) return clean;
@@ -686,7 +693,7 @@ export class DigifactFiscalProvider implements FiscalProvider {
             authToken: request.options?.authToken
         });
         const eNCF = cleanString(request.transaction.electronicNcf || request.transaction.ncf);
-        const url = new URL(resolveDigifactUrl(request, 'issueUrl', 'DIGIFACT_ISSUE_URL', '/v2/transform/nuc_json'));
+        const url = new URL(resolveDigifactIssueUrl(request));
         url.searchParams.set('TAXID', auth.resolvedTaxId);
         url.searchParams.set('FORMAT', 'XML|HTML|PDF');
         if (auth.username) url.searchParams.set('USERNAME', auth.username);
