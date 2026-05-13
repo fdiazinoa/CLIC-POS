@@ -534,8 +534,7 @@ const resolveDirectDigifactUsername = (credential: DirectDigifactCredential, tax
 
 const resolveDirectDigifactQueryUsername = (username?: string): string | undefined => {
     if (!username) return undefined;
-    const parts = username.split('.');
-    return parts[parts.length - 1] || username;
+    return username;
 };
 
 const extractDirectDigifactToken = (payload: any): string => {
@@ -895,6 +894,25 @@ const issueDirectDigifactDocument = async (
     url.searchParams.set('FORMAT', 'XML|HTML|PDF');
     if (auth.username) url.searchParams.set('USERNAME', auth.username);
 
+    const issuePayload = buildDirectDigifactPayload({
+        ...input,
+        establishmentCode: isTestTarget ? '0001' : input.establishmentCode || credential.establishmentCode || credential.establishment_code || credential.digifactEstablishmentCode,
+        branchCode: isTestTarget ? '0001' : input.branchCode || credential.branchCode || credential.branch_code || credential.digifactBranchCode,
+        cashierCode: isTestTarget ? '1' : input.cashierCode
+            || credential.cashierCode
+            || credential.cashier_code
+            || credential.posCode
+            || credential.pos_code
+            || credential.pointOfSaleCode
+            || credential.point_of_sale_code
+            || credential.terminalCode
+            || credential.terminal_code
+            || credential.caja
+            || credential.cajaCode
+            || credential.caja_code
+            || credential.digifactCashierCode
+    }, credential);
+
     const response = await CapacitorHttp.request({
         url: url.toString(),
         method: 'POST',
@@ -903,31 +921,17 @@ const issueDirectDigifactDocument = async (
             Accept: 'application/json',
             Authorization: auth.authorization
         },
-        data: buildDirectDigifactPayload({
-            ...input,
-            establishmentCode: isTestTarget ? '0001' : input.establishmentCode || credential.establishmentCode || credential.establishment_code || credential.digifactEstablishmentCode,
-            branchCode: isTestTarget ? '0001' : input.branchCode || credential.branchCode || credential.branch_code || credential.digifactBranchCode,
-            cashierCode: isTestTarget ? '1' : input.cashierCode
-                || credential.cashierCode
-                || credential.cashier_code
-                || credential.posCode
-                || credential.pos_code
-                || credential.pointOfSaleCode
-                || credential.point_of_sale_code
-                || credential.terminalCode
-                || credential.terminal_code
-                || credential.caja
-                || credential.cajaCode
-                || credential.caja_code
-                || credential.digifactCashierCode
-        }, credential),
+        data: issuePayload,
         connectTimeout: 10000,
         readTimeout: 30000,
         responseType: 'json'
     });
     const raw = response.data && typeof response.data === 'object' ? response.data : {};
     const providerMessage = extractDirectDigifactMessage(raw) || (Number(response.status) < 400 ? 'DigiFact procesó la emisión.' : `DigiFact HTTP ${response.status}`);
-    const message = isTestTarget ? `${providerMessage} [DigiFact test: endpoint=oficial, establecimiento=0001, caja=1]` : providerMessage;
+    const diagnostic = isTestTarget
+        ? ` [DigiFact test: endpoint=oficial, establecimiento=${issuePayload?.Seller?.BranchInfo?.Name || 'N/D'}, caja=${issuePayload?.Seller?.AdditionalInfo?.find?.((item: any) => item.Name === 'CodigoVendedor')?.Value || 'N/D'}, username=${auth.username || 'N/D'}]`
+        : '';
+    const message = `${providerMessage}${diagnostic}`;
     const failure = Number(response.status) >= 400 || isDirectDigifactFailure(raw, message);
     const providerTransactionId = extractDirectDigifactProviderId(raw, cleanString(input.transaction.electronicNcf || input.transaction.ncf));
 

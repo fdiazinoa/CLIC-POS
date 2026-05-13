@@ -171,8 +171,7 @@ const resolveUsername = (credential: DigifactCredentialShape, taxId: string): st
 
 const queryUsername = (username?: string): string | undefined => {
     if (!username) return undefined;
-    const parts = username.split('.');
-    return parts[parts.length - 1] || username;
+    return username;
 };
 
 const extractToken = (payload: any): string => {
