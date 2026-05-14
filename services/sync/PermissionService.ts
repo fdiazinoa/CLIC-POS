@@ -27,6 +27,43 @@ class PermissionService {
         return this.currentTerminalId;
     }
 
+    getCurrentTerminalIdentityCandidates(): string[] {
+        const candidates = new Set<string>();
+        const addCandidate = (value: unknown) => {
+            const normalized = String(value || '').trim();
+            if (normalized) candidates.add(normalized);
+        };
+
+        const addStationAliases = (value: unknown) => {
+            const station = String(value || '').trim();
+            if (!station) return;
+            addCandidate(station);
+            addCandidate(`Caja ${station}`);
+            addCandidate(`Caja ${station.replace(/^0+/, '') || station}`);
+        };
+
+        const terminal = this.getCurrentTerminal();
+        addCandidate(this.currentTerminalId);
+        addCandidate(terminal?.id);
+        addCandidate(terminal?.config?.terminalName);
+        addCandidate((terminal?.config as any)?.erpBinding?.terminalName);
+        addStationAliases(terminal?.config?.stationNumber);
+        addStationAliases((terminal?.config as any)?.erpBinding?.stationNumber);
+        addCandidate(terminal?.config?.erpTerminalId);
+        addCandidate((terminal?.config as any)?.erpBinding?.terminalId);
+
+        try {
+            addCandidate(localStorage.getItem('active_terminal_id'));
+            addCandidate(localStorage.getItem('CLIC_POS_TERMINAL_ID'));
+            addCandidate(localStorage.getItem('clic_erp_sync_terminal_id'));
+            addCandidate(localStorage.getItem('clic_erp_sync_terminal_name'));
+        } catch {
+            // localStorage can be unavailable during non-browser tests.
+        }
+
+        return Array.from(candidates);
+    }
+
     /**
      * Get current terminal configuration
      */

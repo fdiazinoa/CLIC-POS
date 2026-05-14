@@ -570,9 +570,11 @@ class ApiSyncAdapter {
                 const record = item && typeof item === 'object' && !Array.isArray(item)
                     ? item as Record<string, unknown>
                     : {};
+                const sourceTerminalId = this.resolveOperationalSourceTerminalId(record, target.terminalId);
 
                 return {
                     ...record,
+                    source_terminal_id: sourceTerminalId,
                     terminalId: target.terminalId,
                     terminal_id: target.terminalId,
                     ...(deviceId ? { device_id: deviceId } : {})
@@ -581,6 +583,24 @@ class ApiSyncAdapter {
         }
 
         return normalizedBody;
+    }
+
+    private normalizeTerminalIdentity(value: unknown): string {
+        return String(value || '').trim().toLowerCase();
+    }
+
+    private resolveOperationalSourceTerminalId(record: Record<string, unknown>, targetTerminalId: string): string {
+        const existing =
+            String(record.source_terminal_id || record.terminal_id || record.terminalId || '').trim();
+        if (!existing) return targetTerminalId;
+
+        const currentAliases = new Set(
+            [targetTerminalId, ...permissionService.getCurrentTerminalIdentityCandidates()]
+                .map((value) => this.normalizeTerminalIdentity(value))
+                .filter(Boolean)
+        );
+
+        return currentAliases.has(this.normalizeTerminalIdentity(existing)) ? targetTerminalId : existing;
     }
 
     private resolveOperationalTarget(): { baseUrl: string; terminalId: string; useLocalTarget: boolean } | null {

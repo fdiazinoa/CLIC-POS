@@ -181,12 +181,29 @@ class BackgroundSyncManager {
         ]);
 
         if (!terminalScopedCollections.has(collectionName)) return true;
-        if (!item || !item.terminalId) return false;
+        if (!item) return false;
 
-        const itemTerminalId = normalizeTerminalId(item.terminalId);
-        if (!itemTerminalId) return false;
+        const currentTerminalCandidates = new Set(
+            [currentTerminalId, ...permissionService.getCurrentTerminalIdentityCandidates()]
+                .map(normalizeTerminalId)
+                .filter(Boolean)
+        );
 
-        return itemTerminalId === currentTerminalId;
+        if (currentTerminalCandidates.size === 0) return true;
+
+        const itemTerminalCandidates = [
+            item.terminalId,
+            item.source_terminal_id,
+            item.terminal_id,
+            item.terminalName,
+            item.terminal_name,
+        ]
+            .map(normalizeTerminalId)
+            .filter(Boolean);
+
+        if (itemTerminalCandidates.length === 0) return false;
+
+        return itemTerminalCandidates.some((terminalId) => currentTerminalCandidates.has(terminalId));
     }
 
     /**
