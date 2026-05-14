@@ -8,6 +8,7 @@ import {
     buildErpZReportPayload
 } from './erpOutboundPayloads';
 import { permissionService } from './PermissionService';
+import { getSyncDeviceToken } from './deviceToken';
 
 /**
  * API Sync Adapter
@@ -334,7 +335,7 @@ class ApiSyncAdapter {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         terminalId: this.config!.terminalId,
-                        deviceToken: localStorage.getItem('CLIC_POS_DEVICE_TOKEN')
+                        deviceToken: getSyncDeviceToken()
                     })
                 }, 2, 500, channel);
 
@@ -666,7 +667,7 @@ class ApiSyncAdapter {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     terminalId: target.terminalId,
-                    deviceToken: localStorage.getItem('CLIC_POS_DEVICE_TOKEN')
+                    deviceToken: getSyncDeviceToken()
                 })
             }, 2, 500, channel);
 
