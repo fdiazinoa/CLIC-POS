@@ -42,6 +42,7 @@ import {
     productIdentityCandidates,
 } from '../../utils/productReferences';
 import { canonicalizeTariffEntries, resolveTariffId } from '../../utils/masterIdentity';
+import { ensureSyncDeviceToken } from './deviceToken';
 
 export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'productPrices' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities' | 'crmOpportunities' | 'erp_sales_documents';
 
@@ -617,11 +618,11 @@ class SyncManager {
     }
 
     private ensureDeviceToken() {
-        let token = localStorage.getItem('CLIC_POS_DEVICE_TOKEN');
-        if (!token) {
-            token = `dev_${uuidv4()}`;
-            localStorage.setItem('CLIC_POS_DEVICE_TOKEN', token);
-            console.log('🔑 SyncManager: Generated new Device Token:', token);
+        const result = ensureSyncDeviceToken(() => `dev_${uuidv4()}`);
+        if (result.created) {
+            console.log('🔑 SyncManager: Generated new Device Token');
+        } else if (result.migratedFrom) {
+            console.log(`🔑 SyncManager: Migrated legacy Device Token from ${result.migratedFrom}`);
         }
     }
 
