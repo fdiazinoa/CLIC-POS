@@ -1,4 +1,4 @@
-import { Transaction, DocumentType, DocumentSeries } from '../types';
+import { Customer, Transaction, DocumentType, DocumentSeries } from '../types';
 import { db } from '../utils/db';
 import { normalizeTransactionForSync } from './sync/sourceIdentity';
 import {
@@ -679,14 +679,24 @@ class TransactionService {
 
         // Record wallet transaction
         const walletTxns = await db.get('wallet_transactions' as any) as any[] || [];
+        const customers = await db.get('customers') as Customer[] || [];
+        const customer = customers.find(c => c.id === customerId);
         const terminalId =
             typeof window !== 'undefined' ? localStorage.getItem('CLIC_POS_TERMINAL_ID') || undefined : undefined;
         walletTxns.push({
             id: createTechnicalId('WLT-TXN'),
             walletId: wallet.id,
+            customerId,
+            customerName: customer?.name,
             type,
             amount,
             referenceId,
+            source_transaction_id: referenceId,
+            source_customer_id: customerId,
+            source_customer_name: customer?.name,
+            wallet_event_type: type,
+            reference_document_type: type === 'DEPOSIT' ? 'CREDIT_NOTE' : undefined,
+            advance_origin: type === 'DEPOSIT' ? 'CREDIT_NOTE' : undefined,
             createdAt: new Date().toISOString(),
             terminalId,
             operationalChannel: 'WALLET',

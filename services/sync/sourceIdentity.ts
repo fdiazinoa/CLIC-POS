@@ -405,6 +405,18 @@ export const normalizeWalletEventForSync = (event: Record<string, unknown>): Rec
     const sourceTransactionId =
         normalizeString((event as any).source_transaction_id) ||
         normalizeString((event as any).referenceId);
+    const customerId =
+        normalizeString((event as any).source_customer_id) ||
+        normalizeString((event as any).customerId) ||
+        normalizeString((event as any).wallet_customer_id) ||
+        normalizeString((event as any).customer_ref);
+    const customerName =
+        normalizeString((event as any).source_customer_name) ||
+        normalizeString((event as any).customerName) ||
+        normalizeString((event as any).customer_name);
+    const walletEventType =
+        normalizeString((event as any).wallet_event_type) ||
+        normalizeString((event as any).type);
 
     return {
         ...event,
@@ -413,6 +425,12 @@ export const normalizeWalletEventForSync = (event: Record<string, unknown>): Rec
         source_terminal_id: sourceTerminalId,
         device_id: deviceId,
         source_transaction_id: sourceTransactionId,
+        customer_ref: customerId,
+        source_customer_id: customerId,
+        wallet_customer_id: customerId,
+        source_customer_name: customerName,
+        customer_name: customerName,
+        wallet_event_type: walletEventType,
         event_type: (event.event_type as string) || 'WALLET',
         amount: typeof (event as any).amount === 'number' ? (event as any).amount : undefined,
         created_at: createdAt

@@ -2,7 +2,7 @@ import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
 import { apiSyncAdapter } from './ApiSyncAdapter';
 import { permissionService } from './PermissionService';
-import { InventoryLedgerEntry, CashMovement, ZReport, SyncStatus } from '../../types';
+import { InventoryLedgerEntry, CashMovement, Transaction, ZReport, SyncStatus } from '../../types';
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from '../../utils/posSaleActivity';
 
 export interface SyncState {
@@ -224,6 +224,87 @@ class BackgroundSyncManager {
         return Number.isNaN(parsed.getTime()) ? null : parsed;
     }
 
+    private async enrichWalletOperationalEvent(item: any): Promise<any> {
+        const [wallets, customers, transactions, transactionHistory] = await Promise.all([
+            db.get('wallets' as any).catch(() => []),
+            db.get('customers' as any).catch(() => []),
+            db.get('transactions' as any).catch(() => []),
+            db.get('transactionHistory' as any).catch(() => [])
+        ]) as [any[], any[], Transaction[], Transaction[]];
+
+        const normalize = (value: unknown) => String(value || '').trim();
+        const normalizeUpper = (value: unknown) => normalize(value).toUpperCase();
+        const wallet = Array.isArray(wallets)
+            ? wallets.find((entry: any) =>
+                normalize(entry?.id) === normalize(item?.walletId) ||
+                normalize(entry?.customerId) === normalize(item?.customerId)
+            )
+            : null;
+        const customerId = normalize(item?.customerId || item?.source_customer_id || wallet?.customerId);
+        const customer = customerId && Array.isArray(customers)
+            ? customers.find((entry: any) => normalize(entry?.id) === customerId)
+            : null;
+        const customerName = normalize(item?.customerName || item?.source_customer_name || customer?.name);
+        const reference = normalize(item?.referenceId || item?.source_transaction_id);
+        const allTransactions = [
+            ...(Array.isArray(transactions) ? transactions : []),
+            ...(Array.isArray(transactionHistory) ? transactionHistory : [])
+        ];
+        const referenceUpper = normalizeUpper(reference);
+        const referenceTransaction = referenceUpper
+            ? allTransactions.find((tx: any) => [
+                tx?.id,
+                tx?.displayId,
+                tx?.ncf,
+                tx?.electronicNcf,
+                tx?.source_transaction_id
+            ].some(candidate => normalizeUpper(candidate) === referenceUpper))
+            : null;
+        const referenceDocumentType = normalize(
+            item?.reference_document_type ||
+            (this.isCreditNoteTransaction(referenceTransaction, reference) ? 'CREDIT_NOTE' : '')
+        );
+        const type = normalizeUpper(item?.type || item?.wallet_event_type);
+        const isCreditNoteDeposit = type === 'DEPOSIT' && referenceDocumentType === 'CREDIT_NOTE';
+
+        return {
+            ...item,
+            customerId: customerId || item?.customerId,
+            customerName: customerName || item?.customerName,
+            source_customer_id: customerId || item?.source_customer_id,
+            source_customer_name: customerName || item?.source_customer_name,
+            wallet_customer_id: customerId || item?.wallet_customer_id,
+            customer_ref: customerId || item?.customer_ref,
+            source_transaction_id: normalize(referenceTransaction?.id) || reference || item?.source_transaction_id,
+            reference_document_id: normalize(referenceTransaction?.id) || item?.reference_document_id,
+            reference_document_number: normalize(referenceTransaction?.displayId) || reference || item?.reference_document_number,
+            reference_ncf: normalize((referenceTransaction as any)?.electronicNcf || referenceTransaction?.ncf) || item?.reference_ncf,
+            reference_document_type: referenceDocumentType || item?.reference_document_type,
+            wallet_event_type: type || item?.wallet_event_type,
+            advance_origin: item?.advance_origin || (isCreditNoteDeposit ? 'CREDIT_NOTE' : undefined),
+            concept: item?.concept || (isCreditNoteDeposit ? 'Anticipo generado por nota de credito' : undefined)
+        };
+    }
+
+    private isCreditNoteTransaction(transaction: Transaction | null | undefined, reference?: string): boolean {
+        const values = [
+            transaction?.documentType,
+            transaction?.ncfType,
+            transaction?.displayId,
+            transaction?.ncf,
+            (transaction as any)?.electronicNcf,
+            reference
+        ].map(value => String(value || '').trim().toUpperCase());
+
+        return values.some(value =>
+            value === 'REFUND' ||
+            value === 'CREDIT_NOTE' ||
+            value === 'B04' ||
+            value === 'E34' ||
+            value.startsWith('NC')
+        );
+    }
+
     /**
      * Main sync loop
      */
@@ -284,7 +365,7 @@ class BackgroundSyncManager {
 
             // 5) Wallet operational events (ERP-normalized queue)
             await this.processCollection<any>('wallet_transactions', async (item) => {
-                await (apiSyncAdapter as any).pushOperationalEvents?.([item]);
+                await (apiSyncAdapter as any).pushOperationalEvents?.([await this.enrichWalletOperationalEvent(item)]);
             }).catch((error: any) => {
                 collectionErrors.push(`wallet_transactions: ${error?.message || 'unknown error'}`);
             });
