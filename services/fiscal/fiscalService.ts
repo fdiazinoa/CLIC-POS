@@ -465,6 +465,10 @@ type DirectDigifactCredential = {
     cajaCode?: string;
     caja_code?: string;
     digifactCashierCode?: string;
+    autoAssignSequence?: boolean | string | number;
+    autogestionNuc?: boolean | string | number;
+    useSequenceAssignment?: boolean | string | number;
+    assignSequence?: boolean | string | number;
 };
 
 const parseDirectDigifactCredential = (authToken: string): DirectDigifactCredential => {
@@ -752,6 +756,26 @@ const directDigifactIndicatorMontoGravado = (transaction: Transaction): string =
     return raw === false ? '0' : '1';
 };
 
+const directDigifactFlagEnabled = (value: unknown): boolean => {
+    if (value === true) return true;
+    if (typeof value === 'number') return value === 1;
+    const normalized = cleanString(value).toUpperCase();
+    return ['1', 'TRUE', 'YES', 'SI', 'SÍ', 'Y'].includes(normalized);
+};
+
+const shouldUseDirectDigifactSequenceAssignment = (
+    input: IssueFiscalDocumentInput,
+    credential?: DirectDigifactCredential
+): boolean => {
+    if (isDirectDigifactTestTarget(input, credential)) {
+        return true;
+    }
+    return directDigifactFlagEnabled(credential?.autoAssignSequence)
+        || directDigifactFlagEnabled(credential?.autogestionNuc)
+        || directDigifactFlagEnabled(credential?.useSequenceAssignment)
+        || directDigifactFlagEnabled(credential?.assignSequence);
+};
+
 const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput, credential?: DirectDigifactCredential) => {
     const { companyInfo, transaction } = input;
     const branchCode = resolveDirectDigifactBranchCode(input, credential);
@@ -763,6 +787,10 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput, credential?
     const taxAmount = round2(Math.abs(sanitizeNumber(transaction.taxAmount)));
     const netAmount = round2(Math.abs(sanitizeNumber(transaction.netAmount)) || Math.max(0, total - taxAmount));
     const taxRate = normalizePercentRate(input.taxRate, 18);
+    const useSequenceAssignment = shouldUseDirectDigifactSequenceAssignment(input, credential);
+    const sequenceInfo = useSequenceAssignment
+        ? { Name: 'AsignacionDeSecuencia', Value: '1' }
+        : { Name: 'Secuencia', Value: directDigifactSequence(eNCF, documentCode) };
     const items = (transaction.items || []).map((item: any) => {
         const quantity = Math.abs(sanitizeNumber(item.quantity)) || 1;
         const unitPrice = round2(Math.abs(sanitizeNumber(item.price)));
@@ -790,7 +818,7 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput, credential?
             DocType: directDigifactDocumentCode(documentCode),
             IssuedDateTime: toDirectDigifactDateTime(transaction.date),
             AdditionalIssueDocInfo: directDigifactInfoList([
-                { Name: 'Secuencia', Value: directDigifactSequence(eNCF, documentCode) },
+                sequenceInfo,
                 { Name: 'IndicadorMontoGravado', Value: directDigifactIndicatorMontoGravado(transaction) },
                 { Name: 'TipoIngresos', Value: directDigifactTipoIngreso(input.tipoIngreso) },
                 { Name: 'TipoPago', Value: mapDirectDigifactPaymentMethod(transaction.payments?.[0]?.method) }
@@ -928,8 +956,11 @@ const issueDirectDigifactDocument = async (
     });
     const raw = response.data && typeof response.data === 'object' ? response.data : {};
     const providerMessage = extractDirectDigifactMessage(raw) || (Number(response.status) < 400 ? 'DigiFact procesó la emisión.' : `DigiFact HTTP ${response.status}`);
+    const sequenceMode = issuePayload?.Header?.AdditionalIssueDocInfo?.find?.((item: any) => item.Name === 'AsignacionDeSecuencia')
+        ? 'autogestion'
+        : 'local';
     const diagnostic = isTestTarget
-        ? ` [DigiFact test: endpoint=oficial, establecimiento=${issuePayload?.Seller?.BranchInfo?.Name || 'N/D'}, caja=${issuePayload?.Seller?.AdditionalInfo?.find?.((item: any) => item.Name === 'CodigoVendedor')?.Value || 'N/D'}, username=${auth.username || 'N/D'}]`
+        ? ` [DigiFact test: endpoint=oficial, establecimiento=${issuePayload?.Seller?.BranchInfo?.Name || 'N/D'}, caja=${issuePayload?.Seller?.AdditionalInfo?.find?.((item: any) => item.Name === 'CodigoVendedor')?.Value || 'N/D'}, username=${auth.username || 'N/D'}, secuencia=${sequenceMode}]`
         : '';
     const message = `${providerMessage}${diagnostic}`;
     const failure = Number(response.status) >= 400 || isDirectDigifactFailure(raw, message);

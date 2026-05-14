@@ -44,6 +44,10 @@ type DigifactCredentialShape = {
     cajaCode?: string;
     caja_code?: string;
     digifactCashierCode?: string;
+    autoAssignSequence?: boolean | string | number;
+    autogestionNuc?: boolean | string | number;
+    useSequenceAssignment?: boolean | string | number;
+    assignSequence?: boolean | string | number;
 };
 
 type ResolvedDigifactAuth = {
@@ -435,8 +439,29 @@ const digifactIndicatorMontoGravado = (transaction: any): string => {
     return raw === false ? '0' : '1';
 };
 
+const digifactFlagEnabled = (value: unknown): boolean => {
+    if (value === true) return true;
+    if (typeof value === 'number') return value === 1;
+    const normalized = cleanString(value).toUpperCase();
+    return ['1', 'TRUE', 'YES', 'SI', 'SÍ', 'Y'].includes(normalized);
+};
+
+const shouldUseDigifactSequenceAssignment = (
+    request: FiscalDocumentIssueRequest,
+    credential: DigifactCredentialShape
+): boolean => {
+    if (isDigifactTestTarget(request, credential)) {
+        return true;
+    }
+    return digifactFlagEnabled(credential.autoAssignSequence)
+        || digifactFlagEnabled(credential.autogestionNuc)
+        || digifactFlagEnabled(credential.useSequenceAssignment)
+        || digifactFlagEnabled(credential.assignSequence);
+};
+
 const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
     const { companyInfo, transaction, documentCode, options } = request;
+    const credential = getDigifactCredentialFromRequest(request);
     const branchCode = resolveDigifactBranchCode(request);
     const cashierCode = resolveDigifactCashierCode(request);
     const customer = transaction.customerSnapshot || {};
@@ -447,6 +472,10 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
     const taxRate = normalizePercentRate(options?.taxRate, 18);
     const taxableAmount = taxAmount > 0 ? netAmount : 0;
     const sequence = extractSequence(eNCF, documentCode);
+    const useSequenceAssignment = shouldUseDigifactSequenceAssignment(request, credential);
+    const sequenceInfo = useSequenceAssignment
+        ? { Name: 'AsignacionDeSecuencia', Value: '1' }
+        : { Name: 'Secuencia', Value: sequence };
 
     const items = (transaction.items || []).map((item) => {
         const quantity = Math.abs(sanitizeNumber(item.quantity)) || 1;
@@ -478,7 +507,7 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
             DocType: documentTypeCode(documentCode),
             IssuedDateTime: toDigifactDateTime(transaction.date),
             AdditionalIssueDocInfo: digifactInfoList([
-                { Name: 'Secuencia', Value: sequence },
+                sequenceInfo,
                 { Name: 'IndicadorMontoGravado', Value: digifactIndicatorMontoGravado(transaction) },
                 { Name: 'TipoIngresos', Value: digifactTipoIngreso(options?.tipoIngreso) },
                 { Name: 'TipoPago', Value: mapPaymentMethod(transaction.payments?.[0]?.method) }
