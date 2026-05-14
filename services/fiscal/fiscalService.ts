@@ -765,8 +765,12 @@ const directDigifactFlagEnabled = (value: unknown): boolean => {
 
 const shouldUseDirectDigifactSequenceAssignment = (
     input: IssueFiscalDocumentInput,
-    credential?: DirectDigifactCredential
+    credential?: DirectDigifactCredential,
+    options?: { forceLocalSequence?: boolean }
 ): boolean => {
+    if (options?.forceLocalSequence) {
+        return false;
+    }
     if (isDirectDigifactTestTarget(input, credential)) {
         return true;
     }
@@ -776,7 +780,11 @@ const shouldUseDirectDigifactSequenceAssignment = (
         || directDigifactFlagEnabled(credential?.assignSequence);
 };
 
-const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput, credential?: DirectDigifactCredential) => {
+const buildDirectDigifactPayload = (
+    input: IssueFiscalDocumentInput,
+    credential?: DirectDigifactCredential,
+    options?: { forceLocalSequence?: boolean }
+) => {
     const { companyInfo, transaction } = input;
     const branchCode = resolveDirectDigifactBranchCode(input, credential);
     const cashierCode = resolveDirectDigifactCashierCode(input, credential);
@@ -787,7 +795,7 @@ const buildDirectDigifactPayload = (input: IssueFiscalDocumentInput, credential?
     const taxAmount = round2(Math.abs(sanitizeNumber(transaction.taxAmount)));
     const netAmount = round2(Math.abs(sanitizeNumber(transaction.netAmount)) || Math.max(0, total - taxAmount));
     const taxRate = normalizePercentRate(input.taxRate, 18);
-    const useSequenceAssignment = shouldUseDirectDigifactSequenceAssignment(input, credential);
+    const useSequenceAssignment = shouldUseDirectDigifactSequenceAssignment(input, credential, options);
     const sequenceInfo = useSequenceAssignment
         ? { Name: 'AsignacionDeSecuencia', Value: '1' }
         : { Name: 'Secuencia', Value: directDigifactSequence(eNCF, documentCode) };
@@ -909,6 +917,14 @@ const isDirectDigifactFailure = (payload: any, message: string): boolean => {
         /rechaz|error|failed|invalid|invalido|inválido|no coincide|esquema\s+nuc|schema/i.test(message);
 };
 
+const isDirectDigifactSequenceUnavailable = (message: string): boolean =>
+    /no se pudo obtener la secuencia|secuencias disponibles|secuencia.*disponible/i.test(message);
+
+const directDigifactPayloadSequenceMode = (payload: any): string =>
+    payload?.Header?.AdditionalIssueDocInfo?.find?.((item: any) => item.Name === 'AsignacionDeSecuencia')
+        ? 'autogestion'
+        : 'local';
+
 const issueDirectDigifactDocument = async (
     input: IssueFiscalDocumentInput,
     authToken: string
@@ -922,7 +938,7 @@ const issueDirectDigifactDocument = async (
     url.searchParams.set('FORMAT', 'XML|HTML|PDF');
     if (auth.username) url.searchParams.set('USERNAME', auth.username);
 
-    const issuePayload = buildDirectDigifactPayload({
+    const issueInput: IssueFiscalDocumentInput = {
         ...input,
         establishmentCode: isTestTarget ? '0001' : input.establishmentCode || credential.establishmentCode || credential.establishment_code || credential.digifactEstablishmentCode,
         branchCode: isTestTarget ? '0001' : input.branchCode || credential.branchCode || credential.branch_code || credential.digifactBranchCode,
@@ -939,9 +955,9 @@ const issueDirectDigifactDocument = async (
             || credential.cajaCode
             || credential.caja_code
             || credential.digifactCashierCode
-    }, credential);
+    };
 
-    const response = await CapacitorHttp.request({
+    const sendIssuePayload = (payload: any) => CapacitorHttp.request({
         url: url.toString(),
         method: 'POST',
         headers: {
@@ -949,21 +965,36 @@ const issueDirectDigifactDocument = async (
             Accept: 'application/json',
             Authorization: auth.authorization
         },
-        data: issuePayload,
+        data: payload,
         connectTimeout: 10000,
         readTimeout: 30000,
         responseType: 'json'
     });
-    const raw = response.data && typeof response.data === 'object' ? response.data : {};
-    const providerMessage = extractDirectDigifactMessage(raw) || (Number(response.status) < 400 ? 'DigiFact procesó la emisión.' : `DigiFact HTTP ${response.status}`);
-    const sequenceMode = issuePayload?.Header?.AdditionalIssueDocInfo?.find?.((item: any) => item.Name === 'AsignacionDeSecuencia')
-        ? 'autogestion'
-        : 'local';
+
+    let issuePayload = buildDirectDigifactPayload(issueInput, credential);
+    let response = await sendIssuePayload(issuePayload);
+    let raw = response.data && typeof response.data === 'object' ? response.data : {};
+    let providerMessage = extractDirectDigifactMessage(raw) || (Number(response.status) < 400 ? 'DigiFact procesó la emisión.' : `DigiFact HTTP ${response.status}`);
+    let sequenceMode = directDigifactPayloadSequenceMode(issuePayload);
+    let failure = Number(response.status) >= 400 || isDirectDigifactFailure(raw, providerMessage);
+
+    if (isTestTarget && sequenceMode === 'autogestion' && failure && isDirectDigifactSequenceUnavailable(providerMessage)) {
+        const autogestionMessage = providerMessage;
+        issuePayload = buildDirectDigifactPayload(issueInput, credential, { forceLocalSequence: true });
+        response = await sendIssuePayload(issuePayload);
+        raw = response.data && typeof response.data === 'object' ? response.data : {};
+        providerMessage = extractDirectDigifactMessage(raw) || (Number(response.status) < 400 ? 'DigiFact procesó la emisión.' : `DigiFact HTTP ${response.status}`);
+        sequenceMode = 'local-fallback';
+        failure = Number(response.status) >= 400 || isDirectDigifactFailure(raw, providerMessage);
+        if (failure) {
+            providerMessage = `${providerMessage} [Autogestión no disponible: ${autogestionMessage}]`;
+        }
+    }
+
     const diagnostic = isTestTarget
         ? ` [DigiFact test: endpoint=oficial, establecimiento=${issuePayload?.Seller?.BranchInfo?.Name || 'N/D'}, caja=${issuePayload?.Seller?.AdditionalInfo?.find?.((item: any) => item.Name === 'CodigoVendedor')?.Value || 'N/D'}, username=${auth.username || 'N/D'}, secuencia=${sequenceMode}]`
         : '';
     const message = `${providerMessage}${diagnostic}`;
-    const failure = Number(response.status) >= 400 || isDirectDigifactFailure(raw, message);
     const providerTransactionId = extractDirectDigifactProviderId(raw, cleanString(input.transaction.electronicNcf || input.transaction.ncf));
 
     return {
