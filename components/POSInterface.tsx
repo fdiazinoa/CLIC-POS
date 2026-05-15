@@ -640,6 +640,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [customers, selectedCustomer]);
    const [quickActionData, setQuickActionData] = useState<{ product: Product; x: number; y: number } | null>(null);
    const [successToast, setSuccessToast] = useState<string | null>(null);
+   const [incomingUberToast, setIncomingUberToast] = useState<{ count: number; displayIds: string[] } | null>(null);
+   const knownUberOrderIdsRef = useRef<Set<string>>(new Set());
+   const uberOrdersMonitorPrimedRef = useRef(false);
 
    // --- SAFETY GATE STATE ---
    const [showSafetyGate, setShowSafetyGate] = useState(false);
@@ -661,6 +664,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    }, [successToast]);
 
+   useEffect(() => {
+      if (!incomingUberToast) return;
+      const timer = window.setTimeout(() => setIncomingUberToast(null), 6500);
+      return () => window.clearTimeout(timer);
+   }, [incomingUberToast]);
+
    useEffect(() => () => {
       if (ticketAutoSyncTimeoutRef.current) {
          window.clearTimeout(ticketAutoSyncTimeoutRef.current);
@@ -671,6 +680,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const activeTerminal = (config.terminals || []).find(t => t.id === activeTerminalId) || (config.terminals || [])[0];
    const activeTerminalConfig = activeTerminal?.config;
    const terminalId = activeTerminal?.id || 'T1';
+   const terminalDeliveryAlerts = activeTerminalConfig?.operational?.deliveryAlerts;
+   const shouldShowUberToastAlerts = terminalDeliveryAlerts?.showUberEatsToast !== false;
+   const shouldAutoOpenUberModal = Boolean(
+      terminalDeliveryAlerts?.isDeliveryTerminal && terminalDeliveryAlerts?.autoOpenUberEatsModal
+   );
    const productById = useMemo(() => {
       const index = new Map<string, Product>();
       for (const product of products || []) {
@@ -1388,6 +1402,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, []);
 
    const openRecoverReservationModal = useCallback(() => {
+      setIncomingUberToast(null);
       setReservationSearchTerm('');
       setReservationCustomerFilterId(null);
       setShowRecoverReservationModal(true);
@@ -1414,20 +1429,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return true;
    }, [activeRecoveredReservation, showShortErrorToast]);
 
-   const loadUberPendingOrders = useCallback(async () => {
-      setIsLoadingUberPendingOrders(true);
-      setUberPendingOrdersError(null);
+   const loadUberPendingOrders = useCallback(async (
+      options?: { silent?: boolean }
+   ): Promise<UberEatsPendingOrder[] | null> => {
+      const silent = options?.silent === true;
+      if (!silent) {
+         setIsLoadingUberPendingOrders(true);
+         setUberPendingOrdersError(null);
+      }
 
       try {
          const context = resolveUberEatsPosContext(config, activeTerminalId);
          const orders = await fetchUberEatsPendingOrders(context, 25);
          setUberPendingOrders(orders);
+         return orders;
       } catch (error: any) {
          console.warn('⚠️ POSInterface: No se pudieron cargar órdenes Uber Eats pendientes:', error);
-         setUberPendingOrders([]);
-         setUberPendingOrdersError(error?.message || 'No se pudieron cargar los pedidos Uber Eats.');
+         if (!silent) {
+            setUberPendingOrders([]);
+            setUberPendingOrdersError(error?.message || 'No se pudieron cargar los pedidos Uber Eats.');
+         }
+         return null;
       } finally {
-         setIsLoadingUberPendingOrders(false);
+         if (!silent) {
+            setIsLoadingUberPendingOrders(false);
+         }
       }
    }, [activeTerminalId, config]);
 
@@ -1655,6 +1681,69 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!showRecoverReservationModal) return;
       loadUberPendingOrders().catch(console.error);
    }, [showRecoverReservationModal, loadUberPendingOrders]);
+
+   useEffect(() => {
+      knownUberOrderIdsRef.current = new Set();
+      uberOrdersMonitorPrimedRef.current = false;
+      setIncomingUberToast(null);
+   }, [activeTerminalId]);
+
+   useEffect(() => {
+      let cancelled = false;
+      let intervalId: number | null = null;
+
+      const pollUberPendingOrders = async () => {
+         const orders = await loadUberPendingOrders({ silent: true });
+         if (cancelled || !orders) return;
+
+         const currentIds = new Set(orders.map((order) => order.uberOrderId).filter(Boolean));
+         if (!uberOrdersMonitorPrimedRef.current) {
+            knownUberOrderIdsRef.current = currentIds;
+            uberOrdersMonitorPrimedRef.current = true;
+            return;
+         }
+
+         const newOrders = orders.filter((order) => !knownUberOrderIdsRef.current.has(order.uberOrderId));
+         knownUberOrderIdsRef.current = currentIds;
+
+         if (newOrders.length === 0) return;
+
+         if (shouldShowUberToastAlerts) {
+            setIncomingUberToast({
+               count: newOrders.length,
+               displayIds: newOrders.map((order) => order.displayId || order.uberOrderId).filter(Boolean).slice(0, 3),
+            });
+         }
+
+         if (shouldAutoOpenUberModal && !showRecoverReservationModal) {
+            openRecoverReservationModal();
+         }
+      };
+
+      try {
+         resolveUberEatsPosContext(config, activeTerminalId);
+      } catch {
+         return;
+      }
+
+      void pollUberPendingOrders();
+      intervalId = window.setInterval(() => {
+         void pollUberPendingOrders();
+      }, 30000);
+
+      return () => {
+         cancelled = true;
+         if (intervalId) window.clearInterval(intervalId);
+      };
+   }, [
+      activeTerminalId,
+      config,
+      loadUberPendingOrders,
+      openRecoverReservationModal,
+      shouldAutoOpenUberModal,
+      shouldShowUberToastAlerts,
+      showRecoverReservationModal,
+   ]);
 
    const activeReservationByScanCode = useMemo(() => {
       const index = new Map<string, Reservation>();
@@ -5998,6 +6087,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   currentUser={currentUser}
                   roles={roles}
                />
+            )
+         }
+
+         {
+            incomingUberToast && (
+               <div className="fixed top-6 right-6 z-[210] animate-in slide-in-from-top-4">
+                  <button
+                     onClick={openRecoverReservationModal}
+                     className="max-w-sm rounded-[1.6rem] border border-black bg-white px-5 py-4 text-left shadow-2xl transition-all hover:-translate-y-0.5 hover:shadow-black/20"
+                  >
+                     <div className="flex items-start gap-3">
+                        <div className="rounded-2xl bg-black p-2 text-white">
+                           <ShoppingBag size={18} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                           <p className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">Uber Eats</p>
+                           <p className="mt-1 text-sm font-black text-slate-900">
+                              {incomingUberToast.count === 1 ? 'Nuevo pedido listo para POS' : `${incomingUberToast.count} pedidos nuevos listos para POS`}
+                           </p>
+                           <p className="mt-1 text-xs font-semibold text-slate-500">
+                              {incomingUberToast.displayIds.join(' • ')}
+                           </p>
+                           <p className="mt-2 text-[11px] font-black uppercase tracking-[0.18em] text-blue-600">
+                              Tocar para abrir pedidos
+                           </p>
+                        </div>
+                     </div>
+                  </button>
+               </div>
             )
          }
 

@@ -673,6 +673,11 @@ export interface TerminalConfig {
       requireAdvance: boolean;
       minimumAdvancePercent: number;
     };
+    deliveryAlerts?: {
+      isDeliveryTerminal?: boolean;
+      showUberEatsToast?: boolean;
+      autoOpenUberEatsModal?: boolean;
+    };
     fiscalThreshold?: number;
     expandTicket?: boolean;
     showGlobalSales?: boolean;
