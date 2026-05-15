@@ -243,18 +243,59 @@ const isSeedCatalogProduct = (product: Product): boolean => {
 
 const productBusinessKeys = (product: Product): string[] => {
    const keys = new Set<string>();
-   const barcode = typeof product.barcode === 'string' ? product.barcode.trim().toLowerCase() : '';
+   const addKey = (prefix: string, value: unknown) => {
+      const normalized = normalizeSearchToken(value);
+      if (normalized) keys.add(`${prefix}:${normalized}`);
+   };
+
+   addKey('barcode', product.barcode);
+   addKey('barcode', (product as any).barcode_2);
+   addKey('barcode', (product as any).barcode2);
+   addKey('barcode', (product as any).barcode_3);
+   addKey('barcode', (product as any).barcode3);
+
+   if (Array.isArray((product as any).barcodes)) {
+      for (const barcodeEntry of (product as any).barcodes) {
+         if (barcodeEntry && typeof barcodeEntry === 'object' && !Array.isArray(barcodeEntry)) {
+            addKey('barcode', (barcodeEntry as any).barcode);
+            addKey('barcode', (barcodeEntry as any).code);
+            addKey('barcode', (barcodeEntry as any).value);
+         } else {
+            addKey('barcode', barcodeEntry);
+         }
+      }
+   }
+
    const sku = typeof (product as any).sku === 'string' ? (product as any).sku.trim().toLowerCase() : '';
    const code = typeof (product as any).code === 'string' ? (product as any).code.trim().toLowerCase() : '';
    const itemCode = typeof (product as any).item_code === 'string' ? (product as any).item_code.trim().toLowerCase() : '';
    const name = typeof product.name === 'string' ? product.name.trim().toLowerCase() : '';
    const category = typeof product.category === 'string' ? product.category.trim().toLowerCase() : '';
 
-   if (barcode) keys.add(`barcode:${barcode}`);
    if (sku) keys.add(`sku:${sku}`);
    if (code) keys.add(`code:${code}`);
    if (itemCode) keys.add(`item_code:${itemCode}`);
    if (name) keys.add(`namecat:${name}::${category}`);
+
+   return Array.from(keys);
+};
+
+const productSalesIdentityKeys = (product: Product): string[] => {
+   const keys = new Set<string>();
+   const addKey = (prefix: string, value: unknown) => {
+      const normalized = normalizeSearchToken(value);
+      if (normalized) keys.add(`${prefix}:${normalized}`);
+   };
+
+   productBusinessKeys(product).forEach((key) => keys.add(key));
+   productReferenceCandidates(product).forEach((value) => addKey('reference', value));
+   productIdentityCandidates(product).forEach((value) => addKey('identity', value));
+   addKey('operational', resolveOperationalProductId(product));
+   addKey('id', product.id);
+
+   if (keys.size === 0) {
+      keys.add(productSalesIdentityKey(product));
+   }
 
    return Array.from(keys);
 };
@@ -368,10 +409,10 @@ const ProductGridCard = React.memo(({
             warehouseSaleBlocked
                ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
                : 'cursor-pointer hover:border-purple-300 hover:-translate-y-1 active:scale-95'
-         } ${(usesSupermarketLayout && showProductImages) ? 'rounded-[1.75rem] p-4 shadow-[0_10px_26px_rgba(15,23,42,0.08)] min-h-[256px] grid grid-rows-[56%_44%]' : (usesExpandedCatalog && showProductImages) ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[228px] grid grid-rows-[52%_48%]' : usesExpandedCatalog ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] min-h-[204px] flex flex-col h-full' : isCompactMobileCard ? `rounded-[2rem] p-3.5 min-h-[246px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}` : `rounded-[2rem] p-3 min-h-[228px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
+         } ${(usesSupermarketLayout && showProductImages) ? 'rounded-[1.75rem] p-3.5 shadow-[0_10px_26px_rgba(15,23,42,0.08)] min-h-[230px] grid grid-rows-[60%_40%]' : (usesExpandedCatalog && showProductImages) ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[214px] grid grid-rows-[56%_44%]' : usesExpandedCatalog ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] min-h-[190px] flex flex-col h-full' : isCompactMobileCard ? `rounded-[2rem] p-3.5 min-h-[230px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}` : `rounded-[2rem] p-3 min-h-[214px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
       >
          {showProductImages && (
-            <div className={`${usesSupermarketLayout ? 'h-full rounded-[1.4rem] mb-0 p-3' : usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-36 rounded-[1.5rem] mb-3 p-2.5' : 'h-28 md:h-32 rounded-[1.5rem] mb-3'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
+            <div className={`${usesSupermarketLayout ? 'h-full rounded-[1.35rem] mb-0 p-2.5' : usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-[8.5rem] rounded-[1.5rem] mb-2.5 p-2.5' : 'h-28 md:h-32 rounded-[1.5rem] mb-2.5'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
                {imageSrc ? <img src={imageSrc} className={`w-full h-full ${usesSupermarketLayout || usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={usesSupermarketLayout ? 56 : 48} strokeWidth={1} /></div>}
 
                {isWeighted && (
@@ -410,13 +451,13 @@ const ProductGridCard = React.memo(({
                </div>
             </div>
          )}
-         <div className={`flex flex-col ${usesExpandedCatalog ? 'min-h-0 h-full pt-1 justify-between' : usesSupermarketLayout ? 'flex-1 gap-1.5' : 'flex-1 justify-between gap-3'}`}>
-            <div className={usesSupermarketLayout ? 'space-y-1.5' : usesExpandedCatalog ? 'space-y-1' : 'space-y-1.5'}>
+         <div className={`flex flex-col ${usesExpandedCatalog ? 'min-h-0 h-full pt-0.5 justify-between' : usesSupermarketLayout ? 'flex-1 gap-0.5' : 'flex-1 justify-between gap-2'}`}>
+            <div className={usesSupermarketLayout ? 'space-y-1' : usesExpandedCatalog ? 'space-y-0.5' : 'space-y-1'}>
                <span className={`block font-bold text-purple-500 uppercase opacity-60 line-clamp-1 ${usesSupermarketLayout ? 'text-[11px]' : usesExpandedCatalog ? 'text-[10px]' : isCompactMobileCard ? 'text-[10px]' : 'text-[8px]'}`}>{product.category}</span>
-               <h3 className={`font-bold text-gray-800 dark:text-white leading-tight line-clamp-2 ${usesSupermarketLayout ? 'text-[1.22rem] min-h-[2.35rem]' : usesExpandedCatalog ? 'text-[1.05rem] min-h-[2.3rem]' : isCompactMobileCard ? 'text-[1.05rem] min-h-[2.8rem]' : 'text-sm min-h-[2.5rem]'}`}>{product.name}</h3>
+               <h3 className={`font-bold text-gray-800 dark:text-white leading-tight line-clamp-2 ${usesSupermarketLayout ? 'text-[1.08rem] min-h-[1.7rem]' : usesExpandedCatalog ? 'text-[0.98rem] min-h-[1.8rem]' : isCompactMobileCard ? 'text-[1rem] min-h-[2.25rem]' : 'text-sm min-h-[2.1rem]'}`}>{product.name}</h3>
             </div>
-            <div className={`${usesSupermarketLayout ? 'mt-0.5 pt-0' : usesExpandedCatalog ? 'mt-1 pt-1 border-t border-gray-100 dark:border-slate-700' : 'mt-auto pt-2 border-t border-gray-50 dark:border-slate-700'}`}>
-               <span className={`font-black text-gray-900 dark:text-white leading-none ${usesSupermarketLayout ? 'text-[2rem]' : usesExpandedCatalog ? 'text-[1.75rem]' : isCompactMobileCard ? 'text-[1.95rem]' : 'text-lg'}`}>{baseCurrencySymbol}{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            <div className={`${usesSupermarketLayout ? 'mt-0 pt-0' : usesExpandedCatalog ? 'mt-0.5 pt-0.5 border-t border-gray-100 dark:border-slate-700' : 'mt-auto pt-1.5 border-t border-gray-50 dark:border-slate-700'}`}>
+               <span className={`font-black text-gray-900 dark:text-white leading-none ${usesSupermarketLayout ? 'text-[1.78rem]' : usesExpandedCatalog ? 'text-[1.5rem]' : isCompactMobileCard ? 'text-[1.75rem]' : 'text-lg'}`}>{baseCurrencySymbol}{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
             </div>
          </div>
          {warehouseSaleBlocked && (
@@ -912,6 +953,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
 
    const canChangeTariff = hasPermission('POS_CHANGE_TARIFF');
+   const canSellWithOpenZ = hasPermission('POS_ALLOW_SALES_WITH_OPEN_Z');
 
    const usesSupermarketLayout = useMemo(
       () => Boolean(!isMobile && isRetailMode),
@@ -1052,12 +1094,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [isReturnMode, setIsReturnMode] = useState(false);
    const [errorToast, setErrorToast] = useState<string | null>(null);
 
+   const ensureSalesWithOpenZPermission = useCallback((): boolean => {
+      if (canSellWithOpenZ) return true;
+      setErrorToast('Tu rol no permite vender con cierre Z abierto. Activa el permiso en Equipo y Roles.');
+      window.setTimeout(() => setErrorToast(null), 3500);
+      return false;
+   }, [canSellWithOpenZ]);
+
    const activeTariff = useMemo(() => (config.tariffs || []).find(t => t.id === activeTariffId), [config.tariffs, activeTariffId]);
 
    const [searchTerm, setSearchTerm] = useState('');
    const deferredSearchTerm = useDeferredValue(searchTerm);
    const [categoryFilter, setCategoryFilter] = useState('ALL');
-   const deferredCategoryFilter = useDeferredValue(categoryFilter);
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
 
    const [showDiscountModal, setShowDiscountModal] = useState(false);
@@ -1930,6 +1978,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string) => {
       if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
+      if (quantity > 0 && !ensureSalesWithOpenZPermission()) return;
       if (!canAddItemToCart(product, quantity)) return;
 
       // TRACEABILITY INTERCEPTION
@@ -1982,7 +2031,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
       setLastAddedCartId(targetCartId);
-   }, [blockRecoveredUberOrderMutation, canAddItemToCart, getProductPrice, onUpdateCart, cart, activeTerminalConfig]); // Added cart to dependencies
+   }, [blockRecoveredUberOrderMutation, canAddItemToCart, ensureSalesWithOpenZPermission, getProductPrice, onUpdateCart, cart, activeTerminalConfig]); // Added cart to dependencies
 
    const handleProductClick = useCallback((product: Product) => {
       // MOBILE INTERCEPTION
@@ -1998,13 +2047,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const hasModifiers = (product.availableModifiers || []).length > 0;
       const requiresConfigurationBeforeAdd = isWeighted || hasVariants || hasModifiers;
 
+      if (!isReturnMode && !ensureSalesWithOpenZPermission()) return;
       if (requiresConfigurationBeforeAdd && !canAddItemToCart(product)) return;
 
       if (isWeighted) setProductForScale(product);
       else if (hasVariants) setSelectedProductForVariants(product);
       else if (hasModifiers) setProductForModifiers(product);
       else addToCart(product, isReturnMode ? -1 : 1);
-   }, [isMobile, defaultSalesWarehouseId, canAddItemToCart, addToCart, isReturnMode]);
+   }, [isMobile, defaultSalesWarehouseId, ensureSalesWithOpenZPermission, canAddItemToCart, addToCart, isReturnMode]);
 
    const handleProductClickRef = useRef(handleProductClick);
    const quickActionDataRef = useRef(quickActionData);
@@ -2400,20 +2450,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [products]);
 
    const dedupedSalesCatalogProducts = useMemo(() => {
-      const rankedByIdentity = new Map<string, { product: Product; score: number }>();
+      type RankedProductEntry = { product: Product; score: number; keys: Set<string> };
+      const rankedByIdentity = new Map<string, RankedProductEntry>();
 
       for (const product of salesCatalogProducts) {
          if (!product || typeof product !== 'object' || Array.isArray(product)) continue;
 
-         const key = productSalesIdentityKey(product);
+         const keys = productSalesIdentityKeys(product);
          const score = scoreProductForSales(product, warehouses);
-         const existing = rankedByIdentity.get(key);
-         if (!existing || score > existing.score) {
-            rankedByIdentity.set(key, { product, score });
+         const matchedEntries = Array.from(
+            new Set(keys.map((key) => rankedByIdentity.get(key)).filter(Boolean) as RankedProductEntry[])
+         );
+         const bestExisting = matchedEntries
+            .sort((left, right) => right.score - left.score)[0];
+         const incomingEntry: RankedProductEntry = { product, score, keys: new Set(keys) };
+         const winner = !bestExisting || score > bestExisting.score ? incomingEntry : bestExisting;
+         const mergedKeys = new Set<string>(keys);
+
+         for (const entry of matchedEntries) {
+            entry.keys.forEach((key) => mergedKeys.add(key));
+         }
+
+         winner.keys = mergedKeys;
+         for (const key of mergedKeys) {
+            rankedByIdentity.set(key, winner);
          }
       }
 
-      return Array.from(rankedByIdentity.values(), (entry) => entry.product);
+      const uniqueEntries = Array.from(new Set(rankedByIdentity.values()));
+      return uniqueEntries.map((entry) => entry.product);
    }, [salesCatalogProducts, warehouses]);
 
    const salesCatalogProductEntries = useMemo<SalesCatalogProductEntry[]>(() => {
@@ -2444,9 +2509,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [canonicalizeCategory, dedupedSalesCatalogProducts, displayCategory, productHasActiveTariff, warehouses]);
 
    const filteredProducts = useMemo(() => {
-      const normalizedCategoryFilter = deferredCategoryFilter === 'ALL'
+      const normalizedCategoryFilter = categoryFilter === 'ALL'
          ? 'ALL'
-         : canonicalizeCategory(deferredCategoryFilter);
+         : canonicalizeCategory(categoryFilter);
       const normalizedSearch = deferredSearchTerm.trim().toLowerCase();
 
       const filtered = salesCatalogProductEntries.filter((entry) => {
@@ -2467,7 +2532,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             seenIds.add(p.id);
             return true;
          });
-   }, [salesCatalogProductEntries, deferredCategoryFilter, deferredSearchTerm, canonicalizeCategory, effectiveAllowedCategorySet]);
+   }, [salesCatalogProductEntries, categoryFilter, deferredSearchTerm, canonicalizeCategory, effectiveAllowedCategorySet]);
 
    const handleRetailSearchSubmit = useCallback((rawTerm?: string) => {
       const trimmed = (rawTerm ?? searchTerm ?? '').trim();
@@ -2501,10 +2566,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       retailSearchInputRef.current?.focus();
    }, [searchTerm, findProductByAnyCode, addToCart, isReturnMode, filteredProducts, handleProductClick]);
 
-   const categories = useMemo(() => {
-      const allowedDisplayCategories = Array.from(
-         new Set(Array.from(effectiveAllowedCategorySet).map((category) => displayCategory(category)).filter(Boolean))
-      );
+   const categoryOptions = useMemo(() => {
+      const allowedCategoryOptions = Array.from(effectiveAllowedCategorySet)
+         .map((category) => ({
+            id: canonicalizeCategory(category),
+            label: displayCategory(category),
+         }))
+         .filter((category) => category.id && category.label);
       const availableProducts = salesCatalogProductEntries.filter((entry) => {
          if (!entry.isSellable || !entry.hasActiveTariff || !entry.hasErpWarehouse) return false;
          if (effectiveAllowedCategorySet.size > 0) {
@@ -2521,25 +2589,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          availableCategoryMap.set(normalizedCategory, rawCategory);
       }
 
-      const productCategories = Array.from(availableCategoryMap.values())
-         .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+      const productCategories = Array.from(availableCategoryMap.entries())
+         .map(([id, label]) => ({ id, label }))
+         .sort((a, b) => a.label.localeCompare(b.label, 'es', { sensitivity: 'base' }));
 
-      const scopedCategories = allowedDisplayCategories.length > 0
-         ? allowedDisplayCategories
-         : productCategories;
+      const scopedCategories = productCategories.length > 0
+         ? productCategories
+         : allowedCategoryOptions;
 
-      const cats = ['ALL', ...scopedCategories];
-      return cats;
-   }, [displayCategory, effectiveAllowedCategorySet, salesCatalogProductEntries]);
+      const dedupedCategoryOptions = new Map<string, { id: string; label: string }>();
+      for (const category of scopedCategories) {
+         if (!category.id || dedupedCategoryOptions.has(category.id)) continue;
+         dedupedCategoryOptions.set(category.id, category);
+      }
+
+      return [{ id: 'ALL', label: 'Todas' }, ...Array.from(dedupedCategoryOptions.values())];
+   }, [canonicalizeCategory, displayCategory, effectiveAllowedCategorySet, salesCatalogProductEntries]);
+
+   const categoryOptionIds = useMemo(() => categoryOptions.map((option) => option.id), [categoryOptions]);
 
    useEffect(() => {
-      if (categoryFilter !== 'ALL' && !categories.includes(categoryFilter)) {
+      const selectedCategoryKey = categoryFilter === 'ALL' ? 'ALL' : canonicalizeCategory(categoryFilter);
+      if (selectedCategoryKey !== 'ALL' && !categoryOptionIds.includes(selectedCategoryKey)) {
          setCategoryFilter('ALL');
       }
-   }, [categories, categoryFilter]);
-
-
-
+   }, [canonicalizeCategory, categoryFilter, categoryOptionIds]);
 
    // --- PROMOTION ENGINE INTEGRATION ---
    const processedCart = useMemo(() => {
@@ -2979,6 +3053,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             : {};
          const hasReturns = processedCart.some(i => i.quantity < 0);
          const hasSales = processedCart.some(i => i.quantity > 0);
+         if (hasSales && !ensureSalesWithOpenZPermission()) return null;
          const productsById = new Map(products.map(product => [product.id, product] as const));
          const isRefundOnly = hasReturns && !hasSales;
          const refundSeriesId = activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND';
@@ -3471,6 +3546,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const proceedToCheckout = () => {
+      const hasSaleLines = cart.some(item => Number(item.quantity || 0) > 0);
+      if (hasSaleLines && !ensureSalesWithOpenZPermission()) return;
+
       const threshold = activeTerminalConfig?.operational?.fiscalThreshold || 0;
       if (threshold > 0 && cartTotal > threshold && !selectedCustomer) {
          alert(`ATENCIÓN: El monto de la venta (${baseCurrency.symbol}${cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) excede el umbral fiscal permitido para facturas de consumo (${baseCurrency.symbol}${threshold.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}).\n\nEs obligatorio identificar al cliente y emitir una Factura de Crédito Fiscal (B01).`);
@@ -4035,7 +4113,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                   onUpdateConfig(newConfig);
                   setActiveTariffId(mobileConfig.tariffId);
-                  setCategoryFilter(mobileConfig.categoryId);
+                  setCategoryFilter(mobileConfig.categoryId === 'ALL' ? 'ALL' : canonicalizeCategory(mobileConfig.categoryId));
                }
 
                // Proceed to add product
@@ -4224,18 +4302,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* --- CATEGORY SELECTOR BAR --- */}
             <div className={categoryContainerClass}>
-               {categories.map((cat, idx) => (
+               {categoryOptions.map((categoryOption, idx) => {
+                  const selectedCategoryKey = categoryFilter === 'ALL' ? 'ALL' : canonicalizeCategory(categoryFilter);
+                  const isActiveCategory = selectedCategoryKey === categoryOption.id;
+                  return (
                   <button
-                     key={cat || `cat-${idx}`}
-                     onClick={() => setCategoryFilter(cat)}
-                     className={`px-6 py-2.5 rounded-full text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap shadow-sm border ${categoryFilter === cat
+                     key={categoryOption.id || `cat-${idx}`}
+                     onClick={() => setCategoryFilter(categoryOption.id)}
+                     className={`px-6 py-2.5 rounded-full text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap shadow-sm border ${isActiveCategory
                         ? 'bg-blue-600 border-blue-500 text-white shadow-blue-200 scale-105'
                         : 'bg-white border-gray-200 text-gray-400 hover:border-blue-300 hover:text-blue-600'
                         }`}
                   >
-                     {cat === 'ALL' ? 'Todas' : cat}
+                     {categoryOption.label}
                   </button>
-               ))}
+                  );
+               })}
             </div>
 
             <div

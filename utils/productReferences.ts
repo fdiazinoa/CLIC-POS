@@ -27,6 +27,33 @@ const uniqueValues = (values: string[]): string[] => {
   return normalized;
 };
 
+const collectBarcodeValues = (record: Record<string, unknown>): string[] => {
+  const values = [
+    trimValue(record.barcode),
+    trimValue(record.barcode_2),
+    trimValue(record.barcode2),
+    trimValue(record.barcode_3),
+    trimValue(record.barcode3),
+  ];
+
+  for (const entry of asArray(record.barcodes)) {
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      const barcodeRecord = entry as Record<string, unknown>;
+      values.push(
+        trimValue(barcodeRecord.barcode),
+        trimValue(barcodeRecord.code),
+        trimValue(barcodeRecord.value),
+        trimValue(barcodeRecord.id)
+      );
+      continue;
+    }
+
+    values.push(trimValue(entry));
+  }
+
+  return uniqueValues(values);
+};
+
 const quantityFromValue = (value: unknown): number | null => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
@@ -145,7 +172,7 @@ export const productReferenceCandidates = (
     trimValue(record.erp_product_id),
     trimValue(record.sourceItemId),
     trimValue(record.source_item_id),
-    trimValue(record.barcode),
+    ...collectBarcodeValues(record),
     trimValue(record.sku),
     trimValue(record.item_code),
     trimValue(record.code),
@@ -160,7 +187,7 @@ export const productReferenceCandidates = (
     trimValue(nestedProduct.erp_product_id),
     trimValue(nestedProduct.sourceItemId),
     trimValue(nestedProduct.source_item_id),
-    trimValue(nestedProduct.barcode),
+    ...collectBarcodeValues(nestedProduct),
     trimValue(nestedProduct.sku),
     trimValue(nestedProduct.item_code),
     trimValue(nestedProduct.code),
@@ -186,6 +213,10 @@ export const productIdentityCandidates = (
     trimValue(record.erp_product_id),
     trimValue(record.sourceItemId),
     trimValue(record.source_item_id),
+    ...collectBarcodeValues(record),
+    trimValue(record.sku),
+    trimValue(record.item_code),
+    trimValue(record.code),
     trimValue(nestedProduct.id),
     trimValue(nestedProduct.itemId),
     trimValue(nestedProduct.item_id),
@@ -197,6 +228,10 @@ export const productIdentityCandidates = (
     trimValue(nestedProduct.erp_product_id),
     trimValue(nestedProduct.sourceItemId),
     trimValue(nestedProduct.source_item_id),
+    ...collectBarcodeValues(nestedProduct),
+    trimValue(nestedProduct.sku),
+    trimValue(nestedProduct.item_code),
+    trimValue(nestedProduct.code),
   ]);
 };
 

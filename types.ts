@@ -2078,6 +2078,7 @@ export type Permission =
   | 'POS_CREDIT_OVERRIDE'
   | 'POS_PAY_CREDIT'
   | 'POS_ALLOW_ZERO_PRICE'
+  | 'POS_ALLOW_SALES_WITH_OPEN_Z'
   // --- POS CORE ---
   | 'SALE'
   | 'POS_VOID_ITEM'
