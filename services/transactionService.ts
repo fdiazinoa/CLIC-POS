@@ -1,4 +1,4 @@
-import { Transaction, DocumentType, DocumentSeries } from '../types';
+import { Customer, Transaction, DocumentType, DocumentSeries } from '../types';
 import { db } from '../utils/db';
 import { normalizeTransactionForSync } from './sync/sourceIdentity';
 import {
@@ -649,6 +649,7 @@ class TransactionService {
 
         const wallets = await db.get('wallets' as any) as any[] || [];
         let wallet = wallets.find(w => w.customerId === customerId);
+        const now = new Date().toISOString();
 
         if (!wallet) {
             // Create wallet if not exists
@@ -658,22 +659,29 @@ class TransactionService {
                 balance: 0,
                 currency: 'DOP',
                 status: 'ACTIVE',
-                updatedAt: new Date().toISOString()
+                lastActivity: now,
+                updatedAt: now,
+                transactions: []
             };
             wallets.push(wallet);
+        }
+
+        if ((type === 'DEPOSIT' || type === 'REFUND') && wallet.status !== 'ACTIVE') {
+            wallet.status = 'ACTIVE';
         }
 
         if (wallet.status !== 'ACTIVE') {
             throw new Error(`Wallet for customer ${customerId} is not active.`);
         }
 
-        const newBalance = wallet.balance + amount;
+        const newBalance = toNumber(wallet.balance) + amount;
         if (newBalance < -0.01) { // Allow tiny precision diff
             throw new Error('Insufficient wallet balance');
         }
 
         wallet.balance = parseFloat(newBalance.toFixed(2));
-        wallet.updatedAt = new Date().toISOString();
+        wallet.lastActivity = now;
+        wallet.updatedAt = now;
 
         await db.save('wallets' as any, wallets);
 
@@ -687,12 +695,35 @@ class TransactionService {
             type,
             amount,
             referenceId,
-            createdAt: new Date().toISOString(),
+            timestamp: now,
+            createdAt: now,
             terminalId,
             operationalChannel: 'WALLET',
             syncStatus: 'PENDING' as const
         });
         await db.save('wallet_transactions' as any, walletTxns);
+
+        const customers = await db.get('customers') as Customer[] || [];
+        const customer = customers.find(c => c.id === customerId);
+        if (customer) {
+            const updatedCustomer: Customer = {
+                ...customer,
+                wallet: {
+                    ...(customer.wallet || {}),
+                    ...wallet,
+                    id: wallet.id,
+                    customerId,
+                    balance: wallet.balance,
+                    currency: wallet.currency || customer.wallet?.currency || 'DOP',
+                    status: wallet.status || 'ACTIVE',
+                    lastActivity: wallet.lastActivity || now,
+                    transactions: customer.wallet?.transactions || []
+                },
+                updatedAt: now
+            };
+
+            await db.saveDocument('customers', updatedCustomer);
+        }
     }
 
     /**
