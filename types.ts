@@ -194,15 +194,25 @@ export type NCFType = 'B01' | 'B02' | 'B04' | 'B14' | 'B15';
 export type ElectronicNCFType = 'E31' | 'E32' | 'E34' | 'E44' | 'E45';
 export type FiscalDocumentCode = NCFType | ElectronicNCFType;
 export type FiscalMode = 'LEGACY_B' | 'ECF';
-export type FiscalProviderId = 'NONE' | 'POLARIS';
+export type FiscalProviderId = 'NONE' | 'POLARIS' | 'DIGIFACT';
 export type FiscalProviderEnvironment = 0 | 1 | 2 | 3;
+export type FiscalProviderDeliveryMode = 'LOCAL_DIRECT' | 'DELEGATED_ERP';
 
 export interface FiscalProviderConfig {
   id: FiscalProviderId;
   enabled: boolean;
   environment?: FiscalProviderEnvironment;
   displayName?: string;
+  deliveryMode?: FiscalProviderDeliveryMode;
+  apiBaseUrl?: string;
+  testUrl?: string;
+  issueUrl?: string;
+  statusUrl?: string;
   credentialKey?: string;
+  establishmentCode?: string;
+  branchCode?: string;
+  branchName?: string;
+  cashierCode?: string;
   tipoIngreso?: number;
   modificationCode?: number;
   unitCodeGoods?: number;
@@ -580,6 +590,23 @@ export interface TerminalConfig {
   deviceRole?: DeviceRoleConfig; // NEW: Configuración de rol de dispositivo
 
   fiscal: {
+    enabled?: boolean;
+    providerId?: FiscalProviderId;
+    environment?: FiscalProviderEnvironment;
+    deliveryMode?: FiscalProviderDeliveryMode;
+    apiBaseUrl?: string;
+    testUrl?: string;
+    issueUrl?: string;
+    statusUrl?: string;
+    credentialKey?: string;
+    establishmentCode?: string;
+    branchCode?: string;
+    branchName?: string;
+    cashierCode?: string;
+    tipoIngreso?: number;
+    modificationCode?: number;
+    unitCodeGoods?: number;
+    unitCodeServices?: number;
     batchSize: number; // Deprecated but kept for compatibility
     lowBatchThreshold: number;
     // New: Configuration per NCF Type
@@ -672,6 +699,11 @@ export interface TerminalConfig {
       printCopies: number;
       requireAdvance: boolean;
       minimumAdvancePercent: number;
+    };
+    deliveryAlerts?: {
+      isDeliveryTerminal?: boolean;
+      showUberEatsToast?: boolean;
+      autoOpenUberEatsModal?: boolean;
     };
     fiscalThreshold?: number;
     expandTicket?: boolean;

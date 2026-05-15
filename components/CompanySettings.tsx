@@ -51,6 +51,11 @@ const CompanySettings: React.FC<CompanySettingsProps> = ({ config, onUpdateConfi
   }, [config.companyInfo]);
 
   const activeProviderId = getDefaultFiscalProvider(config);
+  const activeProviderLabel = activeProviderId === 'DIGIFACT'
+    ? 'DigiFact'
+    : activeProviderId === 'POLARIS'
+      ? 'Polaris'
+      : 'proveedor fiscal';
   const resolvedCredentialKey = getFiscalProviderCredentialKey(config, activeProviderId);
   const normalizedCompanyRnc = normalizeFiscalCredentialKey(company.rnc);
   const normalizedCredentialKey = normalizeFiscalCredentialKey(resolvedCredentialKey);
@@ -61,7 +66,7 @@ const CompanySettings: React.FC<CompanySettingsProps> = ({ config, onUpdateConfi
   );
 
   const impactedAreas = useMemo(() => [
-    'Emisor fiscal para e-CF y Polaris',
+    'Emisor fiscal para e-CF',
     'Cabecera de tickets y facturas',
     'Correo y documentos impresos',
     'Identidad visible en kiosco y reportes'
@@ -254,7 +259,7 @@ const CompanySettings: React.FC<CompanySettingsProps> = ({ config, onUpdateConfi
                 Alerta de compatibilidad
               </h3>
               <p className="text-sm text-amber-900 leading-relaxed">
-                El RNC del emisor no coincide con la credencial fiscal activa. Polaris rechazara la emision mientras el emisor use <span className="font-mono font-bold">{company.rnc || 'N/D'}</span> y la credencial siga en <span className="font-mono font-bold">{resolvedCredentialKey || 'N/D'}</span>.
+                El RNC del emisor no coincide con la credencial fiscal activa. {activeProviderLabel} puede rechazar la emision mientras el emisor use <span className="font-mono font-bold">{company.rnc || 'N/D'}</span> y la credencial siga en <span className="font-mono font-bold">{resolvedCredentialKey || 'N/D'}</span>.
               </p>
             </div>
           ) : (

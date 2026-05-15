@@ -377,6 +377,43 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               <Toggle label="Terminal Principal" description="Actúa como servidor local." checked={activeTerminal.config.isPrimaryNode} onChange={handleToggleMasterNode} icon={Crown} disabled={activeTerminal.config.governedByMaster} />
                               {!activeTerminal.config.isPrimaryNode && <Toggle label="Gobernado por Maestra" checked={activeTerminal.config.governedByMaster} onChange={(v: boolean) => handleUpdateActiveConfig('', 'governedByMaster', v)} icon={ShieldCheck} />}
                               <SettingsOperational config={activeTerminal.config} onUpdate={handleUpdateActiveConfig} isReadOnly={isReadOnly} />
+                              <div className="p-6 bg-slate-50 rounded-[2rem] border border-slate-100 space-y-4">
+                                 <div className="flex items-start gap-4">
+                                    <div className="p-3 rounded-2xl bg-white text-slate-700 shadow-sm">
+                                       <Truck size={20} />
+                                    </div>
+                                    <div>
+                                       <h4 className="text-sm font-black text-slate-800 uppercase tracking-[0.18em]">Delivery y Marketplaces</h4>
+                                       <p className="text-xs font-medium text-slate-500 mt-1">
+                                          Configura esta caja para recibir alertas automáticas de Uber Eats y abrir el modal de pedidos solo si está dedicada a delivery.
+                                       </p>
+                                    </div>
+                                 </div>
+                                 <Toggle
+                                    label="Caja asignada a Delivery"
+                                    description="Marca esta terminal como la caja operativa para pedidos de delivery y marketplaces."
+                                    checked={Boolean(activeTerminal.config.operational?.deliveryAlerts?.isDeliveryTerminal)}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('operational.deliveryAlerts', 'isDeliveryTerminal', v)}
+                                    icon={Package}
+                                    disabled={isReadOnly}
+                                 />
+                                 <Toggle
+                                    label="Toast al llegar pedido Uber Eats"
+                                    description="Muestra una alerta visual corta cuando entra una orden nueva marcada como PUSHED_TO_POS."
+                                    checked={activeTerminal.config.operational?.deliveryAlerts?.showUberEatsToast !== false}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('operational.deliveryAlerts', 'showUberEatsToast', v)}
+                                    icon={ShoppingBag}
+                                    disabled={isReadOnly}
+                                 />
+                                 <Toggle
+                                    label="Abrir modal automático de pedidos"
+                                    description="Al detectar una orden nueva, abre automáticamente la ventana de Reservas y Pedidos. Recomendado solo para la caja de delivery."
+                                    checked={Boolean(activeTerminal.config.operational?.deliveryAlerts?.autoOpenUberEatsModal)}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('operational.deliveryAlerts', 'autoOpenUberEatsModal', v)}
+                                    icon={Monitor}
+                                    disabled={isReadOnly || !activeTerminal.config.operational?.deliveryAlerts?.isDeliveryTerminal}
+                                 />
+                              </div>
                            </div>
                         )}
 

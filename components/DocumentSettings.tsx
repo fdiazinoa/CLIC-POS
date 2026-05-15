@@ -364,6 +364,9 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       () => fiscalCompliance.providers.find(provider => provider.id === fiscalCompliance.defaultProvider),
       [fiscalCompliance]
    );
+   const isDelegatedDigiFactProvider =
+      fiscalCompliance.defaultProvider === 'DIGIFACT'
+      && selectedFiscalProviderConfig?.deliveryMode === 'DELEGATED_ERP';
 
    const refreshCredentialMeta = async () => {
       const requestId = ++credentialMetaRequestSeq.current;
@@ -796,6 +799,14 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
          return;
       }
 
+      if (isDelegatedDigiFactProvider) {
+         setFiscalFeedback({
+            kind: 'success',
+            message: 'DigiFact se valida desde ERP > Integraciones e-CF. El POS solo delega la emisión al backend ERP y no guarda token local.'
+         });
+         return;
+      }
+
       setIsTestingProvider(true);
       setFiscalFeedback(null);
       try {
@@ -805,7 +816,13 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             fiscalCompliance.defaultProvider,
             environment,
             businessConfig?.companyInfo,
-            provider?.credentialKey
+            provider?.credentialKey,
+            {
+               apiBaseUrl: provider?.apiBaseUrl,
+               testUrl: provider?.testUrl,
+               issueUrl: provider?.issueUrl,
+               statusUrl: provider?.statusUrl
+            }
          );
          setFiscalFeedback({
             kind: result.success ? 'success' : 'error',
@@ -823,8 +840,13 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       const requestContext = getCredentialRequestContext();
       if (!requestContext) return;
 
+      if (requestContext.providerId === 'DIGIFACT' && isDelegatedDigiFactProvider) {
+         setFiscalFeedback({ kind: 'error', message: 'DigiFact no guarda token en el POS. Administra la credencial segura desde ERP > Integraciones e-CF.' });
+         return;
+      }
+
       if (!credentialDraft.trim()) {
-         setFiscalFeedback({ kind: 'error', message: 'Ingresa el Authentication Token de Polaris.' });
+         setFiscalFeedback({ kind: 'error', message: 'Ingresa el Authentication Token del proveedor fiscal.' });
          return;
       }
 
@@ -859,6 +881,11 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
    const handleSaveSupabaseCredential = async () => {
       const requestContext = getCredentialRequestContext();
       if (!requestContext) return;
+
+      if (requestContext.providerId === 'DIGIFACT' && isDelegatedDigiFactProvider) {
+         setFiscalFeedback({ kind: 'error', message: 'DigiFact no guarda token desde el POS. Administra la credencial segura desde ERP > Integraciones e-CF.' });
+         return;
+      }
 
       if (!credentialDraft.trim()) {
          setFiscalFeedback({ kind: 'error', message: 'Ingresa el Authentication Token que deseas enviar a Supabase.' });
@@ -895,6 +922,11 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       const requestContext = getCredentialRequestContext();
       if (!requestContext) return;
 
+      if (requestContext.providerId === 'DIGIFACT' && isDelegatedDigiFactProvider) {
+         setFiscalFeedback({ kind: 'error', message: 'DigiFact no usa credenciales locales en el POS.' });
+         return;
+      }
+
       if (!credentialMeta?.hasLocalCredential) {
          setFiscalFeedback({ kind: 'error', message: 'No existe una credencial local para eliminar.' });
          return;
@@ -930,6 +962,11 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
    const handleDeleteSupabaseCredential = async () => {
       const requestContext = getCredentialRequestContext();
       if (!requestContext) return;
+
+      if (requestContext.providerId === 'DIGIFACT' && isDelegatedDigiFactProvider) {
+         setFiscalFeedback({ kind: 'error', message: 'DigiFact no administra credenciales desde el POS.' });
+         return;
+      }
 
       if (!credentialMeta?.hasSupabaseCredential) {
          setFiscalFeedback({ kind: 'error', message: 'No existe una credencial en Supabase para eliminar.' });
@@ -1174,6 +1211,20 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                               </select>
                            </div>
 
+                           {fiscalCompliance.defaultProvider === 'DIGIFACT' && (
+                              <div className="md:col-span-1">
+                                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Modo DigiFact</label>
+                                 <select
+                                    value={selectedFiscalProviderConfig?.deliveryMode || 'LOCAL_DIRECT'}
+                                    onChange={(e) => updateSelectedProvider({ deliveryMode: e.target.value as any })}
+                                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                 >
+                                    <option value="LOCAL_DIRECT">Token local directo</option>
+                                    <option value="DELEGATED_ERP">Delegado al ERP</option>
+                                 </select>
+                              </div>
+                           )}
+
                            <label className="md:col-span-1 flex items-center gap-3 p-4 bg-slate-50 border border-slate-200 rounded-2xl">
                               <input
                                  type="checkbox"
@@ -1254,6 +1305,36 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                     placeholder="Opcional. Si se deja vacío, se usará el RNC de la empresa."
                                  />
                               </div>
+                              {fiscalCompliance.defaultProvider === 'DIGIFACT' && (
+                                 <>
+                                    <div className="md:col-span-2">
+                                       <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Establecimiento / Sucursal</label>
+                                       <input
+                                          type="text"
+                                          value={selectedFiscalProviderConfig.establishmentCode || selectedFiscalProviderConfig.branchCode || ''}
+                                          onChange={(e) => updateSelectedProvider({
+                                             establishmentCode: e.target.value.toUpperCase(),
+                                             branchCode: e.target.value.toUpperCase()
+                                          })}
+                                          className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                          placeholder="Pruebas: 0001"
+                                       />
+                                    </div>
+                                    <div className="md:col-span-2">
+                                       <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Caja / Punto de Emisión</label>
+                                       <input
+                                          type="text"
+                                          value={selectedFiscalProviderConfig.cashierCode || ''}
+                                          onChange={(e) => updateSelectedProvider({ cashierCode: e.target.value.toUpperCase() })}
+                                          className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                          placeholder="Pruebas: 1"
+                                       />
+                                    </div>
+                                    <div className="md:col-span-4 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-bold text-blue-800">
+                                       En DigiFact pruebas solo está disponible el establecimiento <span className="font-mono">0001</span> / caja <span className="font-mono">1</span>. En producción deben coincidir con los códigos habilitados por DigiFact/Hacienda.
+                                    </div>
+                                 </>
+                              )}
                               <div>
                                  <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Tipo Ingreso</label>
                                  <input
@@ -1296,130 +1377,158 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                               </div>
                               <div className="md:col-span-4 p-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50">
                                  <p className="text-xs font-bold text-slate-600">
-                                    Estos defaults técnicos se envían a Polaris al emitir e-CF. Más adelante podremos sobrescribirlos por producto si un cliente necesita un catálogo fiscal más fino.
+                                    Estos defaults técnicos se envían con la venta al proveedor fiscal activo. Más adelante podremos sobrescribirlos por producto si un cliente necesita un catálogo fiscal más fino.
                                  </p>
                               </div>
-                              <div className="md:col-span-4 mt-2 p-5 rounded-[1.75rem] border border-slate-200 bg-white shadow-sm space-y-4">
-                                 <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-                                    <div>
-                                       <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Credenciales del Proveedor</p>
-                                       <p className="text-sm font-bold text-slate-700">
-                                          La precedencia activa es <span className="font-mono">SQLite -&gt; Supabase -&gt; ENV</span>. El token nunca vuelve al navegador una vez guardado.
-                                       </p>
-                                    </div>
-                                    {credentialMeta?.hasCredential ? (
-                                       <div className="px-3 py-2 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-black">
-                                          Activa desde {credentialMeta.source || 'desconocido'}
-                                       </div>
-                                    ) : (
-                                       <div className="px-3 py-2 rounded-2xl bg-amber-50 border border-amber-200 text-amber-700 text-xs font-black">
-                                          Sin credencial resuelta
-                                       </div>
-                                    )}
-                                 </div>
-
-                                 <div className="flex flex-wrap gap-2">
-                                    {(['sqlite', 'supabase', 'env'] as const).map(source => {
-                                       const isAvailable = credentialMeta?.availableSources?.includes(source);
-                                       return (
-                                          <span
-                                             key={source}
-                                             className={`px-3 py-2 rounded-2xl text-[11px] font-black border ${isAvailable ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-50 text-slate-400 border-slate-200'}`}
-                                          >
-                                             {FISCAL_CREDENTIAL_SOURCE_LABELS[source]}
-                                          </span>
-                                       );
-                                    })}
-                                 </div>
-
-                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                       <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Etiqueta</label>
-                                       <input
-                                          type="text"
-                                          value={credentialLabel}
-                                          onChange={(e) => setCredentialLabel(e.target.value)}
-                                          className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
-                                          placeholder="Ej. Polaris Demo Naco"
-                                       />
-                                    </div>
-                                    <div>
-                                       <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Authentication Token</label>
-                                       <div className="relative">
-                                          <input
-                                             type={showCredentialDraft ? 'text' : 'password'}
-                                             value={credentialDraft}
-                                             onChange={(e) => setCredentialDraft(e.target.value)}
-                                             disabled={hasLockedLocalCredential || isSavingCredential}
-                                             className={`w-full p-4 pr-14 rounded-2xl font-bold border transition-colors ${
-                                                hasLockedLocalCredential
-                                                   ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
-                                                   : 'bg-slate-50 border-slate-200 text-slate-800'
-                                             }`}
-                                             placeholder={hasLockedLocalCredential ? 'Credencial local activa. Usa Eliminar Local para reemplazarla.' : 'Pega aquí el token de Polaris'}
-                                          />
-                                          <button
-                                             type="button"
-                                             disabled={hasLockedLocalCredential}
-                                             onClick={() => setShowCredentialDraft((prev) => !prev)}
-                                             className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                                             aria-label={showCredentialDraft ? 'Ocultar token' : 'Mostrar token'}
-                                          >
-                                             {showCredentialDraft ? <EyeOff size={18} /> : <Eye size={18} />}
-                                          </button>
-                                       </div>
-                                       {hasLockedLocalCredential && (
-                                          <p className="mt-2 text-xs font-bold text-slate-500">
-                                             La credencial ya está guardada en SQLite. Usa <span className="font-black">Eliminar Local</span> para ingresar un nuevo token.
+                              {isDelegatedDigiFactProvider ? (
+                                 <div className="md:col-span-4 mt-2 p-5 rounded-[1.75rem] border border-emerald-200 bg-emerald-50 shadow-sm space-y-3">
+                                    <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                                       <div>
+                                          <p className="text-[11px] font-black text-emerald-700 uppercase tracking-[0.2em] mb-2">Credencial administrada por ERP</p>
+                                          <p className="text-sm font-bold text-emerald-900">
+                                             DigiFact se configura en ERP &gt; Integraciones e-CF. El POS no guarda token ni contraseña; solo usa la referencia de credencial y delega la emisión al backend ERP.
                                           </p>
+                                       </div>
+                                       <div className="px-3 py-2 rounded-2xl bg-white border border-emerald-200 text-emerald-700 text-xs font-black">
+                                          Delegado al ERP
+                                       </div>
+                                    </div>
+                                    <p className="text-xs font-bold text-emerald-800">
+                                       Referencia activa: <span className="font-mono">{selectedFiscalProviderConfig.credentialKey || businessConfig?.companyInfo?.rnc || 'N/D'}</span>
+                                    </p>
+                                 </div>
+                              ) : (
+                                 <div className="md:col-span-4 mt-2 p-5 rounded-[1.75rem] border border-slate-200 bg-white shadow-sm space-y-4">
+                                    <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                                       <div>
+                                          <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Credenciales del Proveedor</p>
+                                          <p className="text-sm font-bold text-slate-700">
+                                             {fiscalCompliance.defaultProvider === 'DIGIFACT'
+                                                ? 'DigiFact puede usar un token vigente o credenciales JSON para renovar token localmente. Incluye el código de establecimiento registrado en DigiFact/Hacienda. El valor nunca vuelve al navegador una vez guardado.'
+                                                : <>La precedencia activa es <span className="font-mono">SQLite -&gt; Supabase -&gt; ENV</span>. El token nunca vuelve al navegador una vez guardado.</>}
+                                          </p>
+                                       </div>
+                                       {credentialMeta?.hasCredential ? (
+                                          <div className="px-3 py-2 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-black">
+                                             Activa desde {credentialMeta.source || 'desconocido'}
+                                          </div>
+                                       ) : (
+                                          <div className="px-3 py-2 rounded-2xl bg-amber-50 border border-amber-200 text-amber-700 text-xs font-black">
+                                             Sin credencial resuelta
+                                          </div>
                                        )}
                                     </div>
-                                 </div>
 
-                                 {credentialMeta?.supportsSupabaseWrite === false && (
-                                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">
-                                       El backend todavía no tiene `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`, así que por ahora solo se puede guardar localmente.
+                                    <div className="flex flex-wrap gap-2">
+                                       {(['sqlite', 'supabase', 'env'] as const).map(source => {
+                                          const isAvailable = credentialMeta?.availableSources?.includes(source);
+                                          return (
+                                             <span
+                                                key={source}
+                                                className={`px-3 py-2 rounded-2xl text-[11px] font-black border ${isAvailable ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-50 text-slate-400 border-slate-200'}`}
+                                             >
+                                                {FISCAL_CREDENTIAL_SOURCE_LABELS[source]}
+                                             </span>
+                                          );
+                                       })}
                                     </div>
-                                 )}
 
-                                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                                    <div className="text-xs text-slate-500 space-y-1">
-                                       <p>Clave resuelta: {credentialMeta?.resolvedCredentialKey || selectedFiscalProviderConfig.credentialKey || businessConfig?.companyInfo?.rnc || 'N/D'}</p>
-                                       <p>Fuentes detectadas: {credentialMeta?.availableSources?.length ? credentialMeta.availableSources.map(source => FISCAL_CREDENTIAL_SOURCE_LABELS[source]).join(', ') : 'Ninguna'}</p>
-                                       <p>Última actualización local: {credentialMeta?.updatedAt ? new Date(credentialMeta.updatedAt).toLocaleString() : 'No registrada localmente'}</p>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                       <div>
+                                          <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Etiqueta</label>
+                                          <input
+                                             type="text"
+                                             value={credentialLabel}
+                                             onChange={(e) => setCredentialLabel(e.target.value)}
+                                             className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                             placeholder="Ej. Proveedor demo Naco"
+                                          />
+                                       </div>
+                                       <div>
+                                          <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">
+                                             {fiscalCompliance.defaultProvider === 'DIGIFACT' ? 'Token / Credenciales DigiFact' : 'Authentication Token'}
+                                          </label>
+                                          <div className="relative">
+                                             <input
+                                                type={showCredentialDraft ? 'text' : 'password'}
+                                                value={credentialDraft}
+                                                onChange={(e) => setCredentialDraft(e.target.value)}
+                                                disabled={hasLockedLocalCredential || isSavingCredential}
+                                                className={`w-full p-4 pr-14 rounded-2xl font-bold border transition-colors ${
+                                                   hasLockedLocalCredential
+                                                      ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                                                      : 'bg-slate-50 border-slate-200 text-slate-800'
+                                                }`}
+                                                placeholder={hasLockedLocalCredential ? 'Credencial local activa. Usa Eliminar Local para reemplazarla.' : fiscalCompliance.defaultProvider === 'DIGIFACT' ? 'Token o {"taxId":"132752155","username":"USER","password":"...","establishmentCode":"0001","cashierCode":"1"}' : 'Pega aquí el token del proveedor'}
+                                             />
+                                             <button
+                                                type="button"
+                                                disabled={hasLockedLocalCredential}
+                                                onClick={() => setShowCredentialDraft((prev) => !prev)}
+                                                className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                                aria-label={showCredentialDraft ? 'Ocultar token' : 'Mostrar token'}
+                                             >
+                                                {showCredentialDraft ? <EyeOff size={18} /> : <Eye size={18} />}
+                                             </button>
+                                          </div>
+                                          {hasLockedLocalCredential && (
+                                             <p className="mt-2 text-xs font-bold text-slate-500">
+                                                La credencial ya está guardada en SQLite. Usa <span className="font-black">Eliminar Local</span> para ingresar un nuevo token.
+                                             </p>
+                                          )}
+                                          {fiscalCompliance.defaultProvider === 'DIGIFACT' && !hasLockedLocalCredential && (
+                                             <p className="mt-2 text-xs font-bold text-slate-500">
+                                                Según la documentación DigiFact, el login usa <span className="font-mono">Username</span>/<span className="font-mono">Password</span>; <span className="font-mono">establishmentCode</span> y <span className="font-mono">cashierCode</span> deben coincidir con la sucursal/caja registrada en DigiFact/Hacienda.
+                                             </p>
+                                          )}
+                                       </div>
                                     </div>
-                                    <div className="flex flex-wrap gap-3">
-                                       <button
-                                          onClick={handleSaveCredential}
-                                          disabled={isSavingCredential || hasLockedLocalCredential}
-                                          className="px-5 py-3 rounded-2xl bg-emerald-600 text-white font-black shadow-lg hover:bg-emerald-700 disabled:opacity-60"
-                                       >
-                                          {isSavingCredential ? 'Guardando local...' : hasLockedLocalCredential ? 'Guardado en SQLite' : 'Guardar Local'}
-                                       </button>
-                                       <button
-                                          onClick={handleSaveSupabaseCredential}
-                                          disabled={isSavingSupabaseCredential || !credentialMeta?.supportsSupabaseWrite}
-                                          className="px-5 py-3 rounded-2xl bg-slate-900 text-white font-black shadow-lg hover:bg-slate-800 disabled:opacity-60"
-                                       >
-                                          {isSavingSupabaseCredential ? 'Guardando en Supabase...' : 'Guardar en Supabase'}
-                                       </button>
-                                       <button
-                                          onClick={handleDeleteLocalCredential}
-                                          disabled={isDeletingLocalCredential || !credentialMeta?.hasLocalCredential}
-                                          className="px-5 py-3 rounded-2xl border border-slate-200 font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                                       >
-                                          {isDeletingLocalCredential ? 'Eliminando local...' : 'Eliminar Local'}
-                                       </button>
-                                       <button
-                                          onClick={handleDeleteSupabaseCredential}
-                                          disabled={isDeletingSupabaseCredential || !credentialMeta?.hasSupabaseCredential}
-                                          className="px-5 py-3 rounded-2xl border border-slate-200 font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                                       >
-                                          {isDeletingSupabaseCredential ? 'Eliminando Supabase...' : 'Eliminar Supabase'}
-                                       </button>
+
+                                    {credentialMeta?.supportsSupabaseWrite === false && (
+                                       <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">
+                                          El backend todavía no tiene `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`, así que por ahora solo se puede guardar localmente.
+                                       </div>
+                                    )}
+
+                                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                                       <div className="text-xs text-slate-500 space-y-1">
+                                          <p>Clave resuelta: {credentialMeta?.resolvedCredentialKey || selectedFiscalProviderConfig.credentialKey || businessConfig?.companyInfo?.rnc || 'N/D'}</p>
+                                          <p>Fuentes detectadas: {credentialMeta?.availableSources?.length ? credentialMeta.availableSources.map(source => FISCAL_CREDENTIAL_SOURCE_LABELS[source]).join(', ') : 'Ninguna'}</p>
+                                          <p>Última actualización local: {credentialMeta?.updatedAt ? new Date(credentialMeta.updatedAt).toLocaleString() : 'No registrada localmente'}</p>
+                                       </div>
+                                       <div className="flex flex-wrap gap-3">
+                                          <button
+                                             onClick={handleSaveCredential}
+                                             disabled={isSavingCredential || hasLockedLocalCredential}
+                                             className="px-5 py-3 rounded-2xl bg-emerald-600 text-white font-black shadow-lg hover:bg-emerald-700 disabled:opacity-60"
+                                          >
+                                             {isSavingCredential ? 'Guardando local...' : hasLockedLocalCredential ? 'Guardado en SQLite' : 'Guardar Local'}
+                                          </button>
+                                          <button
+                                             onClick={handleSaveSupabaseCredential}
+                                             disabled={isSavingSupabaseCredential || !credentialMeta?.supportsSupabaseWrite}
+                                             className="px-5 py-3 rounded-2xl bg-slate-900 text-white font-black shadow-lg hover:bg-slate-800 disabled:opacity-60"
+                                          >
+                                             {isSavingSupabaseCredential ? 'Guardando en Supabase...' : 'Guardar en Supabase'}
+                                          </button>
+                                          <button
+                                             onClick={handleDeleteLocalCredential}
+                                             disabled={isDeletingLocalCredential || !credentialMeta?.hasLocalCredential}
+                                             className="px-5 py-3 rounded-2xl border border-slate-200 font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                                          >
+                                             {isDeletingLocalCredential ? 'Eliminando local...' : 'Eliminar Local'}
+                                          </button>
+                                          <button
+                                             onClick={handleDeleteSupabaseCredential}
+                                             disabled={isDeletingSupabaseCredential || !credentialMeta?.hasSupabaseCredential}
+                                             className="px-5 py-3 rounded-2xl border border-slate-200 font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                                          >
+                                             {isDeletingSupabaseCredential ? 'Eliminando Supabase...' : 'Eliminar Supabase'}
+                                          </button>
+                                       </div>
                                     </div>
                                  </div>
-                              </div>
+                              )}
                            </div>
                         )}
 
