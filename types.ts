@@ -1134,6 +1134,22 @@ export interface Customer {
   addresses?: CustomerAddress[];
   creditDays?: number;
   defaultNcfType?: NCFType;
+  invoiceByEmail?: boolean;
+  invoice_by_email?: boolean;
+  commercialDiscountRate?: number;
+  commercial_discount_rate?: number;
+  defaultTariffId?: string | null;
+  default_tariff_id?: string | null;
+  allowedTariffIds?: string[];
+  allowed_tariff_ids?: string[];
+  tariffs?: Array<string | {
+    id?: string;
+    tariffId?: string;
+    tariff_id?: string;
+    isDefault?: boolean;
+    is_default?: boolean;
+  }>;
+  metadata?: Record<string, unknown>;
   wallet?: Wallet;
   cards?: LoyaltyCard[];
   loyalty?: LoyaltyCard; // Deprecated, kept for backward compatibility during migration
@@ -1375,6 +1391,8 @@ export interface CartItem extends Product {
   originalPrice?: number; // Optional: track original product price for auditing
   discountAmount?: number;
   discountRate?: number;
+  commercialDiscountRate?: number;
+  commercialDiscountAmount?: number;
   netAmount?: number;
   taxAmount?: number;
   totalAmount?: number;
@@ -1440,6 +1458,10 @@ export interface Transaction {
     phone?: string;
     email?: string;
   };
+  customer_invoice_by_email?: boolean;
+  customer_commercial_discount_rate?: number;
+  customer_allowed_tariff_ids?: string[];
+  customer_default_tariff_id?: string | null;
 
   // Accounting
   taxAmount?: number;               // Total tax amount

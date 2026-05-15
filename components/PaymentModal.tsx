@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
    X, CreditCard, Banknote, QrCode, CheckCircle2,
    Trash2, Plus, Wallet, Printer, Mail, ShieldAlert,
@@ -53,6 +53,7 @@ interface PaymentModalProps {
    onConfirm: (payments: PaymentEntry[], voluntaryTip?: number) => Promise<Transaction | null>;
    themeColor: string;
    customer?: Customer | null;
+   autoEmailReceipt?: boolean;
    isDelinquent?: boolean;
    users: User[];
    isMaster?: boolean;
@@ -209,7 +210,7 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, themeColor, customer, autoEmailReceipt = false, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode }) => {
    const [payments, setPayments] = useState<PaymentEntry[]>([]);
    const [activeMethodKey, setActiveMethodKey] = useState<string>('');
    const [inputAmount, setInputAmount] = useState<string>('');
@@ -227,6 +228,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    const [isProcessingGateway, setIsProcessingGateway] = useState(false);
    const [gatewayProgress, setGatewayProgress] = useState<GatewayProgressOverlayState | null>(null);
    const [successNotice, setSuccessNotice] = useState<string | null>(null);
+   const autoEmailAttemptedRef = useRef(false);
 
    const userPermissions = useMemo(() => {
       if (!currentUser) return [];
@@ -1033,6 +1035,15 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          setIsSendingEmail(false);
       }
    };
+
+   useEffect(() => {
+      if (!autoEmailReceipt || !isSuccessScreen || !completedTransaction || autoEmailAttemptedRef.current) {
+         return;
+      }
+
+      autoEmailAttemptedRef.current = true;
+      void handleSendEmail();
+   }, [autoEmailReceipt, completedTransaction, isSuccessScreen]);
 
    if (isSuccessScreen) {
       return (
