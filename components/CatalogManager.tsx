@@ -25,6 +25,7 @@ import { getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/mas
 import {
    productIdMatchesInventoryReference,
    productIdentityCandidates,
+   productReferenceCandidates,
    resolveInventoryProductStockRow,
 } from '../utils/productReferences';
 import { resolveProductImageSrc } from '../utils/entityImage';
@@ -129,14 +130,15 @@ const normalizeCatalogIdentityValue = (value: unknown): string => {
    return String(value).trim().toLowerCase();
 };
 
-const firstCatalogFieldValue = (product: Product | null | undefined, fields: string[]): string => {
-   if (!product) return '';
+const catalogFieldValues = (product: Product | null | undefined, fields: string[]): string[] => {
+   if (!product) return [];
    const record = product as unknown as Record<string, unknown>;
+   const values: string[] = [];
    for (const field of fields) {
       const normalized = normalizeCatalogIdentityValue(record[field]);
-      if (normalized) return normalized;
+      if (normalized) values.push(normalized);
    }
-   return '';
+   return Array.from(new Set(values));
 };
 
 const productImageVersion = (product?: Product | null): number => {
@@ -151,8 +153,15 @@ const productPositiveStockWarehouses = (product?: Product | null): number => {
       .length;
 };
 
-const catalogEditorIdentity = (product?: Product | null): string => {
-   const operationalIdentity = firstCatalogFieldValue(product, [
+const catalogEditorIdentityKeys = (product?: Product | null): string[] => {
+   if (!product) return [];
+   const keys = new Set<string>();
+   const addKey = (prefix: string, value: unknown) => {
+      const normalized = normalizeCatalogIdentityValue(value);
+      if (normalized) keys.add(`${prefix}:${normalized}`);
+   };
+
+   for (const value of catalogFieldValues(product, [
       'sourceItemId',
       'source_item_id',
       'itemId',
@@ -163,22 +172,45 @@ const catalogEditorIdentity = (product?: Product | null): string => {
       'source_product_id',
       'productId',
       'product_id',
-   ]);
-   if (operationalIdentity) return `operational:${operationalIdentity}`;
+   ])) {
+      addKey('operational', value);
+   }
 
-   const commerceIdentity = firstCatalogFieldValue(product, [
+   for (const value of catalogFieldValues(product, [
       'sku',
       'item_code',
       'code',
       'barcode',
-   ]);
-   if (commerceIdentity) return `commerce:${commerceIdentity}`;
+      'barcode_2',
+      'barcode2',
+      'barcode_3',
+      'barcode3',
+   ])) {
+      addKey('commerce', value);
+   }
 
-   const canonicalIdentity = productIdentityCandidates(product)[0];
-   const normalizedCanonical = normalizeCatalogIdentityValue(canonicalIdentity);
-   if (normalizedCanonical) return `canonical:${normalizedCanonical}`;
+   if (Array.isArray((product as any).barcodes)) {
+      for (const barcodeEntry of (product as any).barcodes) {
+         if (barcodeEntry && typeof barcodeEntry === 'object' && !Array.isArray(barcodeEntry)) {
+            addKey('commerce', (barcodeEntry as any).barcode);
+            addKey('commerce', (barcodeEntry as any).code);
+            addKey('commerce', (barcodeEntry as any).value);
+         } else {
+            addKey('commerce', barcodeEntry);
+         }
+      }
+   }
 
-   return '';
+   productReferenceCandidates(product).forEach((value) => addKey('reference', value));
+   productIdentityCandidates(product).forEach((value) => addKey('canonical', value));
+
+   const name = normalizeCatalogIdentityValue(product.name);
+   const category = normalizeCatalogIdentityValue((product as any).category);
+   if (name) addKey('namecat', `${name}::${category}`);
+
+   addKey('id', product.id);
+
+   return Array.from(keys);
 };
 
 const productCompletenessScore = (product?: Product | null): number => {
@@ -198,19 +230,29 @@ const productCompletenessScore = (product?: Product | null): number => {
 };
 
 const dedupeCatalogProducts = (items: Product[]): Product[] => {
-   const byIdentity = new Map<string, Product>();
+   type CatalogRankEntry = { product: Product; keys: Set<string> };
+   const byIdentity = new Map<string, CatalogRankEntry>();
 
    for (const product of items) {
-      const identity = catalogEditorIdentity(product);
-      if (!identity) continue;
+      const identityKeys = catalogEditorIdentityKeys(product);
+      if (identityKeys.length === 0) continue;
 
-      const key = identity;
-      const existing = byIdentity.get(key);
-      if (!existing) {
-         byIdentity.set(key, product);
+      const matchedEntries = Array.from(
+         new Set(identityKeys.map((key) => byIdentity.get(key)).filter(Boolean) as CatalogRankEntry[])
+      );
+      if (matchedEntries.length === 0) {
+         const entry = { product, keys: new Set(identityKeys) };
+         identityKeys.forEach((key) => byIdentity.set(key, entry));
          continue;
       }
 
+      const existingEntry = matchedEntries
+         .sort((left, right) => {
+            const scoreDiff = productCompletenessScore(right.product) - productCompletenessScore(left.product);
+            if (scoreDiff !== 0) return scoreDiff;
+            return productTimestamp(right.product) - productTimestamp(left.product);
+         })[0];
+      const existing = existingEntry.product;
       const existingScore = productCompletenessScore(existing);
       const incomingScore = productCompletenessScore(product);
       const existingImageVersion = productImageVersion(existing);
@@ -225,10 +267,20 @@ const dedupeCatalogProducts = (items: Product[]): Product[] => {
             )
          );
 
-      byIdentity.set(key, shouldReplace ? product : existing);
+      const winner: CatalogRankEntry = shouldReplace
+         ? { product, keys: new Set(identityKeys) }
+         : existingEntry;
+      const mergedKeys = new Set<string>(identityKeys);
+      for (const entry of matchedEntries) {
+         entry.keys.forEach((key) => mergedKeys.add(key));
+      }
+      winner.keys = mergedKeys;
+      for (const key of mergedKeys) {
+         byIdentity.set(key, winner);
+      }
    }
 
-   return Array.from(byIdentity.values());
+   return Array.from(new Set(byIdentity.values())).map((entry) => entry.product);
 };
 
 // --- SUB-COMPONENT: STOCK ROW ---

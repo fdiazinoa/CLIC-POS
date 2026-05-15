@@ -243,18 +243,59 @@ const isSeedCatalogProduct = (product: Product): boolean => {
 
 const productBusinessKeys = (product: Product): string[] => {
    const keys = new Set<string>();
-   const barcode = typeof product.barcode === 'string' ? product.barcode.trim().toLowerCase() : '';
+   const addKey = (prefix: string, value: unknown) => {
+      const normalized = normalizeSearchToken(value);
+      if (normalized) keys.add(`${prefix}:${normalized}`);
+   };
+
+   addKey('barcode', product.barcode);
+   addKey('barcode', (product as any).barcode_2);
+   addKey('barcode', (product as any).barcode2);
+   addKey('barcode', (product as any).barcode_3);
+   addKey('barcode', (product as any).barcode3);
+
+   if (Array.isArray((product as any).barcodes)) {
+      for (const barcodeEntry of (product as any).barcodes) {
+         if (barcodeEntry && typeof barcodeEntry === 'object' && !Array.isArray(barcodeEntry)) {
+            addKey('barcode', (barcodeEntry as any).barcode);
+            addKey('barcode', (barcodeEntry as any).code);
+            addKey('barcode', (barcodeEntry as any).value);
+         } else {
+            addKey('barcode', barcodeEntry);
+         }
+      }
+   }
+
    const sku = typeof (product as any).sku === 'string' ? (product as any).sku.trim().toLowerCase() : '';
    const code = typeof (product as any).code === 'string' ? (product as any).code.trim().toLowerCase() : '';
    const itemCode = typeof (product as any).item_code === 'string' ? (product as any).item_code.trim().toLowerCase() : '';
    const name = typeof product.name === 'string' ? product.name.trim().toLowerCase() : '';
    const category = typeof product.category === 'string' ? product.category.trim().toLowerCase() : '';
 
-   if (barcode) keys.add(`barcode:${barcode}`);
    if (sku) keys.add(`sku:${sku}`);
    if (code) keys.add(`code:${code}`);
    if (itemCode) keys.add(`item_code:${itemCode}`);
    if (name) keys.add(`namecat:${name}::${category}`);
+
+   return Array.from(keys);
+};
+
+const productSalesIdentityKeys = (product: Product): string[] => {
+   const keys = new Set<string>();
+   const addKey = (prefix: string, value: unknown) => {
+      const normalized = normalizeSearchToken(value);
+      if (normalized) keys.add(`${prefix}:${normalized}`);
+   };
+
+   productBusinessKeys(product).forEach((key) => keys.add(key));
+   productReferenceCandidates(product).forEach((value) => addKey('reference', value));
+   productIdentityCandidates(product).forEach((value) => addKey('identity', value));
+   addKey('operational', resolveOperationalProductId(product));
+   addKey('id', product.id);
+
+   if (keys.size === 0) {
+      keys.add(productSalesIdentityKey(product));
+   }
 
    return Array.from(keys);
 };
@@ -2400,20 +2441,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [products]);
 
    const dedupedSalesCatalogProducts = useMemo(() => {
-      const rankedByIdentity = new Map<string, { product: Product; score: number }>();
+      type RankedProductEntry = { product: Product; score: number; keys: Set<string> };
+      const rankedByIdentity = new Map<string, RankedProductEntry>();
 
       for (const product of salesCatalogProducts) {
          if (!product || typeof product !== 'object' || Array.isArray(product)) continue;
 
-         const key = productSalesIdentityKey(product);
+         const keys = productSalesIdentityKeys(product);
          const score = scoreProductForSales(product, warehouses);
-         const existing = rankedByIdentity.get(key);
-         if (!existing || score > existing.score) {
-            rankedByIdentity.set(key, { product, score });
+         const matchedEntries = Array.from(
+            new Set(keys.map((key) => rankedByIdentity.get(key)).filter(Boolean) as RankedProductEntry[])
+         );
+         const bestExisting = matchedEntries
+            .sort((left, right) => right.score - left.score)[0];
+         const incomingEntry: RankedProductEntry = { product, score, keys: new Set(keys) };
+         const winner = !bestExisting || score > bestExisting.score ? incomingEntry : bestExisting;
+         const mergedKeys = new Set<string>(keys);
+
+         for (const entry of matchedEntries) {
+            entry.keys.forEach((key) => mergedKeys.add(key));
+         }
+
+         winner.keys = mergedKeys;
+         for (const key of mergedKeys) {
+            rankedByIdentity.set(key, winner);
          }
       }
 
-      return Array.from(rankedByIdentity.values(), (entry) => entry.product);
+      const uniqueEntries = Array.from(new Set(rankedByIdentity.values()));
+      return uniqueEntries.map((entry) => entry.product);
    }, [salesCatalogProducts, warehouses]);
 
    const salesCatalogProductEntries = useMemo<SalesCatalogProductEntry[]>(() => {
@@ -2501,10 +2557,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       retailSearchInputRef.current?.focus();
    }, [searchTerm, findProductByAnyCode, addToCart, isReturnMode, filteredProducts, handleProductClick]);
 
-   const categories = useMemo(() => {
-      const allowedDisplayCategories = Array.from(
-         new Set(Array.from(effectiveAllowedCategorySet).map((category) => displayCategory(category)).filter(Boolean))
-      );
+   const categoryOptions = useMemo(() => {
+      const allowedCategoryOptions = Array.from(effectiveAllowedCategorySet)
+         .map((category) => ({
+            id: canonicalizeCategory(category),
+            label: displayCategory(category),
+         }))
+         .filter((category) => category.id && category.label);
       const availableProducts = salesCatalogProductEntries.filter((entry) => {
          if (!entry.isSellable || !entry.hasActiveTariff || !entry.hasErpWarehouse) return false;
          if (effectiveAllowedCategorySet.size > 0) {
@@ -2521,25 +2580,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          availableCategoryMap.set(normalizedCategory, rawCategory);
       }
 
-      const productCategories = Array.from(availableCategoryMap.values())
-         .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+      const productCategories = Array.from(availableCategoryMap.entries())
+         .map(([id, label]) => ({ id, label }))
+         .sort((a, b) => a.label.localeCompare(b.label, 'es', { sensitivity: 'base' }));
 
-      const scopedCategories = allowedDisplayCategories.length > 0
-         ? allowedDisplayCategories
-         : productCategories;
+      const scopedCategories = productCategories.length > 0
+         ? productCategories
+         : allowedCategoryOptions;
 
-      const cats = ['ALL', ...scopedCategories];
-      return cats;
-   }, [displayCategory, effectiveAllowedCategorySet, salesCatalogProductEntries]);
+      const dedupedCategoryOptions = new Map<string, { id: string; label: string }>();
+      for (const category of scopedCategories) {
+         if (!category.id || dedupedCategoryOptions.has(category.id)) continue;
+         dedupedCategoryOptions.set(category.id, category);
+      }
+
+      return [{ id: 'ALL', label: 'Todas' }, ...Array.from(dedupedCategoryOptions.values())];
+   }, [canonicalizeCategory, displayCategory, effectiveAllowedCategorySet, salesCatalogProductEntries]);
+
+   const categoryOptionIds = useMemo(() => categoryOptions.map((option) => option.id), [categoryOptions]);
 
    useEffect(() => {
-      if (categoryFilter !== 'ALL' && !categories.includes(categoryFilter)) {
+      const selectedCategoryKey = categoryFilter === 'ALL' ? 'ALL' : canonicalizeCategory(categoryFilter);
+      if (selectedCategoryKey !== 'ALL' && !categoryOptionIds.includes(selectedCategoryKey)) {
          setCategoryFilter('ALL');
       }
-   }, [categories, categoryFilter]);
-
-
-
+   }, [canonicalizeCategory, categoryFilter, categoryOptionIds]);
 
    // --- PROMOTION ENGINE INTEGRATION ---
    const processedCart = useMemo(() => {
@@ -4035,7 +4100,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                   onUpdateConfig(newConfig);
                   setActiveTariffId(mobileConfig.tariffId);
-                  setCategoryFilter(mobileConfig.categoryId);
+                  setCategoryFilter(mobileConfig.categoryId === 'ALL' ? 'ALL' : canonicalizeCategory(mobileConfig.categoryId));
                }
 
                // Proceed to add product
@@ -4224,18 +4289,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* --- CATEGORY SELECTOR BAR --- */}
             <div className={categoryContainerClass}>
-               {categories.map((cat, idx) => (
+               {categoryOptions.map((categoryOption, idx) => {
+                  const selectedCategoryKey = categoryFilter === 'ALL' ? 'ALL' : canonicalizeCategory(categoryFilter);
+                  const isActiveCategory = selectedCategoryKey === categoryOption.id;
+                  return (
                   <button
-                     key={cat || `cat-${idx}`}
-                     onClick={() => setCategoryFilter(cat)}
-                     className={`px-6 py-2.5 rounded-full text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap shadow-sm border ${categoryFilter === cat
+                     key={categoryOption.id || `cat-${idx}`}
+                     onClick={() => setCategoryFilter(categoryOption.id)}
+                     className={`px-6 py-2.5 rounded-full text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap shadow-sm border ${isActiveCategory
                         ? 'bg-blue-600 border-blue-500 text-white shadow-blue-200 scale-105'
                         : 'bg-white border-gray-200 text-gray-400 hover:border-blue-300 hover:text-blue-600'
                         }`}
                   >
-                     {cat === 'ALL' ? 'Todas' : cat}
+                     {categoryOption.label}
                   </button>
-               ))}
+                  );
+               })}
             </div>
 
             <div
