@@ -686,12 +686,59 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
             );
 
+         const computedBalance = txs.reduce((sum: number, tx: WalletTransaction) => {
+            const rawAmount = Number(tx.amount || 0);
+            const signedAmount = tx.type === 'PAYMENT' && rawAmount > 0 ? -rawAmount : rawAmount;
+            return sum + signedAmount;
+         }, 0);
+         const storedBalance = Number(wallet.balance || 0);
+         const shouldTrustLedgerBalance = txs.length > 0 && Math.abs(storedBalance - computedBalance) > 0.01;
+         const effectiveBalance = shouldTrustLedgerBalance
+            ? parseFloat(computedBalance.toFixed(2))
+            : parseFloat(storedBalance.toFixed(2));
+         const walletStatus = (wallet.status === 'BLOCKED' ? 'BLOCKED' : 'ACTIVE') as Wallet['status'];
+         const syncedWallet: Wallet = {
+            ...(selectedCustomer?.wallet || {}),
+            ...wallet,
+            id: String(wallet.id),
+            customerId: effectiveCustomerId,
+            balance: effectiveBalance,
+            currency: wallet.currency || selectedCustomer?.wallet?.currency || config.currencies.find(c => c.isBase)?.code || 'DOP',
+            status: walletStatus,
+            lastActivity: wallet.lastActivity || wallet.updatedAt || txs[0]?.timestamp || new Date().toISOString(),
+            transactions: selectedCustomer?.wallet?.transactions || []
+         };
+
+         if (shouldTrustLedgerBalance) {
+            await db.save('wallets' as any, (wallets || []).map((current: any) =>
+               current?.id === wallet.id ? { ...current, balance: effectiveBalance, updatedAt: syncedWallet.lastActivity } : current
+            ));
+         }
+
+         const currentCustomerWallet = selectedCustomer?.wallet;
+         const customerWalletIsStale = Boolean(
+            selectedCustomer?.id === effectiveCustomerId && (
+               !currentCustomerWallet ||
+               currentCustomerWallet.id !== syncedWallet.id ||
+               Math.abs(Number(currentCustomerWallet.balance || 0) - effectiveBalance) > 0.01 ||
+               currentCustomerWallet.status !== walletStatus
+            )
+         );
+
+         if (selectedCustomer && customerWalletIsStale) {
+            onUpdateCustomer({
+               ...selectedCustomer,
+               wallet: syncedWallet,
+               updatedAt: new Date().toISOString()
+            });
+         }
+
          setWalletMovements(txs);
       } catch (error) {
          console.error('Failed to load wallet movements:', error);
          setWalletMovements([]);
       }
-   }, [selectedCustomer?.id]);
+   }, [config.currencies, onUpdateCustomer, selectedCustomer]);
 
    // --- LOAD CUSTOMER ACTIVITIES ---
    const fetchActivities = useCallback(async () => {
