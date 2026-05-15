@@ -72,6 +72,7 @@ import TerminalBindingScreen from './components/TerminalBindingScreen';
 import CustomerVisor from './components/CustomerVisor';
 import { visorSync } from './utils/visorSync';
 import { markPosInteractionActivity, setPosSaleActivity } from './utils/posSaleActivity';
+import { buildCustomerCommercialPreferenceTrace } from './utils/customerCommercialPreferences';
 
 // Layout imports
 import StandardPOSLayout from './components/layouts/StandardPOSLayout';
@@ -6263,6 +6264,7 @@ const AppContent: React.FC = () => {
                   status: 'COMPLETED',
                   customerId: selectedCustomer?.id,
                   customerName: selectedCustomer?.name || 'Cliente General',
+                  ...buildCustomerCommercialPreferenceTrace(selectedCustomer),
                   customerSnapshot: selectedCustomer ? {
                     name: selectedCustomer.name,
                     taxId: selectedCustomer.taxId,

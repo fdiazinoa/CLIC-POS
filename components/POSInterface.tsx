@@ -80,6 +80,10 @@ import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/
 import { productIdentityCandidates, productReferenceCandidates, resolveOperationalProductId } from '../utils/productReferences';
 import { resolveKdsBaseUrl } from '../utils/kdsRouting';
 import {
+   buildCustomerCommercialPreferenceTrace,
+   resolveCustomerCommercialPreferences,
+} from '../utils/customerCommercialPreferences';
+import {
    confirmUberEatsPosInvoice,
    fetchUberEatsOrderDraft,
    fetchUberEatsPendingOrders,
@@ -512,6 +516,73 @@ const buildUberRecoveredPayment = (reservation: Reservation, amount: number): Pa
    };
 };
 
+const roundCurrency = (value: number): number =>
+   Math.round(((Number(value) || 0) + Number.EPSILON) * 100) / 100;
+
+const roundRate = (value: number): number =>
+   Math.round(((Number(value) || 0) + Number.EPSILON) * 10000) / 10000;
+
+const normalizeCommercialDiscountRate = (rate: number): number =>
+   Math.min(100, Math.max(0, Number.isFinite(Number(rate)) ? Number(rate) : 0));
+
+const clearCommercialDiscountFromItem = (item: CartItem): CartItem => {
+   if (item.commercialDiscountRate === undefined && item.commercialDiscountAmount === undefined) {
+      return item;
+   }
+
+   const restoredPrice = Number(item.originalPrice ?? item.price) || 0;
+   const nextItem: CartItem = {
+      ...item,
+      price: roundCurrency(restoredPrice),
+      originalPrice: undefined,
+      discountAmount: undefined,
+      discountRate: undefined,
+      commercialDiscountRate: undefined,
+      commercialDiscountAmount: undefined,
+      adjustmentSource: undefined,
+   };
+
+   return nextItem;
+};
+
+const applyCommercialDiscountToItem = (item: CartItem, rate: number): CartItem => {
+   const safeRate = normalizeCommercialDiscountRate(rate);
+   const quantity = Number(item.quantity || 0);
+
+   if (safeRate <= 0 || quantity <= 0) {
+      return clearCommercialDiscountFromItem(item);
+   }
+
+   const shouldApply =
+      item.commercialDiscountRate !== undefined ||
+      !item.adjustmentSource ||
+      item.adjustmentSource === 'TARIFF';
+
+   if (!shouldApply) {
+      return item;
+   }
+
+   const basePrice = roundCurrency(Number(item.originalPrice ?? item.price) || 0);
+   if (basePrice <= 0) return item;
+
+   const discountedPrice = roundCurrency(basePrice * (1 - safeRate / 100));
+   const discountAmount = roundCurrency((basePrice - discountedPrice) * quantity);
+
+   return {
+      ...item,
+      price: discountedPrice,
+      originalPrice: basePrice,
+      discountAmount,
+      discountRate: roundRate(safeRate / 100),
+      commercialDiscountRate: safeRate,
+      commercialDiscountAmount: discountAmount,
+      adjustmentSource: 'MANUAL_DISCOUNT',
+      appliedPromotionId: undefined,
+      appliedPromotionCode: undefined,
+      appliedPromotionName: undefined,
+   };
+};
+
 const POSInterface: React.FC<POSInterfaceProps> = ({
    config,
    currentUser,
@@ -597,6 +668,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!selectedCustomer?.id) return selectedCustomer;
       return customers.find(customer => customer.id === selectedCustomer.id) || selectedCustomer;
    }, [customers, selectedCustomer]);
+   const customerCommercialPreferences = useMemo(
+      () => resolveCustomerCommercialPreferences(effectiveSelectedCustomer),
+      [effectiveSelectedCustomer]
+   );
+   const appliedCustomerCommercialKeyRef = useRef<string>('');
    const [quickActionData, setQuickActionData] = useState<{ product: Product; x: number; y: number } | null>(null);
    const [successToast, setSuccessToast] = useState<string | null>(null);
 
@@ -948,18 +1024,45 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const allowedTariffs = useMemo(() => {
       const allowedIds = activeTerminalConfig?.pricing?.allowedTariffIds || [];
-      if (allowedIds.length === 0) return config.tariffs;
-      const filteredTariffs = config.tariffs.filter(t => allowedIds.includes(t.id));
-      return filteredTariffs.length > 0 ? filteredTariffs : config.tariffs;
-   }, [config.tariffs, activeTerminalConfig]);
+      const terminalTariffs = allowedIds.length === 0
+         ? config.tariffs
+         : config.tariffs.filter(t => allowedIds.includes(t.id));
+      const baseTariffs = terminalTariffs.length > 0 ? terminalTariffs : config.tariffs;
+      const customerAllowedIds = customerCommercialPreferences.allowedTariffIds;
+
+      if (customerAllowedIds.length === 0) return baseTariffs;
+
+      const customerAllowedSet = new Set(customerAllowedIds.map(normalizeSearchToken).filter(Boolean));
+      const filteredTariffs = baseTariffs.filter((tariff) =>
+         customerAllowedSet.has(normalizeSearchToken(tariff.id)) ||
+         customerAllowedSet.has(normalizeSearchToken((tariff as any).code))
+      );
+
+      return filteredTariffs.length > 0 ? filteredTariffs : baseTariffs;
+   }, [config.tariffs, activeTerminalConfig, customerCommercialPreferences.allowedTariffIds]);
 
    const [activeTariffId, setActiveTariffId] = useState<string>(() => {
       return activeTerminalConfig?.pricing?.defaultTariffId || allowedTariffs[0]?.id || config.tariffs[0]?.id || '';
    });
-   const desiredTariffId = useMemo(
-      () => activeTerminalConfig?.pricing?.defaultTariffId || allowedTariffs[0]?.id || config.tariffs[0]?.id || '',
-      [activeTerminalConfig?.pricing?.defaultTariffId, allowedTariffs, config.tariffs]
-   );
+   const desiredTariffId = useMemo(() => {
+      const customerDefault = customerCommercialPreferences.defaultTariffId;
+      const customerDefaultTariff = customerDefault
+         ? allowedTariffs.find((tariff) =>
+            normalizeSearchToken(tariff.id) === normalizeSearchToken(customerDefault) ||
+            normalizeSearchToken((tariff as any).code) === normalizeSearchToken(customerDefault)
+         )
+         : undefined;
+
+      if (customerDefaultTariff) return customerDefaultTariff.id;
+      if (customerCommercialPreferences.allowedTariffIds.length === 1 && allowedTariffs[0]?.id) return allowedTariffs[0].id;
+      return activeTerminalConfig?.pricing?.defaultTariffId || allowedTariffs[0]?.id || config.tariffs[0]?.id || '';
+   }, [
+      activeTerminalConfig?.pricing?.defaultTariffId,
+      allowedTariffs,
+      config.tariffs,
+      customerCommercialPreferences.allowedTariffIds.length,
+      customerCommercialPreferences.defaultTariffId,
+   ]);
 
    useEffect(() => {
       if (!desiredTariffId) return;
@@ -969,6 +1072,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          setActiveTariffId(desiredTariffId);
       }
    }, [activeTariffId, allowedTariffs, desiredTariffId]);
+
+   useEffect(() => {
+      const rate = normalizeCommercialDiscountRate(customerCommercialPreferences.commercialDiscountRate);
+      const preferenceKey = `${effectiveSelectedCustomer?.id || 'NO_CUSTOMER'}:${rate}`;
+
+      if (appliedCustomerCommercialKeyRef.current === preferenceKey) return;
+      appliedCustomerCommercialKeyRef.current = preferenceKey;
+
+      onUpdateCart((currentCart) => {
+         let changed = false;
+         const nextCart = (currentCart || []).map((item) => {
+            const nextItem = rate > 0
+               ? applyCommercialDiscountToItem(item, rate)
+               : clearCommercialDiscountFromItem(item);
+            if (nextItem !== item) changed = true;
+            return nextItem;
+         });
+         return changed ? nextCart : currentCart;
+      });
+   }, [
+      customerCommercialPreferences.commercialDiscountRate,
+      effectiveSelectedCustomer?.id,
+      onUpdateCart,
+   ]);
 
    const productPriceIndex = useMemo(() => {
       const index = new Map<string, number>();
@@ -1941,6 +2068,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       const finalPrice = priceOverride ?? selectedVariant?.price ?? getProductPrice(product);
+      const commercialDiscountRate = normalizeCommercialDiscountRate(customerCommercialPreferences.commercialDiscountRate);
+      const effectiveFinalPrice = commercialDiscountRate > 0 && quantity > 0
+         ? applyCommercialDiscountToItem({
+            ...product,
+            cartId: '__preview__',
+            quantity,
+            price: finalPrice,
+            originalPrice: finalPrice,
+         }, commercialDiscountRate).price
+         : finalPrice;
       const modifiersString = buildModifierSignature(modifiers);
       const variantSku = selectedVariant?.sku;
       const effectiveTaxIds = resolveEffectiveTaxIds(product.appliedTaxIds, activeTerminalConfig);
@@ -1951,7 +2088,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const existing = (cart || []).find(i => {
          const iMods = buildModifierSignature(i.modifiers);
          const existingTaxSignature = resolveEffectiveTaxIds(i.appliedTaxIds, activeTerminalConfig).slice().sort().join('|');
-         return i.id === product.id && (i.variantSku || '') === (variantSku || '') && iMods === modifiersString && i.price === finalPrice && existingTaxSignature === taxSignature;
+         return i.id === product.id && (i.variantSku || '') === (variantSku || '') && iMods === modifiersString && i.price === effectiveFinalPrice && existingTaxSignature === taxSignature;
       });
 
       let targetCartId: string;
@@ -1959,13 +2096,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (existing && !usesSerial) {
          targetCartId = existing.cartId!;
          onUpdateCart(prev => {
-            const updatedItem = { ...existing, quantity: existing.quantity + quantity, appliedTaxIds: effectiveTaxIds };
+            const updatedItemBase = { ...existing, quantity: existing.quantity + quantity, appliedTaxIds: effectiveTaxIds };
+            const updatedItem = existing.commercialDiscountRate !== undefined
+               ? applyCommercialDiscountToItem(updatedItemBase, existing.commercialDiscountRate)
+               : updatedItemBase;
             return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
          });
       } else {
          const newCartId = Math.random().toString(36).substr(2, 9);
          targetCartId = newCartId;
-         const newItem = {
+         const baseItem: CartItem = {
             ...product,
             cartId: newCartId,
             quantity,
@@ -1977,12 +2117,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             originalPrice: getProductPrice(product),
             trackingData
          };
+         const newItem = commercialDiscountRate > 0 && quantity > 0
+            ? applyCommercialDiscountToItem({ ...baseItem, originalPrice: finalPrice }, commercialDiscountRate)
+            : baseItem;
          onUpdateCart(prev => [newItem, ...prev]);
       }
 
       // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
       setLastAddedCartId(targetCartId);
-   }, [blockRecoveredUberOrderMutation, canAddItemToCart, getProductPrice, onUpdateCart, cart, activeTerminalConfig]); // Added cart to dependencies
+   }, [blockRecoveredUberOrderMutation, canAddItemToCart, getProductPrice, onUpdateCart, cart, activeTerminalConfig, customerCommercialPreferences.commercialDiscountRate]); // Added cart to dependencies
 
    const handleProductClick = useCallback((product: Product) => {
       // MOBILE INTERCEPTION
@@ -2962,6 +3105,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const fiscalCompliance = getFiscalComplianceConfig(config);
          const uberRecoveredOrder = isUberRecoveredReservation(activeRecoveredReservation) ? activeRecoveredReservation : null;
          const customerForCheckout = uberRecoveredOrder ? null : effectiveSelectedCustomer;
+         const checkoutCustomerCommercialTrace = buildCustomerCommercialPreferenceTrace(customerForCheckout);
          const couponAssignedTo = redeemedCoupon?.assignedTo?.trim();
          if (couponAssignedTo && couponAssignedTo !== customerForCheckout?.id) {
             alert('El cupón aplicado está asignado a un cliente específico. Seleccione ese cliente antes de finalizar la venta.');
@@ -3155,6 +3299,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         status: creditAmount > 0 ? 'PENDING' : 'COMPLETED',
                         customerId: customerForCheckout?.id,
                         customerName: customerForCheckout?.name,
+                        ...checkoutCustomerCommercialTrace,
                         ncf: finalNcf,
                         ncfType: fiscalStatus.type,
                         legacyNcf: fiscalStatus.type.startsWith('E') ? undefined : finalNcf,
@@ -3182,6 +3327,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         terminalId: terminalId,
                         customerId: customerForCheckout?.id,
                         customerName: customerForCheckout?.name,
+                        ...checkoutCustomerCommercialTrace,
                         status: 'COMPLETED',
                         ncf: refundNcf,
                         ncfType: refundNcf ? 'B04' : undefined,
@@ -3291,6 +3437,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   status: !isRefundOnly && creditAmount > 0 ? 'PENDING' : 'COMPLETED',
                   customerId: customerForCheckout?.id,
                   customerName: customerForCheckout?.name || activeRecoveredReservation?.customerName,
+                  ...checkoutCustomerCommercialTrace,
                   pendingBalance: creditAmount > 0 ? creditAmount : undefined,
                   dueDate: creditAmount > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined, // Default 30 days
                   ncf: finalNcf,
@@ -5316,7 +5463,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                onConfirm={handleSplitConfirm}
             />
          )}
-         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} />}
+         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} autoEmailReceipt={customerCommercialPreferences.invoiceByEmail} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} salesUsers={salesUsers} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, selectedVariant, variantInfo) => { addToCart(p, 1, pr, m, undefined, selectedVariant, variantInfo); setSelectedProductForVariants(null); }} />}
