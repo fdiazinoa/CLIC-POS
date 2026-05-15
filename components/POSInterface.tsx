@@ -1098,7 +1098,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [searchTerm, setSearchTerm] = useState('');
    const deferredSearchTerm = useDeferredValue(searchTerm);
    const [categoryFilter, setCategoryFilter] = useState('ALL');
-   const deferredCategoryFilter = useDeferredValue(categoryFilter);
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
 
    const [showDiscountModal, setShowDiscountModal] = useState(false);
@@ -2500,9 +2499,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [canonicalizeCategory, dedupedSalesCatalogProducts, displayCategory, productHasActiveTariff, warehouses]);
 
    const filteredProducts = useMemo(() => {
-      const normalizedCategoryFilter = deferredCategoryFilter === 'ALL'
+      const normalizedCategoryFilter = categoryFilter === 'ALL'
          ? 'ALL'
-         : canonicalizeCategory(deferredCategoryFilter);
+         : canonicalizeCategory(categoryFilter);
       const normalizedSearch = deferredSearchTerm.trim().toLowerCase();
 
       const filtered = salesCatalogProductEntries.filter((entry) => {
@@ -2523,7 +2522,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             seenIds.add(p.id);
             return true;
          });
-   }, [salesCatalogProductEntries, deferredCategoryFilter, deferredSearchTerm, canonicalizeCategory, effectiveAllowedCategorySet]);
+   }, [salesCatalogProductEntries, categoryFilter, deferredSearchTerm, canonicalizeCategory, effectiveAllowedCategorySet]);
 
    const handleRetailSearchSubmit = useCallback((rawTerm?: string) => {
       const trimmed = (rawTerm ?? searchTerm ?? '').trim();
