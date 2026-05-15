@@ -180,7 +180,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
       'ALL',
       'POS_VOID_ITEM', 'POS_VOID_TICKET', 'POS_DISCOUNT',
       'POS_PRICE_OVERRIDE', 'POS_OPEN_DRAWER', 'POS_RETURNS',
-      'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHANGE_TARIFF', 'SETTINGS_ACCESS', 'POS_ALLOW_ZERO_PRICE'
+      'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHANGE_TARIFF', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'SETTINGS_ACCESS', 'POS_ALLOW_ZERO_PRICE'
     ],
     isSystem: true,
     maxDiscountPercent: 100
@@ -190,7 +190,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
     name: 'Supervisor',
     permissions: [
       'POS_VOID_ITEM', 'POS_DISCOUNT', 'POS_OPEN_DRAWER',
-      'POS_RETURNS', 'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHANGE_TARIFF'
+      'POS_RETURNS', 'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHANGE_TARIFF', 'POS_ALLOW_SALES_WITH_OPEN_Z'
     ],
     isSystem: true,
     maxDiscountPercent: 20
@@ -198,7 +198,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
   {
     id: 'CASHIER',
     name: 'Cajero',
-    permissions: ['POS_REPRINT_RECEIPT'],
+    permissions: ['POS_REPRINT_RECEIPT', 'POS_ALLOW_SALES_WITH_OPEN_Z'],
     isSystem: true,
     maxDiscountPercent: 0
   }
@@ -385,6 +385,7 @@ export const FOOD_PRODUCTS: Product[] = [
 export const AVAILABLE_PERMISSIONS = [
   // --- POS CORE ---
   { key: 'SALE', label: 'Realizar Ventas', description: 'Acceso a pantalla de cobro', category: 'SALES' },
+  { key: 'POS_ALLOW_SALES_WITH_OPEN_Z', label: 'Permitir ventas con cierre Z abierto', description: 'Permite agregar y cobrar ventas durante la jornada/corte Z abierto', category: 'SALES' },
   { key: 'POS_PAY_CREDIT', label: 'Cobrar a Crédito (Pendiente)', description: 'Permite finalizar ventas con el método de pago a crédito', category: 'SALES' },
   { key: 'POS_DISCOUNT', label: 'Aplicar Descuentos', description: 'Descuentos manuales en ítems o total', category: 'SALES' },
   { key: 'POS_PRICE_OVERRIDE', label: 'Modificar Precios', description: 'Cambiar precio unitario de productos', category: 'SALES' },
