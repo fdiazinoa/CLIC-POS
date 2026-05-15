@@ -3194,6 +3194,7 @@ const AppContent: React.FC = () => {
         fullPullOnPairing?: boolean;
         resolutionError?: unknown;
       };
+      progress?: (update: { stepId?: 'claim' | 'config' | 'apply' | 'sync' | 'cache' | 'finish'; message?: string }) => void;
     },
     options?: { forceTakeover?: boolean }
   ) => {
@@ -3219,6 +3220,10 @@ const AppContent: React.FC = () => {
       if (!setupResult?.boundConfig) {
         throw new Error('La vinculación debe provenir del backend central de setup. No se recibió configuración enlazada.');
       }
+      setupResult.progress?.({
+        stepId: 'apply',
+        message: 'Guardando configuración de terminal y permisos locales...',
+      });
       const updatedConfig = clearDuplicateDeviceAssignments(setupResult.boundConfig, deviceId, {
         activeTerminalId: terminalId,
         bindingTerminalId: setupResult?.erpTerminalId || terminalId,
@@ -3246,6 +3251,10 @@ const AppContent: React.FC = () => {
 
       setConfig(updatedConfig);
       await db.save('config', updatedConfig);
+      setupResult.progress?.({
+        stepId: 'apply',
+        message: 'Rehidratando series fiscales y documentos operativos...',
+      });
       const operationalDocumentState = extractTerminalOperationalDocumentState(updatedConfig, terminalId);
       await db.rehydrateOperationalDocumentState(
         operationalDocumentState.documentSeries,
@@ -3268,6 +3277,10 @@ const AppContent: React.FC = () => {
       }
 
       if (Array.isArray(setupResult?.boundUsers)) {
+        setupResult.progress?.({
+          stepId: 'apply',
+          message: 'Actualizando usuarios autorizados para esta terminal...',
+        });
         setUsers(setupResult.boundUsers);
         await db.save('users', setupResult.boundUsers);
       }
@@ -3288,6 +3301,10 @@ const AppContent: React.FC = () => {
       // This prevents pulling old config right after takeover.
       if (configSyncUrl) {
         try {
+          setupResult.progress?.({
+            stepId: 'sync',
+            message: 'Enviando identidad de la terminal al backend local...',
+          });
           const res = await fetch(configSyncUrl, {
             method: 'PUT',
             headers: {
@@ -3322,6 +3339,10 @@ const AppContent: React.FC = () => {
       // If we're taking over a previous server or pairing as slave, hydrate from the remote box first.
       if (shouldRestoreRemoteData) {
         try {
+          setupResult.progress?.({
+            stepId: 'sync',
+            message: 'Restaurando historial y catálogos desde la caja maestra...',
+          });
           const remoteRestoreConfig: BusinessConfig = {
             ...updatedConfig,
             terminals: (updatedConfig.terminals || []).map((terminal) => {
@@ -3341,12 +3362,24 @@ const AppContent: React.FC = () => {
 
           // Re-initialize sync manager with a temporary slave profile to pull history/catalogs
           await syncManager.initialize(remoteRestoreConfig, terminalId);
+          setupResult.progress?.({
+            stepId: 'sync',
+            message: 'Restaurando historial operativo de la terminal anterior...',
+          });
           await syncManager.restoreHistory(terminalId);
 
           console.log('🔄 Forcing full catalog sync to restore sequences...');
+          setupResult.progress?.({
+            stepId: 'sync',
+            message: 'Sincronizando productos, clientes, tarifas y secuencias...',
+          });
           await syncManager.syncAllCatalogs();
 
           // Reload data from DB after restoration
+          setupResult.progress?.({
+            stepId: 'cache',
+            message: 'Cargando datos restaurados desde SQLite...',
+          });
           const freshData = await db.init();
           setTransactions(freshData.transactions);
           setProducts(freshData.products);
@@ -3366,22 +3399,42 @@ const AppContent: React.FC = () => {
         localStorage.removeItem('pos_master_ip');
         localStorage.setItem('CLIC_POS_MASTER_URL', buildRuntimeMasterUrl());
       }
+      setupResult.progress?.({
+        stepId: 'sync',
+        message: 'Inicializando servicios del POS con la nueva terminal...',
+      });
       permissionService.initialize(updatedConfig, terminalId);
       await syncManager.initialize(updatedConfig, terminalId);
       const shouldFullPullOnPairing = setupResult?.snapshotMeta?.fullPullOnPairing ?? true;
       if (shouldFullPullOnPairing) {
+        setupResult.progress?.({
+          stepId: 'sync',
+          message: 'Sincronizando maestros: productos, tarifas, clientes, usuarios y documentos...',
+        });
         await syncManager.fullPull();
       } else {
         if (Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
+          setupResult.progress?.({
+            stepId: 'sync',
+            message: 'Guardando productos recibidos en el snapshot inicial...',
+          });
           const normalizedSnapshotItems = await productImageCacheService.normalizeIncomingProducts(setupResult.snapshotItems);
           await db.save('products', normalizedSnapshotItems);
           void productImageCacheService.syncSnapshotItems(normalizedSnapshotItems).catch((error) => {
             console.warn('⚠️ Snapshot product image sync failed after pairing:', error);
           });
         }
+        setupResult.progress?.({
+          stepId: 'sync',
+          message: 'Actualizando configuración resuelta de la terminal...',
+        });
         await syncManager.refreshTerminalResolvedConfig();
       }
 
+      setupResult.progress?.({
+        stepId: 'cache',
+        message: 'Actualizando caches locales y estado visual del POS...',
+      });
       const persistedConfigAfterSync = resolvePersistedBusinessConfig(await db.get('config') as unknown);
       const postSyncConfig = persistedConfigAfterSync || updatedConfig;
 
@@ -3423,6 +3476,10 @@ const AppContent: React.FC = () => {
       if (resolvedErpBaseUrl) {
         persistSetupErpBaseUrls(resolvedErpBaseUrl);
       }
+      setupResult.progress?.({
+        stepId: 'finish',
+        message: 'Terminal lista. Finalizando activación...',
+      });
       persistStoredErpSyncBinding({
         tenantId: setupResult?.tenantId || localStorage.getItem('active_tenant_id') || null,
         terminalId: resolvedErpTerminalId,

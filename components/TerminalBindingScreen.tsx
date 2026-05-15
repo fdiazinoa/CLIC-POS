@@ -18,6 +18,7 @@ interface PairingResult {
     fullPullOnPairing?: boolean;
     resolutionError?: unknown;
   };
+  progress?: (update: { stepId?: 'claim' | 'config' | 'apply' | 'sync' | 'cache' | 'finish'; message?: string }) => void;
 }
 
 interface PairingOptions {
@@ -374,7 +375,8 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                 config: boundConfig,
                 users,
                 masterIp: resolvedMasterIp,
-                snapshotMeta
+                snapshotMeta,
+                progress
               }) => {
                 await onConfigUpdate?.(boundConfig);
                 if (Array.isArray(users)) {
@@ -391,6 +393,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                   boundUsers: users,
                   masterIp: resolvedMasterIp,
                   snapshotMeta,
+                  progress,
                 }, { forceTakeover: Boolean(forceTakeover) });
               }}
             />
