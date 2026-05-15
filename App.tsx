@@ -4973,7 +4973,6 @@ const AppContent: React.FC = () => {
     };
 
     // 5. Persist refund, history mirror and Kardex through the standalone helper
-    const currentTerminal = getCurrentTerminal();
     const defaultWarehouseId =
       currentTerminal?.config?.inventoryScope?.defaultSalesWarehouseId ||
       (config.terminals || []).find(t => t.id === currentTerminalId)?.config?.inventoryScope?.defaultSalesWarehouseId ||
