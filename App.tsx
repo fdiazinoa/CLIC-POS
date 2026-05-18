@@ -1811,6 +1811,10 @@ const AppContent: React.FC = () => {
       const query = terminalId ? `?terminal_id=${encodeURIComponent(terminalId)}` : '';
       const res = await fetch(`/api/mesas${query}`);
       if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.toLowerCase().includes('application/json')) {
+          throw new Error('API de mesas no disponible en este entorno.');
+        }
         const data = await res.json();
 
         // Backward compatibility: some endpoints may return only Table[].
@@ -4395,13 +4399,30 @@ const AppContent: React.FC = () => {
     const headers = { 'Content-Type': 'application/json' };
     const normalizedRoomsPayload = roomsPayload.map(normalizeRoomForLayout);
     const normalizedTablesPayload = tablesPayload.map(normalizeTableForLayout);
+    const parseJsonOrSkipServerSync = async (res: Response, label: string): Promise<any | null> => {
+      const contentType = res.headers.get('content-type') || '';
+      const text = await res.text();
+      if (!contentType.toLowerCase().includes('application/json')) {
+        if (text.trim().startsWith('<')) {
+          console.warn(`⚠️ Floor Plan server sync skipped: ${label} returned HTML instead of JSON.`);
+          return null;
+        }
+        throw new Error(`${label} no devolvió JSON válido.`);
+      }
+      try {
+        return text ? JSON.parse(text) : null;
+      } catch (error: any) {
+        throw new Error(`${label} no devolvió JSON válido: ${error?.message || 'parse error'}`);
+      }
+    };
 
     // Pull current server snapshot to compute deletions safely
     const snapshotRes = await fetch('/api/mesas');
     if (!snapshotRes.ok) {
       throw new Error(`No se pudo leer estado actual de mesas (HTTP ${snapshotRes.status})`);
     }
-    const snapshot = await snapshotRes.json();
+    const snapshot = await parseJsonOrSkipServerSync(snapshotRes, 'Estado actual de mesas');
+    if (!snapshot) return;
     const serverRooms: Room[] = Array.isArray(snapshot?.rooms) ? snapshot.rooms : [];
     const serverTables: Table[] = Array.isArray(snapshot?.tables) ? snapshot.tables : [];
 
@@ -4498,7 +4519,7 @@ const AppContent: React.FC = () => {
       console.log('✅ Floor Plan synced to API server.');
     } catch (error: any) {
       console.error('❌ Floor Plan API sync failed:', error);
-      alert(`Layout guardado localmente, pero falló guardado en servidor: ${error?.message || 'Error desconocido'}`);
+      console.warn(`Layout guardado localmente; sync remoto de plano omitido: ${error?.message || 'Error desconocido'}`);
     }
     console.log('✅ Floor Plan saved to DB with robustness.');
     // Optional: Sync Trigger
