@@ -1165,7 +1165,7 @@ export interface Customer {
   applyChainedTax?: boolean;
   addresses?: CustomerAddress[];
   creditDays?: number;
-  defaultNcfType?: NCFType;
+  defaultNcfType?: FiscalDocumentCode;
   wallet?: Wallet;
   cards?: LoyaltyCard[];
   loyalty?: LoyaltyCard; // Deprecated, kept for backward compatibility during migration

@@ -22,7 +22,7 @@ import {
    PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, RedeemedCouponRef, ProductVariant
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
-import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
+import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, mapElectronicFiscalCodeToLegacy, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
 import { calculateTransactionTaxSummary } from '../utils/taxSummary';
 import UnifiedPaymentModal from './PaymentModal';
 import {
@@ -2413,9 +2413,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return threshold > 0 && fiscalCartGrossTotal > threshold ? 'OVER_THRESHOLD' : 'BASE';
    }, [activeTerminalConfig?.operational?.fiscalThreshold, fiscalCartGrossTotal]);
    const requiredSaleFiscalType = useMemo<FiscalDocumentCode>(() => {
+      const customerFiscalType = selectedCustomer?.defaultNcfType;
       const baseLegacyType: NCFType = fiscalThresholdBucket === 'OVER_THRESHOLD'
          ? 'B01'
-         : (selectedCustomer?.defaultNcfType || (selectedCustomer?.requiresFiscalInvoice ? 'B01' : 'B02'));
+         : (
+            customerFiscalType?.startsWith('E')
+               ? mapElectronicFiscalCodeToLegacy(customerFiscalType as any) as NCFType
+               : (customerFiscalType || (selectedCustomer?.requiresFiscalInvoice ? 'B01' : 'B02')) as NCFType
+         );
       return resolveSaleFiscalCode(fiscalCompliance.mode, baseLegacyType);
    }, [
       fiscalCompliance.mode,
