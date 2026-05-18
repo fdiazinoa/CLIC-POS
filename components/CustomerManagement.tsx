@@ -8,7 +8,7 @@ import {
    Globe, Calendar, Map, Navigation, CheckSquare, Clock, Landmark, ShieldCheck, Zap, Gift,
    Loader2, AlertOctagon, Printer, DollarSign, Banknote, QrCode, ArrowRightLeft
 } from 'lucide-react';
-import { Customer, BusinessConfig, CustomerTransaction, CustomerAddress, NCFType, Wallet, LoyaltyCard, Transaction, User, Collection, Activity, WalletTransaction, ServiceType } from '../types';
+import { Customer, BusinessConfig, CustomerTransaction, CustomerAddress, FiscalDocumentCode, Wallet, LoyaltyCard, Transaction, User, Collection, Activity, WalletTransaction, ServiceType } from '../types';
 import { dgiiService, DGIIResponse } from '../services/dgii/DGIIValidationService';
 import { printTicket } from '../utils/printer';
 import AccountReceivableModal from './AccountReceivableModal';
@@ -20,8 +20,11 @@ import FiscalSyncBadge from './FiscalSyncBadge';
 import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../utils/fiscalBreakdown';
 import {
    canRetryFiscalTransaction,
+   getFiscalComplianceConfig,
    getFiscalRetryActionLabel,
-   isRefundLikeTransaction
+   isRefundLikeTransaction,
+   mapElectronicFiscalCodeToLegacy,
+   mapLegacyFiscalCodeToElectronic
 } from '../utils/fiscal/fiscalHelpers';
 import { resolveCustomerImageSrc } from '../utils/entityImage';
 import {
@@ -108,6 +111,41 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    const [fiscalRetryFeedback, setFiscalRetryFeedback] = useState<string | null>(null);
    const [customerTransactions, setCustomerTransactions] = useState<Transaction[]>([]);
    const [walletMovements, setWalletMovements] = useState<WalletTransaction[]>([]);
+   const fiscalCompliance = useMemo(() => getFiscalComplianceConfig(config), [config]);
+   const isElectronicFiscalMode = fiscalCompliance.mode === 'ECF';
+
+   const normalizeCustomerNcfType = useCallback((value?: FiscalDocumentCode, requiresFiscalInvoice = false): FiscalDocumentCode => {
+      const fallbackLegacy = requiresFiscalInvoice ? 'B01' : 'B02';
+      const candidate = value || fallbackLegacy;
+      const legacyCode = candidate.startsWith('E')
+         ? mapElectronicFiscalCodeToLegacy(candidate as any)
+         : candidate;
+      const safeLegacyCode = ['B01', 'B02', 'B14', 'B15'].includes(legacyCode)
+         ? legacyCode
+         : fallbackLegacy;
+
+      return isElectronicFiscalMode
+         ? mapLegacyFiscalCodeToElectronic(safeLegacyCode as any)
+         : safeLegacyCode as FiscalDocumentCode;
+   }, [isElectronicFiscalMode]);
+
+   const customerNcfOptions = useMemo<Array<{ value: FiscalDocumentCode; label: string }>>(() => {
+      if (isElectronicFiscalMode) {
+         return [
+            { value: 'E32', label: 'e-CF Consumo (E32)' },
+            { value: 'E31', label: 'e-CF Crédito Fiscal (E31)' },
+            { value: 'E44', label: 'e-CF Regímenes Especiales (E44)' },
+            { value: 'E45', label: 'e-CF Gubernamental (E45)' }
+         ];
+      }
+
+      return [
+         { value: 'B02', label: 'Factura de Consumo (B02)' },
+         { value: 'B01', label: 'Crédito Fiscal (B01)' },
+         { value: 'B14', label: 'Regímenes Especiales (B14)' },
+         { value: 'B15', label: 'Gubernamental (B15)' }
+      ];
+   }, [isElectronicFiscalMode]);
 
    const restoreViewportAfterClose = useCallback(() => {
       const activeElement = document.activeElement;
@@ -282,7 +320,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                      economicActivity: data.economicActivity,
                      regimeType: data.regimeType
                   },
-                  defaultNcfType: 'B01',
+                  defaultNcfType: normalizeCustomerNcfType('B01', true),
                   // Defaults
                   totalSpent: 0,
                   currentDebt: 0,
@@ -312,7 +350,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
       const timer = setTimeout(performRemoteSearch, 800); // 800ms debounce
       return () => clearTimeout(timer);
-   }, [searchTerm, customers]);
+   }, [searchTerm, customers, normalizeCustomerNcfType]);
 
    // --- HANDLERS ---
 
@@ -335,7 +373,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
          isTaxExempt: false,
          applyChainedTax: false,
          addresses: [],
-         defaultNcfType: 'B02'
+         defaultNcfType: normalizeCustomerNcfType('B02')
       });
       setEditModalTab('GENERAL');
       setIsEditModalOpen(true);
@@ -347,7 +385,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       setFormData({
          ...selectedCustomer,
          addresses: selectedCustomer.addresses || [],
-         defaultNcfType: selectedCustomer.defaultNcfType || (selectedCustomer.requiresFiscalInvoice ? 'B01' : 'B02')
+         defaultNcfType: normalizeCustomerNcfType(selectedCustomer.defaultNcfType, selectedCustomer.requiresFiscalInvoice)
       });
       setEditModalTab('GENERAL');
       setIsEditModalOpen(true);
@@ -357,11 +395,16 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       e.preventDefault();
       if (!formData.name) return;
 
+      const customerPayload = {
+         ...formData,
+         defaultNcfType: normalizeCustomerNcfType(formData.defaultNcfType, formData.requiresFiscalInvoice)
+      };
+
       if (formData.id) {
-         onUpdateCustomer({ ...formData } as Customer);
+         onUpdateCustomer({ ...customerPayload } as Customer);
       } else {
          const newCustomer: Customer = {
-            ...formData as Customer,
+            ...customerPayload as Customer,
             id: Math.random().toString(36).substr(2, 9),
             createdAt: new Date().toISOString(),
             totalSpent: 0,
@@ -416,7 +459,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                economicActivity: dgiiData.economicActivity,
                regimeType: dgiiData.regimeType
             },
-            defaultNcfType: 'B01'
+            defaultNcfType: normalizeCustomerNcfType('B01', true)
          });
 
          setValidationError(null);
@@ -1620,14 +1663,13 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                        <div>
                                           <label className="block text-[10px] font-black text-slate-500 uppercase mb-1 ml-1">Tipo de Comprobante (NCF)</label>
                                           <select
-                                             value={formData.defaultNcfType || 'B02'}
-                                             onChange={e => setFormData({ ...formData, defaultNcfType: e.target.value as NCFType })}
+                                             value={normalizeCustomerNcfType(formData.defaultNcfType, formData.requiresFiscalInvoice)}
+                                             onChange={e => setFormData({ ...formData, defaultNcfType: e.target.value as FiscalDocumentCode })}
                                              className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-black text-sm text-blue-700"
                                           >
-                                             <option value="B02">Factura de Consumo (B02)</option>
-                                             <option value="B01">Crédito Fiscal (B01)</option>
-                                             <option value="B14">Regímenes Especiales (B14)</option>
-                                             <option value="B15">Gubernamental (B15)</option>
+                                             {customerNcfOptions.map(option => (
+                                                <option key={option.value} value={option.value}>{option.label}</option>
+                                             ))}
                                           </select>
                                        </div>
                                     </div>
