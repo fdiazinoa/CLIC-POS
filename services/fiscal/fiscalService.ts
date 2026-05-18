@@ -854,6 +854,9 @@ const buildDirectDigifactPayload = (
 
     const buyerTaxId = normalizeTaxId(customer.taxId || customer.rnc || (transaction as any).customerTaxId);
     const buyerName = cleanString(customer.name || transaction.customerName);
+    if (documentCode === 'E31' && !buyerTaxId) {
+        throw new Error('DigiFact E31 requiere Buyer.TaxID válido. Seleccione un cliente con RNC/Cédula antes de emitir Crédito Fiscal.');
+    }
     payload.Buyer = {
         TaxID: buyerTaxId || 'NO_APLICA',
         Name: (buyerName || 'Consumidor final').slice(0, 150)

@@ -3162,7 +3162,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          normalizedRefundItems.forEach(item => sellableConditions.set(item.cartId, 'SELLABLE'));
 
          // --- FISCAL COMPLIANCE CHECK (DGII RNC VALIDATION) ---
-         if (!isRefundOnly && fiscalStatus && (fiscalStatus.type === 'B01' || fiscalStatus.type === 'E31') && customerForCheckout) {
+         const isCreditFiscalDocument = !isRefundOnly && fiscalStatus && (fiscalStatus.type === 'B01' || fiscalStatus.type === 'E31');
+         if (isCreditFiscalDocument) {
+            const buyerTaxDigits = String(customerForCheckout?.taxId || '').replace(/\D/g, '');
+            const hasValidBuyerTaxId = buyerTaxDigits.length === 9 || buyerTaxDigits.length === 11;
+            if (!customerForCheckout || !hasValidBuyerTaxId) {
+               alert(
+                  `⛔ COMPROBANTE BLOQUEADO\n\n` +
+                  `Para emitir Crédito Fiscal (${fiscalStatus.type}) debe seleccionar un cliente con RNC/Cédula válido.\n\n` +
+                  `Acción requerida: complete el RNC/Cédula del cliente o cambie el tipo de comprobante a Consumo (${fiscalStatus.type === 'E31' ? 'E32' : 'B02'}).`
+               );
+               return null;
+            }
+
             if (customerForCheckout.fiscalStatus && customerForCheckout.fiscalStatus !== 'ACTIVO') {
                alert(
                   `⛔ COMPROBANTE BLOQUEADO\n\n` +
