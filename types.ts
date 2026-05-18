@@ -1534,6 +1534,11 @@ export interface Transaction {
   refundReason?: string;
   syncStatus?: SyncStatus;
   syncError?: string;
+  syncResponse?: any;
+  syncedAt?: string;
+  erpSyncStatus?: 'APPLIED' | 'SKIPPED_ALREADY_APPLIED' | 'ERROR';
+  erpSyncResponse?: any;
+  erpSyncedAt?: string;
   zReportId?: string; // ID of the Z-Report that closed this transaction
   zReportSequence?: string; // Human readable sequence number of the Z-Report (e.g. "Z-000123")
 
