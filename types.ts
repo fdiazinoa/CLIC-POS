@@ -2164,6 +2164,7 @@ export type Permission =
   | 'POS_REPEAT_Z_REPORT'
   | 'POS_VIEW_ACTIVE_CASH'
   | 'POS_MANAGE_PARKED'
+  | 'TABLE_CONTROL_CENTER'
 
   // --- CATALOG ---
   | 'CATALOG_VIEW'
