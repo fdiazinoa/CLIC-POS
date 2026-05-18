@@ -735,8 +735,8 @@ const TableMap: React.FC<TableMapProps> = ({
 
         const buttonClass = variant === 'grid'
             ? 'rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors'
-            : 'shrink-0 rounded-2xl bg-white/[0.09] hover:bg-white/[0.16] active:scale-[0.98] text-slate-100 text-xs font-black py-3 px-4 border border-white/15 shadow-[0_10px_24px_rgba(2,6,23,0.32)] flex items-center justify-center gap-2 transition-colors touch-manipulation';
-        const iconSize = variant === 'grid' ? 18 : 16;
+            : 'shrink-0 min-w-[150px] rounded-2xl bg-white/[0.09] hover:bg-white/[0.16] active:scale-[0.98] text-slate-100 text-sm font-black py-3.5 px-5 border border-white/15 shadow-[0_10px_24px_rgba(2,6,23,0.32)] flex items-center justify-center gap-2.5 whitespace-nowrap transition-colors touch-manipulation';
+        const iconSize = variant === 'grid' ? 18 : 20;
 
         return (
             <>
@@ -982,7 +982,7 @@ const TableMap: React.FC<TableMapProps> = ({
                     </div>
 
                     {isRestaurantMode && (
-                        <div className="max-w-[48vw] rounded-[1.6rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-3 py-2 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-2 overflow-auto no-scrollbar pointer-events-auto">
+                        <div className="max-w-[min(76vw,1120px)] rounded-[1.8rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-4 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-3 overflow-x-auto overflow-y-hidden no-scrollbar pointer-events-auto">
                             {renderTableControlActions('footer')}
                         </div>
                     )}
