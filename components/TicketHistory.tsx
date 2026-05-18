@@ -15,6 +15,8 @@ import {
    PaymentEntry,
    PaymentIntegrationDefinition,
    RefundProcessingOptions,
+   Customer,
+   FiscalDocumentCorrectionInput,
 } from '../types';
 import { validateTerminalDocument } from '../utils/validation';
 import { printIntegratedPaymentArtifacts, printTicket } from '../utils/printer';
@@ -26,9 +28,11 @@ import FiscalSyncBadge from './FiscalSyncBadge';
 import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../utils/fiscalBreakdown';
 import {
    canRetryFiscalTransaction,
+   FISCAL_DOCUMENT_LABELS,
    getFiscalDisplayCode,
    getFiscalDisplayNcf,
    getFiscalRetryActionLabel,
+   isElectronicFiscalTransaction,
    isRefundLikeTransaction
 } from '../utils/fiscal/fiscalHelpers';
 import { AzulGatewayError, azulMcmService } from '../services/payments/AzulMcmService';
@@ -51,6 +55,8 @@ interface TicketHistoryProps {
    onClose: () => void;
    initialSelectedId?: string | null; // NEW: For Smart Scan
    onRetryFiscalDocument?: (transaction: Transaction) => Promise<string>;
+   customers?: Customer[];
+   onCorrectFiscalDocument?: (transaction: Transaction, correction: FiscalDocumentCorrectionInput) => Promise<Transaction>;
    onRefundTransaction: (
       originalTx: Transaction,
       refundedItems: CartItem[],
@@ -636,12 +642,21 @@ const TicketDetailDrawer: React.FC<{
    onRequestRefund: (tx: Transaction) => void;
    onRequestAzulRefund: (tx: Transaction) => void;
    onRetryFiscalDocument?: (tx: Transaction) => Promise<string>;
+   customers?: Customer[];
+   onCorrectFiscalDocument?: (tx: Transaction, correction: FiscalDocumentCorrectionInput) => Promise<Transaction>;
    themeText: string;
    themeBg: string;
    users: User[];
-}> = ({ tx, config, onClose, onPrint, onRequestRefund, onRequestAzulRefund, onRetryFiscalDocument, themeText, themeBg, users }) => {
+}> = ({ tx, config, onClose, onPrint, onRequestRefund, onRequestAzulRefund, onRetryFiscalDocument, customers = [], onCorrectFiscalDocument, themeText, themeBg, users }) => {
    const [isRetryingFiscal, setIsRetryingFiscal] = useState(false);
    const [retryFeedback, setRetryFeedback] = useState<string | null>(null);
+   const [isCorrectionOpen, setIsCorrectionOpen] = useState(false);
+   const [correctionFiscalCode, setCorrectionFiscalCode] = useState<'E31' | 'E32'>('E32');
+   const [correctionCustomerId, setCorrectionCustomerId] = useState('');
+   const [correctionReason, setCorrectionReason] = useState('');
+   const [shouldRecalculateTaxes, setShouldRecalculateTaxes] = useState(true);
+   const [isCorrectingFiscal, setIsCorrectingFiscal] = useState(false);
+   const [correctionFeedback, setCorrectionFeedback] = useState<string | null>(null);
 
    if (!tx) return null;
    const cashierName = tx.userName || users.find(u => u.id === tx.userId)?.name || 'Sistema';
@@ -660,6 +675,13 @@ const TicketDetailDrawer: React.FC<{
    const canRequestAzulRefund = !isRefundDoc && tx.status !== 'REFUNDED' && canOfferAzulRefundAction(tx, config);
    const displayNcf = getFiscalDisplayNcf(tx);
    const displayFiscalCode = getFiscalDisplayCode(tx);
+   const canCorrectFiscal = isElectronicFiscalTransaction(tx)
+      && Boolean(onCorrectFiscalDocument)
+      && (tx.fiscalSyncStatus === 'ERROR' || tx.fiscalSyncStatus === 'PENDING');
+   const sortedCustomers = [...customers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+   const selectedCorrectionCustomer = sortedCustomers.find(customer => customer.id === correctionCustomerId) || null;
+   const selectedCustomerTaxDigits = (selectedCorrectionCustomer?.taxId || '').replace(/\D/g, '');
+   const selectedCustomerHasValidTaxId = selectedCustomerTaxDigits.length === 9 || selectedCustomerTaxDigits.length === 11;
 
    const handleRetryFiscal = async () => {
       if (!tx || !onRetryFiscalDocument || !canRetryFiscal) return;
@@ -674,6 +696,47 @@ const TicketDetailDrawer: React.FC<{
          setRetryFeedback(error?.message || 'No se pudo iniciar el reintento fiscal.');
       } finally {
          setIsRetryingFiscal(false);
+      }
+   };
+
+   const openFiscalCorrection = () => {
+      const currentCode = displayFiscalCode === 'E31' || displayFiscalCode === 'E32' ? displayFiscalCode : 'E32';
+      setCorrectionFiscalCode(currentCode);
+      setCorrectionCustomerId(tx.customerId || '');
+      setCorrectionReason('');
+      setShouldRecalculateTaxes(true);
+      setCorrectionFeedback(null);
+      setIsCorrectionOpen(true);
+   };
+
+   const handleApplyFiscalCorrection = async () => {
+      if (!tx || !onCorrectFiscalDocument || !canCorrectFiscal) return;
+      const reason = correctionReason.trim();
+      if (!reason) {
+         setCorrectionFeedback('Indica el motivo de la corrección.');
+         return;
+      }
+      if (correctionFiscalCode === 'E31' && (!selectedCorrectionCustomer || !selectedCustomerHasValidTaxId)) {
+         setCorrectionFeedback('Para E31 selecciona un cliente con RNC/Cédula válido.');
+         return;
+      }
+
+      setIsCorrectingFiscal(true);
+      setCorrectionFeedback(null);
+      try {
+         await onCorrectFiscalDocument(tx, {
+            fiscalCode: correctionFiscalCode,
+            customerId: correctionCustomerId || undefined,
+            reason,
+            recalculateTaxes: shouldRecalculateTaxes
+         });
+         setIsCorrectionOpen(false);
+         setRetryFeedback('Corrección aplicada. Reintenta el envío fiscal.');
+      } catch (error: any) {
+         console.error('❌ Error correcting fiscal document:', error);
+         setCorrectionFeedback(error?.message || 'No se pudo corregir el e-CF.');
+      } finally {
+         setIsCorrectingFiscal(false);
       }
    };
 
@@ -860,16 +923,27 @@ const TicketDetailDrawer: React.FC<{
                               {tx.fiscalResponseMessage}
                            </p>
                         )}
-                        {canRetryFiscal && (
+                        {(canRetryFiscal || canCorrectFiscal) && (
                            <div className="mt-3 flex flex-wrap items-center gap-3">
-                              <button
-                                 onClick={handleRetryFiscal}
-                                 disabled={isRetryingFiscal}
-                                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                              >
-                                 <RotateCcw size={12} />
-                                 {isRetryingFiscal ? 'Procesando...' : retryActionLabel}
-                              </button>
+                              {canRetryFiscal && (
+                                 <button
+                                    onClick={handleRetryFiscal}
+                                    disabled={isRetryingFiscal}
+                                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                                 >
+                                    <RotateCcw size={12} />
+                                    {isRetryingFiscal ? 'Procesando...' : retryActionLabel}
+                                 </button>
+                              )}
+                              {canCorrectFiscal && (
+                                 <button
+                                    onClick={openFiscalCorrection}
+                                    className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-black text-amber-700 hover:bg-amber-100"
+                                 >
+                                    <FileText size={12} />
+                                    Corregir e-CF
+                                 </button>
+                              )}
                               {retryFeedback && (
                                  <p className="text-[11px] font-bold text-slate-500">{retryFeedback}</p>
                               )}
@@ -1037,12 +1111,114 @@ const TicketDetailDrawer: React.FC<{
                   </div>
                </>
             </footer>
+
+            {isCorrectionOpen && (
+               <div className="absolute inset-0 z-[120] bg-black/45 backdrop-blur-sm flex items-center justify-center p-4">
+                  <div className="w-full max-w-sm rounded-2xl bg-white shadow-2xl border border-slate-100 overflow-hidden">
+                     <div className="p-4 border-b border-slate-100 flex items-start justify-between gap-3">
+                        <div>
+                           <p className="text-[10px] font-black uppercase tracking-widest text-amber-500">Corrección fiscal</p>
+                           <h4 className="text-base font-black text-slate-900">Corregir e-CF pendiente</h4>
+                           <p className="text-[11px] font-bold text-slate-400 mt-1">{displayNcf || tx.displayId}</p>
+                        </div>
+                        <button
+                           onClick={() => setIsCorrectionOpen(false)}
+                           className="p-2 rounded-full hover:bg-slate-100 text-slate-400"
+                           disabled={isCorrectingFiscal}
+                        >
+                           <X size={18} />
+                        </button>
+                     </div>
+
+                     <div className="p-4 space-y-3">
+                        <div>
+                           <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Tipo e-CF</label>
+                           <select
+                              value={correctionFiscalCode}
+                              onChange={(event) => setCorrectionFiscalCode(event.target.value as 'E31' | 'E32')}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-800"
+                              disabled={isCorrectingFiscal}
+                           >
+                              <option value="E32">{FISCAL_DOCUMENT_LABELS.E32}</option>
+                              <option value="E31">{FISCAL_DOCUMENT_LABELS.E31}</option>
+                           </select>
+                        </div>
+
+                        <div>
+                           <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">
+                              Cliente {correctionFiscalCode === 'E31' ? '(requerido)' : '(opcional)'}
+                           </label>
+                           <select
+                              value={correctionCustomerId}
+                              onChange={(event) => setCorrectionCustomerId(event.target.value)}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-800"
+                              disabled={isCorrectingFiscal}
+                           >
+                              <option value="">Consumidor final / sin cliente</option>
+                              {sortedCustomers.map(customer => (
+                                 <option key={customer.id} value={customer.id}>
+                                    {customer.name}{customer.taxId ? ` - ${customer.taxId}` : ''}
+                                 </option>
+                              ))}
+                           </select>
+                           {correctionFiscalCode === 'E31' && correctionCustomerId && !selectedCustomerHasValidTaxId && (
+                              <p className="mt-1 text-[11px] font-bold text-red-600">El cliente seleccionado no tiene RNC/Cédula válido.</p>
+                           )}
+                        </div>
+
+                        <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600">
+                           <input
+                              type="checkbox"
+                              checked={shouldRecalculateTaxes}
+                              onChange={(event) => setShouldRecalculateTaxes(event.target.checked)}
+                              disabled={isCorrectingFiscal}
+                           />
+                           Recalcular totales fiscales e impuestos
+                        </label>
+
+                        <div>
+                           <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Motivo</label>
+                           <textarea
+                              value={correctionReason}
+                              onChange={(event) => setCorrectionReason(event.target.value)}
+                              className="w-full min-h-[84px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-800 resize-none"
+                              placeholder="Ej: Cliente sin RNC válido, corrección de tipo fiscal..."
+                              disabled={isCorrectingFiscal}
+                           />
+                        </div>
+
+                        {correctionFeedback && (
+                           <p className="rounded-xl bg-red-50 px-3 py-2 text-[11px] font-bold text-red-700">
+                              {correctionFeedback}
+                           </p>
+                        )}
+                     </div>
+
+                     <div className="p-4 border-t border-slate-100 flex justify-end gap-2">
+                        <button
+                           onClick={() => setIsCorrectionOpen(false)}
+                           disabled={isCorrectingFiscal}
+                           className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-600 disabled:opacity-60"
+                        >
+                           Cancelar
+                        </button>
+                        <button
+                           onClick={handleApplyFiscalCorrection}
+                           disabled={isCorrectingFiscal}
+                           className="rounded-xl bg-amber-500 px-4 py-2 text-xs font-black text-white shadow-lg shadow-amber-500/20 disabled:opacity-60"
+                        >
+                           {isCorrectingFiscal ? 'Guardando...' : 'Aplicar corrección'}
+                        </button>
+                     </div>
+                  </div>
+               </div>
+            )}
          </div>
       </div>
    );
 };
 
-const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, onRefundTransaction, initialSelectedId, onRetryFiscalDocument }) => {
+const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, onRefundTransaction, initialSelectedId, onRetryFiscalDocument, customers = [], onCorrectFiscalDocument }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [expandedId, setExpandedId] = useState<string | null>(null);
    const [showFilters, setShowFilters] = useState(false);
@@ -2093,6 +2269,12 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                setIsRefundModalOpen(true);
             }}
             onRetryFiscalDocument={onRetryFiscalDocument}
+            customers={customers}
+            onCorrectFiscalDocument={onCorrectFiscalDocument ? async (tx, correction) => {
+               const corrected = await onCorrectFiscalDocument(tx, correction);
+               setHistoryTransactions(prev => prev.map(item => item.id === corrected.id ? corrected : item));
+               return corrected;
+            } : undefined}
             themeText={themeText}
             themeBg={themeBg}
             users={users}

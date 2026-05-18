@@ -32,7 +32,8 @@ import {
   PaymentEntry,
   RedeemedCouponRef,
   RefundProcessingOptions,
-  PaymentMethodDefinition
+  PaymentMethodDefinition,
+  FiscalDocumentCorrectionInput
 } from './types';
 import {
   DEFAULT_ROLES,
@@ -153,6 +154,7 @@ import { buildTerminalConfigRefreshRequest, type TerminalConfigSyncRequestDetail
 import {
   canRetryFiscalTransaction,
   getEffectiveFiscalComplianceConfig,
+  getFiscalDisplayCode,
   getFiscalProviderConfig,
   getProviderEnvironment,
   getDefaultFiscalProvider,
@@ -4068,6 +4070,123 @@ const AppContent: React.FC = () => {
     }
   }, []);
 
+  const correctFiscalDocument = useCallback(async (
+    transaction: Transaction,
+    correction: FiscalDocumentCorrectionInput
+  ): Promise<Transaction> => {
+    if (!canRetryFiscalTransaction(transaction)) {
+      throw new Error('Solo se pueden corregir e-CF pendientes o con error.');
+    }
+    if (correction.fiscalCode !== 'E31' && correction.fiscalCode !== 'E32') {
+      throw new Error('Por ahora la corrección fiscal permite E31 o E32.');
+    }
+
+    const reason = (correction.reason || '').trim();
+    if (!reason) {
+      throw new Error('Indica el motivo de la corrección fiscal.');
+    }
+
+    const selectedCustomer = correction.customerId
+      ? customers.find(customer => customer.id === correction.customerId)
+      : undefined;
+    const selectedTaxDigits = (selectedCustomer?.taxId || '').replace(/\D/g, '');
+    if (correction.fiscalCode === 'E31' && (!selectedCustomer || (selectedTaxDigits.length !== 9 && selectedTaxDigits.length !== 11))) {
+      throw new Error('Para E31 selecciona un cliente con RNC/Cédula válido.');
+    }
+
+    const currentFiscalCode = getFiscalDisplayCode(transaction);
+    const currentNcf = transaction.electronicNcf || transaction.ncf || '';
+    const terminalId = transaction.terminalId || (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1';
+    const fiscalCodeChanged = currentFiscalCode !== correction.fiscalCode || !currentNcf.startsWith(correction.fiscalCode);
+    const nextNcf = fiscalCodeChanged
+      ? await db.getNextNCF(correction.fiscalCode, terminalId, 50)
+      : currentNcf || undefined;
+
+    if (!nextNcf) {
+      throw new Error(`No hay secuencia local disponible para ${correction.fiscalCode}.`);
+    }
+
+    const correctedAt = new Date().toISOString();
+    const customerSnapshot = selectedCustomer ? {
+      name: selectedCustomer.name,
+      taxId: selectedCustomer.taxId,
+      address: selectedCustomer.address,
+      phone: selectedCustomer.phone,
+      email: selectedCustomer.email
+    } : undefined;
+
+    let correctedTransaction: Transaction = {
+      ...transaction,
+      terminalId,
+      ncfType: correction.fiscalCode,
+      ncf: nextNcf,
+      electronicNcf: nextNcf,
+      legacyNcf: undefined,
+      customerId: selectedCustomer?.id,
+      customerName: selectedCustomer?.name || (correction.fiscalCode === 'E32' ? 'Consumidor final' : transaction.customerName),
+      customerSnapshot,
+      fiscalSyncStatus: 'PENDING',
+      fiscalSyncError: undefined,
+      fiscalReferenceId: undefined,
+      fiscalResponseMessage: `Corrección e-CF aplicada por ${currentUser?.name || 'usuario POS'}. Pendiente de reenvío fiscal.`,
+      fiscalSyncedAt: undefined,
+      syncStatus: transaction.syncStatus === 'COMPLETED' ? transaction.syncStatus : 'PENDING',
+      updatedAt: correctedAt,
+      fiscalCorrectionAudit: [
+        ...(transaction.fiscalCorrectionAudit || []),
+        {
+          id: `FISCAL-CORR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          correctedAt,
+          correctedById: currentUser?.id,
+          correctedByName: currentUser?.name,
+          reason,
+          old: {
+            fiscalCode: currentFiscalCode,
+            ncf: currentNcf || transaction.legacyNcf,
+            customerId: transaction.customerId,
+            customerName: transaction.customerName,
+            customerTaxId: transaction.customerSnapshot?.taxId,
+            netAmount: transaction.netAmount,
+            taxAmount: transaction.taxAmount,
+            total: transaction.total,
+            fiscalSyncStatus: transaction.fiscalSyncStatus,
+            fiscalSyncError: transaction.fiscalSyncError
+          },
+          next: {
+            fiscalCode: correction.fiscalCode,
+            ncf: nextNcf,
+            customerId: selectedCustomer?.id,
+            customerName: selectedCustomer?.name || (correction.fiscalCode === 'E32' ? 'Consumidor final' : transaction.customerName),
+            customerTaxId: selectedCustomer?.taxId,
+            fiscalSyncStatus: 'PENDING'
+          }
+        }
+      ]
+    };
+
+    if (correction.recalculateTaxes) {
+      const terminalConfig = config.terminals?.find(terminal => terminal.id === terminalId)?.config;
+      const fiscalSummary = calculateTransactionFiscalSummary(correctedTransaction, config, { terminalConfig });
+      correctedTransaction = {
+        ...correctedTransaction,
+        netAmount: fiscalSummary.subtotal,
+        taxAmount: fiscalSummary.taxTotal,
+        taxBreakdown: fiscalSummary.taxBreakdown,
+        total: fiscalSummary.total
+      };
+
+      const audit = correctedTransaction.fiscalCorrectionAudit?.[correctedTransaction.fiscalCorrectionAudit.length - 1];
+      if (audit) {
+        audit.next.netAmount = correctedTransaction.netAmount;
+        audit.next.taxAmount = correctedTransaction.taxAmount;
+        audit.next.total = correctedTransaction.total;
+      }
+    }
+
+    await upsertFiscalTransaction(correctedTransaction);
+    return correctedTransaction;
+  }, [config, currentUser, customers, deviceId, upsertFiscalTransaction]);
+
   const pollFiscalDocumentStatus = useCallback(async (
     transaction: Transaction,
     providerId: Exclude<Transaction['fiscalProvider'], undefined | 'NONE'>,
@@ -5710,6 +5829,7 @@ const AppContent: React.FC = () => {
             currentUser={currentUser}
             users={users}
             roles={roles}
+            customers={customers}
             initialSelectedId={scanTargetTicketId}
             onUpdateConfig={handleConfigUpdate}
             onClose={() => {
@@ -5739,6 +5859,7 @@ const AppContent: React.FC = () => {
               }
             }}
             onRetryFiscalDocument={retryFiscalDocument}
+            onCorrectFiscalDocument={correctFiscalDocument}
           />
         );
 

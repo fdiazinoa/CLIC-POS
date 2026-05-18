@@ -1446,6 +1446,7 @@ export interface Transaction {
 
   // Transaction Data
   date: string;
+  updatedAt?: string;
   items: CartItem[];
   total: number;
   payments: any[];
@@ -1494,6 +1495,7 @@ export interface Transaction {
   fiscalSyncedAt?: string;
   fiscalReferenceId?: string;
   fiscalResponseMessage?: string;
+  fiscalCorrectionAudit?: FiscalCorrectionAuditEntry[];
   affectedNCF?: string;             // NCF de la factura afectada (para Notas de Crédito B04)
   affectedInvoiceNumber?: string;   // No. de factura afectada (displayId para búsquedas)
   affectedInvoiceDate?: string;
@@ -1552,6 +1554,36 @@ export interface Transaction {
   erpConfirmationStatus?: 'PENDING' | 'SYNCED' | 'ERROR';
   erpConfirmationError?: string;
   erpConfirmedAt?: string;
+}
+
+export interface FiscalDocumentCorrectionSnapshot {
+  fiscalCode?: FiscalDocumentCode | null;
+  ncf?: string;
+  customerId?: string;
+  customerName?: string;
+  customerTaxId?: string;
+  netAmount?: number;
+  taxAmount?: number;
+  total?: number;
+  fiscalSyncStatus?: CloudSyncStatus;
+  fiscalSyncError?: string;
+}
+
+export interface FiscalCorrectionAuditEntry {
+  id: string;
+  correctedAt: string;
+  correctedById?: string;
+  correctedByName?: string;
+  reason: string;
+  old: FiscalDocumentCorrectionSnapshot;
+  next: FiscalDocumentCorrectionSnapshot;
+}
+
+export interface FiscalDocumentCorrectionInput {
+  fiscalCode: FiscalDocumentCode;
+  customerId?: string;
+  reason: string;
+  recalculateTaxes: boolean;
 }
 
 export type ViewState =
