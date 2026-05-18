@@ -1006,11 +1006,9 @@ const TableMap: React.FC<TableMapProps> = ({
                             }}
                         >
                             <div
-                                className="relative rounded-[2.2rem] border border-white/10 bg-white/[0.03] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_0_1px_rgba(2,6,23,0.6),0_30px_80px_rgba(2,6,23,0.65)] overflow-hidden"
+                                className="relative overflow-visible"
                                 style={{ width: CANVAS_WIDTH, height: CANVAS_HEIGHT }}
                             >
-                                <div className="absolute inset-0 bg-[radial-gradient(circle_at_28%_14%,rgba(56,189,248,0.18),transparent_46%),radial-gradient(circle_at_77%_76%,rgba(250,204,21,0.12),transparent_42%)]" />
-
                                 {obstacleTables.map(obstacle => (
                                     <div
                                         key={obstacle.id}
