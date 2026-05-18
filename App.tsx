@@ -5352,6 +5352,7 @@ const AppContent: React.FC = () => {
                 currencySymbol={config.currencySymbol}
                 currentUser={currentUser!}
                 isAdmin={currentUser?.role === 'ADMIN'}
+                roles={roles}
                 bloqueoMeseros={getCurrentTerminal()?.config?.operational?.bloqueo_meseros}
                 isRestaurantMode={isRestaurantTerminal(getCurrentTerminal())}
                 onOpenTable={openTableForService}

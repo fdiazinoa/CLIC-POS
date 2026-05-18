@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
-import { Room, Table, User as UserType, ParkedTicket, CartItem } from '../types';
+import { Room, Table, User as UserType, ParkedTicket, CartItem, RoleDefinition, Permission } from '../types';
 import {
     Clock,
     User,
@@ -18,7 +18,9 @@ import {
     ArrowRightLeft,
     Pencil,
     Sigma,
-    PieChart
+    PieChart,
+    Activity,
+    X
 } from 'lucide-react';
 import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from 'framer-motion';
 import TableOptionsModal from './TableOptionsModal';
@@ -38,6 +40,7 @@ interface TableMapProps {
     onOpenTable?: (table: Table) => Promise<Table | null>;
     onRefreshTables?: () => void;
     canViewBusinessMetrics?: boolean;
+    roles?: RoleDefinition[];
     onPrintPrecheck?: (table: Table) => void;
     /** Restaurante: persiste división de cuenta desde el mapa (órdenes en espera) */
     onParkedOrderSplitResult?: (orderId: string, remainingItems: CartItem[], newTicketItems: CartItem[]) => void | Promise<void>;
@@ -85,6 +88,7 @@ const CANVAS_WIDTH = 1240;
 const CANVAS_HEIGHT = 860;
 const SCALE_MIN = 0.55;
 const SCALE_MAX = 2.2;
+const TABLE_CONTROL_CENTER_PERMISSION: Permission = 'TABLE_CONTROL_CENTER';
 /** Ancho del panel "Control de Sala" (w-[318px]) + márgenes; evita encimar mesas bajo el aside */
 const RESTAURANT_SIDEBAR_RESERVE_PX = 400;
 /** Zona inferior del selector de salas + margen */
@@ -234,6 +238,7 @@ const TableMap: React.FC<TableMapProps> = ({
     onOpenTable,
     onRefreshTables,
     canViewBusinessMetrics,
+    roles = [],
     onPrintPrecheck,
     onParkedOrderSplitResult,
     onOpenTableLayoutDesigner
@@ -253,6 +258,7 @@ const TableMap: React.FC<TableMapProps> = ({
     const [mergeSecondaryId, setMergeSecondaryId] = useState('');
     const [moveFromId, setMoveFromId] = useState('');
     const [moveToId, setMoveToId] = useState('');
+    const [isControlCenterOpen, setIsControlCenterOpen] = useState(false);
     const reduceMotion = useReducedMotion();
 
     const mapShellRef = useRef<HTMLDivElement | null>(null);
@@ -291,6 +297,18 @@ const TableMap: React.FC<TableMapProps> = ({
 
     const activeRoom = useMemo(() => rooms.find(r => r.id === activeRoomId), [rooms, activeRoomId]);
 
+    const currentRolePermissions = useMemo<Permission[]>(() => {
+        const roleId = currentUser.roleId || currentUser.role;
+        const role = roles.find(r => r.id === roleId) || roles.find(r => r.id === currentUser.role);
+        return role?.permissions || [];
+    }, [currentUser.role, currentUser.roleId, roles]);
+
+    const hasControlCenterAccess = Boolean(
+        isAdmin ||
+        currentRolePermissions.includes('ALL') ||
+        currentRolePermissions.includes(TABLE_CONTROL_CENTER_PERMISSION)
+    );
+
     const roomTables = useMemo(
         () => safeTables.filter(table => table.roomId === activeRoomId),
         [safeTables, activeRoomId]
@@ -301,7 +319,7 @@ const TableMap: React.FC<TableMapProps> = ({
         const el = viewportRef.current;
         if (!el) return;
         const rect = el.getBoundingClientRect();
-        const sidebarReserve = RESTAURANT_SIDEBAR_RESERVE_PX;
+        const sidebarReserve = hasControlCenterAccess && isControlCenterOpen ? RESTAURANT_SIDEBAR_RESERVE_PX : 0;
         const bottomBarReserve = RESTAURANT_BOTTOM_BAR_RESERVE_PX;
         const edgePad = 28;
         const usableW = Math.max(280, rect.width - sidebarReserve - edgePad);
@@ -340,7 +358,7 @@ const TableMap: React.FC<TableMapProps> = ({
         const baseX = -s * (midX - cx);
         const baseY = -s * (midY - cy);
         setViewport({ scale: s, x: baseX - panBiasX, y: baseY - panBiasY });
-    }, [isRestaurantMode, roomTables]);
+    }, [hasControlCenterAccess, isControlCenterOpen, isRestaurantMode, roomTables]);
 
     useLayoutEffect(() => {
         if (!isRestaurantMode) {
@@ -712,6 +730,98 @@ const TableMap: React.FC<TableMapProps> = ({
         return { x, y };
     }, [tooltip]);
 
+    const renderTableControlActions = useCallback((variant: 'footer' | 'grid' = 'footer') => {
+        if (!isRestaurantMode) return null;
+
+        const buttonClass = variant === 'grid'
+            ? 'rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors'
+            : 'shrink-0 rounded-2xl bg-white/[0.09] hover:bg-white/[0.16] active:scale-[0.98] text-slate-100 text-xs font-black py-3 px-4 border border-white/15 shadow-[0_10px_24px_rgba(2,6,23,0.32)] flex items-center justify-center gap-2 transition-colors touch-manipulation';
+        const iconSize = variant === 'grid' ? 18 : 16;
+
+        return (
+            <>
+                <button
+                    type="button"
+                    onClick={() => {
+                        setMergePrimaryId(occupiedForTools[0]?.id || '');
+                        setMergeSecondaryId(occupiedForTools.find(t => t.id !== occupiedForTools[0]?.id)?.id || '');
+                        setMergePickOpen(true);
+                    }}
+                    className={buttonClass}
+                >
+                    <Link2 size={iconSize} className="opacity-95" />
+                    Unir mesas
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setSubtotalPickOpen(true)}
+                    className={buttonClass}
+                >
+                    <Sigma size={iconSize} className="opacity-95" />
+                    Subtotal
+                </button>
+                <button
+                    type="button"
+                    onClick={() => {
+                        setMoveFromId(occupiedForTools[0]?.id || '');
+                        setMoveToId(freeForTools[0]?.id || '');
+                        setMovePickOpen(true);
+                    }}
+                    className={buttonClass}
+                >
+                    <ArrowRightLeft size={iconSize} className="opacity-95" />
+                    Mover mesa
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setFractionPickOpen(true)}
+                    className={buttonClass}
+                >
+                    <PieChart size={iconSize} className="opacity-95" />
+                    Fraccionar
+                </button>
+                <button
+                    type="button"
+                    onClick={() => {
+                        const withOrders = occupiedForTools.filter(t => t.currentOrderId);
+                        if (withOrders.length === 0) {
+                            alert('No hay mesas ocupadas con cuenta en esta sala.');
+                            return;
+                        }
+                        if (withOrders.length === 1) {
+                            const ticket = parkedTickets?.find(p => p.id === withOrders[0].currentOrderId);
+                            if (ticket?.items?.length) {
+                                setSplitTicketForModal(ticket);
+                            } else {
+                                alert('La cuenta no tiene ítems cargados.');
+                            }
+                            return;
+                        }
+                        setSplitPickOpen(true);
+                    }}
+                    className={buttonClass}
+                >
+                    <Scissors size={iconSize} className="opacity-95" />
+                    Dividir cuenta
+                </button>
+                <button
+                    type="button"
+                    onClick={() => onOpenTableLayoutDesigner?.()}
+                    className={buttonClass}
+                >
+                    <Pencil size={iconSize} className="opacity-95" />
+                    Editar layout
+                </button>
+            </>
+        );
+    }, [
+        freeForTools,
+        isRestaurantMode,
+        occupiedForTools,
+        onOpenTableLayoutDesigner,
+        parkedTickets
+    ]);
+
     return (
         <LazyMotion features={domAnimation}>
             <div
@@ -736,98 +846,51 @@ const TableMap: React.FC<TableMapProps> = ({
 
                 <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_20%_18%,rgba(56,189,248,0.22),transparent_48%),radial-gradient(circle_at_82%_78%,rgba(168,85,247,0.16),transparent_42%)]" />
 
-                <aside className="absolute top-6 right-6 z-30 w-[318px] rounded-3xl border border-white/10 bg-white/[0.08] backdrop-blur-xl shadow-[0_26px_70px_rgba(2,6,23,0.65)] overflow-hidden">
+                {hasControlCenterAccess && !isControlCenterOpen && (
+                    <button
+                        type="button"
+                        onClick={() => setIsControlCenterOpen(true)}
+                        className="absolute top-6 right-6 z-30 rounded-2xl border border-sky-300/25 bg-sky-500/20 backdrop-blur-xl px-4 py-3 text-sky-50 font-black text-sm shadow-[0_18px_40px_rgba(2,6,23,0.45)] flex items-center gap-2 hover:bg-sky-500/30 active:scale-[0.98] touch-manipulation"
+                    >
+                        <Activity size={17} />
+                        Control de Sala
+                    </button>
+                )}
+
+                <AnimatePresence>
+                    {hasControlCenterAccess && isControlCenterOpen && (
+                        <m.aside
+                            key="table-control-center"
+                            initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 32 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 32 }}
+                            transition={{ duration: 0.18, ease: 'easeOut' }}
+                            className="absolute top-6 right-6 z-30 w-[318px] rounded-3xl border border-white/10 bg-white/[0.08] backdrop-blur-xl shadow-[0_26px_70px_rgba(2,6,23,0.65)] overflow-hidden"
+                        >
                     <div className="p-5 border-b border-white/10 bg-gradient-to-r from-white/[0.06] to-transparent">
                         <div className="flex items-center justify-between">
                             <div>
                                 <p className="text-[10px] uppercase tracking-[0.26em] font-black text-sky-200/70">Control de Sala</p>
                                 <h3 className="text-lg font-black tracking-tight text-white mt-1">Centro en tiempo real</h3>
                             </div>
-                            <div className="flex items-center gap-1 text-emerald-300 text-[11px] font-bold">
-                                <span className="h-2 w-2 rounded-full bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.8)] animate-pulse" />
-                                LIVE
+                            <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-1 text-emerald-300 text-[11px] font-bold">
+                                    <span className="h-2 w-2 rounded-full bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.8)] animate-pulse" />
+                                    LIVE
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setIsControlCenterOpen(false)}
+                                    className="h-8 w-8 rounded-full border border-white/10 bg-white/[0.08] text-slate-200 flex items-center justify-center hover:bg-white/[0.16]"
+                                    title="Cerrar control de sala"
+                                >
+                                    <X size={15} />
+                                </button>
                             </div>
                         </div>
                     </div>
 
                     <div className="p-5 space-y-4">
-                        {isRestaurantMode && (
-                            <div className="grid grid-cols-2 gap-2.5">
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setMergePrimaryId(occupiedForTools[0]?.id || '');
-                                        setMergeSecondaryId(occupiedForTools.find(t => t.id !== occupiedForTools[0]?.id)?.id || '');
-                                        setMergePickOpen(true);
-                                    }}
-                                    className="rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors"
-                                >
-                                    <Link2 size={18} className="opacity-95" />
-                                    Unir mesas
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setSubtotalPickOpen(true)}
-                                    className="rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors"
-                                >
-                                    <Sigma size={18} className="opacity-95" />
-                                    Subtotal
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setMoveFromId(occupiedForTools[0]?.id || '');
-                                        setMoveToId(freeForTools[0]?.id || '');
-                                        setMovePickOpen(true);
-                                    }}
-                                    className="rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors"
-                                >
-                                    <ArrowRightLeft size={18} className="opacity-95" />
-                                    Mover mesa
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setFractionPickOpen(true)}
-                                    className="rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors"
-                                >
-                                    <PieChart size={18} className="opacity-95" />
-                                    Fraccionar
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        const withOrders = occupiedForTools.filter(t => t.currentOrderId);
-                                        if (withOrders.length === 0) {
-                                            alert('No hay mesas ocupadas con cuenta en esta sala.');
-                                            return;
-                                        }
-                                        if (withOrders.length === 1) {
-                                            const ticket = parkedTickets?.find(p => p.id === withOrders[0].currentOrderId);
-                                            if (ticket?.items?.length) {
-                                                setSplitTicketForModal(ticket);
-                                            } else {
-                                                alert('La cuenta no tiene ítems cargados.');
-                                            }
-                                            return;
-                                        }
-                                        setSplitPickOpen(true);
-                                    }}
-                                    className="rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors"
-                                >
-                                    <Scissors size={18} className="opacity-95" />
-                                    Dividir cuenta
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => onOpenTableLayoutDesigner?.()}
-                                    className="rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors"
-                                >
-                                    <Pencil size={18} className="opacity-95" />
-                                    Editar layout
-                                </button>
-                            </div>
-                        )}
-
                         <div className="grid grid-cols-2 gap-3">
                             <DonutMetric
                                 label="Ocupacion"
@@ -876,9 +939,11 @@ const TableMap: React.FC<TableMapProps> = ({
                             </div>
                         </div>
                     </div>
-                </aside>
+                        </m.aside>
+                    )}
+                </AnimatePresence>
 
-                <div className="absolute bottom-6 right-6 z-30 flex flex-col gap-2">
+                <div className="absolute bottom-24 right-6 z-30 flex flex-col gap-2">
                     <GlassButton onClick={() => handleZoom(0.11)} title="Zoom +">
                         <Plus size={18} />
                     </GlassButton>
@@ -890,8 +955,8 @@ const TableMap: React.FC<TableMapProps> = ({
                     </GlassButton>
                 </div>
 
-                <div className="absolute bottom-7 left-1/2 z-30 -translate-x-1/2 w-[min(92vw,860px)]">
-                    <div className="rounded-full border border-white/10 bg-white/[0.08] backdrop-blur-xl px-3 py-2 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-2 overflow-auto no-scrollbar">
+                <div className="absolute bottom-5 left-5 right-5 z-30 flex items-end gap-3 pointer-events-none">
+                    <div className="min-w-0 flex-1 rounded-[1.6rem] border border-white/10 bg-white/[0.08] backdrop-blur-xl px-3 py-2 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-2 overflow-auto no-scrollbar pointer-events-auto">
                         {rooms.map(room => {
                             const isActive = room.id === activeRoomId;
                             const roomOccupied = safeTables.filter(table => table.roomId === room.id && table.status === 'OCCUPIED').length;
@@ -915,6 +980,12 @@ const TableMap: React.FC<TableMapProps> = ({
                             );
                         })}
                     </div>
+
+                    {isRestaurantMode && (
+                        <div className="max-w-[48vw] rounded-[1.6rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-3 py-2 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-2 overflow-auto no-scrollbar pointer-events-auto">
+                            {renderTableControlActions('footer')}
+                        </div>
+                    )}
                 </div>
 
                 <div
