@@ -2076,7 +2076,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
 
-   const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string) => {
+   const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig']) => {
       if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
       if (quantity > 0 && !ensureSalesWithOpenZPermission()) return;
       if (!canAddItemToCart(product, quantity)) return;
@@ -2126,6 +2126,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             quantity,
             price: finalPrice,
             modifiers,
+            note,
+            restaurantConfig,
             variantSku,
             variantInfo,
             appliedTaxIds: effectiveTaxIds,
@@ -2151,15 +2153,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const productName = product.name || '';
       const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
       const hasVariants = (product.variants || []).length > 0 || (product.attributes || []).length > 0;
-      const hasModifiers = (product.availableModifiers || []).length > 0;
-      const requiresConfigurationBeforeAdd = isWeighted || hasVariants || hasModifiers;
+      const hasRestaurantConfig = Boolean(
+         (product.availableModifiers || []).length > 0
+         || (product.modifier_groups || product.modifierGroups || []).length > 0
+         || (product.combo_groups || product.comboGroups || []).length > 0
+         || (product.fraction_rule || product.fractionRule)
+         || (product.note_presets || product.notePresets || []).length > 0
+      );
+      const requiresConfigurationBeforeAdd = isWeighted || hasVariants || hasRestaurantConfig;
 
       if (!isReturnMode && !ensureSalesWithOpenZPermission()) return;
       if (requiresConfigurationBeforeAdd && !canAddItemToCart(product)) return;
 
       if (isWeighted) setProductForScale(product);
       else if (hasVariants) setSelectedProductForVariants(product);
-      else if (hasModifiers) setProductForModifiers(product);
+      else if (hasRestaurantConfig) setProductForModifiers(product);
       else addToCart(product, isReturnMode ? -1 : 1);
    }, [isMobile, defaultSalesWarehouseId, ensureSalesWithOpenZPermission, canAddItemToCart, addToCart, isReturnMode]);
 
@@ -6079,8 +6087,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                currencySymbol={baseCurrency.symbol}
                themeColor="blue"
                onClose={() => setProductForModifiers(null)}
-               onConfirm={(selectedModifierNames, finalPrice) => {
-                  addToCart(productForModifiers, isReturnMode ? -1 : 1, finalPrice, selectedModifierNames);
+               onConfirm={(selectedModifierNames, finalPrice, note, restaurantConfig) => {
+                  addToCart(productForModifiers, isReturnMode ? -1 : 1, finalPrice, selectedModifierNames, undefined, undefined, undefined, note, restaurantConfig as CartItem['restaurantConfig']);
                   setProductForModifiers(null);
                }}
             />

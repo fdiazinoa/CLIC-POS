@@ -130,6 +130,14 @@ const sanitizeTransactionItemForErp = (item: Record<string, any>): Record<string
         warehouseSettings,
         activeInWarehouses,
         availableModifiers,
+        modifier_groups,
+        modifierGroups,
+        fraction_rule,
+        fractionRule,
+        combo_groups,
+        comboGroups,
+        note_presets,
+        notePresets,
         operationalFlags,
         ...line
     } = item;

@@ -909,6 +909,61 @@ export interface Modifier {
   id: string;
   name: string;
   price: number;
+  price_delta?: number;
+  modifier_type?: 'ADD' | 'REMOVE' | 'NOTE_PRESET' | string;
+  affects_price?: boolean;
+  sort_order?: number;
+  active?: boolean;
+}
+
+export interface ModifierGroup {
+  id: string;
+  name: string;
+  selection_type?: 'SINGLE' | 'MULTIPLE' | string;
+  required?: boolean;
+  min_select?: number;
+  max_select?: number | null;
+  free_quantity?: number;
+  sort_order?: number;
+  modifiers: Modifier[];
+}
+
+export interface ProductFractionOption {
+  id?: string;
+  option_product_id?: string;
+  product_id?: string;
+  name?: string;
+  price?: number;
+  price_override?: number | null;
+  active?: boolean;
+}
+
+export interface ProductFractionRule {
+  id?: string;
+  fraction_mode?: 'HALF' | 'QUARTER' | 'CUSTOM' | string;
+  pricing_rule?: 'HIGHEST_PRICE' | 'AVERAGE_PRICE' | 'SUM_PARTS' | 'BASE_PLUS_DIFF' | string;
+  max_parts?: number;
+  require_equal_parts?: boolean;
+  options?: ProductFractionOption[];
+}
+
+export interface ComboGroupItem {
+  id?: string;
+  product_id?: string;
+  name?: string;
+  price_delta?: number;
+  active?: boolean;
+  sort_order?: number;
+}
+
+export interface ComboGroup {
+  id: string;
+  name: string;
+  required?: boolean;
+  min_select?: number;
+  max_select?: number | null;
+  sort_order?: number;
+  items: ComboGroupItem[];
 }
 
 export interface ProductGroup {
@@ -1219,7 +1274,7 @@ export interface ProductOperationalFlags {
   usesSerial: boolean;
 }
 
-export type ProductType = 'MATERIA_PRIMA' | 'PRODUCTO_TERMINADO' | 'RECETA' | 'KIT' | 'PRODUCT' | 'SERVICE';
+export type ProductType = 'MATERIA_PRIMA' | 'PRODUCTO_TERMINADO' | 'RECETA' | 'KIT' | 'PRODUCT' | 'SERVICE' | 'SIMPLE' | 'COMBO' | 'FRACTIONABLE';
 export type KitInventoryMode = 'FINISHED_GOOD' | 'COMPONENT_CONSUMPTION';
 
 export interface RecipeDetail {
@@ -1265,6 +1320,15 @@ export interface Product {
   minStock?: number;
   warehouseSettings?: Record<string, { min: number, max: number }>;
   availableModifiers?: Modifier[];
+  modifier_groups?: ModifierGroup[];
+  modifierGroups?: ModifierGroup[];
+  fraction_rule?: ProductFractionRule;
+  fractionRule?: ProductFractionRule;
+  combo_groups?: ComboGroup[];
+  comboGroups?: ComboGroup[];
+  note_presets?: string[];
+  notePresets?: string[];
+  product_type?: 'SIMPLE' | 'COMBO' | 'FRACTIONABLE' | 'SERVICE' | string;
   description?: string;
   departmentId?: string;
   sectionId?: string;
@@ -1403,6 +1467,12 @@ export interface CartItem extends Product {
   quantity: number;
   cartId: string;
   modifiers?: string[];
+  restaurantConfig?: {
+    modifierGroups?: Record<string, string[]>;
+    comboGroups?: Record<string, string[]>;
+    fractions?: Array<{ id: string; name: string; price: number; ratio: number }>;
+    note?: string;
+  };
   note?: string;
   originalPrice?: number; // Optional: track original product price for auditing
   discountAmount?: number;
