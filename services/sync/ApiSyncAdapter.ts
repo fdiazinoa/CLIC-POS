@@ -1395,6 +1395,33 @@ class ApiSyncAdapter {
         );
     }
 
+    private isAppliedOrDuplicateErpResult(result: any): boolean {
+        if (!result || typeof result !== 'object') return false;
+        const status = String(result.status || result.syncStatus || result.sync_status || '').toUpperCase();
+        const skippedReason = String(result.apply_skipped_reason || result.applySkippedReason || result.reason || '').toUpperCase();
+        return Boolean(
+            result.ok === true ||
+            result.applied === true ||
+            result.already_applied === true ||
+            result.alreadyApplied === true ||
+            result.duplicate === true ||
+            status === 'APPLIED' ||
+            status === 'SUCCESS' ||
+            skippedReason === 'ALREADY_APPLIED'
+        );
+    }
+
+    private summarizeErpInboxFailure(erp: any): string {
+        if (!erp || typeof erp !== 'object') return 'ERP inbox did not confirm persistence';
+        const results = Array.isArray(erp.results) ? erp.results : [];
+        const details = results
+            .map((result: any) => result?.error || result?.message || result?.applyError || result?.apply_skipped_reason)
+            .filter((value: any): value is string => typeof value === 'string' && value.trim().length > 0);
+        return details.length > 0
+            ? details.join(' | ').slice(0, 800)
+            : JSON.stringify(erp).slice(0, 800);
+    }
+
     async pushTransaction(transaction: any): Promise<void> {
         try {
             const normalizedTransaction = buildErpSalePayload(transaction);
@@ -1525,8 +1552,18 @@ class ApiSyncAdapter {
                 console.warn(
                     `[SYNC_TX_PUSH] Master OK but ERP inbox skipped (${erp.reason || 'NO_ERP_URL'}). Configure CLIC_ERP_BASE_URL / erp_base_url localStorage or ERP_BASE_URL on Master. tx=${txId}`
                 );
+            } else if (erp?.deferred === true && Number(erp?.queued || 0) > 0) {
+                throw new Error(`ERP_FORWARD_DEFERRED: queued=${erp.queued}`);
             } else if (erp?.failed) {
-                console.error(`[SYNC_TX_PUSH] Unexpected erpInbox.failed in 200 response tx=${txId}`);
+                const results = Array.isArray(erp.results) ? erp.results : [];
+                const alreadyApplied = results.length > 0 && results.every((result: any) => this.isAppliedOrDuplicateErpResult(result));
+                if (alreadyApplied) {
+                    console.warn(`[SYNC_TX_PUSH] ERP inbox reported duplicate/already applied for tx=${txId}; accepting as synchronized.`);
+                    return;
+                }
+                const detail = this.summarizeErpInboxFailure(erp);
+                console.error(`[SYNC_TX_PUSH] ERP inbox failed in 200 response tx=${txId}: ${detail}`);
+                throw new Error(`ERP inbox did not persist sale: ${detail}`);
             } else {
                 const types = Array.isArray(erp?.results) ? erp.results.map((r: any) => r.eventType).join(', ') : 'SALE_POSTED';
                 const docIds = Array.isArray(erp?.results)

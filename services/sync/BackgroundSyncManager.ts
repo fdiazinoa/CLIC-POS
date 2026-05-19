@@ -136,6 +136,7 @@ class BackgroundSyncManager {
         return (
             normalized.includes('invalid or missing sync token') ||
             normalized.includes('erp transaction sync failed: 401') ||
+            normalized.includes('erp_forward_deferred') ||
             normalized.includes('circuit breaker open') ||
             normalized.includes('erp temporalmente no disponible') ||
             normalized.includes('failed to fetch') ||
@@ -211,7 +212,11 @@ class BackgroundSyncManager {
      * Main sync loop
      */
     async sync() {
-        if (this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
+        if (this.isProcessing || !navigator.onLine) return;
+        if (isPosSaleActive()) {
+            this.scheduleSync(1500);
+            return;
+        }
 
         // We only sync if we are a SLAVE or if we are a MASTER that needs to push to a central server
         // (In this architecture, Master also pushes to its own server to keep db.json as source of truth)
@@ -527,7 +532,7 @@ class BackgroundSyncManager {
         const shouldReplayForErp = this.isErpOperationalPushConfigured();
         if (!shouldReplayForSlave && !shouldReplayForErp) return;
 
-        const flagSuffix = shouldReplayForErp ? 'erp_v3' : 'v2';
+        const flagSuffix = shouldReplayForErp ? 'erp_v4' : 'v2';
         const flagKey = `sync_replay_completed_transactions_${flagSuffix}_${terminalId}`;
         if (localStorage.getItem(flagKey) === '1') return;
 
