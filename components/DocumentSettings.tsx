@@ -496,9 +496,14 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                candidate.type === allocation.ncfType &&
                (!candidate.terminalId || normalizeKey(candidate.terminalId) === normalizeKey(allocation.terminalId))
             ) || null;
+            const allocationNextNumber = Math.max(
+               allocation.reservedStart,
+               Number(allocation.nextNumber || allocation.reservedStart)
+            );
+            const bufferCurrentNumber = Number(buffer?.currentNumber || 0);
             const currentNumber = buffer
-               ? Math.max(allocation.reservedStart, Number(buffer.currentNumber || allocation.nextNumber || allocation.reservedStart))
-               : Math.max(allocation.reservedStart, Number(allocation.nextNumber || allocation.reservedStart));
+               ? Math.max(allocationNextNumber, bufferCurrentNumber || allocationNextNumber)
+               : allocationNextNumber;
             const boundedCurrent = Math.min(currentNumber, allocation.reservedEnd + 1);
             const total = Math.max(0, allocation.reservedEnd - allocation.reservedStart + 1);
             const consumed = Math.max(0, boundedCurrent - allocation.reservedStart);
