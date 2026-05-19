@@ -2458,7 +2458,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          let fiscalRemaining = 0;
          let fiscalTotal = 0;
 
-         if (localBuffer && Number(localBuffer.currentNumber) <= Number(localBuffer.endNumber)) {
+         const allocationNextNumber = activeAllocation
+            ? Math.max(
+               Number(activeAllocation.reservedStart || 0),
+               Number(activeAllocation.nextNumber || activeAllocation.reservedStart || 0)
+            )
+            : 0;
+         const localBufferCurrent = Number(localBuffer?.currentNumber || 0);
+         const localBufferIsAligned =
+            Boolean(localBuffer) &&
+            (
+               !activeAllocation ||
+               (
+                  localBufferCurrent >= allocationNextNumber &&
+                  Number(localBuffer?.endNumber || 0) <= Number(activeAllocation.reservedEnd || 0)
+               )
+            );
+
+         if (localBufferIsAligned && localBuffer && Number(localBuffer.currentNumber) <= Number(localBuffer.endNumber)) {
             const current = Number(localBuffer.currentNumber);
             const blockStart = Number(activeAllocation?.reservedStart || localBuffer.startNumber || current);
             const blockEnd = Number(activeAllocation?.reservedEnd || localBuffer.endNumber || current);

@@ -18,8 +18,7 @@ import { mergeDocumentSeriesCollection } from './documentSeriesIdentity';
 const DB_KEY = 'clic_pos_db_v1';
 let initPromise: Promise<any> | null = null;
 const INVENTORY_CLOSE_LOCK_MESSAGE = 'Acción denegada: El inventario a esta fecha ya ha sido cerrado y auditado.';
-const getFiscalSequencePadding = (type: FiscalDocumentCode): number =>
-  type.startsWith('E') ? 10 : 8;
+const getFiscalSequencePadding = (_type: FiscalDocumentCode): number => 8;
 // Fiscal allocations already belong to one terminal; reserving local batches creates visible NCF gaps if buffers are reset by sync.
 const FISCAL_ISSUE_BATCH_SIZE = 1;
 
@@ -1273,7 +1272,11 @@ export const db = {
         return null;
       }
 
-      const start = historyNextNumber ?? Math.max(allocation.reservedStart, allocation.nextNumber);
+      const start = Math.max(
+        allocation.reservedStart,
+        allocation.nextNumber,
+        historyNextNumber ?? 0,
+      );
       const end = Math.min(allocation.reservedEnd, start + effectiveBatchSize - 1);
       const nextNumber = end + 1;
 
@@ -1356,6 +1359,30 @@ export const db = {
     let buffer = (buffers || []).find((b: LocalFiscalBuffer) =>
       b.type === type && (!terminalId || !b.terminalId || normalizeSequenceKey(b.terminalId) === normalizeSequenceKey(terminalId))
     );
+
+    const allocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
+    const activeAllocation = getTerminalFiscalAllocation(allocations, terminalId, type as any);
+    if (buffer && activeAllocation) {
+      const allocationNextNumber = Math.max(
+        activeAllocation.reservedStart,
+        Number(activeAllocation.nextNumber || activeAllocation.reservedStart) || activeAllocation.reservedStart,
+      );
+      const bufferCurrentNumber = Number(buffer.currentNumber || 0);
+      const bufferStartNumber = Number(buffer.startNumber || buffer.currentNumber || 0);
+      const hasDifferentAllocation =
+        Boolean(buffer.allocationId && buffer.allocationId !== activeAllocation.id) ||
+        Boolean(buffer.fiscalRangeId && activeAllocation.fiscalRangeId && buffer.fiscalRangeId !== activeAllocation.fiscalRangeId);
+      const isOutsideAllocation =
+        bufferStartNumber < activeAllocation.reservedStart ||
+        Number(buffer.endNumber || 0) > activeAllocation.reservedEnd;
+      const isBehindErpPointer = bufferCurrentNumber < allocationNextNumber;
+
+      if (hasDifferentAllocation || isOutsideAllocation || isBehindErpPointer) {
+        buffers = buffers.filter((candidate) => candidate !== buffer);
+        await dbAdapter.saveCollection('localFiscalBuffer', buffers);
+        buffer = undefined;
+      }
+    }
 
     if (buffer) {
       const maxIssuedNumber = await getMaxIssuedFiscalNumber(type, buffer.prefix || type);
