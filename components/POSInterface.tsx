@@ -3890,7 +3890,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setShowReservationModal(true);
    };
 
-   const releaseActiveEmptyTable = async (): Promise<boolean> => {
+   const releaseActiveEmptyTable = async (options: { silent?: boolean } = {}): Promise<boolean> => {
       if (!activeTable || cart.length > 0) return false;
 
       try {
@@ -3914,7 +3914,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          onSelectCustomer(null);
          setActiveRecoveredReservation(null);
          if (onClearActiveTable) onClearActiveTable();
-         setSuccessToast('Mesa liberada (sin productos)');
+         if (!options.silent) {
+            setSuccessToast('Mesa liberada (sin productos)');
+         }
          return true;
       } catch (error) {
          console.error('Failed to auto-release empty table:', error);
@@ -3980,6 +3982,49 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setTimeout(() => setErrorToast(null), 2000);
    };
 
+   const saveActiveTableOrderForMap = async () => {
+      if (!activeTable || cart.length === 0) return;
+
+      const parkedTicketId = activeTable.currentOrderId || `ORD-${Date.now()}`;
+      const existingParked = (Array.isArray(parkedTickets) ? parkedTickets : []).find((ticket) => ticket.id === parkedTicketId);
+      const tableName = activeTable.nombre || activeTable.name || 'Mesa';
+      const tableOrder: ParkedTicket = {
+         id: parkedTicketId,
+         name: existingParked?.name || `Mesa: ${tableName}`,
+         alias: existingParked?.alias,
+         items: [...cart],
+         total: cartTotal,
+         customerId: selectedCustomer?.id,
+         customerName: selectedCustomer?.name,
+         timestamp: existingParked?.timestamp || new Date().toISOString()
+      };
+
+      const updatedTickets = [
+         ...(Array.isArray(parkedTickets) ? parkedTickets : []).filter(ticket => ticket.id !== tableOrder.id),
+         tableOrder
+      ];
+      onUpdateParkedTickets(updatedTickets);
+
+      try {
+         await fetch(`http://localhost:8001/api/ordenes/${tableOrder.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+               items: tableOrder.items,
+               total: tableOrder.total,
+               status: 'OCCUPIED'
+            })
+         });
+      } catch (error) {
+         console.warn('No se pudo sincronizar la mesa con cocina al volver al mapa:', error);
+      }
+
+      onUpdateCart([]);
+      onSelectCustomer(null);
+      setActiveRecoveredReservation(null);
+      if (onClearActiveTable) onClearActiveTable();
+   };
+
    const handleSendAndExit = async () => {
       if (blockRecoveredUberOrderMutation('enviarlo a espera')) return;
 
@@ -4007,15 +4052,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const handleBackToMap = async () => {
       if (blockRecoveredUberOrderMutation('enviarlo a espera')) return;
 
+      setShowParkedList(false);
+      closeParkAliasModal();
       if (onOpenTableMap) onOpenTableMap();
 
       void (async () => {
-         const releasedEmptyTable = await releaseActiveEmptyTable();
-
-         // Ensure we park if there's something to park and no auto-release happened.
-         if (!releasedEmptyTable && cart.length > 0) {
-            await handleParkCurrentTicket();
+         if (!activeTable) return;
+         if (cart.length === 0) {
+            await releaseActiveEmptyTable({ silent: true });
+            return;
          }
+         await saveActiveTableOrderForMap();
       })();
    };
 
