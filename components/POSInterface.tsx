@@ -3898,35 +3898,44 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const releaseActiveEmptyTable = async (options: { silent?: boolean } = {}): Promise<boolean> => {
       if (!activeTable || cart.length > 0) return false;
 
-      try {
-         const releaseRes = await fetch('/api/mesas/liberar', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tableId: activeTable.id })
-         });
-         const releaseData = await releaseRes.json().catch(() => null);
+      const tableToRelease = activeTable;
 
-         if (!releaseRes.ok || (releaseData && releaseData.success === false)) {
-            throw new Error(releaseData?.message || `HTTP ${releaseRes.status}`);
-         }
-
-         if (activeTable.currentOrderId) {
-            const remaining = parkedTickets.filter(p => p.id !== activeTable.currentOrderId);
-            onUpdateParkedTickets(remaining);
-         }
-
-         onUpdateCart([]);
-         onSelectCustomer(null);
-         setActiveRecoveredReservation(null);
-         if (onClearActiveTable) onClearActiveTable();
-         if (!options.silent) {
-            setSuccessToast('Mesa liberada (sin productos)');
-         }
-         return true;
-      } catch (error) {
-         console.error('Failed to auto-release empty table:', error);
-         return false;
+      if (tableToRelease.currentOrderId) {
+         const remaining = parkedTickets.filter(p => p.id !== tableToRelease.currentOrderId);
+         onUpdateParkedTickets(remaining);
       }
+
+      onUpdateCart([]);
+      onSelectCustomer(null);
+      setActiveRecoveredReservation(null);
+      if (onClearActiveTable) onClearActiveTable();
+      if (!options.silent) {
+         setSuccessToast('Mesa liberada (sin productos)');
+      }
+
+      void (async () => {
+         const controller = new AbortController();
+         const timeoutId = window.setTimeout(() => controller.abort(), 2500);
+         try {
+            const releaseRes = await fetch('/api/mesas/liberar', {
+               method: 'POST',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({ tableId: tableToRelease.id }),
+               signal: controller.signal
+            });
+            const releaseData = await releaseRes.json().catch(() => null);
+
+            if (!releaseRes.ok || (releaseData && releaseData.success === false)) {
+               throw new Error(releaseData?.message || `HTTP ${releaseRes.status}`);
+            }
+         } catch (error) {
+            console.warn('No se pudo confirmar la liberacion de mesa en servidor:', error);
+         } finally {
+            window.clearTimeout(timeoutId);
+         }
+      })();
+
+      return true;
    };
 
    const handleParkCurrentTicket = async (aliasInput?: string) => {
@@ -4010,24 +4019,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       ];
       onUpdateParkedTickets(updatedTickets);
 
-      try {
-         await fetch(`http://localhost:8001/api/ordenes/${tableOrder.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-               items: tableOrder.items,
-               total: tableOrder.total,
-               status: 'OCCUPIED'
-            })
-         });
-      } catch (error) {
-         console.warn('No se pudo sincronizar la mesa con cocina al volver al mapa:', error);
-      }
-
       onUpdateCart([]);
       onSelectCustomer(null);
       setActiveRecoveredReservation(null);
       if (onClearActiveTable) onClearActiveTable();
+
+      void (async () => {
+         try {
+            await fetch(`http://localhost:8001/api/ordenes/${tableOrder.id}`, {
+               method: 'PUT',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({
+                  items: tableOrder.items,
+                  total: tableOrder.total,
+                  status: 'OCCUPIED'
+               })
+            });
+         } catch (error) {
+            console.warn('No se pudo sincronizar la mesa con cocina al volver al mapa:', error);
+         }
+      })();
    };
 
    const handleSendAndExit = async () => {
@@ -4054,21 +4065,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (onOpenTableMap) onOpenTableMap();
    };
 
-   const handleBackToMap = async () => {
+   const handleBackToMap = () => {
       if (blockRecoveredUberOrderMutation('volver al mapa de mesas')) return;
 
       setShowParkedList(false);
       closeParkAliasModal();
 
+      if (onOpenTableMap) onOpenTableMap();
+
       if (activeTable) {
          if (cart.length === 0) {
-            await releaseActiveEmptyTable({ silent: true });
+            void releaseActiveEmptyTable({ silent: true });
          } else {
-            await saveActiveTableOrderForMap();
+            void saveActiveTableOrderForMap();
          }
       }
-
-      if (onOpenTableMap) onOpenTableMap();
    };
 
    const handleRestoreTicket = (parked: ParkedTicket) => {
