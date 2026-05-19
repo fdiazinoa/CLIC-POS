@@ -43,6 +43,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
     };
     const getRoomLabel = (room: Room) => room.name?.trim() || room.nombre?.trim() || 'Sala';
     const getTableLabel = (table: Table) => table.name?.trim() || table.nombre?.trim() || (table.shape === 'OBSTACLE' ? 'Muro' : 'Mesa');
+    const currentRoom = rooms.find(r => r.id === currentRoomId);
 
     // Add new table
     const handleAddTable = (shape: TableShape) => {
@@ -366,10 +367,9 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nombre</label>
                                 <input
                                     type="text"
-                                    value={getRoomLabel(rooms.find(r => r.id === currentRoomId) || { id: '', nombre: 'Sala' })}
+                                    value={currentRoom?.name ?? currentRoom?.nombre ?? ''}
                                     onChange={(e) => {
-                                        const room = rooms.find(r => r.id === currentRoomId);
-                                        if (room && onUpdateRoom) onUpdateRoom({ ...room, name: e.target.value, nombre: e.target.value });
+                                        if (currentRoom && onUpdateRoom) onUpdateRoom({ ...currentRoom, name: e.target.value, nombre: e.target.value });
                                     }}
                                     className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500"
                                 />
@@ -403,7 +403,13 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                             </div>
 
                             <button
-                                onClick={() => setShowRoomSettings(false)}
+                                onClick={() => {
+                                    if (currentRoom && onUpdateRoom) {
+                                        const normalizedName = (currentRoom.name ?? currentRoom.nombre ?? '').trim() || 'Sala';
+                                        onUpdateRoom({ ...currentRoom, name: normalizedName, nombre: normalizedName });
+                                    }
+                                    setShowRoomSettings(false);
+                                }}
                                 className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl mt-4 hover:bg-blue-700"
                             >
                                 Listo
