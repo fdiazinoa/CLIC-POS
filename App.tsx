@@ -1811,6 +1811,10 @@ const AppContent: React.FC = () => {
       const query = terminalId ? `?terminal_id=${encodeURIComponent(terminalId)}` : '';
       const res = await fetch(`/api/mesas${query}`);
       if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.toLowerCase().includes('application/json')) {
+          throw new Error('API de mesas no disponible en este entorno.');
+        }
         const data = await res.json();
 
         // Backward compatibility: some endpoints may return only Table[].
@@ -4372,19 +4376,40 @@ const AppContent: React.FC = () => {
   const resolveTableLabel = (table: Pick<Table, 'name' | 'nombre' | 'shape'>): string => {
     const fromName = typeof table.name === 'string' ? table.name.trim() : '';
     const fromNombre = typeof table.nombre === 'string' ? table.nombre.trim() : '';
-    const fallback = table.shape === 'OBSTACLE' ? 'Muro' : 'Mesa';
+    const fallbackByShape: Record<Table['shape'], string> = {
+      SQUARE: 'Mesa',
+      CIRCLE: 'Mesa',
+      OBSTACLE: 'Muro',
+      BAR: 'Barra',
+      BOOTH: 'Sofa'
+    };
+    const fallback = fallbackByShape[table.shape] || 'Mesa';
     return fromName || fromNombre || fallback;
   };
 
   const normalizeTableForLayout = (table: Table): Table => {
     const label = resolveTableLabel(table);
     const isObstacle = table.shape === 'OBSTACLE';
+    const defaultWidthByShape: Record<Table['shape'], number> = {
+      SQUARE: 100,
+      CIRCLE: 100,
+      OBSTACLE: 120,
+      BAR: 180,
+      BOOTH: 160
+    };
+    const defaultHeightByShape: Record<Table['shape'], number> = {
+      SQUARE: 100,
+      CIRCLE: 100,
+      OBSTACLE: 20,
+      BAR: 60,
+      BOOTH: 90
+    };
     return {
       ...table,
       nombre: label,
       name: label,
-      width: table.width || 100,
-      height: isObstacle ? (table.height || 20) : (table.height || 100),
+      width: table.width || defaultWidthByShape[table.shape] || 100,
+      height: table.height || defaultHeightByShape[table.shape] || 100,
       capacity: isObstacle ? (table.capacity || 0) : Math.max(1, table.capacity || 1),
       consumo_minimo_mesa: isObstacle ? 0 : Math.max(0, Number(table.consumo_minimo_mesa || 0)),
       comensales_minimos: isObstacle ? 0 : Math.max(1, Number(table.comensales_minimos || 1))
@@ -4395,13 +4420,30 @@ const AppContent: React.FC = () => {
     const headers = { 'Content-Type': 'application/json' };
     const normalizedRoomsPayload = roomsPayload.map(normalizeRoomForLayout);
     const normalizedTablesPayload = tablesPayload.map(normalizeTableForLayout);
+    const parseJsonOrSkipServerSync = async (res: Response, label: string): Promise<any | null> => {
+      const contentType = res.headers.get('content-type') || '';
+      const text = await res.text();
+      if (!contentType.toLowerCase().includes('application/json')) {
+        if (text.trim().startsWith('<')) {
+          console.warn(`⚠️ Floor Plan server sync skipped: ${label} returned HTML instead of JSON.`);
+          return null;
+        }
+        throw new Error(`${label} no devolvió JSON válido.`);
+      }
+      try {
+        return text ? JSON.parse(text) : null;
+      } catch (error: any) {
+        throw new Error(`${label} no devolvió JSON válido: ${error?.message || 'parse error'}`);
+      }
+    };
 
     // Pull current server snapshot to compute deletions safely
     const snapshotRes = await fetch('/api/mesas');
     if (!snapshotRes.ok) {
       throw new Error(`No se pudo leer estado actual de mesas (HTTP ${snapshotRes.status})`);
     }
-    const snapshot = await snapshotRes.json();
+    const snapshot = await parseJsonOrSkipServerSync(snapshotRes, 'Estado actual de mesas');
+    if (!snapshot) return;
     const serverRooms: Room[] = Array.isArray(snapshot?.rooms) ? snapshot.rooms : [];
     const serverTables: Table[] = Array.isArray(snapshot?.tables) ? snapshot.tables : [];
 
@@ -4498,7 +4540,7 @@ const AppContent: React.FC = () => {
       console.log('✅ Floor Plan synced to API server.');
     } catch (error: any) {
       console.error('❌ Floor Plan API sync failed:', error);
-      alert(`Layout guardado localmente, pero falló guardado en servidor: ${error?.message || 'Error desconocido'}`);
+      console.warn(`Layout guardado localmente; sync remoto de plano omitido: ${error?.message || 'Error desconocido'}`);
     }
     console.log('✅ Floor Plan saved to DB with robustness.');
     // Optional: Sync Trigger
@@ -5331,6 +5373,7 @@ const AppContent: React.FC = () => {
                 currencySymbol={config.currencySymbol}
                 currentUser={currentUser!}
                 isAdmin={currentUser?.role === 'ADMIN'}
+                roles={roles}
                 bloqueoMeseros={getCurrentTerminal()?.config?.operational?.bloqueo_meseros}
                 isRestaurantMode={isRestaurantTerminal(getCurrentTerminal())}
                 onOpenTable={openTableForService}

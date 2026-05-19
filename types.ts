@@ -1333,7 +1333,7 @@ export interface InventoryTracking {
 }
 
 // --- FLOOR PLAN TYPES ---
-export type TableShape = 'SQUARE' | 'CIRCLE' | 'OBSTACLE';
+export type TableShape = 'SQUARE' | 'CIRCLE' | 'OBSTACLE' | 'BAR' | 'BOOTH';
 
 export interface Room {
   id: string;
@@ -2127,6 +2127,7 @@ export type Permission =
   | 'POS_REPEAT_Z_REPORT'
   | 'POS_VIEW_ACTIVE_CASH'
   | 'POS_MANAGE_PARKED'
+  | 'TABLE_CONTROL_CENTER'
 
   // --- CATALOG ---
   | 'CATALOG_VIEW'

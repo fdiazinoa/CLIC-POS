@@ -2776,21 +2776,41 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       });
    }, [processedCart, config, discountAmount, isTaxIncluded, activeTerminalConfig]);
 
-   const cartTax = taxBreakdown.reduce((sum, t) => sum + t.amount, 0);
+   const displayTaxBreakdown = useMemo(() => {
+      const grouped = new Map<string, { id: string; name: string; rate: number; amount: number }>();
+      taxBreakdown.forEach((tax) => {
+         const rateKey = String(Math.round((Number(tax.rate || 0) <= 1 ? Number(tax.rate || 0) * 100 : Number(tax.rate || 0)) * 1000) / 1000);
+         const existing = grouped.get(rateKey);
+         const normalizedName = (tax.name || '').toLowerCase();
+         const displayName = normalizedName.includes('itbis') ? tax.name : existing?.name || tax.name;
+         grouped.set(rateKey, {
+            id: existing?.id || `tax-rate-${rateKey}`,
+            name: displayName,
+            rate: tax.rate,
+            amount: (existing?.amount || 0) + tax.amount,
+         });
+      });
+      return Array.from(grouped.values()).map((tax) => ({
+         ...tax,
+         amount: Math.round((tax.amount + Number.EPSILON) * 100) / 100,
+      }));
+   }, [taxBreakdown]);
+
+   const cartTax = displayTaxBreakdown.reduce((sum, t) => sum + t.amount, 0);
    const primaryTaxLabel = useMemo(() => {
-      if (taxBreakdown.length === 1) {
-         return formatTaxLineLabel(taxBreakdown[0]);
+      if (displayTaxBreakdown.length === 1) {
+         return formatTaxLineLabel(displayTaxBreakdown[0]);
       }
       return null;
-   }, [taxBreakdown]);
+   }, [displayTaxBreakdown]);
    const combinedTaxBreakdown = useMemo(() => {
-      if (taxBreakdown.length <= 1) return [];
-      return taxBreakdown.map((tax) => ({
+      if (displayTaxBreakdown.length <= 1) return [];
+      return displayTaxBreakdown.map((tax) => ({
          id: tax.id,
          label: formatTaxLineLabel(tax),
          amount: tax.amount,
       }));
-   }, [taxBreakdown]);
+   }, [displayTaxBreakdown]);
 
    const tipsConfig = config.tipsConfig;
    const serviceCharge = tipsConfig?.serviceCharge;
@@ -3870,7 +3890,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setShowReservationModal(true);
    };
 
-   const releaseActiveEmptyTable = async (): Promise<boolean> => {
+   const releaseActiveEmptyTable = async (options: { silent?: boolean } = {}): Promise<boolean> => {
       if (!activeTable || cart.length > 0) return false;
 
       try {
@@ -3894,7 +3914,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          onSelectCustomer(null);
          setActiveRecoveredReservation(null);
          if (onClearActiveTable) onClearActiveTable();
-         setSuccessToast('Mesa liberada (sin productos)');
+         if (!options.silent) {
+            setSuccessToast('Mesa liberada (sin productos)');
+         }
          return true;
       } catch (error) {
          console.error('Failed to auto-release empty table:', error);
@@ -3960,6 +3982,49 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setTimeout(() => setErrorToast(null), 2000);
    };
 
+   const saveActiveTableOrderForMap = async () => {
+      if (!activeTable || cart.length === 0) return;
+
+      const parkedTicketId = activeTable.currentOrderId || `ORD-${Date.now()}`;
+      const existingParked = (Array.isArray(parkedTickets) ? parkedTickets : []).find((ticket) => ticket.id === parkedTicketId);
+      const tableName = activeTable.nombre || activeTable.name || 'Mesa';
+      const tableOrder: ParkedTicket = {
+         id: parkedTicketId,
+         name: existingParked?.name || `Mesa: ${tableName}`,
+         alias: existingParked?.alias,
+         items: [...cart],
+         total: cartTotal,
+         customerId: selectedCustomer?.id,
+         customerName: selectedCustomer?.name,
+         timestamp: existingParked?.timestamp || new Date().toISOString()
+      };
+
+      const updatedTickets = [
+         ...(Array.isArray(parkedTickets) ? parkedTickets : []).filter(ticket => ticket.id !== tableOrder.id),
+         tableOrder
+      ];
+      onUpdateParkedTickets(updatedTickets);
+
+      try {
+         await fetch(`http://localhost:8001/api/ordenes/${tableOrder.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+               items: tableOrder.items,
+               total: tableOrder.total,
+               status: 'OCCUPIED'
+            })
+         });
+      } catch (error) {
+         console.warn('No se pudo sincronizar la mesa con cocina al volver al mapa:', error);
+      }
+
+      onUpdateCart([]);
+      onSelectCustomer(null);
+      setActiveRecoveredReservation(null);
+      if (onClearActiveTable) onClearActiveTable();
+   };
+
    const handleSendAndExit = async () => {
       if (blockRecoveredUberOrderMutation('enviarlo a espera')) return;
 
@@ -3987,14 +4052,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const handleBackToMap = async () => {
       if (blockRecoveredUberOrderMutation('enviarlo a espera')) return;
 
-      const releasedEmptyTable = await releaseActiveEmptyTable();
-
-      // Ensure we park if there's something to park and no auto-release happened
-      if (!releasedEmptyTable && cart.length > 0) {
-         await handleParkCurrentTicket();
-      }
-      // Always navigate, even if empty (handleParkCurrentTicket might skip nav if empty/no-table)
+      setShowParkedList(false);
+      closeParkAliasModal();
       if (onOpenTableMap) onOpenTableMap();
+
+      void (async () => {
+         if (!activeTable) return;
+         if (cart.length === 0) {
+            await releaseActiveEmptyTable({ silent: true });
+            return;
+         }
+         await saveActiveTableOrderForMap();
+      })();
    };
 
    const handleRestoreTicket = (parked: ParkedTicket) => {
@@ -5314,7 +5383,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
 
-                               <div className={`grid ${isRestaurantMode ? 'grid-cols-5' : 'grid-cols-[112px_minmax(0,1fr)]'} items-center gap-2 pt-5 px-2`}>
+                               <div className={`grid ${isRestaurantMode ? (hideTableExtras ? 'grid-cols-4' : 'grid-cols-5') : 'grid-cols-[112px_minmax(0,1fr)]'} items-center gap-3 pt-5 px-1`}>
                                  {!isRestaurantMode ? (
                                     <>
                                        <button
@@ -5348,33 +5417,33 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  ) : (
                                     <>
                                        <button
-                                          onClick={() => onOpenTableMap && onOpenTableMap()}
-                                          className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase border-2 border-slate-100 bg-white text-slate-600 hover:bg-slate-50 transition-all active:scale-95"
+                                          onClick={() => { void handleBackToMap(); }}
+                                          className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase border-2 border-slate-200 bg-slate-50 text-slate-700 hover:bg-white hover:border-slate-300 shadow-sm hover:shadow-md transition-all active:scale-95"
                                        >
-                                          <Layout size={20} />
+                                          <Layout size={24} />
                                           <span>Mesas</span>
                                        </button>
                                        <button
                                           onClick={handleDispatchCommand}
-                                          className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase border-2 border-orange-100 bg-orange-50 text-orange-600 hover:bg-orange-100 transition-all active:scale-95"
+                                          className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase border-2 border-orange-200 bg-orange-50 text-orange-600 hover:bg-orange-100 hover:border-orange-300 shadow-sm hover:shadow-md transition-all active:scale-95"
                                        >
-                                          <ChefHat size={20} />
+                                          <ChefHat size={24} />
                                           <span>Cocina</span>
                                        </button>
                                        {!hideTableExtras && (
                                           <button
                                              onClick={() => setShowSplitModal(true)}
-                                             className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase border-2 border-purple-100 bg-purple-50 text-purple-600 hover:bg-purple-100 transition-all active:scale-95"
+                                             className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase border-2 border-purple-200 bg-purple-50 text-purple-600 hover:bg-purple-100 hover:border-purple-300 shadow-sm hover:shadow-md transition-all active:scale-95"
                                           >
-                                             <Split size={20} />
+                                             <Split size={24} />
                                              <span>Dividir</span>
                                           </button>
                                        )}
                                        <button
                                           onClick={handlePrintPrecuenta}
-                                          className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase border-2 border-blue-100 bg-blue-50 text-blue-600 hover:bg-blue-100 transition-all active:scale-95"
+                                          className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase border-2 border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:border-blue-300 shadow-sm hover:shadow-md transition-all active:scale-95"
                                        >
-                                          <Printer size={20} />
+                                          <Printer size={24} />
                                           <span>Precuenta</span>
                                        </button>
                                        <button
@@ -5385,9 +5454,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              }
                                           }}
                                           disabled={cart.length === 0}
-                                          className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase bg-slate-900 text-white hover:bg-black transition-all active:scale-95 disabled:opacity-50"
+                                          className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase bg-slate-900 text-white hover:bg-black shadow-sm hover:shadow-md transition-all active:scale-95 disabled:bg-slate-200 disabled:text-slate-500 disabled:opacity-100 disabled:cursor-not-allowed"
                                        >
-                                          <ArrowRight size={20} />
+                                          <ArrowRight size={24} />
                                           <span>Cobrar</span>
                                        </button>
                                     </>
