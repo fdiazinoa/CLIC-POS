@@ -144,6 +144,10 @@ const getServiceStage = (progress: number): { icon: string; label: string } => {
 };
 
 const inferArchetype = (table: Table): TableArchetype => {
+    if (table.shape === 'BAR') return 'BAR';
+    if (table.shape === 'BOOTH') return 'BOOTH';
+    if (table.shape === 'CIRCLE') return 'CIRCLE';
+
     const label = `${table.nombre || ''} ${table.name || ''}`.toLowerCase();
     const ratio = table.width / Math.max(1, table.height);
     const capacity = table.capacity || 0;
@@ -161,10 +165,9 @@ const inferArchetype = (table: Table): TableArchetype => {
         label.includes('bar') ||
         label.includes('barra') ||
         label.includes('stool') ||
-        (table.shape === 'CIRCLE' && capacity <= 1);
+        capacity <= 1;
 
     if (looksLikeBarStool) return 'BAR';
-    if (table.shape === 'CIRCLE') return 'CIRCLE';
     return 'SQUARE';
 };
 

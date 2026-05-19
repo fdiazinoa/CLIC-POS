@@ -4376,19 +4376,40 @@ const AppContent: React.FC = () => {
   const resolveTableLabel = (table: Pick<Table, 'name' | 'nombre' | 'shape'>): string => {
     const fromName = typeof table.name === 'string' ? table.name.trim() : '';
     const fromNombre = typeof table.nombre === 'string' ? table.nombre.trim() : '';
-    const fallback = table.shape === 'OBSTACLE' ? 'Muro' : 'Mesa';
+    const fallbackByShape: Record<Table['shape'], string> = {
+      SQUARE: 'Mesa',
+      CIRCLE: 'Mesa',
+      OBSTACLE: 'Muro',
+      BAR: 'Barra',
+      BOOTH: 'Sofa'
+    };
+    const fallback = fallbackByShape[table.shape] || 'Mesa';
     return fromName || fromNombre || fallback;
   };
 
   const normalizeTableForLayout = (table: Table): Table => {
     const label = resolveTableLabel(table);
     const isObstacle = table.shape === 'OBSTACLE';
+    const defaultWidthByShape: Record<Table['shape'], number> = {
+      SQUARE: 100,
+      CIRCLE: 100,
+      OBSTACLE: 120,
+      BAR: 180,
+      BOOTH: 160
+    };
+    const defaultHeightByShape: Record<Table['shape'], number> = {
+      SQUARE: 100,
+      CIRCLE: 100,
+      OBSTACLE: 20,
+      BAR: 60,
+      BOOTH: 90
+    };
     return {
       ...table,
       nombre: label,
       name: label,
-      width: table.width || 100,
-      height: isObstacle ? (table.height || 20) : (table.height || 100),
+      width: table.width || defaultWidthByShape[table.shape] || 100,
+      height: table.height || defaultHeightByShape[table.shape] || 100,
       capacity: isObstacle ? (table.capacity || 0) : Math.max(1, table.capacity || 1),
       consumo_minimo_mesa: isObstacle ? 0 : Math.max(0, Number(table.consumo_minimo_mesa || 0)),
       comensales_minimos: isObstacle ? 0 : Math.max(1, Number(table.comensales_minimos || 1))

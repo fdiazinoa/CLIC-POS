@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import {
     Square, Circle, Save, Trash2, Plus,
-    Layout, Grid, Armchair, Ban, Settings
+    Layout, Grid, Armchair, Ban, Settings, Wine
 } from 'lucide-react';
 import { Table, Room, TableShape } from '../types';
 
@@ -42,15 +42,30 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
         return `tbl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     };
     const getRoomLabel = (room: Room) => room.name?.trim() || room.nombre?.trim() || 'Sala';
-    const getTableLabel = (table: Table) => table.name?.trim() || table.nombre?.trim() || (table.shape === 'OBSTACLE' ? 'Muro' : 'Mesa');
+    const getTableLabel = (table: Table) => {
+        const fallbackByShape: Record<TableShape, string> = {
+            SQUARE: 'Mesa',
+            CIRCLE: 'Mesa',
+            OBSTACLE: 'Muro',
+            BAR: 'Barra',
+            BOOTH: 'Sofa'
+        };
+        return table.name?.trim() || table.nombre?.trim() || fallbackByShape[table.shape] || 'Mesa';
+    };
     const currentRoom = rooms.find(r => r.id === currentRoomId);
 
     // Add new table
     const handleAddTable = (shape: TableShape) => {
         const isObstacle = shape === 'OBSTACLE';
-        const elementName = isObstacle
-            ? `Muro ${tables.filter(t => t.roomId === currentRoomId && t.shape === 'OBSTACLE').length + 1}`
-            : `Mesa ${tables.filter(t => t.roomId === currentRoomId && t.shape !== 'OBSTACLE').length + 1}`;
+        const elementConfig: Record<TableShape, { baseName: string; width: number; height: number; capacity: number }> = {
+            SQUARE: { baseName: 'Mesa', width: 100, height: 100, capacity: 1 },
+            CIRCLE: { baseName: 'Mesa', width: 100, height: 100, capacity: 1 },
+            OBSTACLE: { baseName: 'Muro', width: 120, height: 20, capacity: 0 },
+            BAR: { baseName: 'Barra', width: 180, height: 60, capacity: 1 },
+            BOOTH: { baseName: 'Sofa', width: 160, height: 90, capacity: 4 }
+        };
+        const config = elementConfig[shape];
+        const elementName = `${config.baseName} ${tables.filter(t => t.roomId === currentRoomId && t.shape === shape).length + 1}`;
 
         const newTable: Table = {
             id: generateTableId(),
@@ -59,13 +74,13 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
             nombre: elementName,
             posX: 100 + (tables.length * 10), // Offset slightly to see new ones
             posY: 100 + (tables.length * 10),
-            width: shape === 'OBSTACLE' ? 100 : 100,
-            height: shape === 'OBSTACLE' ? 20 : 100,
+            width: config.width,
+            height: config.height,
             shape,
             rotation: 0,
-            capacity: 1,
+            capacity: config.capacity,
             consumo_minimo_mesa: 0,
-            comensales_minimos: 1
+            comensales_minimos: isObstacle ? 0 : 1
         };
         // Dedup: Ensure we don't just append if something weird happens, but this is a new ID.
         // The issue 'ghost tables' might be re-renders or hydration issues.
@@ -181,6 +196,12 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                     <button onClick={() => handleAddTable('OBSTACLE')} className="flex items-center gap-2 px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold text-slate-700" title="Obstáculo (Muro)">
                         <Ban size={16} /> Muro
                     </button>
+                    <button onClick={() => handleAddTable('BAR')} className="flex items-center gap-2 px-3 py-2 bg-amber-50 hover:bg-amber-100 rounded-lg text-xs font-bold text-amber-700" title="Barra">
+                        <Wine size={16} /> Barra
+                    </button>
+                    <button onClick={() => handleAddTable('BOOTH')} className="flex items-center gap-2 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 rounded-lg text-xs font-bold text-indigo-700" title="Sofa / Booth">
+                        <Armchair size={16} /> Sofa
+                    </button>
                     <div className="w-px h-8 bg-slate-200 mx-2"></div>
                     <button onClick={() => onSave(tables)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-lg shadow-blue-200">
                         <Save size={16} /> Guardar Distribución
@@ -216,8 +237,8 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                                 onPointerDown={(e) => handlePointerDown(e, table.id)}
                                 className={`absolute cursor-move flex flex-col items-center justify-center transition-shadow group
                        ${selectedTableId === table.id ? 'ring-2 ring-blue-500 z-10 shadow-xl' : 'hover:ring-2 hover:ring-blue-300 z-0'}
-                       ${table.shape === 'CIRCLE' ? 'rounded-full' : 'rounded-lg'}
-                       ${table.shape === 'OBSTACLE' ? 'bg-slate-800 text-white rounded-sm' : 'bg-white border-2 border-slate-300 text-slate-700'}
+                       ${table.shape === 'CIRCLE' || table.shape === 'BAR' ? 'rounded-full' : table.shape === 'BOOTH' ? 'rounded-2xl' : 'rounded-lg'}
+                       ${table.shape === 'OBSTACLE' ? 'bg-slate-800 text-white rounded-sm' : table.shape === 'BAR' ? 'bg-amber-50 border-2 border-amber-300 text-amber-800' : table.shape === 'BOOTH' ? 'bg-indigo-50 border-2 border-indigo-300 text-indigo-800' : 'bg-white border-2 border-slate-300 text-slate-700'}
                     `}
                                 style={{
                                     left: table.posX,
@@ -229,7 +250,11 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                             >
                                 {table.shape !== 'OBSTACLE' && (
                                     <>
-                                        <Armchair size={16} className="mb-0.5 opacity-30" />
+                                        {table.shape === 'BAR' ? (
+                                            <Wine size={16} className="mb-0.5 opacity-40" />
+                                        ) : (
+                                            <Armchair size={16} className="mb-0.5 opacity-30" />
+                                        )}
                                         <span className="text-[10px] font-black leading-tight pointer-events-none whitespace-nowrap overflow-hidden text-ellipsis max-w-[90%] text-center">
                                             {getTableLabel(table)}
                                         </span>
