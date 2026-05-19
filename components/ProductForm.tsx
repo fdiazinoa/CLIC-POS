@@ -1103,6 +1103,215 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     </div>
   );
 
+  const makeLocalId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const restaurantModifierGroups = formData.modifier_groups || formData.modifierGroups || [];
+  const restaurantComboGroups = formData.combo_groups || formData.comboGroups || [];
+  const restaurantFractionRule = formData.fraction_rule || formData.fractionRule;
+  const restaurantNotePresets = formData.note_presets || formData.notePresets || [];
+
+  const updateRestaurantProduct = (updates: Partial<Product>) => {
+    setFormData(prev => ({ ...prev, ...updates }));
+  };
+
+  const addRestaurantModifierGroup = () => {
+    updateRestaurantProduct({
+      modifier_groups: [
+        ...restaurantModifierGroups,
+        {
+          id: makeLocalId('modgrp'),
+          name: 'Nuevo grupo',
+          selection_type: 'MULTIPLE',
+          required: false,
+          min_select: 0,
+          max_select: null,
+          free_quantity: 0,
+          sort_order: restaurantModifierGroups.length + 1,
+          modifiers: [],
+        }
+      ]
+    });
+  };
+
+  const updateRestaurantModifierGroup = (groupId: string, updates: Record<string, any>) => {
+    updateRestaurantProduct({
+      modifier_groups: restaurantModifierGroups.map(group => group.id === groupId ? { ...group, ...updates } : group)
+    });
+  };
+
+  const deleteRestaurantModifierGroup = (groupId: string) => {
+    updateRestaurantProduct({
+      modifier_groups: restaurantModifierGroups.filter(group => group.id !== groupId)
+    });
+  };
+
+  const addRestaurantModifier = (groupId: string) => {
+    updateRestaurantProduct({
+      modifier_groups: restaurantModifierGroups.map(group => group.id === groupId ? {
+        ...group,
+        modifiers: [
+          ...(group.modifiers || []),
+          {
+            id: makeLocalId('mod'),
+            name: 'Nueva opción',
+            price: 0,
+            price_delta: 0,
+            modifier_type: 'ADD',
+            affects_price: true,
+            active: true,
+            sort_order: (group.modifiers || []).length + 1,
+          }
+        ]
+      } : group)
+    });
+  };
+
+  const updateRestaurantModifier = (groupId: string, modifierId: string, updates: Record<string, any>) => {
+    updateRestaurantProduct({
+      modifier_groups: restaurantModifierGroups.map(group => group.id === groupId ? {
+        ...group,
+        modifiers: (group.modifiers || []).map(modifier => modifier.id === modifierId ? { ...modifier, ...updates } : modifier)
+      } : group)
+    });
+  };
+
+  const deleteRestaurantModifier = (groupId: string, modifierId: string) => {
+    updateRestaurantProduct({
+      modifier_groups: restaurantModifierGroups.map(group => group.id === groupId ? {
+        ...group,
+        modifiers: (group.modifiers || []).filter(modifier => modifier.id !== modifierId)
+      } : group)
+    });
+  };
+
+  const addRestaurantComboGroup = () => {
+    updateRestaurantProduct({
+      product_type: 'COMBO',
+      type: formData.type === 'PRODUCT' ? 'COMBO' as any : formData.type,
+      combo_groups: [
+        ...restaurantComboGroups,
+        {
+          id: makeLocalId('combo'),
+          name: 'Nueva elección',
+          required: true,
+          min_select: 1,
+          max_select: 1,
+          sort_order: restaurantComboGroups.length + 1,
+          items: [],
+        }
+      ]
+    });
+  };
+
+  const updateRestaurantComboGroup = (groupId: string, updates: Record<string, any>) => {
+    updateRestaurantProduct({
+      combo_groups: restaurantComboGroups.map(group => group.id === groupId ? { ...group, ...updates } : group)
+    });
+  };
+
+  const addRestaurantComboItem = (groupId: string) => {
+    updateRestaurantProduct({
+      combo_groups: restaurantComboGroups.map(group => group.id === groupId ? {
+        ...group,
+        items: [
+          ...(group.items || []),
+          {
+            id: makeLocalId('comboitem'),
+            product_id: '',
+            name: 'Opción combo',
+            price_delta: 0,
+            active: true,
+            sort_order: (group.items || []).length + 1,
+          }
+        ]
+      } : group)
+    });
+  };
+
+  const updateRestaurantComboItem = (groupId: string, itemId: string, updates: Record<string, any>) => {
+    updateRestaurantProduct({
+      combo_groups: restaurantComboGroups.map(group => group.id === groupId ? {
+        ...group,
+        items: (group.items || []).map(item => (item.id || item.product_id) === itemId ? { ...item, ...updates } : item)
+      } : group)
+    });
+  };
+
+  const deleteRestaurantComboGroup = (groupId: string) => {
+    updateRestaurantProduct({ combo_groups: restaurantComboGroups.filter(group => group.id !== groupId) });
+  };
+
+  const deleteRestaurantComboItem = (groupId: string, itemId: string) => {
+    updateRestaurantProduct({
+      combo_groups: restaurantComboGroups.map(group => group.id === groupId ? {
+        ...group,
+        items: (group.items || []).filter(item => (item.id || item.product_id) !== itemId)
+      } : group)
+    });
+  };
+
+  const toggleRestaurantFractions = (enabled: boolean) => {
+    updateRestaurantProduct({
+      product_type: enabled ? 'FRACTIONABLE' : undefined,
+      fraction_rule: enabled
+        ? (restaurantFractionRule || { fraction_mode: 'HALF', pricing_rule: 'HIGHEST_PRICE', max_parts: 2, require_equal_parts: true, options: [] })
+        : undefined,
+    });
+  };
+
+  const updateRestaurantFractionRule = (updates: Record<string, any>) => {
+    updateRestaurantProduct({
+      product_type: 'FRACTIONABLE',
+      fraction_rule: {
+        fraction_mode: 'HALF',
+        pricing_rule: 'HIGHEST_PRICE',
+        max_parts: 2,
+        require_equal_parts: true,
+        options: [],
+        ...restaurantFractionRule,
+        ...updates,
+      }
+    });
+  };
+
+  const addRestaurantFractionOption = () => {
+    updateRestaurantFractionRule({
+      options: [
+        ...(restaurantFractionRule?.options || []),
+        {
+          id: makeLocalId('frac'),
+          option_product_id: '',
+          name: 'Nueva mitad',
+          price: formData.price || 0,
+          active: true,
+        }
+      ]
+    });
+  };
+
+  const updateRestaurantFractionOption = (optionId: string, updates: Record<string, any>) => {
+    updateRestaurantFractionRule({
+      options: (restaurantFractionRule?.options || []).map(option => (option.id || option.option_product_id || option.name) === optionId ? { ...option, ...updates } : option)
+    });
+  };
+
+  const deleteRestaurantFractionOption = (optionId: string) => {
+    updateRestaurantFractionRule({
+      options: (restaurantFractionRule?.options || []).filter(option => (option.id || option.option_product_id || option.name) !== optionId)
+    });
+  };
+
+  const addRestaurantNotePreset = () => {
+    updateRestaurantProduct({ note_presets: [...restaurantNotePresets, 'Nueva nota'] });
+  };
+
+  const updateRestaurantNotePreset = (index: number, value: string) => {
+    updateRestaurantProduct({ note_presets: restaurantNotePresets.map((preset, i) => i === index ? value : preset) });
+  };
+
+  const deleteRestaurantNotePreset = (index: number) => {
+    updateRestaurantProduct({ note_presets: restaurantNotePresets.filter((_, i) => i !== index) });
+  };
+
   return (
     <div className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-white rounded-[2.5rem] w-full max-w-5xl h-[90vh] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 relative">
@@ -2011,6 +2220,224 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {activeTab === 'MODIFIERS' && (
+            <div className="max-w-5xl mx-auto space-y-6 animate-in fade-in">
+              <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                  <div>
+                    <h3 className="text-xl font-black text-slate-800">Restaurante y Comandas</h3>
+                    <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Modificadores, combos, mitades y notas rápidas locales</p>
+                  </div>
+                  <select
+                    value={formData.product_type || (formData.type === 'COMBO' ? 'COMBO' : 'SIMPLE')}
+                    onChange={e => setFormData({ ...formData, product_type: e.target.value })}
+                    className="rounded-2xl border-2 border-gray-100 bg-gray-50 px-4 py-3 text-sm font-black text-gray-700 outline-none focus:border-blue-200"
+                  >
+                    <option value="SIMPLE">Producto simple</option>
+                    <option value="COMBO">Combo / paquete</option>
+                    <option value="FRACTIONABLE">Fraccionable</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <button onClick={addRestaurantModifierGroup} className="rounded-2xl border-2 border-blue-100 bg-blue-50 p-4 text-sm font-black text-blue-700 hover:bg-blue-100 flex items-center justify-center gap-2">
+                    <Plus size={16} /> Grupo modificador
+                  </button>
+                  <button onClick={addRestaurantComboGroup} className="rounded-2xl border-2 border-purple-100 bg-purple-50 p-4 text-sm font-black text-purple-700 hover:bg-purple-100 flex items-center justify-center gap-2">
+                    <Plus size={16} /> Grupo combo
+                  </button>
+                  <button onClick={() => toggleRestaurantFractions(!restaurantFractionRule)} className={`rounded-2xl border-2 p-4 text-sm font-black flex items-center justify-center gap-2 ${restaurantFractionRule ? 'border-orange-200 bg-orange-50 text-orange-700' : 'border-gray-100 bg-gray-50 text-gray-500'}`}>
+                    <LayoutGrid size={16} /> {restaurantFractionRule ? 'Desactivar mitades' : 'Activar mitades'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-black text-slate-800 uppercase">Grupos de modificadores</h4>
+                    <p className="text-[11px] text-slate-400 font-bold">Extras, términos obligatorios y botones “Sin / Aparte”.</p>
+                  </div>
+                  <button onClick={addRestaurantModifierGroup} className="p-3 rounded-xl bg-blue-600 text-white"><Plus size={16} /></button>
+                </div>
+
+                {restaurantModifierGroups.length === 0 && (
+                  <div className="rounded-2xl border-2 border-dashed border-gray-200 p-8 text-center text-sm font-bold text-gray-400">
+                    No hay modificadores configurados para este producto.
+                  </div>
+                )}
+
+                {restaurantModifierGroups.map(group => (
+                  <div key={group.id} className="rounded-2xl border border-gray-100 bg-gray-50 p-4 space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-[1fr_9rem_7rem_7rem_auto] gap-3 items-end">
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase">Nombre del grupo</label>
+                        <input value={group.name} onChange={e => updateRestaurantModifierGroup(group.id, { name: e.target.value })} className="w-full rounded-xl border-2 border-transparent bg-white px-4 py-3 text-sm font-black outline-none focus:border-blue-200" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase">Selección</label>
+                        <select value={group.selection_type || 'MULTIPLE'} onChange={e => updateRestaurantModifierGroup(group.id, { selection_type: e.target.value, max_select: e.target.value === 'SINGLE' ? 1 : group.max_select })} className="w-full rounded-xl bg-white px-3 py-3 text-sm font-bold outline-none">
+                          <option value="MULTIPLE">Múltiple</option>
+                          <option value="SINGLE">Única</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase">Mín.</label>
+                        <input type="number" value={group.min_select || 0} onChange={e => updateRestaurantModifierGroup(group.id, { min_select: Number(e.target.value || 0) })} className="w-full rounded-xl bg-white px-3 py-3 text-sm font-bold outline-none" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase">Máx.</label>
+                        <input type="number" value={group.max_select ?? ''} onChange={e => updateRestaurantModifierGroup(group.id, { max_select: e.target.value ? Number(e.target.value) : null })} className="w-full rounded-xl bg-white px-3 py-3 text-sm font-bold outline-none" />
+                      </div>
+                      <button onClick={() => deleteRestaurantModifierGroup(group.id)} className="p-3 rounded-xl text-red-500 hover:bg-red-50"><Trash2 size={16} /></button>
+                    </div>
+
+                    <label className="inline-flex items-center gap-2 text-xs font-black text-gray-500">
+                      <input type="checkbox" checked={Boolean(group.required)} onChange={e => updateRestaurantModifierGroup(group.id, { required: e.target.checked, min_select: e.target.checked ? Math.max(1, Number(group.min_select || 1)) : group.min_select })} />
+                      Obligatorio para comandar
+                    </label>
+
+                    <div className="space-y-2">
+                      {(group.modifiers || []).map(modifier => (
+                        <div key={modifier.id} className="grid grid-cols-1 md:grid-cols-[1fr_8rem_8rem_8rem_auto] gap-2 items-center rounded-xl bg-white p-3">
+                          <input value={modifier.name} onChange={e => updateRestaurantModifier(group.id, modifier.id, { name: e.target.value })} className="rounded-lg bg-gray-50 px-3 py-2 text-sm font-bold outline-none" placeholder="Ej: Extra queso" />
+                          <select value={modifier.modifier_type || 'ADD'} onChange={e => updateRestaurantModifier(group.id, modifier.id, { modifier_type: e.target.value, affects_price: e.target.value !== 'REMOVE' })} className="rounded-lg bg-gray-50 px-3 py-2 text-sm font-bold outline-none">
+                            <option value="ADD">Extra</option>
+                            <option value="REMOVE">Sin / Aparte</option>
+                            <option value="NOTE_PRESET">Nota</option>
+                          </select>
+                          <input type="number" value={modifier.price_delta ?? modifier.price ?? 0} onChange={e => updateRestaurantModifier(group.id, modifier.id, { price_delta: Number(e.target.value || 0), price: Number(e.target.value || 0) })} className="rounded-lg bg-gray-50 px-3 py-2 text-sm font-bold outline-none" placeholder="Precio" />
+                          <label className="flex items-center gap-2 text-[11px] font-black text-gray-500">
+                            <input type="checkbox" checked={modifier.affects_price !== false} onChange={e => updateRestaurantModifier(group.id, modifier.id, { affects_price: e.target.checked })} />
+                            Cobra
+                          </label>
+                          <button onClick={() => deleteRestaurantModifier(group.id, modifier.id)} className="p-2 rounded-lg text-red-400 hover:bg-red-50"><Trash2 size={14} /></button>
+                        </div>
+                      ))}
+                      <button onClick={() => addRestaurantModifier(group.id)} className="w-full rounded-xl border-2 border-dashed border-blue-100 py-3 text-xs font-black text-blue-600 hover:bg-blue-50">
+                        + Agregar opción
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-sm font-black text-slate-800 uppercase">Combos / paquetes</h4>
+                      <p className="text-[11px] text-slate-400 font-bold">Bebida, acompañante, proteína u otras elecciones.</p>
+                    </div>
+                    <button onClick={addRestaurantComboGroup} className="p-3 rounded-xl bg-purple-600 text-white"><Plus size={16} /></button>
+                  </div>
+                  {restaurantComboGroups.map(group => (
+                    <div key={group.id} className="rounded-2xl bg-purple-50/60 border border-purple-100 p-4 space-y-3">
+                      <div className="flex gap-2">
+                        <input value={group.name} onChange={e => updateRestaurantComboGroup(group.id, { name: e.target.value })} className="flex-1 rounded-xl bg-white px-3 py-2 text-sm font-black outline-none" />
+                        <button onClick={() => deleteRestaurantComboGroup(group.id)} className="p-2 text-red-500"><Trash2 size={15} /></button>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <input type="number" value={group.min_select || 0} onChange={e => updateRestaurantComboGroup(group.id, { min_select: Number(e.target.value || 0) })} className="rounded-xl bg-white px-3 py-2 text-sm font-bold outline-none" placeholder="Mín" />
+                        <input type="number" value={group.max_select ?? 1} onChange={e => updateRestaurantComboGroup(group.id, { max_select: Number(e.target.value || 1) })} className="rounded-xl bg-white px-3 py-2 text-sm font-bold outline-none" placeholder="Máx" />
+                        <label className="flex items-center gap-2 text-[11px] font-black text-purple-700"><input type="checkbox" checked={group.required !== false} onChange={e => updateRestaurantComboGroup(group.id, { required: e.target.checked })} /> Req.</label>
+                      </div>
+                      {(group.items || []).map(item => {
+                        const itemKey = String(item.id || item.product_id);
+                        return (
+                          <div key={itemKey} className="grid grid-cols-[1fr_7rem_auto] gap-2">
+                            <select
+                              value={item.product_id || ''}
+                              onChange={e => {
+                                const selected = allProducts.find(p => p.id === e.target.value);
+                                updateRestaurantComboItem(group.id, itemKey, { product_id: e.target.value, name: selected?.name || item.name });
+                              }}
+                              className="rounded-xl bg-white px-3 py-2 text-xs font-bold outline-none"
+                            >
+                              <option value="">{item.name || 'Opción manual'}</option>
+                              {allProducts.filter(p => p.id !== formData.id).map(product => <option key={product.id} value={product.id}>{product.name}</option>)}
+                            </select>
+                            <input type="number" value={item.price_delta || 0} onChange={e => updateRestaurantComboItem(group.id, itemKey, { price_delta: Number(e.target.value || 0) })} className="rounded-xl bg-white px-3 py-2 text-xs font-bold outline-none" />
+                            <button onClick={() => deleteRestaurantComboItem(group.id, itemKey)} className="p-2 text-red-400"><Trash2 size={14} /></button>
+                          </div>
+                        );
+                      })}
+                      <button onClick={() => addRestaurantComboItem(group.id)} className="w-full rounded-xl border-2 border-dashed border-purple-200 py-2 text-xs font-black text-purple-600">+ Opción combo</button>
+                    </div>
+                  ))}
+                  {restaurantComboGroups.length === 0 && <p className="text-sm font-bold text-gray-400">Sin grupos de combo.</p>}
+                </div>
+
+                <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm space-y-4">
+                  <div>
+                    <h4 className="text-sm font-black text-slate-800 uppercase">Fracciones / mitades</h4>
+                    <p className="text-[11px] text-slate-400 font-bold">Pizza mitad/mitad, cuartos u opciones compuestas.</p>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm font-black text-orange-700">
+                    <input type="checkbox" checked={Boolean(restaurantFractionRule)} onChange={e => toggleRestaurantFractions(e.target.checked)} />
+                    Producto fraccionable
+                  </label>
+                  {restaurantFractionRule && (
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <select value={restaurantFractionRule.fraction_mode || 'HALF'} onChange={e => updateRestaurantFractionRule({ fraction_mode: e.target.value, max_parts: e.target.value === 'QUARTER' ? 4 : 2 })} className="rounded-xl bg-gray-50 px-3 py-3 text-sm font-bold outline-none">
+                          <option value="HALF">Mitad / mitad</option>
+                          <option value="QUARTER">Cuartos</option>
+                        </select>
+                        <select value={restaurantFractionRule.pricing_rule || 'HIGHEST_PRICE'} onChange={e => updateRestaurantFractionRule({ pricing_rule: e.target.value })} className="rounded-xl bg-gray-50 px-3 py-3 text-sm font-bold outline-none">
+                          <option value="HIGHEST_PRICE">Cobrar más cara</option>
+                          <option value="AVERAGE_PRICE">Promedio</option>
+                          <option value="SUM_PARTS">Suma proporcional</option>
+                          <option value="BASE_PLUS_DIFF">Base + diferencia</option>
+                        </select>
+                      </div>
+                      {(restaurantFractionRule.options || []).map(option => {
+                        const optionKey = String(option.id || option.option_product_id || option.name);
+                        return (
+                          <div key={optionKey} className="grid grid-cols-[1fr_7rem_auto] gap-2">
+                            <select
+                              value={option.option_product_id || ''}
+                              onChange={e => {
+                                const selected = allProducts.find(p => p.id === e.target.value);
+                                updateRestaurantFractionOption(optionKey, { option_product_id: e.target.value, name: selected?.name || option.name, price: selected?.price ?? option.price });
+                              }}
+                              className="rounded-xl bg-gray-50 px-3 py-2 text-xs font-bold outline-none"
+                            >
+                              <option value="">{option.name || 'Opción manual'}</option>
+                              {allProducts.filter(p => p.id !== formData.id).map(product => <option key={product.id} value={product.id}>{product.name}</option>)}
+                            </select>
+                            <input type="number" value={option.price_override ?? option.price ?? formData.price} onChange={e => updateRestaurantFractionOption(optionKey, { price_override: Number(e.target.value || 0), price: Number(e.target.value || 0) })} className="rounded-xl bg-gray-50 px-3 py-2 text-xs font-bold outline-none" />
+                            <button onClick={() => deleteRestaurantFractionOption(optionKey)} className="p-2 text-red-400"><Trash2 size={14} /></button>
+                          </div>
+                        );
+                      })}
+                      <button onClick={addRestaurantFractionOption} className="w-full rounded-xl border-2 border-dashed border-orange-200 py-2 text-xs font-black text-orange-600">+ Opción de fracción</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-black text-slate-800 uppercase">Notas rápidas cocina</h4>
+                    <p className="text-[11px] text-slate-400 font-bold">Presets para instrucciones frecuentes.</p>
+                  </div>
+                  <button onClick={addRestaurantNotePreset} className="p-3 rounded-xl bg-slate-900 text-white"><Plus size={16} /></button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {restaurantNotePresets.map((preset, index) => (
+                    <div key={`${preset}-${index}`} className="flex gap-2">
+                      <input value={preset} onChange={e => updateRestaurantNotePreset(index, e.target.value)} className="flex-1 rounded-xl bg-gray-50 px-4 py-3 text-sm font-bold outline-none" />
+                      <button onClick={() => deleteRestaurantNotePreset(index)} className="p-3 text-red-400 hover:bg-red-50 rounded-xl"><Trash2 size={14} /></button>
+                    </div>
+                  ))}
+                </div>
+                {restaurantNotePresets.length === 0 && <p className="text-sm font-bold text-gray-400">Sin notas rápidas.</p>}
+              </div>
             </div>
           )}
 
