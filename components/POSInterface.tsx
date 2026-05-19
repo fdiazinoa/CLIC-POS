@@ -4055,20 +4055,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const handleBackToMap = async () => {
-      if (blockRecoveredUberOrderMutation('enviarlo a espera')) return;
+      if (blockRecoveredUberOrderMutation('volver al mapa de mesas')) return;
 
       setShowParkedList(false);
       closeParkAliasModal();
-      if (onOpenTableMap) onOpenTableMap();
 
-      void (async () => {
-         if (!activeTable) return;
+      if (activeTable) {
          if (cart.length === 0) {
             await releaseActiveEmptyTable({ silent: true });
-            return;
+         } else {
+            await saveActiveTableOrderForMap();
          }
-         await saveActiveTableOrderForMap();
-      })();
+      }
+
+      if (onOpenTableMap) onOpenTableMap();
    };
 
    const handleRestoreTicket = (parked: ParkedTicket) => {
@@ -4226,8 +4226,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          case 'DRAWER': handleOpenDrawer(); break;
          case 'SAVE': openParkAliasModal(); break;
          case 'TABLES':
-            if ((config.vertical === 'RESTAURANT' || config.vertical === 'RETAIL') && cart.length > 0) {
-               handleSendAndExit();
+            if (config.vertical === 'RESTAURANT' || config.vertical === 'RETAIL') {
+               void handleBackToMap();
             } else {
                if (onOpenTableMap) onOpenTableMap();
             }
