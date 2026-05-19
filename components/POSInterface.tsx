@@ -175,6 +175,17 @@ const postJsonWithTimeout = async (url: string, payload: unknown, timeoutMs = 50
    }
 };
 
+const resolveProductionAreaId = (item: any): string => {
+   const direct =
+      item?.production_area_id
+      || item?.productionAreaId
+      || item?.productionAreaID
+      || item?.productionArea
+      || item?.metadata?.production_area_id
+      || item?.metadata?.productionAreaId;
+   return String(direct || '').trim();
+};
+
 const buildKdsDispatchItems = (items: CartItem[]) => items.map((item, index) => ({
    id: item.cartId || `${item.id}-${index}`,
    producto_id: item.id,
@@ -187,7 +198,7 @@ const buildKdsDispatchItems = (items: CartItem[]) => items.map((item, index) => 
    modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
    modificadores: Array.isArray(item.modifiers) ? item.modifiers : [],
    note: item.note || '',
-   production_area_id: (item as any).production_area_id || '',
+   production_area_id: resolveProductionAreaId(item),
    variantInfo: item.variantInfo || '',
 }));
 
@@ -2083,6 +2094,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const variantSku = selectedVariant?.sku;
       const effectiveTaxIds = resolveEffectiveTaxIds(product.appliedTaxIds, activeTerminalConfig);
       const taxSignature = effectiveTaxIds.slice().sort().join('|');
+      const productionAreaId = resolveProductionAreaId(product);
 
       // We look for existing item in the stable 'cart' prop/state instead of inside the setter
       // to avoid using setter for logic that triggers side effects.
@@ -2097,7 +2109,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (existing && !usesSerial) {
          targetCartId = existing.cartId!;
          onUpdateCart(prev => {
-            const updatedItem = { ...existing, quantity: existing.quantity + quantity, appliedTaxIds: effectiveTaxIds };
+            const updatedItem = {
+               ...existing,
+               quantity: existing.quantity + quantity,
+               appliedTaxIds: effectiveTaxIds,
+               production_area_id: resolveProductionAreaId(existing) || productionAreaId || undefined,
+            };
             return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
          });
       } else {
@@ -2112,6 +2129,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             variantSku,
             variantInfo,
             appliedTaxIds: effectiveTaxIds,
+            production_area_id: productionAreaId || undefined,
             originalPrice: getProductPrice(product),
             trackingData
          };
@@ -3714,7 +3732,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // 1. Group only routed items by production area for separate tickets/KDS screens.
          const areas: Record<string, { area: ProductionAreaConfig, title: string, items: CartItem[] }> = {};
          newItems.forEach(item => {
-            const areaId = String(item.production_area_id || '').trim();
+            const areaId = resolveProductionAreaId(item);
             if (!areaId) return;
 
             const configuredArea = areaById.get(areaId);

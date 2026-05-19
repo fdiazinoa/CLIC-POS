@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Save, Printer, Monitor, Layers, Server, AlertCircle, ChefHat } from 'lucide-react';
+import { Plus, Trash2, Save, Printer, Monitor, Layers, Server, AlertCircle, ChefHat, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
 import { BusinessConfig } from '../types';
 import { db } from '../utils/db';
-import { getKdsTerminalTargets } from '../utils/kdsRouting';
+import { getKdsTerminalTargets, resolveKdsBaseUrl } from '../utils/kdsRouting';
 
 interface ProductionArea {
     id: string;
@@ -25,6 +25,8 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [kitchenEnabled, setKitchenEnabled] = useState(false);
+    const [testingKdsAreaId, setTestingKdsAreaId] = useState<string | null>(null);
+    const [kdsTestResults, setKdsTestResults] = useState<Record<string, { ok: boolean; message: string; baseUrl?: string }>>({});
     const kdsTerminals = getKdsTerminalTargets(config, terminals);
 
     useEffect(() => {
@@ -143,6 +145,64 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
             alert("Error al guardar área");
         } finally {
             setSaving(false);
+        }
+    };
+
+    const handleTestKdsConnection = async (area: ProductionArea) => {
+        const normalizedArea: ProductionArea = {
+            ...area,
+            target_terminal_id: area.target_terminal_id?.trim() || undefined,
+            kds_host: area.kds_host?.trim() || undefined,
+            kds_port: String(area.kds_port || '').trim() || '8001',
+        };
+        const baseUrl = resolveKdsBaseUrl(normalizedArea, config, terminals);
+
+        if (!baseUrl) {
+            setKdsTestResults(prev => ({
+                ...prev,
+                [area.id]: {
+                    ok: false,
+                    message: 'Configura la IP/Host o selecciona una terminal KDS con IP LAN.',
+                }
+            }));
+            return;
+        }
+
+        setTestingKdsAreaId(area.id);
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), 4000);
+
+        try {
+            const response = await fetch(`${baseUrl}/api/cocina/ordenes-activas`, {
+                method: 'GET',
+                signal: controller.signal,
+            });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            setKdsTestResults(prev => ({
+                ...prev,
+                [area.id]: {
+                    ok: true,
+                    baseUrl,
+                    message: 'Conexión KDS exitosa. El POS puede alcanzar esta pantalla.',
+                }
+            }));
+        } catch (error: any) {
+            const message = error?.name === 'AbortError'
+                ? 'Tiempo agotado. Verifica que el KDS esté encendido, en la misma red y con el puerto abierto.'
+                : `No se pudo conectar al KDS (${error?.message || 'error de red'}).`;
+            setKdsTestResults(prev => ({
+                ...prev,
+                [area.id]: {
+                    ok: false,
+                    baseUrl,
+                    message,
+                }
+            }));
+        } finally {
+            window.clearTimeout(timeoutId);
+            setTestingKdsAreaId(null);
         }
     };
 
@@ -289,6 +349,28 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                                     <p className="mt-2 text-[10px] font-bold leading-relaxed text-slate-400">
                                         La terminal ERP identifica la pantalla; la IP/Host es la ruta LAN para enviar la comanda a ese equipo.
                                     </p>
+                                    <div className="mt-3 flex flex-col gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => handleTestKdsConnection(area)}
+                                            disabled={testingKdsAreaId === area.id}
+                                            className="inline-flex w-full items-center justify-center gap-2 rounded-xl border-2 border-blue-100 bg-blue-50 px-4 py-3 text-xs font-black uppercase tracking-wide text-blue-700 transition-all hover:border-blue-200 hover:bg-blue-100 active:scale-[0.98] disabled:opacity-60"
+                                        >
+                                            <RefreshCw size={15} className={testingKdsAreaId === area.id ? 'animate-spin' : ''} />
+                                            {testingKdsAreaId === area.id ? 'Probando KDS...' : 'Probar conexión KDS'}
+                                        </button>
+                                        {kdsTestResults[area.id] && (
+                                            <div className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-[11px] font-bold leading-relaxed ${kdsTestResults[area.id].ok ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-red-100 bg-red-50 text-red-700'}`}>
+                                                {kdsTestResults[area.id].ok ? <CheckCircle2 size={15} className="mt-0.5 shrink-0" /> : <XCircle size={15} className="mt-0.5 shrink-0" />}
+                                                <span>
+                                                    {kdsTestResults[area.id].message}
+                                                    {kdsTestResults[area.id].baseUrl && (
+                                                        <span className="block text-[10px] opacity-80">{kdsTestResults[area.id].baseUrl}</span>
+                                                    )}
+                                                </span>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             )}
 

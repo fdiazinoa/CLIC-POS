@@ -1055,8 +1055,16 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       Object.entries(canonicalizeWarehouseRecord(warehouseSettings, warehouses))
         .filter(([warehouseId]) => activeWarehouses.includes(warehouseId))
     );
+    const productionAreaId = String(
+      formData.production_area_id
+      || (formData as any).productionAreaId
+      || (formData as any).metadata?.production_area_id
+      || (formData as any).metadata?.productionAreaId
+      || ''
+    ).trim();
     const updatedProduct = {
       ...formData,
+      production_area_id: productionAreaId || undefined,
       tariffs: canonicalizeTariffEntries(formData.tariffs || [], availableTariffs),
       stockBalances: canonicalizeWarehouseRecord(formData.stockBalances || {}, warehouses),
       activeInWarehouses: activeWarehouses,
@@ -1991,7 +1999,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                   <div>
                     <label className="block text-[10px] font-black text-gray-500 uppercase mb-2 ml-1">Centro de Producción Destino</label>
                     <select
-                      value={formData.production_area_id || ''}
+                      value={formData.production_area_id || (formData as any).productionAreaId || (formData as any).metadata?.production_area_id || (formData as any).metadata?.productionAreaId || ''}
                       onChange={e => setFormData({ ...formData, production_area_id: e.target.value })}
                       className="w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl text-sm font-bold text-gray-800 focus:bg-white focus:border-blue-200 transition-all outline-none"
                     >
