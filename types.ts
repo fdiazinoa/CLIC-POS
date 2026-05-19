@@ -1333,7 +1333,7 @@ export interface InventoryTracking {
 }
 
 // --- FLOOR PLAN TYPES ---
-export type TableShape = 'SQUARE' | 'CIRCLE' | 'OBSTACLE';
+export type TableShape = 'SQUARE' | 'CIRCLE' | 'OBSTACLE' | 'BAR' | 'BOOTH';
 
 export interface Room {
   id: string;
