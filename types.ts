@@ -1329,6 +1329,21 @@ export interface Product {
   note_presets?: string[];
   notePresets?: string[];
   product_type?: 'SIMPLE' | 'COMBO' | 'FRACTIONABLE' | 'SERVICE' | string;
+  restaurant?: {
+    product_type?: 'SIMPLE' | 'COMBO' | 'FRACTIONABLE' | 'SERVICE' | string;
+    production_area_id?: string;
+    productType?: string;
+    productionAreaId?: string;
+    modifier_groups?: ModifierGroup[];
+    modifierGroups?: ModifierGroup[];
+    fraction_rule?: ProductFractionRule;
+    fractionRule?: ProductFractionRule;
+    combo_groups?: ComboGroup[];
+    comboGroups?: ComboGroup[];
+    note_presets?: string[];
+    notePresets?: string[];
+    [key: string]: any;
+  };
   description?: string;
   departmentId?: string;
   sectionId?: string;
@@ -1471,8 +1486,16 @@ export interface CartItem extends Product {
     modifierGroups?: Record<string, string[]>;
     comboGroups?: Record<string, string[]>;
     fractions?: Array<{ id: string; name: string; price: number; ratio: number }>;
+    selected_modifiers?: any[];
+    selected_fraction_parts?: any[];
+    selected_combo_items?: any[];
+    product_type?: string;
+    production_area_id?: string;
     note?: string;
   };
+  selected_modifiers?: any[];
+  selected_fraction_parts?: any[];
+  selected_combo_items?: any[];
   note?: string;
   originalPrice?: number; // Optional: track original product price for auditing
   discountAmount?: number;

@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { X, Check, Plus, AlertCircle, MessageSquare } from 'lucide-react';
 import { Product, Modifier, ModifierGroup, ComboGroup, ProductFractionOption } from '../types';
+import { resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
 
 interface ModifierModalProps {
   product: Product;
@@ -17,8 +18,10 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
   onClose, 
   onConfirm 
 }) => {
+  const restaurantConfigSource = useMemo(() => resolveRestaurantProductConfig(product), [product]);
+  const productType = String(restaurantConfigSource.product_type || product.product_type || product.type || 'SIMPLE').toUpperCase();
   const modifierGroups = useMemo<ModifierGroup[]>(() => {
-    const structured = product.modifier_groups || product.modifierGroups || [];
+    const structured = restaurantConfigSource.modifier_groups || [];
     if (structured.length > 0) {
       return structured
         .map(group => ({
@@ -38,21 +41,21 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
       free_quantity: 0,
       modifiers: product.availableModifiers,
     }];
-  }, [product]);
+  }, [product.availableModifiers, restaurantConfigSource.modifier_groups]);
 
   const comboGroups = useMemo<ComboGroup[]>(
-    () => (product.combo_groups || product.comboGroups || [])
+    () => (restaurantConfigSource.combo_groups || [])
       .map(group => ({ ...group, items: (group.items || []).filter(item => item.active !== false) }))
       .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0)),
-    [product]
+    [restaurantConfigSource.combo_groups]
   );
-  const fractionRule = product.fraction_rule || product.fractionRule;
+  const fractionRule = restaurantConfigSource.fraction_rule;
   const fractionOptions = useMemo<ProductFractionOption[]>(
     () => (fractionRule?.options || []).filter(option => option.active !== false),
     [fractionRule]
   );
   const maxFractionParts = Math.max(2, Number(fractionRule?.max_parts || (fractionRule?.fraction_mode === 'QUARTER' ? 4 : 2)));
-  const notePresets = product.note_presets || product.notePresets || [];
+  const notePresets = restaurantConfigSource.note_presets || [];
 
   const [selectedModifiersByGroup, setSelectedModifiersByGroup] = useState<Record<string, string[]>>({});
   const [selectedCombosByGroup, setSelectedCombosByGroup] = useState<Record<string, string[]>>({});
@@ -99,10 +102,11 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
     });
     if (fractionOptions.length > 0) {
       const selectedCount = Array.from({ length: maxFractionParts }).filter((_, index) => selectedFractions[index]).length;
+      if (productType === 'FRACTIONABLE' && selectedCount === 0) errors.push('Seleccione las fracciones');
       if (selectedCount > 0 && selectedCount < maxFractionParts) errors.push('Complete todas las fracciones');
     }
     return errors;
-  }, [comboGroups, fractionOptions.length, maxFractionParts, modifierGroups, selectedCombosByGroup, selectedFractions, selectedModifiersByGroup]);
+  }, [comboGroups, fractionOptions.length, maxFractionParts, modifierGroups, productType, selectedCombosByGroup, selectedFractions, selectedModifiersByGroup]);
 
   const getModifierPrice = (modifier: Modifier) => Number(modifier.price_delta ?? modifier.price ?? 0);
   const getFractionOptionId = (option: ProductFractionOption) => String(option.option_product_id || option.product_id || option.id || option.name || '');
@@ -178,15 +182,39 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
 
   const handleConfirm = () => {
     if (validationErrors.length > 0) return;
+    const selectedModifierSnapshot = selectedModifierObjects.map(({ group, modifier }) => ({
+      group_id: group.id,
+      group_name: group.name,
+      modifier_id: modifier.id,
+      name: modifier.name,
+      modifier_type: modifier.modifier_type || 'ADD',
+      affects_price: modifier.affects_price !== false,
+      price_delta: getModifierPrice(modifier),
+    }));
+    const selectedFractionSnapshot = selectedFractionObjects.map(option => ({
+      id: getFractionOptionId(option),
+      product_id: option.product_id || option.option_product_id,
+      name: option.name || getFractionOptionId(option),
+      price: getFractionOptionPrice(option),
+      ratio: 1 / maxFractionParts,
+    }));
+    const selectedComboSnapshot = selectedComboObjects.map(({ group, item }) => ({
+      group_id: group.id,
+      group_name: group.name,
+      item_id: item.id || item.product_id,
+      product_id: item.product_id,
+      name: item.name || item.product_id,
+      price_delta: Number(item.price_delta || 0),
+    }));
     onConfirm(buildModifierLabels(), calculateTotal(), note.trim() || undefined, {
       modifierGroups: selectedModifiersByGroup,
       comboGroups: selectedCombosByGroup,
-      fractions: selectedFractionObjects.map(option => ({
-        id: getFractionOptionId(option),
-        name: option.name || getFractionOptionId(option),
-        price: getFractionOptionPrice(option),
-        ratio: 1 / maxFractionParts,
-      })),
+      fractions: selectedFractionSnapshot,
+      selected_modifiers: selectedModifierSnapshot,
+      selected_fraction_parts: selectedFractionSnapshot,
+      selected_combo_items: selectedComboSnapshot,
+      product_type: productType,
+      production_area_id: restaurantConfigSource.production_area_id,
       note: note.trim() || undefined,
     });
   };

@@ -43,6 +43,7 @@ import {
   resolveLinkedInventoryProductIds,
   resolveOperationalProductId,
 } from '../utils/productReferences';
+import { normalizeRestaurantProductConfig, resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -229,7 +230,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     if (!base.images) base.images = [];
     if (!base.appliedTaxIds) base.appliedTaxIds = config.taxes?.[0] ? [config.taxes[0].id] : [];
     if (!base.stockBalances) base.stockBalances = {};
-    return normalizeProductActivationState(base);
+    return normalizeProductActivationState(normalizeRestaurantProductConfig(base));
   });
 
   const [warehouseSettings, setWarehouseSettings] = useState<Record<string, { min: number, max: number }>>(
@@ -425,13 +426,13 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     }
 
     console.log(`🔄 ProductForm: Syncing internal state with updated initialData for ${initialData.id}`);
-    setFormData(normalizeProductActivationState({
+    setFormData(normalizeProductActivationState(normalizeRestaurantProductConfig({
       ...initialData,
       tariffs: initialData.tariffs || [],
       attributes: initialData.attributes || [],
       variants: initialData.variants || [],
       stockBalances: initialData.stockBalances || {}
-    }));
+    })));
     setWarehouseSettings(canonicalizeWarehouseRecord(initialData.warehouseSettings || {}, warehouses));
     lastInitialSyncRef.current = syncMarker;
   }, [initialData?.id, initialData?.updatedAt, (initialData as any)?.createdAt, (initialData as any)?.created_at, initialData?.stockBalances]);
@@ -1055,14 +1056,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       Object.entries(canonicalizeWarehouseRecord(warehouseSettings, warehouses))
         .filter(([warehouseId]) => activeWarehouses.includes(warehouseId))
     );
-    const productionAreaId = String(
-      formData.production_area_id
-      || (formData as any).productionAreaId
-      || (formData as any).metadata?.production_area_id
-      || (formData as any).metadata?.productionAreaId
-      || ''
-    ).trim();
-    const updatedProduct = {
+    const restaurantConfig = resolveRestaurantProductConfig(formData);
+    const productionAreaId = String(restaurantConfig.production_area_id || '').trim();
+    const updatedProduct = normalizeRestaurantProductConfig({
       ...formData,
       production_area_id: productionAreaId || undefined,
       tariffs: canonicalizeTariffEntries(formData.tariffs || [], availableTariffs),
@@ -1070,7 +1066,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       activeInWarehouses: activeWarehouses,
       warehouseSettings: finalWarehouseSettings,
       updatedAt: new Date().toISOString()
-    };
+    });
 
     try {
       setIsSaving(true);
@@ -1104,13 +1100,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   );
 
   const makeLocalId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  const restaurantModifierGroups = formData.modifier_groups || formData.modifierGroups || [];
-  const restaurantComboGroups = formData.combo_groups || formData.comboGroups || [];
-  const restaurantFractionRule = formData.fraction_rule || formData.fractionRule;
-  const restaurantNotePresets = formData.note_presets || formData.notePresets || [];
+  const resolvedRestaurantFormConfig = resolveRestaurantProductConfig(formData);
+  const restaurantModifierGroups = resolvedRestaurantFormConfig.modifier_groups || [];
+  const restaurantComboGroups = resolvedRestaurantFormConfig.combo_groups || [];
+  const restaurantFractionRule = resolvedRestaurantFormConfig.fraction_rule;
+  const restaurantNotePresets = resolvedRestaurantFormConfig.note_presets || [];
 
   const updateRestaurantProduct = (updates: Partial<Product>) => {
-    setFormData(prev => ({ ...prev, ...updates }));
+    setFormData(prev => normalizeRestaurantProductConfig({ ...prev, ...updates }));
   };
 
   const addRestaurantModifierGroup = () => {
@@ -2232,8 +2229,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                     <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Modificadores, combos, mitades y notas rápidas locales</p>
                   </div>
                   <select
-                    value={formData.product_type || (formData.type === 'COMBO' ? 'COMBO' : 'SIMPLE')}
-                    onChange={e => setFormData({ ...formData, product_type: e.target.value })}
+                    value={resolvedRestaurantFormConfig.product_type || (formData.type === 'COMBO' ? 'COMBO' : 'SIMPLE')}
+                    onChange={e => updateRestaurantProduct({ product_type: e.target.value })}
                     className="rounded-2xl border-2 border-gray-100 bg-gray-50 px-4 py-3 text-sm font-black text-gray-700 outline-none focus:border-blue-200"
                   >
                     <option value="SIMPLE">Producto simple</option>

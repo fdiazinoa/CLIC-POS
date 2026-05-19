@@ -60,6 +60,7 @@ import ProductTableSupermarket from './ProductTableSupermarket';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { printComanda, printPrecuenta } from '../utils/printer';
 import ModifierModal from './ModifierModal';
+import { productHasRestaurantConfiguration, resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
 import { visorSync } from '../utils/visorSync';
 import { maybeAutoLaunchCustomerDisplay } from '../utils/customerDisplay';
 import ProductQuickActions from './ProductQuickActions';
@@ -176,11 +177,14 @@ const postJsonWithTimeout = async (url: string, payload: unknown, timeoutMs = 50
 };
 
 const resolveProductionAreaId = (item: any): string => {
+   const restaurantConfig = resolveRestaurantProductConfig(item);
    const direct =
       item?.production_area_id
       || item?.productionAreaId
       || item?.productionAreaID
       || item?.productionArea
+      || item?.restaurantConfig?.production_area_id
+      || restaurantConfig.production_area_id
       || item?.metadata?.production_area_id
       || item?.metadata?.productionAreaId;
    return String(direct || '').trim();
@@ -2094,7 +2098,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const variantSku = selectedVariant?.sku;
       const effectiveTaxIds = resolveEffectiveTaxIds(product.appliedTaxIds, activeTerminalConfig);
       const taxSignature = effectiveTaxIds.slice().sort().join('|');
+      const productRestaurantConfig = resolveRestaurantProductConfig(product);
       const productionAreaId = resolveProductionAreaId(product);
+      const lineRestaurantConfig = restaurantConfig
+         ? {
+            ...restaurantConfig,
+            product_type: restaurantConfig.product_type || productRestaurantConfig.product_type,
+            production_area_id: restaurantConfig.production_area_id || productionAreaId || undefined,
+         }
+         : undefined;
 
       // We look for existing item in the stable 'cart' prop/state instead of inside the setter
       // to avoid using setter for logic that triggers side effects.
@@ -2127,7 +2139,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             price: finalPrice,
             modifiers,
             note,
-            restaurantConfig,
+            restaurantConfig: lineRestaurantConfig,
+            selected_modifiers: lineRestaurantConfig?.selected_modifiers,
+            selected_fraction_parts: lineRestaurantConfig?.selected_fraction_parts || lineRestaurantConfig?.fractions,
+            selected_combo_items: lineRestaurantConfig?.selected_combo_items,
+            product_type: productRestaurantConfig.product_type || product.product_type,
             variantSku,
             variantInfo,
             appliedTaxIds: effectiveTaxIds,
@@ -2153,7 +2169,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const productName = product.name || '';
       const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
       const hasVariants = (product.variants || []).length > 0 || (product.attributes || []).length > 0;
-      const hasRestaurantConfig = Boolean(
+      const hasRestaurantConfig = productHasRestaurantConfiguration(product) || Boolean(
          (product.availableModifiers || []).length > 0
          || (product.modifier_groups || product.modifierGroups || []).length > 0
          || (product.combo_groups || product.comboGroups || []).length > 0
