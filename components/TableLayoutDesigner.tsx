@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import {
     Square, Circle, Save, Trash2, Plus,
     Layout, Grid, Armchair, Ban, Settings, Wine
@@ -25,6 +25,8 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
 }) => {
     const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
     const [showRoomSettings, setShowRoomSettings] = useState(false);
+    const [canvasSize, setCanvasSize] = useState({ width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
+    const canvasHostRef = useRef<HTMLDivElement>(null);
     const canvasRef = useRef<HTMLDivElement>(null);
     const dragStateRef = useRef<{
         tableId: string;
@@ -53,6 +55,42 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
         return table.name?.trim() || table.nombre?.trim() || fallbackByShape[table.shape] || 'Mesa';
     };
     const currentRoom = rooms.find(r => r.id === currentRoomId);
+    const currentRoomTables = useMemo(
+        () => tables.filter(t => t.roomId === currentRoomId),
+        [tables, currentRoomId]
+    );
+
+    useEffect(() => {
+        const host = canvasHostRef.current;
+        if (!host) return;
+
+        const measureCanvas = () => {
+            const rect = host.getBoundingClientRect();
+            const contentWidth = Math.max(
+                CANVAS_WIDTH,
+                ...currentRoomTables.map(table => Number(table.posX || 0) + Number(table.width || 0) + GRID_SIZE)
+            );
+            const contentHeight = Math.max(
+                CANVAS_HEIGHT,
+                ...currentRoomTables.map(table => Number(table.posY || 0) + Number(table.height || 0) + GRID_SIZE)
+            );
+
+            const nextSize = {
+                width: Math.max(contentWidth, Math.floor(rect.width)),
+                height: Math.max(contentHeight, Math.floor(rect.height))
+            };
+
+            setCanvasSize(prev => {
+                if (prev.width === nextSize.width && prev.height === nextSize.height) return prev;
+                return nextSize;
+            });
+        };
+
+        measureCanvas();
+        const observer = new ResizeObserver(measureCanvas);
+        observer.observe(host);
+        return () => observer.disconnect();
+    }, [currentRoomId, currentRoomTables]);
 
     // Add new table
     const handleAddTable = (shape: TableShape) => {
@@ -131,8 +169,8 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
         let newX = snapToGrid(e.clientX - canvasRect.left - dragState.offsetX);
         let newY = snapToGrid(e.clientY - canvasRect.top - dragState.offsetY);
 
-        const maxX = Math.max(0, CANVAS_WIDTH - draggedTable.width);
-        const maxY = Math.max(0, CANVAS_HEIGHT - draggedTable.height);
+        const maxX = Math.max(0, canvasSize.width - draggedTable.width);
+        const maxY = Math.max(0, canvasSize.height - draggedTable.height);
 
         if (newX < 0) newX = 0;
         if (newY < 0) newY = 0;
@@ -211,7 +249,10 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
 
             <div className="flex flex-1 min-h-0 overflow-hidden">
                 {/* Canvas Area */}
-                <div className="flex-1 bg-gradient-to-br from-[#06172b] via-[#081124] to-[#101023] p-4 overflow-auto flex items-center justify-center relative">
+                <div
+                    ref={canvasHostRef}
+                    className="flex-1 bg-gradient-to-br from-[#06172b] via-[#081124] to-[#101023] overflow-auto flex items-start justify-start relative"
+                >
                     <div
                         className="absolute inset-0 pointer-events-none opacity-45"
                         style={{
@@ -230,8 +271,8 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                         onPointerCancel={handleCanvasPointerEnd}
                         className="bg-white/95 shadow-2xl relative select-none overflow-hidden touch-none"
                         style={{
-                            width: CANVAS_WIDTH,
-                            height: CANVAS_HEIGHT,
+                            width: canvasSize.width,
+                            height: canvasSize.height,
                             backgroundImage: 'radial-gradient(circle, #cbd5e1 1px, transparent 1px)',
                             backgroundSize: `${GRID_SIZE}px ${GRID_SIZE}px`
                         }}
@@ -241,7 +282,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                             <Grid size={12} /> SNAP: {GRID_SIZE}px
                         </div>
 
-                        {tables.filter(t => t.roomId === currentRoomId).map(table => (
+                        {currentRoomTables.map(table => (
                             <div
                                 key={table.id}
                                 onPointerDown={(e) => handlePointerDown(e, table.id)}
