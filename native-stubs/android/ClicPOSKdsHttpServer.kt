@@ -151,7 +151,12 @@ object ClicPOSKdsHttpServer {
 
         if ((method == "POST" || method == "PUT") && path.startsWith("/api/ordenes/")) {
             val segments = path.trim('/').split('/')
-            val orderId = segments.getOrNull(2)?.let { URLDecoder.decode(it, "UTF-8") }.orEmpty()
+            val orderIdSegment = if (segments.getOrNull(2) == "enviar-comanda") {
+                segments.getOrNull(3)
+            } else {
+                segments.getOrNull(2)
+            }
+            val orderId = orderIdSegment?.let { URLDecoder.decode(it, "UTF-8") }.orEmpty()
             if (orderId.isBlank()) {
                 return 400 to JSONObject().put("status", "error").put("message", "orderId requerido")
             }
@@ -185,6 +190,7 @@ object ClicPOSKdsHttpServer {
 
         val area = payload.optJSONObject("area")
         val table = payload.optJSONObject("table")
+        val kdsTiming = payload.optJSONObject("kdsTiming")
         val now = payload.optString("date").ifBlank { existing.optString("date").ifBlank { isoNow() } }
         val next = JSONObject(existing.toString())
             .put("id", orderId)
@@ -195,6 +201,7 @@ object ClicPOSKdsHttpServer {
             .put("customerName", payload.optString("customerName").ifBlank { existing.optString("customerName").ifBlank { "Cliente General" } })
             .put("table", table ?: existing.optJSONObject("table") ?: JSONObject.NULL)
             .put("area", area ?: existing.optJSONObject("area") ?: JSONObject.NULL)
+            .put("kdsTiming", kdsTiming ?: existing.optJSONObject("kdsTiming") ?: JSONObject.NULL)
             .put("items", mergeItems(existing.optJSONArray("items"), normalizedItems))
 
         orders[orderId] = next
@@ -203,7 +210,7 @@ object ClicPOSKdsHttpServer {
     private fun normalizeItem(orderId: String, item: JSONObject, index: Int): JSONObject {
         val rawId = item.optString("id").ifBlank { item.optString("cartId").ifBlank { "item-$index" } }
         val id = if (rawId.startsWith(orderId)) rawId else "${orderId}_${rawId}_$index"
-        val modifiers = item.optJSONArray("modificadores") ?: item.optJSONArray("modifiers") ?: JSONArray()
+        val modifiers = normalizeModifiers(item.optJSONArray("modificadores") ?: item.optJSONArray("modifiers") ?: JSONArray())
         return JSONObject()
             .put("id", id)
             .put("producto_id", item.optString("producto_id").ifBlank { item.optString("productId").ifBlank { item.optString("id") } })
@@ -213,6 +220,22 @@ object ClicPOSKdsHttpServer {
             .put("estado_cocina", item.optString("estado_cocina").ifBlank { "PENDIENTE" })
             .put("hora_inicio_preparacion", item.opt("hora_inicio_preparacion") ?: JSONObject.NULL)
             .put("note", item.optString("note", ""))
+    }
+
+    private fun normalizeModifiers(modifiers: JSONArray): JSONArray {
+        val result = JSONArray()
+        for (index in 0 until modifiers.length()) {
+            val raw = modifiers.opt(index)
+            val label = when (raw) {
+                is JSONObject -> raw.optString("label")
+                    .ifBlank { raw.optString("name") }
+                    .ifBlank { raw.optString("nombre") }
+                    .ifBlank { raw.optString("note") }
+                else -> raw?.toString().orEmpty()
+            }.trim()
+            if (label.isNotBlank()) result.put(label)
+        }
+        return result
     }
 
     private fun mergeItems(existing: JSONArray?, incoming: JSONArray): JSONArray {
@@ -226,13 +249,22 @@ object ClicPOSKdsHttpServer {
         for (index in 0 until incoming.length()) {
             val item = incoming.optJSONObject(index) ?: continue
             val id = item.optString("id", "incoming-$index")
-            if (!byId.containsKey(id)) {
-                byId[id] = item
-            }
+            val current = byId[id]
+            byId[id] = if (current == null) item else mergeItemSnapshot(current, item)
         }
         val result = JSONArray()
         byId.values.forEach { item -> result.put(item) }
         return result
+    }
+
+    private fun mergeItemSnapshot(current: JSONObject, incoming: JSONObject): JSONObject {
+        val next = JSONObject(incoming.toString())
+        val currentStatus = current.optString("estado_cocina")
+        if (currentStatus.isNotBlank() && currentStatus != "PENDIENTE") {
+            next.put("estado_cocina", currentStatus)
+            next.put("hora_inicio_preparacion", current.opt("hora_inicio_preparacion") ?: JSONObject.NULL)
+        }
+        return next
     }
 
     private fun activeOrders(): JSONArray {

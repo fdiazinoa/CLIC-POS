@@ -28,6 +28,25 @@ interface KDSOrder {
     userName: string;
     customerId: string;
     customerName: string;
+    table?: {
+        id?: string;
+        name?: string;
+        nombre?: string;
+        roomId?: string | null;
+        roomName?: string | null;
+        guests?: number | null;
+    } | null;
+    area?: {
+        id?: string;
+        name?: string;
+        nombre?: string;
+        warningMinutes?: number;
+        criticalMinutes?: number;
+    } | null;
+    kdsTiming?: {
+        warningMinutes?: number;
+        criticalMinutes?: number;
+    } | null;
     items: KDSItem[];
 }
 
@@ -42,6 +61,8 @@ interface KDSNetworkInfo {
 }
 
 const DEFAULT_KDS_PORT = '8001';
+const DEFAULT_WARNING_MINUTES = 10;
+const DEFAULT_CRITICAL_MINUTES = 20;
 
 const normalizeIp = (value: unknown): string | null => {
     const trimmed = String(value || '').trim();
@@ -341,6 +362,22 @@ const KitchenDisplay: React.FC = () => {
     );
 };
 
+const resolveOrderTiming = (order: KDSOrder): { warningMinutes: number; criticalMinutes: number } => {
+    const warning = Number(order.kdsTiming?.warningMinutes ?? order.area?.warningMinutes ?? DEFAULT_WARNING_MINUTES);
+    const critical = Number(order.kdsTiming?.criticalMinutes ?? order.area?.criticalMinutes ?? DEFAULT_CRITICAL_MINUTES);
+    const warningMinutes = Number.isFinite(warning) && warning > 0 ? Math.floor(warning) : DEFAULT_WARNING_MINUTES;
+    const criticalMinutes = Number.isFinite(critical) && critical > warningMinutes ? Math.floor(critical) : Math.max(warningMinutes + 1, DEFAULT_CRITICAL_MINUTES);
+    return { warningMinutes, criticalMinutes };
+};
+
+const resolveTableLabel = (order: KDSOrder): string => {
+    const tableName = String(order.table?.name || order.table?.nombre || '').trim();
+    const roomName = String(order.table?.roomName || '').trim();
+    if (tableName && roomName) return `${roomName} · ${tableName}`;
+    if (tableName) return tableName;
+    return 'Venta directa';
+};
+
 const TicketCard: React.FC<{
     order: KDSOrder,
     onStatusChange: (id: string, s: string, t: 'item' | 'order') => void
@@ -358,9 +395,10 @@ const TicketCard: React.FC<{
     }, [order.date]);
 
     // Aging Logic
+    const timing = resolveOrderTiming(order);
     const getSeverity = () => {
-        if (elapsed >= 20) return 'critical';
-        if (elapsed >= 10) return 'warning';
+        if (elapsed >= timing.criticalMinutes) return 'critical';
+        if (elapsed >= timing.warningMinutes) return 'warning';
         return 'normal';
     };
 
@@ -377,8 +415,11 @@ const TicketCard: React.FC<{
             {/* Card Header */}
             <div className={`p-4 rounded-t-[1.8rem] flex flex-col gap-2 ${severityColors[severity]}`}>
                 <div className="flex items-center justify-between">
-                    <span className="text-2xl font-black tracking-tighter"># Mesa ??</span>
-                    <div className="flex items-center gap-1.5 text-xs font-black bg-black/20 px-3 py-1 rounded-full">
+                    <span className="text-2xl font-black tracking-tighter truncate pr-3"># {resolveTableLabel(order)}</span>
+                    <div
+                        className="flex items-center gap-1.5 text-xs font-black bg-black/20 px-3 py-1 rounded-full shrink-0"
+                        title={`Alerta: ${timing.warningMinutes} min · Crítico: ${timing.criticalMinutes} min`}
+                    >
                         <Timer size={12} /> {elapsed} min
                     </div>
                 </div>

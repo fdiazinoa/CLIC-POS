@@ -12,6 +12,8 @@ interface ProductionArea {
     target_terminal_id?: string;
     kds_host?: string;
     kds_port?: string;
+    kds_warning_minutes?: number | string;
+    kds_critical_minutes?: number | string;
     printer_ip?: string;
 }
 
@@ -96,7 +98,9 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
             nombre: 'Nueva Área',
             modo_salida: 'KDS',
             kds_delivery_mode: 'LAN',
-            kds_port: '8001'
+            kds_port: '8001',
+            kds_warning_minutes: 10,
+            kds_critical_minutes: 20
         };
         setAreas([...areas, newArea]);
     };
@@ -136,6 +140,11 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                 target_terminal_id: area.target_terminal_id?.trim() || undefined,
                 kds_host: area.kds_host?.trim() || undefined,
                 kds_port: String(area.kds_port || '').trim() || '8001',
+                kds_warning_minutes: Math.max(1, Math.floor(Number(area.kds_warning_minutes || 10))),
+                kds_critical_minutes: Math.max(
+                    Math.max(1, Math.floor(Number(area.kds_warning_minutes || 10))) + 1,
+                    Math.floor(Number(area.kds_critical_minutes || 20))
+                ),
                 printer_ip: area.printer_ip?.trim() || undefined
             };
             const nextAreas = areas.some(existing => existing.id === normalizedArea.id)
@@ -387,6 +396,32 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                                             ? 'Usa una URL http/https cuando el KDS está publicado por web o túnel seguro.'
                                             : 'La terminal ERP identifica la pantalla; la IP/Host es la ruta LAN para enviar la comanda a ese equipo.'}
                                     </p>
+                                    <div className="mt-3 grid grid-cols-2 gap-2">
+                                        <div>
+                                            <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">Alerta (min)</label>
+                                            <input
+                                                type="number"
+                                                inputMode="numeric"
+                                                min={1}
+                                                value={area.kds_warning_minutes ?? 10}
+                                                onChange={(e) => handleUpdateArea(area.id, { kds_warning_minutes: e.target.value })}
+                                                className="w-full bg-amber-50 border-2 border-amber-100 rounded-xl px-3 py-3 text-sm font-black text-amber-800 focus:border-amber-400 outline-none"
+                                                placeholder="10"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">Crítico (min)</label>
+                                            <input
+                                                type="number"
+                                                inputMode="numeric"
+                                                min={2}
+                                                value={area.kds_critical_minutes ?? 20}
+                                                onChange={(e) => handleUpdateArea(area.id, { kds_critical_minutes: e.target.value })}
+                                                className="w-full bg-red-50 border-2 border-red-100 rounded-xl px-3 py-3 text-sm font-black text-red-800 focus:border-red-400 outline-none"
+                                                placeholder="20"
+                                            />
+                                        </div>
+                                    </div>
                                     <div className="mt-3 flex flex-col gap-2">
                                         <button
                                             type="button"
