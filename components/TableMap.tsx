@@ -93,6 +93,7 @@ const TABLE_CONTROL_CENTER_PERMISSION: Permission = 'TABLE_CONTROL_CENTER';
 const RESTAURANT_SIDEBAR_RESERVE_PX = 400;
 /** Zona inferior del selector de salas + margen */
 const RESTAURANT_BOTTOM_BAR_RESERVE_PX = 112;
+const RESTAURANT_FIT_FILL = 1.16;
 const DEFAULT_EXPECTED_STAY = 70;
 const NO_ORDER_TOTAL_THRESHOLD = 0.01;
 const EMPTY_TABLE_ALERT_AFTER_SECONDS = 18;
@@ -334,8 +335,8 @@ const TableMap: React.FC<TableMapProps> = ({
         if (!el) return;
         const rect = el.getBoundingClientRect();
         const sidebarReserve = hasControlCenterAccess && isControlCenterOpen ? RESTAURANT_SIDEBAR_RESERVE_PX : 0;
-        const bottomBarReserve = RESTAURANT_BOTTOM_BAR_RESERVE_PX;
-        const edgePad = 28;
+        const bottomBarReserve = isRestaurantMode ? RESTAURANT_BOTTOM_BAR_RESERVE_PX : 0;
+        const edgePad = 18;
         const usableW = Math.max(280, rect.width - sidebarReserve - edgePad);
         const usableH = Math.max(220, rect.height - bottomBarReserve - edgePad);
 
@@ -356,15 +357,15 @@ const TableMap: React.FC<TableMapProps> = ({
         });
 
         if (!Number.isFinite(minX) || maxX <= minX || maxY <= minY) {
-            const s = clamp(Math.min(usableW / CANVAS_WIDTH, usableH / CANVAS_HEIGHT) * 0.94, SCALE_MIN, SCALE_MAX);
+            const s = clamp(Math.min(usableW / CANVAS_WIDTH, usableH / CANVAS_HEIGHT) * RESTAURANT_FIT_FILL, SCALE_MIN, SCALE_MAX);
             setViewport({ scale: s, x: -panBiasX, y: -panBiasY });
             return;
         }
 
-        const pad = 72;
+        const pad = 32;
         const bw = maxX - minX + pad * 2;
         const bh = maxY - minY + pad * 2;
-        const s = clamp(Math.min(usableW / bw, usableH / bh) * 0.96, SCALE_MIN, SCALE_MAX);
+        const s = clamp(Math.min(usableW / bw, usableH / bh) * RESTAURANT_FIT_FILL, SCALE_MIN, SCALE_MAX);
         const midX = (minX + maxX) / 2;
         const midY = (minY + maxY) / 2;
         const cx = CANVAS_WIDTH / 2;
