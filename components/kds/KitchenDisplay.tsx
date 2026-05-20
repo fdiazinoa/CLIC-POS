@@ -5,7 +5,10 @@ import {
     LayoutGrid,
     ListOrdered,
     CheckCircle2,
-    Timer
+    Timer,
+    Copy,
+    Wifi,
+    WifiOff
 } from 'lucide-react';
 
 interface KDSItem {
@@ -28,15 +31,104 @@ interface KDSOrder {
     items: KDSItem[];
 }
 
+interface KDSNetworkInfo {
+    host: string | null;
+    port: string;
+    url: string | null;
+    ips: string[];
+    source: 'native' | 'browser' | 'unavailable';
+}
+
+const DEFAULT_KDS_PORT = '8001';
+
+const normalizeIp = (value: unknown): string | null => {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) return null;
+
+    const withoutProtocol = trimmed.replace(/^https?:\/\//i, '').split('/')[0];
+    const host = withoutProtocol.includes(':') ? withoutProtocol.split(':')[0] : withoutProtocol;
+
+    if (!host || host === '0.0.0.0' || host === '127.0.0.1' || host.toLowerCase() === 'localhost') {
+        return null;
+    }
+
+    return host;
+};
+
+const resolveKdsPort = (): string => {
+    try {
+        const params = new URLSearchParams(window.location.search || '');
+        const paramPort = params.get('kdsPort');
+        const storedPort = window.localStorage.getItem('CLIC_POS_KDS_PORT') || window.localStorage.getItem('KDS_PORT');
+        const candidate = String(paramPort || storedPort || DEFAULT_KDS_PORT).trim();
+        return /^\d{2,5}$/.test(candidate) ? candidate : DEFAULT_KDS_PORT;
+    } catch {
+        return DEFAULT_KDS_PORT;
+    }
+};
+
+const resolveKdsNetworkInfo = async (): Promise<KDSNetworkInfo> => {
+    const port = resolveKdsPort();
+    const runtimeWindow = window as any;
+
+    try {
+        if (typeof runtimeWindow.ClicPOSNativePrinter?.getDeviceInfo === 'function') {
+            const deviceInfo = await runtimeWindow.ClicPOSNativePrinter.getDeviceInfo();
+            const ips = Array.from(new Set([
+                normalizeIp(deviceInfo?.localIp),
+                ...((Array.isArray(deviceInfo?.localIps) ? deviceInfo.localIps : []).map(normalizeIp))
+            ].filter(Boolean) as string[]));
+            const host = ips[0] || null;
+            return {
+                host,
+                port,
+                url: host ? `http://${host}:${port}` : null,
+                ips,
+                source: host ? 'native' : 'unavailable'
+            };
+        }
+    } catch (error) {
+        console.warn('[KDS] No se pudo leer la IP local del dispositivo:', error);
+    }
+
+    const browserHost = normalizeIp(window.location.hostname);
+    return {
+        host: browserHost,
+        port,
+        url: browserHost ? `http://${browserHost}:${port}` : null,
+        ips: browserHost ? [browserHost] : [],
+        source: browserHost ? 'browser' : 'unavailable'
+    };
+};
+
 const KitchenDisplay: React.FC = () => {
     const [orders, setOrders] = useState<KDSOrder[]>([]);
     const [showSummary, setShowSummary] = useState(false);
     const [loading, setLoading] = useState(true);
     const [currentTime, setCurrentTime] = useState(new Date());
+    const [networkInfo, setNetworkInfo] = useState<KDSNetworkInfo>({
+        host: null,
+        port: DEFAULT_KDS_PORT,
+        url: null,
+        ips: [],
+        source: 'unavailable'
+    });
+    const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
 
     useEffect(() => {
         const interval = setInterval(() => setCurrentTime(new Date()), 1000);
         return () => clearInterval(interval);
+    }, []);
+
+    useEffect(() => {
+        let mounted = true;
+        resolveKdsNetworkInfo().then((info) => {
+            if (mounted) setNetworkInfo(info);
+        });
+
+        return () => {
+            mounted = false;
+        };
     }, []);
 
     // Poll for updates every 5 seconds
@@ -59,6 +151,20 @@ const KitchenDisplay: React.FC = () => {
         const interval = setInterval(fetchOrders, 5000);
         return () => clearInterval(interval);
     }, []);
+
+    const handleCopyEndpoint = async () => {
+        if (!networkInfo.url) return;
+
+        try {
+            await navigator.clipboard.writeText(networkInfo.url);
+            setCopyState('copied');
+        } catch (error) {
+            console.warn('[KDS] No se pudo copiar la URL del KDS:', error);
+            setCopyState('failed');
+        }
+
+        window.setTimeout(() => setCopyState('idle'), 1800);
+    };
 
     const handleUpdateStatus = async (id: string, newStatus: string, type: 'item' | 'order') => {
         try {
@@ -111,6 +217,38 @@ const KitchenDisplay: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-5">
+                    <button
+                        type="button"
+                        onClick={handleCopyEndpoint}
+                        disabled={!networkInfo.url}
+                        className={`hidden lg:flex items-center gap-2 rounded-2xl border px-3 py-2 text-left transition-colors ${networkInfo.url
+                            ? 'border-blue-400/25 bg-blue-500/10 text-blue-100 hover:bg-blue-500/20'
+                            : 'border-amber-400/20 bg-amber-500/10 text-amber-100 cursor-not-allowed'
+                            }`}
+                        title={networkInfo.url ? `Copiar ${networkInfo.url}` : 'No se detectó una IP LAN para este KDS'}
+                    >
+                        {networkInfo.url ? <Wifi size={18} className="text-cyan-300" /> : <WifiOff size={18} className="text-amber-300" />}
+                        <div className="min-w-0">
+                            <div className="text-[9px] font-black uppercase tracking-[0.2em] text-gray-400">
+                                Ruta KDS
+                            </div>
+                            <div className="max-w-[260px] truncate text-xs font-black">
+                                {networkInfo.url || `IP no detectada · puerto ${networkInfo.port}`}
+                            </div>
+                            {networkInfo.ips.length > 1 && (
+                                <div className="max-w-[260px] truncate text-[9px] font-bold text-gray-400">
+                                    Otras IP: {networkInfo.ips.slice(1).join(', ')}
+                                </div>
+                            )}
+                        </div>
+                        {networkInfo.url && (
+                            <div className="flex items-center gap-1 text-[10px] font-black uppercase text-cyan-200">
+                                <Copy size={13} />
+                                {copyState === 'copied' ? 'Copiado' : copyState === 'failed' ? 'Error' : 'Copiar'}
+                            </div>
+                        )}
+                    </button>
+
                     <div className="hidden sm:flex items-center gap-4 text-[10px] font-black uppercase text-gray-400">
                         <div className="flex items-center gap-1.5"><div className="w-2 h-2 bg-emerald-500 rounded-full" /> Normal</div>
                         <div className="flex items-center gap-1.5"><div className="w-2 h-2 bg-amber-500 rounded-full" /> Alerta</div>
