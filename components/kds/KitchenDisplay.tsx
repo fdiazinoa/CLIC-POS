@@ -37,6 +37,8 @@ interface KDSNetworkInfo {
     url: string | null;
     ips: string[];
     source: 'native' | 'browser' | 'unavailable';
+    serverRunning: boolean;
+    message?: string;
 }
 
 const DEFAULT_KDS_PORT = '8001';
@@ -73,18 +75,27 @@ const resolveKdsNetworkInfo = async (): Promise<KDSNetworkInfo> => {
 
     try {
         if (typeof runtimeWindow.ClicPOSNativePrinter?.getDeviceInfo === 'function') {
+            const serverStatus = typeof runtimeWindow.ClicPOSNativePrinter?.startKdsServer === 'function'
+                ? await runtimeWindow.ClicPOSNativePrinter.startKdsServer({ port: Number(port) })
+                : null;
             const deviceInfo = await runtimeWindow.ClicPOSNativePrinter.getDeviceInfo();
             const ips = Array.from(new Set([
+                normalizeIp(serverStatus?.localIp),
                 normalizeIp(deviceInfo?.localIp),
+                ...((Array.isArray(serverStatus?.localIps) ? serverStatus.localIps : []).map(normalizeIp)),
                 ...((Array.isArray(deviceInfo?.localIps) ? deviceInfo.localIps : []).map(normalizeIp))
             ].filter(Boolean) as string[]));
             const host = ips[0] || null;
+            const activePort = String(serverStatus?.port || port);
+            const serverRunning = Boolean(serverStatus?.running || serverStatus?.success);
             return {
                 host,
-                port,
-                url: host ? `http://${host}:${port}` : null,
+                port: activePort,
+                url: host ? `http://${host}:${activePort}` : null,
                 ips,
-                source: host ? 'native' : 'unavailable'
+                source: host ? 'native' : 'unavailable',
+                serverRunning,
+                message: serverStatus?.message
             };
         }
     } catch (error) {
@@ -97,7 +108,8 @@ const resolveKdsNetworkInfo = async (): Promise<KDSNetworkInfo> => {
         port,
         url: browserHost ? `http://${browserHost}:${port}` : null,
         ips: browserHost ? [browserHost] : [],
-        source: browserHost ? 'browser' : 'unavailable'
+        source: browserHost ? 'browser' : 'unavailable',
+        serverRunning: Boolean(browserHost)
     };
 };
 
@@ -111,7 +123,8 @@ const KitchenDisplay: React.FC = () => {
         port: DEFAULT_KDS_PORT,
         url: null,
         ips: [],
-        source: 'unavailable'
+        source: 'unavailable',
+        serverRunning: false
     });
     const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
 
@@ -221,19 +234,19 @@ const KitchenDisplay: React.FC = () => {
                         type="button"
                         onClick={handleCopyEndpoint}
                         disabled={!networkInfo.url}
-                        className={`hidden lg:flex items-center gap-2 rounded-2xl border px-3 py-2 text-left transition-colors ${networkInfo.url
+                        className={`hidden lg:flex items-center gap-2 rounded-2xl border px-3 py-2 text-left transition-colors ${networkInfo.url && networkInfo.serverRunning
                             ? 'border-blue-400/25 bg-blue-500/10 text-blue-100 hover:bg-blue-500/20'
                             : 'border-amber-400/20 bg-amber-500/10 text-amber-100 cursor-not-allowed'
                             }`}
                         title={networkInfo.url ? `Copiar ${networkInfo.url}` : 'No se detectó una IP LAN para este KDS'}
                     >
-                        {networkInfo.url ? <Wifi size={18} className="text-cyan-300" /> : <WifiOff size={18} className="text-amber-300" />}
+                        {networkInfo.url && networkInfo.serverRunning ? <Wifi size={18} className="text-cyan-300" /> : <WifiOff size={18} className="text-amber-300" />}
                         <div className="min-w-0">
                             <div className="text-[9px] font-black uppercase tracking-[0.2em] text-gray-400">
-                                Ruta KDS
+                                {networkInfo.serverRunning ? 'Ruta KDS activa' : 'Servidor KDS'}
                             </div>
                             <div className="max-w-[260px] truncate text-xs font-black">
-                                {networkInfo.url || `IP no detectada · puerto ${networkInfo.port}`}
+                                {networkInfo.url || networkInfo.message || `IP no detectada · puerto ${networkInfo.port}`}
                             </div>
                             {networkInfo.ips.length > 1 && (
                                 <div className="max-w-[260px] truncate text-[9px] font-bold text-gray-400">

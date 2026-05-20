@@ -45,6 +45,18 @@ export interface NativePrinterHealthResult {
   message?: string;
 }
 
+export interface NativeKdsServerStatus {
+  status?: 'running' | 'stopped' | 'error';
+  success?: boolean;
+  running?: boolean;
+  port?: number;
+  localIp?: string | null;
+  localIps?: string[];
+  url?: string | null;
+  ordersCount?: number;
+  message?: string;
+}
+
 export interface NativePrinterBridge {
   platform?: string;
   validateDgiiRnc?: (payload?: { rnc?: string }) => Promise<{
@@ -96,6 +108,10 @@ export interface NativePrinterBridge {
     localIp?: string | null;
     localIps?: string[];
   };
+
+  startKdsServer?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
+  stopKdsServer?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
+  getKdsServerStatus?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
 
   /** Enumeración de lectores biométricos USB/red (Android nativo). */
   discoverFingerprintReaders?: (payload?: { connection?: ConnectionType }) => Promise<unknown>;
