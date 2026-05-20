@@ -32,6 +32,12 @@ const KitchenDisplay: React.FC = () => {
     const [orders, setOrders] = useState<KDSOrder[]>([]);
     const [showSummary, setShowSummary] = useState(false);
     const [loading, setLoading] = useState(true);
+    const [currentTime, setCurrentTime] = useState(new Date());
+
+    useEffect(() => {
+        const interval = setInterval(() => setCurrentTime(new Date()), 1000);
+        return () => clearInterval(interval);
+    }, []);
 
     // Poll for updates every 5 seconds
     useEffect(() => {
@@ -95,24 +101,41 @@ const KitchenDisplay: React.FC = () => {
 
     return (
         <div className="h-screen w-full bg-gray-950 text-gray-100 flex flex-col overflow-hidden font-sans">
-
-            {/* Compact Controls */}
-            <div className="bg-gray-900 border-b border-gray-800 px-5 py-2.5 flex items-center justify-between shadow-xl z-10">
-                <div className="flex items-center gap-4 text-[11px] font-black uppercase text-gray-500">
-                    <div className="flex items-center gap-1.5"><div className="w-2 h-2 bg-emerald-500 rounded-full" /> Normal</div>
-                    <div className="flex items-center gap-1.5"><div className="w-2 h-2 bg-amber-500 rounded-full" /> Alerta</div>
-                    <div className="flex items-center gap-1.5"><div className="w-2 h-2 bg-red-500 rounded-full" /> Critico</div>
+            <header className="bg-gray-800 border-b border-gray-700 px-5 py-3 flex items-center justify-between shadow-xl z-10">
+                <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-3xl leading-none">👨‍🍳</span>
+                    <div className="min-w-0">
+                        <div className="text-xl font-black tracking-tight leading-none">Display de Cocina</div>
+                        <div className="text-xs text-gray-400 font-semibold mt-1">Órdenes en tiempo real</div>
+                    </div>
                 </div>
 
-                <button
-                    onClick={() => setShowSummary(!showSummary)}
-                    className={`flex items-center gap-2 px-5 py-2 rounded-xl font-black text-sm transition-all shadow-lg ${showSummary ? 'bg-blue-600 text-white shadow-blue-500/20' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                        }`}
-                >
-                    {showSummary ? <LayoutGrid size={18} /> : <ListOrdered size={18} />}
-                    {showSummary ? 'Ver Tickets' : 'Ver Resumen'}
-                </button>
-            </div>
+                <div className="flex items-center gap-5">
+                    <div className="hidden sm:flex items-center gap-4 text-[10px] font-black uppercase text-gray-400">
+                        <div className="flex items-center gap-1.5"><div className="w-2 h-2 bg-emerald-500 rounded-full" /> Normal</div>
+                        <div className="flex items-center gap-1.5"><div className="w-2 h-2 bg-amber-500 rounded-full" /> Alerta</div>
+                        <div className="flex items-center gap-1.5"><div className="w-2 h-2 bg-red-500 rounded-full" /> Critico</div>
+                    </div>
+
+                    <button
+                        onClick={() => setShowSummary(!showSummary)}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-xl font-black text-sm transition-all shadow-lg ${showSummary ? 'bg-blue-600 text-white shadow-blue-500/20' : 'bg-gray-700 text-gray-200 hover:bg-gray-600'
+                            }`}
+                    >
+                        {showSummary ? <LayoutGrid size={18} /> : <ListOrdered size={18} />}
+                        {showSummary ? 'Ver Tickets' : 'Ver Resumen'}
+                    </button>
+
+                    <div className="text-right min-w-[132px]">
+                        <div className="text-2xl font-black leading-none">
+                            {currentTime.toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                        <div className="text-xs text-gray-400 font-semibold mt-1">
+                            {currentTime.toLocaleDateString('es-DO', { weekday: 'long', day: 'numeric', month: 'long' })}
+                        </div>
+                    </div>
+                </div>
+            </header>
 
             {/* Main Content Area */}
             <main className="flex-1 overflow-x-auto p-4 scroll-smooth">

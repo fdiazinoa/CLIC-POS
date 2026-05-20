@@ -3621,7 +3621,7 @@ const AppContent: React.FC = () => {
   };
 
   const handleParkedOrderSplitFromMap = useCallback(
-    async (orderId: string, remainingItems: CartItem[], newTicketItems: CartItem[]) => {
+    async (orderId: string, remainingItems: CartItem[], newTicketItems: CartItem[], extraNewTickets: CartItem[][] = [], splitCount = 2) => {
       const sumItems = (items: CartItem[]) =>
         items.reduce((acc, item) => acc + Number(item.price || 0) * Number(item.quantity || 0), 0);
       const source = parkedTickets.find(p => p.id === orderId);
@@ -3636,17 +3636,19 @@ const AppContent: React.FC = () => {
           : [];
       const tableLinked = tables.find(t => t.currentOrderId === orderId);
       const labelBase = tableLinked?.nombre || tableLinked?.name || source.name || 'Mesa';
-      const newTicket: ParkedTicket = {
+      const now = Date.now();
+      const splitGroups = [newTicketItems, ...extraNewTickets].filter(items => items.length > 0);
+      const newTickets: ParkedTicket[] = splitGroups.map((items, index) => ({
         ...source,
-        id: `split-${Date.now()}`,
-        name: `${labelBase} - Parte 2`,
-        alias: `${labelBase} - Parte 2`,
-        items: newTicketItems,
-        total: sumItems(newTicketItems),
+        id: `split-${now}-${index + 2}`,
+        name: `${labelBase} - Cuenta ${index + 2}/${splitCount}`,
+        alias: `${labelBase} - Cuenta ${index + 2}/${splitCount}`,
+        items,
+        total: sumItems(items),
         timestamp: new Date().toISOString(),
         tableId: tableLinked?.id
-      };
-      await handleUpdateParkedTickets([...others, ...kept, newTicket]);
+      }));
+      await handleUpdateParkedTickets([...others, ...kept, ...newTickets]);
       await fetchTables();
     },
     [parkedTickets, tables, fetchTables]

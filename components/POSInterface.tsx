@@ -3715,22 +3715,25 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
-   const handleSplitConfirm = (remainingItems: CartItem[], newTicketItems: CartItem[]) => {
+   const handleSplitConfirm = (remainingItems: CartItem[], newTicketItems: CartItem[], extraNewTickets: CartItem[][] = [], splitCount = 2) => {
       onUpdateCart(remainingItems);
-      
-      const newTicket: ParkedTicket = {
-         id: `split-${Date.now()}`,
+
+      const baseName = activeTable?.name || activeTable?.nombre || 'Mesa';
+      const now = Date.now();
+      const splitGroups = [newTicketItems, ...extraNewTickets].filter(items => items.length > 0);
+      const newTickets: ParkedTicket[] = splitGroups.map((items, index) => ({
+         id: `split-${now}-${index + 2}`,
          tableId: activeTable?.id || 'manual',
-         name: `${activeTable?.name || activeTable?.nombre || 'Mesa'} - Parte 2`,
-         alias: `${activeTable?.name || activeTable?.nombre || 'Mesa'} - Parte 2`,
-         items: newTicketItems,
-         total: newTicketItems.reduce((acc, item) => acc + (item.price * item.quantity), 0),
+         name: `${baseName} - Cuenta ${index + 2}/${splitCount}`,
+         alias: `${baseName} - Cuenta ${index + 2}/${splitCount}`,
+         items,
+         total: items.reduce((acc, item) => acc + (Number(item.price || 0) * Number(item.quantity || 0)), 0),
          timestamp: new Date().toISOString()
-      };
-      
-      onUpdateParkedTickets([...parkedTickets, newTicket]);
+      }));
+
+      onUpdateParkedTickets([...parkedTickets, ...newTickets]);
       setShowSplitModal(false);
-      setSuccessToast("Cuenta dividida: Parte movida a Tickets en Espera");
+      setSuccessToast(`Cuenta dividida en ${splitCount}: cuentas guardadas en Tickets en Espera`);
    };
 
    const proceedToCheckout = () => {

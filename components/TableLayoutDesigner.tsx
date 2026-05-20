@@ -155,9 +155,9 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
     const selectedTable = tables.find(t => t.id === selectedTableId);
 
     return (
-        <div className="flex flex-col h-full bg-slate-50 rounded-xl overflow-hidden shadow-xl border border-slate-200">
+        <div className="flex flex-col h-full min-h-[calc(100vh-1px)] bg-slate-950 overflow-hidden">
             {/* Toolbar */}
-            <div className="bg-white p-4 border-b flex justify-between items-center shrink-0">
+            <div className="bg-white/95 backdrop-blur border-b border-slate-200 px-4 py-3 flex justify-between items-center shrink-0 shadow-sm">
                 <div className="flex items-center gap-4">
                     <h2 className="font-black text-slate-800 flex items-center gap-2"><Layout size={20} /> Diseñador de Sala</h2>
 
@@ -209,16 +209,26 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                 </div>
             </div>
 
-            <div className="flex flex-1 overflow-hidden">
+            <div className="flex flex-1 min-h-0 overflow-hidden">
                 {/* Canvas Area */}
-                <div className="flex-1 bg-slate-200/50 p-8 overflow-auto flex items-center justify-center relative">
+                <div className="flex-1 bg-gradient-to-br from-[#06172b] via-[#081124] to-[#101023] p-4 overflow-auto flex items-center justify-center relative">
+                    <div
+                        className="absolute inset-0 pointer-events-none opacity-45"
+                        style={{
+                            backgroundImage: [
+                                'linear-gradient(rgba(148,163,184,0.13) 1px, transparent 1px)',
+                                'linear-gradient(90deg, rgba(148,163,184,0.13) 1px, transparent 1px)'
+                            ].join(','),
+                            backgroundSize: '34px 34px'
+                        }}
+                    />
 
                     <div
                         ref={canvasRef}
                         onPointerMove={handleCanvasPointerMove}
                         onPointerUp={handleCanvasPointerEnd}
                         onPointerCancel={handleCanvasPointerEnd}
-                        className="bg-white shadow-2xl relative select-none overflow-hidden touch-none"
+                        className="bg-white/95 shadow-2xl relative select-none overflow-hidden touch-none"
                         style={{
                             width: CANVAS_WIDTH,
                             height: CANVAS_HEIGHT,
@@ -280,7 +290,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                                 <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Nombre</label>
                                 <input
                                     type="text"
-                                    value={getTableLabel(selectedTable)}
+                                    value={selectedTable.name ?? selectedTable.nombre ?? ''}
                                     onChange={e => updateTable(selectedTable.id, { name: e.target.value, nombre: e.target.value })}
                                     className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-bold shadow-sm focus:border-blue-500 outline-none"
                                 />

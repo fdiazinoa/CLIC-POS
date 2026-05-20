@@ -43,7 +43,7 @@ interface TableMapProps {
     roles?: RoleDefinition[];
     onPrintPrecheck?: (table: Table) => void;
     /** Restaurante: persiste división de cuenta desde el mapa (órdenes en espera) */
-    onParkedOrderSplitResult?: (orderId: string, remainingItems: CartItem[], newTicketItems: CartItem[]) => void | Promise<void>;
+    onParkedOrderSplitResult?: (orderId: string, remainingItems: CartItem[], newTicketItems: CartItem[], extraNewTickets?: CartItem[][], splitCount?: number) => void | Promise<void>;
     /** Restaurante: abrir diseñador de plano de mesas */
     onOpenTableLayoutDesigner?: () => void;
 }
@@ -974,32 +974,34 @@ const TableMap: React.FC<TableMapProps> = ({
                     </GlassButton>
                 </div>
 
-                <div className="absolute bottom-5 left-5 right-5 z-30 flex items-end gap-3 pointer-events-none">
-                    <div className="min-w-0 flex-1 rounded-[1.6rem] border border-white/10 bg-white/[0.08] backdrop-blur-xl px-3 py-2 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-2 overflow-auto no-scrollbar pointer-events-auto">
+                {!isControlCenterOpen && (
+                    <div className="absolute top-24 right-6 z-30 max-w-[min(76vw,720px)] rounded-[1.6rem] border border-white/10 bg-white/[0.08] backdrop-blur-xl px-3 py-2 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-2 overflow-auto no-scrollbar pointer-events-auto">
                         {rooms.map(room => {
-                            const isActive = room.id === activeRoomId;
-                            const roomOccupied = safeTables.filter(table => table.roomId === room.id && table.status === 'OCCUPIED').length;
+                                const isActive = room.id === activeRoomId;
+                                const roomOccupied = safeTables.filter(table => table.roomId === room.id && table.status === 'OCCUPIED').length;
 
-                            return (
-                                <button
-                                    key={room.id}
-                                    onClick={() => setActiveRoomId(room.id)}
-                                    className={`shrink-0 px-5 py-2 rounded-full border transition-all duration-200 text-sm font-bold flex items-center gap-2 ${
-                                        isActive
-                                            ? 'border-sky-300/60 bg-sky-400/20 text-sky-100 shadow-[0_0_24px_rgba(56,189,248,0.28)]'
-                                            : 'border-white/10 bg-white/[0.04] text-slate-300 hover:text-white hover:bg-white/[0.09]'
-                                    }`}
-                                >
-                                    <LayoutGrid size={14} />
-                                    {room.name || room.nombre}
-                                    {roomOccupied > 0 && (
-                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/70 text-white">{roomOccupied}</span>
-                                    )}
-                                </button>
-                            );
-                        })}
+                                return (
+                                    <button
+                                        key={room.id}
+                                        onClick={() => setActiveRoomId(room.id)}
+                                        className={`shrink-0 px-5 py-2 rounded-full border transition-all duration-200 text-sm font-bold flex items-center gap-2 ${
+                                            isActive
+                                                ? 'border-sky-300/60 bg-sky-400/20 text-sky-100 shadow-[0_0_24px_rgba(56,189,248,0.28)]'
+                                                : 'border-white/10 bg-white/[0.04] text-slate-300 hover:text-white hover:bg-white/[0.09]'
+                                        }`}
+                                    >
+                                        <LayoutGrid size={14} />
+                                        {room.name || room.nombre}
+                                        {roomOccupied > 0 && (
+                                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/70 text-white">{roomOccupied}</span>
+                                        )}
+                                    </button>
+                                );
+                            })}
                     </div>
+                )}
 
+                <div className="absolute bottom-5 left-5 right-5 z-30 flex justify-end pointer-events-none">
                     {isRestaurantMode && (
                         <div className="max-w-[min(76vw,1120px)] rounded-[1.8rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-4 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-3 overflow-x-auto overflow-y-hidden no-scrollbar pointer-events-auto">
                             {renderTableControlActions('footer')}
@@ -1186,9 +1188,9 @@ const TableMap: React.FC<TableMapProps> = ({
                         originalItems={ensureCartIds(splitTicketForModal.items)}
                         currencySymbol={currencySymbol}
                         onClose={() => setSplitTicketForModal(null)}
-                        onConfirm={(remainingItems, newTicketItems) => {
+                        onConfirm={(remainingItems, newTicketItems, extraNewTickets, splitCount) => {
                             if (onParkedOrderSplitResult) {
-                                void onParkedOrderSplitResult(splitTicketForModal.id, remainingItems, newTicketItems);
+                                void onParkedOrderSplitResult(splitTicketForModal.id, remainingItems, newTicketItems, extraNewTickets, splitCount);
                             } else {
                                 alert('No se pudo guardar la división: falta el manejador en la aplicación.');
                             }
