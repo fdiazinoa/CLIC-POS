@@ -123,6 +123,9 @@ const ensureCartIds = (items: CartItem[]): CartItem[] =>
         cartId: it.cartId || `map-${idx}-${it.id || 'item'}`
     }));
 
+const getRoomLabel = (room?: Room): string => room?.nombre || room?.name || 'Sala';
+const getTableLabel = (table: Table): string => table.nombre || table.name || 'Mesa';
+
 const getElapsedMinutes = (timeSeated?: string): number => {
     if (!timeSeated) return 0;
     const start = new Date(timeSeated).getTime();
@@ -299,6 +302,14 @@ const TableMap: React.FC<TableMapProps> = ({
     }, []);
 
     const activeRoom = useMemo(() => rooms.find(r => r.id === activeRoomId), [rooms, activeRoomId]);
+    const roomLabelById = useMemo(() => {
+        return new Map(rooms.map(room => [room.id, getRoomLabel(room)]));
+    }, [rooms]);
+    const getTableRoomLabel = useCallback((table: Table): string => {
+        const tableLabel = getTableLabel(table);
+        const roomLabel = roomLabelById.get(table.roomId);
+        return roomLabel ? `${roomLabel} · ${tableLabel}` : tableLabel;
+    }, [roomLabelById]);
 
     const currentRolePermissions = useMemo<Permission[]>(() => {
         const roleId = currentUser.roleId || currentUser.role;
@@ -403,14 +414,19 @@ const TableMap: React.FC<TableMapProps> = ({
         [roomTables]
     );
 
+    const allServiceTables = useMemo(
+        () => safeTables.filter(table => table.shape !== 'OBSTACLE'),
+        [safeTables]
+    );
+
     const occupiedForTools = useMemo(
-        () => serviceTables.filter(t => t.status === 'OCCUPIED' || t.status === 'RESERVED'),
-        [serviceTables]
+        () => allServiceTables.filter(t => t.status === 'OCCUPIED' || t.status === 'RESERVED'),
+        [allServiceTables]
     );
 
     const freeForTools = useMemo(
-        () => serviceTables.filter(t => !t.status || t.status === 'FREE'),
-        [serviceTables]
+        () => allServiceTables.filter(t => !t.status || t.status === 'FREE'),
+        [allServiceTables]
     );
 
     const occupiedLikeTables = useMemo(
@@ -788,7 +804,7 @@ const TableMap: React.FC<TableMapProps> = ({
                     onClick={() => {
                         const withOrders = occupiedForTools.filter(t => t.currentOrderId);
                         if (withOrders.length === 0) {
-                            alert('No hay mesas ocupadas con cuenta en esta sala.');
+                            alert('No hay mesas ocupadas con cuenta.');
                             return;
                         }
                         if (withOrders.length === 1) {
@@ -1071,7 +1087,8 @@ const TableMap: React.FC<TableMapProps> = ({
                 {selectedTable && (
                     <TableOptionsModal
                         table={selectedTable}
-                        room={activeRoom}
+                        room={rooms.find(candidate => candidate.id === selectedTable.roomId) || activeRoom}
+                        rooms={rooms}
                         allTables={safeTables}
                         onClose={() => setSelectedTable(null)}
                         onAddOrder={() => {
@@ -1190,7 +1207,7 @@ const TableMap: React.FC<TableMapProps> = ({
                             onClick={e => e.stopPropagation()}
                         >
                             <h3 className="text-lg font-black text-white mb-1">Unir mesas</h3>
-                            <p className="text-xs text-slate-400 mb-4">Seleccione dos cuentas ocupadas en esta sala.</p>
+                            <p className="text-xs text-slate-400 mb-4">Seleccione dos cuentas ocupadas. La sala aparece como prefijo para evitar duplicados.</p>
                             <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Mesa principal</label>
                             <select
                                 value={mergePrimaryId}
@@ -1200,7 +1217,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                 <option value="">—</option>
                                 {occupiedForTools.map(t => (
                                     <option key={t.id} value={t.id}>
-                                        {t.nombre || t.name}
+                                        {getTableRoomLabel(t)}
                                     </option>
                                 ))}
                             </select>
@@ -1215,7 +1232,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                     .filter(t => t.id !== mergePrimaryId)
                                     .map(t => (
                                         <option key={t.id} value={t.id}>
-                                            {t.nombre || t.name}
+                                            {getTableRoomLabel(t)}
                                         </option>
                                     ))}
                             </select>
@@ -1275,7 +1292,7 @@ const TableMap: React.FC<TableMapProps> = ({
                             onClick={e => e.stopPropagation()}
                         >
                             <h3 className="text-lg font-black text-white mb-1">Mover pedido</h3>
-                            <p className="text-xs text-slate-400 mb-4">De una mesa ocupada hacia una libre.</p>
+                            <p className="text-xs text-slate-400 mb-4">De una mesa ocupada hacia una libre. La sala aparece como prefijo.</p>
                             <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Origen (ocupada)</label>
                             <select
                                 value={moveFromId}
@@ -1285,7 +1302,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                 <option value="">—</option>
                                 {occupiedForTools.map(t => (
                                     <option key={t.id} value={t.id}>
-                                        {t.nombre || t.name}
+                                        {getTableRoomLabel(t)}
                                     </option>
                                 ))}
                             </select>
@@ -1298,7 +1315,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                 <option value="">—</option>
                                 {freeForTools.map(t => (
                                     <option key={t.id} value={t.id}>
-                                        {t.nombre || t.name}
+                                        {getTableRoomLabel(t)}
                                     </option>
                                 ))}
                             </select>
@@ -1372,7 +1389,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                             }}
                                             className="w-full text-left px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-white/10"
                                         >
-                                            {t.nombre || t.name}
+                                            {getTableRoomLabel(t)}
                                         </button>
                                     ))}
                             </div>
@@ -1415,7 +1432,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                                 }}
                                                 className="w-full text-left px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-white font-semibold border border-white/10"
                                             >
-                                                {t.nombre || t.name}
+                                                {getTableRoomLabel(t)}
                                                 {!ticket?.items?.length ? ' (sin ítems)' : ''}
                                             </button>
                                         );
@@ -1458,7 +1475,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                             }}
                                             className="w-full text-left px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-white/10"
                                         >
-                                            Pre-cuenta — {t.nombre || t.name}
+                                            Pre-cuenta — {getTableRoomLabel(t)}
                                         </button>
                                     ))}
                             </div>
