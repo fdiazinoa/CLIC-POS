@@ -5,6 +5,7 @@ export interface ProductionAreaKdsConfig {
   target_terminal_id?: string;
   kds_host?: string;
   kds_port?: string | number;
+  kds_delivery_mode?: 'LAN' | 'WEB' | string;
 }
 
 export interface KdsTerminalTarget {

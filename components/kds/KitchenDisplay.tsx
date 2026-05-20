@@ -1,11 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-    Clock,
     Users,
     ChefHat,
     LayoutGrid,
     ListOrdered,
-    AlertTriangle,
     CheckCircle2,
     Timer
 } from 'lucide-react';
@@ -98,38 +96,26 @@ const KitchenDisplay: React.FC = () => {
     return (
         <div className="h-screen w-full bg-gray-950 text-gray-100 flex flex-col overflow-hidden font-sans">
 
-            {/* KDS Header */}
-            <header className="bg-gray-900 border-b border-gray-800 p-4 flex items-center justify-between shadow-2xl z-10">
-                <div className="flex items-center gap-4">
-                    <div className="p-2 bg-blue-600 rounded-xl">
-                        <ChefHat size={28} className="text-white" />
-                    </div>
-                    <div>
-                        <h1 className="text-xl font-black uppercase tracking-tighter">Kitchen Display System</h1>
-                        <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest leading-none">Real-time Production Hub</p>
-                    </div>
+            {/* Compact Controls */}
+            <div className="bg-gray-900 border-b border-gray-800 px-5 py-2.5 flex items-center justify-between shadow-xl z-10">
+                <div className="flex items-center gap-4 text-[11px] font-black uppercase text-gray-500">
+                    <div className="flex items-center gap-1.5"><div className="w-2 h-2 bg-emerald-500 rounded-full" /> Normal</div>
+                    <div className="flex items-center gap-1.5"><div className="w-2 h-2 bg-amber-500 rounded-full" /> Alerta</div>
+                    <div className="flex items-center gap-1.5"><div className="w-2 h-2 bg-red-500 rounded-full" /> Critico</div>
                 </div>
 
-                <div className="flex items-center gap-6">
-                    <div className="hidden md:flex items-center gap-4 text-xs font-bold uppercase text-gray-500">
-                        <div className="flex items-center gap-1.5"><div className="w-2 h-2 bg-emerald-500 rounded-full" /> Normal</div>
-                        <div className="flex items-center gap-1.5"><div className="w-2 h-2 bg-amber-500 rounded-full" /> Alerta</div>
-                        <div className="flex items-center gap-1.5"><div className="w-2 h-2 bg-red-500 rounded-full" /> Crítico</div>
-                    </div>
-
-                    <button
-                        onClick={() => setShowSummary(!showSummary)}
-                        className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-sm transition-all shadow-lg ${showSummary ? 'bg-blue-600 text-white shadow-blue-500/20' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                            }`}
-                    >
-                        {showSummary ? <LayoutGrid size={18} /> : <ListOrdered size={18} />}
-                        {showSummary ? 'Ver Tickets' : 'Ver Resumen'}
-                    </button>
-                </div>
-            </header>
+                <button
+                    onClick={() => setShowSummary(!showSummary)}
+                    className={`flex items-center gap-2 px-5 py-2 rounded-xl font-black text-sm transition-all shadow-lg ${showSummary ? 'bg-blue-600 text-white shadow-blue-500/20' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                        }`}
+                >
+                    {showSummary ? <LayoutGrid size={18} /> : <ListOrdered size={18} />}
+                    {showSummary ? 'Ver Tickets' : 'Ver Resumen'}
+                </button>
+            </div>
 
             {/* Main Content Area */}
-            <main className="flex-1 overflow-x-auto p-6 scroll-smooth">
+            <main className="flex-1 overflow-x-auto p-4 scroll-smooth">
                 {showSummary ? (
                     /* 1. Production Summary View */
                     <div className="max-w-4xl mx-auto animate-in fade-in zoom-in-95 duration-300">

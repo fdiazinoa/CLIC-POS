@@ -909,6 +909,61 @@ export interface Modifier {
   id: string;
   name: string;
   price: number;
+  price_delta?: number;
+  modifier_type?: 'ADD' | 'REMOVE' | 'NOTE_PRESET' | string;
+  affects_price?: boolean;
+  sort_order?: number;
+  active?: boolean;
+}
+
+export interface ModifierGroup {
+  id: string;
+  name: string;
+  selection_type?: 'SINGLE' | 'MULTIPLE' | string;
+  required?: boolean;
+  min_select?: number;
+  max_select?: number | null;
+  free_quantity?: number;
+  sort_order?: number;
+  modifiers: Modifier[];
+}
+
+export interface ProductFractionOption {
+  id?: string;
+  option_product_id?: string;
+  product_id?: string;
+  name?: string;
+  price?: number;
+  price_override?: number | null;
+  active?: boolean;
+}
+
+export interface ProductFractionRule {
+  id?: string;
+  fraction_mode?: 'HALF' | 'QUARTER' | 'CUSTOM' | string;
+  pricing_rule?: 'HIGHEST_PRICE' | 'AVERAGE_PRICE' | 'SUM_PARTS' | 'BASE_PLUS_DIFF' | string;
+  max_parts?: number;
+  require_equal_parts?: boolean;
+  options?: ProductFractionOption[];
+}
+
+export interface ComboGroupItem {
+  id?: string;
+  product_id?: string;
+  name?: string;
+  price_delta?: number;
+  active?: boolean;
+  sort_order?: number;
+}
+
+export interface ComboGroup {
+  id: string;
+  name: string;
+  required?: boolean;
+  min_select?: number;
+  max_select?: number | null;
+  sort_order?: number;
+  items: ComboGroupItem[];
 }
 
 export interface ProductGroup {
@@ -1165,7 +1220,7 @@ export interface Customer {
   applyChainedTax?: boolean;
   addresses?: CustomerAddress[];
   creditDays?: number;
-  defaultNcfType?: NCFType;
+  defaultNcfType?: FiscalDocumentCode;
   wallet?: Wallet;
   cards?: LoyaltyCard[];
   loyalty?: LoyaltyCard; // Deprecated, kept for backward compatibility during migration
@@ -1219,7 +1274,7 @@ export interface ProductOperationalFlags {
   usesSerial: boolean;
 }
 
-export type ProductType = 'MATERIA_PRIMA' | 'PRODUCTO_TERMINADO' | 'RECETA' | 'KIT' | 'PRODUCT' | 'SERVICE';
+export type ProductType = 'MATERIA_PRIMA' | 'PRODUCTO_TERMINADO' | 'RECETA' | 'KIT' | 'PRODUCT' | 'SERVICE' | 'SIMPLE' | 'COMBO' | 'FRACTIONABLE';
 export type KitInventoryMode = 'FINISHED_GOOD' | 'COMPONENT_CONSUMPTION';
 
 export interface RecipeDetail {
@@ -1265,6 +1320,30 @@ export interface Product {
   minStock?: number;
   warehouseSettings?: Record<string, { min: number, max: number }>;
   availableModifiers?: Modifier[];
+  modifier_groups?: ModifierGroup[];
+  modifierGroups?: ModifierGroup[];
+  fraction_rule?: ProductFractionRule;
+  fractionRule?: ProductFractionRule;
+  combo_groups?: ComboGroup[];
+  comboGroups?: ComboGroup[];
+  note_presets?: string[];
+  notePresets?: string[];
+  product_type?: 'SIMPLE' | 'COMBO' | 'FRACTIONABLE' | 'SERVICE' | string;
+  restaurant?: {
+    product_type?: 'SIMPLE' | 'COMBO' | 'FRACTIONABLE' | 'SERVICE' | string;
+    production_area_id?: string;
+    productType?: string;
+    productionAreaId?: string;
+    modifier_groups?: ModifierGroup[];
+    modifierGroups?: ModifierGroup[];
+    fraction_rule?: ProductFractionRule;
+    fractionRule?: ProductFractionRule;
+    combo_groups?: ComboGroup[];
+    comboGroups?: ComboGroup[];
+    note_presets?: string[];
+    notePresets?: string[];
+    [key: string]: any;
+  };
   description?: string;
   departmentId?: string;
   sectionId?: string;
@@ -1403,6 +1482,20 @@ export interface CartItem extends Product {
   quantity: number;
   cartId: string;
   modifiers?: string[];
+  restaurantConfig?: {
+    modifierGroups?: Record<string, string[]>;
+    comboGroups?: Record<string, string[]>;
+    fractions?: Array<{ id: string; name: string; price: number; ratio: number }>;
+    selected_modifiers?: any[];
+    selected_fraction_parts?: any[];
+    selected_combo_items?: any[];
+    product_type?: string;
+    production_area_id?: string;
+    note?: string;
+  };
+  selected_modifiers?: any[];
+  selected_fraction_parts?: any[];
+  selected_combo_items?: any[];
   note?: string;
   originalPrice?: number; // Optional: track original product price for auditing
   discountAmount?: number;
@@ -1446,6 +1539,7 @@ export interface Transaction {
 
   // Transaction Data
   date: string;
+  updatedAt?: string;
   items: CartItem[];
   total: number;
   payments: any[];
@@ -1494,6 +1588,7 @@ export interface Transaction {
   fiscalSyncedAt?: string;
   fiscalReferenceId?: string;
   fiscalResponseMessage?: string;
+  fiscalCorrectionAudit?: FiscalCorrectionAuditEntry[];
   affectedNCF?: string;             // NCF de la factura afectada (para Notas de Crédito B04)
   affectedInvoiceNumber?: string;   // No. de factura afectada (displayId para búsquedas)
   affectedInvoiceDate?: string;
@@ -1532,6 +1627,11 @@ export interface Transaction {
   refundReason?: string;
   syncStatus?: SyncStatus;
   syncError?: string;
+  syncResponse?: any;
+  syncedAt?: string;
+  erpSyncStatus?: 'APPLIED' | 'SKIPPED_ALREADY_APPLIED' | 'ERROR';
+  erpSyncResponse?: any;
+  erpSyncedAt?: string;
   zReportId?: string; // ID of the Z-Report that closed this transaction
   zReportSequence?: string; // Human readable sequence number of the Z-Report (e.g. "Z-000123")
 
@@ -1552,6 +1652,36 @@ export interface Transaction {
   erpConfirmationStatus?: 'PENDING' | 'SYNCED' | 'ERROR';
   erpConfirmationError?: string;
   erpConfirmedAt?: string;
+}
+
+export interface FiscalDocumentCorrectionSnapshot {
+  fiscalCode?: FiscalDocumentCode | null;
+  ncf?: string;
+  customerId?: string;
+  customerName?: string;
+  customerTaxId?: string;
+  netAmount?: number;
+  taxAmount?: number;
+  total?: number;
+  fiscalSyncStatus?: CloudSyncStatus;
+  fiscalSyncError?: string;
+}
+
+export interface FiscalCorrectionAuditEntry {
+  id: string;
+  correctedAt: string;
+  correctedById?: string;
+  correctedByName?: string;
+  reason: string;
+  old: FiscalDocumentCorrectionSnapshot;
+  next: FiscalDocumentCorrectionSnapshot;
+}
+
+export interface FiscalDocumentCorrectionInput {
+  fiscalCode: FiscalDocumentCode;
+  customerId?: string;
+  reason: string;
+  recalculateTaxes: boolean;
 }
 
 export type ViewState =

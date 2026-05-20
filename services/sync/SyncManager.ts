@@ -43,6 +43,7 @@ import {
 } from '../../utils/productReferences';
 import { canonicalizeTariffEntries, resolveTariffId } from '../../utils/masterIdentity';
 import { ensureSyncDeviceToken } from './deviceToken';
+import { normalizeRestaurantProductConfig } from '../../utils/restaurantProductConfig';
 
 export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'productPrices' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities' | 'crmOpportunities' | 'erp_sales_documents';
 
@@ -2506,7 +2507,7 @@ class SyncManager {
         for (const [index, normalizedItem] of normalizedItems.entries()) {
             if (!normalizedItem?.id) continue;
             const rawItem = rawItems[index] as Record<string, unknown> | undefined;
-            let item = normalizedItem;
+            let item = normalizeRestaurantProductConfig(normalizedItem as any) as any;
             const incomingRemoteId =
                 typeof rawItem?.id === 'string'
                     ? rawItem.id.trim()
@@ -2536,7 +2537,7 @@ class SyncManager {
                 }
                 item = {
                     ...canonicalLocalProduct,
-                    ...normalizedItem,
+                    ...normalizeRestaurantProductConfig(normalizedItem as any),
                     id: canonicalLocalProduct.id,
                     sourceItemId:
                         typeof (canonicalLocalProduct as any)?.sourceItemId === 'string' && (canonicalLocalProduct as any).sourceItemId.trim()
@@ -2601,16 +2602,17 @@ class SyncManager {
                 };
             }
 
+            item = normalizeRestaurantProductConfig(item as any) as Product;
             await db.saveDocument('products', item);
             if (!preserveOperationalInventory) {
                 await this.syncSnapshotProductStocks(item as Product, runtimeWarehouses, existingStocksByProductWarehouse);
             }
             if (posCatalogDebugMatchesRaw(rawItem || item)) {
                 posCatalogDebugLog('applySnapshotProducts: saved product', {
-                    saved: posCatalogDebugSummarizeItem(item as Record<string, unknown>),
+                    saved: posCatalogDebugSummarizeItem(item as unknown as Record<string, unknown>),
                 });
             }
-            for (const candidate of productIdentityCandidates(item as Record<string, unknown>)) {
+            for (const candidate of productIdentityCandidates(item as unknown as Record<string, unknown>)) {
                 localByIdentity.set(candidate, item as Product);
             }
             localProductsById.set(String(item.id).trim(), item as Product);
@@ -4173,7 +4175,7 @@ class SyncManager {
                 });
 
                 if (collection === 'products') {
-                    cleanItems = await this.enrichPulledProducts(cleanItems);
+                    cleanItems = (await this.enrichPulledProducts(cleanItems)).map((item: any) => normalizeRestaurantProductConfig(item));
                 } else if (this.isImageBackedCollection(collection)) {
                     cleanItems = await masterDataImageCacheService.normalizeIncomingItems(collection, cleanItems as any[]);
                 }
@@ -4205,7 +4207,7 @@ class SyncManager {
 
                         if (collection === 'products') {
                             const enriched = await this.enrichPulledProducts([finalItem]);
-                            finalItem = enriched[0];
+                            finalItem = normalizeRestaurantProductConfig(enriched[0]);
                         } else if (this.isImageBackedCollection(collection)) {
                             finalItem = await masterDataImageCacheService.normalizeIncomingItem(collection, finalItem as any);
                         }

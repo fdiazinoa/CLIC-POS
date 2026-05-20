@@ -156,6 +156,140 @@ class ApiSyncAdapter {
         return message.includes(ERP_TEMPORARILY_UNAVAILABLE_ERROR);
     }
 
+    private safeParseSyncJson(text: string): any | null {
+        try {
+            return text ? JSON.parse(text) : null;
+        } catch {
+            return null;
+        }
+    }
+
+    private collectResponseFacts(value: unknown, facts: {
+        success: boolean;
+        applied: boolean;
+        alreadyApplied: boolean;
+        duplicate: boolean;
+        realApplyError: boolean;
+        errors: string[];
+    }) {
+        if (value === null || value === undefined) return;
+
+        if (typeof value === 'string') {
+            const normalized = value.trim().toLowerCase();
+            if (!normalized) return;
+            if (
+                normalized.includes('already_applied') ||
+                normalized.includes('already applied') ||
+                normalized.includes('already exists') ||
+                normalized.includes('ya existe') ||
+                normalized.includes('ya fue aplicado') ||
+                normalized.includes('previamente aplicado') ||
+                normalized.includes('applied previously') ||
+                normalized.includes('apply_skipped_reason') && normalized.includes('already_applied')
+            ) {
+                facts.alreadyApplied = true;
+            }
+            if (
+                normalized.includes('duplicate') ||
+                normalized.includes('duplicado') ||
+                normalized.includes('duplicada') ||
+                normalized.includes('duplicated')
+            ) {
+                facts.duplicate = true;
+            }
+            if (normalized === 'success' || normalized === 'ok') facts.success = true;
+            if (normalized === 'applied') facts.applied = true;
+            if (normalized === 'already_applied') facts.alreadyApplied = true;
+            return;
+        }
+
+        if (typeof value !== 'object') return;
+
+        if (Array.isArray(value)) {
+            value.forEach(item => this.collectResponseFacts(item, facts));
+            return;
+        }
+
+        for (const [rawKey, rawVal] of Object.entries(value as Record<string, unknown>)) {
+            const key = rawKey.toLowerCase();
+            const stringVal = typeof rawVal === 'string' ? rawVal.trim().toLowerCase() : '';
+
+            if ((key === 'status' || key === 'sync_status' || key === 'applied_status') && stringVal === 'success') {
+                facts.success = true;
+            }
+            if ((key === 'sync_status' || key === 'applied_status' || key === 'status') && stringVal === 'applied') {
+                facts.applied = true;
+            }
+            if (key === 'success' && rawVal === true) facts.success = true;
+            if (key === 'applied' && rawVal === true) facts.applied = true;
+            if (key === 'duplicate' && rawVal === true) facts.duplicate = true;
+            if (key === 'already_applied' && rawVal === true) facts.alreadyApplied = true;
+            if (key === 'apply_skipped_reason' && stringVal === 'already_applied') facts.alreadyApplied = true;
+
+            if ((key === 'apply_error' || key === 'error') && rawVal && typeof rawVal !== 'object') {
+                const errorText = String(rawVal);
+                const errorFacts = { success: false, applied: false, alreadyApplied: false, duplicate: false, realApplyError: false, errors: [] as string[] };
+                this.collectResponseFacts(errorText, errorFacts);
+                if (!errorFacts.alreadyApplied && !errorFacts.duplicate) {
+                    facts.realApplyError = true;
+                    facts.errors.push(errorText);
+                }
+            }
+
+            this.collectResponseFacts(rawVal, facts);
+        }
+    }
+
+    private isIdempotentAppliedResponse(body: any, text = '', responseOk = true): boolean {
+        const facts = {
+            success: false,
+            applied: false,
+            alreadyApplied: false,
+            duplicate: false,
+            realApplyError: false,
+            errors: [] as string[]
+        };
+
+        this.collectResponseFacts(body, facts);
+        this.collectResponseFacts(text, facts);
+
+        if (facts.realApplyError && !facts.alreadyApplied && !facts.duplicate) return false;
+        if (facts.alreadyApplied || facts.duplicate) return true;
+        if (responseOk && (facts.success || facts.applied)) return true;
+        return false;
+    }
+
+    private hasRealApplyErrorResponse(body: any, text = ''): boolean {
+        const facts = {
+            success: false,
+            applied: false,
+            alreadyApplied: false,
+            duplicate: false,
+            realApplyError: false,
+            errors: [] as string[]
+        };
+
+        this.collectResponseFacts(body, facts);
+        this.collectResponseFacts(text, facts);
+        return facts.realApplyError && !facts.alreadyApplied && !facts.duplicate;
+    }
+
+    private allApplyIssuesAreIdempotent(issues: unknown): boolean {
+        const list = Array.isArray(issues) ? issues : issues ? [issues] : [];
+        return list.length > 0 && list.every(issue => this.isIdempotentAppliedResponse(issue, JSON.stringify(issue), true));
+    }
+
+    private attachTransactionSyncAudit(transaction: any, response: any, mode: 'APPLIED' | 'SKIPPED_ALREADY_APPLIED') {
+        if (!transaction || typeof transaction !== 'object') return;
+        const appliedAt = new Date().toISOString();
+        transaction.syncResponse = response;
+        transaction.syncedAt = appliedAt;
+        transaction.erpSyncStatus = mode;
+        transaction.erpSyncResponse = response;
+        transaction.erpSyncedAt = appliedAt;
+        transaction.syncError = undefined;
+    }
+
     private onConnectionLostCallback: (() => void) | null = null;
 
     private logAuthFailure(kind: 'master' | 'erp', error: unknown) {
@@ -1416,26 +1550,42 @@ class ApiSyncAdapter {
                     `[SYNC_TX_PUSH] ERP direct start base=${operationalTarget.baseUrl} terminal=${operationalTarget.terminalId} tx=${txId} items=${itemsCount}`
                 );
                 const { target, response, text } = await this.postErpSalesTransactionWithSmartAuth(normalizedTransaction, txId);
-                let syncBody: any = null;
-                try {
-                    syncBody = JSON.parse(text);
-                } catch {
-                    // non-JSON response
-                }
+                const syncBody = this.safeParseSyncJson(text);
+                const responseAudit = syncBody || { raw: text };
 
                 if (!response.ok) {
+                    if (this.isIdempotentAppliedResponse(syncBody, text, false)) {
+                        this.attachTransactionSyncAudit(transaction, responseAudit, 'SKIPPED_ALREADY_APPLIED');
+                        console.warn(
+                            `[SYNC_TX_PUSH] ERP direct idempotent OK tx=${txId} status=${response.status} body=${text.slice(0, 400)}`
+                        );
+                        return;
+                    }
                     throw new Error(
                         `ERP transaction sync failed: ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 400)}` : ''}`
                     );
                 }
 
                 if (syncBody && typeof syncBody.applyFailedCount === 'number' && syncBody.applyFailedCount > 0) {
+                    if (this.allApplyIssuesAreIdempotent(syncBody.applyIssues || syncBody.results || syncBody)) {
+                        this.attachTransactionSyncAudit(transaction, syncBody, 'SKIPPED_ALREADY_APPLIED');
+                        console.warn(
+                            `[SYNC_TX_PUSH] ERP direct idempotent apply failure accepted tx=${txId}`,
+                            syncBody.applyIssues
+                        );
+                        return;
+                    }
                     console.error(
                         `[SYNC_TX_PUSH] ERP /api/sync/transactions applyFailedCount=${syncBody.applyFailedCount}`,
                         syncBody.applyIssues
                     );
                     throw new Error(`ERP did not persist sale (apply failures): ${JSON.stringify(syncBody.applyIssues || [])}`);
                 }
+                if (this.hasRealApplyErrorResponse(syncBody, text)) {
+                    throw new Error(`ERP did not persist sale (apply error): ${text.slice(0, 400)}`);
+                }
+
+                this.attachTransactionSyncAudit(transaction, responseAudit, 'APPLIED');
 
                 console.log(
                     `[SYNC_TX_PUSH] ERP direct OK tx=${txId} host=${target.baseUrl} terminal=${target.terminalId} body=${text.slice(0, 400)}`
@@ -1495,6 +1645,15 @@ class ApiSyncAdapter {
                     console.warn(
                         `[SYNC_TX_PUSH] Master persisted tx=${txId} locally but ERP forwarding failed. Accepting slave sync and leaving ERP retry to master. body=${detail}`
                     );
+                    this.attachTransactionSyncAudit(transaction, errBody || { raw: errorText }, 'APPLIED');
+                    return;
+                }
+
+                if (this.isIdempotentAppliedResponse(errBody, errorText, false)) {
+                    console.warn(
+                        `[SYNC_TX_PUSH] Master/ERP returned duplicate already-applied for tx=${txId}. Marking local sync completed. body=${detail}`
+                    );
+                    this.attachTransactionSyncAudit(transaction, errBody || { raw: errorText }, 'SKIPPED_ALREADY_APPLIED');
                     return;
                 }
 
@@ -1515,12 +1674,27 @@ class ApiSyncAdapter {
                 `[SYNC_TX_PUSH] master_response applyFailedCount=${syncBody?.applyFailedCount ?? 'n/a'} erpInbox_skipped=${erp?.skipped ?? 'n/a'} erpInbox_failed=${erp?.failed ?? 'n/a'} sync_id=${r0?.syncId ?? 'n/a'} erp_document_id=${r0?.erpDocumentId ?? 'n/a'} apply_err=${r0?.error ?? 'n/a'}`
             );
             if (syncBody && typeof syncBody.applyFailedCount === 'number' && syncBody.applyFailedCount > 0) {
+                if (this.allApplyIssuesAreIdempotent(syncBody.applyIssues || erp?.results || syncBody)) {
+                    console.warn(
+                        `[SYNC_TX_PUSH] Master response contained idempotent apply failures for tx=${txId}. Marking completed.`,
+                        syncBody.applyIssues
+                    );
+                    this.attachTransactionSyncAudit(transaction, syncBody, 'SKIPPED_ALREADY_APPLIED');
+                    return;
+                }
                 console.error(
                     `[SYNC_TX_PUSH] ERP /api/sync/transactions applyFailedCount=${syncBody.applyFailedCount}`,
                     syncBody.applyIssues
                 );
                 throw new Error(`ERP did not persist sale (apply failures): ${JSON.stringify(syncBody.applyIssues || [])}`);
             }
+            if (erp?.failed && !this.isIdempotentAppliedResponse(erp, JSON.stringify(erp), true)) {
+                throw new Error(`ERP did not persist sale (apply error): ${JSON.stringify(erp).slice(0, 400)}`);
+            }
+            if (this.hasRealApplyErrorResponse(syncBody, JSON.stringify(syncBody))) {
+                throw new Error(`ERP did not persist sale (apply error): ${JSON.stringify(syncBody).slice(0, 400)}`);
+            }
+            this.attachTransactionSyncAudit(transaction, syncBody, 'APPLIED');
             if (erp?.skipped) {
                 console.warn(
                     `[SYNC_TX_PUSH] Master OK but ERP inbox skipped (${erp.reason || 'NO_ERP_URL'}). Configure CLIC_ERP_BASE_URL / erp_base_url localStorage or ERP_BASE_URL on Master. tx=${txId}`

@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Save, Printer, Monitor, Layers, Server, AlertCircle, ChefHat } from 'lucide-react';
+import { Plus, Trash2, Save, Printer, Monitor, Layers, Server, AlertCircle, ChefHat, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
 import { BusinessConfig } from '../types';
 import { db } from '../utils/db';
-import { getKdsTerminalTargets } from '../utils/kdsRouting';
+import { getKdsTerminalTargets, resolveKdsBaseUrl } from '../utils/kdsRouting';
 
 interface ProductionArea {
     id: string;
     nombre: string;
     modo_salida: 'KDS' | 'PRINTER' | 'AMBOS';
+    kds_delivery_mode?: 'LAN' | 'WEB';
     target_terminal_id?: string;
     kds_host?: string;
     kds_port?: string;
@@ -25,6 +26,8 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [kitchenEnabled, setKitchenEnabled] = useState(false);
+    const [testingKdsAreaId, setTestingKdsAreaId] = useState<string | null>(null);
+    const [kdsTestResults, setKdsTestResults] = useState<Record<string, { ok: boolean; message: string; baseUrl?: string }>>({});
     const kdsTerminals = getKdsTerminalTargets(config, terminals);
 
     useEffect(() => {
@@ -92,6 +95,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
             id: `pa_${Date.now()}`,
             nombre: 'Nueva Área',
             modo_salida: 'KDS',
+            kds_delivery_mode: 'LAN',
             kds_port: '8001'
         };
         setAreas([...areas, newArea]);
@@ -104,6 +108,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
     const handleSelectKdsTerminal = (area: ProductionArea, targetId: string) => {
         const target = kdsTerminals.find((candidate) => candidate.id === targetId);
         handleUpdateArea(area.id, {
+            kds_delivery_mode: 'LAN',
             target_terminal_id: targetId || undefined,
             kds_host: target?.host || area.kds_host,
             kds_port: target?.port || area.kds_port || '8001',
@@ -127,6 +132,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
             const normalizedArea: ProductionArea = {
                 ...area,
                 nombre: area.nombre?.trim() || 'Nueva Área',
+                kds_delivery_mode: area.kds_delivery_mode === 'WEB' ? 'WEB' : 'LAN',
                 target_terminal_id: area.target_terminal_id?.trim() || undefined,
                 kds_host: area.kds_host?.trim() || undefined,
                 kds_port: String(area.kds_port || '').trim() || '8001',
@@ -143,6 +149,65 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
             alert("Error al guardar área");
         } finally {
             setSaving(false);
+        }
+    };
+
+    const handleTestKdsConnection = async (area: ProductionArea) => {
+        const normalizedArea: ProductionArea = {
+            ...area,
+            kds_delivery_mode: area.kds_delivery_mode === 'WEB' ? 'WEB' : 'LAN',
+            target_terminal_id: area.target_terminal_id?.trim() || undefined,
+            kds_host: area.kds_host?.trim() || undefined,
+            kds_port: String(area.kds_port || '').trim() || '8001',
+        };
+        const baseUrl = resolveKdsBaseUrl(normalizedArea, config, terminals);
+
+        if (!baseUrl) {
+            setKdsTestResults(prev => ({
+                ...prev,
+                [area.id]: {
+                    ok: false,
+                    message: 'Configura la IP/Host o selecciona una terminal KDS con IP LAN.',
+                }
+            }));
+            return;
+        }
+
+        setTestingKdsAreaId(area.id);
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), 4000);
+
+        try {
+            const response = await fetch(`${baseUrl}/api/cocina/ordenes-activas`, {
+                method: 'GET',
+                signal: controller.signal,
+            });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            setKdsTestResults(prev => ({
+                ...prev,
+                [area.id]: {
+                    ok: true,
+                    baseUrl,
+                    message: 'Conexión KDS exitosa. El POS puede alcanzar esta pantalla.',
+                }
+            }));
+        } catch (error: any) {
+            const message = error?.name === 'AbortError'
+                ? 'Tiempo agotado. Verifica que el KDS esté encendido, en la misma red y con el puerto abierto.'
+                : `No se pudo conectar al KDS (${error?.message || 'error de red'}).`;
+            setKdsTestResults(prev => ({
+                ...prev,
+                [area.id]: {
+                    ok: false,
+                    baseUrl,
+                    message,
+                }
+            }));
+        } finally {
+            window.clearTimeout(timeoutId);
+            setTestingKdsAreaId(null);
         }
     };
 
@@ -240,6 +305,31 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                             {/* Conditional Settings */}
                             {(area.modo_salida === 'KDS' || area.modo_salida === 'AMBOS') && (
                                 <div className="animate-in slide-in-from-left-2">
+                                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2 block">Ruta del KDS</label>
+                                    <div className="mb-3 grid grid-cols-2 gap-2">
+                                        {[
+                                            { id: 'LAN', label: 'IP / LAN', helper: 'Equipo local' },
+                                            { id: 'WEB', label: 'Web URL', helper: 'Ruta http/https' },
+                                        ].map(mode => (
+                                            <button
+                                                key={mode.id}
+                                                type="button"
+                                                onClick={() => handleUpdateArea(area.id, {
+                                                    kds_delivery_mode: mode.id as 'LAN' | 'WEB',
+                                                    target_terminal_id: mode.id === 'WEB' ? undefined : area.target_terminal_id,
+                                                    kds_port: mode.id === 'WEB' ? area.kds_port : (area.kds_port || '8001'),
+                                                })}
+                                                className={`rounded-2xl border-2 px-3 py-3 text-left transition-all ${((area.kds_delivery_mode || 'LAN') === mode.id)
+                                                    ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-inner'
+                                                    : 'border-slate-100 bg-white text-slate-500 hover:border-slate-200'}`}
+                                            >
+                                                <span className="block text-xs font-black uppercase">{mode.label}</span>
+                                                <span className="block text-[10px] font-bold opacity-70">{mode.helper}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                    {(area.kds_delivery_mode || 'LAN') !== 'WEB' && (
+                                        <>
                                     <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">Pantalla Destino (Terminal)</label>
                                     <select
                                         value={area.target_terminal_id || ''}
@@ -263,18 +353,23 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                                             La terminal KDS seleccionada no reportó IP LAN. Escribe la IP/Host manualmente para poder enviar comandas.
                                         </p>
                                     )}
-                                    <div className="mt-3 grid grid-cols-[1fr_6rem] gap-2">
+                                        </>
+                                    )}
+                                    <div className={`mt-3 grid gap-2 ${(area.kds_delivery_mode || 'LAN') === 'WEB' ? 'grid-cols-1' : 'grid-cols-[1fr_6rem]'}`}>
                                         <div>
-                                            <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">IP / Host del KDS</label>
+                                            <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">
+                                                {(area.kds_delivery_mode || 'LAN') === 'WEB' ? 'URL Web del KDS' : 'IP / Host del KDS'}
+                                            </label>
                                             <input
                                                 type="text"
                                                 value={area.kds_host || ''}
                                                 onChange={(e) => handleUpdateArea(area.id, { kds_host: e.target.value })}
                                                 className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl px-4 py-3 text-sm font-black text-slate-700 focus:border-blue-500 outline-none"
-                                                placeholder="Ej: 192.168.1.50"
+                                                placeholder={(area.kds_delivery_mode || 'LAN') === 'WEB' ? 'Ej: https://kds.mercasend.net' : 'Ej: 192.168.1.50'}
                                             />
                                         </div>
-                                        <div>
+                                        {(area.kds_delivery_mode || 'LAN') !== 'WEB' && (
+                                            <div>
                                             <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">Puerto</label>
                                             <input
                                                 type="text"
@@ -284,11 +379,36 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                                                 className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl px-3 py-3 text-sm font-black text-slate-700 focus:border-blue-500 outline-none"
                                                 placeholder="8001"
                                             />
-                                        </div>
+                                            </div>
+                                        )}
                                     </div>
                                     <p className="mt-2 text-[10px] font-bold leading-relaxed text-slate-400">
-                                        La terminal ERP identifica la pantalla; la IP/Host es la ruta LAN para enviar la comanda a ese equipo.
+                                        {(area.kds_delivery_mode || 'LAN') === 'WEB'
+                                            ? 'Usa una URL http/https cuando el KDS está publicado por web o túnel seguro.'
+                                            : 'La terminal ERP identifica la pantalla; la IP/Host es la ruta LAN para enviar la comanda a ese equipo.'}
                                     </p>
+                                    <div className="mt-3 flex flex-col gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => handleTestKdsConnection(area)}
+                                            disabled={testingKdsAreaId === area.id}
+                                            className="inline-flex w-full items-center justify-center gap-2 rounded-xl border-2 border-blue-100 bg-blue-50 px-4 py-3 text-xs font-black uppercase tracking-wide text-blue-700 transition-all hover:border-blue-200 hover:bg-blue-100 active:scale-[0.98] disabled:opacity-60"
+                                        >
+                                            <RefreshCw size={15} className={testingKdsAreaId === area.id ? 'animate-spin' : ''} />
+                                            {testingKdsAreaId === area.id ? 'Probando KDS...' : 'Probar conexión KDS'}
+                                        </button>
+                                        {kdsTestResults[area.id] && (
+                                            <div className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-[11px] font-bold leading-relaxed ${kdsTestResults[area.id].ok ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-red-100 bg-red-50 text-red-700'}`}>
+                                                {kdsTestResults[area.id].ok ? <CheckCircle2 size={15} className="mt-0.5 shrink-0" /> : <XCircle size={15} className="mt-0.5 shrink-0" />}
+                                                <span>
+                                                    {kdsTestResults[area.id].message}
+                                                    {kdsTestResults[area.id].baseUrl && (
+                                                        <span className="block text-[10px] opacity-80">{kdsTestResults[area.id].baseUrl}</span>
+                                                    )}
+                                                </span>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             )}
 
