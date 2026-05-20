@@ -32,7 +32,8 @@ import {
   PaymentEntry,
   RedeemedCouponRef,
   RefundProcessingOptions,
-  PaymentMethodDefinition
+  PaymentMethodDefinition,
+  FiscalDocumentCorrectionInput
 } from './types';
 import {
   DEFAULT_ROLES,
@@ -153,6 +154,7 @@ import { buildTerminalConfigRefreshRequest, type TerminalConfigSyncRequestDetail
 import {
   canRetryFiscalTransaction,
   getEffectiveFiscalComplianceConfig,
+  getFiscalDisplayCode,
   getFiscalProviderConfig,
   getProviderEnvironment,
   getDefaultFiscalProvider,
@@ -3198,6 +3200,7 @@ const AppContent: React.FC = () => {
         fullPullOnPairing?: boolean;
         resolutionError?: unknown;
       };
+      progress?: (update: { stepId?: 'claim' | 'config' | 'apply' | 'sync' | 'cache' | 'finish'; message?: string }) => void;
     },
     options?: { forceTakeover?: boolean }
   ) => {
@@ -3223,6 +3226,10 @@ const AppContent: React.FC = () => {
       if (!setupResult?.boundConfig) {
         throw new Error('La vinculación debe provenir del backend central de setup. No se recibió configuración enlazada.');
       }
+      setupResult.progress?.({
+        stepId: 'apply',
+        message: 'Guardando configuración de terminal y permisos locales...',
+      });
       const updatedConfig = clearDuplicateDeviceAssignments(setupResult.boundConfig, deviceId, {
         activeTerminalId: terminalId,
         bindingTerminalId: setupResult?.erpTerminalId || terminalId,
@@ -3250,6 +3257,10 @@ const AppContent: React.FC = () => {
 
       setConfig(updatedConfig);
       await db.save('config', updatedConfig);
+      setupResult.progress?.({
+        stepId: 'apply',
+        message: 'Rehidratando series fiscales y documentos operativos...',
+      });
       const operationalDocumentState = extractTerminalOperationalDocumentState(updatedConfig, terminalId);
       await db.rehydrateOperationalDocumentState(
         operationalDocumentState.documentSeries,
@@ -3272,6 +3283,10 @@ const AppContent: React.FC = () => {
       }
 
       if (Array.isArray(setupResult?.boundUsers)) {
+        setupResult.progress?.({
+          stepId: 'apply',
+          message: 'Actualizando usuarios autorizados para esta terminal...',
+        });
         setUsers(setupResult.boundUsers);
         await db.save('users', setupResult.boundUsers);
       }
@@ -3292,6 +3307,10 @@ const AppContent: React.FC = () => {
       // This prevents pulling old config right after takeover.
       if (configSyncUrl) {
         try {
+          setupResult.progress?.({
+            stepId: 'sync',
+            message: 'Enviando identidad de la terminal al backend local...',
+          });
           const res = await fetch(configSyncUrl, {
             method: 'PUT',
             headers: {
@@ -3326,6 +3345,10 @@ const AppContent: React.FC = () => {
       // If we're taking over a previous server or pairing as slave, hydrate from the remote box first.
       if (shouldRestoreRemoteData) {
         try {
+          setupResult.progress?.({
+            stepId: 'sync',
+            message: 'Restaurando historial y catálogos desde la caja maestra...',
+          });
           const remoteRestoreConfig: BusinessConfig = {
             ...updatedConfig,
             terminals: (updatedConfig.terminals || []).map((terminal) => {
@@ -3345,12 +3368,24 @@ const AppContent: React.FC = () => {
 
           // Re-initialize sync manager with a temporary slave profile to pull history/catalogs
           await syncManager.initialize(remoteRestoreConfig, terminalId);
+          setupResult.progress?.({
+            stepId: 'sync',
+            message: 'Restaurando historial operativo de la terminal anterior...',
+          });
           await syncManager.restoreHistory(terminalId);
 
           console.log('🔄 Forcing full catalog sync to restore sequences...');
+          setupResult.progress?.({
+            stepId: 'sync',
+            message: 'Sincronizando productos, clientes, tarifas y secuencias...',
+          });
           await syncManager.syncAllCatalogs();
 
           // Reload data from DB after restoration
+          setupResult.progress?.({
+            stepId: 'cache',
+            message: 'Cargando datos restaurados desde SQLite...',
+          });
           const freshData = await db.init();
           setTransactions(freshData.transactions);
           setProducts(freshData.products);
@@ -3370,22 +3405,42 @@ const AppContent: React.FC = () => {
         localStorage.removeItem('pos_master_ip');
         localStorage.setItem('CLIC_POS_MASTER_URL', buildRuntimeMasterUrl());
       }
+      setupResult.progress?.({
+        stepId: 'sync',
+        message: 'Inicializando servicios del POS con la nueva terminal...',
+      });
       permissionService.initialize(updatedConfig, terminalId);
       await syncManager.initialize(updatedConfig, terminalId);
       const shouldFullPullOnPairing = setupResult?.snapshotMeta?.fullPullOnPairing ?? true;
       if (shouldFullPullOnPairing) {
+        setupResult.progress?.({
+          stepId: 'sync',
+          message: 'Sincronizando maestros: productos, tarifas, clientes, usuarios y documentos...',
+        });
         await syncManager.fullPull();
       } else {
         if (Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
+          setupResult.progress?.({
+            stepId: 'sync',
+            message: 'Guardando productos recibidos en el snapshot inicial...',
+          });
           const normalizedSnapshotItems = await productImageCacheService.normalizeIncomingProducts(setupResult.snapshotItems);
           await db.save('products', normalizedSnapshotItems);
           void productImageCacheService.syncSnapshotItems(normalizedSnapshotItems).catch((error) => {
             console.warn('⚠️ Snapshot product image sync failed after pairing:', error);
           });
         }
+        setupResult.progress?.({
+          stepId: 'sync',
+          message: 'Actualizando configuración resuelta de la terminal...',
+        });
         await syncManager.refreshTerminalResolvedConfig();
       }
 
+      setupResult.progress?.({
+        stepId: 'cache',
+        message: 'Actualizando caches locales y estado visual del POS...',
+      });
       const persistedConfigAfterSync = resolvePersistedBusinessConfig(await db.get('config') as unknown);
       const postSyncConfig = persistedConfigAfterSync || updatedConfig;
 
@@ -3427,6 +3482,10 @@ const AppContent: React.FC = () => {
       if (resolvedErpBaseUrl) {
         persistSetupErpBaseUrls(resolvedErpBaseUrl);
       }
+      setupResult.progress?.({
+        stepId: 'finish',
+        message: 'Terminal lista. Finalizando activación...',
+      });
       persistStoredErpSyncBinding({
         tenantId: setupResult?.tenantId || localStorage.getItem('active_tenant_id') || null,
         terminalId: resolvedErpTerminalId,
@@ -4014,6 +4073,123 @@ const AppContent: React.FC = () => {
       console.warn('⚠️ Fiscal history mirror update skipped:', historyMirrorError);
     }
   }, []);
+
+  const correctFiscalDocument = useCallback(async (
+    transaction: Transaction,
+    correction: FiscalDocumentCorrectionInput
+  ): Promise<Transaction> => {
+    if (!canRetryFiscalTransaction(transaction)) {
+      throw new Error('Solo se pueden corregir e-CF pendientes o con error.');
+    }
+    if (correction.fiscalCode !== 'E31' && correction.fiscalCode !== 'E32') {
+      throw new Error('Por ahora la corrección fiscal permite E31 o E32.');
+    }
+
+    const reason = (correction.reason || '').trim();
+    if (!reason) {
+      throw new Error('Indica el motivo de la corrección fiscal.');
+    }
+
+    const selectedCustomer = correction.customerId
+      ? customers.find(customer => customer.id === correction.customerId)
+      : undefined;
+    const selectedTaxDigits = (selectedCustomer?.taxId || '').replace(/\D/g, '');
+    if (correction.fiscalCode === 'E31' && (!selectedCustomer || (selectedTaxDigits.length !== 9 && selectedTaxDigits.length !== 11))) {
+      throw new Error('Para E31 selecciona un cliente con RNC/Cédula válido.');
+    }
+
+    const currentFiscalCode = getFiscalDisplayCode(transaction);
+    const currentNcf = transaction.electronicNcf || transaction.ncf || '';
+    const terminalId = transaction.terminalId || (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1';
+    const fiscalCodeChanged = currentFiscalCode !== correction.fiscalCode || !currentNcf.startsWith(correction.fiscalCode);
+    const nextNcf = fiscalCodeChanged
+      ? await db.getNextNCF(correction.fiscalCode, terminalId, 50)
+      : currentNcf || undefined;
+
+    if (!nextNcf) {
+      throw new Error(`No hay secuencia local disponible para ${correction.fiscalCode}.`);
+    }
+
+    const correctedAt = new Date().toISOString();
+    const customerSnapshot = selectedCustomer ? {
+      name: selectedCustomer.name,
+      taxId: selectedCustomer.taxId,
+      address: selectedCustomer.address,
+      phone: selectedCustomer.phone,
+      email: selectedCustomer.email
+    } : undefined;
+
+    let correctedTransaction: Transaction = {
+      ...transaction,
+      terminalId,
+      ncfType: correction.fiscalCode,
+      ncf: nextNcf,
+      electronicNcf: nextNcf,
+      legacyNcf: undefined,
+      customerId: selectedCustomer?.id,
+      customerName: selectedCustomer?.name || (correction.fiscalCode === 'E32' ? 'Consumidor final' : transaction.customerName),
+      customerSnapshot,
+      fiscalSyncStatus: 'PENDING',
+      fiscalSyncError: undefined,
+      fiscalReferenceId: undefined,
+      fiscalResponseMessage: `Corrección e-CF aplicada por ${currentUser?.name || 'usuario POS'}. Pendiente de reenvío fiscal.`,
+      fiscalSyncedAt: undefined,
+      syncStatus: transaction.syncStatus === 'COMPLETED' ? transaction.syncStatus : 'PENDING',
+      updatedAt: correctedAt,
+      fiscalCorrectionAudit: [
+        ...(transaction.fiscalCorrectionAudit || []),
+        {
+          id: `FISCAL-CORR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          correctedAt,
+          correctedById: currentUser?.id,
+          correctedByName: currentUser?.name,
+          reason,
+          old: {
+            fiscalCode: currentFiscalCode,
+            ncf: currentNcf || transaction.legacyNcf,
+            customerId: transaction.customerId,
+            customerName: transaction.customerName,
+            customerTaxId: transaction.customerSnapshot?.taxId,
+            netAmount: transaction.netAmount,
+            taxAmount: transaction.taxAmount,
+            total: transaction.total,
+            fiscalSyncStatus: transaction.fiscalSyncStatus,
+            fiscalSyncError: transaction.fiscalSyncError
+          },
+          next: {
+            fiscalCode: correction.fiscalCode,
+            ncf: nextNcf,
+            customerId: selectedCustomer?.id,
+            customerName: selectedCustomer?.name || (correction.fiscalCode === 'E32' ? 'Consumidor final' : transaction.customerName),
+            customerTaxId: selectedCustomer?.taxId,
+            fiscalSyncStatus: 'PENDING'
+          }
+        }
+      ]
+    };
+
+    if (correction.recalculateTaxes) {
+      const terminalConfig = config.terminals?.find(terminal => terminal.id === terminalId)?.config;
+      const fiscalSummary = calculateTransactionFiscalSummary(correctedTransaction, config, { terminalConfig });
+      correctedTransaction = {
+        ...correctedTransaction,
+        netAmount: fiscalSummary.subtotal,
+        taxAmount: fiscalSummary.taxTotal,
+        taxBreakdown: fiscalSummary.taxBreakdown,
+        total: fiscalSummary.total
+      };
+
+      const audit = correctedTransaction.fiscalCorrectionAudit?.[correctedTransaction.fiscalCorrectionAudit.length - 1];
+      if (audit) {
+        audit.next.netAmount = correctedTransaction.netAmount;
+        audit.next.taxAmount = correctedTransaction.taxAmount;
+        audit.next.total = correctedTransaction.total;
+      }
+    }
+
+    await upsertFiscalTransaction(correctedTransaction);
+    return correctedTransaction;
+  }, [config, currentUser, customers, deviceId, upsertFiscalTransaction]);
 
   const pollFiscalDocumentStatus = useCallback(async (
     transaction: Transaction,
@@ -5498,7 +5674,11 @@ const AppContent: React.FC = () => {
             }}
             onOpenInventoryTracking={(productId) => handleViewChange('TRACKING', { productId })}
             onOpenAudit={() => handleViewChange('INVENTORY_AUDIT')}
-            onOpenTableMap={() => handleViewChange('TABLE_MAP')}
+            onOpenTableMap={() => {
+              setViewData(null);
+              setCurrentView('TABLE_MAP');
+              fetchTables().catch((error) => console.error('Failed to refresh tables on TABLE_MAP view:', error));
+            }}
             onOpenAgenda={() => setCurrentView('AGENDA')}
             onTransactionComplete={handleTransactionComplete}
             activeTable={activeTable}
@@ -5696,6 +5876,7 @@ const AppContent: React.FC = () => {
             currentUser={currentUser}
             users={users}
             roles={roles}
+            customers={customers}
             initialSelectedId={scanTargetTicketId}
             onUpdateConfig={handleConfigUpdate}
             onClose={() => {
@@ -5725,6 +5906,7 @@ const AppContent: React.FC = () => {
               }
             }}
             onRetryFiscalDocument={retryFiscalDocument}
+            onCorrectFiscalDocument={correctFiscalDocument}
           />
         );
 

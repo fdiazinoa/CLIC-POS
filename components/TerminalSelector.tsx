@@ -87,6 +87,7 @@ interface BoundTerminalPayload {
     fullPullOnPairing?: boolean;
     resolutionError?: unknown;
   };
+  progress?: (update: TerminalBindingProgressUpdate) => void;
 }
 
 interface TerminalSelectorProps {
@@ -102,6 +103,71 @@ interface TerminalSelectorProps {
   onBack: () => void;
   onMasterIpChange?: (nextIp: string) => void;
 }
+
+interface TerminalBindingProgressUpdate {
+  stepId?: TerminalBindingProgressStepId;
+  message?: string;
+}
+
+type TerminalBindingProgressStepId = 'claim' | 'config' | 'apply' | 'sync' | 'cache' | 'finish';
+
+type TerminalBindingProgressStatus = 'pending' | 'active' | 'done' | 'error';
+
+interface TerminalBindingProgressStep {
+  id: TerminalBindingProgressStepId;
+  label: string;
+  detail: string;
+  status: TerminalBindingProgressStatus;
+}
+
+interface TerminalBindingProgressState {
+  isOpen: boolean;
+  terminal?: TerminalCard;
+  terminalName: string;
+  activeStepId: TerminalBindingProgressStepId;
+  message: string;
+  error: string | null;
+  steps: TerminalBindingProgressStep[];
+}
+
+const TERMINAL_BINDING_PROGRESS_TEMPLATE: Array<Omit<TerminalBindingProgressStep, 'status'>> = [
+  { id: 'claim', label: 'Reasignar terminal', detail: 'Validando dispositivo y tomando control' },
+  { id: 'config', label: 'Descargar configuración', detail: 'Leyendo snapshot del ERP o master' },
+  { id: 'apply', label: 'Aplicar configuración', detail: 'Guardando identidad y permisos locales' },
+  { id: 'sync', label: 'Sincronizar maestros', detail: 'Productos, tarifas, clientes, usuarios y series' },
+  { id: 'cache', label: 'Actualizar datos locales', detail: 'Rehidratando SQLite y caches del POS' },
+  { id: 'finish', label: 'Finalizar', detail: 'Preparando entrada al POS' },
+];
+
+const createProgressSteps = (
+  activeStepId: TerminalBindingProgressStepId,
+  errorStepId?: TerminalBindingProgressStepId
+): TerminalBindingProgressStep[] => {
+  const activeIndex = TERMINAL_BINDING_PROGRESS_TEMPLATE.findIndex((step) => step.id === activeStepId);
+  const errorIndex = errorStepId
+    ? TERMINAL_BINDING_PROGRESS_TEMPLATE.findIndex((step) => step.id === errorStepId)
+    : -1;
+
+  return TERMINAL_BINDING_PROGRESS_TEMPLATE.map((step, index) => ({
+    ...step,
+    status: errorIndex === index
+      ? 'error'
+      : index < activeIndex
+        ? 'done'
+        : index === activeIndex
+          ? 'active'
+          : 'pending',
+  }));
+};
+
+const createInitialProgressState = (): TerminalBindingProgressState => ({
+  isOpen: false,
+  terminalName: '',
+  activeStepId: 'claim',
+  message: '',
+  error: null,
+  steps: createProgressSteps('claim'),
+});
 
 const normalizeBaseUrl = (value?: string | null): string | null => {
   const raw = (value || '').trim();
@@ -282,6 +348,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   const [isBinding, setIsBinding] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [pendingTerminal, setPendingTerminal] = useState<TerminalCard | null>(null);
+  const [bindingProgress, setBindingProgress] = useState<TerminalBindingProgressState>(() => createInitialProgressState());
   const [masterIpInput, setMasterIpInput] = useState(masterIp);
   const [erpBaseUrl, setErpBaseUrl] = useState<string | null>(() => normalizeBaseUrl(initialErpBaseUrl) || resolveErpBaseUrl());
   const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -321,6 +388,48 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
     }
     return getSetupApiBase(masterIpInput);
   }, [bindingMode, isNativeAndroid, masterIpInput]);
+
+  const startBindingProgress = useCallback((terminal: TerminalCard, message: string) => {
+    setBindingProgress({
+      isOpen: true,
+      terminal,
+      terminalName: terminal.name,
+      activeStepId: 'claim',
+      message,
+      error: null,
+      steps: createProgressSteps('claim'),
+    });
+  }, []);
+
+  const updateBindingProgress = useCallback((update: TerminalBindingProgressUpdate) => {
+    setBindingProgress((current) => {
+      if (!current.isOpen) return current;
+      const nextStepId = update.stepId || current.activeStepId;
+      return {
+        ...current,
+        activeStepId: nextStepId,
+        message: update.message || current.message,
+        error: null,
+        steps: createProgressSteps(nextStepId),
+      };
+    });
+  }, []);
+
+  const failBindingProgress = useCallback((message: string) => {
+    setBindingProgress((current) => {
+      if (!current.isOpen) return current;
+      return {
+        ...current,
+        message: 'No se pudo completar el traspaso.',
+        error: message,
+        steps: createProgressSteps(current.activeStepId, current.activeStepId),
+      };
+    });
+  }, []);
+
+  const closeBindingProgress = useCallback(() => {
+    setBindingProgress(createInitialProgressState());
+  }, []);
 
   const fetchTerminals = useCallback(async () => {
     if (shouldBlockAlreadyBound) {
@@ -435,11 +544,14 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
   const bindTerminal = useCallback(
     async (terminal: TerminalCard, forceTransfer: boolean) => {
+      let completed = false;
+      const showProgress = forceTransfer;
       setIsBinding(true);
       setError(null);
       if (forceTransfer) {
         setShowTransferModal(false);
         setPendingTerminal(null);
+        startBindingProgress(terminal, `Reasignando ${terminal.name} a este equipo...`);
       }
 
     try {
@@ -447,6 +559,13 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
       if (expectsErpDirect && !erpBaseUrl) {
         throw new Error('No encontramos la URL base del ERP para completar la vinculación.');
+      }
+
+      if (showProgress) {
+        updateBindingProgress({
+          stepId: 'claim',
+          message: 'Validando la terminal ocupada y solicitando el traspaso...',
+        });
       }
 
       if (useErpDirectMasterAndroid) {
@@ -542,6 +661,13 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           throw new Error('No se pudo vincular la terminal.');
         }
 
+        if (showProgress) {
+          updateBindingProgress({
+            stepId: 'config',
+            message: 'Terminal reasignada. Descargando configuración inicial y maestros...',
+          });
+        }
+
         const initialConfigParams = new URLSearchParams({
           tenant_id: data.tenant_id || tenantId,
           pos_device_id: deviceId,
@@ -600,6 +726,13 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             throw new Error('El ERP no devolvió terminal_config en la configuración inicial.');
           }
 
+          if (showProgress) {
+            updateBindingProgress({
+              stepId: 'apply',
+              message: 'Aplicando configuración resuelta para esta terminal...',
+            });
+          }
+
           const applied = applyTerminalConfigSnapshot(
             erpInitialConfigData.config || data.config || currentConfig,
             {
@@ -636,6 +769,13 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           const snapshot = extractTerminalConfigSnapshot(erpInitialConfigData);
           if (!snapshot) {
             throw new Error('El ERP no devolvió terminal_config en la configuración inicial.');
+          }
+
+          if (showProgress) {
+            updateBindingProgress({
+              stepId: 'apply',
+              message: 'Aplicando configuración resuelta para esta terminal...',
+            });
           }
 
           const applied = applyTerminalConfigSnapshot(
@@ -692,6 +832,13 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             ? normalizeMasterHost(masterIpInput) || masterIpInput.trim() || undefined
             : undefined;
 
+        if (showProgress) {
+          updateBindingProgress({
+            stepId: 'sync',
+            message: 'Sincronizando maestros y preparando datos locales del POS...',
+          });
+        }
+
         await onBound({
           terminalId: initialConfigData.terminal_id || data.terminal_id || terminal.id,
           erpTerminalId: data.erp_terminal_id || terminal.erpTerminalId || undefined,
@@ -712,7 +859,15 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             fullPullOnPairing: initialConfigData.snapshot_meta?.full_pull_on_pairing,
             resolutionError: initialConfigData.snapshot_meta?.resolution_error,
           },
+          progress: showProgress ? updateBindingProgress : undefined,
         });
+        completed = true;
+        if (showProgress) {
+          updateBindingProgress({
+            stepId: 'finish',
+            message: 'Terminal transferida correctamente. Abriendo el POS...',
+          });
+        }
       } catch (err) {
         if (isTerminalOccupiedError(err)) {
           setPendingTerminal({
@@ -724,14 +879,21 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           return;
         }
         console.error('Failed to bind terminal during setup:', err);
-        setError(err instanceof Error ? err.message : 'No se pudo completar la vinculación.');
+        const message = err instanceof Error ? err.message : 'No se pudo completar la vinculación.';
+        setError(message);
+        if (showProgress) {
+          setPendingTerminal(terminal);
+          failBindingProgress(message);
+        }
       } finally {
         setIsBinding(false);
-        setShowTransferModal(false);
-        setPendingTerminal(null);
+        if (!showProgress || completed) {
+          setShowTransferModal(false);
+          setPendingTerminal(null);
+        }
       }
     },
-    [apiBase, bindingMode, currentConfig, deviceId, erpBaseUrl, expectsErpDirect, masterIpInput, onBound, tenantId, useErpDirectMasterAndroid, usesErpDirect]
+    [apiBase, bindingMode, currentConfig, deviceId, erpBaseUrl, expectsErpDirect, failBindingProgress, masterIpInput, onBound, startBindingProgress, tenantId, updateBindingProgress, useErpDirectMasterAndroid, usesErpDirect]
   );
 
   const handleCardClick = useCallback(
@@ -982,6 +1144,136 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {bindingProgress.isOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-slate-950/55 p-3 sm:p-4 backdrop-blur-sm">
+          <div className="my-auto w-full max-w-[34rem] overflow-hidden rounded-[1.5rem] border border-white/70 bg-white shadow-[0_32px_96px_rgba(15,23,42,0.28)] sm:rounded-[2rem]">
+            <div className="px-5 py-5 sm:px-7 sm:py-7">
+              <div className="flex items-start gap-4">
+                <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.25rem] shadow-inner ${
+                  bindingProgress.error ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'
+                }`}>
+                  {bindingProgress.error ? (
+                    <AlertTriangle size={24} />
+                  ) : (
+                    <RefreshCw size={24} className="animate-spin" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className={`text-[11px] font-black uppercase tracking-[0.3em] ${
+                    bindingProgress.error ? 'text-red-500' : 'text-blue-500'
+                  }`}>
+                    {bindingProgress.error ? 'Traspaso detenido' : 'Transferencia en progreso'}
+                  </p>
+                  <h4 className="mt-2 text-xl font-black tracking-tight text-slate-900">
+                    {bindingProgress.terminalName || 'Terminal'}
+                  </h4>
+                  <p className="mt-2 text-sm font-semibold leading-relaxed text-slate-500">
+                    {bindingProgress.message || 'Preparando el equipo...'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-6 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className={`h-2 rounded-full transition-all duration-500 ${
+                    bindingProgress.error ? 'bg-red-500' : 'bg-blue-600'
+                  }`}
+                  style={{
+                    width: `${Math.max(
+                      12,
+                      ((TERMINAL_BINDING_PROGRESS_TEMPLATE.findIndex((step) => step.id === bindingProgress.activeStepId) + 1)
+                        / TERMINAL_BINDING_PROGRESS_TEMPLATE.length) * 100
+                    )}%`,
+                  }}
+                />
+              </div>
+
+              <div className="mt-6 space-y-3">
+                {bindingProgress.steps.map((step) => (
+                  <div
+                    key={step.id}
+                    className={`flex items-start gap-3 rounded-2xl border px-4 py-3 ${
+                      step.status === 'error'
+                        ? 'border-red-100 bg-red-50'
+                        : step.status === 'active'
+                          ? 'border-blue-100 bg-blue-50'
+                          : step.status === 'done'
+                            ? 'border-emerald-100 bg-emerald-50'
+                            : 'border-slate-100 bg-slate-50'
+                    }`}
+                  >
+                    <div className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
+                      step.status === 'error'
+                        ? 'bg-red-100 text-red-600'
+                        : step.status === 'active'
+                          ? 'bg-blue-100 text-blue-600'
+                          : step.status === 'done'
+                            ? 'bg-emerald-100 text-emerald-600'
+                            : 'bg-white text-slate-300'
+                    }`}>
+                      {step.status === 'done' ? (
+                        <CheckCircle2 size={15} />
+                      ) : step.status === 'active' ? (
+                        <RefreshCw size={14} className="animate-spin" />
+                      ) : step.status === 'error' ? (
+                        <AlertTriangle size={14} />
+                      ) : (
+                        <span className="h-2 w-2 rounded-full bg-current" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <p className={`text-sm font-black ${
+                        step.status === 'error'
+                          ? 'text-red-700'
+                          : step.status === 'active'
+                            ? 'text-blue-800'
+                            : step.status === 'done'
+                              ? 'text-emerald-800'
+                              : 'text-slate-500'
+                      }`}>
+                        {step.label}
+                      </p>
+                      <p className="mt-0.5 text-xs font-semibold leading-relaxed text-slate-500">{step.detail}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {bindingProgress.error && (
+                <div className="mt-5 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold leading-relaxed text-red-700">
+                  {bindingProgress.error}
+                </div>
+              )}
+            </div>
+
+            {bindingProgress.error && (
+              <div className="border-t border-slate-100 px-5 py-4 sm:px-7">
+                <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={closeBindingProgress}
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 sm:w-auto"
+                  >
+                    Cerrar
+                  </button>
+                  {bindingProgress.terminal && (
+                    <button
+                      type="button"
+                      onClick={() => void bindTerminal(bindingProgress.terminal!, true)}
+                      disabled={isBinding}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                    >
+                      {isBinding ? <RefreshCw size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                      Reintentar
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

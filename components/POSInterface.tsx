@@ -22,7 +22,7 @@ import {
    PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, RedeemedCouponRef, ProductVariant
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
-import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
+import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, mapElectronicFiscalCodeToLegacy, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
 import { calculateTransactionTaxSummary } from '../utils/taxSummary';
 import UnifiedPaymentModal from './PaymentModal';
 import {
@@ -60,6 +60,7 @@ import ProductTableSupermarket from './ProductTableSupermarket';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { printComanda, printPrecuenta } from '../utils/printer';
 import ModifierModal from './ModifierModal';
+import { productHasRestaurantConfiguration, resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
 import { visorSync } from '../utils/visorSync';
 import { maybeAutoLaunchCustomerDisplay } from '../utils/customerDisplay';
 import ProductQuickActions from './ProductQuickActions';
@@ -175,6 +176,20 @@ const postJsonWithTimeout = async (url: string, payload: unknown, timeoutMs = 50
    }
 };
 
+const resolveProductionAreaId = (item: any): string => {
+   const restaurantConfig = resolveRestaurantProductConfig(item);
+   const direct =
+      item?.production_area_id
+      || item?.productionAreaId
+      || item?.productionAreaID
+      || item?.productionArea
+      || item?.restaurantConfig?.production_area_id
+      || restaurantConfig.production_area_id
+      || item?.metadata?.production_area_id
+      || item?.metadata?.productionAreaId;
+   return String(direct || '').trim();
+};
+
 const buildKdsDispatchItems = (items: CartItem[]) => items.map((item, index) => ({
    id: item.cartId || `${item.id}-${index}`,
    producto_id: item.id,
@@ -187,7 +202,7 @@ const buildKdsDispatchItems = (items: CartItem[]) => items.map((item, index) => 
    modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
    modificadores: Array.isArray(item.modifiers) ? item.modifiers : [],
    note: item.note || '',
-   production_area_id: (item as any).production_area_id || '',
+   production_area_id: resolveProductionAreaId(item),
    variantInfo: item.variantInfo || '',
 }));
 
@@ -2065,7 +2080,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
 
-   const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string) => {
+   const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig']) => {
       if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
       if (quantity > 0 && !ensureSalesWithOpenZPermission()) return;
       if (!canAddItemToCart(product, quantity)) return;
@@ -2083,6 +2098,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const variantSku = selectedVariant?.sku;
       const effectiveTaxIds = resolveEffectiveTaxIds(product.appliedTaxIds, activeTerminalConfig);
       const taxSignature = effectiveTaxIds.slice().sort().join('|');
+      const productRestaurantConfig = resolveRestaurantProductConfig(product);
+      const productionAreaId = resolveProductionAreaId(product);
+      const lineRestaurantConfig = restaurantConfig
+         ? {
+            ...restaurantConfig,
+            product_type: restaurantConfig.product_type || productRestaurantConfig.product_type,
+            production_area_id: restaurantConfig.production_area_id || productionAreaId || undefined,
+         }
+         : undefined;
 
       // We look for existing item in the stable 'cart' prop/state instead of inside the setter
       // to avoid using setter for logic that triggers side effects.
@@ -2097,7 +2121,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (existing && !usesSerial) {
          targetCartId = existing.cartId!;
          onUpdateCart(prev => {
-            const updatedItem = { ...existing, quantity: existing.quantity + quantity, appliedTaxIds: effectiveTaxIds };
+            const updatedItem = {
+               ...existing,
+               quantity: existing.quantity + quantity,
+               appliedTaxIds: effectiveTaxIds,
+               production_area_id: resolveProductionAreaId(existing) || productionAreaId || undefined,
+            };
             return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
          });
       } else {
@@ -2109,9 +2138,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             quantity,
             price: finalPrice,
             modifiers,
+            note,
+            restaurantConfig: lineRestaurantConfig,
+            selected_modifiers: lineRestaurantConfig?.selected_modifiers,
+            selected_fraction_parts: lineRestaurantConfig?.selected_fraction_parts || lineRestaurantConfig?.fractions,
+            selected_combo_items: lineRestaurantConfig?.selected_combo_items,
+            product_type: productRestaurantConfig.product_type || product.product_type,
             variantSku,
             variantInfo,
             appliedTaxIds: effectiveTaxIds,
+            production_area_id: productionAreaId || undefined,
             originalPrice: getProductPrice(product),
             trackingData
          };
@@ -2133,15 +2169,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const productName = product.name || '';
       const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
       const hasVariants = (product.variants || []).length > 0 || (product.attributes || []).length > 0;
-      const hasModifiers = (product.availableModifiers || []).length > 0;
-      const requiresConfigurationBeforeAdd = isWeighted || hasVariants || hasModifiers;
+      const hasRestaurantConfig = productHasRestaurantConfiguration(product) || Boolean(
+         (product.availableModifiers || []).length > 0
+         || (product.modifier_groups || product.modifierGroups || []).length > 0
+         || (product.combo_groups || product.comboGroups || []).length > 0
+         || (product.fraction_rule || product.fractionRule)
+         || (product.note_presets || product.notePresets || []).length > 0
+      );
+      const requiresConfigurationBeforeAdd = isWeighted || hasVariants || hasRestaurantConfig;
 
       if (!isReturnMode && !ensureSalesWithOpenZPermission()) return;
       if (requiresConfigurationBeforeAdd && !canAddItemToCart(product)) return;
 
       if (isWeighted) setProductForScale(product);
       else if (hasVariants) setSelectedProductForVariants(product);
-      else if (hasModifiers) setProductForModifiers(product);
+      else if (hasRestaurantConfig) setProductForModifiers(product);
       else addToCart(product, isReturnMode ? -1 : 1);
    }, [isMobile, defaultSalesWarehouseId, ensureSalesWithOpenZPermission, canAddItemToCart, addToCart, isReturnMode]);
 
@@ -2413,9 +2455,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return threshold > 0 && fiscalCartGrossTotal > threshold ? 'OVER_THRESHOLD' : 'BASE';
    }, [activeTerminalConfig?.operational?.fiscalThreshold, fiscalCartGrossTotal]);
    const requiredSaleFiscalType = useMemo<FiscalDocumentCode>(() => {
+      const customerFiscalType = selectedCustomer?.defaultNcfType;
       const baseLegacyType: NCFType = fiscalThresholdBucket === 'OVER_THRESHOLD'
          ? 'B01'
-         : (selectedCustomer?.defaultNcfType || (selectedCustomer?.requiresFiscalInvoice ? 'B01' : 'B02'));
+         : (
+            customerFiscalType?.startsWith('E')
+               ? mapElectronicFiscalCodeToLegacy(customerFiscalType as any) as NCFType
+               : (customerFiscalType || (selectedCustomer?.requiresFiscalInvoice ? 'B01' : 'B02')) as NCFType
+         );
       return resolveSaleFiscalCode(fiscalCompliance.mode, baseLegacyType);
    }, [
       fiscalCompliance.mode,
@@ -3194,7 +3241,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          normalizedRefundItems.forEach(item => sellableConditions.set(item.cartId, 'SELLABLE'));
 
          // --- FISCAL COMPLIANCE CHECK (DGII RNC VALIDATION) ---
-         if (!isRefundOnly && fiscalStatus && (fiscalStatus.type === 'B01' || fiscalStatus.type === 'E31') && customerForCheckout) {
+         const isCreditFiscalDocument = !isRefundOnly && fiscalStatus && (fiscalStatus.type === 'B01' || fiscalStatus.type === 'E31');
+         if (isCreditFiscalDocument) {
+            const buyerTaxDigits = String(customerForCheckout?.taxId || '').replace(/\D/g, '');
+            const hasValidBuyerTaxId = buyerTaxDigits.length === 9 || buyerTaxDigits.length === 11;
+            if (!customerForCheckout || !hasValidBuyerTaxId) {
+               alert(
+                  `⛔ COMPROBANTE BLOQUEADO\n\n` +
+                  `Para emitir Crédito Fiscal (${fiscalStatus.type}) debe seleccionar un cliente con RNC/Cédula válido.\n\n` +
+                  `Acción requerida: complete el RNC/Cédula del cliente o cambie el tipo de comprobante a Consumo (${fiscalStatus.type === 'E31' ? 'E32' : 'B02'}).`
+               );
+               return null;
+            }
+
             if (customerForCheckout.fiscalStatus && customerForCheckout.fiscalStatus !== 'ACTIVO') {
                alert(
                   `⛔ COMPROBANTE BLOQUEADO\n\n` +
@@ -3714,7 +3773,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // 1. Group only routed items by production area for separate tickets/KDS screens.
          const areas: Record<string, { area: ProductionAreaConfig, title: string, items: CartItem[] }> = {};
          newItems.forEach(item => {
-            const areaId = String(item.production_area_id || '').trim();
+            const areaId = resolveProductionAreaId(item);
             if (!areaId) return;
 
             const configuredArea = areaById.get(areaId);
@@ -3893,35 +3952,44 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const releaseActiveEmptyTable = async (options: { silent?: boolean } = {}): Promise<boolean> => {
       if (!activeTable || cart.length > 0) return false;
 
-      try {
-         const releaseRes = await fetch('/api/mesas/liberar', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tableId: activeTable.id })
-         });
-         const releaseData = await releaseRes.json().catch(() => null);
+      const tableToRelease = activeTable;
 
-         if (!releaseRes.ok || (releaseData && releaseData.success === false)) {
-            throw new Error(releaseData?.message || `HTTP ${releaseRes.status}`);
-         }
-
-         if (activeTable.currentOrderId) {
-            const remaining = parkedTickets.filter(p => p.id !== activeTable.currentOrderId);
-            onUpdateParkedTickets(remaining);
-         }
-
-         onUpdateCart([]);
-         onSelectCustomer(null);
-         setActiveRecoveredReservation(null);
-         if (onClearActiveTable) onClearActiveTable();
-         if (!options.silent) {
-            setSuccessToast('Mesa liberada (sin productos)');
-         }
-         return true;
-      } catch (error) {
-         console.error('Failed to auto-release empty table:', error);
-         return false;
+      if (tableToRelease.currentOrderId) {
+         const remaining = parkedTickets.filter(p => p.id !== tableToRelease.currentOrderId);
+         onUpdateParkedTickets(remaining);
       }
+
+      onUpdateCart([]);
+      onSelectCustomer(null);
+      setActiveRecoveredReservation(null);
+      if (onClearActiveTable) onClearActiveTable();
+      if (!options.silent) {
+         setSuccessToast('Mesa liberada (sin productos)');
+      }
+
+      void (async () => {
+         const controller = new AbortController();
+         const timeoutId = window.setTimeout(() => controller.abort(), 2500);
+         try {
+            const releaseRes = await fetch('/api/mesas/liberar', {
+               method: 'POST',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({ tableId: tableToRelease.id }),
+               signal: controller.signal
+            });
+            const releaseData = await releaseRes.json().catch(() => null);
+
+            if (!releaseRes.ok || (releaseData && releaseData.success === false)) {
+               throw new Error(releaseData?.message || `HTTP ${releaseRes.status}`);
+            }
+         } catch (error) {
+            console.warn('No se pudo confirmar la liberacion de mesa en servidor:', error);
+         } finally {
+            window.clearTimeout(timeoutId);
+         }
+      })();
+
+      return true;
    };
 
    const handleParkCurrentTicket = async (aliasInput?: string) => {
@@ -4005,24 +4073,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       ];
       onUpdateParkedTickets(updatedTickets);
 
-      try {
-         await fetch(`http://localhost:8001/api/ordenes/${tableOrder.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-               items: tableOrder.items,
-               total: tableOrder.total,
-               status: 'OCCUPIED'
-            })
-         });
-      } catch (error) {
-         console.warn('No se pudo sincronizar la mesa con cocina al volver al mapa:', error);
-      }
-
       onUpdateCart([]);
       onSelectCustomer(null);
       setActiveRecoveredReservation(null);
       if (onClearActiveTable) onClearActiveTable();
+
+      void (async () => {
+         try {
+            await fetch(`http://localhost:8001/api/ordenes/${tableOrder.id}`, {
+               method: 'PUT',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({
+                  items: tableOrder.items,
+                  total: tableOrder.total,
+                  status: 'OCCUPIED'
+               })
+            });
+         } catch (error) {
+            console.warn('No se pudo sincronizar la mesa con cocina al volver al mapa:', error);
+         }
+      })();
    };
 
    const handleSendAndExit = async () => {
@@ -4049,21 +4119,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (onOpenTableMap) onOpenTableMap();
    };
 
-   const handleBackToMap = async () => {
-      if (blockRecoveredUberOrderMutation('enviarlo a espera')) return;
+   const handleBackToMap = () => {
+      if (blockRecoveredUberOrderMutation('volver al mapa de mesas')) return;
 
       setShowParkedList(false);
       closeParkAliasModal();
       if (onOpenTableMap) onOpenTableMap();
 
-      void (async () => {
+      window.setTimeout(() => {
          if (!activeTable) return;
          if (cart.length === 0) {
-            await releaseActiveEmptyTable({ silent: true });
+            void releaseActiveEmptyTable({ silent: true });
             return;
          }
-         await saveActiveTableOrderForMap();
-      })();
+         void saveActiveTableOrderForMap();
+      }, 0);
    };
 
    const handleRestoreTicket = (parked: ParkedTicket) => {
@@ -6061,8 +6131,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                currencySymbol={baseCurrency.symbol}
                themeColor="blue"
                onClose={() => setProductForModifiers(null)}
-               onConfirm={(selectedModifierNames, finalPrice) => {
-                  addToCart(productForModifiers, isReturnMode ? -1 : 1, finalPrice, selectedModifierNames);
+               onConfirm={(selectedModifierNames, finalPrice, note, restaurantConfig) => {
+                  addToCart(productForModifiers, isReturnMode ? -1 : 1, finalPrice, selectedModifierNames, undefined, undefined, undefined, note, restaurantConfig as CartItem['restaurantConfig']);
                   setProductForModifiers(null);
                }}
             />
