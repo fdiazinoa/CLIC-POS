@@ -8,6 +8,7 @@ import { Table, Room } from '../types';
 interface TableOptionsModalProps {
   table: Table;
   room?: Room;
+  rooms?: Room[];
   allTables: Table[];
   onClose: () => void;
   onAddOrder: () => void;
@@ -19,9 +20,25 @@ interface TableOptionsModalProps {
   onFree?: () => void;
 }
 
+const getRoomLabel = (room?: Room): string => {
+  return room?.nombre || room?.name || 'Sala';
+};
+
+const getTableLabel = (table: Table): string => {
+  return table.nombre || table.name || 'Mesa';
+};
+
+const getTableRoomLabel = (table: Table, rooms: Room[] = []): string => {
+  const tableLabel = getTableLabel(table);
+  const room = rooms.find(candidate => candidate.id === table.roomId);
+  const roomLabel = getRoomLabel(room);
+  return room ? `${roomLabel} · ${tableLabel}` : tableLabel;
+};
+
 const TableOptionsModal: React.FC<TableOptionsModalProps> = ({
   table,
   room,
+  rooms = [],
   allTables,
   onClose,
   onAddOrder,
@@ -33,7 +50,7 @@ const TableOptionsModal: React.FC<TableOptionsModalProps> = ({
   onFree
 }) => {
   const isOccupied = table.status === 'OCCUPIED';
-  const availableTables = allTables.filter(t => t.id !== table.id && t.roomId === table.roomId && t.status === 'FREE');
+  const availableTables = allTables.filter(t => t.id !== table.id && (!t.status || t.status === 'FREE') && t.shape !== 'OBSTACLE');
   const [showMoveView, setShowMoveView] = useState(false);
 
   // Sub-view for Move Table to keep modal clean
@@ -44,7 +61,7 @@ const TableOptionsModal: React.FC<TableOptionsModalProps> = ({
           <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
             <div>
               <h3 className="text-xs font-bold tracking-wider text-gray-400 uppercase">Mover Pedido</h3>
-              <h2 className="text-xl font-bold text-gray-800">De {table.nombre} a...</h2>
+              <h2 className="text-xl font-bold text-gray-800">De {getTableRoomLabel(table, rooms)} a...</h2>
             </div>
             <button onClick={() => setShowMoveView(false)} className="p-2 hover:bg-gray-200 rounded-full text-gray-500 transition-colors">
               <X size={20} />
@@ -63,11 +80,12 @@ const TableOptionsModal: React.FC<TableOptionsModalProps> = ({
                 <button
                   key={t.id}
                   onClick={() => {
-                    if (confirm(`¿Mover a ${t.nombre}?`)) onMoveTable(t.id);
+                    if (confirm(`¿Mover a ${getTableRoomLabel(t, rooms)}?`)) onMoveTable(t.id);
                   }}
                   className="p-4 rounded-xl border border-gray-200 bg-white hover:border-blue-500 hover:bg-blue-50 hover:shadow-md transition-all text-center group flex flex-col items-center gap-1"
                 >
-                  <div className="font-bold text-gray-700 group-hover:text-blue-700 text-lg">{t.nombre}</div>
+                  <div className="font-bold text-gray-700 group-hover:text-blue-700 text-base leading-tight">{getTableLabel(t)}</div>
+                  <div className="text-[10px] text-blue-500 uppercase font-black tracking-wide">{getRoomLabel(rooms.find(candidate => candidate.id === t.roomId))}</div>
                   <div className="text-[10px] text-gray-400 uppercase font-bold tracking-wide">Cap: {t.capacity || 4}</div>
                 </button>
               ))
@@ -93,7 +111,8 @@ const TableOptionsModal: React.FC<TableOptionsModalProps> = ({
           <h3 className="text-[10px] font-black tracking-widest text-gray-400 uppercase mb-1">ACCIONES RÁPIDAS</h3>
           <div className="flex items-start justify-between">
             <div>
-              <h2 className="text-2xl font-black text-gray-800 tracking-tight">{table.nombre}</h2>
+              <h2 className="text-2xl font-black text-gray-800 tracking-tight">{getTableLabel(table)}</h2>
+              <p className="mt-0.5 text-[10px] font-black uppercase tracking-widest text-blue-500">{getRoomLabel(room)}</p>
               <div className="flex items-center gap-2 mt-2">
                 <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black tracking-wide uppercase ${isOccupied ? 'bg-red-100 text-red-700 ' : 'bg-green-100 text-green-700'}`}>
                   {isOccupied ? 'Ocupada' : 'Libre'}
