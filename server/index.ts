@@ -266,7 +266,7 @@ server.post('/api/mesas/abrir', (req, res) => {
             db.prepare(`
                 UPDATE tables
                 SET currentOrderId = ?,
-                    status = 'OCCUPIED',
+                    status = 'FREE',
                     currentOrderTotal = 0,
                     timeSeated = ?,
                     waiterName = ?,

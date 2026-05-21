@@ -7,10 +7,11 @@ import {
    Save, Info, AlertTriangle, Check, Tv, MonitorPlay, QrCode, Trash2,
    Cable, Radio, MousePointer2, Image as ImageIcon, ArrowLeft,
    Smartphone, Wallet, ShieldCheck, Database, HardDrive, Loader2, Wifi,
-   Cpu, Keyboard, Activity, Layers, Activity as Wave, Barcode, Fingerprint
+   Cpu, Keyboard, Activity, Layers, Activity as Wave, Barcode, Fingerprint,
+   Coffee, Truck
 } from 'lucide-react';
 import { BusinessConfig, Product, CustomerDisplayConfig, ScaleDevice, ScaleTech, PrinterDevice, ConnectionType, ScaleLabelConfig, FingerprintReaderConfig, FingerprintDriver, FingerprintDiscoveredDevice } from '../types';
-import { parseScaleBarcode } from '../utils/barcodeParser';
+import { parseScaleBarcodeDetailed } from '../utils/barcodeParser';
 import { nativePrintBridge } from '../services/printer/NativePrintBridge';
 import { biometricService } from '../services/BiometricAuthService';
 import {
@@ -73,6 +74,27 @@ const FINGERPRINT_CONNECTION_OPTIONS: { id: FingerprintReaderConfig['connectionT
    { id: 'SERIAL', label: 'Serie / COM', icon: Cable, helper: 'Para lectores industriales RS-232.' },
    { id: 'NETWORK', label: 'Red IP', icon: Wifi, helper: 'Solo si el lector expone servicio por red.' }
 ];
+
+const PRINTER_ROLE_OPTIONS: Array<{
+   id: string;
+   label: string;
+   helper: string;
+   type: PrinterDevice['type'];
+   icon: React.ElementType;
+}> = [
+   { id: 'GENERAL', label: 'General / Caja', helper: 'Tickets y recibos de venta', type: 'TICKET', icon: Printer },
+   { id: 'LABEL', label: 'Etiquetas / Label', helper: 'Etiquetas de artículos y góndola', type: 'LABEL', icon: Barcode },
+   { id: 'COCINA', label: 'Cocina / KDS', helper: 'Comandas para cocina', type: 'KITCHEN', icon: MonitorPlay },
+   { id: 'BAR', label: 'Bar / Bebidas', helper: 'Comandas de barra', type: 'KITCHEN', icon: Coffee },
+   { id: 'LOGISTICS', label: 'Logística / Delivery', helper: 'Despacho y entregas', type: 'LOGISTICS', icon: Truck }
+];
+
+const resolvePrinterRoleId = (printer: Partial<PrinterDevice>): string => {
+   if (printer.type === 'LABEL') return 'LABEL';
+   if (printer.type === 'LOGISTICS') return 'LOGISTICS';
+   if (printer.productionAreaId) return printer.productionAreaId;
+   return printer.type === 'KITCHEN' ? 'COCINA' : 'GENERAL';
+};
 
 
 interface HardwareSettingsProps {
@@ -274,6 +296,26 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
    const selectedTerminalId = terminalId || globalConfig.terminals?.[0]?.id || 'T1';
+   const normalizedTestBarcode = testBarcode.replace(/\D/g, '');
+   const buildScalePreviewSegments = () => {
+      const totalLength = Math.max(1, scaleLabelConfig.structure.totalLength || 13);
+      const samplePrefix = scaleLabelConfig.prefixes[0] || '20';
+      const sample = (normalizedTestBarcode || `${samplePrefix}1234501234`).padEnd(totalLength, '0').slice(0, totalLength);
+      const segment = (start: number, length: number) => sample.slice(Math.max(0, start), Math.max(0, start + length));
+      const prefixLength = scaleLabelConfig.structure.prefixLength || samplePrefix.length || 2;
+      const pluStart = scaleLabelConfig.structure.pluStart || prefixLength;
+      const pluLength = scaleLabelConfig.structure.pluLength || 5;
+      const valueStart = scaleLabelConfig.structure.valueStart || pluStart + pluLength;
+      const valueLength = scaleLabelConfig.structure.valueLength || 5;
+      const checksumStart = Math.max(prefixLength, pluStart + pluLength, valueStart + valueLength);
+
+      return [
+         { label: 'Prefijo', value: segment(0, prefixLength), className: 'bg-purple-100 text-purple-700 border-purple-200' },
+         { label: 'PLU', value: segment(pluStart, pluLength), className: 'bg-blue-100 text-blue-700 border-blue-200' },
+         { label: scaleLabelConfig.valueType === 'WEIGHT' ? 'Peso' : 'Precio', value: segment(valueStart, valueLength), className: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+         { label: 'Check', value: sample.slice(checksumStart) || '-', className: 'bg-slate-100 text-slate-600 border-slate-200' }
+      ];
+   };
 
    // --- ACTIONS ---
 
@@ -849,7 +891,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
             printerName: printer.name,
             printerAddress: printer.address,
             connection: printer.connection,
-            role: 'TICKET',
+            role: (printer.type || 'TICKET') as any,
             jobType: 'HARDWARE_TEST',
             referenceId: `test-${printerKey}`
          });
@@ -1325,21 +1367,28 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                                  </div>
                               </div>
                               <div className="flex items-center gap-4">
-                                 <div className="flex flex-col gap-1">
-                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Área de Producción</label>
+                                 <div className="flex flex-col gap-1 min-w-[220px]">
+                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Tipo / Uso de Impresora</label>
                                     <select
-                                       value={p.productionAreaId || 'GENERAL'}
+                                       value={resolvePrinterRoleId(p)}
                                        onChange={(e) => {
-                                          const newArea = e.target.value;
-                                          setPrinters(printers.map(x => x.id === p.id ? { ...x, productionAreaId: newArea, type: newArea === 'GENERAL' ? 'TICKET' : 'KITCHEN' } : x));
+                                          const selectedRole = PRINTER_ROLE_OPTIONS.find(option => option.id === e.target.value) || PRINTER_ROLE_OPTIONS[0];
+                                          const productionAreaId = selectedRole.type === 'KITCHEN' ? selectedRole.id : undefined;
+                                          setPrinters(printers.map(x => x.id === p.id ? {
+                                             ...x,
+                                             productionAreaId,
+                                             type: selectedRole.type
+                                          } : x));
                                        }}
                                        className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 outline-none focus:border-blue-400"
                                     >
-                                       <option value="GENERAL">General / Caja</option>
-                                       <option value="COCINA">Cocina / KDS</option>
-                                       <option value="BAR">Bar / Bebidas</option>
-                                       <option value="LOGISTICS">Logística / Delivery</option>
+                                       {PRINTER_ROLE_OPTIONS.map(option => (
+                                          <option key={option.id} value={option.id}>{option.label}</option>
+                                       ))}
                                     </select>
+                                    <span className="text-[10px] font-semibold text-slate-400 ml-1">
+                                       {PRINTER_ROLE_OPTIONS.find(option => option.id === resolvePrinterRoleId(p))?.helper}
+                                    </span>
                                  </div>
                                  <div className="flex items-center gap-2">
                                  <button
@@ -1425,28 +1474,45 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                               </div>
                            </div>
 
-                           <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200">
-                              <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-6">Estructura del Código (EAN-13)</h3>
+                           <div className="bg-gradient-to-br from-slate-50 to-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                              <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6 mb-6">
+                                 <div>
+                                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Estructura del Código (EAN-13)</h3>
+                                    <p className="mt-2 text-sm font-semibold text-slate-500">
+                                       Visualiza cómo el POS separa prefijo, PLU y valor antes de buscar el artículo.
+                                    </p>
+                                 </div>
+                                 <div className="flex flex-wrap gap-2">
+                                    {buildScalePreviewSegments().map(segment => (
+                                       <div key={segment.label} className={`rounded-2xl border px-4 py-3 min-w-[96px] ${segment.className}`}>
+                                          <p className="text-[9px] font-black uppercase tracking-[0.18em] opacity-70">{segment.label}</p>
+                                          <p className="mt-1 font-mono text-lg font-black tracking-wider">{segment.value}</p>
+                                       </div>
+                                    ))}
+                                 </div>
+                              </div>
                               <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                                  {[
-                                    { label: 'Longitud Total', key: 'totalLength' },
-                                    { label: 'Inicio PLU', key: 'pluStart' },
-                                    { label: 'Largo PLU', key: 'pluLength' },
-                                    { label: 'Inicio Valor', key: 'valueStart' },
-                                    { label: 'Decimales', key: 'decimals', root: true }
+                                    { label: 'Longitud Total', key: 'totalLength', helper: 'EAN-13 = 13' },
+                                    { label: 'Inicio PLU', key: 'pluStart', helper: 'Posición 0-based' },
+                                    { label: 'Largo PLU', key: 'pluLength', helper: 'Dígitos del artículo' },
+                                    { label: 'Inicio Valor', key: 'valueStart', helper: 'Peso o precio' },
+                                    { label: 'Decimales', key: 'decimals', root: true, helper: 'Divisor 10^n' }
                                  ].map((field: any) => (
-                                    <div key={field.label}>
-                                       <label className="text-[10px] font-bold text-slate-500 uppercase">{field.label}</label>
+                                    <div key={field.label} className="rounded-2xl bg-white border border-slate-200 p-3">
+                                       <label className="text-[10px] font-black text-slate-500 uppercase tracking-wide">{field.label}</label>
                                        <input
                                           type="number"
                                           value={field.root ? (scaleLabelConfig as any)[field.key] : (scaleLabelConfig.structure as any)[field.key]}
                                           onChange={(e) => {
-                                             const val = parseInt(e.target.value);
-                                             if (field.root) setScaleLabelConfig({ ...scaleLabelConfig, [field.key]: val });
-                                             else setScaleLabelConfig({ ...scaleLabelConfig, structure: { ...scaleLabelConfig.structure, [field.key]: val } });
+                                             const val = parseInt(e.target.value, 10);
+                                             const safeVal = Number.isFinite(val) ? val : 0;
+                                             if (field.root) setScaleLabelConfig({ ...scaleLabelConfig, [field.key]: safeVal });
+                                             else setScaleLabelConfig({ ...scaleLabelConfig, structure: { ...scaleLabelConfig.structure, [field.key]: safeVal } });
                                           }}
-                                          className="w-full mt-2 p-3 rounded-xl border border-slate-300 text-center font-mono font-bold outline-none focus:border-purple-500"
+                                          className="w-full mt-2 p-3 rounded-xl border border-slate-200 bg-slate-50 text-center font-mono font-black outline-none focus:bg-white focus:border-purple-500"
                                        />
+                                       <p className="mt-1 text-[10px] font-semibold text-slate-400">{field.helper}</p>
                                     </div>
                                  ))}
                               </div>
@@ -1464,8 +1530,10 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                                  />
                                  <button
                                     onClick={() => {
-                                       const result = parseScaleBarcode(testBarcode, scaleLabelConfig as any);
-                                       setTestResult(result ? { success: true, message: `PLU: ${result.plu} | ${result.type === 'WEIGHT' ? 'Peso' : 'Precio'}: ${result.value}` } : { success: false, message: 'Error de lectura' });
+                                       const result = parseScaleBarcodeDetailed(testBarcode, scaleLabelConfig as any);
+                                       setTestResult(result.success && result.item
+                                          ? { success: true, message: `Código ${result.normalizedBarcode} | PLU: ${result.item.plu} | ${result.item.type === 'WEIGHT' ? 'Peso' : 'Precio'}: ${result.item.value}` }
+                                          : { success: false, message: result.message });
                                     }}
                                     className="px-8 py-3 bg-slate-800 text-white font-bold rounded-2xl hover:bg-slate-900 transition-colors"
                                  >

@@ -137,6 +137,8 @@ type ProductionAreaConfig = {
    target_terminal_id?: string;
    kds_host?: string;
    kds_port?: string | number;
+   kds_warning_minutes?: number | string;
+   kds_critical_minutes?: number | string;
    printer_ip?: string;
 };
 
@@ -205,6 +207,12 @@ const buildKdsDispatchItems = (items: CartItem[]) => items.map((item, index) => 
    production_area_id: resolveProductionAreaId(item),
    variantInfo: item.variantInfo || '',
 }));
+
+const normalizeKdsMinutes = (value: unknown, fallback: number): number => {
+   const parsed = Number(value);
+   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+   return Math.max(1, Math.floor(parsed));
+};
 
 const queuePendingKdsDispatch = async (payload: Record<string, unknown>) => {
    try {
@@ -3715,22 +3723,25 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
-   const handleSplitConfirm = (remainingItems: CartItem[], newTicketItems: CartItem[]) => {
+   const handleSplitConfirm = (remainingItems: CartItem[], newTicketItems: CartItem[], extraNewTickets: CartItem[][] = [], splitCount = 2) => {
       onUpdateCart(remainingItems);
-      
-      const newTicket: ParkedTicket = {
-         id: `split-${Date.now()}`,
+
+      const baseName = activeTable?.name || activeTable?.nombre || 'Mesa';
+      const now = Date.now();
+      const splitGroups = [newTicketItems, ...extraNewTickets].filter(items => items.length > 0);
+      const newTickets: ParkedTicket[] = splitGroups.map((items, index) => ({
+         id: `split-${now}-${index + 2}`,
          tableId: activeTable?.id || 'manual',
-         name: `${activeTable?.name || activeTable?.nombre || 'Mesa'} - Parte 2`,
-         alias: `${activeTable?.name || activeTable?.nombre || 'Mesa'} - Parte 2`,
-         items: newTicketItems,
-         total: newTicketItems.reduce((acc, item) => acc + (item.price * item.quantity), 0),
+         name: `${baseName} - Cuenta ${index + 2}/${splitCount}`,
+         alias: `${baseName} - Cuenta ${index + 2}/${splitCount}`,
+         items,
+         total: items.reduce((acc, item) => acc + (Number(item.price || 0) * Number(item.quantity || 0)), 0),
          timestamp: new Date().toISOString()
-      };
-      
-      onUpdateParkedTickets([...parkedTickets, newTicket]);
+      }));
+
+      onUpdateParkedTickets([...parkedTickets, ...newTickets]);
       setShowSplitModal(false);
-      setSuccessToast("Cuenta dividida: Parte movida a Tickets en Espera");
+      setSuccessToast(`Cuenta dividida en ${splitCount}: cuentas guardadas en Tickets en Espera`);
    };
 
    const proceedToCheckout = () => {
@@ -3806,6 +3817,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          let sentKdsCount = 0;
          let queuedKdsCount = 0;
          const dispatchedCartIds = new Set<string>();
+         const activeTableRoom = activeTable?.roomId ? rooms?.find(room => room.id === activeTable.roomId) : undefined;
+         const kdsTablePayload = activeTable ? {
+            id: activeTable.id,
+            name: activeTable.name || activeTable.nombre,
+            roomId: activeTable.roomId || null,
+            roomName: activeTableRoom?.name || activeTableRoom?.nombre || null,
+            guests: activeTable.guests || activeTable.capacity || null,
+         } : null;
 
          // 2. Print and/or send to KDS per configured area.
          for (const [areaId, areaData] of Object.entries(areas)) {
@@ -3829,6 +3848,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const kdsBaseUrl = resolveKdsBaseUrl(areaData.area, config);
                const kdsItems = buildKdsDispatchItems(areaData.items);
                const areaTotal = areaData.items.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
+               const warningMinutes = normalizeKdsMinutes(areaData.area.kds_warning_minutes, 10);
+               const criticalMinutes = Math.max(
+                  warningMinutes + 1,
+                  normalizeKdsMinutes(areaData.area.kds_critical_minutes, 20)
+               );
                const kdsPayload = {
                   orderId,
                   displayId: orderId,
@@ -3836,14 +3860,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   terminalId: activeTerminalId,
                   userName: currentUser.name,
                   customerName: selectedCustomer?.name || 'Cliente General',
-                  table: activeTable ? {
-                     id: activeTable.id,
-                     name: activeTable.name || activeTable.nombre,
-                  } : null,
+                  table: kdsTablePayload,
                   area: {
                      id: areaId,
                      name: areaData.title,
                      targetTerminalId: areaData.area.target_terminal_id || null,
+                     warningMinutes,
+                     criticalMinutes,
+                  },
+                  kdsTiming: {
+                     warningMinutes,
+                     criticalMinutes,
                   },
                   items: kdsItems,
                   total: areaTotal,
@@ -3867,6 +3894,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         terminalId: activeTerminalId,
                         userName: currentUser.name,
                         customerName: selectedCustomer?.name || 'Cliente General',
+                        table: kdsTablePayload,
+                        area: kdsPayload.area,
+                        kdsTiming: kdsPayload.kdsTiming,
                      });
                      const endpoint = `${kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(orderId)}`;
                      await postJsonWithTimeout(endpoint, kdsPayload);

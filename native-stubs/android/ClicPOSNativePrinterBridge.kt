@@ -93,6 +93,9 @@ class AndroidPrinterBridge(context: Context) {
                     checkStatus: function (payload) { return call('checkStatus', payload); },
                     getDeviceProfile: function () { return Promise.resolve(parseResult(window.AndroidPrinter.getDeviceProfile())); },
                     getDeviceInfo: function () { return Promise.resolve(parseResult(window.AndroidPrinter.getDeviceInfo())); },
+                    startKdsServer: function (payload) { return call('startKdsServer', payload); },
+                    stopKdsServer: function (payload) { return call('stopKdsServer', payload); },
+                    getKdsServerStatus: function (payload) { return call('getKdsServerStatus', payload); },
                     discoverFingerprintReaders: function (payload) { return call('discoverFingerprintReaders', payload); },
                     scanFingerprintReaders: function (payload) { return call('scanFingerprintReaders', payload); },
                     testFingerprintReader: function (payload) { return call('testFingerprintReader', payload); }
@@ -473,6 +476,26 @@ class AndroidPrinterBridge(context: Context) {
             .put("localIp", preferredLocalIp)
             .put("localIps", JSONArray(localIps))
             .toString()
+    }
+
+    @JavascriptInterface
+    fun startKdsServer(payloadJson: String?): String {
+        val port = runCatching {
+            val payload = if (payloadJson.isNullOrBlank()) JSONObject() else JSONObject(payloadJson)
+            payload.optInt("port", 8001)
+        }.getOrDefault(8001)
+
+        return ClicPOSKdsHttpServer.start(appContext, port).toString()
+    }
+
+    @JavascriptInterface
+    fun stopKdsServer(payloadJson: String?): String {
+        return ClicPOSKdsHttpServer.stop().toString()
+    }
+
+    @JavascriptInterface
+    fun getKdsServerStatus(payloadJson: String?): String {
+        return ClicPOSKdsHttpServer.status(appContext).toString()
     }
 
     @JavascriptInterface

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import {
     Square, Circle, Save, Trash2, Plus,
     Layout, Grid, Armchair, Ban, Settings, Wine
@@ -25,6 +25,8 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
 }) => {
     const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
     const [showRoomSettings, setShowRoomSettings] = useState(false);
+    const [canvasSize, setCanvasSize] = useState({ width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
+    const canvasHostRef = useRef<HTMLDivElement>(null);
     const canvasRef = useRef<HTMLDivElement>(null);
     const dragStateRef = useRef<{
         tableId: string;
@@ -52,7 +54,66 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
         };
         return table.name?.trim() || table.nombre?.trim() || fallbackByShape[table.shape] || 'Mesa';
     };
+    const getNextElementName = (shape: TableShape, baseName: string) => {
+        const isTableShape = shape === 'SQUARE' || shape === 'CIRCLE';
+        const namePrefix = isTableShape ? 'Mesa' : baseName;
+        const usedNumbers = new Set<number>();
+
+        currentRoomTables.forEach(table => {
+            const label = getTableLabel(table);
+            const match = label.match(new RegExp(`^${namePrefix}\\s+(\\d+)\\b`, 'i'));
+            if (!match) return;
+
+            const number = Number(match[1]);
+            if (Number.isFinite(number) && number > 0) {
+                usedNumbers.add(number);
+            }
+        });
+
+        let nextNumber = 1;
+        while (usedNumbers.has(nextNumber)) {
+            nextNumber += 1;
+        }
+
+        return `${namePrefix} ${nextNumber}`;
+    };
     const currentRoom = rooms.find(r => r.id === currentRoomId);
+    const currentRoomTables = useMemo(
+        () => tables.filter(t => t.roomId === currentRoomId),
+        [tables, currentRoomId]
+    );
+
+    useEffect(() => {
+        const host = canvasHostRef.current;
+        if (!host) return;
+
+        const measureCanvas = () => {
+            const rect = host.getBoundingClientRect();
+            const contentWidth = Math.max(
+                CANVAS_WIDTH,
+                ...currentRoomTables.map(table => Number(table.posX || 0) + Number(table.width || 0) + GRID_SIZE)
+            );
+            const contentHeight = Math.max(
+                CANVAS_HEIGHT,
+                ...currentRoomTables.map(table => Number(table.posY || 0) + Number(table.height || 0) + GRID_SIZE)
+            );
+
+            const nextSize = {
+                width: Math.max(contentWidth, Math.floor(rect.width)),
+                height: Math.max(contentHeight, Math.floor(rect.height))
+            };
+
+            setCanvasSize(prev => {
+                if (prev.width === nextSize.width && prev.height === nextSize.height) return prev;
+                return nextSize;
+            });
+        };
+
+        measureCanvas();
+        const observer = new ResizeObserver(measureCanvas);
+        observer.observe(host);
+        return () => observer.disconnect();
+    }, [currentRoomId, currentRoomTables]);
 
     // Add new table
     const handleAddTable = (shape: TableShape) => {
@@ -65,7 +126,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
             BOOTH: { baseName: 'Sofa', width: 160, height: 90, capacity: 4 }
         };
         const config = elementConfig[shape];
-        const elementName = `${config.baseName} ${tables.filter(t => t.roomId === currentRoomId && t.shape === shape).length + 1}`;
+        const elementName = getNextElementName(shape, config.baseName);
 
         const newTable: Table = {
             id: generateTableId(),
@@ -131,8 +192,8 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
         let newX = snapToGrid(e.clientX - canvasRect.left - dragState.offsetX);
         let newY = snapToGrid(e.clientY - canvasRect.top - dragState.offsetY);
 
-        const maxX = Math.max(0, CANVAS_WIDTH - draggedTable.width);
-        const maxY = Math.max(0, CANVAS_HEIGHT - draggedTable.height);
+        const maxX = Math.max(0, canvasSize.width - draggedTable.width);
+        const maxY = Math.max(0, canvasSize.height - draggedTable.height);
 
         if (newX < 0) newX = 0;
         if (newY < 0) newY = 0;
@@ -155,9 +216,9 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
     const selectedTable = tables.find(t => t.id === selectedTableId);
 
     return (
-        <div className="flex flex-col h-full bg-slate-50 rounded-xl overflow-hidden shadow-xl border border-slate-200">
+        <div className="flex flex-col h-full min-h-[calc(100vh-1px)] bg-slate-950 overflow-hidden">
             {/* Toolbar */}
-            <div className="bg-white p-4 border-b flex justify-between items-center shrink-0">
+            <div className="bg-white/95 backdrop-blur border-b border-slate-200 px-4 py-3 flex justify-between items-center shrink-0 shadow-sm">
                 <div className="flex items-center gap-4">
                     <h2 className="font-black text-slate-800 flex items-center gap-2"><Layout size={20} /> Diseñador de Sala</h2>
 
@@ -209,19 +270,32 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                 </div>
             </div>
 
-            <div className="flex flex-1 overflow-hidden">
+            <div className="flex flex-1 min-h-0 overflow-hidden">
                 {/* Canvas Area */}
-                <div className="flex-1 bg-slate-200/50 p-8 overflow-auto flex items-center justify-center relative">
+                <div
+                    ref={canvasHostRef}
+                    className="flex-1 bg-gradient-to-br from-[#06172b] via-[#081124] to-[#101023] overflow-auto flex items-start justify-start relative"
+                >
+                    <div
+                        className="absolute inset-0 pointer-events-none opacity-45"
+                        style={{
+                            backgroundImage: [
+                                'linear-gradient(rgba(148,163,184,0.13) 1px, transparent 1px)',
+                                'linear-gradient(90deg, rgba(148,163,184,0.13) 1px, transparent 1px)'
+                            ].join(','),
+                            backgroundSize: '34px 34px'
+                        }}
+                    />
 
                     <div
                         ref={canvasRef}
                         onPointerMove={handleCanvasPointerMove}
                         onPointerUp={handleCanvasPointerEnd}
                         onPointerCancel={handleCanvasPointerEnd}
-                        className="bg-white shadow-2xl relative select-none overflow-hidden touch-none"
+                        className="bg-white/95 shadow-2xl relative select-none overflow-hidden touch-none"
                         style={{
-                            width: CANVAS_WIDTH,
-                            height: CANVAS_HEIGHT,
+                            width: canvasSize.width,
+                            height: canvasSize.height,
                             backgroundImage: 'radial-gradient(circle, #cbd5e1 1px, transparent 1px)',
                             backgroundSize: `${GRID_SIZE}px ${GRID_SIZE}px`
                         }}
@@ -231,7 +305,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                             <Grid size={12} /> SNAP: {GRID_SIZE}px
                         </div>
 
-                        {tables.filter(t => t.roomId === currentRoomId).map(table => (
+                        {currentRoomTables.map(table => (
                             <div
                                 key={table.id}
                                 onPointerDown={(e) => handlePointerDown(e, table.id)}
@@ -269,10 +343,21 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
 
                 {/* Property Editor Panel (Right Side) */}
                 {selectedTable && (
-                    <div className="w-64 bg-white border-l border-slate-200 p-6 flex flex-col gap-6 animate-in slide-in-from-right duration-200">
-                        <div>
-                            <h3 className="font-bold text-slate-800 mb-1">Propiedades</h3>
-                            <p className="text-xs text-slate-500">Editando {getTableLabel(selectedTable)}</p>
+                    <div className="w-64 bg-white border-l border-slate-200 p-6 flex flex-col gap-6 overflow-y-auto animate-in slide-in-from-right duration-200">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <h3 className="font-bold text-slate-800 mb-1">Propiedades</h3>
+                                <p className="text-xs text-slate-500">Editando {getTableLabel(selectedTable)}</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => deleteTable(selectedTable.id)}
+                                className="shrink-0 p-2 rounded-lg text-red-500 bg-red-50 hover:bg-red-100 transition-colors"
+                                title="Eliminar elemento"
+                                aria-label="Eliminar elemento"
+                            >
+                                <Trash2 size={16} />
+                            </button>
                         </div>
 
                         <div className="space-y-4">
@@ -280,7 +365,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                                 <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Nombre</label>
                                 <input
                                     type="text"
-                                    value={getTableLabel(selectedTable)}
+                                    value={selectedTable.name ?? selectedTable.nombre ?? ''}
                                     onChange={e => updateTable(selectedTable.id, { name: e.target.value, nombre: e.target.value })}
                                     className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-bold shadow-sm focus:border-blue-500 outline-none"
                                 />

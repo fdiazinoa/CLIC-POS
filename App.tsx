@@ -1869,7 +1869,7 @@ const AppContent: React.FC = () => {
     const nowIso = new Date().toISOString();
     const baseUpdate = {
       ...table,
-      status: 'OCCUPIED' as const,
+      status: 'FREE' as const,
       timeSeated: table.timeSeated || nowIso,
       waiterId: currentUser.id,
       waiterName: currentUser.name
@@ -3621,7 +3621,7 @@ const AppContent: React.FC = () => {
   };
 
   const handleParkedOrderSplitFromMap = useCallback(
-    async (orderId: string, remainingItems: CartItem[], newTicketItems: CartItem[]) => {
+    async (orderId: string, remainingItems: CartItem[], newTicketItems: CartItem[], extraNewTickets: CartItem[][] = [], splitCount = 2) => {
       const sumItems = (items: CartItem[]) =>
         items.reduce((acc, item) => acc + Number(item.price || 0) * Number(item.quantity || 0), 0);
       const source = parkedTickets.find(p => p.id === orderId);
@@ -3636,17 +3636,19 @@ const AppContent: React.FC = () => {
           : [];
       const tableLinked = tables.find(t => t.currentOrderId === orderId);
       const labelBase = tableLinked?.nombre || tableLinked?.name || source.name || 'Mesa';
-      const newTicket: ParkedTicket = {
+      const now = Date.now();
+      const splitGroups = [newTicketItems, ...extraNewTickets].filter(items => items.length > 0);
+      const newTickets: ParkedTicket[] = splitGroups.map((items, index) => ({
         ...source,
-        id: `split-${Date.now()}`,
-        name: `${labelBase} - Parte 2`,
-        alias: `${labelBase} - Parte 2`,
-        items: newTicketItems,
-        total: sumItems(newTicketItems),
+        id: `split-${now}-${index + 2}`,
+        name: `${labelBase} - Cuenta ${index + 2}/${splitCount}`,
+        alias: `${labelBase} - Cuenta ${index + 2}/${splitCount}`,
+        items,
+        total: sumItems(items),
         timestamp: new Date().toISOString(),
         tableId: tableLinked?.id
-      };
-      await handleUpdateParkedTickets([...others, ...kept, newTicket]);
+      }));
+      await handleUpdateParkedTickets([...others, ...kept, ...newTickets]);
       await fetchTables();
     },
     [parkedTickets, tables, fetchTables]
@@ -5503,22 +5505,15 @@ const AppContent: React.FC = () => {
         );
 
         return (
-          <div className="h-screen flex flex-col bg-slate-950">
-            <div className="border-b border-white/10 p-4 flex justify-between items-center z-20 shrink-0 bg-white/[0.06] backdrop-blur-xl shadow-[0_12px_34px_rgba(2,6,23,0.45)]">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-gradient-to-br from-sky-500 to-blue-700 text-white rounded-xl shadow-[0_10px_24px_rgba(2,132,199,0.45)]">
-                  <Layout size={20} />
-                </div>
-                <h2 className="font-black text-slate-100 tracking-tight uppercase text-sm">Mapa de Mesas</h2>
-              </div>
-              <button
-                onClick={() => setCurrentView('POS')}
-                className="px-6 py-2 rounded-xl font-bold transition-all flex items-center gap-2 border border-white/15 bg-white/[0.08] backdrop-blur-xl text-slate-100 hover:bg-white/[0.15] active:scale-[0.98]"
-              >
-                Cerrar
-              </button>
-            </div>
-            <div className="flex-1 overflow-hidden relative">
+          <div className="h-screen bg-slate-950 overflow-hidden relative">
+            <button
+              type="button"
+              onClick={() => setCurrentView('POS')}
+              className="absolute left-4 top-4 z-50 rounded-2xl border border-white/15 bg-slate-950/60 px-4 py-2.5 text-sm font-black text-slate-100 shadow-[0_16px_40px_rgba(2,6,23,0.55)] backdrop-blur-xl hover:bg-white/[0.14] active:scale-[0.98]"
+            >
+              Cerrar
+            </button>
+            <div className="h-full overflow-hidden relative">
               <TableMap
                 rooms={rooms}
                 currentRoomId={activeRoomId}
