@@ -13,6 +13,7 @@ import { resolveFiscalProviderCredential } from '../credentials.js';
 const DIGIFACT_TEST_BASE_URL = 'https://testnucdo.digifact.com/api';
 const DIGIFACT_PROD_BASE_URL = 'https://nucdo.digifact.com/api';
 const DIGIFACT_ISSUE_FORMAT = 'JSON';
+const DIGIFACT_SEQUENCE_RETRY_LIMIT = 5;
 const TOKEN_CACHE_TTL_MS = 29 * 24 * 60 * 60 * 1000;
 
 type DigifactCredentialShape = {
@@ -230,6 +231,9 @@ const extractMessage = (payload: any): string => {
 
 const extractProviderTransactionId = (payload: any, fallbackENCF?: string): string | undefined => {
     const candidates = [
+        payload?.suggestedFileName,
+        payload?.SuggestedFileName,
+        payload?.data?.suggestedFileName,
         payload?.batch,
         payload?.Batch,
         payload?.eNCF,
@@ -278,6 +282,19 @@ const isDigifactFailure = (payload: any, status: string, message: string): boole
     const code = Number(payload?.code ?? payload?.Code);
     return Number.isFinite(code) && code !== 1;
 };
+
+const isDigifactSequenceRetryable = (payload: any, message: string): boolean => {
+    const detail = `${message || ''} ${payload?.description || ''} ${payload?.Description || ''}`;
+    return /no se pudo obtener la secuencia|secuencias disponibles|ENCF_ya_existente|SECUENCIA_YA_GENERADO/i.test(detail);
+};
+
+const digifactPayloadSequenceMode = (payload: any): string =>
+    payload?.Header?.AdditionalIssueDocInfo?.find?.((item: any) => item.Name === 'AsignacionDeSecuencia')
+        ? 'autogestion'
+        : 'local';
+
+const waitDigifactRetry = (attempt: number) =>
+    new Promise(resolve => setTimeout(resolve, Math.min(2000, 350 * attempt)));
 
 const mapPaymentMethod = (method?: string): string => {
     const normalized = cleanString(method).toUpperCase();
@@ -730,22 +747,43 @@ export class DigifactFiscalProvider implements FiscalProvider {
         }
         url.searchParams.set('USERNAME', auth.username);
 
-        const response = await fetch(url.toString(), {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Accept: 'application/json',
-                Authorization: auth.authorization
-            },
-            body: JSON.stringify(buildDigifactPayload(request))
-        });
-        const raw = await response.json().catch(() => ({}));
-        const status = extractStatus(raw);
-        const message = extractMessage(raw);
+        const issuePayload = buildDigifactPayload(request);
+        const sequenceMode = digifactPayloadSequenceMode(issuePayload);
+        const maxAttempts = sequenceMode === 'autogestion' ? DIGIFACT_SEQUENCE_RETRY_LIMIT : 1;
+        let raw: any = {};
+        let responseOk = false;
+        let status = '';
+        let message = '';
+        let failure = true;
+        let attempt = 0;
+
+        while (attempt < maxAttempts) {
+            attempt += 1;
+            const response = await fetch(url.toString(), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                    Authorization: auth.authorization
+                },
+                body: JSON.stringify(issuePayload)
+            });
+            responseOk = response.ok;
+            raw = await response.json().catch(() => ({}));
+            status = extractStatus(raw);
+            message = extractMessage(raw);
+            failure = isDigifactFailure(raw, status, message);
+
+            if ((responseOk && !failure) || !isDigifactSequenceRetryable(raw, message) || attempt >= maxAttempts) {
+                break;
+            }
+
+            await waitDigifactRetry(attempt);
+        }
+
         const providerTransactionId = extractProviderTransactionId(raw, eNCF);
         const pending = isPendingStatus(status) || isPendingStatus(message);
-        const failure = isDigifactFailure(raw, status, message);
-        const success = response.ok && !failure;
+        const success = responseOk && !failure;
 
         return {
             success,
@@ -754,7 +792,7 @@ export class DigifactFiscalProvider implements FiscalProvider {
             documentCode: request.documentCode,
             providerTransactionId,
             status: status || (success ? 'Aceptado' : 'Rechazado'),
-            message: message || (success ? 'DigiFact emitió el NUC correctamente.' : `DigiFact HTTP ${response.status}`),
+            message: message || (success ? 'DigiFact emitió el NUC correctamente.' : 'DigiFact rechazó la emisión.'),
             pending,
             raw
         };
