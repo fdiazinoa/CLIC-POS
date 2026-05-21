@@ -17,7 +17,7 @@ interface KDSItem {
     nombre: string;
     cantidad: number;
     modificadores: string[] | null;
-    estado_cocina: 'PENDIENTE' | 'EN_PREPARACION' | 'LISTO';
+    estado_cocina: 'PENDIENTE' | 'EN_PREPARACION' | 'LISTO' | 'DEVUELTO';
     hora_inicio_preparacion: string | null;
 }
 
@@ -66,7 +66,7 @@ const DEFAULT_CRITICAL_MINUTES = 20;
 
 const getOrderSignature = (order: KDSOrder): string => {
     const itemSignature = (order.items || [])
-        .map(item => `${item.id}:${item.cantidad}`)
+        .map(item => `${item.id}:${item.cantidad}:${item.estado_cocina}`)
         .join('|');
     return `${order.id}:${itemSignature}`;
 };
@@ -311,7 +311,7 @@ const KitchenDisplay: React.FC = () => {
         const summary: Record<string, number> = {};
         orders.forEach(order => {
             order.items.forEach(item => {
-                if (item.estado_cocina !== 'LISTO') {
+                if (item.estado_cocina !== 'LISTO' && item.estado_cocina !== 'DEVUELTO') {
                     summary[item.nombre] = (summary[item.nombre] || 0) + item.cantidad;
                 }
             });
@@ -520,29 +520,43 @@ const TicketCard: React.FC<{
 
             {/* Items List */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {order.items.map((item) => (
-                    <div
-                        key={item.id}
-                        onClick={() => onStatusChange(item.id, item.estado_cocina === 'LISTO' ? 'PENDIENTE' : 'LISTO', 'item')}
-                        className={`cursor-pointer transition-all ${item.estado_cocina === 'LISTO' ? 'opacity-30 grayscale line-through' : ''}`}
-                    >
-                        <div className="flex items-start gap-3">
-                            <span className="text-2xl font-black text-blue-500 leading-tight">{item.cantidad}x</span>
-                            <div className="flex-1">
-                                <p className="text-xl font-bold leading-tight text-gray-200">{item.nombre}</p>
-                                {item.modificadores && item.modificadores.length > 0 && (
-                                    <ul className="mt-1 space-y-0.5">
-                                        {item.modificadores.map((mod, i) => (
-                                            <li key={i} className="text-red-300 text-sm font-bold uppercase flex items-center gap-1">
-                                                <span className="text-xs">↳</span> {mod}
-                                            </li>
-                                        ))}
-                                    </ul>
-                                )}
+                {order.items.map((item) => {
+                    const isReturned = item.estado_cocina === 'DEVUELTO';
+                    const isReady = item.estado_cocina === 'LISTO';
+                    return (
+                        <div
+                            key={item.id}
+                            onClick={() => {
+                                if (isReturned) return;
+                                onStatusChange(item.id, isReady ? 'PENDIENTE' : 'LISTO', 'item');
+                            }}
+                            className={`transition-all ${isReturned ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'} ${isReady || isReturned ? 'grayscale line-through' : ''}`}
+                        >
+                            <div className="flex items-start gap-3">
+                                <span className={`text-2xl font-black leading-tight ${isReturned ? 'text-red-400' : 'text-blue-500'}`}>{item.cantidad}x</span>
+                                <div className="flex-1">
+                                    <div className="flex items-start justify-between gap-2">
+                                        <p className="text-xl font-bold leading-tight text-gray-200">{item.nombre}</p>
+                                        {isReturned && (
+                                            <span className="rounded-full bg-red-500/20 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-red-200">
+                                                Devuelto
+                                            </span>
+                                        )}
+                                    </div>
+                                    {item.modificadores && item.modificadores.length > 0 && (
+                                        <ul className="mt-1 space-y-0.5">
+                                            {item.modificadores.map((mod, i) => (
+                                                <li key={i} className="text-red-300 text-sm font-bold uppercase flex items-center gap-1">
+                                                    <span className="text-xs">↳</span> {mod}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                </div>
                             </div>
                         </div>
-                    </div>
-                ))}
+                    );
+                })}
             </div>
 
             {/* Card Footer */}

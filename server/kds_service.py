@@ -27,8 +27,11 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "db.sqlite")
 
 class StatusUpdate(BaseModel):
     item_id: Optional[str] = None
+    item_ids: Optional[List[str]] = None
+    cart_id: Optional[str] = None
+    producto_id: Optional[str] = None
     orden_id: Optional[str] = None
-    nuevo_estado: str  # 'PENDIENTE', 'EN_PREPARACION', 'LISTO'
+    nuevo_estado: str  # 'PENDIENTE', 'EN_PREPARACION', 'LISTO', 'DEVUELTO'
 
 class ProductionArea(BaseModel):
     id: str
@@ -430,22 +433,46 @@ def update_status(update: StatusUpdate):
     try:
         now = datetime.now().isoformat()
         
-        if update.item_id:
+        if update.item_id or update.item_ids or update.cart_id:
             # Update specific item
             extra_sql = ""
-            params = [update.nuevo_estado, update.item_id]
+            extra_params = []
             
             if update.nuevo_estado == 'EN_PREPARACION':
                 extra_sql = ", hora_inicio_preparacion = ?"
-                params.insert(1, now)
-            elif update.nuevo_estado == 'LISTO':
+                extra_params.append(now)
+            elif update.nuevo_estado in ('LISTO', 'DEVUELTO'):
                 extra_sql = ", hora_terminado = ?"
-                params.insert(1, now)
-                
-            conn.execute(f"UPDATE ordenes_detalles SET estado_cocina = ? {extra_sql} WHERE id = ?", params)
+                extra_params.append(now)
+
+            candidate_ids = []
+            if update.item_id:
+                candidate_ids.append(update.item_id)
+            if update.item_ids:
+                candidate_ids.extend(update.item_ids)
+
+            seen_ids = set()
+            for item_id in candidate_ids:
+                if not item_id or item_id in seen_ids:
+                    continue
+                seen_ids.add(item_id)
+                conn.execute(
+                    f"UPDATE ordenes_detalles SET estado_cocina = ? {extra_sql} WHERE id = ?",
+                    [update.nuevo_estado, *extra_params, item_id]
+                )
+
+            if update.cart_id and update.orden_id:
+                conn.execute(
+                    f"UPDATE ordenes_detalles SET estado_cocina = ? {extra_sql} WHERE orden_id = ? AND id LIKE ?",
+                    [update.nuevo_estado, *extra_params, update.orden_id, f"%{update.cart_id}%"]
+                )
             
             # Check if all items in the same order are now 'LISTO'
-            item_info = conn.execute("SELECT orden_id FROM ordenes_detalles WHERE id = ?", (update.item_id,)).fetchone()
+            item_info = None
+            if update.item_id:
+                item_info = conn.execute("SELECT orden_id FROM ordenes_detalles WHERE id = ?", (update.item_id,)).fetchone()
+            elif update.orden_id:
+                item_info = {"orden_id": update.orden_id}
             if item_info:
                 check_all_ready(conn, item_info['orden_id'])
                 

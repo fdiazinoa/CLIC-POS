@@ -11,7 +11,7 @@ import {
    ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle,
    MessageSquare, PlayCircle, Download, Lock, ArrowUpRight, Landmark,
    UserCheck, StickyNote, Inbox, Printer, QrCode, Box, Package, MapPin,
-   Cloud, RefreshCw, CloudOff, Layout, ChefHat, Building2, ClipboardCheck
+   Cloud, RefreshCw, CloudOff, Layout, ChefHat, Building2, ClipboardCheck, Undo2
 
 
 } from 'lucide-react';
@@ -142,6 +142,12 @@ type ProductionAreaConfig = {
    printer_ip?: string;
 };
 
+type KdsDispatchMeta = {
+   areaId: string;
+   orderId: string;
+   itemIds: string[];
+};
+
 const buildModifierSignature = (modifiers?: unknown[]): string => {
    if (!Array.isArray(modifiers) || modifiers.length === 0) return '';
    return modifiers.map((modifier) => String(modifier ?? '')).sort().join('|');
@@ -192,7 +198,103 @@ const resolveProductionAreaId = (item: any): string => {
    return String(direct || '').trim();
 };
 
-const buildKdsDispatchItems = (items: CartItem[]) => items.map((item, index) => ({
+const normalizeKdsIdentity = (value: unknown): string => String(value ?? '').trim().toLowerCase();
+
+const collectKdsProductKeys = (item: any): string[] => {
+   const keys = [
+      item?.id,
+      item?.productId,
+      item?.product_id,
+      item?.producto_id,
+      item?.sourceProductId,
+      item?.erpProductId,
+      item?.operationalProductId,
+      item?.sku,
+      item?.code,
+      item?.barcode,
+      item?.variantSku,
+      item?.metadata?.productId,
+      item?.metadata?.sourceProductId,
+      item?.metadata?.erpProductId,
+   ];
+
+   return Array.from(new Set(keys.map(normalizeKdsIdentity).filter(Boolean)));
+};
+
+const collectProductionAreaAssignedProductKeys = (area: ProductionAreaConfig): string[] => {
+   const source = area as any;
+   const rawLists = [
+      source.productIds,
+      source.product_ids,
+      source.assignedProductIds,
+      source.assigned_product_ids,
+      source.products,
+      source.items,
+   ].filter(Boolean);
+   const keys: string[] = [];
+
+   rawLists.forEach((rawList) => {
+      const list = Array.isArray(rawList) ? rawList : [rawList];
+      list.forEach((entry) => {
+         if (entry && typeof entry === 'object') {
+            keys.push(...collectKdsProductKeys(entry));
+            return;
+         }
+         const normalized = normalizeKdsIdentity(entry);
+         if (normalized) keys.push(normalized);
+      });
+   });
+
+   return Array.from(new Set(keys));
+};
+
+const buildProductionAreaResolver = (productionAreas: ProductionAreaConfig[], products: Product[]) => {
+   const areaById = new Map(productionAreas.map(area => [String(area.id), area]));
+   const productKeyToAreaId = new Map<string, string>();
+
+   const assignKeysToArea = (keys: string[], areaId?: string) => {
+      const normalizedAreaId = String(areaId || '').trim();
+      if (!normalizedAreaId || !areaById.has(normalizedAreaId)) return;
+      keys.forEach((key) => {
+         if (!key || productKeyToAreaId.has(key)) return;
+         productKeyToAreaId.set(key, normalizedAreaId);
+      });
+   };
+
+   products.forEach((product) => {
+      assignKeysToArea(collectKdsProductKeys(product), resolveProductionAreaId(product));
+   });
+
+   productionAreas.forEach((area) => {
+      assignKeysToArea(collectProductionAreaAssignedProductKeys(area), area.id);
+   });
+
+   return (item: any): string => {
+      const directAreaId = resolveProductionAreaId(item);
+      if (directAreaId && areaById.has(directAreaId)) return directAreaId;
+
+      const mappedAreaId = collectKdsProductKeys(item)
+         .map((key) => productKeyToAreaId.get(key))
+         .find((areaId): areaId is string => Boolean(areaId && areaById.has(areaId)));
+      return mappedAreaId || directAreaId;
+   };
+};
+
+const getCartDispatchKey = (item: CartItem): string => item.cartId || `${item.id}:${item.name}`;
+
+const buildKdsItemIds = (orderId: string, areaId: string, item: CartItem, index: number): string[] => {
+   const rawId = item.cartId || `${item.id}-${index}`;
+   const nativeItemId = String(rawId).startsWith(orderId) ? String(rawId) : `${orderId}_${rawId}_${index}`;
+   const serverItemId = `${orderId}_${areaId}_${rawId}_${index}`;
+   return Array.from(new Set([serverItemId, nativeItemId]));
+};
+
+const isKdsReturnedCartItem = (item?: Partial<CartItem> | null): boolean => {
+   const status = String((item as any)?.kdsStatus || '').trim().toUpperCase();
+   return status === 'DEVUELTO' || Boolean((item as any)?.kdsReturnedAt);
+};
+
+const buildKdsDispatchItems = (items: CartItem[], areaId?: string) => items.map((item, index) => ({
    id: item.cartId || `${item.id}-${index}`,
    producto_id: item.id,
    productId: item.id,
@@ -204,7 +306,8 @@ const buildKdsDispatchItems = (items: CartItem[]) => items.map((item, index) => 
    modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
    modificadores: Array.isArray(item.modifiers) ? item.modifiers : [],
    note: item.note || '',
-   production_area_id: resolveProductionAreaId(item),
+   production_area_id: areaId || resolveProductionAreaId(item),
+   estado_cocina: 'PENDIENTE',
    variantInfo: item.variantInfo || '',
 }));
 
@@ -2126,7 +2229,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       let targetCartId: string;
 
-      if (existing && !usesSerial) {
+      if (existing && !usesSerial && !existing.dispatched) {
          targetCartId = existing.cartId!;
          onUpdateCart(prev => {
             const updatedItem = {
@@ -3152,18 +3255,40 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       let newCart: CartItem[] = [];
 
       if (cartIdToDelete || updatedItem === null) {
+         const targetCartId = cartIdToDelete || editingItem?.cartId;
+         const originalItem = (cart || []).find(i => i.cartId === targetCartId);
+         if (originalItem?.dispatched) {
+            alert(isKdsReturnedCartItem(originalItem)
+               ? 'Este artículo ya fue devuelto en cocina y queda bloqueado para auditoría.'
+               : 'Este artículo ya fue enviado al KDS. Usa Devolver para marcarlo en cocina; no se puede borrar directamente.'
+            );
+            return;
+         }
+
          // Void Line Check
          const authorized = await requestApproval({
             permission: 'POS_VOID_ITEM',
             actionDescription: 'Eliminar artículo del carrito',
-            context: { itemId: cartIdToDelete || editingItem?.cartId }
+            context: { itemId: targetCartId }
          });
          if (!authorized) return;
 
-         newCart = cart.filter(i => i.cartId !== (cartIdToDelete || editingItem?.cartId));
+         newCart = cart.filter(i => i.cartId !== targetCartId);
       } else {
          // Update Check (Price Override / Discount)
          const originalItem = (cart || []).find(i => i.cartId === updatedItem.cartId);
+
+         if (originalItem?.dispatched) {
+            const originalQty = Number(originalItem.quantity || 0);
+            const nextQty = Number(updatedItem.quantity || 0);
+            if (Math.abs(nextQty - originalQty) > 0.0001) {
+               alert(isKdsReturnedCartItem(originalItem)
+                  ? 'Este artículo ya fue devuelto en cocina y queda bloqueado para auditoría.'
+                  : 'Este artículo ya fue enviado al KDS. Para cancelar la preparación usa Devolver; para agregar más cantidad, agrega una línea nueva.'
+               );
+               return;
+            }
+         }
 
          // Stock Check (Quantity Increase)
          if (originalItem && updatedItem.quantity > originalItem.quantity) {
@@ -3780,11 +3905,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const configuredAreas = await db.get('productionAreas' as any).catch(() => []) as any;
          const productionAreas: ProductionAreaConfig[] = Array.isArray(configuredAreas) ? configuredAreas : [];
          const areaById = new Map(productionAreas.map(area => [String(area.id), area]));
+         const configuredProducts = await db.get('products' as any).catch(() => []) as any;
+         const productionProducts: Product[] = Array.isArray(configuredProducts) ? configuredProducts : [];
+         const resolveAreaForDispatch = buildProductionAreaResolver(productionAreas, productionProducts);
 
          // 1. Group only routed items by production area for separate tickets/KDS screens.
          const areas: Record<string, { area: ProductionAreaConfig, title: string, items: CartItem[] }> = {};
+         const dispatchMetaByCartId = new Map<string, KdsDispatchMeta>();
          newItems.forEach(item => {
-            const areaId = resolveProductionAreaId(item);
+            const areaId = resolveAreaForDispatch(item);
             if (!areaId) return;
 
             const configuredArea = areaById.get(areaId);
@@ -3846,7 +3975,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             if (shouldSendKds) {
                const kdsBaseUrl = resolveKdsBaseUrl(areaData.area, config);
-               const kdsItems = buildKdsDispatchItems(areaData.items);
+               const kdsItems = buildKdsDispatchItems(areaData.items, areaId);
                const areaTotal = areaData.items.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
                const warningMinutes = normalizeKdsMinutes(areaData.area.kds_warning_minutes, 10);
                const criticalMinutes = Math.max(
@@ -3915,21 +4044,40 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
             }
 
-            areaData.items.forEach(item => {
-               dispatchedCartIds.add(item.cartId || `${item.id}:${item.name}`);
+            areaData.items.forEach((item, index) => {
+               const key = getCartDispatchKey(item);
+               dispatchedCartIds.add(key);
+               dispatchMetaByCartId.set(key, {
+                  areaId,
+                  orderId,
+                  itemIds: buildKdsItemIds(orderId, areaId, item, index),
+               });
             });
          }
 
          // 3. Mark items as dispatched in state
          const updatedCart = cart.map(item => {
-            const key = item.cartId || `${item.id}:${item.name}`;
-            return dispatchedCartIds.has(key) ? { ...item, dispatched: true } : item;
+            const key = getCartDispatchKey(item);
+            const dispatchMeta = dispatchMetaByCartId.get(key);
+            return dispatchedCartIds.has(key) ? {
+               ...item,
+               dispatched: true,
+               kdsStatus: 'ENVIADO',
+               kdsOrderId: dispatchMeta?.orderId,
+               kdsAreaId: dispatchMeta?.areaId,
+               kdsItemIds: dispatchMeta?.itemIds,
+               production_area_id: dispatchMeta?.areaId || resolveProductionAreaId(item) || undefined,
+               restaurantConfig: {
+                  ...(item.restaurantConfig || {}),
+                  production_area_id: dispatchMeta?.areaId || item.restaurantConfig?.production_area_id || undefined,
+               },
+            } : item;
          });
          onUpdateCart(updatedCart);
 
          // 4. Save state to DB (Parking)
          if (activeTable) {
-            await handleParkCurrentTicket();
+            await handleParkCurrentTicket(undefined, updatedCart);
          }
 
          const parts = [
@@ -3942,6 +4090,90 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       } catch (e) {
          console.error("Dispatch error:", e);
          alert("Error al procesar el envío a cocina");
+      }
+   };
+
+   const handleReturnDispatchedCartItem = async (item: CartItem) => {
+      if (blockRecoveredUberOrderMutation('devolver el artículo enviado a cocina')) return;
+      if (!item.dispatched) {
+         await updateCartItem(null, item.cartId);
+         return;
+      }
+      if (isKdsReturnedCartItem(item)) {
+         alert('Este artículo ya fue marcado como devuelto en cocina.');
+         return;
+      }
+
+      const authorized = await requestApproval({
+         permission: 'POS_VOID_ITEM',
+         actionDescription: 'Devolver artículo enviado al KDS',
+         context: {
+            itemId: item.cartId,
+            ticketId: item.kdsOrderId || activeTable?.currentOrderId,
+            reason: 'Devolución de artículo enviado al KDS'
+         }
+      });
+      if (!authorized) return;
+
+      const confirmed = window.confirm(`¿Marcar "${item.name}" como devuelto en cocina? El plato no debe prepararse y la línea quedará en el ticket como auditoría.`);
+      if (!confirmed) return;
+
+      try {
+         const configuredAreas = await db.get('productionAreas' as any).catch(() => []) as any;
+         const productionAreas: ProductionAreaConfig[] = Array.isArray(configuredAreas) ? configuredAreas : [];
+         const configuredProducts = await db.get('products' as any).catch(() => []) as any;
+         const productionProducts: Product[] = Array.isArray(configuredProducts) ? configuredProducts : [];
+         const areaById = new Map(productionAreas.map(area => [String(area.id), area]));
+         const resolveAreaForDispatch = buildProductionAreaResolver(productionAreas, productionProducts);
+         const areaId = String(item.kdsAreaId || resolveAreaForDispatch(item) || '').trim();
+         const area = areaById.get(areaId);
+         const orderId = String(item.kdsOrderId || activeTable?.currentOrderId || '').trim();
+
+         if (!orderId || !area) {
+            alert('No se pudo ubicar la orden o el centro de producción para devolver este artículo en cocina.');
+            return;
+         }
+
+         const kdsBaseUrl = resolveKdsBaseUrl(area, config);
+         if (!kdsBaseUrl) {
+            alert('El centro de producción no tiene ruta KDS disponible. Configura la IP/terminal antes de devolver en cocina.');
+            return;
+         }
+
+         await postJsonWithTimeout(`${kdsBaseUrl}/api/cocina/cambiar-estado`, {
+            orden_id: orderId,
+            item_id: item.kdsItemIds?.[0],
+            item_ids: item.kdsItemIds || [],
+            cart_id: item.cartId,
+            producto_id: item.id,
+            nuevo_estado: 'DEVUELTO',
+         });
+
+         const returnedAt = new Date().toISOString();
+         const newCart = cart.map((cartItem) => {
+            if (cartItem.cartId !== item.cartId) return cartItem;
+            return {
+               ...cartItem,
+               price: 0,
+               kdsOriginalPrice: cartItem.kdsOriginalPrice ?? cartItem.price,
+               kdsStatus: 'DEVUELTO',
+               kdsReturnedAt: returnedAt,
+               voidedByKdsReturn: true,
+               returnReason: 'Devuelto en cocina',
+            };
+         });
+         onUpdateCart(newCart);
+
+         if (activeTable && onUpdateParkedTickets) {
+            const ticketId = activeTable.currentOrderId;
+            const total = newCart.reduce((sum, cartItem) => sum + (Number(cartItem.price || 0) * Number(cartItem.quantity || 0)), 0);
+            onUpdateParkedTickets(parkedTickets.map(ticket => ticket.id === ticketId ? { ...ticket, items: newCart, total } : ticket));
+         }
+
+         setSuccessToast(`Artículo devuelto en cocina: ${item.name}`);
+      } catch (error: any) {
+         console.error('[KDS] No se pudo marcar artículo como devuelto:', error);
+         alert(`No se pudo marcar el artículo como devuelto en cocina: ${error?.message || 'error desconocido'}`);
       }
    };
 
@@ -4022,20 +4254,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return true;
    };
 
-   const handleParkCurrentTicket = async (aliasInput?: string) => {
+   const handleParkCurrentTicket = async (aliasInput?: string, cartOverride?: CartItem[]) => {
       if (blockRecoveredUberOrderMutation('guardarlo como ticket en espera')) return;
-      if (cart.length === 0) return;
+      const ticketItems = cartOverride || cart;
+      if (ticketItems.length === 0) return;
       const parkedTicketId = activeTable?.currentOrderId || `P-${Date.now()}`;
       const existingParked = (Array.isArray(parkedTickets) ? parkedTickets : []).find((ticket) => ticket.id === parkedTicketId);
       const normalizedAlias = aliasInput === undefined
          ? existingParked?.alias
          : (aliasInput.trim() || undefined);
+      const ticketTotal = ticketItems.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
       const newParked: ParkedTicket = {
          id: parkedTicketId,
          name: buildParkedTicketName(),
          alias: normalizedAlias,
-         items: [...cart],
-         total: cartTotal,
+         items: [...ticketItems],
+         total: ticketTotal,
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
          timestamp: existingParked?.timestamp || new Date().toISOString()
@@ -4048,14 +4282,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       if (activeTable) {
          try {
-            const total = cart.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+            const total = ticketItems.reduce((sum, i) => sum + (i.price * i.quantity), 0);
 
             // Sync with KDS backend
             await fetch(`http://localhost:8001/api/ordenes/${newParked.id}`, {
                method: 'PUT',
                headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({
-                  items: cart,
+                  items: ticketItems,
                   total: total,
                   status: 'OCCUPIED'
                })
@@ -5056,6 +5290,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         const lineNet = item.price * item.quantity;
                         const lineTaxSummary = getCartItemTaxSummary(item);
                         const isActiveCartItem = activeCartItemId === item.cartId;
+                        const isReturnedToKds = isKdsReturnedCartItem(item);
+                        const isDispatchedToKds = Boolean(item.dispatched);
 
                         // MOBILE CARD DESIGN
                         if (isMobile) {
@@ -5079,6 +5315,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
                                           </div>
                                           <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">{lineTaxSummary}</span>
+                                          {isDispatchedToKds && (
+                                             <span className={`mt-1 inline-flex w-fit rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${isReturnedToKds ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
+                                                {isReturnedToKds ? 'KDS devuelto' : 'KDS enviado'}
+                                             </span>
+                                          )}
                                        </div>
                                        {item.salespersonId && (
                                           <div className="mt-1 flex items-center gap-1 text-[9px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded-md w-fit">
@@ -5101,9 +5342,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 <button
                                                    onClick={(e) => {
                                                       e.stopPropagation();
+                                                      if (isDispatchedToKds) {
+                                                         alert('Este artículo ya fue enviado al KDS. Usa Devolver para cancelar la preparación.');
+                                                         return;
+                                                      }
                                                       updateCartItem({ ...item, quantity: item.quantity - 1 });
                                                    }}
-                                                   className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-all hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+                                                   disabled={isDispatchedToKds}
+                                                   className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-all hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
                                                 >
                                                    <Minus size={13} strokeWidth={3} />
                                                 </button>
@@ -5111,9 +5357,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 <button
                                                    onClick={(e) => {
                                                       e.stopPropagation();
+                                                      if (isDispatchedToKds) {
+                                                         alert('Para agregar más cantidad a un artículo ya enviado al KDS, agrega una línea nueva desde el catálogo.');
+                                                         return;
+                                                      }
                                                       updateCartItem({ ...item, quantity: item.quantity + 1 });
                                                    }}
-                                                   className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-all hover:bg-blue-700"
+                                                   disabled={isDispatchedToKds}
+                                                   className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
                                                 >
                                                    <Plus size={13} strokeWidth={3} />
                                                 </button>
@@ -5131,16 +5382,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              >
                                                 <Edit3 size={13} strokeWidth={2.4} />
                                              </button>
-                                             <button
-                                                onClick={(e) => {
-                                                   e.stopPropagation();
-                                                   updateCartItem(null, item.cartId);
-                                                }}
-                                                className="inline-flex items-center justify-center rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-red-700 shadow-sm transition-all hover:bg-red-100"
-                                                title="Eliminar artículo"
-                                             >
-                                                <Trash2 size={13} strokeWidth={2.4} />
-                                             </button>
+                                             {isDispatchedToKds ? (
+                                                <button
+                                                   onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      handleReturnDispatchedCartItem(item);
+                                                   }}
+                                                   disabled={isReturnedToKds}
+                                                   className="inline-flex items-center justify-center rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-700 shadow-sm transition-all hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                   title={isReturnedToKds ? 'Artículo ya devuelto en KDS' : 'Devolver en KDS'}
+                                                >
+                                                   <Undo2 size={13} strokeWidth={2.4} />
+                                                </button>
+                                             ) : (
+                                                <button
+                                                   onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      updateCartItem(null, item.cartId);
+                                                   }}
+                                                   className="inline-flex items-center justify-center rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-red-700 shadow-sm transition-all hover:bg-red-100"
+                                                   title="Eliminar artículo"
+                                                >
+                                                   <Trash2 size={13} strokeWidth={2.4} />
+                                                </button>
+                                             )}
                                           </div>
                                        </>
                                     )}
@@ -5191,6 +5456,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              <div className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">
                                                 {lineTaxSummary}
                                              </div>
+                                             {isDispatchedToKds && (
+                                                <span className={`mt-1 inline-flex w-fit rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${isReturnedToKds ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
+                                                   {isReturnedToKds ? 'KDS devuelto' : 'KDS enviado'}
+                                                </span>
+                                             )}
                                           </div>
                                           {/* Salesperson Badge */}
                                           {item.salespersonId && (
@@ -5210,9 +5480,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              <button
                                                 onClick={(e) => {
                                                    e.stopPropagation();
+                                                   if (isDispatchedToKds) {
+                                                      alert('Este artículo ya fue enviado al KDS. Usa Devolver para cancelar la preparación.');
+                                                      return;
+                                                   }
                                                    updateCartItem({ ...item, quantity: item.quantity - 1 }, item.cartId);
                                                 }}
-                                                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+                                                disabled={isDispatchedToKds}
+                                                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
                                                 title="Restar cantidad"
                                              >
                                                 <Minus size={13} strokeWidth={3} />
@@ -5220,9 +5495,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              <button
                                                 onClick={(e) => {
                                                    e.stopPropagation();
+                                                   if (isDispatchedToKds) {
+                                                      alert('Para agregar más cantidad a un artículo ya enviado al KDS, agrega una línea nueva desde el catálogo.');
+                                                      return;
+                                                   }
                                                    updateCartItem({ ...item, quantity: item.quantity + 1 }, item.cartId);
                                                 }}
-                                                className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-colors hover:bg-blue-700"
+                                                disabled={isDispatchedToKds}
+                                                className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
                                                 title="Sumar cantidad"
                                              >
                                                 <Plus size={13} strokeWidth={3} />
@@ -5237,16 +5517,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              >
                                                 <Edit3 size={12} />
                                              </button>
-                                             <button
-                                                onClick={(e) => {
-                                                   e.stopPropagation();
-                                                   updateCartItem(null, item.cartId);
-                                                }}
-                                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 shadow-sm transition-colors hover:bg-red-100"
-                                                title="Eliminar artículo"
-                                             >
-                                                <Trash2 size={12} />
-                                             </button>
+                                             {isDispatchedToKds ? (
+                                                <button
+                                                   onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      handleReturnDispatchedCartItem(item);
+                                                   }}
+                                                   disabled={isReturnedToKds}
+                                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 text-amber-700 shadow-sm transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                   title={isReturnedToKds ? 'Artículo ya devuelto en KDS' : 'Devolver en KDS'}
+                                                >
+                                                   <Undo2 size={12} />
+                                                </button>
+                                             ) : (
+                                                <button
+                                                   onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      updateCartItem(null, item.cartId);
+                                                   }}
+                                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 shadow-sm transition-colors hover:bg-red-100"
+                                                   title="Eliminar artículo"
+                                                >
+                                                   <Trash2 size={12} />
+                                                </button>
+                                             )}
                                           </div>
                                        )}
                                     </div>
@@ -5678,7 +5972,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          )}
          {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
-         {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} salesUsers={salesUsers} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
+         {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} salesUsers={salesUsers} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={!isKdsReturnedCartItem(editingItem)} canVoidItem={!editingItem.dispatched} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, selectedVariant, variantInfo) => { addToCart(p, 1, pr, m, undefined, selectedVariant, variantInfo); setSelectedProductForVariants(null); }} />}
          {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(w) => { addToCart(productForScale, w); setProductForScale(null); }} />}
          {
