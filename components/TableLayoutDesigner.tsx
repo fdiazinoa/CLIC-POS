@@ -54,6 +54,29 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
         };
         return table.name?.trim() || table.nombre?.trim() || fallbackByShape[table.shape] || 'Mesa';
     };
+    const getNextElementName = (shape: TableShape, baseName: string) => {
+        const isTableShape = shape === 'SQUARE' || shape === 'CIRCLE';
+        const namePrefix = isTableShape ? 'Mesa' : baseName;
+        const usedNumbers = new Set<number>();
+
+        currentRoomTables.forEach(table => {
+            const label = getTableLabel(table);
+            const match = label.match(new RegExp(`^${namePrefix}\\s+(\\d+)\\b`, 'i'));
+            if (!match) return;
+
+            const number = Number(match[1]);
+            if (Number.isFinite(number) && number > 0) {
+                usedNumbers.add(number);
+            }
+        });
+
+        let nextNumber = 1;
+        while (usedNumbers.has(nextNumber)) {
+            nextNumber += 1;
+        }
+
+        return `${namePrefix} ${nextNumber}`;
+    };
     const currentRoom = rooms.find(r => r.id === currentRoomId);
     const currentRoomTables = useMemo(
         () => tables.filter(t => t.roomId === currentRoomId),
@@ -103,7 +126,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
             BOOTH: { baseName: 'Sofa', width: 160, height: 90, capacity: 4 }
         };
         const config = elementConfig[shape];
-        const elementName = `${config.baseName} ${tables.filter(t => t.roomId === currentRoomId && t.shape === shape).length + 1}`;
+        const elementName = getNextElementName(shape, config.baseName);
 
         const newTable: Table = {
             id: generateTableId(),
@@ -320,10 +343,21 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
 
                 {/* Property Editor Panel (Right Side) */}
                 {selectedTable && (
-                    <div className="w-64 bg-white border-l border-slate-200 p-6 flex flex-col gap-6 animate-in slide-in-from-right duration-200">
-                        <div>
-                            <h3 className="font-bold text-slate-800 mb-1">Propiedades</h3>
-                            <p className="text-xs text-slate-500">Editando {getTableLabel(selectedTable)}</p>
+                    <div className="w-64 bg-white border-l border-slate-200 p-6 flex flex-col gap-6 overflow-y-auto animate-in slide-in-from-right duration-200">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <h3 className="font-bold text-slate-800 mb-1">Propiedades</h3>
+                                <p className="text-xs text-slate-500">Editando {getTableLabel(selectedTable)}</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => deleteTable(selectedTable.id)}
+                                className="shrink-0 p-2 rounded-lg text-red-500 bg-red-50 hover:bg-red-100 transition-colors"
+                                title="Eliminar elemento"
+                                aria-label="Eliminar elemento"
+                            >
+                                <Trash2 size={16} />
+                            </button>
                         </div>
 
                         <div className="space-y-4">
