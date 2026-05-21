@@ -75,6 +75,7 @@ const LOCAL_FISCAL_CREDENTIAL_COLLECTION = 'fiscalCredentials';
 const POLARIS_API_BASE = 'https://api.polarisedi.com';
 const DIGIFACT_TEST_BASE_URL = 'https://testnucdo.digifact.com/api';
 const DIGIFACT_PROD_BASE_URL = 'https://nucdo.digifact.com/api';
+const DIGIFACT_ISSUE_FORMAT = 'JSON';
 
 interface LocalFiscalCredentialRecord {
     id: string;
@@ -930,8 +931,11 @@ const issueDirectDigifactDocument = async (
     const issueUrl = resolveDirectDigifactIssueUrl(input, credential);
     const url = new URL(issueUrl);
     url.searchParams.set('TAXID', auth.taxId);
-    url.searchParams.set('FORMAT', 'XML|HTML|PDF');
-    if (auth.username) url.searchParams.set('USERNAME', auth.username);
+    url.searchParams.set('FORMAT', DIGIFACT_ISSUE_FORMAT);
+    if (!auth.username) {
+        throw new Error('DigiFact requiere USERNAME en la URL de emisión. Guarda la credencial con username, por ejemplo {"taxId":"132752155","username":"TESTUSERTIK","password":"..."}');
+    }
+    url.searchParams.set('USERNAME', auth.username);
 
     const issueInput: IssueFiscalDocumentInput = {
         ...input,
