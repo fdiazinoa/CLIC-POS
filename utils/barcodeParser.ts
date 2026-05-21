@@ -6,37 +6,89 @@ export interface ScannedItem {
     type: 'WEIGHT' | 'PRICE';
 }
 
-export function parseScaleBarcode(barcode: string, config: ScaleLabelConfig): ScannedItem | null {
-    if (!config.isEnabled) return null;
+export interface ScaleBarcodeParseResult {
+    success: boolean;
+    item?: ScannedItem;
+    normalizedBarcode: string;
+    message: string;
+}
 
-    // 1. Validar Longitud
-    if (barcode.length !== config.structure.totalLength) return null;
+export function normalizeScaleBarcodeInput(barcode: string): string {
+    return String(barcode || '').replace(/\D/g, '');
+}
 
-    // 2. Validar Prefijo
-    const prefix = barcode.substring(0, config.structure.prefixLength);
-    if (!config.prefixes.includes(prefix)) return null;
+export function parseScaleBarcodeDetailed(barcode: string, config: ScaleLabelConfig): ScaleBarcodeParseResult {
+    const normalizedBarcode = normalizeScaleBarcodeInput(barcode);
 
-    // 3. Extraer PLU
-    const plu = barcode.substring(
-        config.structure.pluStart,
-        config.structure.pluStart + config.structure.pluLength
-    );
+    if (!config.isEnabled) {
+        return {
+            success: false,
+            normalizedBarcode,
+            message: 'Activa el lector de etiquetas antes de probar.'
+        };
+    }
 
-    // 4. Extraer Valor (Peso o Precio)
-    const rawValue = barcode.substring(
-        config.structure.valueStart,
-        config.structure.valueStart + config.structure.valueLength
-    );
+    if (!normalizedBarcode) {
+        return {
+            success: false,
+            normalizedBarcode,
+            message: 'Escanea o escribe un código EAN-13 para probar.'
+        };
+    }
 
+    if (normalizedBarcode.length !== config.structure.totalLength) {
+        return {
+            success: false,
+            normalizedBarcode,
+            message: `Longitud inválida: ${normalizedBarcode.length} dígitos. Esperado: ${config.structure.totalLength}.`
+        };
+    }
+
+    const prefix = normalizedBarcode.substring(0, config.structure.prefixLength);
+    if (!config.prefixes.includes(prefix)) {
+        return {
+            success: false,
+            normalizedBarcode,
+            message: `Prefijo ${prefix || 'vacío'} no permitido. Permitidos: ${config.prefixes.join(', ') || 'ninguno'}.`
+        };
+    }
+
+    const pluEnd = config.structure.pluStart + config.structure.pluLength;
+    const valueEnd = config.structure.valueStart + config.structure.valueLength;
+    if (pluEnd > normalizedBarcode.length || valueEnd > normalizedBarcode.length) {
+        return {
+            success: false,
+            normalizedBarcode,
+            message: 'La estructura configurada excede la longitud del código.'
+        };
+    }
+
+    const plu = normalizedBarcode.substring(config.structure.pluStart, pluEnd);
+    const rawValue = normalizedBarcode.substring(config.structure.valueStart, valueEnd);
     const numericValue = parseInt(rawValue, 10);
-    if (isNaN(numericValue)) return null;
 
-    // 5. Aplicar Divisor
-    const finalValue = numericValue / Math.pow(10, config.decimals);
+    if (Number.isNaN(numericValue)) {
+        return {
+            success: false,
+            normalizedBarcode,
+            message: `El valor ${rawValue || 'vacío'} no es numérico.`
+        };
+    }
+
+    const item = {
+        plu,
+        value: numericValue / Math.pow(10, config.decimals),
+        type: config.valueType
+    } as ScannedItem;
 
     return {
-        plu: plu,
-        value: finalValue,
-        type: config.valueType
+        success: true,
+        item,
+        normalizedBarcode,
+        message: `PLU ${item.plu} leído correctamente.`
     };
+}
+
+export function parseScaleBarcode(barcode: string, config: ScaleLabelConfig): ScannedItem | null {
+    return parseScaleBarcodeDetailed(barcode, config).item || null;
 }
