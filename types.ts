@@ -1303,6 +1303,11 @@ export interface Product {
   imageVersion?: string;
   imageLocalPath?: string | null;
   barcode?: string;
+  barcode_2?: string;
+  barcode_3?: string;
+  barcode2?: string;
+  barcode3?: string;
+  barcodes?: Array<string | { code?: string; value?: string; barcode?: string; [key: string]: any }>;
   cost?: number;
   is_sellable?: boolean;
   theoreticalCost?: number; // New calculated cost

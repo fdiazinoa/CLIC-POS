@@ -13,6 +13,8 @@ import {
 import { BusinessConfig, Product, CustomerDisplayConfig, ScaleDevice, ScaleTech, PrinterDevice, ConnectionType, ScaleLabelConfig, FingerprintReaderConfig, FingerprintDriver, FingerprintDiscoveredDevice } from '../types';
 import { parseScaleBarcodeDetailed } from '../utils/barcodeParser';
 import { productReferenceCandidates } from '../utils/productReferences';
+import { DEFAULT_LABEL_TEMPLATES } from '../constants';
+import { printLabelsFromTemplate } from '../utils/labelPrinter';
 import { nativePrintBridge } from '../services/printer/NativePrintBridge';
 import { biometricService } from '../services/BiometricAuthService';
 import {
@@ -318,6 +320,87 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
          });
       });
    };
+
+   const resolveMatchedProductLabelCode = (product: Product, code: string): string => {
+      const raw = String(code || '').trim().toLowerCase();
+      const digitsOnly = raw.replace(/\D/g, '');
+      const normalized = digitsOnly || raw;
+      const matchedReference = productReferenceCandidates(product).find(reference => {
+         const refRaw = String(reference || '').trim().toLowerCase();
+         const refDigits = refRaw.replace(/\D/g, '');
+         return refRaw === normalized || (digitsOnly && refDigits === digitsOnly);
+      });
+
+      return matchedReference || product.barcode || product.id;
+   };
+
+   const handleProductLabelTest = async () => {
+      const foundProduct = findProductByLabelCode(productLabelTestCode);
+      if (!foundProduct) {
+         setProductLabelTestResult({
+            success: false,
+            message: 'No existe un articulo con ese codigo normal. Guardalo en barcode, barcode_2 o barcode_3 del producto.'
+         });
+         return;
+      }
+
+      const labelPrinter = printers.find(printer => printer.type === 'LABEL');
+      if (!labelPrinter) {
+         setProductLabelTestResult({
+            success: false,
+            message: `Producto encontrado: ${foundProduct.name}. Configura una impresora con tipo Etiquetas / Label antes de imprimir.`
+         });
+         return;
+      }
+
+      const templates = (Array.isArray(globalConfig.labelTemplates) && globalConfig.labelTemplates.length > 0)
+         ? globalConfig.labelTemplates
+         : DEFAULT_LABEL_TEMPLATES;
+      const articleTemplate = templates.find(template => template.category === 'ARTICLE') || templates[0];
+
+      if (!articleTemplate) {
+         setProductLabelTestResult({
+            success: false,
+            message: 'No hay plantillas de etiquetas de articulo disponibles.'
+         });
+         return;
+      }
+
+      const feedbackKey = 'product-label-test';
+      setTestingPrinterId(feedbackKey);
+      setProductLabelTestResult(null);
+
+      try {
+         const result = await printLabelsFromTemplate({
+            config: { ...globalConfig, availablePrinters: printers },
+            template: articleTemplate,
+            terminalId: selectedTerminalId,
+            referenceId: `label-test-${foundProduct.id}-${Date.now()}`,
+            records: [{
+               productId: foundProduct.id,
+               productName: foundProduct.name || foundProduct.id,
+               sku: resolveMatchedProductLabelCode(foundProduct, productLabelTestCode),
+               price: foundProduct.price || 0,
+               copies: 1
+            }]
+         });
+
+         setProductLabelTestResult({
+            success: result.printed,
+            message: result.printed
+               ? `Etiqueta enviada a ${labelPrinter.name || 'la impresora label'}: ${foundProduct.name} | Precio: ${globalConfig.currencySymbol || '$'}${Number(foundProduct.price || 0).toFixed(2)}`
+               : result.message
+         });
+      } catch (error) {
+         setProductLabelTestResult({
+            success: false,
+            message: error instanceof Error ? error.message : 'No se pudo imprimir la etiqueta de prueba.'
+         });
+      } finally {
+         setTestingPrinterId(null);
+      }
+   };
+
    const buildScalePreviewSegments = () => {
       const totalLength = Math.max(1, scaleLabelConfig.structure.totalLength || 13);
       const samplePrefix = scaleLabelConfig.prefixes[0] || '20';
@@ -1502,14 +1585,11 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                                  />
                                  <button
                                     type="button"
-                                    onClick={() => {
-                                       const foundProduct = findProductByLabelCode(productLabelTestCode);
-                                       setProductLabelTestResult(foundProduct
-                                          ? { success: true, message: `Producto encontrado: ${foundProduct.name} | Precio: ${globalConfig.currencySymbol || '$'}${Number(foundProduct.price || 0).toFixed(2)}` }
-                                          : { success: false, message: `No existe un artículo con ese código normal. Guárdalo en barcode, barcode_2 o barcode_3 del producto.` });
-                                    }}
-                                    className="px-6 py-3 bg-blue-600 text-white font-black rounded-2xl hover:bg-blue-700 transition-colors"
+                                    onClick={handleProductLabelTest}
+                                    disabled={testingPrinterId === 'product-label-test'}
+                                    className="px-6 py-3 bg-blue-600 text-white font-black rounded-2xl hover:bg-blue-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                                  >
+                                    {testingPrinterId === 'product-label-test' ? <Loader2 size={16} className="animate-spin" /> : <Printer size={16} />}
                                     Probar producto
                                  </button>
                               </div>
@@ -1520,7 +1600,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                                  </div>
                               )}
                               <p className="mt-3 text-[11px] font-bold text-slate-400">
-                                 Artículos con identificadores disponibles: {productWithBarcodeCount}. Para imprimir, entra a Artículos &gt; Etiquetas o Inventario &gt; Imprimir Etiquetas.
+                                 Artículos con identificadores disponibles: {productWithBarcodeCount}. La prueba imprime 1 etiqueta usando la primera plantilla de articulo.
                               </p>
                            </div>
                         </div>

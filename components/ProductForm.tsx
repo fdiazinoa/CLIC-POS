@@ -233,6 +233,17 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     return normalizeProductActivationState(normalizeRestaurantProductConfig(base));
   });
 
+  const alternateBarcode2 = String(formData.barcode_2 || formData.barcode2 || '').trim();
+  const alternateBarcode3 = String(formData.barcode_3 || formData.barcode3 || '').trim();
+
+  const updateAlternateBarcode = (slot: 2 | 3, value: string) => {
+    if (slot === 2) {
+      setFormData({ ...formData, barcode_2: value, barcode2: value });
+      return;
+    }
+    setFormData({ ...formData, barcode_3: value, barcode3: value });
+  };
+
   const [warehouseSettings, setWarehouseSettings] = useState<Record<string, { min: number, max: number }>>(
     () => canonicalizeWarehouseRecord(initialData?.warehouseSettings || {}, warehouses)
   );
@@ -1058,8 +1069,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     );
     const restaurantConfig = resolveRestaurantProductConfig(formData);
     const productionAreaId = String(restaurantConfig.production_area_id || '').trim();
+    const normalizedBarcode2 = String(formData.barcode_2 || formData.barcode2 || '').trim();
+    const normalizedBarcode3 = String(formData.barcode_3 || formData.barcode3 || '').trim();
     const updatedProduct = normalizeRestaurantProductConfig({
       ...formData,
+      barcode_2: normalizedBarcode2 || undefined,
+      barcode2: normalizedBarcode2 || undefined,
+      barcode_3: normalizedBarcode3 || undefined,
+      barcode3: normalizedBarcode3 || undefined,
       production_area_id: productionAreaId || undefined,
       tariffs: canonicalizeTariffEntries(formData.tariffs || [], availableTariffs),
       stockBalances: canonicalizeWarehouseRecord(formData.stockBalances || {}, warehouses),
@@ -1686,10 +1703,18 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Nombre Comercial</label>
                       <input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} onPaste={(e) => e.stopPropagation()} className="w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl text-lg font-bold text-gray-800 focus:bg-white focus:border-blue-200 transition-all select-text" />
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Código Barra / SKU</label>
+                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Código Barra Principal / SKU</label>
                         <input type="text" value={formData.barcode || ''} onChange={e => setFormData({ ...formData, barcode: e.target.value })} onPaste={(e) => e.stopPropagation()} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-mono text-sm select-text" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Código Barra 2</label>
+                        <input type="text" value={alternateBarcode2} onChange={e => updateAlternateBarcode(2, e.target.value)} onPaste={(e) => e.stopPropagation()} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-mono text-sm select-text" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Código Barra 3</label>
+                        <input type="text" value={alternateBarcode3} onChange={e => updateAlternateBarcode(3, e.target.value)} onPaste={(e) => e.stopPropagation()} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-mono text-sm select-text" />
                       </div>
                       <div>
                         <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Costo Unitario (CPP)</label>
@@ -2538,14 +2563,20 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <div className="p-4 rounded-2xl bg-gray-50 border border-gray-100">
                     <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Articulo</p>
                     <p className="font-bold text-gray-800 break-words">{formData.name || 'Sin nombre'}</p>
                   </div>
                   <div className="p-4 rounded-2xl bg-gray-50 border border-gray-100">
-                    <p className="text-[10px] font-black text-gray-400 uppercase mb-1">SKU / Codigo</p>
+                    <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Código Principal</p>
                     <p className="font-mono text-sm text-gray-700 break-words">{formData.barcode || formData.id}</p>
+                  </div>
+                  <div className="p-4 rounded-2xl bg-gray-50 border border-gray-100">
+                    <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Códigos Alternos</p>
+                    <p className="font-mono text-sm text-gray-700 break-words">
+                      {[alternateBarcode2, alternateBarcode3].filter(Boolean).join(' / ') || 'Sin alternos'}
+                    </p>
                   </div>
                   <div className="p-4 rounded-2xl bg-gray-50 border border-gray-100">
                     <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Precio Actual</p>
