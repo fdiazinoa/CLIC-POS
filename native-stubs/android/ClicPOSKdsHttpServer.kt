@@ -172,7 +172,11 @@ object ClicPOSKdsHttpServer {
 
         if (method == "POST" && path == "/api/cocina/cambiar-estado") {
             val payload = parseObject(body)
-            updateStatus(payload.optString("item_id", ""), payload.optString("orden_id", ""), payload.optString("nuevo_estado", "PENDIENTE"))
+            updateStatus(
+                cleanPayloadId(payload.opt("item_id")),
+                cleanPayloadId(payload.opt("orden_id")),
+                payload.optString("nuevo_estado", "PENDIENTE")
+            )
             return 200 to JSONObject().put("status", "success").put("success", true)
         }
 
@@ -310,6 +314,13 @@ object ClicPOSKdsHttpServer {
                 if (status == "EN_PREPARACION") item.put("hora_inicio_preparacion", isoNow())
             }
         }
+    }
+
+    private fun cleanPayloadId(value: Any?): String {
+        if (value == null || value == JSONObject.NULL) return ""
+        val text = value.toString().trim()
+        if (text.equals("null", ignoreCase = true) || text.equals("undefined", ignoreCase = true)) return ""
+        return text
     }
 
     private fun parseObject(body: String): JSONObject {

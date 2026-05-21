@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
     Users,
     ChefHat,
@@ -63,6 +63,13 @@ interface KDSNetworkInfo {
 const DEFAULT_KDS_PORT = '8001';
 const DEFAULT_WARNING_MINUTES = 10;
 const DEFAULT_CRITICAL_MINUTES = 20;
+
+const getOrderSignature = (order: KDSOrder): string => {
+    const itemSignature = (order.items || [])
+        .map(item => `${item.id}:${item.cantidad}`)
+        .join('|');
+    return `${order.id}:${itemSignature}`;
+};
 
 const normalizeIp = (value: unknown): string | null => {
     const trimmed = String(value || '').trim();
@@ -148,11 +155,66 @@ const KitchenDisplay: React.FC = () => {
         serverRunning: false
     });
     const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+    const audioContextRef = useRef<AudioContext | null>(null);
+    const knownOrderSignaturesRef = useRef<Set<string>>(new Set());
+    const didPrimeOrdersRef = useRef(false);
+
+    const ensureAudioContext = useCallback(() => {
+        const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+        if (!AudioContextCtor) return null;
+        if (!audioContextRef.current) {
+            audioContextRef.current = new AudioContextCtor();
+        }
+        if (audioContextRef.current.state === 'suspended') {
+            audioContextRef.current.resume().catch(() => undefined);
+        }
+        return audioContextRef.current;
+    }, []);
+
+    const playKitchenAlert = useCallback(() => {
+        try {
+            const context = ensureAudioContext();
+            if (!context) {
+                navigator.vibrate?.([180, 80, 180]);
+                return;
+            }
+            const now = context.currentTime;
+            [0, 0.18, 0.36].forEach((offset) => {
+                const oscillator = context.createOscillator();
+                const gain = context.createGain();
+                oscillator.type = 'square';
+                oscillator.frequency.setValueAtTime(880, now + offset);
+                gain.gain.setValueAtTime(0.0001, now + offset);
+                gain.gain.exponentialRampToValueAtTime(0.25, now + offset + 0.015);
+                gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.12);
+                oscillator.connect(gain);
+                gain.connect(context.destination);
+                oscillator.start(now + offset);
+                oscillator.stop(now + offset + 0.13);
+            });
+            navigator.vibrate?.([120, 60, 120]);
+        } catch (error) {
+            console.warn('[KDS] No se pudo reproducir alerta sonora:', error);
+            navigator.vibrate?.([180, 80, 180]);
+        }
+    }, [ensureAudioContext]);
 
     useEffect(() => {
         const interval = setInterval(() => setCurrentTime(new Date()), 1000);
         return () => clearInterval(interval);
     }, []);
+
+    useEffect(() => {
+        const unlockAudio = () => {
+            ensureAudioContext();
+        };
+        window.addEventListener('pointerdown', unlockAudio, { once: true });
+        window.addEventListener('keydown', unlockAudio, { once: true });
+        return () => {
+            window.removeEventListener('pointerdown', unlockAudio);
+            window.removeEventListener('keydown', unlockAudio);
+        };
+    }, [ensureAudioContext]);
 
     useEffect(() => {
         let mounted = true;
@@ -172,7 +234,16 @@ const KitchenDisplay: React.FC = () => {
                 const response = await fetch('http://localhost:8001/api/cocina/ordenes-activas');
                 if (response.ok) {
                     const data = await response.json();
-                    setOrders(data);
+                    const nextOrders = Array.isArray(data) ? data : [];
+                    const nextSignatures = new Set(nextOrders.map(getOrderSignature));
+                    const hasNewOrder = didPrimeOrdersRef.current
+                        && nextOrders.some((order) => !knownOrderSignaturesRef.current.has(getOrderSignature(order)));
+                    knownOrderSignaturesRef.current = nextSignatures;
+                    didPrimeOrdersRef.current = true;
+                    setOrders(nextOrders);
+                    if (hasNewOrder) {
+                        playKitchenAlert();
+                    }
                 }
             } catch (error) {
                 console.error("Error fetching KDS orders:", error);
@@ -202,16 +273,34 @@ const KitchenDisplay: React.FC = () => {
 
     const handleUpdateStatus = async (id: string, newStatus: string, type: 'item' | 'order') => {
         try {
-            await fetch('http://localhost:8001/api/cocina/cambiar-estado', {
+            const payload = type === 'item'
+                ? { item_id: id, nuevo_estado: newStatus }
+                : { orden_id: id, nuevo_estado: newStatus };
+            const response = await fetch('http://localhost:8001/api/cocina/cambiar-estado', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    item_id: type === 'item' ? id : null,
-                    orden_id: type === 'order' ? id : null,
-                    nuevo_estado: newStatus
-                })
+                body: JSON.stringify(payload)
             });
-            // Immediate optimistic update or wait for next poll
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            setOrders(prevOrders => prevOrders
+                .map(order => {
+                    if (type === 'order' && order.id === id) {
+                        return {
+                            ...order,
+                            items: order.items.map(item => ({ ...item, estado_cocina: newStatus as KDSItem['estado_cocina'] }))
+                        };
+                    }
+                    if (type === 'item') {
+                        return {
+                            ...order,
+                            items: order.items.map(item => item.id === id ? { ...item, estado_cocina: newStatus as KDSItem['estado_cocina'] } : item)
+                        };
+                    }
+                    return order;
+                })
+                .filter(order => order.items.some(item => item.estado_cocina === 'PENDIENTE' || item.estado_cocina === 'EN_PREPARACION'))
+            );
         } catch (error) {
             console.error("Error updating KDS status:", error);
         }
