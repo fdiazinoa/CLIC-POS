@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { BusinessConfig, Product, CustomerDisplayConfig, ScaleDevice, ScaleTech, PrinterDevice, ConnectionType, ScaleLabelConfig, FingerprintReaderConfig, FingerprintDriver, FingerprintDiscoveredDevice } from '../types';
 import { parseScaleBarcodeDetailed } from '../utils/barcodeParser';
+import { productReferenceCandidates } from '../utils/productReferences';
 import { nativePrintBridge } from '../services/printer/NativePrintBridge';
 import { biometricService } from '../services/BiometricAuthService';
 import {
@@ -294,9 +295,29 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    });
    const [testBarcode, setTestBarcode] = useState('');
    const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+   const [productLabelTestCode, setProductLabelTestCode] = useState('');
+   const [productLabelTestResult, setProductLabelTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
    const selectedTerminalId = terminalId || globalConfig.terminals?.[0]?.id || 'T1';
    const normalizedTestBarcode = testBarcode.replace(/\D/g, '');
+   const labelPrinterCount = useMemo(() => printers.filter(printer => printer.type === 'LABEL').length, [printers]);
+   const productWithBarcodeCount = useMemo(() => {
+      return (products || []).filter(product => productReferenceCandidates(product).some(reference => reference.trim())).length;
+   }, [products]);
+   const findProductByLabelCode = (code: string): Product | undefined => {
+      const raw = String(code || '').trim().toLowerCase();
+      const digitsOnly = raw.replace(/\D/g, '');
+      const normalized = digitsOnly || raw;
+      if (!normalized) return undefined;
+
+      return (products || []).find(product => {
+         return productReferenceCandidates(product).some(reference => {
+            const refRaw = String(reference || '').trim().toLowerCase();
+            const refDigits = refRaw.replace(/\D/g, '');
+            return refRaw === normalized || (digitsOnly && refDigits === digitsOnly);
+         });
+      });
+   };
    const buildScalePreviewSegments = () => {
       const totalLength = Math.max(1, scaleLabelConfig.structure.totalLength || 13);
       const samplePrefix = scaleLabelConfig.prefixes[0] || '20';
@@ -1443,13 +1464,84 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                   <div className="bg-white p-8 rounded-[2.5rem] border border-gray-200 shadow-sm animate-in slide-in-from-right-4">
                      <div className="flex justify-between items-center mb-8 pb-4 border-b border-slate-50">
                         <div>
-                           <h3 className="text-xl font-black text-slate-800 flex items-center gap-3"><Barcode className="text-purple-600" /> Lector de Etiquetas</h3>
-                           <p className="text-xs text-slate-400 font-medium">Configura la lectura de códigos de barras impresos por balanzas.</p>
+                           <h3 className="text-xl font-black text-slate-800 flex items-center gap-3"><Barcode className="text-purple-600" /> Etiquetas de Producto y Balanza</h3>
+                           <p className="text-xs text-slate-400 font-medium">Separa labels normales de ropa/retail de etiquetas EAN-13 generadas por balanzas.</p>
                         </div>
                         <label className="relative inline-flex items-center cursor-pointer">
                            <input type="checkbox" checked={scaleLabelConfig.isEnabled} onChange={(e) => setScaleLabelConfig({ ...scaleLabelConfig, isEnabled: e.target.checked })} className="sr-only peer" />
                            <div className="w-14 h-7 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-purple-600"></div>
                         </label>
+                     </div>
+
+                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 mb-8">
+                        <div className="rounded-3xl border border-blue-100 bg-gradient-to-br from-blue-50 to-white p-6 shadow-sm">
+                           <div className="flex items-start justify-between gap-4">
+                              <div>
+                                 <div className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-white">
+                                    <Printer size={14} /> Producto / Ropa
+                                 </div>
+                                 <h4 className="mt-4 text-lg font-black text-slate-800">Label normal de artículo</h4>
+                                 <p className="mt-2 text-sm font-semibold text-slate-500">
+                                    Usa el barcode real del producto, SKU o códigos alternos. No interpreta peso ni precio.
+                                 </p>
+                              </div>
+                              <div className="rounded-2xl bg-white border border-blue-100 px-4 py-3 text-right">
+                                 <p className="text-[10px] font-black uppercase tracking-widest text-blue-400">Impresoras label</p>
+                                 <p className="text-2xl font-black text-blue-700">{labelPrinterCount}</p>
+                              </div>
+                           </div>
+
+                           <div className="mt-5 rounded-2xl bg-white border border-blue-100 p-4">
+                              <div className="flex flex-col lg:flex-row gap-3">
+                                 <input
+                                    type="text"
+                                    placeholder="Prueba barcode normal: 7703562865157, SKU, barcode_2..."
+                                    value={productLabelTestCode}
+                                    onChange={(e) => setProductLabelTestCode(e.target.value)}
+                                    className="flex-1 p-3 bg-slate-50 border border-blue-100 rounded-2xl font-mono text-sm outline-none focus:border-blue-500"
+                                 />
+                                 <button
+                                    type="button"
+                                    onClick={() => {
+                                       const foundProduct = findProductByLabelCode(productLabelTestCode);
+                                       setProductLabelTestResult(foundProduct
+                                          ? { success: true, message: `Producto encontrado: ${foundProduct.name} | Precio: ${globalConfig.currencySymbol || '$'}${Number(foundProduct.price || 0).toFixed(2)}` }
+                                          : { success: false, message: `No existe un artículo con ese código normal. Guárdalo en barcode, barcode_2 o barcode_3 del producto.` });
+                                    }}
+                                    className="px-6 py-3 bg-blue-600 text-white font-black rounded-2xl hover:bg-blue-700 transition-colors"
+                                 >
+                                    Probar producto
+                                 </button>
+                              </div>
+                              {productLabelTestResult && (
+                                 <div className={`mt-3 p-3 rounded-2xl flex items-center gap-3 ${productLabelTestResult.success ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-amber-50 text-amber-800 border border-amber-200'}`}>
+                                    {productLabelTestResult.success ? <CheckCircle size={18} /> : <Info size={18} />}
+                                    <span className="text-sm font-bold">{productLabelTestResult.message}</span>
+                                 </div>
+                              )}
+                              <p className="mt-3 text-[11px] font-bold text-slate-400">
+                                 Artículos con identificadores disponibles: {productWithBarcodeCount}. Para imprimir, entra a Artículos &gt; Etiquetas o Inventario &gt; Imprimir Etiquetas.
+                              </p>
+                           </div>
+                        </div>
+
+                        <div className="rounded-3xl border border-purple-100 bg-gradient-to-br from-purple-50 to-white p-6 shadow-sm">
+                           <div className="flex items-start justify-between gap-4">
+                              <div>
+                                 <div className="inline-flex items-center gap-2 rounded-2xl bg-purple-600 px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-white">
+                                    <Scale size={14} /> Balanza
+                                 </div>
+                                 <h4 className="mt-4 text-lg font-black text-slate-800">EAN-13 con peso o precio</h4>
+                                 <p className="mt-2 text-sm font-semibold text-slate-500">
+                                    Solo para etiquetas generadas por balanzas. Valida prefijo, PLU y valor antes de buscar el artículo.
+                                 </p>
+                              </div>
+                              <div className={`rounded-2xl border px-4 py-3 text-right ${scaleLabelConfig.isEnabled ? 'bg-green-50 border-green-100' : 'bg-slate-50 border-slate-100'}`}>
+                                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Lector balanza</p>
+                                 <p className={`text-sm font-black ${scaleLabelConfig.isEnabled ? 'text-green-700' : 'text-slate-400'}`}>{scaleLabelConfig.isEnabled ? 'ACTIVO' : 'INACTIVO'}</p>
+                              </div>
+                           </div>
+                        </div>
                      </div>
 
                      {scaleLabelConfig.isEnabled && (
@@ -1533,7 +1625,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                                        const result = parseScaleBarcodeDetailed(testBarcode, scaleLabelConfig as any);
                                        setTestResult(result.success && result.item
                                           ? { success: true, message: `Código ${result.normalizedBarcode} | PLU: ${result.item.plu} | ${result.item.type === 'WEIGHT' ? 'Peso' : 'Precio'}: ${result.item.value}` }
-                                          : { success: false, message: result.message });
+                                          : { success: false, message: `${result.message} Si este código es de ropa/retail, pruébalo arriba como etiqueta normal de producto.` });
                                     }}
                                     className="px-8 py-3 bg-slate-800 text-white font-bold rounded-2xl hover:bg-slate-900 transition-colors"
                                  >
