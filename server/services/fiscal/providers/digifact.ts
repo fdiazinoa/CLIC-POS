@@ -12,6 +12,7 @@ import { resolveFiscalProviderCredential } from '../credentials.js';
 
 const DIGIFACT_TEST_BASE_URL = 'https://testnucdo.digifact.com/api';
 const DIGIFACT_PROD_BASE_URL = 'https://nucdo.digifact.com/api';
+const DIGIFACT_ISSUE_FORMAT = 'JSON';
 const TOKEN_CACHE_TTL_MS = 29 * 24 * 60 * 60 * 1000;
 
 type DigifactCredentialShape = {
@@ -723,8 +724,11 @@ export class DigifactFiscalProvider implements FiscalProvider {
         const eNCF = cleanString(request.transaction.electronicNcf || request.transaction.ncf);
         const url = new URL(resolveDigifactIssueUrl(request));
         url.searchParams.set('TAXID', auth.resolvedTaxId);
-        url.searchParams.set('FORMAT', 'XML|HTML|PDF');
-        if (auth.username) url.searchParams.set('USERNAME', auth.username);
+        url.searchParams.set('FORMAT', DIGIFACT_ISSUE_FORMAT);
+        if (!auth.username) {
+            throw new Error('DigiFact requiere USERNAME en la URL de emisión. Guarda la credencial con username, por ejemplo {"taxId":"132752155","username":"TESTUSERTIK","password":"..."}');
+        }
+        url.searchParams.set('USERNAME', auth.username);
 
         const response = await fetch(url.toString(), {
             method: 'POST',
