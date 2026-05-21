@@ -96,7 +96,6 @@ const RESTAURANT_BOTTOM_BAR_RESERVE_PX = 112;
 const RESTAURANT_FIT_FILL = 1.16;
 const DEFAULT_EXPECTED_STAY = 70;
 const NO_ORDER_TOTAL_THRESHOLD = 0.01;
-const EMPTY_TABLE_ALERT_AFTER_SECONDS = 18;
 
 const TABLE_ENTRY_VARIANTS = {
     hidden: {
@@ -178,14 +177,7 @@ const inferArchetype = (table: Table): TableArchetype => {
 const getSmartStatus = (table: Table, elapsedMinutes: number, hasDigitizedItems: boolean): SmartStatus => {
     if (!table.status || table.status === 'FREE') return 'FREE';
     if (table.status === 'RESERVED') return 'CHECK_REQUESTED';
-    const elapsedSeconds = elapsedMinutes * 60;
-
-    if (!hasDigitizedItems) {
-        // Empty opened table: allow a short grace period, then mark as attention instead of occupied/red.
-        if (!table.timeSeated || elapsedSeconds >= EMPTY_TABLE_ALERT_AFTER_SECONDS) {
-            return 'ATTENTION';
-        }
-    }
+    if (!hasDigitizedItems) return 'FREE';
 
     return 'OCCUPIED';
 };
@@ -591,7 +583,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 const data = await res.json();
                 if (res.ok && data.status === 'success') {
                     onRefreshTables?.();
-                    onTableClick({ ...table, currentOrderId: data.orden_id, status: 'OCCUPIED' });
+                    onTableClick({ ...table, currentOrderId: data.orden_id, status: 'FREE' });
                 } else {
                     alert(data?.message || 'Error abriendo mesa');
                 }

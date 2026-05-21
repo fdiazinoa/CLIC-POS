@@ -345,8 +345,8 @@ def open_table(req: TableOpenRequest):
         # Link table
         conn.execute("""
             UPDATE tables 
-            SET currentOrderId = ?, 
-                status = 'OCCUPIED', 
+            SET currentOrderId = ?,
+                status = 'FREE',
                 waiterName = ?,
                 timeSeated = ?
             WHERE id = ?

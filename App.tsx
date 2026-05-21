@@ -1869,7 +1869,7 @@ const AppContent: React.FC = () => {
     const nowIso = new Date().toISOString();
     const baseUpdate = {
       ...table,
-      status: 'OCCUPIED' as const,
+      status: 'FREE' as const,
       timeSeated: table.timeSeated || nowIso,
       waiterId: currentUser.id,
       waiterName: currentUser.name
