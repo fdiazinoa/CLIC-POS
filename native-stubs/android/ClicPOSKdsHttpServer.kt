@@ -174,6 +174,9 @@ object ClicPOSKdsHttpServer {
             val payload = parseObject(body)
             updateStatus(
                 cleanPayloadId(payload.opt("item_id")),
+                cleanPayloadIds(payload.optJSONArray("item_ids")),
+                cleanPayloadId(payload.opt("cart_id")),
+                cleanPayloadId(payload.opt("producto_id")),
                 cleanPayloadId(payload.opt("orden_id")),
                 payload.optString("nuevo_estado", "PENDIENTE")
             )
@@ -264,6 +267,12 @@ object ClicPOSKdsHttpServer {
     private fun mergeItemSnapshot(current: JSONObject, incoming: JSONObject): JSONObject {
         val next = JSONObject(incoming.toString())
         val currentStatus = current.optString("estado_cocina")
+        val incomingStatus = incoming.optString("estado_cocina")
+        if (incomingStatus == "DEVUELTO") {
+            next.put("estado_cocina", incomingStatus)
+            next.put("hora_inicio_preparacion", current.opt("hora_inicio_preparacion") ?: JSONObject.NULL)
+            return next
+        }
         if (currentStatus.isNotBlank() && currentStatus != "PENDIENTE") {
             next.put("estado_cocina", currentStatus)
             next.put("hora_inicio_preparacion", current.opt("hora_inicio_preparacion") ?: JSONObject.NULL)
@@ -290,13 +299,26 @@ object ClicPOSKdsHttpServer {
         return result
     }
 
-    private fun updateStatus(itemId: String, orderId: String, status: String) {
-        if (itemId.isNotBlank()) {
-            orders.values.forEach { order ->
+    private fun updateStatus(itemId: String, itemIds: List<String>, cartId: String, productId: String, orderId: String, status: String) {
+        val candidateIds = (listOf(itemId) + itemIds).filter { it.isNotBlank() }.toSet()
+        val hasItemMatcher = candidateIds.isNotEmpty() || cartId.isNotBlank() || productId.isNotBlank()
+
+        if (hasItemMatcher) {
+            val targetOrders = if (orderId.isNotBlank()) {
+                listOfNotNull(orders[orderId])
+            } else {
+                orders.values.toList()
+            }
+            targetOrders.forEach { order ->
                 val items = order.optJSONArray("items") ?: return@forEach
                 for (index in 0 until items.length()) {
                     val item = items.optJSONObject(index) ?: continue
-                    if (item.optString("id") == itemId) {
+                    val currentItemId = item.optString("id")
+                    val currentProductId = item.optString("producto_id")
+                    val matchesId = candidateIds.contains(currentItemId)
+                    val matchesCart = cartId.isNotBlank() && currentItemId.contains(cartId)
+                    val matchesProduct = productId.isNotBlank() && currentProductId == productId
+                    if (matchesId || matchesCart || matchesProduct) {
                         item.put("estado_cocina", status)
                         if (status == "EN_PREPARACION") item.put("hora_inicio_preparacion", isoNow())
                     }
@@ -321,6 +343,16 @@ object ClicPOSKdsHttpServer {
         val text = value.toString().trim()
         if (text.equals("null", ignoreCase = true) || text.equals("undefined", ignoreCase = true)) return ""
         return text
+    }
+
+    private fun cleanPayloadIds(values: JSONArray?): List<String> {
+        if (values == null) return emptyList()
+        val result = mutableListOf<String>()
+        for (index in 0 until values.length()) {
+            val cleaned = cleanPayloadId(values.opt(index))
+            if (cleaned.isNotBlank()) result.add(cleaned)
+        }
+        return result.distinct()
     }
 
     private fun parseObject(body: String): JSONObject {

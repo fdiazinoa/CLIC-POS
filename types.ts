@@ -1516,6 +1516,13 @@ export interface CartItem extends Product {
   variantInfo?: string; // NEW: Human readable variant detail
   variantSku?: string; // NEW: Variant SKU for inventory/receipts
   dispatched?: boolean; // NEW: Track if item was sent to kitchen
+  kdsStatus?: 'ENVIADO' | 'DEVUELTO' | 'RETURN_PENDING' | string;
+  kdsOrderId?: string;
+  kdsAreaId?: string;
+  kdsItemIds?: string[];
+  kdsReturnedAt?: string;
+  kdsOriginalPrice?: number;
+  voidedByKdsReturn?: boolean;
 }
 
 export interface Transaction {
