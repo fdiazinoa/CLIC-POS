@@ -75,6 +75,10 @@ const LOCAL_FISCAL_CREDENTIAL_COLLECTION = 'fiscalCredentials';
 const POLARIS_API_BASE = 'https://api.polarisedi.com';
 const DIGIFACT_TEST_BASE_URL = 'https://testnucdo.digifact.com/api';
 const DIGIFACT_PROD_BASE_URL = 'https://nucdo.digifact.com/api';
+const DIGIFACT_ISSUE_FORMAT = 'JSON';
+const DIGIFACT_TEST_BRANCH_CODE = '1';
+const DIGIFACT_TEST_CASHIER_CODE = '1';
+const DIGIFACT_SEQUENCE_RETRY_LIMIT = 5;
 
 interface LocalFiscalCredentialRecord {
     id: string;
@@ -594,7 +598,7 @@ const resolveDirectDigifactAuth = async (
     }
 
     if (!username || !password) {
-        throw new Error('Para DigiFact local guarda un token vigente o credenciales JSON: {"taxId":"132752155","username":"TESTUSERTIK","password":"...","establishmentCode":"0001","cashierCode":"1"}');
+        throw new Error('Para DigiFact local guarda un token vigente o credenciales JSON: {"taxId":"132752155","username":"TESTUSERTIK","password":"...","establishmentCode":"1","cashierCode":"1"}');
     }
 
     const baseUrl = resolveDirectDigifactBaseUrl(input);
@@ -700,7 +704,7 @@ const normalizeDirectDigifactBranchCode = (value: unknown): string =>
 
 const resolveDirectDigifactBranchCode = (input: IssueFiscalDocumentInput, credential?: DirectDigifactCredential): string => {
     if (isDirectDigifactTestTarget(input, credential)) {
-        return '0001';
+        return DIGIFACT_TEST_BRANCH_CODE;
     }
     const code = normalizeDirectDigifactBranchCode(
         input.establishmentCode
@@ -719,7 +723,7 @@ const normalizeDirectDigifactCashierCode = (value: unknown): string =>
 
 const resolveDirectDigifactCashierCode = (input: IssueFiscalDocumentInput, credential?: DirectDigifactCredential): string => {
     if (isDirectDigifactTestTarget(input, credential)) {
-        return '1';
+        return DIGIFACT_TEST_CASHIER_CODE;
     }
     const code = normalizeDirectDigifactCashierCode(
         input.cashierCode
@@ -781,6 +785,9 @@ const buildDirectDigifactPayload = (
     credential?: DirectDigifactCredential
 ) => {
     const { companyInfo, transaction } = input;
+    const sellerTaxId = isDirectDigifactTestTarget(input, credential)
+        ? normalizeTaxId(credential?.taxId || credential?.rnc || companyInfo.rnc)
+        : normalizeTaxId(companyInfo.rnc);
     const branchCode = resolveDirectDigifactBranchCode(input, credential);
     const cashierCode = resolveDirectDigifactCashierCode(input, credential);
     const documentCode = String(transaction.ncfType || '');
@@ -828,7 +835,7 @@ const buildDirectDigifactPayload = (
             ])
         },
         Seller: {
-            TaxID: normalizeTaxId(companyInfo.rnc),
+            TaxID: sellerTaxId,
             Name: cleanString(companyInfo.name).slice(0, 150),
             Contact: directDigifactContact(companyInfo.phone, (companyInfo as any).email),
             BranchInfo: directDigifactBranchInfo(companyInfo.address, branchCode),
@@ -892,6 +899,9 @@ const buildDirectDigifactPayload = (
 
 const extractDirectDigifactProviderId = (payload: any, fallbackENCF?: string): string | undefined => {
     const candidates = [
+        payload?.suggestedFileName,
+        payload?.SuggestedFileName,
+        payload?.data?.suggestedFileName,
         payload?.batch,
         payload?.Batch,
         payload?.eNCF,
@@ -915,10 +925,18 @@ const isDirectDigifactFailure = (payload: any, message: string): boolean => {
         /rechaz|error|failed|invalid|invalido|inválido|no coincide|esquema\s+nuc|schema/i.test(message);
 };
 
+const isDirectDigifactSequenceRetryable = (payload: any, message: string): boolean => {
+    const detail = `${message || ''} ${payload?.description || ''} ${payload?.Description || ''}`;
+    return /no se pudo obtener la secuencia|secuencias disponibles|ENCF_ya_existente|SECUENCIA_YA_GENERADO/i.test(detail);
+};
+
 const directDigifactPayloadSequenceMode = (payload: any): string =>
     payload?.Header?.AdditionalIssueDocInfo?.find?.((item: any) => item.Name === 'AsignacionDeSecuencia')
         ? 'autogestion'
         : 'local';
+
+const waitDirectDigifactRetry = (attempt: number) =>
+    new Promise(resolve => window.setTimeout(resolve, Math.min(2000, 350 * attempt)));
 
 const issueDirectDigifactDocument = async (
     input: IssueFiscalDocumentInput,
@@ -930,14 +948,17 @@ const issueDirectDigifactDocument = async (
     const issueUrl = resolveDirectDigifactIssueUrl(input, credential);
     const url = new URL(issueUrl);
     url.searchParams.set('TAXID', auth.taxId);
-    url.searchParams.set('FORMAT', 'XML|HTML|PDF');
-    if (auth.username) url.searchParams.set('USERNAME', auth.username);
+    url.searchParams.set('FORMAT', DIGIFACT_ISSUE_FORMAT);
+    if (!auth.username) {
+        throw new Error('DigiFact requiere USERNAME en la URL de emisión. Guarda la credencial con username, por ejemplo {"taxId":"132752155","username":"TESTUSERTIK","password":"..."}');
+    }
+    url.searchParams.set('USERNAME', auth.username);
 
     const issueInput: IssueFiscalDocumentInput = {
         ...input,
-        establishmentCode: isTestTarget ? '0001' : input.establishmentCode || credential.establishmentCode || credential.establishment_code || credential.digifactEstablishmentCode,
-        branchCode: isTestTarget ? '0001' : input.branchCode || credential.branchCode || credential.branch_code || credential.digifactBranchCode,
-        cashierCode: isTestTarget ? '1' : input.cashierCode
+        establishmentCode: isTestTarget ? DIGIFACT_TEST_BRANCH_CODE : input.establishmentCode || credential.establishmentCode || credential.establishment_code || credential.digifactEstablishmentCode,
+        branchCode: isTestTarget ? DIGIFACT_TEST_BRANCH_CODE : input.branchCode || credential.branchCode || credential.branch_code || credential.digifactBranchCode,
+        cashierCode: isTestTarget ? DIGIFACT_TEST_CASHIER_CODE : input.cashierCode
             || credential.cashierCode
             || credential.cashier_code
             || credential.posCode
@@ -953,26 +974,43 @@ const issueDirectDigifactDocument = async (
     };
 
     const issuePayload = buildDirectDigifactPayload(issueInput, credential);
-    const response = await CapacitorHttp.request({
-        url: url.toString(),
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-            Authorization: auth.authorization
-        },
-        data: issuePayload,
-        connectTimeout: 10000,
-        readTimeout: 30000,
-        responseType: 'json'
-    });
-    const raw = response.data && typeof response.data === 'object' ? response.data : {};
-    const providerMessage = extractDirectDigifactMessage(raw) || (Number(response.status) < 400 ? 'DigiFact procesó la emisión.' : `DigiFact HTTP ${response.status}`);
     const sequenceMode = directDigifactPayloadSequenceMode(issuePayload);
-    const failure = Number(response.status) >= 400 || isDirectDigifactFailure(raw, providerMessage);
+    let raw: any = {};
+    let responseStatus = 0;
+    let providerMessage = '';
+    let failure = true;
+    let attempt = 0;
+    const maxAttempts = sequenceMode === 'autogestion' ? DIGIFACT_SEQUENCE_RETRY_LIMIT : 1;
+
+    while (attempt < maxAttempts) {
+        attempt += 1;
+        const response = await CapacitorHttp.request({
+            url: url.toString(),
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+                Authorization: auth.authorization
+            },
+            data: issuePayload,
+            connectTimeout: 10000,
+            readTimeout: 30000,
+            responseType: 'json'
+        });
+        responseStatus = Number(response.status);
+        raw = response.data && typeof response.data === 'object' ? response.data : {};
+        providerMessage = extractDirectDigifactMessage(raw) || (responseStatus < 400 ? 'DigiFact procesó la emisión.' : `DigiFact HTTP ${response.status}`);
+        failure = responseStatus >= 400 || isDirectDigifactFailure(raw, providerMessage);
+
+        if (!failure || !isDirectDigifactSequenceRetryable(raw, providerMessage) || attempt >= maxAttempts) {
+            break;
+        }
+
+        await waitDirectDigifactRetry(attempt);
+    }
 
     const diagnostic = isTestTarget
-        ? ` [DigiFact test: endpoint=oficial, establecimiento=${issuePayload?.Seller?.BranchInfo?.Name || 'N/D'}, caja=${issuePayload?.Seller?.AdditionalInfo?.find?.((item: any) => item.Name === 'CodigoVendedor')?.Value || 'N/D'}, username=${auth.username || 'N/D'}, secuencia=${sequenceMode}]`
+        ? ` [DigiFact test: endpoint=oficial, formato=${DIGIFACT_ISSUE_FORMAT}, sellerTaxID=${issuePayload?.Seller?.TaxID || 'N/D'}, establecimiento=${issuePayload?.Seller?.BranchInfo?.Name || 'N/D'}, caja=${issuePayload?.Seller?.AdditionalInfo?.find?.((item: any) => item.Name === 'CodigoVendedor')?.Value || 'N/D'}, username=${auth.username || 'N/D'}, secuencia=${sequenceMode}, intentos=${attempt}]`
         : '';
     const message = `${providerMessage}${diagnostic}`;
     const providerTransactionId = extractDirectDigifactProviderId(raw, cleanString(input.transaction.electronicNcf || input.transaction.ncf));

@@ -1322,7 +1322,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                              branchCode: e.target.value.toUpperCase()
                                           })}
                                           className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
-                                          placeholder="Pruebas: 0001"
+                                          placeholder="Pruebas: 1"
                                        />
                                     </div>
                                     <div className="md:col-span-2">
@@ -1336,7 +1336,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                        />
                                     </div>
                                     <div className="md:col-span-4 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-bold text-blue-800">
-                                       En DigiFact pruebas solo está disponible el establecimiento <span className="font-mono">0001</span> / caja <span className="font-mono">1</span>. En producción deben coincidir con los códigos habilitados por DigiFact/Hacienda.
+                                       En DigiFact pruebas validamos el establecimiento <span className="font-mono">1</span> / caja <span className="font-mono">1</span>. En producción deben coincidir con los códigos habilitados por DigiFact/Hacienda.
                                     </div>
                                  </>
                               )}
@@ -1464,7 +1464,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                                       ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
                                                       : 'bg-slate-50 border-slate-200 text-slate-800'
                                                 }`}
-                                                placeholder={hasLockedLocalCredential ? 'Credencial local activa. Usa Eliminar Local para reemplazarla.' : fiscalCompliance.defaultProvider === 'DIGIFACT' ? 'Token o {"taxId":"132752155","username":"USER","password":"...","establishmentCode":"0001","cashierCode":"1"}' : 'Pega aquí el token del proveedor'}
+                                                placeholder={hasLockedLocalCredential ? 'Credencial local activa. Usa Eliminar Local para reemplazarla.' : fiscalCompliance.defaultProvider === 'DIGIFACT' ? 'Token o {"taxId":"132752155","username":"USER","password":"...","establishmentCode":"1","cashierCode":"1"}' : 'Pega aquí el token del proveedor'}
                                              />
                                              <button
                                                 type="button"

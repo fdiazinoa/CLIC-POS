@@ -12,6 +12,10 @@ import { resolveFiscalProviderCredential } from '../credentials.js';
 
 const DIGIFACT_TEST_BASE_URL = 'https://testnucdo.digifact.com/api';
 const DIGIFACT_PROD_BASE_URL = 'https://nucdo.digifact.com/api';
+const DIGIFACT_ISSUE_FORMAT = 'JSON';
+const DIGIFACT_TEST_BRANCH_CODE = '1';
+const DIGIFACT_TEST_CASHIER_CODE = '1';
+const DIGIFACT_SEQUENCE_RETRY_LIMIT = 5;
 const TOKEN_CACHE_TTL_MS = 29 * 24 * 60 * 60 * 1000;
 
 type DigifactCredentialShape = {
@@ -229,6 +233,9 @@ const extractMessage = (payload: any): string => {
 
 const extractProviderTransactionId = (payload: any, fallbackENCF?: string): string | undefined => {
     const candidates = [
+        payload?.suggestedFileName,
+        payload?.SuggestedFileName,
+        payload?.data?.suggestedFileName,
         payload?.batch,
         payload?.Batch,
         payload?.eNCF,
@@ -277,6 +284,19 @@ const isDigifactFailure = (payload: any, status: string, message: string): boole
     const code = Number(payload?.code ?? payload?.Code);
     return Number.isFinite(code) && code !== 1;
 };
+
+const isDigifactSequenceRetryable = (payload: any, message: string): boolean => {
+    const detail = `${message || ''} ${payload?.description || ''} ${payload?.Description || ''}`;
+    return /no se pudo obtener la secuencia|secuencias disponibles|ENCF_ya_existente|SECUENCIA_YA_GENERADO/i.test(detail);
+};
+
+const digifactPayloadSequenceMode = (payload: any): string =>
+    payload?.Header?.AdditionalIssueDocInfo?.find?.((item: any) => item.Name === 'AsignacionDeSecuencia')
+        ? 'autogestion'
+        : 'local';
+
+const waitDigifactRetry = (attempt: number) =>
+    new Promise(resolve => setTimeout(resolve, Math.min(2000, 350 * attempt)));
 
 const mapPaymentMethod = (method?: string): string => {
     const normalized = cleanString(method).toUpperCase();
@@ -360,7 +380,7 @@ const normalizeBranchCode = (value: unknown): string =>
 const resolveDigifactBranchCode = (request: FiscalDocumentIssueRequest): string => {
     const credential = getDigifactCredentialFromRequest(request);
     if (isDigifactTestTarget(request, credential)) {
-        return '0001';
+        return DIGIFACT_TEST_BRANCH_CODE;
     }
     const code = normalizeBranchCode(
         request.options?.establishmentCode
@@ -388,7 +408,7 @@ const normalizeCashierCode = (value: unknown): string =>
 const resolveDigifactCashierCode = (request: FiscalDocumentIssueRequest): string => {
     const credential = getDigifactCredentialFromRequest(request);
     if (isDigifactTestTarget(request, credential)) {
-        return '1';
+        return DIGIFACT_TEST_CASHIER_CODE;
     }
     const code = normalizeCashierCode(
         request.options?.cashierCode
@@ -462,6 +482,9 @@ const shouldUseDigifactSequenceAssignment = (
 const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
     const { companyInfo, transaction, documentCode, options } = request;
     const credential = getDigifactCredentialFromRequest(request);
+    const sellerTaxId = isDigifactTestTarget(request, credential)
+        ? normalizeTaxId(credential.taxId || credential.rnc || companyInfo.rnc)
+        : normalizeTaxId(companyInfo.rnc);
     const branchCode = resolveDigifactBranchCode(request);
     const cashierCode = resolveDigifactCashierCode(request);
     const customer = transaction.customerSnapshot || {};
@@ -514,7 +537,7 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
             ])
         },
         Seller: {
-            TaxID: normalizeTaxId(companyInfo.rnc),
+            TaxID: sellerTaxId,
             Name: cleanString(companyInfo.name).slice(0, 150),
             Contact: digifactContact(companyInfo.phone, (companyInfo as any).email),
             BranchInfo: digifactBranchInfo(companyInfo.address, branchCode),
@@ -723,25 +746,49 @@ export class DigifactFiscalProvider implements FiscalProvider {
         const eNCF = cleanString(request.transaction.electronicNcf || request.transaction.ncf);
         const url = new URL(resolveDigifactIssueUrl(request));
         url.searchParams.set('TAXID', auth.resolvedTaxId);
-        url.searchParams.set('FORMAT', 'XML|HTML|PDF');
-        if (auth.username) url.searchParams.set('USERNAME', auth.username);
+        url.searchParams.set('FORMAT', DIGIFACT_ISSUE_FORMAT);
+        if (!auth.username) {
+            throw new Error('DigiFact requiere USERNAME en la URL de emisión. Guarda la credencial con username, por ejemplo {"taxId":"132752155","username":"TESTUSERTIK","password":"..."}');
+        }
+        url.searchParams.set('USERNAME', auth.username);
 
-        const response = await fetch(url.toString(), {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Accept: 'application/json',
-                Authorization: auth.authorization
-            },
-            body: JSON.stringify(buildDigifactPayload(request))
-        });
-        const raw = await response.json().catch(() => ({}));
-        const status = extractStatus(raw);
-        const message = extractMessage(raw);
+        const issuePayload = buildDigifactPayload(request);
+        const sequenceMode = digifactPayloadSequenceMode(issuePayload);
+        const maxAttempts = sequenceMode === 'autogestion' ? DIGIFACT_SEQUENCE_RETRY_LIMIT : 1;
+        let raw: any = {};
+        let responseOk = false;
+        let status = '';
+        let message = '';
+        let failure = true;
+        let attempt = 0;
+
+        while (attempt < maxAttempts) {
+            attempt += 1;
+            const response = await fetch(url.toString(), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                    Authorization: auth.authorization
+                },
+                body: JSON.stringify(issuePayload)
+            });
+            responseOk = response.ok;
+            raw = await response.json().catch(() => ({}));
+            status = extractStatus(raw);
+            message = extractMessage(raw);
+            failure = isDigifactFailure(raw, status, message);
+
+            if ((responseOk && !failure) || !isDigifactSequenceRetryable(raw, message) || attempt >= maxAttempts) {
+                break;
+            }
+
+            await waitDigifactRetry(attempt);
+        }
+
         const providerTransactionId = extractProviderTransactionId(raw, eNCF);
         const pending = isPendingStatus(status) || isPendingStatus(message);
-        const failure = isDigifactFailure(raw, status, message);
-        const success = response.ok && !failure;
+        const success = responseOk && !failure;
 
         return {
             success,
@@ -750,7 +797,7 @@ export class DigifactFiscalProvider implements FiscalProvider {
             documentCode: request.documentCode,
             providerTransactionId,
             status: status || (success ? 'Aceptado' : 'Rechazado'),
-            message: message || (success ? 'DigiFact emitió el NUC correctamente.' : `DigiFact HTTP ${response.status}`),
+            message: message || (success ? 'DigiFact emitió el NUC correctamente.' : 'DigiFact rechazó la emisión.'),
             pending,
             raw
         };

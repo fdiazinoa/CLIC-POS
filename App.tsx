@@ -4316,8 +4316,17 @@ const AppContent: React.FC = () => {
       });
 
       const finalStatus = result.pending ? 'PENDING' : result.success ? 'SYNCED' : 'ERROR';
+      const assignedDigifactENCF = providerId === 'DIGIFACT'
+        && result.success
+        && !result.pending
+        && result.providerTransactionId
+        && /^E\d{2}/i.test(result.providerTransactionId)
+        ? result.providerTransactionId
+        : undefined;
       const finalizedTransaction: Transaction = {
         ...baseTransaction,
+        ncf: assignedDigifactENCF || baseTransaction.ncf,
+        electronicNcf: assignedDigifactENCF || baseTransaction.electronicNcf,
         fiscalSyncStatus: finalStatus,
         fiscalSyncError: result.success ? undefined : result.message,
         fiscalReferenceId: result.providerTransactionId || baseTransaction.fiscalReferenceId,
