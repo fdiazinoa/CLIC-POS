@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { BusinessConfig, LabelElement, LabelElementType, LabelTemplate, LabelDataSource, LabelTemplateCategory } from '../types';
 import { DEFAULT_LABEL_TEMPLATES, DEFAULT_LABEL_TEMPLATE_IDS } from '../constants';
+import { printLabelsFromTemplate } from '../utils/labelPrinter';
 
 interface LabelDesignerProps {
   config: BusinessConfig;
@@ -122,6 +123,7 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
   const [zoom, setZoom] = useState(2);
   const [printCopies, setPrintCopies] = useState(1);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [isPrintingTest, setIsPrintingTest] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
 
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -336,7 +338,7 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
     setStatusMessage('Plantillas guardadas en Ajustes.');
   };
 
-  const handlePrintTest = () => {
+  const handlePrintTest = async () => {
     if (!activeTemplate) return;
     if (!hasPrintableData(activeTemplate)) {
       setStatusMessage('Impresion bloqueada: agrega al menos un dato (nombre, precio o SKU/codigo).');
@@ -345,7 +347,31 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
 
     const copies = Math.max(1, Math.floor(printCopies) || 1);
     setPrintCopies(copies);
-    setStatusMessage(`Impresion de prueba enviada: ${activeTemplate.name} (${copies} copia${copies > 1 ? 's' : ''}).`);
+    setIsPrintingTest(true);
+    setStatusMessage(`Enviando prueba: ${activeTemplate.name} (${copies} copia${copies > 1 ? 's' : ''})...`);
+
+    try {
+      const result = await printLabelsFromTemplate({
+        config,
+        template: activeTemplate,
+        terminalId: localStorage.getItem('active_terminal_id') || localStorage.getItem('CLIC_POS_TERMINAL_ID') || undefined,
+        referenceId: `LBL-DESIGN-${Date.now()}`,
+        records: [{
+          productId: 'TEST-LABEL',
+          productName: 'Producto de Prueba',
+          sku: '7703562865157',
+          price: 85,
+          copies
+        }]
+      });
+
+      setStatusMessage(result.message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Error desconocido';
+      setStatusMessage(`No se pudo imprimir la prueba: ${message}`);
+    } finally {
+      setIsPrintingTest(false);
+    }
   };
 
   return (
@@ -477,7 +503,12 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
               className="w-16 p-2 bg-white border border-gray-300 rounded-lg text-sm font-mono text-center"
               title="Copias"
             />
-            <button onClick={handlePrintTest} className="bg-slate-100 hover:bg-slate-200 text-slate-700 p-2 rounded-lg transition-colors" title="Imprimir prueba">
+            <button
+              onClick={handlePrintTest}
+              disabled={isPrintingTest}
+              className="bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-wait text-slate-700 p-2 rounded-lg transition-colors"
+              title="Imprimir prueba"
+            >
               <Printer size={18} />
             </button>
             <button

@@ -1,11 +1,13 @@
 import { BusinessConfig, LabelElement, LabelTemplate } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
 import { buildEscPosLabelPayload } from '../services/printer/EscPosFormatter';
+import { buildZplLabelPayload } from '../services/printer/ZplFormatter';
 import { nativePrintBridge } from '../services/printer/NativePrintBridge';
 import { offlinePrintQueueService } from '../services/printer/OfflinePrintQueueService';
 import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRuntime';
 
 const MM_TO_PX = 3.78;
+const ZEBRA_PRINTER_PATTERN = /\b(zebra|zd\d*|zd\s*\d+|zt\d*|zq\d*|gk\d*|gc\d*|lp\s*\d+)\b/i;
 
 export interface LabelPrintRecord {
   productId: string;
@@ -173,6 +175,27 @@ const renderPrintableDocument = (
   `;
 };
 
+const resolveLabelPrinter = (config: BusinessConfig, terminalId?: string) => {
+  const terminal = (config.terminals || []).find(t => t.id === terminalId);
+  const assignments = terminal?.config?.hardware?.printerAssignments || {};
+  const assignedPrinterId = assignments.LABEL;
+
+  if (assignedPrinterId) {
+    const assigned = (config.availablePrinters || []).find(printer => printer.id === assignedPrinterId);
+    if (assigned) return assigned;
+  }
+
+  return (config.availablePrinters || []).find(printer => printer.type === 'LABEL');
+};
+
+const shouldUseZplForLabelPrinter = (config: BusinessConfig, terminalId?: string): boolean => {
+  const printer = resolveLabelPrinter(config, terminalId);
+  if (!printer) return false;
+
+  const descriptor = `${printer.name || ''} ${printer.id || ''} ${printer.address || ''}`;
+  return printer.type === 'LABEL' && ZEBRA_PRINTER_PATTERN.test(descriptor);
+};
+
 export const printLabelsFromTemplate = async ({
   config,
   template,
@@ -191,17 +214,20 @@ export const printLabelsFromTemplate = async ({
 
   const printRef = referenceId || `LBL-${Date.now()}`;
   const printableHtml = renderPrintableDocument(template, preparedRecords, config.currencySymbol || '$', false);
+  const useZpl = shouldUseZplForLabelPrinter(config, terminalId);
+  const zplBase64 = useZpl ? buildZplLabelPayload(template, preparedRecords, config.currencySymbol || '$') : null;
   const escPosBase64 = buildEscPosLabelPayload(preparedRecords, config.currencySymbol || '$');
+  const rawLabelBase64 = zplBase64 || escPosBase64;
 
   let printedSilently = false;
 
-  if (escPosBase64) {
+  if (rawLabelBase64) {
     printedSilently = await PrintRouterService.routeAndPrintEscPos({
       config,
-      escPosBase64,
+      escPosBase64: rawLabelBase64,
       role: 'LABEL',
       terminalId,
-      jobType: 'LABEL',
+      jobType: zplBase64 ? 'LABEL_ZPL' : 'LABEL',
       referenceId: printRef
     });
   }
@@ -221,7 +247,9 @@ export const printLabelsFromTemplate = async ({
     return {
       printed: true,
       method: 'silent',
-      message: 'Etiquetas enviadas a la impresora configurada de la terminal.'
+      message: zplBase64
+        ? 'Etiquetas ZPL enviadas a la impresora Zebra configurada.'
+        : 'Etiquetas enviadas a la impresora configurada de la terminal.'
     };
   }
 
@@ -230,10 +258,10 @@ export const printLabelsFromTemplate = async ({
     await offlinePrintQueueService.enqueueJob({
       role: 'LABEL',
       terminalId,
-      jobType: 'LABEL',
+      jobType: zplBase64 ? 'LABEL_ZPL' : 'LABEL',
       referenceId: printRef,
       html: printableHtml,
-      escPosBase64: escPosBase64 || undefined,
+      escPosBase64: rawLabelBase64 || undefined,
       source: 'LABEL_PRINT'
     });
 
