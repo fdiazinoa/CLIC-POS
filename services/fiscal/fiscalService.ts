@@ -785,6 +785,9 @@ const buildDirectDigifactPayload = (
     credential?: DirectDigifactCredential
 ) => {
     const { companyInfo, transaction } = input;
+    const sellerTaxId = isDirectDigifactTestTarget(input, credential)
+        ? normalizeTaxId(credential?.taxId || credential?.rnc || companyInfo.rnc)
+        : normalizeTaxId(companyInfo.rnc);
     const branchCode = resolveDirectDigifactBranchCode(input, credential);
     const cashierCode = resolveDirectDigifactCashierCode(input, credential);
     const documentCode = String(transaction.ncfType || '');
@@ -832,7 +835,7 @@ const buildDirectDigifactPayload = (
             ])
         },
         Seller: {
-            TaxID: normalizeTaxId(companyInfo.rnc),
+            TaxID: sellerTaxId,
             Name: cleanString(companyInfo.name).slice(0, 150),
             Contact: directDigifactContact(companyInfo.phone, (companyInfo as any).email),
             BranchInfo: directDigifactBranchInfo(companyInfo.address, branchCode),
@@ -1007,7 +1010,7 @@ const issueDirectDigifactDocument = async (
     }
 
     const diagnostic = isTestTarget
-        ? ` [DigiFact test: endpoint=oficial, formato=${DIGIFACT_ISSUE_FORMAT}, establecimiento=${issuePayload?.Seller?.BranchInfo?.Name || 'N/D'}, caja=${issuePayload?.Seller?.AdditionalInfo?.find?.((item: any) => item.Name === 'CodigoVendedor')?.Value || 'N/D'}, username=${auth.username || 'N/D'}, secuencia=${sequenceMode}, intentos=${attempt}]`
+        ? ` [DigiFact test: endpoint=oficial, formato=${DIGIFACT_ISSUE_FORMAT}, sellerTaxID=${issuePayload?.Seller?.TaxID || 'N/D'}, establecimiento=${issuePayload?.Seller?.BranchInfo?.Name || 'N/D'}, caja=${issuePayload?.Seller?.AdditionalInfo?.find?.((item: any) => item.Name === 'CodigoVendedor')?.Value || 'N/D'}, username=${auth.username || 'N/D'}, secuencia=${sequenceMode}, intentos=${attempt}]`
         : '';
     const message = `${providerMessage}${diagnostic}`;
     const providerTransactionId = extractDirectDigifactProviderId(raw, cleanString(input.transaction.electronicNcf || input.transaction.ncf));

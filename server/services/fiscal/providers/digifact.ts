@@ -482,6 +482,9 @@ const shouldUseDigifactSequenceAssignment = (
 const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
     const { companyInfo, transaction, documentCode, options } = request;
     const credential = getDigifactCredentialFromRequest(request);
+    const sellerTaxId = isDigifactTestTarget(request, credential)
+        ? normalizeTaxId(credential.taxId || credential.rnc || companyInfo.rnc)
+        : normalizeTaxId(companyInfo.rnc);
     const branchCode = resolveDigifactBranchCode(request);
     const cashierCode = resolveDigifactCashierCode(request);
     const customer = transaction.customerSnapshot || {};
@@ -534,7 +537,7 @@ const buildDigifactPayload = (request: FiscalDocumentIssueRequest) => {
             ])
         },
         Seller: {
-            TaxID: normalizeTaxId(companyInfo.rnc),
+            TaxID: sellerTaxId,
             Name: cleanString(companyInfo.name).slice(0, 150),
             Contact: digifactContact(companyInfo.phone, (companyInfo as any).email),
             BranchInfo: digifactBranchInfo(companyInfo.address, branchCode),
