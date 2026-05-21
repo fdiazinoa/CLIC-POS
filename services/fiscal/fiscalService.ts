@@ -76,6 +76,8 @@ const POLARIS_API_BASE = 'https://api.polarisedi.com';
 const DIGIFACT_TEST_BASE_URL = 'https://testnucdo.digifact.com/api';
 const DIGIFACT_PROD_BASE_URL = 'https://nucdo.digifact.com/api';
 const DIGIFACT_ISSUE_FORMAT = 'JSON';
+const DIGIFACT_TEST_BRANCH_CODE = '1';
+const DIGIFACT_TEST_CASHIER_CODE = '1';
 const DIGIFACT_SEQUENCE_RETRY_LIMIT = 5;
 
 interface LocalFiscalCredentialRecord {
@@ -596,7 +598,7 @@ const resolveDirectDigifactAuth = async (
     }
 
     if (!username || !password) {
-        throw new Error('Para DigiFact local guarda un token vigente o credenciales JSON: {"taxId":"132752155","username":"TESTUSERTIK","password":"...","establishmentCode":"0001","cashierCode":"1"}');
+        throw new Error('Para DigiFact local guarda un token vigente o credenciales JSON: {"taxId":"132752155","username":"TESTUSERTIK","password":"...","establishmentCode":"1","cashierCode":"1"}');
     }
 
     const baseUrl = resolveDirectDigifactBaseUrl(input);
@@ -702,7 +704,7 @@ const normalizeDirectDigifactBranchCode = (value: unknown): string =>
 
 const resolveDirectDigifactBranchCode = (input: IssueFiscalDocumentInput, credential?: DirectDigifactCredential): string => {
     if (isDirectDigifactTestTarget(input, credential)) {
-        return '0001';
+        return DIGIFACT_TEST_BRANCH_CODE;
     }
     const code = normalizeDirectDigifactBranchCode(
         input.establishmentCode
@@ -721,7 +723,7 @@ const normalizeDirectDigifactCashierCode = (value: unknown): string =>
 
 const resolveDirectDigifactCashierCode = (input: IssueFiscalDocumentInput, credential?: DirectDigifactCredential): string => {
     if (isDirectDigifactTestTarget(input, credential)) {
-        return '1';
+        return DIGIFACT_TEST_CASHIER_CODE;
     }
     const code = normalizeDirectDigifactCashierCode(
         input.cashierCode
@@ -951,9 +953,9 @@ const issueDirectDigifactDocument = async (
 
     const issueInput: IssueFiscalDocumentInput = {
         ...input,
-        establishmentCode: isTestTarget ? '0001' : input.establishmentCode || credential.establishmentCode || credential.establishment_code || credential.digifactEstablishmentCode,
-        branchCode: isTestTarget ? '0001' : input.branchCode || credential.branchCode || credential.branch_code || credential.digifactBranchCode,
-        cashierCode: isTestTarget ? '1' : input.cashierCode
+        establishmentCode: isTestTarget ? DIGIFACT_TEST_BRANCH_CODE : input.establishmentCode || credential.establishmentCode || credential.establishment_code || credential.digifactEstablishmentCode,
+        branchCode: isTestTarget ? DIGIFACT_TEST_BRANCH_CODE : input.branchCode || credential.branchCode || credential.branch_code || credential.digifactBranchCode,
+        cashierCode: isTestTarget ? DIGIFACT_TEST_CASHIER_CODE : input.cashierCode
             || credential.cashierCode
             || credential.cashier_code
             || credential.posCode

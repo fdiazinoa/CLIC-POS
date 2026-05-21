@@ -13,6 +13,8 @@ import { resolveFiscalProviderCredential } from '../credentials.js';
 const DIGIFACT_TEST_BASE_URL = 'https://testnucdo.digifact.com/api';
 const DIGIFACT_PROD_BASE_URL = 'https://nucdo.digifact.com/api';
 const DIGIFACT_ISSUE_FORMAT = 'JSON';
+const DIGIFACT_TEST_BRANCH_CODE = '1';
+const DIGIFACT_TEST_CASHIER_CODE = '1';
 const DIGIFACT_SEQUENCE_RETRY_LIMIT = 5;
 const TOKEN_CACHE_TTL_MS = 29 * 24 * 60 * 60 * 1000;
 
@@ -378,7 +380,7 @@ const normalizeBranchCode = (value: unknown): string =>
 const resolveDigifactBranchCode = (request: FiscalDocumentIssueRequest): string => {
     const credential = getDigifactCredentialFromRequest(request);
     if (isDigifactTestTarget(request, credential)) {
-        return '0001';
+        return DIGIFACT_TEST_BRANCH_CODE;
     }
     const code = normalizeBranchCode(
         request.options?.establishmentCode
@@ -406,7 +408,7 @@ const normalizeCashierCode = (value: unknown): string =>
 const resolveDigifactCashierCode = (request: FiscalDocumentIssueRequest): string => {
     const credential = getDigifactCredentialFromRequest(request);
     if (isDigifactTestTarget(request, credential)) {
-        return '1';
+        return DIGIFACT_TEST_CASHIER_CODE;
     }
     const code = normalizeCashierCode(
         request.options?.cashierCode
