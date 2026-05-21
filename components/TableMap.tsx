@@ -968,7 +968,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 </div>
 
                 {!isControlCenterOpen && (
-                    <div className="absolute top-24 right-6 z-30 max-w-[min(76vw,720px)] rounded-[1.6rem] border border-white/10 bg-white/[0.08] backdrop-blur-xl px-3 py-2 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-2 overflow-auto no-scrollbar pointer-events-auto">
+                    <div className="absolute left-5 top-24 bottom-24 z-30 w-[min(10rem,38vw)] rounded-[1.6rem] border border-white/10 bg-white/[0.08] backdrop-blur-xl px-2.5 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex flex-col gap-2 overflow-y-auto overflow-x-hidden no-scrollbar pointer-events-auto">
                         {rooms.map(room => {
                                 const isActive = room.id === activeRoomId;
                                 const roomOccupied = safeTables.filter(table => table.roomId === room.id && table.status === 'OCCUPIED').length;
@@ -977,16 +977,16 @@ const TableMap: React.FC<TableMapProps> = ({
                                     <button
                                         key={room.id}
                                         onClick={() => setActiveRoomId(room.id)}
-                                        className={`shrink-0 px-5 py-2 rounded-full border transition-all duration-200 text-sm font-bold flex items-center gap-2 ${
+                                        className={`w-full px-3 py-2.5 rounded-2xl border transition-all duration-200 text-sm font-bold flex items-center gap-2 text-left ${
                                             isActive
                                                 ? 'border-sky-300/60 bg-sky-400/20 text-sky-100 shadow-[0_0_24px_rgba(56,189,248,0.28)]'
                                                 : 'border-white/10 bg-white/[0.04] text-slate-300 hover:text-white hover:bg-white/[0.09]'
                                         }`}
                                     >
-                                        <LayoutGrid size={14} />
-                                        {room.name || room.nombre}
+                                        <LayoutGrid size={14} className="shrink-0" />
+                                        <span className="min-w-0 flex-1 truncate">{room.name || room.nombre}</span>
                                         {roomOccupied > 0 && (
-                                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/70 text-white">{roomOccupied}</span>
+                                            <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-rose-500/70 text-white">{roomOccupied}</span>
                                         )}
                                     </button>
                                 );

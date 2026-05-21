@@ -447,6 +447,7 @@ export interface ReceiptConfig {
   showForeignCurrencyTotals?: boolean;
   showSerialNumbers?: boolean; // NEW: Toggle printing serial numbers
   showLotNumbers?: boolean; // NEW: Toggle printing lot numbers
+  showOrderNumber?: boolean;
 }
 
 // Document Types for all transaction categories
@@ -708,6 +709,12 @@ export interface TerminalConfig {
     fiscalThreshold?: number;
     expandTicket?: boolean;
     showGlobalSales?: boolean;
+    orderNumbers?: {
+      enabled?: boolean;
+      nextNumber?: number;
+      prefix?: string;
+      padding?: number;
+    };
   };
   ux: {
     theme: 'LIGHT' | 'DARK';
@@ -1516,6 +1523,8 @@ export interface CartItem extends Product {
   variantInfo?: string; // NEW: Human readable variant detail
   variantSku?: string; // NEW: Variant SKU for inventory/receipts
   dispatched?: boolean; // NEW: Track if item was sent to kitchen
+  orderNumber?: string;
+  tableDisplayLabel?: string;
   kdsStatus?: 'ENVIADO' | 'DEVUELTO' | 'RETURN_PENDING' | string;
   kdsOrderId?: string;
   kdsAreaId?: string;
@@ -1649,6 +1658,9 @@ export interface Transaction {
   // Restaurant fields
   serviceChargeAmount?: number;     // Propina Legal (10%)
   voluntaryTipAmount?: number;      // Propina Voluntaria
+  orderNumber?: string;
+  tableDisplayLabel?: string;
+  tableRoomLabel?: string;
   marketplaceSourceChannel?: 'UBER_EATS';
   marketplaceSourceOrderId?: string;
   marketplaceSourceStoreId?: string;
@@ -1980,6 +1992,9 @@ export interface ParkedTicket {
   customerName?: string;
   timestamp: string;
   tableId?: string | number;
+  orderNumber?: string;
+  tableDisplayLabel?: string;
+  tableRoomLabel?: string;
 }
 
 export type ReservationStatus = 'ACTIVE' | 'INVOICED' | 'EXPIRED' | 'CANCELLED';

@@ -202,6 +202,7 @@ object ClicPOSKdsHttpServer {
         val next = JSONObject(existing.toString())
             .put("id", orderId)
             .put("displayId", payload.optString("displayId").ifBlank { existing.optString("displayId").ifBlank { orderId } })
+            .put("orderNumber", payload.optString("orderNumber").ifBlank { existing.optString("orderNumber") })
             .put("date", now)
             .put("userName", payload.optString("userName").ifBlank { existing.optString("userName") })
             .put("customerId", payload.optString("customerId").ifBlank { existing.optString("customerId") })

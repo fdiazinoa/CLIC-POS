@@ -5564,6 +5564,8 @@ const AppContent: React.FC = () => {
                       finalTotal: order.total || subtotal,
                       table: table,
                       customerName: order.customerName,
+                      orderNumber: order.orderNumber,
+                      tableDisplayLabel: order.tableDisplayLabel,
                       terminalId: getCurrentTerminal()?.id || 'T1'
                     });
                   } else {

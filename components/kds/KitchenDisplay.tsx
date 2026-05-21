@@ -23,7 +23,8 @@ interface KDSItem {
 
 interface KDSOrder {
     id: string;
-    displayId: string;
+    displayId?: string;
+    orderNumber?: string;
     date: string;
     userName: string;
     customerId: string;
@@ -32,6 +33,7 @@ interface KDSOrder {
         id?: string;
         name?: string;
         nombre?: string;
+        displayLabel?: string | null;
         roomId?: string | null;
         roomName?: string | null;
         guests?: number | null;
@@ -460,11 +462,33 @@ const resolveOrderTiming = (order: KDSOrder): { warningMinutes: number; critical
 };
 
 const resolveTableLabel = (order: KDSOrder): string => {
+    const compactLabel = String(order.table?.displayLabel || '').trim();
+    if (compactLabel) return compactLabel;
+
     const tableName = String(order.table?.name || order.table?.nombre || '').trim();
     const roomName = String(order.table?.roomName || '').trim();
     if (tableName && roomName) return `${roomName} · ${tableName}`;
     if (tableName) return tableName;
-    return 'Venta directa';
+    return '';
+};
+
+const looksTechnicalOrderId = (value?: string): boolean => {
+    const normalized = String(value || '').trim();
+    if (!normalized) return true;
+    return /^P-\d+$/i.test(normalized)
+        || /^TXN-/i.test(normalized)
+        || /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(normalized)
+        || normalized.length > 18;
+};
+
+const resolveVisibleOrderNumber = (order: KDSOrder): string => {
+    const orderNumber = String(order.orderNumber || '').trim();
+    if (orderNumber) return orderNumber;
+
+    const displayId = String(order.displayId || '').trim();
+    if (displayId && !looksTechnicalOrderId(displayId)) return displayId;
+
+    return '';
 };
 
 const TicketCard: React.FC<{
@@ -492,6 +516,9 @@ const TicketCard: React.FC<{
     };
 
     const severity = getSeverity();
+    const tableLabel = resolveTableLabel(order);
+    const visibleOrderNumber = resolveVisibleOrderNumber(order);
+    const headerTitle = tableLabel || (visibleOrderNumber ? `Orden ${visibleOrderNumber}` : 'Venta directa');
     const severityColors = {
         normal: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400',
         warning: 'border-amber-500/30 bg-amber-500/10 text-amber-400',
@@ -504,7 +531,7 @@ const TicketCard: React.FC<{
             {/* Card Header */}
             <div className={`p-4 rounded-t-[1.8rem] flex flex-col gap-2 ${severityColors[severity]}`}>
                 <div className="flex items-center justify-between">
-                    <span className="text-2xl font-black tracking-tighter truncate pr-3"># {resolveTableLabel(order)}</span>
+                    <span className="text-2xl font-black tracking-tighter truncate pr-3"># {headerTitle}</span>
                     <div
                         className="flex items-center gap-1.5 text-xs font-black bg-black/20 px-3 py-1 rounded-full shrink-0"
                         title={`Alerta: ${timing.warningMinutes} min · Crítico: ${timing.criticalMinutes} min`}
@@ -514,7 +541,7 @@ const TicketCard: React.FC<{
                 </div>
                 <div className="flex items-center justify-between text-[10px] font-black uppercase tracking-widest opacity-80">
                     <span className="flex items-center gap-1"><Users size={10} /> {order.userName}</span>
-                    <span>ID: {order.displayId || order.id.slice(-4)}</span>
+                    <span>{visibleOrderNumber ? `Orden: ${visibleOrderNumber}` : `Ref: ${String(order.id).slice(-4)}`}</span>
                 </div>
             </div>
 
