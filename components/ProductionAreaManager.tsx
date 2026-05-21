@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Save, Printer, Monitor, Layers, Server, AlertCircle, ChefHat, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
-import { BusinessConfig } from '../types';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Plus, Trash2, Save, Printer, Monitor, Layers, Server, AlertCircle, RefreshCw, CheckCircle2, XCircle, Search, PackageCheck, PackageX } from 'lucide-react';
+import { BusinessConfig, Product } from '../types';
 import { db } from '../utils/db';
 import { getKdsTerminalTargets, resolveKdsBaseUrl } from '../utils/kdsRouting';
+import { normalizeRestaurantProductConfig, resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
 
 interface ProductionArea {
     id: string;
@@ -25,17 +26,28 @@ interface ProductionAreaManagerProps {
 
 const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals, config, onUpdateConfig }) => {
     const [areas, setAreas] = useState<ProductionArea[]>([]);
+    const [products, setProducts] = useState<Product[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-    const [kitchenEnabled, setKitchenEnabled] = useState(false);
+    const [productSearch, setProductSearch] = useState('');
+    const [savingProductAreaId, setSavingProductAreaId] = useState<string | null>(null);
     const [testingKdsAreaId, setTestingKdsAreaId] = useState<string | null>(null);
     const [kdsTestResults, setKdsTestResults] = useState<Record<string, { ok: boolean; message: string; baseUrl?: string }>>({});
     const kdsTerminals = getKdsTerminalTargets(config, terminals);
 
     useEffect(() => {
         fetchAreas();
-        fetchConfig();
+        fetchProducts();
     }, []);
+
+    const assignedProductCountByArea = useMemo(() => {
+        const counts: Record<string, number> = {};
+        products.forEach(product => {
+            const areaId = resolveRestaurantProductConfig(product).production_area_id;
+            if (areaId) counts[areaId] = (counts[areaId] || 0) + 1;
+        });
+        return counts;
+    }, [products]);
 
     const resolveLocalConfig = async (): Promise<BusinessConfig> => {
         const rawConfig = await db.get('config' as any) as BusinessConfig | BusinessConfig[];
@@ -45,39 +57,27 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
         return configDoc?.operational ? configDoc : config;
     };
 
-    const fetchConfig = async () => {
+    const ensureKitchenModuleEnabled = async () => {
         try {
             const configDoc = await resolveLocalConfig();
-            setKitchenEnabled(Boolean(configDoc?.operational?.usa_modulos_cocina ?? config?.operational?.usa_modulos_cocina));
-        } catch (e) {
-            console.error("Failed to fetch operational config", e);
-            setKitchenEnabled(Boolean(config?.operational?.usa_modulos_cocina));
-        }
-    };
-
-    const toggleKitchen = async (val: boolean) => {
-        setKitchenEnabled(val);
-        try {
-            const configDoc = await resolveLocalConfig();
+            if (configDoc?.operational?.usa_modulos_cocina) return;
             if (!configDoc) return;
-            const nextOperational = {
-                vertical_negocio: configDoc.vertical,
-                usa_mesas: false,
-                pantalla_inicio: 'VENTA_DIRECTA' as const,
-                bloqueo_meseros: false,
-                pedir_comensales: false,
-                ...configDoc.operational,
-                usa_modulos_cocina: val
-            };
             const nextConfig: BusinessConfig = {
                 ...configDoc,
-                operational: nextOperational
+                operational: {
+                    vertical_negocio: configDoc.vertical,
+                    usa_mesas: false,
+                    pantalla_inicio: 'VENTA_DIRECTA' as const,
+                    bloqueo_meseros: false,
+                    pedir_comensales: false,
+                    ...configDoc.operational,
+                    usa_modulos_cocina: true
+                }
             };
             await db.save('config' as any, nextConfig);
             onUpdateConfig(nextConfig);
         } catch (e) {
-            console.error("Failed to update kitchen module status", e);
-            setKitchenEnabled(!val); // Revert on failure
+            console.error("Failed to enable kitchen module status", e);
         }
     };
 
@@ -92,6 +92,15 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
         }
     };
 
+    const fetchProducts = async () => {
+        try {
+            const localProducts = await db.get('products' as any) as Product[] || [];
+            setProducts(Array.isArray(localProducts) ? localProducts : []);
+        } catch (e) {
+            console.error("Failed to fetch products", e);
+        }
+    };
+
     const handleAddArea = () => {
         const newArea: ProductionArea = {
             id: `pa_${Date.now()}`,
@@ -103,6 +112,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
             kds_critical_minutes: 20
         };
         setAreas([...areas, newArea]);
+        ensureKitchenModuleEnabled();
     };
 
     const handleUpdateArea = (id: string, updates: Partial<ProductionArea>) => {
@@ -152,6 +162,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                 : [...areas, normalizedArea];
             setAreas(nextAreas);
             await db.save('productionAreas' as any, nextAreas);
+            await ensureKitchenModuleEnabled();
             alert("Área guardada correctamente");
         } catch (e) {
             console.error("Failed to save production area", e);
@@ -159,6 +170,52 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
         } finally {
             setSaving(false);
         }
+    };
+
+    const handleAssignProductToArea = async (productId: string, areaId: string, assign: boolean) => {
+        setSavingProductAreaId(areaId);
+        try {
+            const nextProducts = products.map(product => {
+                if (product.id !== productId) return product;
+                const resolved = resolveRestaurantProductConfig(product);
+                const nextAreaId = assign ? areaId : undefined;
+                return normalizeRestaurantProductConfig({
+                    ...product,
+                    production_area_id: nextAreaId,
+                    restaurant: {
+                        ...(product.restaurant || {}),
+                        production_area_id: nextAreaId,
+                        product_type: resolved.product_type || product.product_type || 'SIMPLE',
+                    },
+                    updatedAt: new Date().toISOString(),
+                });
+            });
+            setProducts(nextProducts);
+            await db.save('products' as any, nextProducts);
+            await ensureKitchenModuleEnabled();
+        } catch (error) {
+            console.error('Failed to assign product to production area', error);
+            alert('No se pudo asignar el artículo al centro de producción.');
+            fetchProducts();
+        } finally {
+            setSavingProductAreaId(null);
+        }
+    };
+
+    const getAreaProducts = (areaId: string) => {
+        const query = productSearch.trim().toLowerCase();
+        return products
+            .filter(product => {
+                const text = `${product.name || ''} ${product.category || ''} ${product.barcode || ''}`.toLowerCase();
+                return !query || text.includes(query);
+            })
+            .sort((a, b) => {
+                const aAssigned = resolveRestaurantProductConfig(a).production_area_id === areaId ? 0 : 1;
+                const bAssigned = resolveRestaurantProductConfig(b).production_area_id === areaId ? 0 : 1;
+                if (aAssigned !== bAssigned) return aAssigned - bAssigned;
+                return String(a.name || '').localeCompare(String(b.name || ''));
+            })
+            .slice(0, 80);
     };
 
     const handleTestKdsConnection = async (area: ProductionArea) => {
@@ -223,11 +280,11 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
     if (loading) return <div className="p-8 text-center text-slate-500 font-bold animate-pulse">Cargando Centros de Producción...</div>;
 
     return (
-        <div className="p-6 max-w-5xl mx-auto animate-in fade-in duration-500">
-            <div className="flex justify-between items-center mb-8">
+        <div className="p-4 md:p-6 max-w-[92rem] mx-auto animate-in fade-in duration-500">
+            <div className="flex justify-between items-center mb-5">
                 <div>
                     <h2 className="text-2xl font-black text-slate-800">Centros de Producción</h2>
-                    <p className="text-sm text-slate-400 font-medium">Configura dónde se preparan tus productos (Cocina, Barra, Hornos, etc.)</p>
+                    <p className="text-sm text-slate-400 font-medium">Configura rutas KDS/impresión y asigna artículos sin salir de esta pantalla.</p>
                 </div>
                 <button
                     onClick={handleAddArea}
@@ -238,28 +295,24 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                 </button>
             </div>
 
-            <div className="mb-8 bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100 flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                    <div className={`p-3 rounded-2xl ${kitchenEnabled ? 'bg-orange-100 text-orange-600' : 'bg-slate-100 text-slate-400'}`}>
-                        <ChefHat size={24} />
+            <div className="mb-5 flex flex-col gap-3 rounded-[1.5rem] border border-blue-100 bg-blue-50/70 px-5 py-4 md:flex-row md:items-center md:justify-between">
+                <div className="flex items-center gap-3">
+                    <div className="rounded-2xl bg-blue-600 p-3 text-white shadow-lg shadow-blue-100">
+                        <PackageCheck size={20} />
                     </div>
                     <div>
-                        <h3 className="font-black text-slate-800">Módulo de Cocina y Producción</h3>
-                        <p className="text-xs text-slate-400 font-medium">Activa o desactiva el sistema de ruteo de comandas globalmente.</p>
+                        <h3 className="text-sm font-black uppercase tracking-wide text-blue-900">Ruteo activo por configuración</h3>
+                        <p className="text-xs font-bold text-blue-600">
+                            Crear y guardar centros activa el flujo de comandas. Los artículos asignados viajarán al KDS/impresora del área.
+                        </p>
                     </div>
                 </div>
-                <button
-                    onClick={() => toggleKitchen(!kitchenEnabled)}
-                    className={`relative inline-flex h-8 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 ${kitchenEnabled ? 'bg-orange-600' : 'bg-slate-200'}`}
-                >
-                    <span
-                        aria-hidden="true"
-                        className={`pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${kitchenEnabled ? 'translate-x-6' : 'translate-x-0'}`}
-                    />
-                </button>
+                <div className="rounded-2xl bg-white px-4 py-2 text-xs font-black uppercase tracking-wide text-blue-700 shadow-sm">
+                    {areas.length} áreas · {products.filter(product => resolveRestaurantProductConfig(product).production_area_id).length} artículos asignados
+                </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 gap-5">
                 {areas.length === 0 ? (
                     <div className="col-span-full py-12 bg-slate-50 rounded-[2rem] border-2 border-dashed border-slate-200 flex flex-col items-center justify-center text-slate-400">
                         <Layers size={48} className="mb-4 opacity-20" />
@@ -267,11 +320,11 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                         <p className="text-xs">Usa el botón superior para crear la primera.</p>
                     </div>
                 ) : areas.map(area => (
-                    <div key={area.id} className="bg-white rounded-[2rem] shadow-xl border border-slate-100 p-6 hover:shadow-2xl transition-all group overflow-hidden relative">
+                    <div key={area.id} className="bg-white rounded-[2rem] shadow-xl border border-slate-100 p-5 hover:shadow-2xl transition-all group overflow-hidden relative">
                         {/* Status Accent */}
                         <div className={`absolute top-0 left-0 w-2 h-full ${area.modo_salida === 'KDS' ? 'bg-blue-500' : area.modo_salida === 'PRINTER' ? 'bg-emerald-500' : 'bg-purple-500'}`} />
 
-                        <div className="flex justify-between items-start mb-6 pl-2">
+                        <div className="flex justify-between items-start mb-4 pl-2">
                             <div className="flex-1">
                                 <input
                                     type="text"
@@ -289,7 +342,8 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                             </button>
                         </div>
 
-                        <div className="space-y-4 pl-2">
+                        <div className="grid grid-cols-1 gap-5 pl-2 xl:grid-cols-[minmax(0,1fr)_24rem]">
+                        <div className="space-y-4">
                             {/* Mode Selection */}
                             <div>
                                 <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2 block">Modo de Notificación</label>
@@ -464,7 +518,71 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                             )}
                         </div>
 
-                        <div className="mt-8 flex justify-end">
+                        <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50/70 p-4">
+                            <div className="mb-3 flex items-start justify-between gap-3">
+                                <div>
+                                    <h4 className="text-sm font-black text-slate-800">Artículos del centro</h4>
+                                    <p className="text-[11px] font-bold text-slate-400">
+                                        {assignedProductCountByArea[area.id] || 0} asignados a {area.nombre || 'esta área'}
+                                    </p>
+                                </div>
+                                <span className="rounded-full bg-white px-3 py-1 text-[10px] font-black uppercase text-slate-500 shadow-sm">
+                                    {products.length} artículos
+                                </span>
+                            </div>
+                            <div className="relative mb-3">
+                                <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                <input
+                                    value={productSearch}
+                                    onChange={(event) => setProductSearch(event.target.value)}
+                                    placeholder="Buscar artículo, categoría o código..."
+                                    className="w-full rounded-2xl border-2 border-white bg-white py-3 pl-9 pr-3 text-xs font-bold text-slate-700 outline-none transition-all focus:border-blue-200"
+                                />
+                            </div>
+                            <div className="max-h-[24rem] space-y-2 overflow-y-auto pr-1">
+                                {getAreaProducts(area.id).length === 0 ? (
+                                    <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-center text-xs font-bold text-slate-400">
+                                        No hay artículos que coincidan.
+                                    </div>
+                                ) : getAreaProducts(area.id).map(product => {
+                                    const productAreaId = resolveRestaurantProductConfig(product).production_area_id;
+                                    const assignedHere = productAreaId === area.id;
+                                    const assignedElsewhere = Boolean(productAreaId && productAreaId !== area.id);
+                                    return (
+                                        <button
+                                            key={product.id}
+                                            type="button"
+                                            disabled={savingProductAreaId === area.id}
+                                            onClick={() => handleAssignProductToArea(product.id, area.id, !assignedHere)}
+                                            className={`flex w-full items-center justify-between gap-3 rounded-2xl border px-3 py-3 text-left transition-all active:scale-[0.99] disabled:opacity-60 ${assignedHere
+                                                ? 'border-blue-200 bg-blue-50 text-blue-900'
+                                                : assignedElsewhere
+                                                    ? 'border-amber-100 bg-amber-50/70 text-slate-700'
+                                                    : 'border-white bg-white text-slate-700 hover:border-slate-200'}`}
+                                        >
+                                            <span className="min-w-0">
+                                                <span className="block truncate text-xs font-black">{product.name}</span>
+                                                <span className="block truncate text-[10px] font-bold uppercase text-slate-400">
+                                                    {product.category || 'Sin categoría'}
+                                                    {assignedElsewhere ? ' · asignado a otro centro' : ''}
+                                                </span>
+                                            </span>
+                                            {assignedHere ? (
+                                                <CheckCircle2 size={18} className="shrink-0 text-blue-600" />
+                                            ) : (
+                                                <PackageX size={18} className="shrink-0 text-slate-300" />
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            <p className="mt-3 text-[10px] font-bold leading-relaxed text-slate-400">
+                                Al marcar un artículo aquí se guarda su destino de producción local. Si luego sincroniza desde ERP, el snapshot puede actualizar esta asignación.
+                            </p>
+                        </div>
+                        </div>
+
+                        <div className="mt-5 flex justify-end">
                             <button
                                 onClick={() => handleSave(area)}
                                 disabled={saving}
@@ -483,7 +601,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                 <div>
                     <h4 className="text-blue-800 font-black text-sm uppercase">Recordatorio Operativo</h4>
                     <p className="text-blue-600 text-xs font-medium leading-relaxed">
-                        Una vez configuradas las áreas, recuerda asignar a cada producto su destino correspondiente desde el editor de catálogo. Los productos sin área asignada se ignorarán en las comandas de cocina.
+                        Los productos sin centro asignado mantienen el comportamiento actual. Puedes asignarlos aquí para una configuración rápida o desde la ficha del artículo si necesitas revisar otros parámetros.
                     </p>
                 </div>
             </div>
