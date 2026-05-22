@@ -4861,7 +4861,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
 
 
-               <div className="w-full md:flex-1 flex flex-wrap items-center gap-2 md:gap-4 md:min-w-0">
+               <div className="w-full md:flex-1 flex flex-wrap md:flex-nowrap items-center gap-2 md:gap-4 md:min-w-0">
                   <div className="relative shrink-0 ml-auto md:ml-0 order-1" ref={tariffSelectorRef}>
                      <button
                         type="button"
@@ -4917,7 +4917,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      )}
                   </div>
 
-                  <div className="relative order-3 md:order-none w-full md:flex-1 group min-w-0 md:min-w-[300px]">
+                  <div className="relative order-3 md:order-none w-full md:flex-1 group min-w-0 md:min-w-[220px]">
                      <Search className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                      <input
                         ref={searchInputRef}
@@ -5098,58 +5098,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div >
 
             {/* DESKTOP: marca + mesa/comensales bajo el logo; retail: busqueda al centro; botones carrito/acciones alineados a la derecha (como APK 1.0.300) */}
-            <div className={`hidden md:flex px-5 pt-3 pb-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-4 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
+            <div className={`hidden md:flex px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
                <div className="flex w-full items-center justify-between gap-4">
-                  <div className="flex min-w-0 shrink-0 flex-col gap-2 self-start pt-1">
+                  <div className="flex min-w-0 shrink-0 items-center justify-start">
                      {renderTicketBrand(false)}
-                     {activeTable && (
-                        <div className="flex max-w-[min(100%,20rem)] flex-col items-start animate-in fade-in slide-in-from-top-2 duration-300">
-                           <span className="mb-1 text-[10px] font-black uppercase leading-none tracking-widest text-slate-400">Mesa Activa</span>
-                           <div className="flex items-center gap-2">
-                              <Layout size={18} className="text-blue-600" />
-                              <div className="min-w-0">
-                                 <span className="block text-2xl font-black tracking-tighter text-slate-900">
-                                    {activeTableContext.compactLabel || activeTable.nombre || activeTable.name}
-                                 </span>
-                                 {activeTableContext.roomLabel && (
-                                    <span className="block truncate text-[10px] font-black uppercase tracking-widest text-slate-400">
-                                       {activeTableContext.roomLabel} · {activeTable.nombre || activeTable.name}
-                                    </span>
-                                 )}
-                              </div>
-                           </div>
-
-                           <div className="mt-2 flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 shadow-sm transition-all hover:shadow-md">
-                              <button
-                                 onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
-                                 className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
-                                 title="Reducir comensales"
-                              >
-                                 <Minus size={10} strokeWidth={3} />
-                              </button>
-
-                              <div className="flex items-center gap-1 px-1">
-                                 <Users size={12} className="text-blue-500" />
-                                 <span className="min-w-[1rem] text-center text-xs font-black text-slate-700">{activeTable.guests || 1}</span>
-                              </div>
-
-                              <button
-                                 onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
-                                 className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-500"
-                                 title="Aumentar comensales"
-                              >
-                                 <Plus size={10} strokeWidth={3} />
-                              </button>
-                           </div>
-
-                           {shouldApplyServiceCharge && (
-                              <div className="mt-2.5 flex items-center gap-1 rounded-lg border border-blue-100/50 bg-blue-50 px-2 py-1 text-[9px] font-black uppercase tracking-tighter text-blue-600 animate-in fade-in slide-in-from-top-1">
-                                 <Percent size={10} className="text-blue-500" />
-                                 <span>Propina Sugerida {serviceCharge?.percentage}% Activa</span>
-                              </div>
-                           )}
-                        </div>
-                     )}
                   </div>
 
                   {/* RETAIL MODE SEARCH BAR */}
@@ -5254,14 +5206,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         onClick={() => setRightSidebarTab('CART')}
                         aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${cartQuantity} artículos` : ''}`}
                         title={`Carrito${cartQuantity > 0 ? ` (${cartQuantity})` : ''}`}
-                        className={`group relative flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
+                        className={`group relative flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
                            rightSidebarTab === 'CART'
                               ? 'border-red-200 bg-gradient-to-br from-red-50 via-rose-50 to-red-100 text-red-700 shadow-[0_14px_30px_rgba(248,113,113,0.18)]'
                               : 'border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:bg-red-50/70 hover:text-red-600'
                         }`}
                      >
                         <span
-                           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
+                           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition-all ${
                               rightSidebarTab === 'CART'
                                  ? 'border-red-200/80 bg-white/90 text-red-600 shadow-sm'
                                  : 'border-red-100 bg-red-50 text-red-500 group-hover:border-red-200 group-hover:bg-white group-hover:text-red-600'
@@ -5279,14 +5231,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         onClick={() => setRightSidebarTab('ACTIONS')}
                         aria-label="Abrir acciones rápidas"
                         title="Acciones"
-                        className={`group flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
+                        className={`group flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
                            rightSidebarTab === 'ACTIONS'
                               ? 'border-blue-200 bg-gradient-to-br from-blue-50 via-sky-50 to-blue-100 text-blue-700 shadow-[0_14px_30px_rgba(59,130,246,0.18)]'
                               : 'border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:bg-blue-50/70 hover:text-blue-600'
                         }`}
                      >
                         <span
-                           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
+                           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition-all ${
                               rightSidebarTab === 'ACTIONS'
                                  ? 'border-blue-200/80 bg-white/90 text-blue-600 shadow-sm'
                                  : 'border-blue-100 bg-blue-50 text-blue-500 group-hover:border-blue-200 group-hover:bg-white group-hover:text-blue-600'
@@ -5297,6 +5249,47 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </button>
                   </div>
                </div>
+
+               {activeTable && (
+                  <div className="flex w-full items-center justify-between gap-3 animate-in fade-in slide-in-from-top-1 duration-200">
+                     <div className="flex min-w-0 items-center gap-2">
+                        <Layout size={18} className="shrink-0 text-blue-600" />
+                        <span className="truncate text-xl font-black tracking-tight text-slate-900">
+                           {activeTableContext.compactLabel || activeTable.nombre || activeTable.name}
+                        </span>
+                     </div>
+
+                     <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 shadow-sm transition-all hover:shadow-md">
+                        <button
+                           onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
+                           className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                           title="Reducir comensales"
+                        >
+                           <Minus size={10} strokeWidth={3} />
+                        </button>
+
+                        <div className="flex items-center gap-1 px-1">
+                           <Users size={12} className="text-blue-500" />
+                           <span className="min-w-[1rem] text-center text-xs font-black text-slate-700">{activeTable.guests || 1}</span>
+                        </div>
+
+                        <button
+                           onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
+                           className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-500"
+                           title="Aumentar comensales"
+                        >
+                           <Plus size={10} strokeWidth={3} />
+                        </button>
+                     </div>
+                  </div>
+               )}
+
+               {activeTable && shouldApplyServiceCharge && (
+                  <div className="flex items-center gap-1 rounded-lg border border-blue-100/50 bg-blue-50 px-2 py-1 text-[9px] font-black uppercase tracking-tighter text-blue-600 animate-in fade-in slide-in-from-top-1">
+                     <Percent size={10} className="text-blue-500" />
+                     <span>Propina Sugerida {serviceCharge?.percentage}% Activa</span>
+                  </div>
+               )}
 
                {
                   selectedCustomer ? (
