@@ -785,6 +785,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const mobileCartButtonRef = useRef<HTMLButtonElement>(null);
    const desktopActionGridRef = useRef<HTMLDivElement>(null);
    const ticketAutoSyncTimeoutRef = useRef<number | null>(null);
+   const hydratedTableOrderRef = useRef<string | null>(null);
    const quickActionTouchTimerRef = useRef<number | null>(null);
    const quickActionTouchStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
    const lastTouchContextMenuAtRef = useRef(0);
@@ -1164,34 +1165,52 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // --- SMART TABLE HYDRATION ---
    // Automatically load order when entering via Table Map
    useEffect(() => {
-      if (activeTable) {
-         if (activeTable.currentOrderId) {
-            console.log(`🤖 Smart Access: Hydrating table ${activeTable.nombre} (Order ${activeTable.currentOrderId})`);
-            const ticket = parkedTickets.find(t => t.id === activeTable.currentOrderId);
-            if (ticket) {
-               // 1. Load Cart
-               onUpdateCart(ticket.items || []);
-               // 2. Load Customer
-               if (ticket.customerId) {
-                  const customer = customers.find(c => c.id === ticket.customerId);
-                  if (customer) onSelectCustomer(customer);
-               } else {
-                  onSelectCustomer(null);
-               }
-               console.log(`✅ Loaded ${ticket.items.length} items from active table.`);
-            } else {
-               // Nunca dejar el carrito de la mesa anterior: si el ticket aún no está en memoria, vaciar hasta que llegue el sync.
-               console.warn(`⚠️ Ticket ${activeTable.currentOrderId} not found in parked tickets. Clearing cart to avoid inheriting another table.`);
-               onUpdateCart([]);
-               onSelectCustomer(null);
-            }
-         } else {
-            // Mesa sin orden activa: siempre carrito y cliente limpios (evita heredar la mesa previa).
+      if (!activeTable) {
+         hydratedTableOrderRef.current = null;
+         return;
+      }
+
+      const orderKey = `${activeTable.id || 'table'}:${activeTable.currentOrderId || 'new'}`;
+
+      if (!activeTable.currentOrderId) {
+         if (hydratedTableOrderRef.current !== orderKey && cart.length === 0) {
             onUpdateCart([]);
             onSelectCustomer(null);
+            hydratedTableOrderRef.current = orderKey;
          }
+         return;
       }
-   }, [activeTable, parkedTickets]); // Re-run if table changes or tickets sync
+
+      console.log(`🤖 Smart Access: Hydrating table ${activeTable.nombre} (Order ${activeTable.currentOrderId})`);
+      const ticket = parkedTickets.find(t => t.id === activeTable.currentOrderId);
+
+      if (ticket) {
+         const shouldHydrateCart = hydratedTableOrderRef.current !== orderKey || cart.length === 0;
+
+         if (shouldHydrateCart) {
+            onUpdateCart(ticket.items || []);
+            hydratedTableOrderRef.current = orderKey;
+         }
+
+         if (ticket.customerId) {
+            const customer = customers.find(c => c.id === ticket.customerId);
+            if (customer) onSelectCustomer(customer);
+         } else if (shouldHydrateCart) {
+            onSelectCustomer(null);
+         }
+         console.log(`✅ Loaded ${ticket.items.length} items from active table.`);
+         return;
+      }
+
+      // Si el mesero toca un articulo rapido al abrir una mesa nueva, no borrar ese carrito.
+      if (cart.length === 0) {
+         console.warn(`⚠️ Ticket ${activeTable.currentOrderId} not found in parked tickets. Clearing empty cart to avoid inheriting another table.`);
+         onUpdateCart([]);
+         onSelectCustomer(null);
+      } else {
+         console.warn(`⚠️ Ticket ${activeTable.currentOrderId} not found yet; preserving ${cart.length} local item(s).`);
+      }
+   }, [activeTable, parkedTickets, cart.length, customers, onUpdateCart, onSelectCustomer]); // Re-run if table changes or tickets sync
 
    const isMobile = useIsMobile();
    const tariffSelectorRef = useRef<HTMLDivElement>(null);
@@ -2334,9 +2353,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
          : undefined;
 
-      // We look for existing item in the stable 'cart' prop/state instead of inside the setter
-      // to avoid using setter for logic that triggers side effects.
-      const existing = (cart || []).find(i => {
+      const matchesCartLine = (i: CartItem) => {
          const iMods = buildModifierSignature(i.modifiers);
          const existingTaxSignature = resolveEffectiveTaxIds(i.appliedTaxIds, activeTerminalConfig).slice().sort().join('|');
          return i.id === product.id
@@ -2345,49 +2362,53 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             && i.price === finalPrice
             && existingTaxSignature === taxSignature
             && (i.enteredById || i.salespersonId || '') === currentUser.id;
-      });
+      };
 
-      let targetCartId: string;
+      const newCartId = Math.random().toString(36).substr(2, 9);
+      let targetCartId = newCartId;
+      const newItem = {
+         ...product,
+         cartId: newCartId,
+         quantity,
+         price: finalPrice,
+         modifiers,
+         note,
+         restaurantConfig: lineRestaurantConfig,
+         selected_modifiers: lineRestaurantConfig?.selected_modifiers,
+         selected_fraction_parts: lineRestaurantConfig?.selected_fraction_parts || lineRestaurantConfig?.fractions,
+         selected_combo_items: lineRestaurantConfig?.selected_combo_items,
+         product_type: productRestaurantConfig.product_type || product.product_type,
+         variantSku,
+         variantInfo,
+         appliedTaxIds: effectiveTaxIds,
+         production_area_id: productionAreaId || undefined,
+         originalPrice: getProductPrice(product),
+         salespersonId: currentUser.id,
+         enteredAt: new Date().toISOString(),
+         enteredById: currentUser.id,
+         enteredByName: currentUser.name,
+         trackingData
+      };
 
-      if (existing && !usesSerial && !existing.dispatched) {
-         targetCartId = existing.cartId!;
-         onUpdateCart(prev => {
+      onUpdateCart(prev => {
+         const currentExisting = !usesSerial
+            ? (prev || []).find(item => matchesCartLine(item) && !item.dispatched)
+            : undefined;
+
+         if (currentExisting) {
+            targetCartId = currentExisting.cartId || newCartId;
             const updatedItem = {
-               ...existing,
-               quantity: existing.quantity + quantity,
+               ...currentExisting,
+               quantity: currentExisting.quantity + quantity,
                appliedTaxIds: effectiveTaxIds,
-               production_area_id: resolveProductionAreaId(existing) || productionAreaId || undefined,
+               production_area_id: resolveProductionAreaId(currentExisting) || productionAreaId || undefined,
             };
-            return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
-         });
-      } else {
-         const newCartId = Math.random().toString(36).substr(2, 9);
+            return [updatedItem, ...prev.filter(i => i.cartId !== currentExisting.cartId)];
+         }
+
          targetCartId = newCartId;
-         const newItem = {
-            ...product,
-            cartId: newCartId,
-            quantity,
-            price: finalPrice,
-            modifiers,
-            note,
-            restaurantConfig: lineRestaurantConfig,
-            selected_modifiers: lineRestaurantConfig?.selected_modifiers,
-            selected_fraction_parts: lineRestaurantConfig?.selected_fraction_parts || lineRestaurantConfig?.fractions,
-            selected_combo_items: lineRestaurantConfig?.selected_combo_items,
-            product_type: productRestaurantConfig.product_type || product.product_type,
-            variantSku,
-            variantInfo,
-            appliedTaxIds: effectiveTaxIds,
-            production_area_id: productionAreaId || undefined,
-            originalPrice: getProductPrice(product),
-            salespersonId: currentUser.id,
-            enteredAt: new Date().toISOString(),
-            enteredById: currentUser.id,
-            enteredByName: currentUser.name,
-            trackingData
-         };
-         onUpdateCart(prev => [newItem, ...prev]);
-      }
+         return [newItem, ...prev];
+      });
 
       // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
       setLastAddedCartId(targetCartId);

@@ -288,6 +288,21 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                     margin: 10px auto;
                 }
                 #qrcode img { margin: 0 auto; }
+                .order-number-block {
+                    margin: 6px 0 4px;
+                    text-align: center;
+                    font-size: 22px;
+                    font-weight: 900;
+                    line-height: 1.1;
+                    letter-spacing: 0.5px;
+                }
+                .order-number-block .label {
+                    display: block;
+                    font-size: 12px;
+                    font-weight: 900;
+                    letter-spacing: 0;
+                    text-transform: uppercase;
+                }
             </style>
         </head>
         <body>
@@ -309,7 +324,6 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                     <div class="meta-row" style="font-weight: bold;">Ticket: ${transaction.displayId || transaction.id}</div>
                     <div class="meta-row">${dateStr} ${timeStr}</div>
                 </div>
-                ${receiptConfig?.showOrderNumber && transaction.orderNumber ? `<div class="meta-row" style="font-weight: bold; margin-top: 3px;">No. Orden: ${transaction.orderNumber}</div>` : ''}
                 ${transaction.tableDisplayLabel ? `<div class="meta-row" style="font-weight: bold;">Mesa/Sala: ${transaction.tableDisplayLabel}</div>` : ''}
             </div>
 
@@ -527,6 +541,12 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 </div>
                 <div class="divider"></div>
                 <div id="qrcode"></div>
+                ${receiptConfig?.showOrderNumber && transaction.orderNumber ? `
+                <div class="order-number-block">
+                    <span class="label">No. Orden</span>
+                    ${transaction.orderNumber}
+                </div>
+                ` : ''}
                 <div style="font-weight: bold; font-size: 9px; margin-top: 5px;">ESCANEA ESTE TICKET PARA DEVOLUCIONES Y CUPONES</div>
                 ` : ''}
             </div>
