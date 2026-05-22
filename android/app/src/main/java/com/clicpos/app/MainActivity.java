@@ -24,7 +24,14 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        int softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            softInputMode |= WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
+        } else {
+            softInputMode |= WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN;
+        }
+        getWindow().setSoftInputMode(softInputMode);
 
         if (getBridge() == null || getBridge().getWebView() == null) {
             return;

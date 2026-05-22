@@ -2278,6 +2278,8 @@ export type Permission =
   | 'POS_REPRINT_RECEIPT'
   | 'POS_NEW_SALE'
   | 'POS_CHANGE_TARIFF'
+  | 'POS_VIEW_X_REPORT'
+  | 'POS_CLOSE_X'
   | 'POS_CLOSE_Z'
   | 'POS_REPEAT_Z_REPORT'
   | 'POS_VIEW_ACTIVE_CASH'
@@ -2470,6 +2472,11 @@ export interface ZReport {
   stats?: ZReportStats;
   syncStatus?: SyncStatus;
   syncError?: string;
+}
+
+export interface XReport extends ZReport {
+  reportType: 'X';
+  source_x_report_id?: string;
 }
 // --- ANALYTICS & ADVANCED REPORTING ---
 export type AnalyticsCategory =

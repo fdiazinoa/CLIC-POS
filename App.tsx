@@ -20,6 +20,7 @@ import {
   ParkedTicket,
   StockTransfer,
   ZReport,
+  XReport,
   DeviceRole,
   Reception,
   ProductStock,
@@ -59,6 +60,7 @@ import { calculateTransactionFiscalSummary } from './utils/fiscalBreakdown';
 import { extractTerminalOperationalDocumentState } from './utils/terminalConfigSnapshot';
 import { mergeDocumentSeriesCollection, resolveDocumentAssignmentId } from './utils/documentSeriesIdentity';
 import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
+import { ThermalPrinterService } from './services/printer/ThermalPrinterService';
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
@@ -1127,7 +1129,8 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     const currentTerminal = getCurrentTerminal();
-    const autoLogoutMinutes = currentTerminal?.config?.security?.autoLogoutMinutes ?? 0;
+    const isNativeStandaloneApk = isNativeAndroidRuntime() && !normalizeMasterHost(localStorage.getItem('pos_master_ip'));
+    const autoLogoutMinutes = isNativeStandaloneApk ? 0 : (currentTerminal?.config?.security?.autoLogoutMinutes ?? 0);
     const shouldTrackInactivity =
       Boolean(currentUser) &&
       currentView !== 'LOGIN' &&
@@ -1171,6 +1174,27 @@ const AppContent: React.FC = () => {
       }
     };
   }, [currentUser, currentView, getCurrentTerminal, navigateToUserLogin]);
+
+  useEffect(() => {
+    if (!isNativeAndroidRuntime()) return;
+
+    const applyNativeKeyboardGuard = () => {
+      document.querySelectorAll('input, textarea').forEach((element) => {
+        if (!(element instanceof HTMLElement)) return;
+        if (element.dataset.allowNativeKeyboard === 'true') return;
+        element.setAttribute('inputmode', 'none');
+        element.setAttribute('autocomplete', 'off');
+        element.setAttribute('autocorrect', 'off');
+        element.setAttribute('autocapitalize', 'off');
+      });
+    };
+
+    applyNativeKeyboardGuard();
+    const observer = new MutationObserver(applyNativeKeyboardGuard);
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (currentView !== 'POS') return;
@@ -1567,6 +1591,7 @@ const AppContent: React.FC = () => {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   const [zReports, setZReports] = useState<ZReport[]>([]);
+  const [xReports, setXReports] = useState<XReport[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [parkedTickets, setParkedTickets] = useState<ParkedTicket[]>([]);
@@ -2661,6 +2686,7 @@ const AppContent: React.FC = () => {
           setWarehouses(data.warehouses || []);
           setCashMovements(data.cashMovements || []);
           setZReports(data.zReports || []);
+          setXReports(Array.isArray(data.xReports) ? data.xReports : []);
           setPurchaseOrders(data.purchaseOrders || []);
           setSuppliers(data.suppliers || []);
           setParkedTickets(Array.isArray(data.parkedTickets) ? data.parkedTickets : []);
@@ -3083,6 +3109,7 @@ const AppContent: React.FC = () => {
         case 'transactions': setTransactions(Array.isArray(freshData) ? freshData as Transaction[] : []); break;
         case 'cashMovements': setCashMovements(freshData as CashMovement[]); break;
         case 'zReports': setZReports(freshData as ZReport[]); break;
+        case 'xReports': setXReports(Array.isArray(freshData) ? freshData as XReport[] : []); break;
         case 'warehouses': setWarehouses(Array.isArray(freshData) ? freshData as Warehouse[] : []); break;
       }
     };
@@ -3452,6 +3479,7 @@ const AppContent: React.FC = () => {
           setProducts(freshData.products);
           setCashMovements(freshData.cashMovements);
           setZReports(freshData.zReports || []);
+          setXReports(Array.isArray(freshData.xReports) ? freshData.xReports : []);
         } catch (error) {
           console.error('Failed to restore history:', error);
           alert(shouldTakeover
@@ -3524,6 +3552,7 @@ const AppContent: React.FC = () => {
       if (Array.isArray(freshData.warehouses)) setWarehouses(freshData.warehouses);
       if (Array.isArray(freshData.cashMovements)) setCashMovements(freshData.cashMovements);
       if (Array.isArray(freshData.zReports)) setZReports(freshData.zReports);
+      if (Array.isArray(freshData.xReports)) setXReports(freshData.xReports);
       if (Array.isArray(freshData.purchaseOrders)) setPurchaseOrders(freshData.purchaseOrders);
       if (Array.isArray(freshData.suppliers)) setSuppliers(freshData.suppliers);
       if (Array.isArray(freshData.parkedTickets)) setParkedTickets(freshData.parkedTickets);
@@ -4793,6 +4822,184 @@ const AppContent: React.FC = () => {
     }
   };
 
+  const handleXReport = async (cashCounted: number, notes = 'Arqueo parcial') => {
+    const currentTerminal = getCurrentTerminal() || (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
+    const terminalId = currentTerminal?.id || 'T1';
+
+    try {
+      const terminalKey = normalizeTerminalId(terminalId);
+      const isDefaultTerminal = terminalKey === 't1';
+      const belongsToCurrentTerminal = (value?: string | null) =>
+        normalizeTerminalId(value) === terminalKey || (!value && isDefaultTerminal);
+
+      const terminalTransactions = getPendingTransactionsForTerminal(terminalId);
+      const terminalCashMovements = getPendingCashMovementsForTerminal(terminalId);
+      const terminalCollections = collections.filter(c => belongsToCurrentTerminal(c.terminalId) && !c.zReportId);
+
+      const totalsByMethod = terminalTransactions.flatMap(t => t?.payments || []).reduce((acc: Record<string, number>, p) => {
+        if (p && p.method) {
+          acc[p.method] = (acc[p.method] || 0) + Number(p.amount || 0);
+        }
+        return acc;
+      }, {});
+
+      const baseCurrency = (config.currencies || []).find(c => c.isBase) || (config.currencies || [])[0];
+      const baseCurrencyCode = baseCurrency?.code || 'DOP';
+      const cashSales = totalsByMethod.CASH || 0;
+      const cardTotal = totalsByMethod.CARD || 0;
+      const otherTotal = Object.entries(totalsByMethod)
+        .filter(([method]) => method !== 'CASH' && method !== 'CARD')
+        .reduce((sum, [, amount]) => sum + Number(amount || 0), 0);
+      const cashIn = terminalCashMovements
+        .filter(m => m.type === 'IN' && (!m.currencyCode || m.currencyCode === baseCurrencyCode))
+        .reduce((sum, movement) => sum + Number(movement.amount || 0), 0);
+      const cashOut = terminalCashMovements
+        .filter(m => m.type === 'OUT' && (!m.currencyCode || m.currencyCode === baseCurrencyCode))
+        .reduce((sum, movement) => sum + Number(movement.amount || 0), 0);
+      const expectedCash = cashSales + cashIn - cashOut;
+      const discrepancy = Number(cashCounted || 0) - expectedCash;
+      const stats = calculateZReportStats(terminalTransactions, terminalCollections);
+
+      const orderedTicketRefs = terminalTransactions
+        .map((transaction) => transaction.displayId || transaction.id)
+        .filter(Boolean);
+      const openedAtCandidates = [
+        ...terminalTransactions.map(t => new Date(t.date).getTime()),
+        ...terminalCashMovements.map(m => new Date(m.timestamp).getTime())
+      ].filter((value) => Number.isFinite(value)) as number[];
+      const openedAt = openedAtCandidates.length > 0
+        ? new Date(Math.min(...openedAtCandidates)).toISOString()
+        : new Date().toISOString();
+
+      let sequenceNumber = '';
+      let xReportSeriesId: string | undefined;
+      let xReportSeriesNumber: number | undefined;
+
+      const rawInternalSequences = ((await db.get('internalSequences')) as DocumentSeries[]) || [];
+      const terminalSeriesList = currentTerminal?.config?.documentSeries || [];
+      const availableSeries = mergeDocumentSeriesCollection([
+        ...rawInternalSequences,
+        ...terminalSeriesList
+      ]);
+      const assignedSeriesId = currentTerminal?.config?.documentAssignments?.['X_REPORT'];
+      const resolvedSeriesId = resolveDocumentAssignmentId('X_REPORT', availableSeries, assignedSeriesId)
+        || resolveDocumentAssignmentId('X_REPORT', availableSeries, 'X_REPORT');
+      const xReportSeries = resolvedSeriesId
+        ? availableSeries.find(s => s.id === resolvedSeriesId)
+        : undefined;
+
+      if (xReportSeries) {
+        const prefix = xReportSeries.prefix || 'X';
+        const num = Math.max(1, Number(xReportSeries.nextNumber) || 1);
+        const padding = xReportSeries.padding || 6;
+        sequenceNumber = `${prefix}${num.toString().padStart(padding, '0')}`;
+        xReportSeriesId = xReportSeries.id;
+        xReportSeriesNumber = num;
+
+        const updatedSeries = {
+          ...xReportSeries,
+          nextNumber: num + 1
+        };
+        const updatedSequences = mergeDocumentSeriesCollection([
+          ...rawInternalSequences,
+          updatedSeries
+        ]);
+        setInternalSequences(updatedSequences);
+        await db.save('internalSequences', updatedSequences);
+
+        const hasTerminalSeries = terminalSeriesList.some(s => s.id === xReportSeries.id);
+        const updatedTerminalSeries = hasTerminalSeries
+          ? terminalSeriesList.map(s => s.id === xReportSeries.id ? updatedSeries : s)
+          : [...terminalSeriesList, updatedSeries];
+        const updatedTerminals = (config.terminals || []).map(t => {
+          if (t.id !== terminalId) return t;
+          return {
+            ...t,
+            config: {
+              ...t.config,
+              documentSeries: updatedTerminalSeries,
+              documentAssignments: {
+                ...(t.config.documentAssignments || {}),
+                X_REPORT: xReportSeries.id
+              }
+            }
+          };
+        });
+        const updatedConfig = { ...config, terminals: updatedTerminals };
+        setConfig(updatedConfig);
+        await db.save('config', updatedConfig);
+
+        if (permissionService.isMasterTerminal()) {
+          try {
+            await syncManager.pushCatalog('internalSequences');
+          } catch (sequenceSyncError) {
+            console.warn('⚠️ [App.tsx] X-Report sequence push failed; local counter is already advanced:', sequenceSyncError);
+          }
+        }
+      } else {
+        const existingXReports = await db.get('xReports') as XReport[];
+        const nextSeqNum = ((Array.isArray(existingXReports) ? existingXReports.length : 0) + 1).toString().padStart(6, '0');
+        sequenceNumber = `X-${nextSeqNum}`;
+      }
+
+      const newXReport: XReport = {
+        id: `XR-${Date.now()}`,
+        reportType: 'X',
+        terminalId,
+        sequenceNumber,
+        seriesId: xReportSeriesId,
+        seriesNumber: xReportSeriesNumber,
+        source_terminal_id: terminalId,
+        openedAt,
+        closedAt: new Date().toISOString(),
+        closedByUserId: currentUser?.id || 'sys',
+        closedByUserName: currentUser?.name || 'System',
+        baseCurrency: baseCurrencyCode,
+        totalsByMethod,
+        cashExpected: { [baseCurrencyCode]: expectedCash },
+        cashCounted: { [baseCurrencyCode]: Number(cashCounted || 0) },
+        cashDiscrepancy: { [baseCurrencyCode]: discrepancy },
+        cashSales,
+        cashIn,
+        cashOut,
+        transactionCount: terminalTransactions.length,
+        notes,
+        declared_totals: {
+          cash: Number(cashCounted || 0),
+          card: cardTotal,
+          other: otherTotal,
+          total_declared: Number(cashCounted || 0) + cardTotal + otherTotal,
+        },
+        system_totals: {
+          expected_cash: expectedCash,
+          expected_card: cardTotal,
+          expected_other: otherTotal,
+          total_expected: Object.values(totalsByMethod).reduce<number>((sum, amount) => sum + Number(amount || 0), 0),
+          cash_difference: discrepancy,
+          total_difference: discrepancy,
+        },
+        sync_audit: {
+          total_tickets_issued: terminalTransactions.length,
+          first_ticket_id: orderedTicketRefs[0] || null,
+          last_ticket_id: orderedTicketRefs[orderedTicketRefs.length - 1] || null,
+        },
+        stats,
+        syncStatus: 'PENDING' as const
+      };
+
+      await db.saveDocument('xReports', newXReport);
+      setXReports(prev => [newXReport, ...prev].sort((a, b) => new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime()));
+
+      const userRole = roles.find(r => r.id === (currentUser?.roleId || currentUser?.role));
+      const hiddenModules = userRole?.zReportConfig?.hiddenModules || [];
+      const printed = await ThermalPrinterService.printZReport(newXReport, hiddenModules, config);
+      alert(`Cierre X ${sequenceNumber} generado${printed ? ' e impreso' : ', pero no se pudo imprimir automáticamente'}.`);
+    } catch (error: any) {
+      console.error('❌ X-Report failed:', error);
+      alert(`No se pudo generar el Cierre X: ${error?.message || 'Error desconocido'}`);
+    }
+  };
+
   const handleZReport = async (cashCounted: number, notes: string, reportData?: any) => {
     // 1. Robust Terminal ID Discovery.
     // The Z modal already knows the active terminal; prefer it over rediscovering by deviceId
@@ -6050,17 +6257,20 @@ const AppContent: React.FC = () => {
           const currentTerminalId = financeTerminal?.id || 'T1';
           const terminalTransactions = getPendingTransactionsForTerminal(currentTerminalId);
           const terminalMovements = getPendingCashMovementsForTerminal(currentTerminalId);
+          const terminalXReports = xReports.filter(report => normalizeTerminalId(report.terminalId) === normalizeTerminalId(currentTerminalId));
           const allowPartialXReport = financeTerminal?.config?.workflow?.session?.allowPartialXReport !== false;
 
           return (
             <FinanceDashboard
               transactions={terminalTransactions}
               cashMovements={terminalMovements}
+              xReports={terminalXReports}
               config={config}
               currentUser={currentUser}
               roles={roles}
               allowPartialXReport={allowPartialXReport}
               onRegisterMovement={handleRegisterMovement}
+              onCloseXReport={handleXReport}
               onOpenZReport={() => setCurrentView('Z_REPORT')}
               onClose={() => setCurrentView('POS')}
             />

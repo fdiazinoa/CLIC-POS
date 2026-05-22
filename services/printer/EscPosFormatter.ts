@@ -735,6 +735,8 @@ export const buildEscPosZReportPayload = (
 
   const width = RECEIPT_LINE_WIDTH;
   const chunks: Uint8Array[] = [];
+  const isXReport = (report as any).reportType === 'X';
+  const reportTitle = isXReport ? 'CIERRE X (ARQUEO)' : 'REPORTE DE CIERRE (Z)';
   const currencySymbol = resolveCurrencySymbol(config, report.baseCurrency);
   const totalCollected = Object.values(report.totalsByMethod || {}).reduce((sum, value) => sum + Number(value || 0), 0);
 
@@ -743,7 +745,7 @@ export const buildEscPosZReportPayload = (
   chunks.push(bold(true));
   pushTextLines(chunks, splitLines(config?.companyInfo?.name || 'CLIC POS', width));
   chunks.push(size(0x11));
-  pushTextLines(chunks, splitLines('REPORTE DE CIERRE (Z)', width));
+  pushTextLines(chunks, splitLines(reportTitle, width));
   chunks.push(size(0x00));
   pushTextLines(chunks, splitLines(report.sequenceNumber || report.id, width));
   chunks.push(bold(false));

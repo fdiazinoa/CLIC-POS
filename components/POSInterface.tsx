@@ -1142,7 +1142,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       operationalVertical === 'RESTAURANT' ||
       operationalVertical === 'RESTAURANTE' ||
       config.vertical === 'RESTAURANT';
+   const showTableMapButton = Boolean(activeTerminalConfig?.operational?.usa_mesas);
    const hideTableExtras = isRestaurantMode && !!activeTable;
+   const restaurantActionGridClass = !isRestaurantMode
+      ? 'grid-cols-[112px_minmax(0,1fr)]'
+      : showTableMapButton
+         ? (hideTableExtras ? 'grid-cols-4' : 'grid-cols-5')
+         : (hideTableExtras ? 'grid-cols-3' : 'grid-cols-4');
    const reservationPolicy = activeTerminalConfig?.operational?.reservationPolicy || {
       validityDays: 7,
       printCopies: 1,
@@ -4365,10 +4371,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const handlePrintPrecuenta = async () => {
       if (cart.length === 0) return;
       setSuccessToast('Generando Precuenta...');
-      // In a more complete implementation, this would call printer.ts with a dummy transaction
-      setTimeout(() => {
-         setSuccessToast('Precuenta enviada a impresora');
-      }, 1000);
+      try {
+         const printed = await printPrecuenta(config, {
+            items: processedCart.filter(item => Number(item.quantity || 0) > 0),
+            subtotal: cartSubtotal,
+            discountTotal: discountAmount,
+            taxTotal: cartTax,
+            finalTotal: cartTotal,
+            table: activeTable,
+            customerName: effectiveSelectedCustomer?.name,
+            terminalId,
+            orderNumber: readCartOrderNumber(cart),
+            tableDisplayLabel: activeTableContext.compactLabel || activeTableContext.tableLabel,
+         });
+
+         if (printed) {
+            setSuccessToast('Precuenta enviada a impresora');
+            return;
+         }
+
+         setSuccessToast(null);
+         setErrorToast('No se pudo imprimir la precuenta. Verifica la impresora de ticket.');
+         window.setTimeout(() => setErrorToast(null), 3000);
+      } catch (error) {
+         console.error('Error imprimiendo precuenta:', error);
+         setSuccessToast(null);
+         setErrorToast('No se pudo imprimir la precuenta.');
+         window.setTimeout(() => setErrorToast(null), 3000);
+      }
    };
 
    const openReservationModal = () => {
@@ -4750,6 +4780,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          case 'DRAWER': handleOpenDrawer(); break;
          case 'SAVE': openParkAliasModal(); break;
          case 'TABLES':
+            if (!showTableMapButton) break;
             if ((config.vertical === 'RESTAURANT' || config.vertical === 'RETAIL') && cart.length > 0) {
                handleSendAndExit();
             } else {
@@ -5971,7 +6002,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
 
-                               <div className={`grid ${isRestaurantMode ? (hideTableExtras ? 'grid-cols-4' : 'grid-cols-5') : 'grid-cols-[112px_minmax(0,1fr)]'} items-center gap-3 pt-5 px-1`}>
+                               <div className={`grid ${restaurantActionGridClass} items-center gap-3 pt-5 px-1`}>
                                  {!isRestaurantMode ? (
                                     <>
                                        <button
@@ -6004,13 +6035,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     </>
                                  ) : (
                                     <>
-                                       <button
-                                          onClick={() => { void handleBackToMap(); }}
-                                          className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase border-2 border-slate-200 bg-slate-50 text-slate-700 hover:bg-white hover:border-slate-300 shadow-sm hover:shadow-md transition-all active:scale-95"
-                                       >
-                                          <Layout size={24} />
-                                          <span>Mesas</span>
-                                       </button>
+                                       {showTableMapButton && (
+                                          <button
+                                             onClick={() => { void handleBackToMap(); }}
+                                             className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase border-2 border-slate-200 bg-slate-50 text-slate-700 hover:bg-white hover:border-slate-300 shadow-sm hover:shadow-md transition-all active:scale-95"
+                                          >
+                                             <Layout size={24} />
+                                             <span>Mesas</span>
+                                          </button>
+                                       )}
                                        <button
                                           onClick={handleDispatchCommand}
                                           className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase border-2 border-orange-200 bg-orange-50 text-orange-600 hover:bg-orange-100 hover:border-orange-300 shadow-sm hover:shadow-md transition-all active:scale-95"

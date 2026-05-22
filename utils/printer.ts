@@ -999,16 +999,15 @@ export const printPrecuenta = async (
     const silentHtml = receiptHtml.replace(/<script>[\s\S]*?window\.onload[\s\S]*?<\/script>/, '');
     let printedSilently = false;
 
-    if (!shouldSuppressBrowserPrintFallback()) {
-        printedSilently = await PrintRouterService.routeAndPrintHtml({
-            config,
-            html: silentHtml,
-            role: 'TICKET',
-            jobType: 'TICKET',
-            referenceId: `PRECUENTA-${Date.now()}`,
-            copies: 1,
-        });
-    }
+    printedSilently = await PrintRouterService.routeAndPrintHtml({
+        config,
+        html: silentHtml,
+        role: 'TICKET',
+        terminalId: params.terminalId,
+        jobType: 'PRECUENTA',
+        referenceId: `PRECUENTA-${Date.now()}`,
+        copies: 1,
+    });
 
     if (printedSilently) return true;
 

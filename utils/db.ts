@@ -3,7 +3,7 @@ import {
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
   RoleDefinition, ParkedTicket, PurchaseOrder, PurchaseOrderItem, Supplier, Watchlist,
   NCFType, FiscalDocumentCode, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries,
-  Campaign, Coupon, ZReport, Reception, ProductStock, InventoryTracking, Reservation, InventoryCommitment, PaymentMethodDefinition, CartItem,
+  Campaign, Coupon, ZReport, XReport, Reception, ProductStock, InventoryTracking, Reservation, InventoryCommitment, PaymentMethodDefinition, CartItem,
   ProductPrice
 } from '../types';
 import {
@@ -170,6 +170,7 @@ const SEED_DATA = {
     { id: 'cpn_3', campaignId: 'camp_summer_2024', code: 'VIP-CLIENT', status: 'GENERATED', createdAt: new Date().toISOString() }
   ] as Coupon[],
   zReports: [] as ZReport[],
+  xReports: [] as XReport[],
   receptions: [] as Reception[],
   productStocks: RETAIL_PRODUCTS.map(p => ({
     id: `${p.id}_wh_central`,
