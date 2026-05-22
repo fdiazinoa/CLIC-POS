@@ -4102,15 +4102,82 @@ const AppContent: React.FC = () => {
     };
   }, [customers, transactions]);
 
-  const upsertFiscalTransaction = useCallback(async (nextTransaction: Transaction) => {
+  const upsertFiscalTransaction = useCallback(async (
+    nextTransaction: Transaction,
+    options?: { requeueOperationalSync?: boolean }
+  ) => {
+    const readStoredTransaction = async (collection: 'transactions' | 'transactionHistory') => {
+      try {
+        return await db.getDocument(collection, nextTransaction.id) as Transaction | null;
+      } catch (error) {
+        console.warn(`⚠️ Fiscal ${collection} read skipped:`, error);
+        return null;
+      }
+    };
+
+    const activeTransaction = await readStoredTransaction('transactions');
+    const historyTransaction = await readStoredTransaction('transactionHistory');
+    const preserveOperationalState = (
+      incoming: Transaction,
+      existing?: Transaction | null
+    ): Transaction => {
+      if (!existing) return incoming;
+
+      const existingStatus = existing.syncStatus;
+      const incomingStatus = incoming.syncStatus;
+      const shouldReplayCompleted = options?.requeueOperationalSync && existingStatus === 'COMPLETED';
+      const shouldPreserveInFlight =
+        !shouldReplayCompleted &&
+        (existingStatus === 'COMPLETED' || existingStatus === 'SYNCING') &&
+        (!incomingStatus || incomingStatus === 'PENDING' || incomingStatus === 'ERROR' || incomingStatus === 'SYNCING');
+
+      const merged: Transaction = {
+        ...incoming,
+        zReportId: incoming.zReportId || existing.zReportId,
+        zReportSequence: incoming.zReportSequence || existing.zReportSequence
+      };
+
+      if (shouldReplayCompleted) {
+        return {
+          ...merged,
+          syncStatus: 'PENDING',
+          syncError: undefined,
+          _forceSyncReplay: true,
+          syncRetryAfter: undefined
+        } as Transaction;
+      }
+
+      if (shouldPreserveInFlight) {
+        return {
+          ...merged,
+          syncStatus: existing.syncStatus,
+          syncError: existing.syncError,
+          _forceSyncReplay: (existing as any)._forceSyncReplay,
+          syncRetryAfter: (existing as any).syncRetryAfter
+        } as Transaction;
+      }
+
+      return merged;
+    };
+
+    const shouldWriteActive = Boolean(activeTransaction) || !historyTransaction;
+    const activeCandidate = preserveOperationalState(nextTransaction, activeTransaction || historyTransaction);
+    const historyCandidate = preserveOperationalState(nextTransaction, historyTransaction || activeTransaction);
+
     setTransactions(prev => {
       const exists = prev.some(tx => tx.id === nextTransaction.id);
-      if (exists) return prev.map(tx => tx.id === nextTransaction.id ? nextTransaction : tx);
-      return [nextTransaction, ...prev];
+      if (!shouldWriteActive) {
+        return exists ? prev.filter(tx => tx.id !== nextTransaction.id) : prev;
+      }
+      if (exists) return prev.map(tx => tx.id === nextTransaction.id ? activeCandidate : tx);
+      return [activeCandidate, ...prev];
     });
-    await db.saveDocument('transactions', nextTransaction);
+
+    if (shouldWriteActive) {
+      await db.saveDocument('transactions', activeCandidate);
+    }
     try {
-      await db.saveDocument('transactionHistory', nextTransaction);
+      await db.saveDocument('transactionHistory', historyCandidate);
     } catch (historyMirrorError) {
       console.warn('⚠️ Fiscal history mirror update skipped:', historyMirrorError);
     }
@@ -4374,7 +4441,9 @@ const AppContent: React.FC = () => {
         fiscalSyncedAt: result.success && !result.pending ? new Date().toISOString() : baseTransaction.fiscalSyncedAt
       };
 
-      await upsertFiscalTransaction(finalizedTransaction);
+      await upsertFiscalTransaction(finalizedTransaction, {
+        requeueOperationalSync: result.success && !result.pending
+      });
 
       if (result.pending && result.providerTransactionId) {
         window.setTimeout(() => {

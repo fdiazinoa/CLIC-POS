@@ -385,14 +385,18 @@ class BackgroundSyncManager {
                 // Attempt push
                 await pushFn(item);
 
-                // Mark as completed
-                item.syncStatus = 'COMPLETED';
-                item.syncError = undefined;
-                if (item._forceSyncReplay) {
-                    item._forceSyncReplay = false;
-                }
-                delete (item as any).syncRetryAfter;
-                await db.saveDocument(collectionName as any, item as any);
+                // Mark as completed on top of the latest local document so concurrent
+                // fiscal updates do not get overwritten by this worker's stale copy.
+                const latestItem = await db.getDocument(collectionName as any, item.id).catch(() => null) as T | null;
+                const completedItem = {
+                    ...(latestItem || item),
+                    syncStatus: 'COMPLETED' as SyncStatus,
+                    syncError: undefined,
+                    _forceSyncReplay: false,
+                    syncRetryAfter: undefined
+                } as T;
+                await db.saveDocument(collectionName as any, completedItem as any);
+                Object.assign(item, completedItem);
                 if (collectionName === 'transactions') {
                     const transaction = item as any;
                     console.log(
