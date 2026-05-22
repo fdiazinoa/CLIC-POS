@@ -1637,7 +1637,7 @@ const SmartTableNode = React.memo(({
                 top: model.table.posY,
                 width: model.table.width,
                 height: model.table.height,
-                transform: `rotate(${model.table.rotation || 0}deg)`,
+                rotate: Number(model.table.rotation || 0),
                 willChange: 'transform, opacity'
             }}
         >
