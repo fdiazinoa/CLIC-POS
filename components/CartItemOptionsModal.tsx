@@ -2,7 +2,7 @@
 import React, { useState, useMemo } from 'react';
 import {
   X, Trash2, Save, Minus, Plus, MessageSquare, Percent,
-  DollarSign, Tag, User, Package, ChevronRight
+  DollarSign, Tag, User, Package, ChevronRight, Undo2
 } from 'lucide-react';
 import { CartItem, BusinessConfig, User as UserType, RoleDefinition } from '../types';
 import { TerminalSnapshotSeller } from '../utils/terminalSnapshotSellers';
@@ -17,6 +17,9 @@ interface CartItemOptionsModalProps {
   onUpdate: (updatedItem: CartItem | null, cartIdToDelete?: string) => void;
   canApplyDiscount: boolean;
   canVoidItem: boolean;
+  isKdsDispatched?: boolean;
+  isKdsReturned?: boolean;
+  onReturnItem?: (item: CartItem) => void | Promise<void>;
 }
 
 const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
@@ -28,7 +31,10 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   onClose,
   onUpdate,
   canApplyDiscount,
-  canVoidItem
+  canVoidItem,
+  isKdsDispatched = false,
+  isKdsReturned = false,
+  onReturnItem
 }) => {
   const EPSILON = 0.01;
   const [quantity, setQuantity] = useState(item.quantity);
@@ -156,6 +162,12 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
     onClose();
   };
 
+  const handleReturnItem = async () => {
+    if (!onReturnItem || isKdsReturned) return;
+    await Promise.resolve(onReturnItem(item));
+    onClose();
+  };
+
   const themeClasses = {
     blue: 'bg-blue-600 hover:bg-blue-700',
     orange: 'bg-orange-600 hover:bg-orange-700',
@@ -203,7 +215,8 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
           <div className="bg-white p-4 rounded-[2rem] border border-gray-100 shadow-sm flex items-center justify-between">
             <button
               onClick={() => handleQuantityChange(-1)}
-              className="w-16 h-16 rounded-2xl bg-gray-50 hover:bg-gray-100 text-gray-400 flex items-center justify-center active:scale-90 transition-all"
+              disabled={isKdsDispatched}
+              className="w-16 h-16 rounded-2xl bg-gray-50 hover:bg-gray-100 text-gray-400 flex items-center justify-center active:scale-90 transition-all disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Minus size={28} strokeWidth={3} />
             </button>
@@ -215,7 +228,8 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
 
             <button
               onClick={() => handleQuantityChange(1)}
-              className={`w-16 h-16 rounded-2xl text-white shadow-lg shadow-blue-100 flex items-center justify-center active:scale-90 transition-all ${themeClasses}`}
+              disabled={isKdsDispatched}
+              className={`w-16 h-16 rounded-2xl text-white shadow-lg shadow-blue-100 flex items-center justify-center active:scale-90 transition-all disabled:cursor-not-allowed disabled:opacity-40 ${themeClasses}`}
             >
               <Plus size={28} strokeWidth={3} />
             </button>
@@ -321,15 +335,25 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
         {/* Footer Actions */}
         <div className="p-6 bg-white border-t border-gray-50 flex gap-3">
 
-          {/* DELETE BUTTON */}
-          <button
-            onClick={() => setIsDeleting(true)}
-            disabled={!canVoidItem}
-            className={`w-[25%] py-4 rounded-2xl font-black flex flex-col items-center justify-center gap-1 transition-all active:scale-95 ${canVoidItem ? 'bg-white border-2 border-red-50 text-red-500 hover:bg-red-50' : 'bg-gray-50 text-gray-300 opacity-50 cursor-not-allowed'}`}
-          >
-            <Trash2 size={24} />
-            <span className="text-[8px] uppercase tracking-tighter">Eliminar</span>
-          </button>
+          {isKdsDispatched ? (
+            <button
+              onClick={handleReturnItem}
+              disabled={isKdsReturned || !onReturnItem}
+              className="w-[25%] py-4 rounded-2xl font-black flex flex-col items-center justify-center gap-1 transition-all active:scale-95 border-2 border-amber-100 bg-amber-50 text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Undo2 size={24} />
+              <span className="text-[8px] uppercase tracking-tighter">{isKdsReturned ? 'Devuelto' : 'Devolver'}</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => setIsDeleting(true)}
+              disabled={!canVoidItem}
+              className={`w-[25%] py-4 rounded-2xl font-black flex flex-col items-center justify-center gap-1 transition-all active:scale-95 ${canVoidItem ? 'bg-white border-2 border-red-50 text-red-500 hover:bg-red-50' : 'bg-gray-50 text-gray-300 opacity-50 cursor-not-allowed'}`}
+            >
+              <Trash2 size={24} />
+              <span className="text-[8px] uppercase tracking-tighter">Eliminar</span>
+            </button>
+          )}
 
           {/* UPDATE BUTTON */}
           <button

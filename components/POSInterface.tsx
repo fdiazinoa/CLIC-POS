@@ -292,7 +292,25 @@ const buildKdsItemIds = (orderId: string, areaId: string, item: CartItem, index:
 
 const isKdsReturnedCartItem = (item?: Partial<CartItem> | null): boolean => {
    const status = String((item as any)?.kdsStatus || '').trim().toUpperCase();
-   return status === 'DEVUELTO' || Boolean((item as any)?.kdsReturnedAt);
+   const legacyStatus = String((item as any)?.estado_comanda || '').trim().toUpperCase();
+   return status === 'DEVUELTO' || legacyStatus === 'DEVUELTO' || Boolean((item as any)?.kdsReturnedAt);
+};
+
+const isKdsDispatchedCartItem = (item?: Partial<CartItem> | null): boolean => {
+   const status = String((item as any)?.kdsStatus || '').trim().toUpperCase();
+   const legacyStatus = String((item as any)?.estado_comanda || '').trim().toUpperCase();
+   return Boolean(
+      (item as any)?.dispatched
+      || status === 'ENVIADO'
+      || status === 'RETURN_PENDING'
+      || status === 'DEVUELTO'
+      || legacyStatus === 'ENVIADO'
+      || legacyStatus === 'DEVUELTO'
+      || (item as any)?.kdsOrderId
+      || (item as any)?.kdsAreaId
+      || ((item as any)?.kdsItemIds || []).length > 0
+      || (item as any)?.kdsReturnedAt
+   );
 };
 
 const buildKdsDispatchItems = (items: CartItem[], areaId?: string) => items.map((item, index) => ({
@@ -455,7 +473,10 @@ const buildCartDigest = (items: CartItem[] = []): string =>
             Number(item.price || 0),
             (item.modifiers || []).join('|'),
             item.orderNumber || '',
-            item.tableDisplayLabel || ''
+            item.tableDisplayLabel || '',
+            isKdsDispatchedCartItem(item) ? 'KDS' : '',
+            item.kdsStatus || '',
+            item.kdsReturnedAt || ''
          ].join(':')
       )
       .join('||');
@@ -2392,7 +2413,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       onUpdateCart(prev => {
          const currentExisting = !usesSerial
-            ? (prev || []).find(item => matchesCartLine(item) && !item.dispatched)
+            ? (prev || []).find(item => matchesCartLine(item) && !isKdsDispatchedCartItem(item))
             : undefined;
 
          if (currentExisting) {
@@ -3411,7 +3432,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (cartIdToDelete || updatedItem === null) {
          const targetCartId = cartIdToDelete || editingItem?.cartId;
          const originalItem = (cart || []).find(i => i.cartId === targetCartId);
-         if (originalItem?.dispatched) {
+         if (isKdsDispatchedCartItem(originalItem)) {
             alert(isKdsReturnedCartItem(originalItem)
                ? 'Este artículo ya fue devuelto en cocina y queda bloqueado para auditoría.'
                : 'Este artículo ya fue enviado al KDS. Usa Devolver para marcarlo en cocina; no se puede borrar directamente.'
@@ -3432,7 +3453,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // Update Check (Price Override / Discount)
          const originalItem = (cart || []).find(i => i.cartId === updatedItem.cartId);
 
-         if (originalItem?.dispatched) {
+         if (isKdsDispatchedCartItem(originalItem)) {
             const originalQty = Number(originalItem.quantity || 0);
             const nextQty = Number(updatedItem.quantity || 0);
             if (Math.abs(nextQty - originalQty) > 0.0001) {
@@ -4062,7 +4083,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const handleDispatchCommand = async () => {
       if (cart.length === 0) return;
 
-      const newItems = cart.filter(item => !item.dispatched);
+      const newItems = cart.filter(item => !isKdsDispatchedCartItem(item));
       if (newItems.length === 0) {
          alert("Todos los ítems ya han sido enviados.");
          return;
@@ -4250,6 +4271,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ...(item.restaurantConfig || {}),
                   production_area_id: dispatchMeta?.areaId || item.restaurantConfig?.production_area_id || undefined,
                },
+               estado_comanda: 'ENVIADO',
             } : item;
          });
          onUpdateCart(updatedCart);
@@ -4274,7 +4296,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const handleReturnDispatchedCartItem = async (item: CartItem) => {
       if (blockRecoveredUberOrderMutation('devolver el artículo enviado a cocina')) return;
-      if (!item.dispatched) {
+      if (!isKdsDispatchedCartItem(item)) {
          await updateCartItem(null, item.cartId);
          return;
       }
@@ -4336,6 +4358,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                price: 0,
                kdsOriginalPrice: cartItem.kdsOriginalPrice ?? cartItem.price,
                kdsStatus: 'DEVUELTO',
+               estado_comanda: 'DEVUELTO',
                kdsReturnedAt: returnedAt,
                voidedByKdsReturn: true,
                returnReason: 'Devuelto en cocina',
@@ -5479,7 +5502,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         const lineTaxSummary = getCartItemTaxSummary(item);
                         const isActiveCartItem = activeCartItemId === item.cartId;
                         const isReturnedToKds = isKdsReturnedCartItem(item);
-                        const isDispatchedToKds = Boolean(item.dispatched);
+                        const isDispatchedToKds = isKdsDispatchedCartItem(item);
                         const enteredTime = item.enteredAt
                            ? new Date(item.enteredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                            : '';
@@ -6163,7 +6186,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          )}
          {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
-         {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} salesUsers={salesUsers} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={!isKdsReturnedCartItem(editingItem)} canVoidItem={!editingItem.dispatched} />}
+         {editingItem && (
+            <CartItemOptionsModal
+               item={editingItem}
+               config={config}
+               users={users}
+               salesUsers={salesUsers}
+               roles={roles}
+               onClose={() => setEditingItem(null)}
+               onUpdate={updateCartItem}
+               canApplyDiscount={!isKdsReturnedCartItem(editingItem)}
+               canVoidItem={!isKdsDispatchedCartItem(editingItem)}
+               isKdsDispatched={isKdsDispatchedCartItem(editingItem)}
+               isKdsReturned={isKdsReturnedCartItem(editingItem)}
+               onReturnItem={handleReturnDispatchedCartItem}
+            />
+         )}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, selectedVariant, variantInfo) => { addToCart(p, 1, pr, m, undefined, selectedVariant, variantInfo); setSelectedProductForVariants(null); }} />}
          {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(w) => { addToCart(productForScale, w); setProductForScale(null); }} />}
          {
