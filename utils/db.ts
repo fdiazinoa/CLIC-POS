@@ -21,6 +21,9 @@ const INVENTORY_CLOSE_LOCK_MESSAGE = 'Acción denegada: El inventario a esta fec
 const getFiscalSequencePadding = (_type: FiscalDocumentCode): number => 8;
 // Fiscal allocations already belong to one terminal; reserving local batches creates visible NCF gaps if buffers are reset by sync.
 const FISCAL_ISSUE_BATCH_SIZE = 1;
+const SETUP_WIZARD_COMPLETED_STORAGE_KEY = 'clic_pos_setup_wizard_completed';
+const ALLOW_FULL_DEMO_SEED_STORAGE_KEY = 'clic_pos_allow_demo_seed';
+const FIRST_RUN_BOOTSTRAP_COLLECTIONS = new Set(['config', 'users', 'roles']);
 
 const getSnapshotLockDate = (snapshot: any): number => {
   const lockRef = snapshot?.lockDate || snapshot?.cutoffDate || snapshot?.closedAt || snapshot?.createdAt;
@@ -624,6 +627,17 @@ export const db = {
       return !!value;
     };
 
+    const shouldSeedFullDemoData = () => {
+      try {
+        return (
+          window.localStorage.getItem(SETUP_WIZARD_COMPLETED_STORAGE_KEY) === '1' ||
+          window.localStorage.getItem(ALLOW_FULL_DEMO_SEED_STORAGE_KEY) === '1'
+        );
+      } catch (error) {
+        return false;
+      }
+    };
+
     const _initRunner = async () => {
       console.log('🏁 _initRunner started');
       console.log('🔌 Connecting to DB Adapter...');
@@ -714,8 +728,10 @@ export const db = {
         // CRITICAL FIX: Only seed collections on first run
         // This prevents re-seeding demo data and overwriting user data
         if (isFirstRun) {
-          console.log('🌱 First run detected - seeding initial data...');
+          const allowFullDemoSeed = shouldSeedFullDemoData();
+          console.log(`🌱 First run detected - seeding ${allowFullDemoSeed ? 'full demo' : 'core bootstrap'} data...`);
           for (const [key, value] of Object.entries(SEED_DATA)) {
+            if (!allowFullDemoSeed && !FIRST_RUN_BOOTSTRAP_COLLECTIONS.has(key)) continue;
             if (!shouldCheckSeedForCollection(key, value)) continue;
             try {
               const existingCollection = await withTimeout(
@@ -768,8 +784,18 @@ export const db = {
 
       // Only return SEED_DATA on first run for master terminals without config
       if (!hasConfig && !isSlave && !isInitialized) {
-        console.log('🌱 No config found on Master (First Run): Returning SEED_DATA');
-        return SEED_DATA;
+        const allowFullDemoSeed = shouldSeedFullDemoData();
+        console.log(`🌱 No config found on Master (First Run): Returning ${allowFullDemoSeed ? 'SEED_DATA' : 'bootstrap data'}`);
+        if (allowFullDemoSeed) {
+          return SEED_DATA;
+        }
+
+        return Object.keys(SEED_DATA).reduce((acc: any, key) => {
+          acc[key] = FIRST_RUN_BOOTSTRAP_COLLECTIONS.has(key)
+            ? (SEED_DATA as any)[key]
+            : getFallbackCollectionValue(key);
+          return acc;
+        }, {});
       }
 
       // Load all data to return consistent structure (Legacy support)
