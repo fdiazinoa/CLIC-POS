@@ -94,7 +94,7 @@ def upsert_direct_kds_order(conn, orden_id: str, payload: dict):
     items = [normalize_direct_kds_item(item, index) for index, item in enumerate(payload.get("items") or [])]
     now = payload.get("date") or datetime.now().isoformat()
     total = payload.get("total") or sum((item["quantity"] for item in items))
-    display_id = payload.get("displayId") or orden_id
+    display_id = payload.get("displayId") or payload.get("orderNumber") or orden_id
     user_name = payload.get("userName") or ""
     customer_name = payload.get("customerName") or "Cliente General"
     customer_id = payload.get("customerId") or ""

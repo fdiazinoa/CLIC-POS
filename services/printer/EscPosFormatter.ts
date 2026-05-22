@@ -351,6 +351,12 @@ export const buildEscPosTicketPayload = (
 
   pushPair(chunks, `Ticket: ${transaction.displayId || transaction.id}`, new Date(transaction.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), width);
   pushTextLines(chunks, splitLines(new Date(transaction.date).toLocaleDateString(), width));
+  if (config.receiptConfig?.showOrderNumber && transaction.orderNumber) {
+    pushTextLines(chunks, splitLines(`No. Orden: ${transaction.orderNumber}`, width));
+  }
+  if (transaction.tableDisplayLabel) {
+    pushTextLines(chunks, splitLines(`Mesa/Sala: ${transaction.tableDisplayLabel}`, width));
+  }
 
   const snapshot = transaction.customerSnapshot;
   const customerName = (snapshot?.name || transaction.customerName || 'Cliente Mostrador').trim() || 'Cliente Mostrador';

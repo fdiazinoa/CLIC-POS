@@ -78,6 +78,7 @@ interface TooltipState {
 }
 
 interface ParkedOrderSummary {
+    orderId: string;
     itemCount: number;
     calculatedTotal: number;
     finalTotal: number;
@@ -140,6 +141,27 @@ const formatElapsed = (minutes: number): string => {
     return `${h}h ${m}m`;
 };
 
+const summarizeParkedTicket = (ticket: ParkedTicket): ParkedOrderSummary | null => {
+    const items = Array.isArray(ticket.items) ? ticket.items : [];
+    const itemCount = items.reduce((acc, item) => acc + Math.max(0, Number(item.quantity || 0)), 0);
+    if (itemCount <= 0) return null;
+
+    const calculatedTotal = items.reduce(
+        (acc, item) => acc + (Number(item.price || 0) * Number(item.quantity || 0)),
+        0
+    );
+    const hasExplicitTotal = typeof ticket.total === 'number';
+    const finalTotal = hasExplicitTotal ? Number(ticket.total) : calculatedTotal;
+
+    return {
+        orderId: ticket.id,
+        itemCount,
+        calculatedTotal,
+        finalTotal,
+        hasExplicitTotal
+    };
+};
+
 const getServiceStage = (progress: number): { icon: string; label: string } => {
     if (progress < 0.34) return { icon: '🥗', label: 'Entradas' };
     if (progress < 0.67) return { icon: '🥩', label: 'Plato fuerte' };
@@ -175,9 +197,9 @@ const inferArchetype = (table: Table): TableArchetype => {
 };
 
 const getSmartStatus = (table: Table, elapsedMinutes: number, hasDigitizedItems: boolean): SmartStatus => {
-    if (!table.status || table.status === 'FREE') return 'FREE';
+    if (hasDigitizedItems) return 'OCCUPIED';
     if (table.status === 'RESERVED') return 'CHECK_REQUESTED';
-    if (!hasDigitizedItems) return 'FREE';
+    if (!table.status || table.status === 'FREE') return 'FREE';
 
     return 'OCCUPIED';
 };
@@ -412,39 +434,76 @@ const TableMap: React.FC<TableMapProps> = ({
         [safeTables]
     );
 
-    const occupiedForTools = useMemo(
-        () => allServiceTables.filter(t => t.status === 'OCCUPIED' || t.status === 'RESERVED'),
-        [allServiceTables]
-    );
-
-    const freeForTools = useMemo(
-        () => allServiceTables.filter(t => !t.status || t.status === 'FREE'),
-        [allServiceTables]
-    );
-
-    const occupiedLikeTables = useMemo(
-        () => serviceTables.filter(table => table.status === 'OCCUPIED' || table.status === 'RESERVED'),
-        [serviceTables]
-    );
-
     const parkedSummaryByOrderId = useMemo(() => {
         const map = new Map<string, ParkedOrderSummary>();
         (parkedTickets || []).forEach(ticket => {
-            const items = Array.isArray(ticket.items) ? ticket.items : [];
-            const itemCount = items.reduce((acc, item) => acc + Math.max(0, Number(item.quantity || 0)), 0);
-            const calculatedTotal = items.reduce((acc, item) => acc + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
-            const hasExplicitTotal = typeof ticket.total === 'number';
-            const finalTotal = hasExplicitTotal ? Number(ticket.total) : calculatedTotal;
-            map.set(ticket.id, { itemCount, calculatedTotal, finalTotal, hasExplicitTotal });
+            const summary = summarizeParkedTicket(ticket);
+            if (summary) map.set(String(ticket.id), summary);
         });
         return map;
     }, [parkedTickets]);
+
+    const parkedSummaryByTableId = useMemo(() => {
+        const map = new Map<string, ParkedOrderSummary>();
+        (parkedTickets || []).forEach(ticket => {
+            if (ticket.tableId === undefined || ticket.tableId === null) return;
+            const summary = summarizeParkedTicket(ticket);
+            if (summary) map.set(String(ticket.tableId), summary);
+        });
+        return map;
+    }, [parkedTickets]);
+
+    const getParkedSummaryForTable = useCallback(
+        (table: Table) =>
+            (table.currentOrderId ? parkedSummaryByOrderId.get(String(table.currentOrderId)) : undefined)
+            || parkedSummaryByTableId.get(String(table.id)),
+        [parkedSummaryByOrderId, parkedSummaryByTableId]
+    );
+
+    const isTableOccupiedFromTicket = useCallback(
+        (table: Table) => Boolean(getParkedSummaryForTable(table)?.itemCount),
+        [getParkedSummaryForTable]
+    );
+
+    const enrichTableWithParkedTicket = useCallback((table: Table): Table => {
+        const parkedSummary = getParkedSummaryForTable(table);
+        if (!parkedSummary) return table;
+
+        const persistedTotal = Number(table.currentOrderTotal || 0);
+        const total = parkedSummary.hasExplicitTotal
+            ? parkedSummary.finalTotal
+            : (persistedTotal > NO_ORDER_TOTAL_THRESHOLD ? persistedTotal : parkedSummary.calculatedTotal);
+
+        return {
+            ...table,
+            status: 'OCCUPIED',
+            currentOrderId: parkedSummary.orderId,
+            currentOrderTotal: total
+        } as Table;
+    }, [getParkedSummaryForTable]);
+
+    const occupiedForTools = useMemo(
+        () => allServiceTables
+            .map(enrichTableWithParkedTicket)
+            .filter(t => t.status === 'OCCUPIED' || t.status === 'RESERVED'),
+        [allServiceTables, enrichTableWithParkedTicket]
+    );
+
+    const freeForTools = useMemo(
+        () => allServiceTables.filter(t => !isTableOccupiedFromTicket(t) && (!t.status || t.status === 'FREE')),
+        [allServiceTables, isTableOccupiedFromTicket]
+    );
+
+    const occupiedLikeTables = useMemo(
+        () => serviceTables.filter(table => table.status === 'OCCUPIED' || table.status === 'RESERVED' || isTableOccupiedFromTicket(table)),
+        [serviceTables, isTableOccupiedFromTicket]
+    );
 
     const averageTicket = useMemo(() => {
         if (occupiedLikeTables.length === 0) return 0;
         const total = occupiedLikeTables.reduce((acc, table) => {
             const persistedTotal = Number(table.currentOrderTotal || 0);
-            const parkedSummary = table.currentOrderId ? parkedSummaryByOrderId.get(table.currentOrderId) : undefined;
+            const parkedSummary = getParkedSummaryForTable(table);
             const parkedTotal = parkedSummary
                 ? (parkedSummary.hasExplicitTotal
                     ? parkedSummary.finalTotal
@@ -454,7 +513,7 @@ const TableMap: React.FC<TableMapProps> = ({
             return acc + resolvedTotal;
         }, 0);
         return total / occupiedLikeTables.length;
-    }, [occupiedLikeTables, parkedSummaryByOrderId]);
+    }, [occupiedLikeTables, getParkedSummaryForTable]);
 
     const expectedStayMinutes = useMemo(() => {
         const elapsed = occupiedLikeTables
@@ -473,7 +532,7 @@ const TableMap: React.FC<TableMapProps> = ({
         return serviceTables.map((table, index) => {
             const elapsedMinutes = getElapsedMinutes(table.timeSeated);
             const persistedTotal = Number(table.currentOrderTotal || 0);
-            const parkedSummary = table.currentOrderId ? parkedSummaryByOrderId.get(table.currentOrderId) : undefined;
+            const parkedSummary = getParkedSummaryForTable(table);
             const parkedItems = parkedSummary?.itemCount || 0;
             const parkedTotal = parkedSummary
                 ? (parkedSummary.hasExplicitTotal
@@ -483,12 +542,13 @@ const TableMap: React.FC<TableMapProps> = ({
             const total = parkedTotal > NO_ORDER_TOTAL_THRESHOLD ? parkedTotal : persistedTotal;
             const hasDigitizedItems = total > NO_ORDER_TOTAL_THRESHOLD || parkedItems > 0;
             const smartStatus = getSmartStatus(table, elapsedMinutes, hasDigitizedItems);
+            const displayTable = hasDigitizedItems && parkedSummary ? enrichTableWithParkedTicket(table) : table;
             const isOccupiedLike = smartStatus !== 'FREE';
             const isLocked =
                 isOccupiedLike &&
                 Boolean(bloqueoMeseros) &&
-                Boolean(table.waiterId) &&
-                table.waiterId !== currentUser.id &&
+                Boolean(displayTable.waiterId) &&
+                displayTable.waiterId !== currentUser.id &&
                 !isAdmin;
 
             const progress = isOccupiedLike ? clamp(elapsedMinutes / Math.max(1, expectedStayMinutes), 0, 1) : 0;
@@ -496,10 +556,10 @@ const TableMap: React.FC<TableMapProps> = ({
             const needsRevenueGlow = isOccupiedLike && highRevenueThreshold > 0 && total >= highRevenueThreshold;
 
             const baseModel: SmartTableModel = {
-                table,
+                table: displayTable,
                 index,
                 smartStatus,
-                archetype: inferArchetype(table),
+                archetype: inferArchetype(displayTable),
                 isOccupiedLike,
                 isLocked,
                 elapsedMinutes,
@@ -517,7 +577,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 lastOrderHint: computeLastOrderHint(baseModel)
             };
         });
-    }, [serviceTables, bloqueoMeseros, currentUser.id, isAdmin, expectedStayMinutes, highRevenueThreshold, parkedSummaryByOrderId]);
+    }, [serviceTables, bloqueoMeseros, currentUser.id, isAdmin, expectedStayMinutes, highRevenueThreshold, getParkedSummaryForTable, enrichTableWithParkedTicket]);
 
     const stats = useMemo(() => {
         const total = smartTables.length;
@@ -968,25 +1028,28 @@ const TableMap: React.FC<TableMapProps> = ({
                 </div>
 
                 {!isControlCenterOpen && (
-                    <div className="absolute top-24 right-6 z-30 max-w-[min(76vw,720px)] rounded-[1.6rem] border border-white/10 bg-white/[0.08] backdrop-blur-xl px-3 py-2 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-2 overflow-auto no-scrollbar pointer-events-auto">
+                    <div className="absolute left-5 top-24 bottom-24 z-30 w-[min(10rem,38vw)] rounded-[1.6rem] border border-white/10 bg-white/[0.08] backdrop-blur-xl px-2.5 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex flex-col gap-2 overflow-y-auto overflow-x-hidden no-scrollbar pointer-events-auto">
                         {rooms.map(room => {
                                 const isActive = room.id === activeRoomId;
-                                const roomOccupied = safeTables.filter(table => table.roomId === room.id && table.status === 'OCCUPIED').length;
+                                const roomOccupied = safeTables.filter(table =>
+                                    table.roomId === room.id &&
+                                    (table.status === 'OCCUPIED' || table.status === 'RESERVED' || isTableOccupiedFromTicket(table))
+                                ).length;
 
                                 return (
                                     <button
                                         key={room.id}
                                         onClick={() => setActiveRoomId(room.id)}
-                                        className={`shrink-0 px-5 py-2 rounded-full border transition-all duration-200 text-sm font-bold flex items-center gap-2 ${
+                                        className={`w-full px-3 py-2.5 rounded-2xl border transition-all duration-200 text-sm font-bold flex items-center gap-2 text-left ${
                                             isActive
                                                 ? 'border-sky-300/60 bg-sky-400/20 text-sky-100 shadow-[0_0_24px_rgba(56,189,248,0.28)]'
                                                 : 'border-white/10 bg-white/[0.04] text-slate-300 hover:text-white hover:bg-white/[0.09]'
                                         }`}
                                     >
-                                        <LayoutGrid size={14} />
-                                        {room.name || room.nombre}
+                                        <LayoutGrid size={14} className="shrink-0" />
+                                        <span className="min-w-0 flex-1 truncate">{room.name || room.nombre}</span>
                                         {roomOccupied > 0 && (
-                                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/70 text-white">{roomOccupied}</span>
+                                            <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-rose-500/70 text-white">{roomOccupied}</span>
                                         )}
                                     </button>
                                 );

@@ -309,6 +309,8 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                     <div class="meta-row" style="font-weight: bold;">Ticket: ${transaction.displayId || transaction.id}</div>
                     <div class="meta-row">${dateStr} ${timeStr}</div>
                 </div>
+                ${receiptConfig?.showOrderNumber && transaction.orderNumber ? `<div class="meta-row" style="font-weight: bold; margin-top: 3px;">No. Orden: ${transaction.orderNumber}</div>` : ''}
+                ${transaction.tableDisplayLabel ? `<div class="meta-row" style="font-weight: bold;">Mesa/Sala: ${transaction.tableDisplayLabel}</div>` : ''}
             </div>
 
             <div class="divider"></div>
@@ -856,6 +858,8 @@ export const printPrecuenta = async (
         table?: Table | null;
         customerName?: string;
         terminalId?: string;
+        orderNumber?: string;
+        tableDisplayLabel?: string;
     }
 ): Promise<boolean> => {
     const { companyInfo, currencySymbol } = config;
@@ -918,7 +922,8 @@ export const printPrecuenta = async (
             <div class="divider"></div>
 
             <div class="meta-row">
-                ${params.table ? `<div><strong>Mesa:</strong> ${params.table.name || params.table.nombre}</div>` : ''}
+                ${params.table ? `<div><strong>Mesa:</strong> ${params.tableDisplayLabel || params.table.name || params.table.nombre}</div>` : ''}
+                ${params.orderNumber ? `<div><strong>No. Orden:</strong> ${params.orderNumber}</div>` : ''}
                 ${params.customerName ? `<div><strong>Cliente:</strong> ${params.customerName}</div>` : ''}
                 <div><strong>Fecha:</strong> ${dateStr} ${timeStr}</div>
             </div>
@@ -1025,6 +1030,7 @@ export const printComanda = async (
     }
 ): Promise<boolean> => {
     const { items, table, orderNumber, customerName, areaTitle, productionAreaId } = data;
+    const tableLabel = (table as any)?.tableDisplayLabel || (table as any)?.displayLabel || table?.name || table?.nombre;
     const dateStr = new Date().toLocaleDateString();
     const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -1065,7 +1071,7 @@ export const printComanda = async (
             </div>
 
             <div class="meta-row text-center">
-                ${table ? `<div style="font-size: 24px; font-weight: 900;">MESA: ${table.name || table.nombre}</div>` : ''}
+                ${table ? `<div style="font-size: 24px; font-weight: 900;">MESA: ${tableLabel}</div>` : ''}
                 ${orderNumber ? `<div>ORDEN: #${orderNumber}</div>` : ''}
                 <div>${dateStr} ${timeStr}</div>
                 ${customerName ? `<div>Cliente: ${customerName}</div>` : ''}

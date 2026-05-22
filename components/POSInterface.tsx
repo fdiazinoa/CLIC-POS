@@ -106,7 +106,8 @@ export interface POSInterfaceProps {
    selectedCustomer: Customer | null;
    onSelectCustomer: (customer: Customer | null) => void;
    parkedTickets: ParkedTicket[];
-   onUpdateParkedTickets: (tickets: ParkedTicket[]) => void;
+   onUpdateParkedTickets: (tickets: ParkedTicket[]) => void | Promise<void>;
+   onTableOrderSaved?: (table: Table, ticket: ParkedTicket) => void | Promise<void>;
    onLogout: () => void;
    onOpenSettings: (initialView?: string, initialData?: any) => void;
    onOpenCustomers: () => void;
@@ -449,10 +450,67 @@ const buildCartDigest = (items: CartItem[] = []): string =>
             item.cartId || item.id || '',
             Number(item.quantity || 0),
             Number(item.price || 0),
-            (item.modifiers || []).join('|')
+            (item.modifiers || []).join('|'),
+            item.orderNumber || '',
+            item.tableDisplayLabel || ''
          ].join(':')
       )
       .join('||');
+
+const extractFirstNumberToken = (value?: unknown): string => {
+   const match = String(value || '').match(/\d+/);
+   return match ? match[0] : '';
+};
+
+const buildTableContextLabels = (table?: Partial<Table> | null, rooms: Room[] = []) => {
+   const tableName = String(table?.nombre || table?.name || '').trim();
+   if (!tableName) {
+      return {
+         tableLabel: '',
+         roomLabel: '',
+         compactLabel: ''
+      };
+   }
+
+   const room = table?.roomId
+      ? rooms.find(candidate => String(candidate.id) === String(table.roomId))
+      : undefined;
+   const roomLabel = String(room?.nombre || room?.name || '').trim();
+   const roomNumber = extractFirstNumberToken(roomLabel);
+   const tableNumber = extractFirstNumberToken(tableName);
+   const compactLabel = roomNumber && tableNumber
+      ? `${roomNumber}-${tableNumber}`
+      : roomLabel
+         ? `${roomLabel} - ${tableName}`
+         : tableName;
+
+   return {
+      tableLabel: tableName,
+      roomLabel,
+      compactLabel
+   };
+};
+
+const readCartOrderNumber = (items: CartItem[] = []): string | undefined =>
+   items
+      .map(item => String(item.orderNumber || '').trim())
+      .find(Boolean);
+
+const normalizeOrderNumberSettings = (settings: any) => {
+   const nextNumber = Math.max(1, Math.floor(Number(settings?.nextNumber || 1)));
+   const padding = Math.max(0, Math.min(10, Math.floor(Number(settings?.padding ?? 3))));
+   return {
+      enabled: Boolean(settings?.enabled),
+      nextNumber,
+      prefix: String(settings?.prefix || '').trim(),
+      padding,
+   };
+};
+
+const formatOrderNumber = (settings: ReturnType<typeof normalizeOrderNumberSettings>): string => {
+   const numeric = String(settings.nextNumber).padStart(settings.padding, '0');
+   return `${settings.prefix}${numeric}`;
+};
 
 interface ProductGridCardProps {
    product: Product;
@@ -704,6 +762,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onOpenInventoryTracking,
    onOpenAudit,
    onOpenTableMap,
+   onTableOrderSaved,
    onOpenAgenda,
    onTransactionComplete,
    onAddCustomer,
@@ -806,6 +865,58 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const activeTerminal = (config.terminals || []).find(t => t.id === activeTerminalId) || (config.terminals || [])[0];
    const activeTerminalConfig = activeTerminal?.config;
    const terminalId = activeTerminal?.id || 'T1';
+   const activeTableContext = useMemo(
+      () => buildTableContextLabels(activeTable, rooms),
+      [activeTable, rooms]
+   );
+   const reserveNextOrderNumber = useCallback((): string | undefined => {
+      const settings = normalizeOrderNumberSettings(activeTerminalConfig?.operational?.orderNumbers);
+      if (!settings.enabled || !activeTerminal?.id) return undefined;
+
+      const orderNumber = formatOrderNumber(settings);
+      const nextConfig: BusinessConfig = {
+         ...config,
+         terminals: (config.terminals || []).map((terminal) => {
+            if (terminal.id !== activeTerminal.id) return terminal;
+
+            const terminalConfig = terminal.config;
+            const operational = terminalConfig.operational;
+            const currentSettings = normalizeOrderNumberSettings(operational.orderNumbers || settings);
+
+            return {
+               ...terminal,
+               config: {
+                  ...terminalConfig,
+                  operational: {
+                     ...operational,
+                     orderNumbers: {
+                        ...(operational.orderNumbers || {}),
+                        enabled: true,
+                        prefix: settings.prefix,
+                        padding: settings.padding,
+                        nextNumber: Math.max(currentSettings.nextNumber, settings.nextNumber) + 1,
+                     },
+                  },
+               },
+            };
+         }),
+      };
+
+      onUpdateConfig(nextConfig);
+      return orderNumber;
+   }, [activeTerminal?.id, activeTerminalConfig, config, onUpdateConfig]);
+
+   const applyOrderContextToItems = useCallback((items: CartItem[], orderNumber?: string): CartItem[] => {
+      const tableDisplayLabel = activeTableContext.compactLabel || undefined;
+      const tableRoomLabel = activeTableContext.roomLabel || undefined;
+
+      return items.map(item => ({
+         ...item,
+         ...(orderNumber ? { orderNumber: item.orderNumber || orderNumber } : {}),
+         ...(tableDisplayLabel ? { tableDisplayLabel } : {}),
+         ...(tableRoomLabel ? { tableRoomLabel } : {}),
+      }));
+   }, [activeTableContext.compactLabel, activeTableContext.roomLabel]);
    const terminalDeliveryAlerts = activeTerminalConfig?.operational?.deliveryAlerts;
    const shouldShowUberToastAlerts = terminalDeliveryAlerts?.showUberEatsToast !== false;
    const shouldAutoOpenUberModal = Boolean(
@@ -1387,7 +1498,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const buildParkedTicketName = useCallback(() => {
       if (activeTable) {
-         return `Mesa: ${activeTable.nombre || activeTable.name}`;
+         return `Mesa: ${activeTableContext.compactLabel || activeTable.nombre || activeTable.name}`;
       }
 
       if (selectedCustomer?.name) {
@@ -1395,7 +1506,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       return `Ticket #${(Array.isArray(parkedTickets) ? parkedTickets : []).length + 1}`;
-   }, [activeTable, selectedCustomer, parkedTickets]);
+   }, [activeTable, activeTableContext.compactLabel, selectedCustomer, parkedTickets]);
 
    const closeParkAliasModal = useCallback(() => {
       setShowParkAliasModal(false);
@@ -3073,13 +3184,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const syncedTicket: ParkedTicket = {
          id: orderId,
-         name: existing?.name || `Mesa: ${activeTable.nombre || activeTable.name || orderId}`,
+         name: existing?.name || `Mesa: ${activeTableContext.compactLabel || activeTable.nombre || activeTable.name || orderId}`,
          alias: existing?.alias,
          items: [...cart],
          total: cartTotal,
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
-         timestamp: existing?.timestamp || new Date().toISOString()
+         timestamp: existing?.timestamp || new Date().toISOString(),
+         tableId: activeTable.id,
+         orderNumber: readCartOrderNumber(cart) || existing?.orderNumber,
+         tableDisplayLabel: activeTableContext.compactLabel || existing?.tableDisplayLabel,
+         tableRoomLabel: activeTableContext.roomLabel || existing?.tableRoomLabel,
       };
 
       const nextTickets = [...parkedTickets.filter(ticket => ticket.id !== orderId), syncedTicket];
@@ -3090,6 +3205,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       ticketAutoSyncTimeoutRef.current = window.setTimeout(() => {
          onUpdateParkedTickets(nextTickets);
+         void Promise.resolve(onTableOrderSaved?.(activeTable, syncedTicket));
          ticketAutoSyncTimeoutRef.current = null;
       }, 120);
 
@@ -3100,7 +3216,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
       };
    }, [
+      activeTable?.id,
       activeTable?.currentOrderId,
+      activeTableContext.compactLabel,
+      activeTableContext.roomLabel,
       activeTable?.nombre,
       activeTable?.name,
       cart,
@@ -3108,7 +3227,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       parkedTickets,
       selectedCustomer?.id,
       selectedCustomer?.name,
-      onUpdateParkedTickets
+      onUpdateParkedTickets,
+      onTableOrderSaved
    ]);
 
    const handleCreateReservation = async () => {
@@ -3667,7 +3787,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
                const refundDocumentTotal = normalizedRefundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-               const documentItems = isRefundOnly ? normalizedRefundItems : processedCart;
+               const rawDocumentItems = isRefundOnly ? normalizedRefundItems : processedCart;
+               const saleOrderNumber = !isRefundOnly
+                  ? (readCartOrderNumber(processedCart) || reserveNextOrderNumber())
+                  : undefined;
+               const documentItems = !isRefundOnly
+                  ? applyOrderContextToItems(rawDocumentItems, saleOrderNumber)
+                  : rawDocumentItems;
                const documentTotal = (isRefundOnly ? refundDocumentTotal : cartTotal) + (voluntaryTip || 0);
                const transactionSettlement = buildTransactionSettlementFields(paymentsForTransaction, documentTotal, baseCurrency.code);
 
@@ -3687,6 +3813,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   status: !isRefundOnly && creditAmount > 0 ? 'PENDING' : 'COMPLETED',
                   customerId: customerForCheckout?.id,
                   customerName: customerForCheckout?.name || activeRecoveredReservation?.customerName,
+                  orderNumber: saleOrderNumber,
+                  tableDisplayLabel: activeTableContext.compactLabel || undefined,
+                  tableRoomLabel: activeTableContext.roomLabel || undefined,
                   pendingBalance: creditAmount > 0 ? creditAmount : undefined,
                   dueDate: creditAmount > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined, // Default 30 days
                   ncf: finalNcf,
@@ -3900,6 +4029,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       const orderId = activeTable?.currentOrderId || `P-${Date.now()}`;
+      const orderNumber = readCartOrderNumber(cart) || reserveNextOrderNumber();
+      const displayOrderRef = orderNumber || activeTableContext.compactLabel || orderId;
 
       try {
          const configuredAreas = await db.get('productionAreas' as any).catch(() => []) as any;
@@ -3950,6 +4081,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const kdsTablePayload = activeTable ? {
             id: activeTable.id,
             name: activeTable.name || activeTable.nombre,
+            displayLabel: activeTableContext.compactLabel || null,
             roomId: activeTable.roomId || null,
             roomName: activeTableRoom?.name || activeTableRoom?.nombre || null,
             guests: activeTable.guests || activeTable.capacity || null,
@@ -3964,8 +4096,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (shouldPrint) {
                const printed = await printComanda(config, {
                   items: areaData.items,
-                  table: activeTable || undefined,
-                  orderNumber: orderId,
+                  table: activeTable
+                     ? ({ ...activeTable, tableDisplayLabel: activeTableContext.compactLabel } as any)
+                     : undefined,
+                  orderNumber,
                   customerName: selectedCustomer?.name,
                   areaTitle: areaData.title,
                   productionAreaId: areaId
@@ -3984,7 +4118,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                );
                const kdsPayload = {
                   orderId,
-                  displayId: orderId,
+                  displayId: displayOrderRef,
+                  orderNumber,
                   date: new Date().toISOString(),
                   terminalId: activeTerminalId,
                   userName: currentUser.name,
@@ -4019,7 +4154,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         items: kdsItems,
                         total: areaTotal,
                         status: 'OCCUPIED',
-                        displayId: orderId,
+                        displayId: displayOrderRef,
+                        orderNumber,
                         terminalId: activeTerminalId,
                         userName: currentUser.name,
                         customerName: selectedCustomer?.name || 'Cliente General',
@@ -4061,6 +4197,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             const dispatchMeta = dispatchMetaByCartId.get(key);
             return dispatchedCartIds.has(key) ? {
                ...item,
+               ...(dispatchMeta?.orderId ? { orderNumber: orderNumber || item.orderNumber } : {}),
+               ...(activeTableContext.compactLabel ? { tableDisplayLabel: activeTableContext.compactLabel } : {}),
+               ...(activeTableContext.roomLabel ? { tableRoomLabel: activeTableContext.roomLabel } : {}),
                dispatched: true,
                kdsStatus: 'ENVIADO',
                kdsOrderId: dispatchMeta?.orderId,
@@ -4218,7 +4357,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       if (tableToRelease.currentOrderId) {
          const remaining = parkedTickets.filter(p => p.id !== tableToRelease.currentOrderId);
-         onUpdateParkedTickets(remaining);
+         await Promise.resolve(onUpdateParkedTickets(remaining));
       }
 
       onUpdateCart([]);
@@ -4272,15 +4411,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          total: ticketTotal,
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
-         timestamp: existingParked?.timestamp || new Date().toISOString()
+         timestamp: existingParked?.timestamp || new Date().toISOString(),
+         tableId: activeTable?.id || existingParked?.tableId,
+         orderNumber: readCartOrderNumber(ticketItems) || existingParked?.orderNumber,
+         tableDisplayLabel: activeTableContext.compactLabel || existingParked?.tableDisplayLabel,
+         tableRoomLabel: activeTableContext.roomLabel || existingParked?.tableRoomLabel,
       };
 
       // Remove existing if updating same ID
       const updatedTickets = [...(Array.isArray(parkedTickets) ? parkedTickets : []).filter(p => p.id !== newParked.id), newParked];
-      onUpdateParkedTickets(updatedTickets);
+      await Promise.resolve(onUpdateParkedTickets(updatedTickets));
       closeParkAliasModal();
 
       if (activeTable) {
+         await Promise.resolve(onTableOrderSaved?.(activeTable, newParked));
          try {
             const total = ticketItems.reduce((sum, i) => sum + (i.price * i.quantity), 0);
 
@@ -4322,20 +4466,25 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const tableName = activeTable.nombre || activeTable.name || 'Mesa';
       const tableOrder: ParkedTicket = {
          id: parkedTicketId,
-         name: existingParked?.name || `Mesa: ${tableName}`,
+         name: existingParked?.name || `Mesa: ${activeTableContext.compactLabel || tableName}`,
          alias: existingParked?.alias,
          items: [...cart],
          total: cartTotal,
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
-         timestamp: existingParked?.timestamp || new Date().toISOString()
+         timestamp: existingParked?.timestamp || new Date().toISOString(),
+         tableId: activeTable.id,
+         orderNumber: readCartOrderNumber(cart) || existingParked?.orderNumber,
+         tableDisplayLabel: activeTableContext.compactLabel || existingParked?.tableDisplayLabel,
+         tableRoomLabel: activeTableContext.roomLabel || existingParked?.tableRoomLabel,
       };
 
       const updatedTickets = [
          ...(Array.isArray(parkedTickets) ? parkedTickets : []).filter(ticket => ticket.id !== tableOrder.id),
          tableOrder
       ];
-      onUpdateParkedTickets(updatedTickets);
+      await Promise.resolve(onUpdateParkedTickets(updatedTickets));
+      await Promise.resolve(onTableOrderSaved?.(activeTable, tableOrder));
 
       onUpdateCart([]);
       onSelectCustomer(null);
@@ -4383,21 +4532,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (onOpenTableMap) onOpenTableMap();
    };
 
-   const handleBackToMap = () => {
+   const handleBackToMap = async () => {
       if (blockRecoveredUberOrderMutation('volver al mapa de mesas')) return;
 
       setShowParkedList(false);
       closeParkAliasModal();
-      if (onOpenTableMap) onOpenTableMap();
 
-      window.setTimeout(() => {
-         if (!activeTable) return;
+      if (activeTable) {
          if (cart.length === 0) {
-            void releaseActiveEmptyTable({ silent: true });
-            return;
+            await releaseActiveEmptyTable({ silent: true });
+         } else {
+            await saveActiveTableOrderForMap();
          }
-         void saveActiveTableOrderForMap();
-      }, 0);
+      }
+
+      if (onOpenTableMap) onOpenTableMap();
    };
 
    const handleRestoreTicket = (parked: ParkedTicket) => {
@@ -4722,7 +4871,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
 
 
-               <div className="w-full md:flex-1 flex flex-wrap items-center gap-2 md:gap-4 md:min-w-0">
+               <div className="w-full md:flex-1 flex flex-wrap md:flex-nowrap items-center gap-2 md:gap-4 md:min-w-0">
                   <div className="relative shrink-0 ml-auto md:ml-0 order-1" ref={tariffSelectorRef}>
                      <button
                         type="button"
@@ -4730,7 +4879,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            if (!canChangeTariff) return;
                            setShowTariffSelector(!showTariffSelector);
                         }}
-                        className={`flex items-center justify-between gap-2 md:gap-3 min-w-[134px] sm:min-w-[156px] px-3 md:px-5 py-2.5 md:py-3 rounded-2xl border-2 transition-all ${showTariffSelector ? 'border-purple-500 bg-purple-50' : 'bg-purple-50/80 border-purple-100 md:bg-gray-100 md:border-transparent'} ${canChangeTariff ? 'hover:border-purple-300' : 'opacity-75 cursor-not-allowed'}`}
+                        className={`flex items-center justify-between gap-2 md:gap-3 min-w-[134px] sm:min-w-[156px] px-3 md:px-5 py-2.5 md:py-3 rounded-2xl border-2 transition-all ${showTariffSelector ? 'border-purple-500 bg-purple-50' : 'bg-purple-50/80 border-purple-100'} ${canChangeTariff ? 'hover:border-purple-300' : 'opacity-75 cursor-not-allowed'}`}
                         disabled={!canChangeTariff}
                         title={canChangeTariff ? 'Cambiar tarifa activa' : 'Tu rol no tiene permiso para cambiar la tarifa'}
                      >
@@ -4778,7 +4927,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      )}
                   </div>
 
-                  <div className="relative order-3 md:order-none w-full md:flex-1 group min-w-0 md:min-w-[300px]">
+                  <div className="relative order-3 md:order-none w-full md:flex-1 group min-w-0 md:min-w-[220px]">
                      <Search className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                      <input
                         ref={searchInputRef}
@@ -4893,11 +5042,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <h2 className="font-black text-gray-800 text-lg leading-tight">
                         {activeTable ? (
                            <div className="flex flex-col">
-                              {(() => {
-                                 const room = rooms?.find(r => r.id === activeTable.roomId);
-                                 return room ? <span className="text-[10px] text-gray-400 -mb-1 font-bold uppercase">{room.name || room.nombre}</span> : null;
-                              })()}
-                              <span>Mesa {activeTable.nombre || activeTable.name}</span>
+                              <span className="text-[10px] text-gray-400 -mb-1 font-bold uppercase">
+                                 {activeTableContext.roomLabel || 'Mesa Activa'}
+                              </span>
+                              <span>{activeTableContext.compactLabel || activeTable.nombre || activeTable.name}</span>
                            </div>
                         ) : 'Ticket Actual'}
                      </h2>
@@ -4960,51 +5108,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div >
 
             {/* DESKTOP: marca + mesa/comensales bajo el logo; retail: busqueda al centro; botones carrito/acciones alineados a la derecha (como APK 1.0.300) */}
-            <div className={`hidden md:flex px-5 pt-3 pb-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-4 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
+            <div className={`hidden md:flex px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
                <div className="flex w-full items-center justify-between gap-4">
-                  <div className="flex min-w-0 shrink-0 flex-col gap-2 self-start pt-1">
+                  <div className="flex min-w-0 shrink-0 items-center justify-start">
                      {renderTicketBrand(false)}
-                     {activeTable && (
-                        <div className="flex max-w-[min(100%,20rem)] flex-col items-start animate-in fade-in slide-in-from-top-2 duration-300">
-                           <span className="mb-1 text-[10px] font-black uppercase leading-none tracking-widest text-slate-400">Mesa Activa</span>
-                           <div className="flex items-center gap-2">
-                              <Layout size={18} className="text-blue-600" />
-                              <span className="text-2xl font-black tracking-tighter text-slate-900">
-                                 {activeTable.nombre || activeTable.name}
-                              </span>
-                           </div>
-
-                           <div className="mt-2 flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 shadow-sm transition-all hover:shadow-md">
-                              <button
-                                 onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
-                                 className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
-                                 title="Reducir comensales"
-                              >
-                                 <Minus size={10} strokeWidth={3} />
-                              </button>
-
-                              <div className="flex items-center gap-1 px-1">
-                                 <Users size={12} className="text-blue-500" />
-                                 <span className="min-w-[1rem] text-center text-xs font-black text-slate-700">{activeTable.guests || 1}</span>
-                              </div>
-
-                              <button
-                                 onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
-                                 className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-500"
-                                 title="Aumentar comensales"
-                              >
-                                 <Plus size={10} strokeWidth={3} />
-                              </button>
-                           </div>
-
-                           {shouldApplyServiceCharge && (
-                              <div className="mt-2.5 flex items-center gap-1 rounded-lg border border-blue-100/50 bg-blue-50 px-2 py-1 text-[9px] font-black uppercase tracking-tighter text-blue-600 animate-in fade-in slide-in-from-top-1">
-                                 <Percent size={10} className="text-blue-500" />
-                                 <span>Propina Sugerida {serviceCharge?.percentage}% Activa</span>
-                              </div>
-                           )}
-                        </div>
-                     )}
                   </div>
 
                   {/* RETAIL MODE SEARCH BAR */}
@@ -5109,14 +5216,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         onClick={() => setRightSidebarTab('CART')}
                         aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${cartQuantity} artículos` : ''}`}
                         title={`Carrito${cartQuantity > 0 ? ` (${cartQuantity})` : ''}`}
-                        className={`group relative flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
+                        className={`group relative flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
                            rightSidebarTab === 'CART'
                               ? 'border-red-200 bg-gradient-to-br from-red-50 via-rose-50 to-red-100 text-red-700 shadow-[0_14px_30px_rgba(248,113,113,0.18)]'
                               : 'border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:bg-red-50/70 hover:text-red-600'
                         }`}
                      >
                         <span
-                           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
+                           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition-all ${
                               rightSidebarTab === 'CART'
                                  ? 'border-red-200/80 bg-white/90 text-red-600 shadow-sm'
                                  : 'border-red-100 bg-red-50 text-red-500 group-hover:border-red-200 group-hover:bg-white group-hover:text-red-600'
@@ -5134,14 +5241,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         onClick={() => setRightSidebarTab('ACTIONS')}
                         aria-label="Abrir acciones rápidas"
                         title="Acciones"
-                        className={`group flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
+                        className={`group flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
                            rightSidebarTab === 'ACTIONS'
                               ? 'border-blue-200 bg-gradient-to-br from-blue-50 via-sky-50 to-blue-100 text-blue-700 shadow-[0_14px_30px_rgba(59,130,246,0.18)]'
                               : 'border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:bg-blue-50/70 hover:text-blue-600'
                         }`}
                      >
                         <span
-                           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
+                           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition-all ${
                               rightSidebarTab === 'ACTIONS'
                                  ? 'border-blue-200/80 bg-white/90 text-blue-600 shadow-sm'
                                  : 'border-blue-100 bg-blue-50 text-blue-500 group-hover:border-blue-200 group-hover:bg-white group-hover:text-blue-600'
@@ -5152,6 +5259,47 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </button>
                   </div>
                </div>
+
+               {activeTable && (
+                  <div className="flex w-full items-center justify-between gap-3 animate-in fade-in slide-in-from-top-1 duration-200">
+                     <div className="flex min-w-0 items-center gap-2">
+                        <Layout size={18} className="shrink-0 text-blue-600" />
+                        <span className="truncate text-xl font-black tracking-tight text-slate-900">
+                           {activeTableContext.compactLabel || activeTable.nombre || activeTable.name}
+                        </span>
+                     </div>
+
+                     <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 shadow-sm transition-all hover:shadow-md">
+                        <button
+                           onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
+                           className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                           title="Reducir comensales"
+                        >
+                           <Minus size={10} strokeWidth={3} />
+                        </button>
+
+                        <div className="flex items-center gap-1 px-1">
+                           <Users size={12} className="text-blue-500" />
+                           <span className="min-w-[1rem] text-center text-xs font-black text-slate-700">{activeTable.guests || 1}</span>
+                        </div>
+
+                        <button
+                           onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
+                           className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-500"
+                           title="Aumentar comensales"
+                        >
+                           <Plus size={10} strokeWidth={3} />
+                        </button>
+                     </div>
+                  </div>
+               )}
+
+               {activeTable && shouldApplyServiceCharge && (
+                  <div className="flex items-center gap-1 rounded-lg border border-blue-100/50 bg-blue-50 px-2 py-1 text-[9px] font-black uppercase tracking-tighter text-blue-600 animate-in fade-in slide-in-from-top-1">
+                     <Percent size={10} className="text-blue-500" />
+                     <span>Propina Sugerida {serviceCharge?.percentage}% Activa</span>
+                  </div>
+               )}
 
                {
                   selectedCustomer ? (
