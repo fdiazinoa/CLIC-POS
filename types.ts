@@ -914,6 +914,7 @@ export type RoundingRule = 'NONE' | 'ENDING_99' | 'CEILING' | 'ROUND_HALF_UP' | 
 
 export interface Modifier {
   id: string;
+  product_id?: string;
   name: string;
   price: number;
   price_delta?: number;

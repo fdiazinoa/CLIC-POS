@@ -186,6 +186,7 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
       group_id: group.id,
       group_name: group.name,
       modifier_id: modifier.id,
+      product_id: modifier.product_id,
       name: modifier.name,
       modifier_type: modifier.modifier_type || 'ADD',
       affects_price: modifier.affects_price !== false,

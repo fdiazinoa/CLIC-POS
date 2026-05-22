@@ -1105,6 +1105,11 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const restaurantComboGroups = resolvedRestaurantFormConfig.combo_groups || [];
   const restaurantFractionRule = resolvedRestaurantFormConfig.fraction_rule;
   const restaurantNotePresets = resolvedRestaurantFormConfig.note_presets || [];
+  const selectableRestaurantProducts = useMemo(() => (
+    (allProducts || [])
+      .filter(product => product.id !== formData.id && product.is_sellable !== false)
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+  ), [allProducts, formData.id]);
 
   const updateRestaurantProduct = (updates: Partial<Product>) => {
     setFormData(prev => normalizeRestaurantProductConfig({ ...prev, ...updates }));
@@ -1169,6 +1174,23 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
         modifiers: (group.modifiers || []).map(modifier => modifier.id === modifierId ? { ...modifier, ...updates } : modifier)
       } : group)
     });
+  };
+
+  const assignRestaurantModifierProduct = (groupId: string, modifierId: string, productId: string) => {
+    const selectedProduct = selectableRestaurantProducts.find(product => product.id === productId);
+    updateRestaurantModifier(groupId, modifierId, selectedProduct
+      ? {
+          product_id: selectedProduct.id,
+          name: selectedProduct.name,
+          price: Number(selectedProduct.price || 0),
+          price_delta: Number(selectedProduct.price || 0),
+          modifier_type: 'ADD',
+          affects_price: true,
+        }
+      : {
+          product_id: undefined,
+        }
+    );
   };
 
   const deleteRestaurantModifier = (groupId: string, modifierId: string) => {
@@ -2299,7 +2321,17 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
                     <div className="space-y-2">
                       {(group.modifiers || []).map(modifier => (
-                        <div key={modifier.id} className="grid grid-cols-1 md:grid-cols-[1fr_8rem_8rem_8rem_auto] gap-2 items-center rounded-xl bg-white p-3">
+                        <div key={modifier.id} className="grid grid-cols-1 md:grid-cols-[1.15fr_1fr_8rem_7rem_7rem_auto] gap-2 items-center rounded-xl bg-white p-3">
+                          <select
+                            value={modifier.product_id || ''}
+                            onChange={e => assignRestaurantModifierProduct(group.id, modifier.id, e.target.value)}
+                            className="rounded-lg bg-gray-50 px-3 py-2 text-sm font-bold outline-none"
+                          >
+                            <option value="">Opción manual</option>
+                            {selectableRestaurantProducts.map(product => (
+                              <option key={product.id} value={product.id}>{product.name}</option>
+                            ))}
+                          </select>
                           <input value={modifier.name} onChange={e => updateRestaurantModifier(group.id, modifier.id, { name: e.target.value })} className="rounded-lg bg-gray-50 px-3 py-2 text-sm font-bold outline-none" placeholder="Ej: Extra queso" />
                           <select value={modifier.modifier_type || 'ADD'} onChange={e => updateRestaurantModifier(group.id, modifier.id, { modifier_type: e.target.value, affects_price: e.target.value !== 'REMOVE' })} className="rounded-lg bg-gray-50 px-3 py-2 text-sm font-bold outline-none">
                             <option value="ADD">Extra</option>
@@ -2315,7 +2347,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                         </div>
                       ))}
                       <button onClick={() => addRestaurantModifier(group.id)} className="w-full rounded-xl border-2 border-dashed border-blue-100 py-3 text-xs font-black text-blue-600 hover:bg-blue-50">
-                        + Agregar opción
+                        + Agregar opción / artículo
                       </button>
                     </div>
                   </div>
@@ -2354,7 +2386,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                               }}
                               className="rounded-xl bg-white px-3 py-2 text-xs font-bold outline-none"
                             >
-                              <option value="">{item.name || 'Opción manual'}</option>
+                              <option value="">{item.name || 'Elegir artículo del combo'}</option>
                               {allProducts.filter(p => p.id !== formData.id).map(product => <option key={product.id} value={product.id}>{product.name}</option>)}
                             </select>
                             <input type="number" value={item.price_delta || 0} onChange={e => updateRestaurantComboItem(group.id, itemKey, { price_delta: Number(e.target.value || 0) })} className="rounded-xl bg-white px-3 py-2 text-xs font-bold outline-none" />
@@ -2362,7 +2394,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                           </div>
                         );
                       })}
-                      <button onClick={() => addRestaurantComboItem(group.id)} className="w-full rounded-xl border-2 border-dashed border-purple-200 py-2 text-xs font-black text-purple-600">+ Opción combo</button>
+                      {(group.items || []).length === 0 && (
+                        <p className="rounded-xl bg-white/70 p-3 text-xs font-bold text-purple-400">Agrega artículos para que el cajero pueda elegir componentes del combo.</p>
+                      )}
+                      <button onClick={() => addRestaurantComboItem(group.id)} className="w-full rounded-xl border-2 border-dashed border-purple-200 py-2 text-xs font-black text-purple-600">+ Artículo del combo</button>
                     </div>
                   ))}
                   {restaurantComboGroups.length === 0 && <p className="text-sm font-bold text-gray-400">Sin grupos de combo.</p>}
