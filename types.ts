@@ -1489,6 +1489,7 @@ export interface Table {
 export interface CartItem extends Product {
   quantity: number;
   cartId: string;
+  createdAt?: string;
   modifiers?: string[];
   restaurantConfig?: {
     modifierGroups?: Record<string, string[]>;

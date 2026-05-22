@@ -2383,6 +2383,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                ...existing,
                quantity: existing.quantity + quantity,
                appliedTaxIds: effectiveTaxIds,
+               createdAt: existing.createdAt || new Date().toISOString(),
                production_area_id: resolveProductionAreaId(existing) || productionAreaId || undefined,
             };
             return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
@@ -2393,6 +2394,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const newItem = {
             ...product,
             cartId: newCartId,
+            createdAt: new Date().toISOString(),
             quantity,
             price: finalPrice,
             modifiers,
