@@ -31,6 +31,7 @@ import {
 } from '../types';
 
 import { getInventorySnapshotAtDate, getLeadTimePerformance, getABCRanking, getHRPerformance } from './AnalyticsLogic';
+import { checkForPosApkUpdate, openPosApkDownloadUrl } from '../services/version/posApkUpdateService';
 
 const AgendaManager = React.lazy(() => import('./AgendaManager'));
 const SpacesManager = React.lazy(() => import('./SpacesManager'));
@@ -156,7 +157,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
   const [fiscalPurchaseOrders, setFiscalPurchaseOrders] = useState<PurchaseOrder[]>(props.purchaseOrders || []);
   const [fiscalReceptions, setFiscalReceptions] = useState<Reception[]>(props.receptions || []);
   const [fiscalSuppliers, setFiscalSuppliers] = useState<Supplier[]>(props.suppliers || []);
-  const usesPageScroll = currentView === 'HOME' || currentView === 'TERMINALS' || currentView === 'TAXES';
+  const [isCheckingApkUpdate, setIsCheckingApkUpdate] = useState(false);
+  const usesPageScroll = currentView === 'HOME' || currentView === 'TERMINALS' || currentView === 'TAXES' || currentView === 'PRODUCTION_AREAS';
 
   useEffect(() => {
     const previousBodyOverflow = document.body.style.overflow;
@@ -251,6 +253,40 @@ const Settings: React.FC<SettingsProps> = (props) => {
       alert('No se pudo completar la reparación de CxC. Revise consola e intente nuevamente.');
     } finally {
       setIsRepairingReceivables(false);
+    }
+  };
+
+  const handleManualApkUpdateCheck = async () => {
+    if (isCheckingApkUpdate) return;
+    setIsCheckingApkUpdate(true);
+    try {
+      const result = await checkForPosApkUpdate({
+        config: props.config,
+        timeoutMs: 5000,
+        force: true,
+      });
+
+      if (result?.hasUpdate) {
+        const confirmed = window.confirm(
+          `Nueva versión disponible.\n\n` +
+          `Versión actual: ${result.local.versionName || result.local.versionCode || 'desconocida'}\n` +
+          `Versión disponible: ${result.release.version_name}\n\n` +
+          `${result.release.changelog || 'Sin notas de cambios.'}\n\n` +
+          `¿Desea descargar el APK ahora?`
+        );
+        if (confirmed) {
+          await openPosApkDownloadUrl(result.release);
+        }
+        return;
+      }
+
+      const currentVersion = result?.local.versionName || result?.local.versionCode || 'instalada';
+      alert(`El POS está actualizado. Versión actual: ${currentVersion}.`);
+    } catch (error: any) {
+      console.info('[posApkUpdate] Consulta manual fallida:', error);
+      alert(`No se pudo consultar la actualización del APK. La operación del POS no se bloquea.\n\n${error?.message || 'Error de red'}`);
+    } finally {
+      setIsCheckingApkUpdate(false);
     }
   };
 
@@ -888,6 +924,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     locked={!hasPermission('SETTINGS_ACCESS') || isRepairingReceivables}
                   />
                   <SettingsCard icon={RefreshCw} label="Sincronización" description="Estado de Red y Réplicas" color="bg-indigo-600" onClick={() => setCurrentView('SYNC')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={Cloud} label={isCheckingApkUpdate ? "Buscando APK..." : "Actualizar APK"} description="Buscar y descargar release POS" color="bg-sky-700" onClick={handleManualApkUpdateCheck} locked={!hasPermission('SETTINGS_ACCESS') || isCheckingApkUpdate} />
                   <SettingsCard icon={ShieldAlert} label="Seguridad y Datos" description="Backups y Modo Kiosco" color="bg-red-600" onClick={() => setCurrentView('SECURITY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={History} label="Traza de Auditoría" description="Logs de Operaciones" color="bg-orange-500" onClick={() => setCurrentView('LOGS')} locked={!hasPermission('AUDIT_LOG_VIEW')} />
                   <SettingsCard icon={BarChart3} label="Informes y Analítica" description="BI, Snapshots y KPIs" color="bg-blue-700" onClick={() => setCurrentView('REPORTS')} locked={!hasPermission('REPORTS_VIEW_SALES')} />

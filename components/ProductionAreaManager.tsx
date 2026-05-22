@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Trash2, Save, Printer, Monitor, Layers, Server, AlertCircle, RefreshCw, CheckCircle2, XCircle, Search, PackageCheck, PackageX } from 'lucide-react';
-import { BusinessConfig, Product } from '../types';
+import { BusinessConfig, PrinterDevice, Product } from '../types';
 import { db } from '../utils/db';
 import { getKdsTerminalTargets, resolveKdsBaseUrl } from '../utils/kdsRouting';
 import { normalizeRestaurantProductConfig, resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
@@ -15,6 +15,7 @@ interface ProductionArea {
     kds_port?: string;
     kds_warning_minutes?: number | string;
     kds_critical_minutes?: number | string;
+    printer_id?: string;
     printer_ip?: string;
 }
 
@@ -34,6 +35,16 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
     const [testingKdsAreaId, setTestingKdsAreaId] = useState<string | null>(null);
     const [kdsTestResults, setKdsTestResults] = useState<Record<string, { ok: boolean; message: string; baseUrl?: string }>>({});
     const kdsTerminals = getKdsTerminalTargets(config, terminals);
+    const kitchenPrinters = useMemo(
+        () => (config.availablePrinters || [])
+            .filter((printer): printer is PrinterDevice => Boolean(printer && printer.id))
+            .filter(printer => printer.type === 'KITCHEN' || printer.type === 'TICKET'),
+        [config.availablePrinters]
+    );
+    const printerById = useMemo(
+        () => new Map((config.availablePrinters || []).map(printer => [printer.id, printer])),
+        [config.availablePrinters]
+    );
 
     useEffect(() => {
         fetchAreas();
@@ -155,6 +166,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                     Math.max(1, Math.floor(Number(area.kds_warning_minutes || 10))) + 1,
                     Math.floor(Number(area.kds_critical_minutes || 20))
                 ),
+                printer_id: area.printer_id?.trim() || undefined,
                 printer_ip: area.printer_ip?.trim() || undefined
             };
             const nextAreas = areas.some(existing => existing.id === normalizedArea.id)
@@ -280,7 +292,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
     if (loading) return <div className="p-8 text-center text-slate-500 font-bold animate-pulse">Cargando Centros de Producción...</div>;
 
     return (
-        <div className="p-4 md:p-6 max-w-[92rem] mx-auto animate-in fade-in duration-500">
+        <div className="p-4 pb-28 md:p-6 md:pb-28 max-w-[92rem] mx-auto animate-in fade-in duration-500">
             <div className="flex justify-between items-center mb-5">
                 <div>
                     <h2 className="text-2xl font-black text-slate-800">Centros de Producción</h2>
@@ -503,17 +515,32 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
 
                             {(area.modo_salida === 'PRINTER' || area.modo_salida === 'AMBOS') && (
                                 <div className="animate-in slide-in-from-left-2">
-                                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">IP de Impresora</label>
+                                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">Impresora de cocina</label>
                                     <div className="relative">
-                                        <input
-                                            type="text"
-                                            value={area.printer_ip || ''}
-                                            onChange={(e) => handleUpdateArea(area.id, { printer_ip: e.target.value })}
-                                            className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl px-4 py-3 text-sm font-black text-slate-700 focus:border-emerald-500 outline-none pl-10"
-                                            placeholder="Ej: 192.168.1.100"
-                                        />
+                                        <select
+                                            value={area.printer_id || ''}
+                                            onChange={(e) => handleUpdateArea(area.id, { printer_id: e.target.value || undefined })}
+                                            className="w-full appearance-none bg-slate-50 border-2 border-slate-100 rounded-xl px-4 py-3 text-sm font-black text-slate-700 focus:border-emerald-500 outline-none pl-10"
+                                        >
+                                            <option value="">Usar impresora KITCHEN por defecto de Hardware</option>
+                                            {kitchenPrinters.map(printer => (
+                                                <option key={printer.id} value={printer.id}>
+                                                    {printer.name} · {printer.type}{printer.address ? ` · ${printer.address}` : ''}
+                                                </option>
+                                            ))}
+                                        </select>
                                         <Server size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" />
                                     </div>
+                                    {area.printer_id && printerById.get(area.printer_id) && (
+                                        <p className="mt-2 text-[10px] font-bold text-emerald-600">
+                                            Se imprimirá en {printerById.get(area.printer_id)?.name}. La conexión se administra en Ajustes &gt; Hardware.
+                                        </p>
+                                    )}
+                                    {kitchenPrinters.length === 0 && (
+                                        <p className="mt-2 text-[11px] font-bold text-amber-600">
+                                            No hay impresoras de cocina configuradas en Hardware. Registra una impresora y asígnale uso Cocina / KDS.
+                                        </p>
+                                    )}
                                 </div>
                             )}
                         </div>

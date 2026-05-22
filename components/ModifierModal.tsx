@@ -233,39 +233,53 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
     setSelectedFractions(prev => ({ ...prev, [partIndex]: optionId }));
   };
 
-  const renderSelectionButton = (selected: boolean, label: string, meta: string | null, onClick: () => void) => (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex min-h-[4rem] items-center justify-between rounded-xl border p-3 text-left transition-all ${
-        selected
-          ? `border-current bg-gray-50 ${checkboxTheme.split(' ')[0]}`
-          : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-      }`}
-    >
-      <span className="flex items-center gap-3">
-        <span className={`flex h-5 w-5 items-center justify-center rounded border ${selected ? `${themeBtnClass} border-transparent text-white` : 'border-gray-300 bg-white'}`}>
-          {selected && <Check size={12} />}
-        </span>
-        <span className="font-bold text-gray-700">{label}</span>
-      </span>
-      {meta && <span className="text-xs font-black text-gray-500">{meta}</span>}
-    </button>
-  );
+  const selectionTextClass = {
+    blue: 'text-blue-700',
+    orange: 'text-orange-700',
+    gray: 'text-gray-900',
+  }[themeColor] || 'text-indigo-700';
 
-  const hasAdvancedConfiguration = modifierGroups.length > 0 || comboGroups.length > 0 || fractionOptions.length > 0 || notePresets.length > 0;
+  const selectedCardClass = {
+    blue: 'border-blue-300 bg-blue-50 shadow-blue-100',
+    orange: 'border-orange-300 bg-orange-50 shadow-orange-100',
+    gray: 'border-gray-400 bg-gray-50 shadow-gray-100',
+  }[themeColor] || 'border-indigo-300 bg-indigo-50 shadow-indigo-100';
 
-  const checkboxTheme = {
-    blue: 'text-blue-600 focus:ring-blue-500',
-    orange: 'text-orange-600 focus:ring-orange-500',
-    gray: 'text-gray-800 focus:ring-gray-500',
-  }[themeColor] || 'text-indigo-600';
+  const selectedBadgeClass = {
+    blue: 'bg-blue-600 text-white',
+    orange: 'bg-orange-600 text-white',
+    gray: 'bg-gray-900 text-white',
+  }[themeColor] || 'bg-indigo-600 text-white';
 
   const themeBtnClass = {
     blue: 'bg-blue-600 hover:bg-blue-700',
     orange: 'bg-orange-600 hover:bg-orange-700',
     gray: 'bg-gray-800 hover:bg-gray-900',
   }[themeColor] || 'bg-indigo-600 hover:bg-indigo-700';
+
+  const renderSelectionButton = (selected: boolean, label: string, meta: string | null, onClick: () => void) => (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex min-h-[4.5rem] items-center gap-3 rounded-2xl border-2 p-3 text-left shadow-sm transition-all active:scale-[0.98] ${
+        selected
+          ? `${selectedCardClass} ${selectionTextClass}`
+          : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50'
+      }`}
+    >
+      <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border-2 transition-all ${
+        selected ? `${selectedBadgeClass} border-transparent` : 'border-gray-200 bg-gray-50 text-transparent'
+      }`}>
+        <Check size={16} strokeWidth={3} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-base font-black leading-tight">{label}</span>
+        {meta && <span className="mt-1 block text-xs font-black uppercase tracking-wide text-gray-500">{meta}</span>}
+      </span>
+    </button>
+  );
+
+  const hasAdvancedConfiguration = modifierGroups.length > 0 || comboGroups.length > 0 || fractionOptions.length > 0 || notePresets.length > 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
@@ -320,14 +334,26 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
             </section>
           )}
 
-          {modifierGroups.map(group => (
+          {modifierGroups.map(group => {
+            const selectedCount = (selectedModifiersByGroup[group.id] || []).length;
+            const minSelect = group.required ? Math.max(1, Number(group.min_select || 1)) : Number(group.min_select || 0);
+            const maxSelect = group.selection_type === 'SINGLE' ? 1 : Number(group.max_select || 0);
+            const counterLabel = maxSelect > 0 ? `${selectedCount}/${maxSelect}` : `${selectedCount}`;
+            return (
             <section key={group.id}>
               <div className="mb-3 flex items-center justify-between gap-3">
-                <h3 className="text-xs font-black text-gray-500 uppercase tracking-widest">
-                  {group.name} {group.required && <span className="text-red-500">*</span>}
-                </h3>
-                <span className="text-[10px] font-black uppercase text-gray-400">
-                  {group.selection_type === 'SINGLE' ? 'Una opción' : 'Múltiple'}
+                <div>
+                  <h3 className="text-xs font-black text-gray-500 uppercase tracking-widest">
+                    {group.name} {group.required && <span className="text-red-500">*</span>}
+                  </h3>
+                  {minSelect > 0 && (
+                    <p className="mt-1 text-[11px] font-bold text-gray-400">Mínimo {minSelect}</p>
+                  )}
+                </div>
+                <span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase ${
+                  minSelect > 0 && selectedCount < minSelect ? 'bg-red-50 text-red-500' : 'bg-gray-100 text-gray-500'
+                }`}>
+                  {counterLabel}
                 </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -343,15 +369,28 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
                 })}
               </div>
             </section>
-          ))}
+          )})}
 
-          {comboGroups.map(group => (
+          {comboGroups.map(group => {
+            const selectedCount = (selectedCombosByGroup[group.id] || []).length;
+            const minSelect = group.required ? Math.max(1, Number(group.min_select || 1)) : Number(group.min_select || 0);
+            const maxSelect = Math.max(1, Number(group.max_select || 1));
+            return (
             <section key={group.id}>
               <div className="mb-3 flex items-center justify-between gap-3">
-                <h3 className="text-xs font-black text-gray-500 uppercase tracking-widest">
-                  {group.name} {group.required && <span className="text-red-500">*</span>}
-                </h3>
-                <span className="text-[10px] font-black uppercase text-gray-400">Combo</span>
+                <div>
+                  <h3 className="text-xs font-black text-gray-500 uppercase tracking-widest">
+                    {group.name} {group.required && <span className="text-red-500">*</span>}
+                  </h3>
+                  {minSelect > 0 && (
+                    <p className="mt-1 text-[11px] font-bold text-gray-400">Mínimo {minSelect}</p>
+                  )}
+                </div>
+                <span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase ${
+                  minSelect > 0 && selectedCount < minSelect ? 'bg-red-50 text-red-500' : 'bg-gray-100 text-gray-500'
+                }`}>
+                  {selectedCount}/{maxSelect}
+                </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {group.items.map(item => {
@@ -366,7 +405,7 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
                 })}
               </div>
             </section>
-          ))}
+          )})}
 
           <section>
             <div className="mb-3 flex items-center gap-2">

@@ -46,6 +46,7 @@ type CheckOptions = {
   endpointUrl?: string;
   timeoutMs?: number;
   localVersion?: PosApkLocalVersion;
+  force?: boolean;
 };
 
 const DEFAULT_POS_APK_LATEST_URL = 'https://cloud-admin-gamma.vercel.app/api/pos-apk/latest';
@@ -190,8 +191,8 @@ export const isRemotePosApkNewer = (
 );
 
 export const checkForPosApkUpdate = async (options: CheckOptions = {}): Promise<PosApkUpdateResult | null> => {
-  if (hasCheckedForUpdateThisBoot) return null;
-  hasCheckedForUpdateThisBoot = true;
+  if (hasCheckedForUpdateThisBoot && !options.force) return null;
+  if (!options.force) hasCheckedForUpdateThisBoot = true;
 
   const endpointUrl = options.endpointUrl || resolvePosApkLatestUrl(options.config);
   const local = options.localVersion || await readInstalledPosApkVersion();

@@ -351,7 +351,10 @@ export const buildEscPosTicketPayload = (
 
   pushPair(chunks, `Ticket: ${transaction.displayId || transaction.id}`, new Date(transaction.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), width);
   pushTextLines(chunks, splitLines(new Date(transaction.date).toLocaleDateString(), width));
-  if (config.receiptConfig?.showOrderNumber && transaction.orderNumber) {
+  const shouldPrintOrderNumber = Boolean(config.receiptConfig?.showOrderNumber && transaction.orderNumber);
+  const shouldPrintQr = Boolean(config.receiptConfig?.showQr && qrPayload);
+
+  if (shouldPrintOrderNumber && !shouldPrintQr) {
     pushTextLines(chunks, splitLines(`No. Orden: ${transaction.orderNumber}`, width));
   }
   if (transaction.tableDisplayLabel) {
@@ -489,7 +492,7 @@ export const buildEscPosTicketPayload = (
     .map(line => line.trim())
     .filter(Boolean);
 
-  if (config.receiptConfig?.showQr && qrPayload) {
+  if (shouldPrintQr) {
     chunks.push(align(0));
     if (transaction.ncfType) {
       pushTextLines(chunks, splitLines(comprobanteTypeLabels[transaction.ncfType] || transaction.ncfType, width));
@@ -499,8 +502,15 @@ export const buildEscPosTicketPayload = (
     }
     chunks.push(divider(width));
     chunks.push(align(1));
-    pushTextLines(chunks, splitLines('ESCANEA ESTE TICKET PARA DEVOLUCIONES Y CUPONES', width));
     pushQrCode(chunks, qrPayload);
+    if (shouldPrintOrderNumber) {
+      chunks.push(bold(true));
+      chunks.push(size(0x11));
+      pushTextLines(chunks, splitLines(`NO. ORDEN ${transaction.orderNumber}`, width));
+      chunks.push(size(0x00));
+      chunks.push(bold(false));
+    }
+    pushTextLines(chunks, splitLines('ESCANEA ESTE TICKET PARA DEVOLUCIONES Y CUPONES', width));
     chunks.push(align(0));
   }
 

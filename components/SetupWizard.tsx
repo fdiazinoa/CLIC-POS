@@ -2,12 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { 
   ArrowRight, ArrowLeft, Check, UploadCloud, FileSpreadsheet, 
   Map, DollarSign, Flag, Building2, Package, Percent, Wand2,
-  CheckCircle2, ChevronDown, AlertCircle
+  CheckCircle2, ChevronDown, AlertCircle, Monitor, ShoppingBag, ScanLine, Boxes
 } from 'lucide-react';
-import { BusinessConfig, CompanyInfo, CurrencyConfig, DocumentSeries, DocumentType, PaymentMethodDefinition, TaxDefinition, Tariff, TerminalConfig, Warehouse } from '../types';
+import { BusinessConfig, CompanyInfo, CurrencyConfig, DeviceRole, DocumentSeries, DocumentType, PaymentMethodDefinition, TaxDefinition, Tariff, TerminalConfig, Warehouse } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG, INITIAL_TAXES, INITIAL_TARIFFS } from '../constants';
 import { db } from '../utils/db';
 import { PRODUCT_SEED_PACKS, ProductSeedPackId, buildSeedProducts, getProductSeedPack } from '../utils/productSeedPacks';
+import { getDefaultRoleConfig } from '../utils/deviceRoleHelpers';
 
 interface SetupWizardProps {
   initialConfig: BusinessConfig;
@@ -131,6 +132,14 @@ const SUGGESTED_DOCUMENT_SERIES: DocumentSeries[] = [
   { id: 'PAYMENT_OUT', documentType: 'PAYMENT_OUT', name: 'Pago Realizado', description: 'Salida de pago.', prefix: 'PP', nextNumber: 1, padding: 6, icon: 'ArrowUp', color: 'red' },
 ];
 
+const DEVICE_ROLE_OPTIONS: Array<{ role: DeviceRole; label: string; description: string; icon: any }> = [
+  { role: DeviceRole.STANDARD_POS, label: 'POS estándar', description: 'Caja para ventas, cobros y operación diaria.', icon: ShoppingBag },
+  { role: DeviceRole.KITCHEN_DISPLAY, label: 'Pantalla cocina', description: 'KDS dedicado para visualizar y marcar comandas.', icon: Monitor },
+  { role: DeviceRole.SELF_CHECKOUT, label: 'SelfCheckout', description: 'Terminal de autoservicio para cliente final.', icon: ScanLine },
+  { role: DeviceRole.PRICE_CHECKER, label: 'Verificador precio', description: 'Consulta rápida de artículos por código.', icon: ScanLine },
+  { role: DeviceRole.HANDHELD_INVENTORY, label: 'Inventario móvil', description: 'Conteos, ajustes y operaciones de almacén.', icon: Boxes },
+];
+
 const makeId = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.round(Math.random() * 1000)}`;
 
@@ -173,6 +182,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
   const [terminalId, setTerminalId] = useState('t1');
   const [terminalName, setTerminalName] = useState('Caja 1');
   const [stationNumber, setStationNumber] = useState('1');
+  const [deviceRole, setDeviceRole] = useState<DeviceRole>(DeviceRole.STANDARD_POS);
   
   // Catalog Import State
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -205,6 +215,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
     setTerminalId(terminal?.id || 't1');
     setTerminalName(terminalConfig.terminalName || 'Caja 1');
     setStationNumber(terminalConfig.stationNumber ? String(terminalConfig.stationNumber) : '1');
+    setDeviceRole(terminalConfig.deviceRole?.role || DeviceRole.STANDARD_POS);
 
     const baseCurrency = (nextCurrencies || []).find((c) => c.isBase) || nextCurrencies[0];
     setDefaultCurrencyCode(baseCurrency?.code || '');
@@ -307,6 +318,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
       },
       documentSeries: normalizedSeries,
       documentAssignments,
+      deviceRole: getDefaultRoleConfig(deviceRole),
       operational: {
         ...DEFAULT_TERMINAL_CONFIG.operational,
         defaultTaxIds: primaryVat ? [primaryVat.id] : []
@@ -415,6 +427,13 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
   };
 
   const handleNext = async () => {
+    if (currentStep === 'TERMINAL' && deviceRole === DeviceRole.KITCHEN_DISPLAY) {
+      const finalConfig = await finalizeConfig();
+      setConfig(finalConfig);
+      setCurrentStep('READY');
+      return;
+    }
+
     if (currentStep === 'CATALOG') {
       const finalConfig = await finalizeConfig();
       setConfig(finalConfig);
@@ -651,8 +670,41 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
     <div className="space-y-6 animate-in slide-in-from-right-8 duration-500">
       <div className="text-center mb-8">
         <h2 className="text-2xl font-bold text-gray-800">Terminal Local</h2>
-        <p className="text-gray-500">Define el nombre y número de estación.</p>
+        <p className="text-gray-500">Define el tipo, nombre y número de estación.</p>
       </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {DEVICE_ROLE_OPTIONS.map(option => {
+          const Icon = option.icon;
+          const selected = deviceRole === option.role;
+          return (
+            <button
+              key={option.role}
+              type="button"
+              onClick={() => setDeviceRole(option.role)}
+              className={`rounded-2xl border-2 p-4 text-left transition-all ${
+                selected ? 'border-blue-500 bg-blue-50 shadow-lg shadow-blue-100' : 'border-gray-200 bg-white hover:border-gray-300'
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <div className={`rounded-xl p-2 ${selected ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>
+                  <Icon size={20} />
+                </div>
+                <div>
+                  <div className="font-black text-gray-800">{option.label}</div>
+                  <p className="mt-1 text-sm font-medium text-gray-500">{option.description}</p>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {deviceRole === DeviceRole.KITCHEN_DISPLAY && (
+        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm font-bold text-emerald-700">
+          Esta terminal quedará como pantalla de cocina y el wizard saltará las configuraciones de venta.
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div>
@@ -1332,6 +1384,10 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
         <div className="flex justify-between border-b border-gray-200 pb-2">
           <span className="text-gray-500 text-sm">Negocio</span>
           <span className="font-bold text-gray-800">{config.companyInfo.name || 'Sin nombre'}</span>
+        </div>
+        <div className="flex justify-between border-b border-gray-200 pb-2">
+          <span className="text-gray-500 text-sm">Terminal</span>
+          <span className="font-bold text-gray-800">{DEVICE_ROLE_OPTIONS.find(option => option.role === deviceRole)?.label || 'POS estándar'}</span>
         </div>
         <div className="flex justify-between border-b border-gray-200 pb-2">
           <span className="text-gray-500 text-sm">Moneda</span>
