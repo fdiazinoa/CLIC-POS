@@ -1807,6 +1807,39 @@ const AppContent: React.FC = () => {
     });
   };
 
+  const reconcileTablesWithParkedTickets = useCallback((sourceTables: Table[], tickets: ParkedTicket[] = []): Table[] => {
+    const hasItems = (ticket?: ParkedTicket | null) =>
+      Boolean(ticket && Array.isArray(ticket.items) && ticket.items.some(item => Number(item.quantity || 0) > 0));
+    const ticketTotal = (ticket: ParkedTicket) =>
+      typeof ticket.total === 'number'
+        ? Number(ticket.total || 0)
+        : (ticket.items || []).reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
+    const byOrderId = new Map<string, ParkedTicket>();
+    const byTableId = new Map<string, ParkedTicket>();
+
+    (tickets || []).forEach(ticket => {
+      if (!hasItems(ticket)) return;
+      byOrderId.set(String(ticket.id), ticket);
+      if (ticket.tableId !== undefined && ticket.tableId !== null) {
+        byTableId.set(String(ticket.tableId), ticket);
+      }
+    });
+
+    return (sourceTables || []).map(table => {
+      const linkedTicket = (table.currentOrderId ? byOrderId.get(String(table.currentOrderId)) : undefined)
+        || byTableId.get(String(table.id));
+      if (!linkedTicket) return table;
+
+      return {
+        ...table,
+        status: 'OCCUPIED',
+        currentOrderId: linkedTicket.id,
+        currentOrderTotal: ticketTotal(linkedTicket),
+        timeSeated: table.timeSeated || linkedTicket.timestamp
+      } as Table;
+    });
+  }, []);
+
   const fetchTables = async () => {
     try {
       const terminalId = getCurrentTerminal()?.id;
@@ -1821,14 +1854,14 @@ const AppContent: React.FC = () => {
 
         // Backward compatibility: some endpoints may return only Table[].
         if (Array.isArray(data)) {
-          setTables(data);
+          setTables(reconcileTablesWithParkedTickets(data, parkedTickets));
           return;
         }
 
         const nextTables = Array.isArray(data?.tables) ? data.tables : [];
         const nextRooms = Array.isArray(data?.rooms) ? data.rooms : [];
 
-        setTables(nextTables);
+        setTables(reconcileTablesWithParkedTickets(nextTables, parkedTickets));
 
         if (nextRooms.length > 0) {
           setRooms(nextRooms);
@@ -1848,7 +1881,7 @@ const AppContent: React.FC = () => {
         ]);
         const nextRooms = Array.isArray(localRooms) ? localRooms : [];
         const nextTables = Array.isArray(localTables) ? localTables : [];
-        setTables(nextTables);
+        setTables(reconcileTablesWithParkedTickets(nextTables, parkedTickets));
         if (nextRooms.length > 0) {
           setRooms(nextRooms);
           setActiveRoomId(prev =>
@@ -5521,23 +5554,63 @@ const AppContent: React.FC = () => {
                 parkedTickets={parkedTickets}
                 onTableClick={async (table) => {
                   console.log('Mesa seleccionada:', table.name);
-                  setActiveTable(table);
 
                   // Cargar ítems solo de ESTA mesa: órdenes abiertas viven en parkedTickets (no heredar carrito previo).
+                  let nextCart: CartItem[] = [];
+                  let selectedTable = table;
                   if (table.currentOrderId) {
-                    const parked = (parkedTickets || []).find(p => p.id === table.currentOrderId);
+                    let activeParkedTickets = parkedTickets || [];
+                    let parked = activeParkedTickets.find(p => p.id === table.currentOrderId)
+                      || activeParkedTickets.find(p => String(p.tableId) === String(table.id));
+                    if (!parked) {
+                      const persistedTickets = await db.get('parkedTickets') as ParkedTicket[] | null;
+                      if (Array.isArray(persistedTickets)) {
+                        activeParkedTickets = persistedTickets;
+                        setParkedTickets(persistedTickets);
+                        parked = activeParkedTickets.find(p => p.id === table.currentOrderId)
+                          || activeParkedTickets.find(p => String(p.tableId) === String(table.id));
+                      }
+                    }
                     const fromTx = (transactions || []).find(t => t.id === table.currentOrderId);
                     if (parked?.items?.length) {
-                      setCart(parked.items);
+                      selectedTable = {
+                        ...table,
+                        status: 'OCCUPIED',
+                        currentOrderId: parked.id,
+                        currentOrderTotal: typeof parked.total === 'number'
+                          ? parked.total
+                          : parked.items.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0)
+                      };
+                      nextCart = parked.items;
                     } else if (fromTx?.items?.length) {
-                      setCart(fromTx.items);
-                    } else {
-                      setCart([]);
+                      nextCart = fromTx.items;
                     }
-                  } else {
-                    setCart([]);
+                  } else if (table.id) {
+                    let activeParkedTickets = parkedTickets || [];
+                    let parked = activeParkedTickets.find(p => String(p.tableId) === String(table.id));
+                    if (!parked) {
+                      const persistedTickets = await db.get('parkedTickets') as ParkedTicket[] | null;
+                      if (Array.isArray(persistedTickets)) {
+                        activeParkedTickets = persistedTickets;
+                        setParkedTickets(persistedTickets);
+                        parked = activeParkedTickets.find(p => String(p.tableId) === String(table.id));
+                      }
+                    }
+                    if (parked?.items?.length) {
+                      selectedTable = {
+                        ...table,
+                        status: 'OCCUPIED',
+                        currentOrderId: parked.id,
+                        currentOrderTotal: typeof parked.total === 'number'
+                          ? parked.total
+                          : parked.items.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0)
+                      };
+                      nextCart = parked.items;
+                    }
                   }
 
+                  setCart(nextCart);
+                  setActiveTable(selectedTable);
                   setCurrentView('POS');
                 }}
                 onRefreshTables={fetchTables}
@@ -5675,6 +5748,37 @@ const AppContent: React.FC = () => {
               setViewData(null);
               setCurrentView('TABLE_MAP');
               fetchTables().catch((error) => console.error('Failed to refresh tables on TABLE_MAP view:', error));
+            }}
+            onTableOrderSaved={async (table, ticket) => {
+              const total = typeof ticket.total === 'number'
+                ? Number(ticket.total || 0)
+                : (ticket.items || []).reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
+              const updatedTable = {
+                ...table,
+                status: 'OCCUPIED',
+                currentOrderId: ticket.id,
+                currentOrderTotal: total,
+                timeSeated: table.timeSeated || ticket.timestamp
+              } as Table;
+
+              setTables(prev => {
+                const base = prev.some(t => t.id === updatedTable.id)
+                  ? prev.map(t => t.id === updatedTable.id ? updatedTable : t)
+                  : [...prev, updatedTable];
+                const reconciled = reconcileTablesWithParkedTickets(base, [ticket, ...(parkedTickets || [])]);
+                db.save('tables', reconciled).catch(error => console.error('Failed to persist table occupancy:', error));
+                return reconciled;
+              });
+
+              try {
+                await fetch(`/api/tables/${encodeURIComponent(String(table.id))}`, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(updatedTable)
+                });
+              } catch (error) {
+                console.warn('No se pudo persistir estado ocupado de mesa en API:', error);
+              }
             }}
             onOpenAgenda={() => setCurrentView('AGENDA')}
             onTransactionComplete={handleTransactionComplete}

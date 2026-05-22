@@ -106,7 +106,8 @@ export interface POSInterfaceProps {
    selectedCustomer: Customer | null;
    onSelectCustomer: (customer: Customer | null) => void;
    parkedTickets: ParkedTicket[];
-   onUpdateParkedTickets: (tickets: ParkedTicket[]) => void;
+   onUpdateParkedTickets: (tickets: ParkedTicket[]) => void | Promise<void>;
+   onTableOrderSaved?: (table: Table, ticket: ParkedTicket) => void | Promise<void>;
    onLogout: () => void;
    onOpenSettings: (initialView?: string, initialData?: any) => void;
    onOpenCustomers: () => void;
@@ -761,6 +762,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onOpenInventoryTracking,
    onOpenAudit,
    onOpenTableMap,
+   onTableOrderSaved,
    onOpenAgenda,
    onTransactionComplete,
    onAddCustomer,
@@ -3189,6 +3191,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
          timestamp: existing?.timestamp || new Date().toISOString(),
+         tableId: activeTable.id,
          orderNumber: readCartOrderNumber(cart) || existing?.orderNumber,
          tableDisplayLabel: activeTableContext.compactLabel || existing?.tableDisplayLabel,
          tableRoomLabel: activeTableContext.roomLabel || existing?.tableRoomLabel,
@@ -3202,6 +3205,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       ticketAutoSyncTimeoutRef.current = window.setTimeout(() => {
          onUpdateParkedTickets(nextTickets);
+         void Promise.resolve(onTableOrderSaved?.(activeTable, syncedTicket));
          ticketAutoSyncTimeoutRef.current = null;
       }, 120);
 
@@ -3212,6 +3216,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
       };
    }, [
+      activeTable?.id,
       activeTable?.currentOrderId,
       activeTableContext.compactLabel,
       activeTableContext.roomLabel,
@@ -3222,7 +3227,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       parkedTickets,
       selectedCustomer?.id,
       selectedCustomer?.name,
-      onUpdateParkedTickets
+      onUpdateParkedTickets,
+      onTableOrderSaved
    ]);
 
    const handleCreateReservation = async () => {
@@ -4351,7 +4357,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       if (tableToRelease.currentOrderId) {
          const remaining = parkedTickets.filter(p => p.id !== tableToRelease.currentOrderId);
-         onUpdateParkedTickets(remaining);
+         await Promise.resolve(onUpdateParkedTickets(remaining));
       }
 
       onUpdateCart([]);
@@ -4406,6 +4412,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
          timestamp: existingParked?.timestamp || new Date().toISOString(),
+         tableId: activeTable?.id || existingParked?.tableId,
          orderNumber: readCartOrderNumber(ticketItems) || existingParked?.orderNumber,
          tableDisplayLabel: activeTableContext.compactLabel || existingParked?.tableDisplayLabel,
          tableRoomLabel: activeTableContext.roomLabel || existingParked?.tableRoomLabel,
@@ -4413,10 +4420,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // Remove existing if updating same ID
       const updatedTickets = [...(Array.isArray(parkedTickets) ? parkedTickets : []).filter(p => p.id !== newParked.id), newParked];
-      onUpdateParkedTickets(updatedTickets);
+      await Promise.resolve(onUpdateParkedTickets(updatedTickets));
       closeParkAliasModal();
 
       if (activeTable) {
+         await Promise.resolve(onTableOrderSaved?.(activeTable, newParked));
          try {
             const total = ticketItems.reduce((sum, i) => sum + (i.price * i.quantity), 0);
 
@@ -4465,6 +4473,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
          timestamp: existingParked?.timestamp || new Date().toISOString(),
+         tableId: activeTable.id,
          orderNumber: readCartOrderNumber(cart) || existingParked?.orderNumber,
          tableDisplayLabel: activeTableContext.compactLabel || existingParked?.tableDisplayLabel,
          tableRoomLabel: activeTableContext.roomLabel || existingParked?.tableRoomLabel,
@@ -4474,7 +4483,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          ...(Array.isArray(parkedTickets) ? parkedTickets : []).filter(ticket => ticket.id !== tableOrder.id),
          tableOrder
       ];
-      onUpdateParkedTickets(updatedTickets);
+      await Promise.resolve(onUpdateParkedTickets(updatedTickets));
+      await Promise.resolve(onTableOrderSaved?.(activeTable, tableOrder));
 
       onUpdateCart([]);
       onSelectCustomer(null);
@@ -4522,21 +4532,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (onOpenTableMap) onOpenTableMap();
    };
 
-   const handleBackToMap = () => {
+   const handleBackToMap = async () => {
       if (blockRecoveredUberOrderMutation('volver al mapa de mesas')) return;
 
       setShowParkedList(false);
       closeParkAliasModal();
-      if (onOpenTableMap) onOpenTableMap();
 
-      window.setTimeout(() => {
-         if (!activeTable) return;
+      if (activeTable) {
          if (cart.length === 0) {
-            void releaseActiveEmptyTable({ silent: true });
-            return;
+            await releaseActiveEmptyTable({ silent: true });
+         } else {
+            await saveActiveTableOrderForMap();
          }
-         void saveActiveTableOrderForMap();
-      }, 0);
+      }
+
+      if (onOpenTableMap) onOpenTableMap();
    };
 
    const handleRestoreTicket = (parked: ParkedTicket) => {
