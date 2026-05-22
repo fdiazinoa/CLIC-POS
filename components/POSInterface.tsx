@@ -140,6 +140,8 @@ type ProductionAreaConfig = {
    kds_port?: string | number;
    kds_warning_minutes?: number | string;
    kds_critical_minutes?: number | string;
+   printer_id?: string;
+   printerId?: string;
    printer_ip?: string;
 };
 
@@ -782,6 +784,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const mobileCartButtonRef = useRef<HTMLButtonElement>(null);
    const desktopActionGridRef = useRef<HTMLDivElement>(null);
    const ticketAutoSyncTimeoutRef = useRef<number | null>(null);
+   const ticketAutoSyncFlushRef = useRef<(() => void) | null>(null);
+   const activeTableHydrationRef = useRef<{ key: string; missingTicket: boolean } | null>(null);
    const quickActionTouchTimerRef = useRef<number | null>(null);
    const quickActionTouchStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
    const lastTouchContextMenuAtRef = useRef(0);
@@ -859,6 +863,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (ticketAutoSyncTimeoutRef.current) {
          window.clearTimeout(ticketAutoSyncTimeoutRef.current);
          ticketAutoSyncTimeoutRef.current = null;
+      }
+      if (ticketAutoSyncFlushRef.current) {
+         ticketAutoSyncFlushRef.current();
+         ticketAutoSyncFlushRef.current = null;
       }
    }, []);
 
@@ -1160,34 +1168,62 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // --- SMART TABLE HYDRATION ---
    // Automatically load order when entering via Table Map
    useEffect(() => {
-      if (activeTable) {
-         if (activeTable.currentOrderId) {
-            console.log(`🤖 Smart Access: Hydrating table ${activeTable.nombre} (Order ${activeTable.currentOrderId})`);
-            const ticket = parkedTickets.find(t => t.id === activeTable.currentOrderId);
-            if (ticket) {
-               // 1. Load Cart
-               onUpdateCart(ticket.items || []);
-               // 2. Load Customer
-               if (ticket.customerId) {
-                  const customer = customers.find(c => c.id === ticket.customerId);
-                  if (customer) onSelectCustomer(customer);
-               } else {
-                  onSelectCustomer(null);
-               }
-               console.log(`✅ Loaded ${ticket.items.length} items from active table.`);
-            } else {
-               // Nunca dejar el carrito de la mesa anterior: si el ticket aún no está en memoria, vaciar hasta que llegue el sync.
-               console.warn(`⚠️ Ticket ${activeTable.currentOrderId} not found in parked tickets. Clearing cart to avoid inheriting another table.`);
-               onUpdateCart([]);
-               onSelectCustomer(null);
-            }
-         } else {
-            // Mesa sin orden activa: siempre carrito y cliente limpios (evita heredar la mesa previa).
+      if (!activeTable) {
+         activeTableHydrationRef.current = null;
+         return;
+      }
+
+      const orderId = String(activeTable.currentOrderId || '').trim();
+      const tableKey = `${activeTable.id || 'table'}:${orderId || 'empty'}`;
+      const previousHydration = activeTableHydrationRef.current;
+      const isNewTableContext = previousHydration?.key !== tableKey;
+
+      if (!orderId) {
+         if (isNewTableContext) {
             onUpdateCart([]);
             onSelectCustomer(null);
          }
+         activeTableHydrationRef.current = { key: tableKey, missingTicket: false };
+         return;
       }
-   }, [activeTable, parkedTickets]); // Re-run if table changes or tickets sync
+
+      const ticket = parkedTickets.find(t => t.id === orderId);
+      const shouldHydrate =
+         isNewTableContext ||
+         (previousHydration?.missingTicket && cart.length === 0);
+
+      if (!ticket) {
+         if (isNewTableContext) {
+            console.warn(`Ticket ${orderId} no encontrado para la mesa activa. Se limpia el carrito para evitar heredar otra mesa.`);
+            onUpdateCart([]);
+            onSelectCustomer(null);
+         }
+         activeTableHydrationRef.current = { key: tableKey, missingTicket: true };
+         return;
+      }
+
+      if (shouldHydrate) {
+         const ticketItems = ticket.items || [];
+         if (buildCartDigest(ticketItems) !== buildCartDigest(cart)) {
+            onUpdateCart(ticketItems);
+         }
+         if (ticket.customerId) {
+            const customer = customers.find(c => c.id === ticket.customerId);
+            if (customer) onSelectCustomer(customer);
+         } else {
+            onSelectCustomer(null);
+         }
+      }
+
+      activeTableHydrationRef.current = { key: tableKey, missingTicket: false };
+   }, [
+      activeTable?.id,
+      activeTable?.currentOrderId,
+      parkedTickets,
+      customers,
+      onUpdateCart,
+      onSelectCustomer
+   ]);
 
    const isMobile = useIsMobile();
    const tariffSelectorRef = useRef<HTMLDivElement>(null);
@@ -3203,16 +3239,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          window.clearTimeout(ticketAutoSyncTimeoutRef.current);
       }
 
-      ticketAutoSyncTimeoutRef.current = window.setTimeout(() => {
+      const flushTicketSync = () => {
          onUpdateParkedTickets(nextTickets);
          void Promise.resolve(onTableOrderSaved?.(activeTable, syncedTicket));
+         ticketAutoSyncFlushRef.current = null;
          ticketAutoSyncTimeoutRef.current = null;
-      }, 120);
+      };
+
+      ticketAutoSyncFlushRef.current = flushTicketSync;
+      ticketAutoSyncTimeoutRef.current = window.setTimeout(flushTicketSync, 120);
 
       return () => {
          if (ticketAutoSyncTimeoutRef.current) {
             window.clearTimeout(ticketAutoSyncTimeoutRef.current);
             ticketAutoSyncTimeoutRef.current = null;
+         }
+         if (ticketAutoSyncFlushRef.current === flushTicketSync) {
+            flushTicketSync();
          }
       };
    }, [
@@ -4102,7 +4145,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   orderNumber,
                   customerName: selectedCustomer?.name,
                   areaTitle: areaData.title,
-                  productionAreaId: areaId
+                  productionAreaId: areaId,
+                  printerId: areaData.area.printer_id || areaData.area.printerId
                });
                if (printed) printedCount += 1;
             }

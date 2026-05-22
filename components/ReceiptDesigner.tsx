@@ -241,7 +241,7 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                         <p className="text-[12px] font-black uppercase">Factura de Crédito Fiscal</p>
                         <p className="text-[11px] font-mono font-bold">NCF: B0100000001</p>
                         <p className="text-[11px] font-mono font-bold">Ticket No.: 000452</p>
-                        {localReceipt.showOrderNumber && (
+                        {localReceipt.showOrderNumber && !localReceipt.showQr && (
                            <p className="text-[11px] font-mono font-bold">No. Orden: 001</p>
                         )}
                      </div>
@@ -341,6 +341,9 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                      {localReceipt.showQr && (
                         <div className="flex flex-col items-center gap-1">
                            <QrCode size={48} className="text-slate-800" />
+                           {localReceipt.showOrderNumber && (
+                              <span className="text-center text-lg font-black leading-none">NO. ORDEN<br />001</span>
+                           )}
                            <span className="text-[8px] font-bold uppercase">e-Factura Validada</span>
                         </div>
                      )}

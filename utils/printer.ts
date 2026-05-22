@@ -288,6 +288,14 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                     margin: 10px auto;
                 }
                 #qrcode img { margin: 0 auto; }
+                .order-number-qr {
+                    text-align: center;
+                    font-size: 24px;
+                    line-height: 1.05;
+                    font-weight: 900;
+                    margin: 6px 0 4px;
+                    letter-spacing: 0;
+                }
             </style>
         </head>
         <body>
@@ -309,7 +317,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                     <div class="meta-row" style="font-weight: bold;">Ticket: ${transaction.displayId || transaction.id}</div>
                     <div class="meta-row">${dateStr} ${timeStr}</div>
                 </div>
-                ${receiptConfig?.showOrderNumber && transaction.orderNumber ? `<div class="meta-row" style="font-weight: bold; margin-top: 3px;">No. Orden: ${transaction.orderNumber}</div>` : ''}
+                ${receiptConfig?.showOrderNumber && transaction.orderNumber && !receiptConfig?.showQr ? `<div class="meta-row" style="font-weight: bold; margin-top: 3px;">No. Orden: ${transaction.orderNumber}</div>` : ''}
                 ${transaction.tableDisplayLabel ? `<div class="meta-row" style="font-weight: bold;">Mesa/Sala: ${transaction.tableDisplayLabel}</div>` : ''}
             </div>
 
@@ -527,6 +535,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 </div>
                 <div class="divider"></div>
                 <div id="qrcode"></div>
+                ${receiptConfig?.showOrderNumber && transaction.orderNumber ? `<div class="order-number-qr">NO. ORDEN<br/>${transaction.orderNumber}</div>` : ''}
                 <div style="font-weight: bold; font-size: 9px; margin-top: 5px;">ESCANEA ESTE TICKET PARA DEVOLUCIONES Y CUPONES</div>
                 ` : ''}
             </div>
@@ -1027,9 +1036,10 @@ export const printComanda = async (
         customerName?: string;
         areaTitle?: string;
         productionAreaId?: string;
+        printerId?: string;
     }
 ): Promise<boolean> => {
-    const { items, table, orderNumber, customerName, areaTitle, productionAreaId } = data;
+    const { items, table, orderNumber, customerName, areaTitle, productionAreaId, printerId } = data;
     const tableLabel = (table as any)?.tableDisplayLabel || (table as any)?.displayLabel || table?.name || table?.nombre;
     const dateStr = new Date().toLocaleDateString();
     const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1112,18 +1122,15 @@ export const printComanda = async (
     const silentHtml = receiptHtml.replace(/<script>[\s\S]*?window\.onload[\s\S]*?<\/script>/, '');
     let printedSilently = false;
 
-    // Use KITCHEN role for routing, or specific productionAreaId if we had a mapping
-    if (!shouldSuppressBrowserPrintFallback()) {
-        printedSilently = await PrintRouterService.routeAndPrintHtml({
-            config,
-            html: silentHtml,
-            role: 'KITCHEN',
-            jobType: 'TICKET',
-            referenceId: `COMANDA-${Date.now()}`,
-            copies: 1,
-            preferredPrinterId: productionAreaId // Use this if it maps to a printer
-        });
-    }
+    printedSilently = await PrintRouterService.routeAndPrintHtml({
+        config,
+        html: silentHtml,
+        role: 'KITCHEN',
+        jobType: 'TICKET',
+        referenceId: `COMANDA-${Date.now()}`,
+        copies: 1,
+        preferredPrinterId: printerId || productionAreaId
+    });
 
     if (printedSilently) return true;
 
