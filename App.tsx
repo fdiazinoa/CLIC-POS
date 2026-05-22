@@ -3566,11 +3566,16 @@ const AppContent: React.FC = () => {
       };
       const effectiveDeviceId = deviceId || localStorage.getItem('pos_device_id') || '';
       const seedMode = nextConfig.metadata?.seedMode;
+      const productSeedPackId = nextConfig.metadata?.productSeedPackId;
       if (seedMode === 'BLANK') {
         setCustomers([]);
-        setProducts([]);
         setTransactions([]);
         setProductStocks([]);
+        const starterProducts = await db.get('products') as Product[];
+        setProducts(Array.isArray(starterProducts) ? starterProducts : []);
+      } else if (productSeedPackId) {
+        const starterProducts = await db.get('products') as Product[];
+        setProducts(Array.isArray(starterProducts) ? starterProducts : []);
       }
 
       localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);

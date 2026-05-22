@@ -7,6 +7,7 @@ import {
 import { BusinessConfig, CompanyInfo, CurrencyConfig, DocumentSeries, DocumentType, PaymentMethodDefinition, TaxDefinition, Tariff, TerminalConfig, Warehouse } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG, INITIAL_TAXES, INITIAL_TARIFFS } from '../constants';
 import { db } from '../utils/db';
+import { PRODUCT_SEED_PACKS, ProductSeedPackId, buildSeedProducts, getProductSeedPack } from '../utils/productSeedPacks';
 
 interface SetupWizardProps {
   initialConfig: BusinessConfig;
@@ -157,7 +158,8 @@ const DETECTED_CSV_HEADERS = [
 
 const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) => {
   const [currentStep, setCurrentStep] = useState<WizardStep>('SEED');
-  const [seedMode, setSeedMode] = useState<'DEMO' | 'BLANK'>('DEMO');
+  const [seedMode, setSeedMode] = useState<'DEMO' | 'BLANK'>('BLANK');
+  const [productSeedPackId, setProductSeedPackId] = useState<ProductSeedPackId>('NONE');
   const [config, setConfig] = useState<BusinessConfig>(initialConfig);
   const [taxes, setTaxes] = useState<TaxDefinition[]>(initialConfig.taxes || []);
   const [tariffs, setTariffs] = useState<Tariff[]>(initialConfig.tariffs || []);
@@ -177,6 +179,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
   const [isMappingMode, setIsMappingMode] = useState(false);
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [isAutoMatching, setIsAutoMatching] = useState(false);
+  const selectedProductPack = getProductSeedPack(productSeedPackId);
 
   const hydrateFromConfig = (nextConfig: BusinessConfig, mode: 'DEMO' | 'BLANK') => {
     const terminal = (nextConfig.terminals || [])[0];
@@ -314,7 +317,8 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
       ...config,
       metadata: {
         ...(config.metadata || {}),
-        seedMode
+        seedMode,
+        productSeedPackId
       },
       currencySymbol: baseCurrency?.symbol || config.currencySymbol,
       taxRate: primaryVat?.rate ?? config.taxRate,
@@ -338,10 +342,19 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
   const finalizeConfig = async () => {
     const finalConfig = buildFinalConfig();
     const warehousesToPersist = finalConfig.terminals[0]?.config.inventoryScope?.warehouses || [];
+    const defaultTaxIds = finalConfig.terminals[0]?.config.operational?.defaultTaxIds || [];
+    const defaultTariffIdToPersist = finalConfig.terminals[0]?.config.pricing?.defaultTariffId || '';
+    const defaultWarehouseIdToPersist = finalConfig.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || '';
+    const starterProducts = buildSeedProducts(productSeedPackId, {
+      defaultTaxIds,
+      defaultTariffId: defaultTariffIdToPersist,
+      defaultWarehouseId: defaultWarehouseIdToPersist
+    });
+
     if (warehousesToPersist.length) {
       await db.save('warehouses', warehousesToPersist);
     }
-    if (seedMode === 'BLANK') {
+    if (seedMode === 'BLANK' || productSeedPackId !== 'NONE') {
       const collectionsToClear = [
         'products',
         'customers',
@@ -387,13 +400,15 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
       );
 
       await db.save('warehouses' as any, warehousesToPersist);
+      await db.save('products' as any, starterProducts);
       await db.save('paymentMethods' as any, finalConfig.paymentMethods || []);
       await db.save('internalSequences' as any, finalConfig.terminals[0]?.config.documentSeries || []);
       await db.saveDocument('config' as any, {
         id: '_db_initialized',
         timestamp: new Date().toISOString(),
         version: 1,
-        seedMode: 'BLANK'
+        seedMode,
+        productSeedPackId
       });
     }
     return finalConfig;
@@ -577,21 +592,10 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
     <div className="space-y-6 animate-in slide-in-from-right-8 duration-500">
       <div className="text-center mb-8">
         <h2 className="text-2xl font-bold text-gray-800">Base de Datos Inicial</h2>
-        <p className="text-gray-500">Elige cómo quieres iniciar el sistema local.</p>
+        <p className="text-gray-500">Inicia en blanco y, si quieres, carga solo artículos de arranque.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <button
-          onClick={() => setSeedMode('DEMO')}
-          className={`p-6 rounded-2xl border-2 text-left transition-all hover:-translate-y-1 hover:shadow-lg ${
-            seedMode === 'DEMO' ? 'border-blue-500 bg-blue-50/50' : 'border-gray-200 bg-white'
-          }`}
-        >
-          <div className="text-lg font-bold text-gray-800">Cargar Demo</div>
-          <p className="text-sm text-gray-500 mt-2">
-            Incluye datos de ejemplo para iniciar rápido y explorar el POS.
-          </p>
-        </button>
         <button
           onClick={() => setSeedMode('BLANK')}
           className={`p-6 rounded-2xl border-2 text-left transition-all hover:-translate-y-1 hover:shadow-lg ${
@@ -600,9 +604,45 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
         >
           <div className="text-lg font-bold text-gray-800">Base en Blanco</div>
           <p className="text-sm text-gray-500 mt-2">
-            Configura tu propia terminal, almacenes, tarifas, impuestos y series.
+            Configura terminal, almacenes, tarifas, impuestos y series sin ventas demo.
           </p>
         </button>
+        <button
+          onClick={() => setProductSeedPackId('NONE')}
+          className={`p-6 rounded-2xl border-2 text-left transition-all hover:-translate-y-1 hover:shadow-lg ${
+            productSeedPackId === 'NONE' ? 'border-green-500 bg-green-50/50' : 'border-gray-200 bg-white'
+          }`}
+        >
+          <div className="text-lg font-bold text-gray-800">Sin artículos</div>
+          <p className="text-sm text-gray-500 mt-2">
+            Deja el catálogo vacío para cargar tus productos manualmente o por importación.
+          </p>
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        <div>
+          <h3 className="text-sm font-black uppercase tracking-[0.18em] text-gray-500">Artículos por tipo de negocio</h3>
+          <p className="text-sm text-gray-500 mt-1">Estos paquetes solo crean artículos; no crean clientes, ventas, caja ni auditoría.</p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {PRODUCT_SEED_PACKS.map((pack) => (
+            <button
+              key={pack.id}
+              onClick={() => setProductSeedPackId(pack.id)}
+              className={`p-4 rounded-2xl border-2 text-left transition-all hover:-translate-y-0.5 hover:shadow-md ${
+                productSeedPackId === pack.id ? 'border-blue-500 bg-blue-50/60' : 'border-gray-200 bg-white'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-black text-gray-800">{pack.label}</span>
+                <span className="text-xs font-black text-gray-400">{pack.items.length} artículos</span>
+              </div>
+              <p className="text-sm text-gray-500 mt-1">{pack.description}</p>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -1296,6 +1336,12 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
         <div className="flex justify-between border-b border-gray-200 pb-2">
           <span className="text-gray-500 text-sm">Moneda</span>
           <span className="font-bold text-gray-800">{config.currencySymbol}</span>
+        </div>
+        <div className="flex justify-between border-b border-gray-200 pb-2">
+          <span className="text-gray-500 text-sm">Artículos</span>
+          <span className="font-bold text-gray-800">
+            {selectedProductPack ? `${selectedProductPack.label} (${selectedProductPack.items.length})` : 'Sin artículos'}
+          </span>
         </div>
         <div className="flex justify-between">
           <span className="text-gray-500 text-sm">Vertical</span>
