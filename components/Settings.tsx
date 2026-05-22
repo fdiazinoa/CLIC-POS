@@ -31,7 +31,13 @@ import {
 } from '../types';
 
 import { getInventorySnapshotAtDate, getLeadTimePerformance, getABCRanking, getHRPerformance } from './AnalyticsLogic';
-import { checkForPosApkUpdate, openPosApkDownloadUrl } from '../services/version/posApkUpdateService';
+import {
+  checkForPosApkUpdate,
+  openPosApkDownloadUrl,
+  openPosApkPortalUrl,
+  resolvePosApkLatestUrl,
+  resolvePosApkPortalUrl,
+} from '../services/version/posApkUpdateService';
 
 const AgendaManager = React.lazy(() => import('./AgendaManager'));
 const SpacesManager = React.lazy(() => import('./SpacesManager'));
@@ -284,7 +290,17 @@ const Settings: React.FC<SettingsProps> = (props) => {
       alert(`El POS está actualizado. Versión actual: ${currentVersion}.`);
     } catch (error: any) {
       console.info('[posApkUpdate] Consulta manual fallida:', error);
-      alert(`No se pudo consultar la actualización del APK. La operación del POS no se bloquea.\n\n${error?.message || 'Error de red'}`);
+      const endpointUrl = resolvePosApkLatestUrl(props.config);
+      const portalUrl = resolvePosApkPortalUrl(props.config);
+      const shouldOpenPortal = window.confirm(
+        `No se pudo consultar la actualización del APK.\n\n` +
+        `El POS sigue operando normal. Esto suele pasar cuando el endpoint de Cloud-Admin todavía no está publicado, no tiene CORS habilitado o no hay conexión.\n\n` +
+        `Endpoint consultado:\n${endpointUrl}\n\n` +
+        `¿Desea abrir la pantalla de APK POS para descarga manual?\n${portalUrl}`
+      );
+      if (shouldOpenPortal) {
+        await openPosApkPortalUrl(props.config);
+      }
     } finally {
       setIsCheckingApkUpdate(false);
     }
