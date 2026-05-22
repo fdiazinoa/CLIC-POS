@@ -71,6 +71,7 @@ import ActivationScreen from './components/ActivationScreen';
 import TerminalModeSelector from './components/TerminalModeSelector';
 import TerminalBindingScreen from './components/TerminalBindingScreen';
 import CustomerVisor from './components/CustomerVisor';
+import PosApkUpdateBanner from './components/PosApkUpdateBanner';
 import { visorSync } from './utils/visorSync';
 import { markPosInteractionActivity, setPosSaleActivity } from './utils/posSaleActivity';
 
@@ -151,6 +152,11 @@ import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
 import { resolveCustomerImageSrc } from './utils/entityImage';
 import { posCatalogDebugElapsedMs, posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugNow, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
 import { buildTerminalConfigRefreshRequest, type TerminalConfigSyncRequestDetail } from './utils/terminalConfigPushScopes';
+import {
+  checkForPosApkUpdate,
+  openPosApkDownloadUrl,
+  type PosApkUpdateAvailable
+} from './services/version/posApkUpdateService';
 import {
   canRetryFiscalTransaction,
   getEffectiveFiscalComplianceConfig,
@@ -736,6 +742,8 @@ const AppContent: React.FC = () => {
   const lockdownHandledRef = useRef(false);
   const [reconnectionStatus, setReconnectionStatus] = useState<'idle' | 'searching' | 'connected' | 'failed'>('idle');
   const [terminalConfigRestartNotice, setTerminalConfigRestartNotice] = useState<TerminalConfigRestartNotice | null>(() => readTerminalConfigRestartNotice());
+  const [posApkUpdate, setPosApkUpdate] = useState<PosApkUpdateAvailable | null>(null);
+  const posApkUpdateCheckStartedRef = useRef(false);
 
   // --- SECURITY BOOTSTRAP STATE ---
   const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
@@ -744,6 +752,26 @@ const AppContent: React.FC = () => {
   const inactivityTimerRef = useRef<number | null>(null);
 
   // Security bootstrap logic moved to loadData
+
+  useEffect(() => {
+    if (!isDataLoaded || posApkUpdateCheckStartedRef.current) return;
+    posApkUpdateCheckStartedRef.current = true;
+
+    let disposed = false;
+
+    void checkForPosApkUpdate({ config, timeoutMs: 3500 })
+      .then((result) => {
+        if (disposed || !result?.hasUpdate) return;
+        setPosApkUpdate(result);
+      })
+      .catch((error) => {
+        console.info('[posApkUpdate] Validación omitida sin bloquear operación:', error);
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [config, isDataLoaded]);
 
   useEffect(() => {
     if (!isNativeAndroidRuntime()) {
@@ -6928,12 +6956,23 @@ const AppContent: React.FC = () => {
   }
 
   const allowsViewportScroll = currentView === 'SETTINGS' || currentView === 'TERMINAL_PAIRING' || currentView === 'LOGIN';
+  const handleDownloadPosApkUpdate = () => {
+    if (!posApkUpdate) return;
+    void openPosApkDownloadUrl(posApkUpdate.release);
+  };
 
   return (
     <ErrorBoundary componentName="App Root">
       <>
         {renderReconnectionBanner()}
         {renderTerminalConfigRestartBanner()}
+        {posApkUpdate && (
+          <PosApkUpdateBanner
+            update={posApkUpdate}
+            onDownload={handleDownloadPosApkUpdate}
+            onDismiss={() => setPosApkUpdate(null)}
+          />
+        )}
         <div
           className={`fixed inset-0 w-full h-full bg-gray-50 flex flex-col font-sans select-none text-gray-900 ${allowsViewportScroll ? '' : 'overflow-hidden'}`}
           style={{
