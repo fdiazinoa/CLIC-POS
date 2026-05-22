@@ -235,9 +235,9 @@ server.get('/api/mesas', (req, res) => {
 
             return {
                 ...t,
-                status: linkedTicket ? 'OCCUPIED' : t.status,
+                status: linkedTicket ? 'OCCUPIED' : (t.status === 'RESERVED' ? 'RESERVED' : 'FREE'),
                 currentOrderId: linkedTicket ? linkedTicket.id : (t.currentOrderId || null),
-                currentOrderTotal: linkedTicket ? linkedTotal : t.currentOrderTotal,
+                currentOrderTotal: linkedTicket ? linkedTotal : 0,
                 data: t.data ? JSON.parse(t.data) : {}
             };
         });
@@ -358,10 +358,10 @@ server.get('/api/tables', (req, res) => {
             const associatedOrder = (t.currentOrderId ? parkedTicketsIndex.byOrderId.get(String(t.currentOrderId)) : undefined)
                 || parkedTicketsIndex.byTableId.get(String(t.id));
 
-            const dynamicStatus = associatedOrder ? 'OCCUPIED' : (t.status || 'FREE');
+            const dynamicStatus = associatedOrder ? 'OCCUPIED' : (t.status === 'RESERVED' ? 'RESERVED' : 'FREE');
 
             // Calculate total from order items if available, or fallback to stored total
-            const total = associatedOrder ? getParkedTicketTotal(associatedOrder) : Number(t.currentOrderTotal || 0);
+            const total = associatedOrder ? getParkedTicketTotal(associatedOrder) : 0;
 
             return {
                 ...t,

@@ -46,6 +46,8 @@ interface TableMapProps {
     onParkedOrderSplitResult?: (orderId: string, remainingItems: CartItem[], newTicketItems: CartItem[], extraNewTickets?: CartItem[][], splitCount?: number) => void | Promise<void>;
     /** Restaurante: abrir diseñador de plano de mesas */
     onOpenTableLayoutDesigner?: () => void;
+    /** Restaurante: recordar sala elegida fuera del mapa para conservarla al volver desde POS */
+    onRoomChange?: (roomId: string) => void;
 }
 
 type SmartStatus = 'FREE' | 'ATTENTION' | 'OCCUPIED' | 'CHECK_REQUESTED';
@@ -199,9 +201,7 @@ const inferArchetype = (table: Table): TableArchetype => {
 const getSmartStatus = (table: Table, elapsedMinutes: number, hasDigitizedItems: boolean): SmartStatus => {
     if (hasDigitizedItems) return 'OCCUPIED';
     if (table.status === 'RESERVED') return 'CHECK_REQUESTED';
-    if (!table.status || table.status === 'FREE') return 'FREE';
-
-    return 'OCCUPIED';
+    return 'FREE';
 };
 
 const computeLastOrderHint = (model: Pick<SmartTableModel, 'smartStatus' | 'serviceStage' | 'hasDigitizedItems'>): string => {
@@ -262,7 +262,8 @@ const TableMap: React.FC<TableMapProps> = ({
     roles = [],
     onPrintPrecheck,
     onParkedOrderSplitResult,
-    onOpenTableLayoutDesigner
+    onOpenTableLayoutDesigner,
+    onRoomChange
 }) => {
     const [activeRoomId, setActiveRoomId] = useState<string>(initialRoomId || rooms[0]?.id || '');
     const [selectedTable, setSelectedTable] = useState<Table | null>(null);
@@ -302,9 +303,16 @@ const TableMap: React.FC<TableMapProps> = ({
     useEffect(() => {
         const roomStillExists = rooms.some(room => room.id === activeRoomId);
         if (!roomStillExists) {
-            setActiveRoomId(initialRoomId || rooms[0]?.id || '');
+            const nextRoomId = initialRoomId || rooms[0]?.id || '';
+            setActiveRoomId(nextRoomId);
+            if (nextRoomId) onRoomChange?.(nextRoomId);
         }
-    }, [rooms, activeRoomId, initialRoomId]);
+    }, [rooms, activeRoomId, initialRoomId, onRoomChange]);
+
+    const handleRoomSelect = useCallback((roomId: string) => {
+        setActiveRoomId(roomId);
+        onRoomChange?.(roomId);
+    }, [onRoomChange]);
 
     useEffect(() => {
         const onFullscreenChange = () => {
@@ -485,8 +493,8 @@ const TableMap: React.FC<TableMapProps> = ({
     const occupiedForTools = useMemo(
         () => allServiceTables
             .map(enrichTableWithParkedTicket)
-            .filter(t => t.status === 'OCCUPIED' || t.status === 'RESERVED'),
-        [allServiceTables, enrichTableWithParkedTicket]
+            .filter(t => t.status === 'RESERVED' || isTableOccupiedFromTicket(t) || Number(t.currentOrderTotal || 0) > NO_ORDER_TOTAL_THRESHOLD),
+        [allServiceTables, enrichTableWithParkedTicket, isTableOccupiedFromTicket]
     );
 
     const freeForTools = useMemo(
@@ -495,7 +503,7 @@ const TableMap: React.FC<TableMapProps> = ({
     );
 
     const occupiedLikeTables = useMemo(
-        () => serviceTables.filter(table => table.status === 'OCCUPIED' || table.status === 'RESERVED' || isTableOccupiedFromTicket(table)),
+        () => serviceTables.filter(table => table.status === 'RESERVED' || isTableOccupiedFromTicket(table) || Number(table.currentOrderTotal || 0) > NO_ORDER_TOTAL_THRESHOLD),
         [serviceTables, isTableOccupiedFromTicket]
     );
 
@@ -542,7 +550,11 @@ const TableMap: React.FC<TableMapProps> = ({
             const total = parkedTotal > NO_ORDER_TOTAL_THRESHOLD ? parkedTotal : persistedTotal;
             const hasDigitizedItems = total > NO_ORDER_TOTAL_THRESHOLD || parkedItems > 0;
             const smartStatus = getSmartStatus(table, elapsedMinutes, hasDigitizedItems);
-            const displayTable = hasDigitizedItems && parkedSummary ? enrichTableWithParkedTicket(table) : table;
+            const displayTable = hasDigitizedItems && parkedSummary
+                ? enrichTableWithParkedTicket(table)
+                : smartStatus === 'FREE'
+                    ? ({ ...table, status: 'FREE', currentOrderTotal: 0 } as Table)
+                    : table;
             const isOccupiedLike = smartStatus !== 'FREE';
             const isLocked =
                 isOccupiedLike &&
@@ -1033,13 +1045,13 @@ const TableMap: React.FC<TableMapProps> = ({
                                 const isActive = room.id === activeRoomId;
                                 const roomOccupied = safeTables.filter(table =>
                                     table.roomId === room.id &&
-                                    (table.status === 'OCCUPIED' || table.status === 'RESERVED' || isTableOccupiedFromTicket(table))
+                                    (table.status === 'RESERVED' || isTableOccupiedFromTicket(table) || Number(table.currentOrderTotal || 0) > NO_ORDER_TOTAL_THRESHOLD)
                                 ).length;
 
                                 return (
                                     <button
                                         key={room.id}
-                                        onClick={() => setActiveRoomId(room.id)}
+                                        onClick={() => handleRoomSelect(room.id)}
                                         className={`w-full px-3 py-2.5 rounded-2xl border transition-all duration-200 text-sm font-bold flex items-center gap-2 text-left ${
                                             isActive
                                                 ? 'border-sky-300/60 bg-sky-400/20 text-sky-100 shadow-[0_0_24px_rgba(56,189,248,0.28)]'

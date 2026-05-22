@@ -227,6 +227,10 @@ object ClicPOSKdsHttpServer {
             .put("modificadores", modifiers)
             .put("estado_cocina", item.optString("estado_cocina").ifBlank { "PENDIENTE" })
             .put("hora_inicio_preparacion", item.opt("hora_inicio_preparacion") ?: JSONObject.NULL)
+            .put("hora_terminado", item.opt("hora_terminado") ?: JSONObject.NULL)
+            .put("enteredAt", item.optString("enteredAt", ""))
+            .put("enteredById", item.optString("enteredById", ""))
+            .put("enteredByName", item.optString("enteredByName", ""))
             .put("note", item.optString("note", ""))
     }
 
@@ -272,11 +276,13 @@ object ClicPOSKdsHttpServer {
         if (incomingStatus == "DEVUELTO") {
             next.put("estado_cocina", incomingStatus)
             next.put("hora_inicio_preparacion", current.opt("hora_inicio_preparacion") ?: JSONObject.NULL)
+            next.put("hora_terminado", current.opt("hora_terminado") ?: JSONObject.NULL)
             return next
         }
         if (currentStatus.isNotBlank() && currentStatus != "PENDIENTE") {
             next.put("estado_cocina", currentStatus)
             next.put("hora_inicio_preparacion", current.opt("hora_inicio_preparacion") ?: JSONObject.NULL)
+            next.put("hora_terminado", current.opt("hora_terminado") ?: JSONObject.NULL)
         }
         return next
     }
@@ -322,6 +328,7 @@ object ClicPOSKdsHttpServer {
                     if (matchesId || matchesCart || matchesProduct) {
                         item.put("estado_cocina", status)
                         if (status == "EN_PREPARACION") item.put("hora_inicio_preparacion", isoNow())
+                        if (status == "LISTO" || status == "DEVUELTO") item.put("hora_terminado", isoNow())
                     }
                 }
             }
@@ -335,6 +342,7 @@ object ClicPOSKdsHttpServer {
                 val item = items.optJSONObject(index) ?: continue
                 item.put("estado_cocina", status)
                 if (status == "EN_PREPARACION") item.put("hora_inicio_preparacion", isoNow())
+                if (status == "LISTO" || status == "DEVUELTO") item.put("hora_terminado", isoNow())
             }
         }
     }

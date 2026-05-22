@@ -369,7 +369,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
             }
             const hasTrackingHtml = trackingHtml.length > 0;
             let sellerNameHtml = '';
-            if (item.salespersonId) {
+            if (receiptConfig?.showLineSalesperson && item.salespersonId) {
                 const sellerName = resolveTerminalSellerName(item.salespersonId, config, transaction.terminalId, users) || 'Vendedor';
                 sellerNameHtml = `<br/>Vendedor: ${sellerName}`;
             }

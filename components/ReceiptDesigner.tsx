@@ -57,6 +57,7 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
       showSerialNumbers: config.receiptConfig?.showSerialNumbers ?? false,
       showLotNumbers: config.receiptConfig?.showLotNumbers ?? false,
       showOrderNumber: config.receiptConfig?.showOrderNumber ?? false,
+      showLineSalesperson: config.receiptConfig?.showLineSalesperson ?? false,
    });
 
    const [isSaving, setIsSaving] = useState(false);
@@ -271,7 +272,7 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                               </div>
                            )}
 
-                           {item.seller && (
+                           {localReceipt.showLineSalesperson && item.seller && (
                               <div className="text-[10px]">
                                  Vendedor: {item.seller}
                               </div>

@@ -1828,7 +1828,14 @@ const AppContent: React.FC = () => {
     return (sourceTables || []).map(table => {
       const linkedTicket = (table.currentOrderId ? byOrderId.get(String(table.currentOrderId)) : undefined)
         || byTableId.get(String(table.id));
-      if (!linkedTicket) return table;
+      if (!linkedTicket) {
+        if (table.status === 'RESERVED') return table;
+        return {
+          ...table,
+          status: 'FREE',
+          currentOrderTotal: 0
+        } as Table;
+      }
 
       return {
         ...table,
@@ -5552,6 +5559,7 @@ const AppContent: React.FC = () => {
                 currentRoomId={activeRoomId}
                 tables={tables}
                 parkedTickets={parkedTickets}
+                onRoomChange={setActiveRoomId}
                 onTableClick={async (table) => {
                   console.log('Mesa seleccionada:', table.name);
 

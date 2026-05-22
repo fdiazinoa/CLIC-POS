@@ -378,7 +378,7 @@ export const buildEscPosTicketPayload = (
     if (item.note) {
       pushTextLines(chunks, splitLines(`Nota: ${item.note}`, width));
     }
-    if (item.salespersonId) {
+    if (config.receiptConfig?.showLineSalesperson && item.salespersonId) {
       const sellerName = resolveTerminalSellerName(item.salespersonId, config, transaction.terminalId, users);
       if (sellerName) {
         pushTextLines(chunks, splitLines(`Vendedor: ${sellerName}`, width));

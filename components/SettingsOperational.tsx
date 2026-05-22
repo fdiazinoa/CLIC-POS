@@ -61,6 +61,7 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
             minimumAdvancePercent: 20
         },
         expandTicket: false,
+        showLineSalesperson: false,
         orderNumbers: {
             enabled: false,
             nextNumber: 1,
@@ -374,6 +375,15 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                         checked={operational.bloqueo_meseros}
                         onChange={(v: boolean) => handleToggle('bloqueo_meseros', v)}
                         icon={ShieldCheck}
+                        disabled={isReadOnly}
+                    />
+
+                    <Toggle
+                        label="Visualizar vendedor en líneas"
+                        description="Muestra en cada línea del ticket interno quién digitó el artículo para auditoría operativa."
+                        checked={Boolean(operational.showLineSalesperson)}
+                        onChange={(v: boolean) => handleToggle('showLineSalesperson', v)}
+                        icon={Users}
                         disabled={isReadOnly}
                     />
 

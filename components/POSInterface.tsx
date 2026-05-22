@@ -307,6 +307,9 @@ const buildKdsDispatchItems = (items: CartItem[], areaId?: string) => items.map(
    modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
    modificadores: Array.isArray(item.modifiers) ? item.modifiers : [],
    note: item.note || '',
+   enteredAt: item.enteredAt || '',
+   enteredById: item.enteredById || item.salespersonId || '',
+   enteredByName: item.enteredByName || '',
    production_area_id: areaId || resolveProductionAreaId(item),
    estado_cocina: 'PENDIENTE',
    variantInfo: item.variantInfo || '',
@@ -965,6 +968,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const resolveSalespersonLabel = useCallback((salespersonId?: string | null) => {
       return resolveTerminalSellerName(salespersonId, config, terminalId, users) || 'Vendedor';
    }, [config, terminalId, users]);
+   const shouldShowLineSalesperson = Boolean(activeTerminalConfig?.operational?.showLineSalesperson);
    const terminalDisplaySource = activeTerminalConfig?.terminalName || activeTerminalConfig?.stationNumber || terminalId;
    const terminalDisplayLabel = useMemo(() => {
       const normalized = String(terminalDisplaySource || terminalId).trim();
@@ -2335,7 +2339,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const existing = (cart || []).find(i => {
          const iMods = buildModifierSignature(i.modifiers);
          const existingTaxSignature = resolveEffectiveTaxIds(i.appliedTaxIds, activeTerminalConfig).slice().sort().join('|');
-         return i.id === product.id && (i.variantSku || '') === (variantSku || '') && iMods === modifiersString && i.price === finalPrice && existingTaxSignature === taxSignature;
+         return i.id === product.id
+            && (i.variantSku || '') === (variantSku || '')
+            && iMods === modifiersString
+            && i.price === finalPrice
+            && existingTaxSignature === taxSignature
+            && (i.enteredById || i.salespersonId || '') === currentUser.id;
       });
 
       let targetCartId: string;
@@ -2371,6 +2380,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             appliedTaxIds: effectiveTaxIds,
             production_area_id: productionAreaId || undefined,
             originalPrice: getProductPrice(product),
+            salespersonId: currentUser.id,
+            enteredAt: new Date().toISOString(),
+            enteredById: currentUser.id,
+            enteredByName: currentUser.name,
             trackingData
          };
          onUpdateCart(prev => [newItem, ...prev]);
@@ -2378,7 +2391,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
       setLastAddedCartId(targetCartId);
-   }, [blockRecoveredUberOrderMutation, canAddItemToCart, ensureSalesWithOpenZPermission, getProductPrice, onUpdateCart, cart, activeTerminalConfig]); // Added cart to dependencies
+   }, [blockRecoveredUberOrderMutation, canAddItemToCart, ensureSalesWithOpenZPermission, getProductPrice, onUpdateCart, cart, activeTerminalConfig, currentUser.id, currentUser.name]); // Added cart to dependencies
 
    const handleProductClick = useCallback((product: Product) => {
       // MOBILE INTERCEPTION
@@ -3636,6 +3649,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   : saleTotal;
                const salePayments = payments.filter(p => !['WALLET', 'ADVANCE'].includes(p.method));
                const saleSettlement = buildTransactionSettlementFields(salePayments, saleTotal, baseCurrency.code);
+               const splitClosedAt = new Date().toISOString();
 
                // Prepare wallet operations
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
@@ -3668,6 +3682,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         userId: currentUser.id,
                         userName: currentUser.name,
                         terminalId: terminalId,
+                        closedAt: splitClosedAt,
                         status: creditAmount > 0 ? 'PENDING' : 'COMPLETED',
                         customerId: customerForCheckout?.id,
                         customerName: customerForCheckout?.name,
@@ -3696,6 +3711,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         userId: currentUser.id,
                         userName: currentUser.name,
                         terminalId: terminalId,
+                        closedAt: splitClosedAt,
                         customerId: customerForCheckout?.id,
                         customerName: customerForCheckout?.name,
                         status: 'COMPLETED',
@@ -3796,13 +3812,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   : rawDocumentItems;
                const documentTotal = (isRefundOnly ? refundDocumentTotal : cartTotal) + (voluntaryTip || 0);
                const transactionSettlement = buildTransactionSettlementFields(paymentsForTransaction, documentTotal, baseCurrency.code);
+               const transactionClosedAt = new Date().toISOString();
 
                const txn = await withTimeout(transactionService.createTransaction({
                   documentType: hasReturns ? 'REFUND' : 'TICKET',
                   seriesId: hasReturns
                      ? (activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC')
                      : assignedSequenceId,
-                  date: new Date().toISOString(),
+                  date: transactionClosedAt,
+                  closedAt: transactionClosedAt,
                   items: documentItems,
                   total: documentTotal,
                   payments: paymentsForTransaction,
@@ -3866,6 +3884,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                // Ensure seriesId is preserved (Backend might not return it in the root object)
                const finalTxn = {
                   ...txn,
+                  closedAt: txn.closedAt || transactionClosedAt,
                   seriesId: txn.seriesId || (isRefundOnly ? refundSeriesId : assignedSequenceId)
                };
 
@@ -5440,6 +5459,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         const isActiveCartItem = activeCartItemId === item.cartId;
                         const isReturnedToKds = isKdsReturnedCartItem(item);
                         const isDispatchedToKds = Boolean(item.dispatched);
+                        const enteredTime = item.enteredAt
+                           ? new Date(item.enteredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                           : '';
 
                         // MOBILE CARD DESIGN
                         if (isMobile) {
@@ -5469,10 +5491,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              </span>
                                           )}
                                        </div>
-                                       {item.salespersonId && (
+                                       {shouldShowLineSalesperson && item.salespersonId && (
                                           <div className="mt-1 flex items-center gap-1 text-[9px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded-md w-fit">
                                              <User size={10} />
-                                             <span>{resolveSalespersonLabel(item.salespersonId)}</span>
+                                             <span>{resolveSalespersonLabel(item.salespersonId)}{enteredTime ? ` · ${enteredTime}` : ''}</span>
                                           </div>
                                        )}
                                     </div>
@@ -5611,10 +5633,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              )}
                                           </div>
                                           {/* Salesperson Badge */}
-                                          {item.salespersonId && (
+                                          {shouldShowLineSalesperson && item.salespersonId && (
                                              <div className="flex items-center gap-1 text-[9px] text-gray-400 mt-0.5">
                                                 <User size={10} />
-                                                <span className="truncate max-w-[80px]">{resolveSalespersonLabel(item.salespersonId) || '...'}</span>
+                                                <span className="truncate max-w-[120px]">{resolveSalespersonLabel(item.salespersonId) || '...'}{enteredTime ? ` · ${enteredTime}` : ''}</span>
                                              </div>
                                           )}
                                        </div>

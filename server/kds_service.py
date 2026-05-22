@@ -406,7 +406,7 @@ def get_active_orders():
             
             # Get details for this order
             items_query = """
-            SELECT id, producto_id, nombre, cantidad, modificadores, estado_cocina, hora_inicio_preparacion
+            SELECT id, producto_id, nombre, cantidad, modificadores, estado_cocina, hora_inicio_preparacion, hora_terminado
             FROM ordenes_detalles
             WHERE orden_id = ?
             """
@@ -478,7 +478,18 @@ def update_status(update: StatusUpdate):
                 
         elif update.orden_id:
             # Update entire order
-            conn.execute("UPDATE ordenes_detalles SET estado_cocina = ? WHERE orden_id = ?", (update.nuevo_estado, update.orden_id))
+            if update.nuevo_estado in ('LISTO', 'DEVUELTO'):
+                conn.execute(
+                    "UPDATE ordenes_detalles SET estado_cocina = ?, hora_terminado = ? WHERE orden_id = ?",
+                    (update.nuevo_estado, now, update.orden_id)
+                )
+            elif update.nuevo_estado == 'EN_PREPARACION':
+                conn.execute(
+                    "UPDATE ordenes_detalles SET estado_cocina = ?, hora_inicio_preparacion = ? WHERE orden_id = ?",
+                    (update.nuevo_estado, now, update.orden_id)
+                )
+            else:
+                conn.execute("UPDATE ordenes_detalles SET estado_cocina = ? WHERE orden_id = ?", (update.nuevo_estado, update.orden_id))
             if update.nuevo_estado == 'LISTO':
                 conn.execute("UPDATE transactions SET status = 'PARA_ENTREGAR' WHERE id = ?", (update.orden_id,))
                 

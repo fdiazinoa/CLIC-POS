@@ -448,6 +448,7 @@ export interface ReceiptConfig {
   showSerialNumbers?: boolean; // NEW: Toggle printing serial numbers
   showLotNumbers?: boolean; // NEW: Toggle printing lot numbers
   showOrderNumber?: boolean;
+  showLineSalesperson?: boolean;
 }
 
 // Document Types for all transaction categories
@@ -709,6 +710,7 @@ export interface TerminalConfig {
     fiscalThreshold?: number;
     expandTicket?: boolean;
     showGlobalSales?: boolean;
+    showLineSalesperson?: boolean;
     orderNumbers?: {
       enabled?: boolean;
       nextNumber?: number;
@@ -1131,6 +1133,7 @@ export interface BusinessConfig {
     bloqueo_meseros: boolean;
     pedir_comensales: boolean;
     usa_modulos_cocina: boolean;
+    showLineSalesperson?: boolean;
     reservationPolicy?: {
       validityDays: number;
       printCopies: number;
@@ -1517,6 +1520,9 @@ export interface CartItem extends Product {
   salespersonId?: string;
   ncf?: string; // NCF asignado a esta línea o al ticket
   appliedPromotionId?: string;
+  enteredAt?: string;
+  enteredById?: string;
+  enteredByName?: string;
   trackingId?: string; // NEW: Assigned lot/serial ID
   trackingCode?: string; // NEW: Assigned lot/serial code
   trackingData?: any[]; // NEW: Detailed tracking records selected
@@ -1557,6 +1563,7 @@ export interface Transaction {
   // Transaction Data
   date: string;
   updatedAt?: string;
+  closedAt?: string;
   items: CartItem[];
   total: number;
   payments: any[];

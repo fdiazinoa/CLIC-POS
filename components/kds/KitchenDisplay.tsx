@@ -19,6 +19,7 @@ interface KDSItem {
     modificadores: string[] | null;
     estado_cocina: 'PENDIENTE' | 'EN_PREPARACION' | 'LISTO' | 'DEVUELTO';
     hora_inicio_preparacion: string | null;
+    hora_terminado?: string | null;
 }
 
 interface KDSOrder {
