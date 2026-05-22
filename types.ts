@@ -1525,6 +1525,7 @@ export interface CartItem extends Product {
   dispatched?: boolean; // NEW: Track if item was sent to kitchen
   orderNumber?: string;
   tableDisplayLabel?: string;
+  tableRoomLabel?: string;
   kdsStatus?: 'ENVIADO' | 'DEVUELTO' | 'RETURN_PENDING' | string;
   kdsOrderId?: string;
   kdsAreaId?: string;
