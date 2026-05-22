@@ -145,6 +145,7 @@ import {
   getLifecycleActivationBlockMessage,
   getLifecycleBlockingMessageFromError,
   isLifecycleActivationBlocked,
+  isLifecycleErpIntegrationDisabled,
   persistStoredErpSyncBinding
 } from './utils/erpSyncLifecycle';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
@@ -1344,14 +1345,20 @@ const AppContent: React.FC = () => {
           pendingEvents: 0,
         });
 
-        const blockingActivation = result?.heartbeat?.activation || result?.registered?.activation || result?.bootstrap?.activation;
-        if (!disposed && isLifecycleActivationBlocked(blockingActivation)) {
-          triggerLockdown(getLifecycleActivationBlockMessage(blockingActivation));
+        const lifecycleActivation = result?.heartbeat?.activation || result?.registered?.activation || result?.bootstrap?.activation;
+        if (!disposed && isLifecycleActivationBlocked(lifecycleActivation)) {
+          triggerLockdown(getLifecycleActivationBlockMessage(lifecycleActivation));
           return;
         }
 
+        const erpIntegrationDisabled = isLifecycleErpIntegrationDisabled(lifecycleActivation);
+
         if (!disposed && result?.heartbeat?.terminal?.id) {
           console.log(`[ERP SYNC] Terminal ${terminalName} enlazada con ${result.heartbeat.terminal.id}`);
+        }
+
+        if (!disposed && erpIntegrationDisabled) {
+          console.log(`[ERP SYNC] ${terminalName} opera en POS local con canal cloud activo; ERP queda pendiente de activación.`);
         }
 
         if (!disposed && (result?.outbox?.applied || 0) > 0) {
@@ -1359,9 +1366,11 @@ const AppContent: React.FC = () => {
         }
 
         const now = Date.now();
-        const shouldRefreshManifest = Boolean(options?.forceManifestRefresh)
+        const shouldRefreshManifest = !erpIntegrationDisabled && (
+          Boolean(options?.forceManifestRefresh)
           || (result?.outbox?.applied || 0) > 0
-          || now - lastManifestRefreshAt >= MANIFEST_REFRESH_INTERVAL_MS;
+          || now - lastManifestRefreshAt >= MANIFEST_REFRESH_INTERVAL_MS
+        );
 
         if (shouldRefreshManifest) {
           const refreshedFromManifest = await syncManager.syncTerminalManifestInBackground(undefined, {

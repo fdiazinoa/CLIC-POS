@@ -160,15 +160,20 @@ export const isLifecycleActivationBlocked = (activation?: SyncActivationState | 
     const billingStatus = normalizeActivationBillingStatus(activation.billing_status);
 
     return (
-        activation.erp_enabled === false
-        || activation.terminal_active === false
+        activation.terminal_active === false
         || activation.kill_switch_active === true
         || mode === 'LICENSE_BLOCKED'
         || mode === 'TERMINAL_BLOCKED'
-        || mode === 'ERP_DISABLED'
         || reason === 'TERMINAL_DISABLED'
         || (Boolean(billingStatus) && billingStatus !== 'ACTIVE')
     );
+};
+
+export const isLifecycleErpIntegrationDisabled = (activation?: SyncActivationState | null): boolean => {
+    if (!activation) return false;
+
+    const mode = normalizeActivationMode(activation.mode);
+    return activation.erp_enabled === false || mode === 'ERP_DISABLED';
 };
 
 export const getLifecycleActivationBlockMessage = (activation?: SyncActivationState | null): string => {
@@ -182,10 +187,6 @@ export const getLifecycleActivationBlockMessage = (activation?: SyncActivationSt
 
     if (mode === 'TERMINAL_BLOCKED' || reason === 'TERMINAL_DISABLED' || activation.terminal_active === false) {
         return 'Esta terminal ha sido desactivada temporalmente desde el Panel de Control.';
-    }
-
-    if (mode === 'ERP_DISABLED' || activation.erp_enabled === false) {
-        return 'El tenant está activo solo para POS local; la integración ERP está deshabilitada.';
     }
 
     if (billingStatus && billingStatus !== 'ACTIVE') {
@@ -211,15 +212,9 @@ export const getLifecycleBlockingMessageFromError = (error: unknown): string | n
         || code === 'LICENSE_EXCEEDED_INACTIVE'
         || message.includes('terminal ha sido desactivada')
         || message.includes('licencia actual no permite')
-        || message.includes('integración erp está deshabilitada')
-        || message.includes('integracion erp esta deshabilitada')
     ) {
         if (code === 'TERMINAL_DISABLED' || code === 'LICENSE_EXCEEDED_INACTIVE' || message.includes('terminal ha sido desactivada')) {
             return 'Esta terminal ha sido desactivada temporalmente desde el Panel de Control.';
-        }
-
-        if (message.includes('integración erp está deshabilitada') || message.includes('integracion erp esta deshabilitada')) {
-            return 'El tenant está activo solo para POS local; la integración ERP está deshabilitada.';
         }
 
         return 'Servicio Suspendido.';
@@ -1243,8 +1238,8 @@ export const ensureErpSyncLifecycle = async (params: EnsureLifecycleParams): Pro
     const bootstrap = storedBinding.terminalId ? null : await bootstrapErpSyncLifecycle(params.deviceId);
     const activation = bootstrap?.activation;
 
-    if (activation && activation.erp_enabled === false) {
-        return { bootstrap, registered: null, heartbeat: null };
+    if (isLifecycleErpIntegrationDisabled(activation)) {
+        console.info('[ERP SYNC] Tenant en modo POS local: se mantiene registro/heartbeat cloud sin aplicar ERP.');
     }
 
     let registered: SyncRegisterResponse | null = null;
