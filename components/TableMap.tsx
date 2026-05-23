@@ -95,6 +95,13 @@ interface TableTransferSelection {
     sourceTableId?: string;
 }
 
+interface TableNoticeState {
+    title: string;
+    message: string;
+    primaryLabel?: string;
+    tableToOpen?: Table;
+}
+
 const CANVAS_WIDTH = 1240;
 const CANVAS_HEIGHT = 860;
 const SCALE_MIN = 0.55;
@@ -286,6 +293,7 @@ const TableMap: React.FC<TableMapProps> = ({
     const [splitPickOpen, setSplitPickOpen] = useState(false);
     const [showRoomPicker, setShowRoomPicker] = useState(false);
     const [isControlCenterOpen, setIsControlCenterOpen] = useState(false);
+    const [tableNotice, setTableNotice] = useState<TableNoticeState | null>(null);
     const reduceMotion = useReducedMotion();
 
     const mapShellRef = useRef<HTMLDivElement | null>(null);
@@ -652,8 +660,12 @@ const TableMap: React.FC<TableMapProps> = ({
         waiterId: undefined,
         waiterName: undefined,
         timeSeated: undefined,
-        guests: undefined
-    }), []);
+        guests: undefined,
+        joinedTableId: undefined,
+        joinedTableName: undefined,
+        joinedSourceTableId: undefined,
+        joinedSourceTableName: undefined
+    } as Table), []);
 
     const completeTableTransfer = useCallback(async (sourceTableId: string, targetTableId: string, mode: TableTransferMode) => {
         if (sourceTableId === targetTableId) {
@@ -691,6 +703,7 @@ const TableMap: React.FC<TableMapProps> = ({
         const nextTotal = nextItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
         const targetRoomLabel = roomLabelById.get(targetTable.roomId);
         const targetTableLabel = getTableLabel(targetTable);
+        const sourceTableLabel = getTableLabel(sourceTable);
         const nextTicket: ParkedTicket = {
             ...sourceTicket,
             items: nextItems,
@@ -710,7 +723,7 @@ const TableMap: React.FC<TableMapProps> = ({
             nextTicket
         ];
 
-        const nextTargetTable: Table = {
+        const nextTargetTable = {
             ...targetTable,
             status: 'OCCUPIED',
             currentOrderId: nextTicket.id,
@@ -718,10 +731,29 @@ const TableMap: React.FC<TableMapProps> = ({
             waiterId: sourceTable.waiterId || targetTable.waiterId || currentUser.id,
             waiterName: sourceTable.waiterName || targetTable.waiterName || currentUser.name,
             timeSeated: sourceTable.timeSeated || targetTable.timeSeated || nextTicket.timestamp,
-            guests: targetTable.guests || sourceTable.guests
-        };
+            guests: targetTable.guests || sourceTable.guests,
+            joinedTableId: mode === 'MERGE' ? sourceTable.id : undefined,
+            joinedTableName: mode === 'MERGE' ? sourceTableLabel : undefined,
+            joinedSourceTableId: mode === 'MERGE' ? sourceTable.id : undefined,
+            joinedSourceTableName: mode === 'MERGE' ? sourceTableLabel : undefined
+        } as Table;
 
-        const nextSourceTable = resetTableRuntimeState(sourceTable);
+        const nextSourceTable = mode === 'MERGE'
+            ? {
+                ...sourceTable,
+                status: 'OCCUPIED',
+                currentOrderId: nextTicket.id,
+                currentOrderTotal: nextTotal,
+                waiterId: sourceTable.waiterId || currentUser.id,
+                waiterName: sourceTable.waiterName || currentUser.name,
+                timeSeated: sourceTable.timeSeated || nextTicket.timestamp,
+                guests: sourceTable.guests || targetTable.guests,
+                joinedTableId: targetTable.id,
+                joinedTableName: targetTableLabel,
+                joinedSourceTableId: sourceTable.id,
+                joinedSourceTableName: sourceTableLabel
+            } as Table
+            : resetTableRuntimeState(sourceTable);
         const nextTables = safeTables.map(table => {
             if (table.id === sourceTable.id) return nextSourceTable;
             if (table.id === targetTable.id) return nextTargetTable;
@@ -732,8 +764,13 @@ const TableMap: React.FC<TableMapProps> = ({
         await Promise.resolve(onUpdateTables?.(nextTables));
         setTransferSelection(null);
 
-        const verb = mode === 'MERGE' ? 'unidas' : 'movida';
-        alert(`Mesas ${verb}. ${getTableLabel(targetTable)} asumió la cuenta ${nextTicket.orderNumber || nextTicket.id}.`);
+        setTableNotice({
+            title: mode === 'MERGE' ? 'Mesas unidas' : 'Mesa movida',
+            message: mode === 'MERGE'
+                ? `${targetTableLabel} quedó unida con ${sourceTableLabel}. Al abrir cualquiera de las dos mesas verás la misma cuenta.`
+                : `${targetTableLabel} asumió la cuenta de ${sourceTableLabel}.`,
+            primaryLabel: 'Entendido'
+        });
     }, [
         currentUser.id,
         currentUser.name,
@@ -774,6 +811,17 @@ const TableMap: React.FC<TableMapProps> = ({
     }, [completeTableTransfer, resolveTicketForTable, transferSelection]);
 
     const handleTableAction = useCallback(async (table: Table) => {
+        const joinedTableName = String((table as any).joinedTableName || '').trim();
+        if (isRestaurantMode && joinedTableName) {
+            setTableNotice({
+                title: 'Mesa unida',
+                message: `${getTableLabel(table)} está unida con ${joinedTableName}. Ambas mesas comparten la misma cuenta.`,
+                primaryLabel: 'Abrir cuenta',
+                tableToOpen: table
+            });
+            return;
+        }
+
         if (table.status === 'OCCUPIED' || table.status === 'RESERVED') {
             onTableClick(table);
             return;
@@ -1112,6 +1160,53 @@ const TableMap: React.FC<TableMapProps> = ({
                             >
                                 Cancelar
                             </button>
+                        </m.div>
+                    )}
+                </AnimatePresence>
+
+                <AnimatePresence>
+                    {tableNotice && (
+                        <m.div
+                            key="table-notice"
+                            className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={() => setTableNotice(null)}
+                        >
+                            <m.div
+                                initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 18, scale: 0.96 }}
+                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.96 }}
+                                transition={{ duration: 0.16, ease: 'easeOut' }}
+                                className="w-full max-w-md rounded-3xl border border-white/12 bg-white p-6 text-slate-900 shadow-[0_24px_70px_rgba(2,6,23,0.48)]"
+                                onClick={event => event.stopPropagation()}
+                            >
+                                <h3 className="text-xl font-black tracking-tight">{tableNotice.title}</h3>
+                                <p className="mt-3 text-sm font-semibold leading-6 text-slate-600">{tableNotice.message}</p>
+                                <div className="mt-6 flex justify-end gap-2">
+                                    {tableNotice.tableToOpen && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const tableToOpen = tableNotice.tableToOpen;
+                                                setTableNotice(null);
+                                                if (tableToOpen) onTableClick(tableToOpen);
+                                            }}
+                                            className="rounded-2xl bg-slate-950 px-4 py-2.5 text-sm font-black text-white shadow-lg active:scale-[0.98]"
+                                        >
+                                            {tableNotice.primaryLabel || 'Abrir cuenta'}
+                                        </button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={() => setTableNotice(null)}
+                                        className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-black text-slate-700 active:scale-[0.98]"
+                                    >
+                                        {tableNotice.tableToOpen ? 'Cerrar' : (tableNotice.primaryLabel || 'Entendido')}
+                                    </button>
+                                </div>
+                            </m.div>
                         </m.div>
                     )}
                 </AnimatePresence>
