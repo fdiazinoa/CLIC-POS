@@ -1046,7 +1046,7 @@ const TableMap: React.FC<TableMapProps> = ({
                     </GlassButton>
                 </div>
 
-                <div className="absolute left-5 top-24 z-40 flex items-start gap-3 pointer-events-auto">
+                <div className="absolute bottom-5 left-5 z-40 flex flex-col-reverse items-start gap-3 pointer-events-auto">
                     <GlassButton onClick={() => setShowRoomPicker(prev => !prev)} title="Salas" className="w-auto px-4">
                         <span className="flex items-center gap-2">
                             <LayoutGrid size={18} />
@@ -1057,11 +1057,11 @@ const TableMap: React.FC<TableMapProps> = ({
                     <AnimatePresence>
                         {showRoomPicker && (
                             <m.div
-                                initial={{ opacity: 0, x: -12, scale: 0.98 }}
-                                animate={{ opacity: 1, x: 0, scale: 1 }}
-                                exit={{ opacity: 0, x: -12, scale: 0.98 }}
+                                initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                exit={{ opacity: 0, y: 12, scale: 0.98 }}
                                 transition={{ duration: 0.16 }}
-                                className="max-h-[min(68vh,34rem)] w-[min(16rem,58vw)] rounded-[1.6rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-2.5 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex flex-col gap-2 overflow-y-auto overflow-x-hidden no-scrollbar"
+                                className="mb-1 max-h-[min(58vh,28rem)] w-[min(16rem,58vw)] rounded-[1.6rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-2.5 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex flex-col gap-2 overflow-y-auto overflow-x-hidden no-scrollbar"
                             >
                                 {rooms.map(room => {
                                     const isActive = room.id === activeRoomId;
@@ -1099,7 +1099,7 @@ const TableMap: React.FC<TableMapProps> = ({
 
                 <div className="absolute bottom-5 left-5 right-5 z-30 flex justify-end pointer-events-none">
                     {isRestaurantMode && (
-                        <div className="max-w-[min(76vw,1120px)] rounded-[1.8rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-4 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-3 overflow-x-auto overflow-y-hidden no-scrollbar pointer-events-auto">
+                        <div className="ml-[7.5rem] max-w-[min(calc(100vw-10rem),1120px)] rounded-[1.8rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-4 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-3 overflow-x-auto overflow-y-hidden no-scrollbar pointer-events-auto">
                             {renderTableControlActions('footer')}
                         </div>
                     )}
