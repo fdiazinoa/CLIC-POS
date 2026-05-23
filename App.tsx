@@ -1915,6 +1915,14 @@ const AppContent: React.FC = () => {
     });
   };
 
+  const belongsToCurrentCashier = useCallback((record?: { userId?: string | null; userName?: string | null }) => {
+    if (!currentUser) return false;
+    const currentUserId = (currentUser.id || '').trim();
+    if (currentUserId && (record?.userId || '').trim() === currentUserId) return true;
+    const currentUserName = (currentUser.name || '').trim().toLowerCase();
+    return Boolean(currentUserName && (record?.userName || '').trim().toLowerCase() === currentUserName);
+  }, [currentUser]);
+
   const reconcileTablesWithParkedTickets = useCallback((sourceTables: Table[], tickets: ParkedTicket[] = []): Table[] => {
     const hasItems = (ticket?: ParkedTicket | null) =>
       Boolean(ticket && Array.isArray(ticket.items) && ticket.items.some(item => Number(item.quantity || 0) > 0));
@@ -1936,7 +1944,21 @@ const AppContent: React.FC = () => {
     return (sourceTables || []).map(table => {
       const linkedTicket = (table.currentOrderId ? byOrderId.get(String(table.currentOrderId)) : undefined)
         || byTableId.get(String(table.id));
-      if (!linkedTicket) return table;
+      if (!linkedTicket) {
+        const hasStaleOccupancy =
+          table.status === 'OCCUPIED' &&
+          (table.currentOrderId || Number(table.currentOrderTotal || 0) > 0);
+        if (!hasStaleOccupancy) return table;
+        return {
+          ...table,
+          status: 'FREE',
+          currentOrderId: undefined,
+          currentOrderTotal: undefined,
+          timeSeated: undefined,
+          waiterId: undefined,
+          waiterName: undefined
+        } as Table;
+      }
 
       return {
         ...table,
@@ -4887,9 +4909,17 @@ const AppContent: React.FC = () => {
       const belongsToCurrentTerminal = (value?: string | null) =>
         normalizeTerminalId(value) === terminalKey || (!value && isDefaultTerminal);
 
-      const terminalTransactions = getPendingTransactionsForTerminal(terminalId);
-      const terminalCashMovements = getPendingCashMovementsForTerminal(terminalId);
-      const terminalCollections = collections.filter(c => belongsToCurrentTerminal(c.terminalId) && !c.zReportId);
+      const terminalTransactions = getPendingTransactionsForTerminal(terminalId).filter(belongsToCurrentCashier);
+      const terminalCashMovements = getPendingCashMovementsForTerminal(terminalId).filter(belongsToCurrentCashier);
+      const terminalCollections = collections.filter(c =>
+        belongsToCurrentTerminal(c.terminalId) &&
+        belongsToCurrentCashier(c) &&
+        !c.zReportId
+      );
+
+      if (terminalTransactions.length === 0 && terminalCashMovements.length === 0 && terminalCollections.length === 0) {
+        throw new Error('Este cajero no tiene movimientos abiertos para generar Cierre X.');
+      }
 
       const totalsByMethod = terminalTransactions.flatMap(t => t?.payments || []).reduce((acc: Record<string, number>, p) => {
         if (p && p.method) {
@@ -6312,9 +6342,12 @@ const AppContent: React.FC = () => {
         {
           const financeTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
           const currentTerminalId = financeTerminal?.id || 'T1';
-          const terminalTransactions = getPendingTransactionsForTerminal(currentTerminalId);
-          const terminalMovements = getPendingCashMovementsForTerminal(currentTerminalId);
-          const terminalXReports = xReports.filter(report => normalizeTerminalId(report.terminalId) === normalizeTerminalId(currentTerminalId));
+          const terminalTransactions = getPendingTransactionsForTerminal(currentTerminalId).filter(belongsToCurrentCashier);
+          const terminalMovements = getPendingCashMovementsForTerminal(currentTerminalId).filter(belongsToCurrentCashier);
+          const terminalXReports = xReports.filter(report =>
+            normalizeTerminalId(report.terminalId) === normalizeTerminalId(currentTerminalId) &&
+            belongsToCurrentCashier({ userId: report.closedByUserId, userName: report.closedByUserName })
+          );
           const allowPartialXReport = financeTerminal?.config?.workflow?.session?.allowPartialXReport !== false;
 
           return (

@@ -232,8 +232,9 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
       () => [...(xReports || [])].sort((a, b) => new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime()).slice(0, 3),
       [xReports]
    );
+   const hasCashierActivity = openTransactions.length > 0 || cashMovements.length > 0;
    const canViewXReport = hasPermission('POS_VIEW_X_REPORT') || hasPermission('POS_CLOSE_X');
-   const canCloseXReport = hasPermission('POS_CLOSE_X') && allowPartialXReport && Boolean(onCloseXReport);
+   const canCloseXReport = hasPermission('POS_CLOSE_X') && allowPartialXReport && hasCashierActivity && Boolean(onCloseXReport);
 
    return (
       <div className="h-screen w-full bg-gray-50 flex flex-col overflow-hidden">
@@ -349,7 +350,11 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
 
                      {!canCloseXReport && (
                         <p className="mt-2 text-center text-[10px] font-bold uppercase tracking-wide text-gray-400">
-                           {allowPartialXReport ? 'Requiere permiso de cierre X' : 'Cierre X desactivado en esta terminal'}
+                           {!allowPartialXReport
+                              ? 'Cierre X desactivado en esta terminal'
+                              : hasCashierActivity
+                                 ? 'Requiere permiso de cierre X'
+                                 : 'Sin movimientos para este cajero'}
                         </p>
                      )}
 

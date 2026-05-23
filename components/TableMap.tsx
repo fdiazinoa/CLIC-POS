@@ -199,9 +199,7 @@ const inferArchetype = (table: Table): TableArchetype => {
 const getSmartStatus = (table: Table, elapsedMinutes: number, hasDigitizedItems: boolean): SmartStatus => {
     if (hasDigitizedItems) return 'OCCUPIED';
     if (table.status === 'RESERVED') return 'CHECK_REQUESTED';
-    if (!table.status || table.status === 'FREE') return 'FREE';
-
-    return 'OCCUPIED';
+    return 'FREE';
 };
 
 const computeLastOrderHint = (model: Pick<SmartTableModel, 'smartStatus' | 'serviceStage' | 'hasDigitizedItems'>): string => {
@@ -275,6 +273,7 @@ const TableMap: React.FC<TableMapProps> = ({
     const [subtotalPickOpen, setSubtotalPickOpen] = useState(false);
     const [fractionPickOpen, setFractionPickOpen] = useState(false);
     const [splitPickOpen, setSplitPickOpen] = useState(false);
+    const [showRoomPicker, setShowRoomPicker] = useState(false);
     const [mergePrimaryId, setMergePrimaryId] = useState('');
     const [mergeSecondaryId, setMergeSecondaryId] = useState('');
     const [moveFromId, setMoveFromId] = useState('');
@@ -465,6 +464,23 @@ const TableMap: React.FC<TableMapProps> = ({
         [getParkedSummaryForTable]
     );
 
+    const getVisualTableState = useCallback((table: Table): Table => {
+        const parkedSummary = getParkedSummaryForTable(table);
+        if (parkedSummary?.itemCount) return table;
+        if (table.status === 'RESERVED') return table;
+        if (table.status !== 'OCCUPIED' && !table.currentOrderId && !table.currentOrderTotal) return table;
+
+        return {
+            ...table,
+            status: 'FREE',
+            currentOrderId: undefined,
+            currentOrderTotal: undefined,
+            timeSeated: undefined,
+            waiterId: undefined,
+            waiterName: undefined
+        } as Table;
+    }, [getParkedSummaryForTable]);
+
     const enrichTableWithParkedTicket = useCallback((table: Table): Table => {
         const parkedSummary = getParkedSummaryForTable(table);
         if (!parkedSummary) return table;
@@ -484,19 +500,22 @@ const TableMap: React.FC<TableMapProps> = ({
 
     const occupiedForTools = useMemo(
         () => allServiceTables
-            .map(enrichTableWithParkedTicket)
+            .map(table => enrichTableWithParkedTicket(getVisualTableState(table)))
             .filter(t => t.status === 'OCCUPIED' || t.status === 'RESERVED'),
-        [allServiceTables, enrichTableWithParkedTicket]
+        [allServiceTables, enrichTableWithParkedTicket, getVisualTableState]
     );
 
     const freeForTools = useMemo(
-        () => allServiceTables.filter(t => !isTableOccupiedFromTicket(t) && (!t.status || t.status === 'FREE')),
-        [allServiceTables, isTableOccupiedFromTicket]
+        () => allServiceTables.filter(t => !isTableOccupiedFromTicket(t) && getVisualTableState(t).status === 'FREE'),
+        [allServiceTables, getVisualTableState, isTableOccupiedFromTicket]
     );
 
     const occupiedLikeTables = useMemo(
-        () => serviceTables.filter(table => table.status === 'OCCUPIED' || table.status === 'RESERVED' || isTableOccupiedFromTicket(table)),
-        [serviceTables, isTableOccupiedFromTicket]
+        () => serviceTables.filter(table => {
+            const visualTable = getVisualTableState(table);
+            return visualTable.status === 'RESERVED' || isTableOccupiedFromTicket(table);
+        }),
+        [serviceTables, getVisualTableState, isTableOccupiedFromTicket]
     );
 
     const averageTicket = useMemo(() => {
@@ -529,18 +548,18 @@ const TableMap: React.FC<TableMapProps> = ({
     const highRevenueThreshold = useMemo(() => averageTicket * 1.5, [averageTicket]);
 
     const smartTables = useMemo<SmartTableModel[]>(() => {
-        return serviceTables.map((table, index) => {
+        return serviceTables.map((rawTable, index) => {
+            const table = getVisualTableState(rawTable);
             const elapsedMinutes = getElapsedMinutes(table.timeSeated);
-            const persistedTotal = Number(table.currentOrderTotal || 0);
             const parkedSummary = getParkedSummaryForTable(table);
             const parkedItems = parkedSummary?.itemCount || 0;
             const parkedTotal = parkedSummary
                 ? (parkedSummary.hasExplicitTotal
                     ? parkedSummary.finalTotal
-                    : (persistedTotal > NO_ORDER_TOTAL_THRESHOLD ? persistedTotal : parkedSummary.calculatedTotal))
+                    : parkedSummary.calculatedTotal)
                 : 0;
-            const total = parkedTotal > NO_ORDER_TOTAL_THRESHOLD ? parkedTotal : persistedTotal;
-            const hasDigitizedItems = total > NO_ORDER_TOTAL_THRESHOLD || parkedItems > 0;
+            const total = parkedTotal > NO_ORDER_TOTAL_THRESHOLD ? parkedTotal : 0;
+            const hasDigitizedItems = parkedItems > 0;
             const smartStatus = getSmartStatus(table, elapsedMinutes, hasDigitizedItems);
             const displayTable = hasDigitizedItems && parkedSummary ? enrichTableWithParkedTicket(table) : table;
             const isOccupiedLike = smartStatus !== 'FREE';
@@ -577,7 +596,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 lastOrderHint: computeLastOrderHint(baseModel)
             };
         });
-    }, [serviceTables, bloqueoMeseros, currentUser.id, isAdmin, expectedStayMinutes, highRevenueThreshold, getParkedSummaryForTable, enrichTableWithParkedTicket]);
+    }, [serviceTables, bloqueoMeseros, currentUser.id, isAdmin, expectedStayMinutes, highRevenueThreshold, getParkedSummaryForTable, enrichTableWithParkedTicket, getVisualTableState]);
 
     const stats = useMemo(() => {
         const total = smartTables.length;
@@ -1027,35 +1046,56 @@ const TableMap: React.FC<TableMapProps> = ({
                     </GlassButton>
                 </div>
 
-                {!isControlCenterOpen && (
-                    <div className="absolute left-5 top-24 bottom-24 z-30 w-[min(10rem,38vw)] rounded-[1.6rem] border border-white/10 bg-white/[0.08] backdrop-blur-xl px-2.5 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex flex-col gap-2 overflow-y-auto overflow-x-hidden no-scrollbar pointer-events-auto">
-                        {rooms.map(room => {
-                                const isActive = room.id === activeRoomId;
-                                const roomOccupied = safeTables.filter(table =>
-                                    table.roomId === room.id &&
-                                    (table.status === 'OCCUPIED' || table.status === 'RESERVED' || isTableOccupiedFromTicket(table))
-                                ).length;
+                <div className="absolute left-5 top-24 z-40 flex items-start gap-3 pointer-events-auto">
+                    <GlassButton onClick={() => setShowRoomPicker(prev => !prev)} title="Salas" className="w-auto px-4">
+                        <span className="flex items-center gap-2">
+                            <LayoutGrid size={18} />
+                            <span className="text-xs font-black uppercase tracking-widest">Salas</span>
+                        </span>
+                    </GlassButton>
 
-                                return (
-                                    <button
-                                        key={room.id}
-                                        onClick={() => setActiveRoomId(room.id)}
-                                        className={`w-full px-3 py-2.5 rounded-2xl border transition-all duration-200 text-sm font-bold flex items-center gap-2 text-left ${
-                                            isActive
-                                                ? 'border-sky-300/60 bg-sky-400/20 text-sky-100 shadow-[0_0_24px_rgba(56,189,248,0.28)]'
-                                                : 'border-white/10 bg-white/[0.04] text-slate-300 hover:text-white hover:bg-white/[0.09]'
-                                        }`}
-                                    >
-                                        <LayoutGrid size={14} className="shrink-0" />
-                                        <span className="min-w-0 flex-1 truncate">{room.name || room.nombre}</span>
-                                        {roomOccupied > 0 && (
-                                            <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-rose-500/70 text-white">{roomOccupied}</span>
-                                        )}
-                                    </button>
-                                );
-                            })}
-                    </div>
-                )}
+                    <AnimatePresence>
+                        {showRoomPicker && (
+                            <m.div
+                                initial={{ opacity: 0, x: -12, scale: 0.98 }}
+                                animate={{ opacity: 1, x: 0, scale: 1 }}
+                                exit={{ opacity: 0, x: -12, scale: 0.98 }}
+                                transition={{ duration: 0.16 }}
+                                className="max-h-[min(68vh,34rem)] w-[min(16rem,58vw)] rounded-[1.6rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-2.5 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex flex-col gap-2 overflow-y-auto overflow-x-hidden no-scrollbar"
+                            >
+                                {rooms.map(room => {
+                                    const isActive = room.id === activeRoomId;
+                                    const roomOccupied = safeTables.filter(table => {
+                                        if (table.roomId !== room.id) return false;
+                                        const visualTable = getVisualTableState(table);
+                                        return visualTable.status === 'RESERVED' || isTableOccupiedFromTicket(table);
+                                    }).length;
+
+                                    return (
+                                        <button
+                                            key={room.id}
+                                            onClick={() => {
+                                                setActiveRoomId(room.id);
+                                                setShowRoomPicker(false);
+                                            }}
+                                            className={`w-full px-3 py-2.5 rounded-2xl border transition-all duration-200 text-sm font-bold flex items-center gap-2 text-left ${
+                                                isActive
+                                                    ? 'border-sky-300/60 bg-sky-400/20 text-sky-100 shadow-[0_0_24px_rgba(56,189,248,0.28)]'
+                                                    : 'border-white/10 bg-white/[0.04] text-slate-300 hover:text-white hover:bg-white/[0.09]'
+                                            }`}
+                                        >
+                                            <LayoutGrid size={14} className="shrink-0" />
+                                            <span className="min-w-0 flex-1 truncate">{room.name || room.nombre}</span>
+                                            {roomOccupied > 0 && (
+                                                <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-rose-500/70 text-white">{roomOccupied}</span>
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </m.div>
+                        )}
+                    </AnimatePresence>
+                </div>
 
                 <div className="absolute bottom-5 left-5 right-5 z-30 flex justify-end pointer-events-none">
                     {isRestaurantMode && (
@@ -1625,7 +1665,7 @@ const SmartTableNode = React.memo(({
                 top: model.table.posY,
                 width: model.table.width,
                 height: model.table.height,
-                transform: `rotate(${model.table.rotation || 0}deg)`,
+                rotate: `${model.table.rotation || 0}deg`,
                 willChange: 'transform, opacity'
             }}
         >
@@ -1707,14 +1747,6 @@ const SmartTableNode = React.memo(({
                             <p className="text-base font-black tracking-tight truncate">
                                 {model.table.nombre || model.table.name}
                             </p>
-                            <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-emerald-200">
-                                <Check size={10} />
-                                Disponible
-                            </div>
-                        </div>
-
-                        <div className="flex justify-center">
-                            <span className="text-[10px] text-emerald-100/80 font-semibold">Mesa lista</span>
                         </div>
                     </>
                 ) : (
@@ -1747,10 +1779,6 @@ const SmartTableNode = React.memo(({
                             <p className="text-base font-black tracking-tight drop-shadow-[0_2px_6px_rgba(2,6,23,0.5)] truncate">
                                 {model.table.nombre || model.table.name}
                             </p>
-                            <div className={`mt-1 inline-flex items-center gap-1 text-[11px] font-bold ${statusPalette[model.smartStatus].badge}`}>
-                                {statusPalette[model.smartStatus].icon}
-                                {statusPalette[model.smartStatus].label}
-                            </div>
                         </div>
 
                         <div className="flex items-center justify-between text-[11px] font-semibold">
