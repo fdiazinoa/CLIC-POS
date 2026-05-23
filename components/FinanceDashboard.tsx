@@ -232,6 +232,7 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
       () => [...(xReports || [])].sort((a, b) => new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime()).slice(0, 3),
       [xReports]
    );
+   const canViewXReport = hasPermission('POS_VIEW_X_REPORT') || hasPermission('POS_CLOSE_X');
    const canCloseXReport = hasPermission('POS_CLOSE_X') && allowPartialXReport && Boolean(onCloseXReport);
 
    return (
@@ -326,7 +327,7 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
             <div className="w-full md:w-1/2 flex flex-col gap-6">
 
                {/* Control X: permiso + política ERP/POS (allowPartialXReport) */}
-               {hasPermission('POS_VIEW_X_REPORT') && allowPartialXReport && (
+               {canViewXReport && (
                   <div className="bg-gray-900 text-white p-6 rounded-3xl shadow-xl relative overflow-hidden">
                      {/* Background Pattern */}
                      <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
@@ -385,7 +386,7 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
                         </button>
                         {!canCloseXReport && (
                            <p className="mt-2 text-center text-[10px] font-bold uppercase tracking-wide text-gray-500">
-                              Requiere permiso de cierre X
+                              {allowPartialXReport ? 'Requiere permiso de cierre X' : 'Cierre X desactivado en esta terminal'}
                            </p>
                         )}
                         {recentXReports.length > 0 && (
