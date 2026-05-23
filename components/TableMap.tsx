@@ -714,7 +714,8 @@ const TableMap: React.FC<TableMapProps> = ({
             tableDisplayLabel: targetTableLabel,
             tableRoomLabel: targetRoomLabel,
             orderNumber: sourceTicket.orderNumber || targetTicket?.orderNumber,
-        };
+            ...(mode === 'MERGE' ? { joinedTableIds: [sourceTable.id, targetTable.id] } : { joinedTableIds: undefined }),
+        } as ParkedTicket;
 
         const removedTicketIds = new Set([String(sourceTicket.id)]);
         if (targetTicket?.id) removedTicketIds.add(String(targetTicket.id));

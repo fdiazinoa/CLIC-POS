@@ -1942,8 +1942,26 @@ const AppContent: React.FC = () => {
     });
 
     return (sourceTables || []).map(table => {
-      const linkedTicket = (table.currentOrderId ? byOrderId.get(String(table.currentOrderId)) : undefined)
-        || byTableId.get(String(table.id));
+      const tableId = String(table.id);
+      const orderTicket = table.currentOrderId ? byOrderId.get(String(table.currentOrderId)) : undefined;
+      const orderTicketTableId = orderTicket?.tableId !== undefined && orderTicket?.tableId !== null
+        ? String(orderTicket.tableId)
+        : '';
+      const joinedTableIds = Array.isArray((orderTicket as any)?.joinedTableIds)
+        ? (orderTicket as any).joinedTableIds.map((id: unknown) => String(id))
+        : [];
+      const canLinkByOrder = Boolean(
+        orderTicket &&
+        (
+          !orderTicketTableId ||
+          orderTicketTableId === tableId ||
+          joinedTableIds.includes(tableId) ||
+          String((table as any).joinedTableId || '') === orderTicketTableId ||
+          String((table as any).joinedSourceTableId || '') === tableId
+        )
+      );
+      const linkedTicket = (canLinkByOrder ? orderTicket : undefined)
+        || byTableId.get(tableId);
       if (!linkedTicket) {
         const hasStaleOccupancy =
           table.status === 'OCCUPIED' &&
@@ -5898,8 +5916,10 @@ const AppContent: React.FC = () => {
                     }
                     const fromTx = (transactions || []).find(t => t.id === table.currentOrderId);
                     if (parked?.items?.length) {
+                      const joinedSourceName = String((selectedTable as any).joinedSourceTableName || '').trim();
                       selectedTable = {
                         ...table,
+                        ...(joinedSourceName ? { name: joinedSourceName, nombre: joinedSourceName } : {}),
                         status: 'OCCUPIED',
                         currentOrderId: parked.id,
                         currentOrderTotal: typeof parked.total === 'number'
@@ -5922,8 +5942,10 @@ const AppContent: React.FC = () => {
                       }
                     }
                     if (parked?.items?.length) {
+                      const joinedSourceName = String((selectedTable as any).joinedSourceTableName || '').trim();
                       selectedTable = {
                         ...table,
+                        ...(joinedSourceName ? { name: joinedSourceName, nombre: joinedSourceName } : {}),
                         status: 'OCCUPIED',
                         currentOrderId: parked.id,
                         currentOrderTotal: typeof parked.total === 'number'
