@@ -5939,6 +5939,11 @@ const AppContent: React.FC = () => {
                   setCurrentView('POS');
                 }}
                 onRefreshTables={fetchTables}
+                onUpdateTables={async (nextTables) => {
+                  setTables(nextTables);
+                  await db.save('tables', nextTables);
+                }}
+                onUpdateParkedTickets={handleUpdateParkedTickets}
                 currencySymbol={config.currencySymbol}
                 currentUser={currentUser!}
                 isAdmin={currentUser?.role === 'ADMIN'}
