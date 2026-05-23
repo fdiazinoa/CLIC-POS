@@ -34,7 +34,8 @@ import {
   RedeemedCouponRef,
   RefundProcessingOptions,
   PaymentMethodDefinition,
-  FiscalDocumentCorrectionInput
+  FiscalDocumentCorrectionInput,
+  TerminalConfig
 } from './types';
 import {
   DEFAULT_ROLES,
@@ -501,6 +502,23 @@ const getTerminalBindingMode = (setupMode: TerminalSetupMode | null): 'MASTER' |
 
 const hasPendingTerminalSetup = (): boolean => localStorage.getItem(TERMINAL_SETUP_PENDING_KEY) === '1';
 
+const isNativeStandaloneTerminalRuntime = (terminal?: { config?: TerminalConfig } | null): boolean => {
+  if (!isNativeAndroidRuntime()) return false;
+
+  const setupMode = getStoredTerminalSetupMode();
+  if (setupMode === 'CLIENT') return false;
+
+  const terminalConfig = terminal?.config;
+  if (terminalConfig?.isPrimaryNode === false && terminalConfig?.governedByMaster) {
+    return false;
+  }
+
+  if (setupMode === 'SERVER_LOCAL') return true;
+  if (!normalizeMasterHost(localStorage.getItem('pos_master_ip'))) return true;
+
+  return terminalConfig?.isPrimaryNode === true && terminalConfig?.governedByMaster !== true;
+};
+
 const buildConfigSyncUrl = (): string | null => {
   const masterHost = normalizeMasterHost(localStorage.getItem('pos_master_ip'));
   const isLoopbackMaster = masterHost === 'localhost' || masterHost === '127.0.0.1';
@@ -780,6 +798,29 @@ const AppContent: React.FC = () => {
       return;
     }
 
+    let wakeLock: any = null;
+    let wakeLockRequested = false;
+
+    const requestWakeLock = async () => {
+      const runtimeNavigator = navigator as any;
+      if (!runtimeNavigator?.wakeLock?.request || document.visibilityState !== 'visible') {
+        return;
+      }
+
+      try {
+        wakeLock = await runtimeNavigator.wakeLock.request('screen');
+        wakeLockRequested = true;
+        wakeLock?.addEventListener?.('release', () => {
+          wakeLock = null;
+        });
+      } catch (error) {
+        if (!wakeLockRequested) {
+          console.info('[Android] Screen Wake Lock no disponible; usando FLAG_KEEP_SCREEN_ON nativo.', error);
+          wakeLockRequested = true;
+        }
+      }
+    };
+
     const installAndroidPrinterShim = (): boolean => {
       const runtimeWindow = window as any;
       if (runtimeWindow.ClicPOSNativePrinter || !runtimeWindow.AndroidPrinter) {
@@ -853,6 +894,13 @@ const AppContent: React.FC = () => {
       applyInputRuntimeHints(event.target);
     };
 
+    const handleVisibilityChange = () => {
+      if (!document.hidden && !wakeLock) {
+        void requestWakeLock();
+      }
+    };
+
+    void requestWakeLock();
     installAndroidPrinterShim();
     const printerShimPoll = window.setInterval(() => {
       if (installAndroidPrinterShim()) {
@@ -862,10 +910,13 @@ const AppContent: React.FC = () => {
 
     seedExistingInputs();
     document.addEventListener('focusin', handleFocusIn, true);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       window.clearInterval(printerShimPoll);
       document.removeEventListener('focusin', handleFocusIn, true);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      wakeLock?.release?.().catch?.(() => undefined);
     };
   }, []);
 
@@ -1129,7 +1180,11 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     const currentTerminal = getCurrentTerminal();
-    const isNativeStandaloneApk = isNativeAndroidRuntime() && !normalizeMasterHost(localStorage.getItem('pos_master_ip'));
+    const isNativeStandaloneApk = isNativeStandaloneTerminalRuntime(currentTerminal);
+    if (isNativeStandaloneApk && normalizeMasterHost(localStorage.getItem('pos_master_ip'))) {
+      console.info('[Security] Native standalone terminal detected; clearing stale master pointer for inactivity policy.');
+      localStorage.removeItem('pos_master_ip');
+    }
     const autoLogoutMinutes = isNativeStandaloneApk ? 0 : (currentTerminal?.config?.security?.autoLogoutMinutes ?? 0);
     const shouldTrackInactivity =
       Boolean(currentUser) &&

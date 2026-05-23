@@ -24,14 +24,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        int softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            softInputMode |= WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
-        } else {
-            softInputMode |= WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN;
-        }
-        getWindow().setSoftInputMode(softInputMode);
+        enforcePosWindowPolicy();
 
         if (getBridge() == null || getBridge().getWebView() == null) {
             return;
@@ -59,6 +52,23 @@ public class MainActivity extends BridgeActivity {
         webView.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
 
         ensureBluetoothPermissions();
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        enforcePosWindowPolicy();
+    }
+
+    private void enforcePosWindowPolicy() {
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        int softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            softInputMode |= WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
+        } else {
+            softInputMode |= WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN;
+        }
+        getWindow().setSoftInputMode(softInputMode);
     }
 
     private void ensureBluetoothPermissions() {
