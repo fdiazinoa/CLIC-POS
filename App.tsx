@@ -6144,6 +6144,7 @@ const AppContent: React.FC = () => {
               const freshStocks = await db.get('productStocks') as ProductStock[] || [];
               setProductStocks(freshStocks);
             }}
+            onOpenFinance={() => setCurrentView('FINANCE')}
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
@@ -6210,6 +6211,7 @@ const AppContent: React.FC = () => {
               const freshStocks = await db.get('productStocks') as ProductStock[] || [];
               setProductStocks(freshStocks);
             }}
+            onOpenFinance={() => setCurrentView('FINANCE')}
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}

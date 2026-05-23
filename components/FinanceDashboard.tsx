@@ -325,6 +325,49 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
 
             {/* RIGHT: X-REPORT (MONITOR) & Z-REPORT LINK */}
             <div className="w-full md:w-1/2 flex flex-col gap-6">
+               {canViewXReport && (
+                  <div className="bg-white p-5 rounded-3xl shadow-sm border border-blue-100">
+                     <div className="flex items-start gap-4">
+                        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-100">
+                           <ClipboardCheck size={24} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                           <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Arqueo parcial</p>
+                           <h3 className="mt-1 text-xl font-black text-gray-900">Cierre X</h3>
+                           <p className="mt-1 text-xs font-bold text-gray-500">Cuenta la caja sin limpiar ventas ni movimientos.</p>
+                        </div>
+                     </div>
+
+                     <button
+                        onClick={() => setShowXCloseModal(true)}
+                        disabled={!canCloseXReport}
+                        className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-4 text-sm font-black uppercase tracking-wide text-white shadow-lg shadow-blue-100 transition-all active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500 disabled:shadow-none"
+                     >
+                        <ClipboardCheck size={18} />
+                        Hacer Cierre X
+                     </button>
+
+                     {!canCloseXReport && (
+                        <p className="mt-2 text-center text-[10px] font-bold uppercase tracking-wide text-gray-400">
+                           {allowPartialXReport ? 'Requiere permiso de cierre X' : 'Cierre X desactivado en esta terminal'}
+                        </p>
+                     )}
+
+                     {recentXReports.length > 0 && (
+                        <div className="mt-4 rounded-2xl bg-gray-50 p-3">
+                           <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-gray-400">Últimos X</p>
+                           <div className="space-y-2">
+                              {recentXReports.map(report => (
+                                 <div key={report.id} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 text-xs shadow-sm">
+                                    <span className="font-black text-gray-800">{report.sequenceNumber}</span>
+                                    <span className="font-bold text-gray-400">{new Date(report.closedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                 </div>
+                              ))}
+                           </div>
+                        </div>
+                     )}
+                  </div>
+               )}
 
                {/* Control X: permiso + política ERP/POS (allowPartialXReport) */}
                {canViewXReport && (
@@ -375,32 +418,6 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
                         </div>
                      </div>
 
-                     <div className="relative z-10 mt-6 border-t border-white/10 pt-5">
-                        <button
-                           onClick={() => setShowXCloseModal(true)}
-                           disabled={!canCloseXReport}
-                           className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-500 px-4 py-3 text-sm font-black uppercase tracking-wide text-white shadow-lg shadow-blue-950/20 transition-all active:scale-95 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-gray-500 disabled:shadow-none"
-                        >
-                           <ClipboardCheck size={18} />
-                           Hacer Cierre X
-                        </button>
-                        {!canCloseXReport && (
-                           <p className="mt-2 text-center text-[10px] font-bold uppercase tracking-wide text-gray-500">
-                              {allowPartialXReport ? 'Requiere permiso de cierre X' : 'Cierre X desactivado en esta terminal'}
-                           </p>
-                        )}
-                        {recentXReports.length > 0 && (
-                           <div className="mt-4 space-y-2">
-                              <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">Últimos X</p>
-                              {recentXReports.map(report => (
-                                 <div key={report.id} className="flex items-center justify-between rounded-xl bg-white/5 px-3 py-2 text-xs">
-                                    <span className="font-black text-white">{report.sequenceNumber}</span>
-                                    <span className="text-gray-400">{new Date(report.closedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                 </div>
-                              ))}
-                           </div>
-                        )}
-                     </div>
                   </div>
                )}
 

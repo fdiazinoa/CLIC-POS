@@ -117,6 +117,7 @@ interface SettingsProps {
     creditNoteIds: string[];
   }>;
   onAdjustStock: (adjustments: { productId: string; quantity: number }[]) => void;
+  onOpenFinance?: () => void;
   onOpenZReport: () => void;
   onOpenSupplyChain: () => void;
   onOpenFranchise: () => void;
@@ -891,6 +892,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   <SettingsCard icon={PlugZap} label="Integraciones" description="AZUL, CardNet y adquirentes" color="bg-sky-600" onClick={() => setCurrentView('INTEGRATIONS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ArrowRightLeft} label="Divisas y Cambio" description="Multi-moneda y Tasas" color="bg-teal-500" onClick={() => setCurrentView('EXCHANGE')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Percent} label="Impuestos" description="ITBIS, Exentos y Cargos" color="bg-emerald-500" onClick={() => setCurrentView('TAXES')} locked={!hasPermission('SETTINGS_TAXES')} />
+                  <SettingsCard icon={ListChecks} label="Cierre X" description="Arqueo parcial sin limpiar ventas" color="bg-blue-700" onClick={props.onOpenFinance || props.onOpenZReport} locked={!hasPermission('POS_CLOSE_X')} />
                   <SettingsCard icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" onClick={props.onOpenZReport} locked={!hasPermission('POS_CLOSE_Z')} />
                   <SettingsCard icon={FileText} label="Documentos" description="Series, NCF, Prefijos" color="bg-blue-400" onClick={() => setCurrentView('DOCUMENTS')} locked={!hasPermission('SETTINGS_TAXES')} />
                 </div>
