@@ -1,3 +1,4 @@
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { BusinessConfig, Product, TerminalConfig } from '../../types';
 import { getDefaultRoleConfig, resolveDeviceRoleValue } from '../../utils/deviceRoleHelpers';
 import { supabase } from '../../utils/supabase';
@@ -97,6 +98,8 @@ const withTimeout = async <T>(promise: Promise<T>, label: string): Promise<T> =>
 
 const stripTrailingSlashes = (value: string): string => value.replace(/\/+$/, '');
 
+const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+
 const buildDeviceHeaders = (deviceId?: string | null): Record<string, string> => {
   const resolvedDeviceId = asString(deviceId);
   return resolvedDeviceId
@@ -116,14 +119,49 @@ const fetchErpJson = async (
     headers?: Record<string, string>;
   }
 ) => {
+  const url = `${stripTrailingSlashes(baseUrl)}${path}`;
+  const headers = {
+    Accept: 'application/json',
+    ...(options?.body ? { 'Content-Type': 'application/json' } : {}),
+    ...(options?.headers || {}),
+  };
+
+  if (isNativeAndroidRuntime()) {
+    const nativeResponse = await withTimeout(
+      CapacitorHttp.request({
+        url,
+        method: options?.method || 'GET',
+        headers,
+        data: options?.body || undefined,
+      }),
+      `ERP native request ${path}`
+    );
+
+    const payload = typeof nativeResponse.data === 'string'
+      ? (() => {
+          try {
+            return nativeResponse.data ? JSON.parse(nativeResponse.data) : null;
+          } catch {
+            return nativeResponse.data;
+          }
+        })()
+      : nativeResponse.data;
+
+    if (nativeResponse.status < 200 || nativeResponse.status >= 300) {
+      const message =
+        asString(asObject(payload).message) ||
+        asString(asObject(payload).error) ||
+        `HTTP ${nativeResponse.status}`;
+      throw new Error(`ERP ${path}: ${message}`);
+    }
+
+    return payload;
+  }
+
   const response = await withTimeout(
-    fetch(`${stripTrailingSlashes(baseUrl)}${path}`, {
+    fetch(url, {
       method: options?.method || 'GET',
-      headers: {
-        Accept: 'application/json',
-        ...(options?.body ? { 'Content-Type': 'application/json' } : {}),
-        ...(options?.headers || {}),
-      },
+      headers,
       body: options?.body ? JSON.stringify(options.body) : undefined,
     }),
     `ERP request ${path}`

@@ -650,12 +650,9 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         }
 
         if (!data) {
-          if (forceTransfer && proxyError) {
-            throw proxyError instanceof Error
-              ? proxyError
-              : new Error('No se pudo contactar el proxy local para completar el traspaso.');
+          if (proxyError) {
+            console.warn('setup proxy unavailable; using native ERP request for terminal binding', proxyError);
           }
-
           data = await bindTerminalFromErp({
             currentConfig,
             posDeviceId: deviceId,
@@ -1092,11 +1089,11 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                       </div>
                       <div className="min-w-0">
                         <p className="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400 break-all sm:tracking-[0.25em]">
-                          {terminal.id.toUpperCase()}
-                          {hasDuplicateName && <span className="ml-2 text-amber-600">#{terminalRef}</span>}
+                          {terminal.id.toUpperCase()} · ERP #{terminalRef}
                         </p>
                         <h4 className="mt-1 text-xl font-black tracking-tight text-slate-900 sm:text-2xl">
                           {terminal.name}
+                          {hasDuplicateName && <span className="ml-2 text-base font-black text-amber-600">#{terminalRef}</span>}
                         </h4>
                         <div className="mt-3 flex items-center gap-2 text-sm font-medium text-slate-500">
                           <MapPin size={14} />
