@@ -377,13 +377,13 @@ const bootstrapErpTenant = async (identity: ErpIdentity) => {
       deviceId: identity.deviceId || null,
       erpBaseUrl: identity.erpBaseUrl,
     },
-    {
+    ...(!identity.tenantId ? [{
       tenantId: null,
       tenantSlug: identity.tenantSlug || null,
       tenantEmail: identity.tenantEmail || null,
       deviceId: identity.deviceId || null,
       erpBaseUrl: identity.erpBaseUrl,
-    },
+    }] : []),
   ];
 
   let lastError: Error | null = null;
@@ -433,13 +433,21 @@ const resolveBootstrapContext = (
   bootstrap: any,
   fallbackTenantId?: string | null
 ) => {
+  const activation = asObject(bootstrap?.activation);
+  const tenant = asObject(bootstrap?.tenant);
+
   return {
     tenantId:
-      asString(bootstrap?.tenant?.id)
-      || asString(bootstrap?.activation?.tenant_id)
+      asString(tenant.id)
+      || asString(activation.tenant_id)
       || asString(fallbackTenantId)
       || null,
-    tenantName: asString(bootstrap?.tenant?.name) || null,
+    cloudTenantId:
+      asString(activation.cloud_admin_tenant_id)
+      || asString(tenant.cloud_admin_tenant_id)
+      || asString(tenant.external_tenant_id)
+      || null,
+    tenantName: asString(tenant.name) || null,
     companyId: asString(bootstrap?.company?.id) || null,
     storeId: asString(bootstrap?.store?.id) || null,
   };
@@ -469,6 +477,7 @@ const resolveTenantDirectoryContext = async (
 const resolveErpTerminalContext = async (identity: ErpIdentity) => {
   const candidates: Array<{
     tenantId: string | null;
+    cloudTenantId?: string | null;
     tenantName: string | null;
     companyId: string | null;
     storeId: string | null;
@@ -479,10 +488,22 @@ const resolveErpTerminalContext = async (identity: ErpIdentity) => {
   try {
     const bootstrap = await bootstrapErpTenant(identity);
     const candidate = resolveBootstrapContext(bootstrap, identity.tenantId);
-    if (candidate.tenantId) {
+    const requestedTenantId = asString(identity.tenantId);
+    const matchesRequestedTenant =
+      !requestedTenantId ||
+      candidate.cloudTenantId === requestedTenantId ||
+      candidate.tenantId === requestedTenantId;
+
+    if (candidate.tenantId && matchesRequestedTenant) {
       candidates.push({
         ...candidate,
         source: 'ERP_BOOTSTRAP',
+      });
+    } else if (candidate.tenantId) {
+      console.warn('⚠️ Ignoring ERP bootstrap context from a different tenant:', {
+        requestedTenantId,
+        resolvedTenantId: candidate.tenantId,
+        resolvedCloudTenantId: candidate.cloudTenantId,
       });
     }
   } catch (error: any) {
@@ -501,10 +522,19 @@ const resolveErpTerminalContext = async (identity: ErpIdentity) => {
   let fallbackContext: any = null;
 
   for (const candidate of candidates) {
-    const terminals = await fetchErpTerminals(identity.erpBaseUrl, {
+    const terminalRows = await fetchErpTerminals(identity.erpBaseUrl, {
       tenantId: candidate.tenantId,
       companyId: candidate.companyId,
       storeId: candidate.storeId,
+    });
+    const terminals = terminalRows.filter((terminal: any) => {
+      const terminalTenantId = asString(terminal?.tenant_id) || asString(terminal?.tenantId);
+      const terminalCompanyId = asString(terminal?.company_id) || asString(terminal?.companyId);
+      const terminalStoreId = asString(terminal?.store_id) || asString(terminal?.storeId);
+      const matchesTenant = !terminalTenantId || !candidate.tenantId || terminalTenantId === candidate.tenantId;
+      const matchesCompany = !terminalCompanyId || !candidate.companyId || terminalCompanyId === candidate.companyId;
+      const matchesStore = !terminalStoreId || !candidate.storeId || terminalStoreId === candidate.storeId;
+      return matchesTenant && matchesCompany && matchesStore;
     });
 
     const contextWithTerminals = {
