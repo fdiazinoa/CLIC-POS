@@ -3979,13 +3979,22 @@ const AppContent: React.FC = () => {
       });
       permissionService.initialize(updatedConfig, terminalId);
       await syncManager.initialize(updatedConfig, terminalId);
-      const shouldFullPullOnPairing = setupResult?.snapshotMeta?.fullPullOnPairing ?? true;
+      const shouldFullPullOnPairing = shouldTakeover
+        ? true
+        : setupResult?.snapshotMeta?.fullPullOnPairing ?? true;
       if (shouldFullPullOnPairing) {
         setupResult.progress?.({
           stepId: 'sync',
           message: 'Sincronizando maestros: productos, tarifas, clientes, usuarios y documentos...',
         });
         await syncManager.fullPull();
+        if (shouldTakeover) {
+          setupResult.progress?.({
+            stepId: 'sync',
+            message: 'Verificando stock, pagos, tickets abiertos y datos operativos recuperados...',
+          });
+          await syncManager.syncAllCatalogs();
+        }
       } else {
         if (Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
           setupResult.progress?.({
