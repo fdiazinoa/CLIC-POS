@@ -231,6 +231,8 @@ type MasterBootstrapBlockState = {
   retrying?: boolean;
 };
 
+type ActivationErpRecoveryResult = 'RECOVERED' | 'TERMINALS_AVAILABLE' | 'NO_TERMINALS';
+
 const LICENSE_REFRESH_BASE_MS = 60_000;
 const TIMER_JITTER_MIN_MS = 3_000;
 const TIMER_JITTER_MAX_MS = 5_000;
@@ -4285,7 +4287,7 @@ const AppContent: React.FC = () => {
     tenantEmail?: string | null;
     erpBaseUrl: string;
     posDeviceId: string;
-  }): Promise<boolean> => {
+  }): Promise<ActivationErpRecoveryResult> => {
     const recoveryBaseConfig = Array.isArray(config?.terminals) && config.terminals.length > 0
       ? config
       : getInitialConfig(SubVertical.SUPERMARKET);
@@ -4300,12 +4302,16 @@ const AppContent: React.FC = () => {
     });
 
     const terminals = Array.isArray(terminalList.terminals) ? terminalList.terminals : [];
+    if (terminals.length === 0) {
+      return 'NO_TERMINALS';
+    }
+
     const sameDeviceTerminal = terminals.find((terminal) =>
       String(terminal.currentDeviceId || '').trim() === input.posDeviceId
     );
 
     if (!sameDeviceTerminal) {
-      return false;
+      return 'TERMINALS_AVAILABLE';
     }
 
     setErpRebuildRecovery({
@@ -4349,7 +4355,7 @@ const AppContent: React.FC = () => {
     });
 
     setErpRebuildRecovery(null);
-    return true;
+    return 'RECOVERED';
   };
 
   const handleSetupWizardComplete = async (finalConfig: BusinessConfig) => {
@@ -6457,9 +6463,10 @@ const AppContent: React.FC = () => {
                   persistSetupErpBaseUrls(activatedErpBaseUrl);
                 }
 
+                let shouldOpenErpTerminalPairing = false;
                 if (activatedTenantId && activatedErpBaseUrl && resolvedDeviceId) {
                   try {
-                    const recovered = await recoverActivatedTerminalFromErp({
+                    const recoveryResult = await recoverActivatedTerminalFromErp({
                       tenantId: activatedTenantId,
                       tenantSlug: tenantData?.slug || localStorage.getItem('clic_tenant_slug') || null,
                       tenantEmail: tenantData?.email || localStorage.getItem('clic_tenant_email') || null,
@@ -6467,12 +6474,14 @@ const AppContent: React.FC = () => {
                       posDeviceId: resolvedDeviceId,
                     });
 
-                    if (recovered) {
+                    if (recoveryResult === 'RECOVERED') {
                       console.log('[ACTIVATION] Terminal recuperada desde ERP para este mismo device_id.');
                       return;
                     }
+
+                    shouldOpenErpTerminalPairing = recoveryResult === 'TERMINALS_AVAILABLE';
                   } catch (recoveryError) {
-                    console.warn('[ACTIVATION] No se pudo auto-recuperar la terminal desde ERP. Se mostrará selección de terminal.', recoveryError);
+                    console.warn('[ACTIVATION] ERP no tiene terminal operativa para este tenant. Continuando wizard local-first.', recoveryError);
                     setErpRebuildRecovery(null);
                   }
                 }
@@ -6481,12 +6490,16 @@ const AppContent: React.FC = () => {
                 localStorage.removeItem(SETUP_FLOW_STAGE_KEY);
                 localStorage.removeItem(SETUP_FLOW_VERSION_KEY);
                 localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
-                if (activatedErpBaseUrl) {
+                if (shouldOpenErpTerminalPairing) {
                   localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_ERP');
                   setCurrentView('TERMINAL_PAIRING');
                 } else {
-                  localStorage.removeItem(TERMINAL_SETUP_MODE_KEY);
-                  setCurrentView('TERMINAL_MODE_SELECTOR');
+                  localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_LOCAL');
+                  localStorage.setItem(SETUP_FLOW_STAGE_KEY, 'ACTIVATED_LOCAL_FIRST');
+                  localStorage.setItem(SETUP_FLOW_VERSION_KEY, SETUP_FLOW_VERSION);
+                  localStorage.removeItem('pos_master_ip');
+                  localStorage.setItem('CLIC_POS_MASTER_URL', buildRuntimeMasterUrl());
+                  setCurrentView('VERTICAL_SELECTOR');
                 }
               })();
             }}
