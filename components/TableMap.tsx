@@ -39,6 +39,8 @@ interface TableMapProps {
     isRestaurantMode?: boolean;
     onOpenTable?: (table: Table) => Promise<Table | null>;
     onRefreshTables?: () => void;
+    onUpdateTables?: (tables: Table[]) => void | Promise<void>;
+    onUpdateParkedTickets?: (tickets: ParkedTicket[]) => void | Promise<void>;
     canViewBusinessMetrics?: boolean;
     roles?: RoleDefinition[];
     onPrintPrecheck?: (table: Table) => void;
@@ -79,10 +81,27 @@ interface TooltipState {
 
 interface ParkedOrderSummary {
     orderId: string;
+    tableId?: string;
+    joinedTableIds: string[];
     itemCount: number;
     calculatedTotal: number;
     finalTotal: number;
     hasExplicitTotal: boolean;
+}
+
+type TableTransferMode = 'MOVE' | 'MERGE';
+
+interface TableTransferSelection {
+    mode: TableTransferMode;
+    step: 'SOURCE' | 'TARGET';
+    sourceTableId?: string;
+}
+
+interface TableNoticeState {
+    title: string;
+    message: string;
+    primaryLabel?: string;
+    tableToOpen?: Table;
 }
 
 const CANVAS_WIDTH = 1240;
@@ -155,6 +174,10 @@ const summarizeParkedTicket = (ticket: ParkedTicket): ParkedOrderSummary | null 
 
     return {
         orderId: ticket.id,
+        tableId: ticket.tableId !== undefined && ticket.tableId !== null ? String(ticket.tableId) : undefined,
+        joinedTableIds: Array.isArray((ticket as any).joinedTableIds)
+            ? (ticket as any).joinedTableIds.map((id: unknown) => String(id))
+            : [],
         itemCount,
         calculatedTotal,
         finalTotal,
@@ -199,9 +222,7 @@ const inferArchetype = (table: Table): TableArchetype => {
 const getSmartStatus = (table: Table, elapsedMinutes: number, hasDigitizedItems: boolean): SmartStatus => {
     if (hasDigitizedItems) return 'OCCUPIED';
     if (table.status === 'RESERVED') return 'CHECK_REQUESTED';
-    if (!table.status || table.status === 'FREE') return 'FREE';
-
-    return 'OCCUPIED';
+    return 'FREE';
 };
 
 const computeLastOrderHint = (model: Pick<SmartTableModel, 'smartStatus' | 'serviceStage' | 'hasDigitizedItems'>): string => {
@@ -258,6 +279,8 @@ const TableMap: React.FC<TableMapProps> = ({
     isRestaurantMode,
     onOpenTable,
     onRefreshTables,
+    onUpdateTables,
+    onUpdateParkedTickets,
     canViewBusinessMetrics,
     roles = [],
     onPrintPrecheck,
@@ -270,16 +293,13 @@ const TableMap: React.FC<TableMapProps> = ({
     const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [splitTicketForModal, setSplitTicketForModal] = useState<ParkedTicket | null>(null);
-    const [mergePickOpen, setMergePickOpen] = useState(false);
-    const [movePickOpen, setMovePickOpen] = useState(false);
+    const [transferSelection, setTransferSelection] = useState<TableTransferSelection | null>(null);
     const [subtotalPickOpen, setSubtotalPickOpen] = useState(false);
     const [fractionPickOpen, setFractionPickOpen] = useState(false);
     const [splitPickOpen, setSplitPickOpen] = useState(false);
-    const [mergePrimaryId, setMergePrimaryId] = useState('');
-    const [mergeSecondaryId, setMergeSecondaryId] = useState('');
-    const [moveFromId, setMoveFromId] = useState('');
-    const [moveToId, setMoveToId] = useState('');
+    const [showRoomPicker, setShowRoomPicker] = useState(false);
     const [isControlCenterOpen, setIsControlCenterOpen] = useState(false);
+    const [tableNotice, setTableNotice] = useState<TableNoticeState | null>(null);
     const reduceMotion = useReducedMotion();
 
     const mapShellRef = useRef<HTMLDivElement | null>(null);
@@ -454,9 +474,22 @@ const TableMap: React.FC<TableMapProps> = ({
     }, [parkedTickets]);
 
     const getParkedSummaryForTable = useCallback(
-        (table: Table) =>
-            (table.currentOrderId ? parkedSummaryByOrderId.get(String(table.currentOrderId)) : undefined)
-            || parkedSummaryByTableId.get(String(table.id)),
+        (table: Table) => {
+            const tableId = String(table.id);
+            const byOrder = table.currentOrderId ? parkedSummaryByOrderId.get(String(table.currentOrderId)) : undefined;
+            const orderBelongsToTable = Boolean(
+                byOrder &&
+                (
+                    !byOrder.tableId ||
+                    byOrder.tableId === tableId ||
+                    byOrder.joinedTableIds.includes(tableId) ||
+                    String((table as any).joinedTableId || '') === byOrder.tableId ||
+                    String((table as any).joinedSourceTableId || '') === tableId
+                )
+            );
+            return (orderBelongsToTable ? byOrder : undefined)
+                || parkedSummaryByTableId.get(tableId);
+        },
         [parkedSummaryByOrderId, parkedSummaryByTableId]
     );
 
@@ -464,6 +497,23 @@ const TableMap: React.FC<TableMapProps> = ({
         (table: Table) => Boolean(getParkedSummaryForTable(table)?.itemCount),
         [getParkedSummaryForTable]
     );
+
+    const getVisualTableState = useCallback((table: Table): Table => {
+        const parkedSummary = getParkedSummaryForTable(table);
+        if (parkedSummary?.itemCount) return table;
+        if (table.status === 'RESERVED') return table;
+        if (table.status !== 'OCCUPIED' && !table.currentOrderId && !table.currentOrderTotal) return table;
+
+        return {
+            ...table,
+            status: 'FREE',
+            currentOrderId: undefined,
+            currentOrderTotal: undefined,
+            timeSeated: undefined,
+            waiterId: undefined,
+            waiterName: undefined
+        } as Table;
+    }, [getParkedSummaryForTable]);
 
     const enrichTableWithParkedTicket = useCallback((table: Table): Table => {
         const parkedSummary = getParkedSummaryForTable(table);
@@ -484,19 +534,22 @@ const TableMap: React.FC<TableMapProps> = ({
 
     const occupiedForTools = useMemo(
         () => allServiceTables
-            .map(enrichTableWithParkedTicket)
+            .map(table => enrichTableWithParkedTicket(getVisualTableState(table)))
             .filter(t => t.status === 'OCCUPIED' || t.status === 'RESERVED'),
-        [allServiceTables, enrichTableWithParkedTicket]
+        [allServiceTables, enrichTableWithParkedTicket, getVisualTableState]
     );
 
     const freeForTools = useMemo(
-        () => allServiceTables.filter(t => !isTableOccupiedFromTicket(t) && (!t.status || t.status === 'FREE')),
-        [allServiceTables, isTableOccupiedFromTicket]
+        () => allServiceTables.filter(t => !isTableOccupiedFromTicket(t) && getVisualTableState(t).status === 'FREE'),
+        [allServiceTables, getVisualTableState, isTableOccupiedFromTicket]
     );
 
     const occupiedLikeTables = useMemo(
-        () => serviceTables.filter(table => table.status === 'OCCUPIED' || table.status === 'RESERVED' || isTableOccupiedFromTicket(table)),
-        [serviceTables, isTableOccupiedFromTicket]
+        () => serviceTables.filter(table => {
+            const visualTable = getVisualTableState(table);
+            return visualTable.status === 'RESERVED' || isTableOccupiedFromTicket(table);
+        }),
+        [serviceTables, getVisualTableState, isTableOccupiedFromTicket]
     );
 
     const averageTicket = useMemo(() => {
@@ -529,18 +582,18 @@ const TableMap: React.FC<TableMapProps> = ({
     const highRevenueThreshold = useMemo(() => averageTicket * 1.5, [averageTicket]);
 
     const smartTables = useMemo<SmartTableModel[]>(() => {
-        return serviceTables.map((table, index) => {
+        return serviceTables.map((rawTable, index) => {
+            const table = getVisualTableState(rawTable);
             const elapsedMinutes = getElapsedMinutes(table.timeSeated);
-            const persistedTotal = Number(table.currentOrderTotal || 0);
             const parkedSummary = getParkedSummaryForTable(table);
             const parkedItems = parkedSummary?.itemCount || 0;
             const parkedTotal = parkedSummary
                 ? (parkedSummary.hasExplicitTotal
                     ? parkedSummary.finalTotal
-                    : (persistedTotal > NO_ORDER_TOTAL_THRESHOLD ? persistedTotal : parkedSummary.calculatedTotal))
+                    : parkedSummary.calculatedTotal)
                 : 0;
-            const total = parkedTotal > NO_ORDER_TOTAL_THRESHOLD ? parkedTotal : persistedTotal;
-            const hasDigitizedItems = total > NO_ORDER_TOTAL_THRESHOLD || parkedItems > 0;
+            const total = parkedTotal > NO_ORDER_TOTAL_THRESHOLD ? parkedTotal : 0;
+            const hasDigitizedItems = parkedItems > 0;
             const smartStatus = getSmartStatus(table, elapsedMinutes, hasDigitizedItems);
             const displayTable = hasDigitizedItems && parkedSummary ? enrichTableWithParkedTicket(table) : table;
             const isOccupiedLike = smartStatus !== 'FREE';
@@ -577,7 +630,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 lastOrderHint: computeLastOrderHint(baseModel)
             };
         });
-    }, [serviceTables, bloqueoMeseros, currentUser.id, isAdmin, expectedStayMinutes, highRevenueThreshold, getParkedSummaryForTable, enrichTableWithParkedTicket]);
+    }, [serviceTables, bloqueoMeseros, currentUser.id, isAdmin, expectedStayMinutes, highRevenueThreshold, getParkedSummaryForTable, enrichTableWithParkedTicket, getVisualTableState]);
 
     const stats = useMemo(() => {
         const total = smartTables.length;
@@ -613,7 +666,182 @@ const TableMap: React.FC<TableMapProps> = ({
 
     const minExpectedTicket = activeRoom?.consumo_minimo || 0;
 
+    const resolveTicketForTable = useCallback((table: Table): ParkedTicket | undefined => {
+        return (parkedTickets || []).find(ticket => table.currentOrderId && String(ticket.id) === String(table.currentOrderId))
+            || (parkedTickets || []).find(ticket => String(ticket.tableId) === String(table.id));
+    }, [parkedTickets]);
+
+    const resetTableRuntimeState = useCallback((table: Table): Table => ({
+        ...table,
+        status: 'FREE',
+        currentOrderId: undefined,
+        currentOrderTotal: undefined,
+        waiterId: undefined,
+        waiterName: undefined,
+        timeSeated: undefined,
+        guests: undefined,
+        joinedTableId: undefined,
+        joinedTableName: undefined,
+        joinedSourceTableId: undefined,
+        joinedSourceTableName: undefined
+    } as Table), []);
+
+    const completeTableTransfer = useCallback(async (sourceTableId: string, targetTableId: string, mode: TableTransferMode) => {
+        if (sourceTableId === targetTableId) {
+            alert('Seleccione dos mesas distintas.');
+            return;
+        }
+
+        const sourceTable = safeTables.find(table => table.id === sourceTableId);
+        const targetTable = safeTables.find(table => table.id === targetTableId);
+        if (!sourceTable || !targetTable) {
+            alert('No se pudo ubicar una de las mesas seleccionadas.');
+            return;
+        }
+
+        const sourceTicket = resolveTicketForTable(sourceTable);
+        if (!sourceTicket?.items?.length) {
+            alert('La mesa origen no tiene artículos para mover.');
+            return;
+        }
+
+        const targetTicket = resolveTicketForTable(targetTable);
+        const targetIsOccupied = Boolean(targetTicket?.items?.length) || getVisualTableState(targetTable).status !== 'FREE';
+        if (mode === 'MOVE' && targetIsOccupied) {
+            alert('Para mover, seleccione una mesa destino libre. Si desea combinar cuentas use Unir mesas.');
+            return;
+        }
+
+        if (mode === 'MERGE' && targetTicket && String(targetTicket.id) === String(sourceTicket.id)) {
+            alert('Estas mesas ya pertenecen a la misma cuenta.');
+            return;
+        }
+
+        const targetItems = mode === 'MERGE' && targetTicket?.items?.length ? targetTicket.items : [];
+        const nextItems = [...ensureCartIds(sourceTicket.items || []), ...ensureCartIds(targetItems)];
+        const nextTotal = nextItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
+        const targetRoomLabel = roomLabelById.get(targetTable.roomId);
+        const targetTableLabel = getTableLabel(targetTable);
+        const sourceTableLabel = getTableLabel(sourceTable);
+        const nextTicket: ParkedTicket = {
+            ...sourceTicket,
+            items: nextItems,
+            total: nextTotal,
+            tableId: targetTable.id,
+            name: `Mesa: ${targetRoomLabel ? `${targetRoomLabel} · ${targetTableLabel}` : targetTableLabel}`,
+            timestamp: sourceTicket.timestamp || new Date().toISOString(),
+            tableDisplayLabel: targetTableLabel,
+            tableRoomLabel: targetRoomLabel,
+            orderNumber: sourceTicket.orderNumber || targetTicket?.orderNumber,
+            ...(mode === 'MERGE' ? { joinedTableIds: [sourceTable.id, targetTable.id] } : { joinedTableIds: undefined }),
+        } as ParkedTicket;
+
+        const removedTicketIds = new Set([String(sourceTicket.id)]);
+        if (targetTicket?.id) removedTicketIds.add(String(targetTicket.id));
+        const nextParkedTickets = [
+            ...(parkedTickets || []).filter(ticket => !removedTicketIds.has(String(ticket.id))),
+            nextTicket
+        ];
+
+        const nextTargetTable = {
+            ...targetTable,
+            status: 'OCCUPIED',
+            currentOrderId: nextTicket.id,
+            currentOrderTotal: nextTotal,
+            waiterId: sourceTable.waiterId || targetTable.waiterId || currentUser.id,
+            waiterName: sourceTable.waiterName || targetTable.waiterName || currentUser.name,
+            timeSeated: sourceTable.timeSeated || targetTable.timeSeated || nextTicket.timestamp,
+            guests: targetTable.guests || sourceTable.guests,
+            joinedTableId: mode === 'MERGE' ? sourceTable.id : undefined,
+            joinedTableName: mode === 'MERGE' ? sourceTableLabel : undefined,
+            joinedSourceTableId: mode === 'MERGE' ? sourceTable.id : undefined,
+            joinedSourceTableName: mode === 'MERGE' ? sourceTableLabel : undefined
+        } as Table;
+
+        const nextSourceTable = mode === 'MERGE'
+            ? {
+                ...sourceTable,
+                status: 'OCCUPIED',
+                currentOrderId: nextTicket.id,
+                currentOrderTotal: nextTotal,
+                waiterId: sourceTable.waiterId || currentUser.id,
+                waiterName: sourceTable.waiterName || currentUser.name,
+                timeSeated: sourceTable.timeSeated || nextTicket.timestamp,
+                guests: sourceTable.guests || targetTable.guests,
+                joinedTableId: targetTable.id,
+                joinedTableName: targetTableLabel,
+                joinedSourceTableId: sourceTable.id,
+                joinedSourceTableName: sourceTableLabel
+            } as Table
+            : resetTableRuntimeState(sourceTable);
+        const nextTables = safeTables.map(table => {
+            if (table.id === sourceTable.id) return nextSourceTable;
+            if (table.id === targetTable.id) return nextTargetTable;
+            return table;
+        });
+
+        await Promise.resolve(onUpdateParkedTickets?.(nextParkedTickets));
+        await Promise.resolve(onUpdateTables?.(nextTables));
+        setTransferSelection(null);
+
+        setTableNotice({
+            title: mode === 'MERGE' ? 'Mesas unidas' : 'Mesa movida',
+            message: mode === 'MERGE'
+                ? `${targetTableLabel} quedó unida con ${sourceTableLabel}. Al abrir cualquiera de las dos mesas verás la misma cuenta.`
+                : `${targetTableLabel} asumió la cuenta de ${sourceTableLabel}.`,
+            primaryLabel: 'Entendido'
+        });
+    }, [
+        currentUser.id,
+        currentUser.name,
+        getVisualTableState,
+        onUpdateParkedTickets,
+        onUpdateTables,
+        parkedTickets,
+        resetTableRuntimeState,
+        resolveTicketForTable,
+        roomLabelById,
+        safeTables
+    ]);
+
+    const handleTransferTableClick = useCallback((table: Table) => {
+        if (!transferSelection) return false;
+
+        if (transferSelection.step === 'SOURCE') {
+            const sourceTicket = resolveTicketForTable(table);
+            if (!sourceTicket?.items?.length) {
+                alert('Seleccione una mesa origen con artículos.');
+                return true;
+            }
+            setTransferSelection({
+                ...transferSelection,
+                step: 'TARGET',
+                sourceTableId: table.id
+            });
+            return true;
+        }
+
+        if (!transferSelection.sourceTableId) {
+            setTransferSelection({ mode: transferSelection.mode, step: 'SOURCE' });
+            return true;
+        }
+
+        void completeTableTransfer(transferSelection.sourceTableId, table.id, transferSelection.mode);
+        return true;
+    }, [completeTableTransfer, resolveTicketForTable, transferSelection]);
+
     const handleTableAction = useCallback(async (table: Table) => {
+        const joinedTableName = String((table as any).joinedTableName || '').trim();
+        if (isRestaurantMode && joinedTableName) {
+            setTableNotice({
+                title: 'Mesa unida',
+                message: `${getTableLabel(table)} está unida con ${joinedTableName}. Ambas mesas comparten la misma cuenta.`,
+                primaryLabel: 'Abrir cuenta',
+                tableToOpen: table
+            });
+            return;
+        }
+
         if (table.status === 'OCCUPIED' || table.status === 'RESERVED') {
             onTableClick(table);
             return;
@@ -663,9 +891,10 @@ const TableMap: React.FC<TableMapProps> = ({
                 alert(`Mesa bloqueada. Atendida por: ${model.table.waiterName || 'otro mesero'}`);
                 return;
             }
+            if (handleTransferTableClick(model.table)) return;
             handleTableAction(model.table);
         },
-        [handleTableAction]
+        [handleTableAction, handleTransferTableClick]
     );
 
     const handleZoom = useCallback((delta: number) => {
@@ -815,9 +1044,11 @@ const TableMap: React.FC<TableMapProps> = ({
                 <button
                     type="button"
                     onClick={() => {
-                        setMergePrimaryId(occupiedForTools[0]?.id || '');
-                        setMergeSecondaryId(occupiedForTools.find(t => t.id !== occupiedForTools[0]?.id)?.id || '');
-                        setMergePickOpen(true);
+                        if (occupiedForTools.length === 0) {
+                            alert('No hay mesas ocupadas para unir.');
+                            return;
+                        }
+                        setTransferSelection({ mode: 'MERGE', step: 'SOURCE' });
                     }}
                     className={buttonClass}
                 >
@@ -835,9 +1066,15 @@ const TableMap: React.FC<TableMapProps> = ({
                 <button
                     type="button"
                     onClick={() => {
-                        setMoveFromId(occupiedForTools[0]?.id || '');
-                        setMoveToId(freeForTools[0]?.id || '');
-                        setMovePickOpen(true);
+                        if (occupiedForTools.length === 0) {
+                            alert('No hay mesas ocupadas para mover.');
+                            return;
+                        }
+                        if (freeForTools.length === 0) {
+                            alert('No hay mesas libres para recibir el pedido.');
+                            return;
+                        }
+                        setTransferSelection({ mode: 'MOVE', step: 'SOURCE' });
                     }}
                     className={buttonClass}
                 >
@@ -918,16 +1155,81 @@ const TableMap: React.FC<TableMapProps> = ({
 
                 <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_20%_18%,rgba(56,189,248,0.22),transparent_48%),radial-gradient(circle_at_82%_78%,rgba(168,85,247,0.16),transparent_42%)]" />
 
-                {hasControlCenterAccess && !isControlCenterOpen && (
-                    <button
-                        type="button"
-                        onClick={() => setIsControlCenterOpen(true)}
-                        className="absolute top-6 right-6 z-30 rounded-2xl border border-sky-300/25 bg-sky-500/20 backdrop-blur-xl px-4 py-3 text-sky-50 font-black text-sm shadow-[0_18px_40px_rgba(2,6,23,0.45)] flex items-center gap-2 hover:bg-sky-500/30 active:scale-[0.98] touch-manipulation"
-                    >
-                        <Activity size={17} />
-                        Control de Sala
-                    </button>
-                )}
+                <AnimatePresence>
+                    {transferSelection && (
+                        <m.div
+                            key={`${transferSelection.mode}-${transferSelection.step}`}
+                            initial={{ opacity: 0, y: -12 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -12 }}
+                            transition={{ duration: 0.16 }}
+                            className="absolute left-1/2 top-6 z-40 -translate-x-1/2 rounded-2xl border border-sky-200/25 bg-slate-950/78 px-5 py-3 text-center shadow-[0_18px_48px_rgba(2,6,23,0.62)] backdrop-blur-xl"
+                        >
+                            <p className="text-[10px] font-black uppercase tracking-[0.22em] text-sky-200">
+                                {transferSelection.mode === 'MERGE' ? 'Unir mesas' : 'Mover mesa'}
+                            </p>
+                            <p className="mt-1 text-sm font-black text-white">
+                                {transferSelection.step === 'SOURCE'
+                                    ? 'Mesa a mover: toque la mesa origen'
+                                    : 'Mesa destino: toque la mesa que recibirá la cuenta'}
+                            </p>
+                            <button
+                                type="button"
+                                onClick={() => setTransferSelection(null)}
+                                className="mt-2 text-[11px] font-bold text-slate-300 underline decoration-white/20 underline-offset-4 hover:text-white"
+                            >
+                                Cancelar
+                            </button>
+                        </m.div>
+                    )}
+                </AnimatePresence>
+
+                <AnimatePresence>
+                    {tableNotice && (
+                        <m.div
+                            key="table-notice"
+                            className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={() => setTableNotice(null)}
+                        >
+                            <m.div
+                                initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 18, scale: 0.96 }}
+                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.96 }}
+                                transition={{ duration: 0.16, ease: 'easeOut' }}
+                                className="w-full max-w-md rounded-3xl border border-white/12 bg-white p-6 text-slate-900 shadow-[0_24px_70px_rgba(2,6,23,0.48)]"
+                                onClick={event => event.stopPropagation()}
+                            >
+                                <h3 className="text-xl font-black tracking-tight">{tableNotice.title}</h3>
+                                <p className="mt-3 text-sm font-semibold leading-6 text-slate-600">{tableNotice.message}</p>
+                                <div className="mt-6 flex justify-end gap-2">
+                                    {tableNotice.tableToOpen && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const tableToOpen = tableNotice.tableToOpen;
+                                                setTableNotice(null);
+                                                if (tableToOpen) onTableClick(tableToOpen);
+                                            }}
+                                            className="rounded-2xl bg-slate-950 px-4 py-2.5 text-sm font-black text-white shadow-lg active:scale-[0.98]"
+                                        >
+                                            {tableNotice.primaryLabel || 'Abrir cuenta'}
+                                        </button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={() => setTableNotice(null)}
+                                        className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-black text-slate-700 active:scale-[0.98]"
+                                    >
+                                        {tableNotice.tableToOpen ? 'Cerrar' : (tableNotice.primaryLabel || 'Entendido')}
+                                    </button>
+                                </div>
+                            </m.div>
+                        </m.div>
+                    )}
+                </AnimatePresence>
 
                 <AnimatePresence>
                     {hasControlCenterAccess && isControlCenterOpen && (
@@ -1027,39 +1329,70 @@ const TableMap: React.FC<TableMapProps> = ({
                     </GlassButton>
                 </div>
 
-                {!isControlCenterOpen && (
-                    <div className="absolute left-5 top-24 bottom-24 z-30 w-[min(10rem,38vw)] rounded-[1.6rem] border border-white/10 bg-white/[0.08] backdrop-blur-xl px-2.5 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex flex-col gap-2 overflow-y-auto overflow-x-hidden no-scrollbar pointer-events-auto">
-                        {rooms.map(room => {
-                                const isActive = room.id === activeRoomId;
-                                const roomOccupied = safeTables.filter(table =>
-                                    table.roomId === room.id &&
-                                    (table.status === 'OCCUPIED' || table.status === 'RESERVED' || isTableOccupiedFromTicket(table))
-                                ).length;
-
-                                return (
-                                    <button
-                                        key={room.id}
-                                        onClick={() => setActiveRoomId(room.id)}
-                                        className={`w-full px-3 py-2.5 rounded-2xl border transition-all duration-200 text-sm font-bold flex items-center gap-2 text-left ${
-                                            isActive
-                                                ? 'border-sky-300/60 bg-sky-400/20 text-sky-100 shadow-[0_0_24px_rgba(56,189,248,0.28)]'
-                                                : 'border-white/10 bg-white/[0.04] text-slate-300 hover:text-white hover:bg-white/[0.09]'
-                                        }`}
-                                    >
-                                        <LayoutGrid size={14} className="shrink-0" />
-                                        <span className="min-w-0 flex-1 truncate">{room.name || room.nombre}</span>
-                                        {roomOccupied > 0 && (
-                                            <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-rose-500/70 text-white">{roomOccupied}</span>
-                                        )}
-                                    </button>
-                                );
-                            })}
+                <div className="absolute bottom-5 left-5 z-40 flex flex-col-reverse items-start gap-3 pointer-events-auto">
+                    <div className="flex items-center gap-3">
+                        <GlassButton onClick={() => setShowRoomPicker(prev => !prev)} title="Salas" className="w-auto px-4">
+                            <span className="flex items-center gap-2">
+                                <LayoutGrid size={18} />
+                                <span className="text-xs font-black uppercase tracking-widest">Salas</span>
+                            </span>
+                        </GlassButton>
+                        {hasControlCenterAccess && (
+                            <GlassButton onClick={() => setIsControlCenterOpen(prev => !prev)} title="Control" className="w-auto px-4">
+                                <span className="flex items-center gap-2">
+                                    <Activity size={18} />
+                                    <span className="text-xs font-black uppercase tracking-widest">Control</span>
+                                </span>
+                            </GlassButton>
+                        )}
                     </div>
-                )}
+
+                    <AnimatePresence>
+                        {showRoomPicker && (
+                            <m.div
+                                initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                                transition={{ duration: 0.16 }}
+                                className="mb-1 max-h-[min(58vh,28rem)] w-[min(16rem,58vw)] rounded-[1.6rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-2.5 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex flex-col gap-2 overflow-y-auto overflow-x-hidden no-scrollbar"
+                            >
+                                {rooms.map(room => {
+                                    const isActive = room.id === activeRoomId;
+                                    const roomOccupied = safeTables.filter(table => {
+                                        if (table.roomId !== room.id) return false;
+                                        const visualTable = getVisualTableState(table);
+                                        return visualTable.status === 'RESERVED' || isTableOccupiedFromTicket(table);
+                                    }).length;
+
+                                    return (
+                                        <button
+                                            key={room.id}
+                                            onClick={() => {
+                                                setActiveRoomId(room.id);
+                                                setShowRoomPicker(false);
+                                            }}
+                                            className={`w-full px-3 py-2.5 rounded-2xl border transition-all duration-200 text-sm font-bold flex items-center gap-2 text-left ${
+                                                isActive
+                                                    ? 'border-sky-300/60 bg-sky-400/20 text-sky-100 shadow-[0_0_24px_rgba(56,189,248,0.28)]'
+                                                    : 'border-white/10 bg-white/[0.04] text-slate-300 hover:text-white hover:bg-white/[0.09]'
+                                            }`}
+                                        >
+                                            <LayoutGrid size={14} className="shrink-0" />
+                                            <span className="min-w-0 flex-1 truncate">{room.name || room.nombre}</span>
+                                            {roomOccupied > 0 && (
+                                                <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-rose-500/70 text-white">{roomOccupied}</span>
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </m.div>
+                        )}
+                    </AnimatePresence>
+                </div>
 
                 <div className="absolute bottom-5 left-5 right-5 z-30 flex justify-end pointer-events-none">
                     {isRestaurantMode && (
-                        <div className="max-w-[min(76vw,1120px)] rounded-[1.8rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-4 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-3 overflow-x-auto overflow-y-hidden no-scrollbar pointer-events-auto">
+                        <div className="ml-[15.5rem] max-w-[min(calc(100vw-18rem),1120px)] rounded-[1.8rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-4 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-3 overflow-x-auto overflow-y-hidden no-scrollbar pointer-events-auto">
                             {renderTableControlActions('footer')}
                         </div>
                     )}
@@ -1253,171 +1586,6 @@ const TableMap: React.FC<TableMapProps> = ({
                             setSplitTicketForModal(null);
                         }}
                     />
-                )}
-
-                {isRestaurantMode && mergePickOpen && (
-                    <div
-                        className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4"
-                        onClick={() => setMergePickOpen(false)}
-                    >
-                        <div
-                            className="bg-slate-900 border border-white/15 rounded-2xl p-6 max-w-md w-full shadow-2xl"
-                            onClick={e => e.stopPropagation()}
-                        >
-                            <h3 className="text-lg font-black text-white mb-1">Unir mesas</h3>
-                            <p className="text-xs text-slate-400 mb-4">Seleccione dos cuentas ocupadas. La sala aparece como prefijo para evitar duplicados.</p>
-                            <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Mesa principal</label>
-                            <select
-                                value={mergePrimaryId}
-                                onChange={e => setMergePrimaryId(e.target.value)}
-                                className="w-full mb-3 bg-slate-800 text-white rounded-lg p-2.5 border border-white/10"
-                            >
-                                <option value="">—</option>
-                                {occupiedForTools.map(t => (
-                                    <option key={t.id} value={t.id}>
-                                        {getTableRoomLabel(t)}
-                                    </option>
-                                ))}
-                            </select>
-                            <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Mesa a unir</label>
-                            <select
-                                value={mergeSecondaryId}
-                                onChange={e => setMergeSecondaryId(e.target.value)}
-                                className="w-full mb-4 bg-slate-800 text-white rounded-lg p-2.5 border border-white/10"
-                            >
-                                <option value="">—</option>
-                                {occupiedForTools
-                                    .filter(t => t.id !== mergePrimaryId)
-                                    .map(t => (
-                                        <option key={t.id} value={t.id}>
-                                            {getTableRoomLabel(t)}
-                                        </option>
-                                    ))}
-                            </select>
-                            <div className="flex justify-end gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() => setMergePickOpen(false)}
-                                    className="px-4 py-2 rounded-xl text-slate-300 hover:bg-white/10"
-                                >
-                                    Cancelar
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={async () => {
-                                        if (!mergePrimaryId || !mergeSecondaryId || mergePrimaryId === mergeSecondaryId) {
-                                            alert('Seleccione dos mesas distintas.');
-                                            return;
-                                        }
-                                        try {
-                                            const res = await fetch('/api/mesas/unir', {
-                                                method: 'POST',
-                                                headers: { 'Content-Type': 'application/json' },
-                                                body: JSON.stringify({
-                                                    mainTableId: mergePrimaryId,
-                                                    secondaryTableIds: [mergeSecondaryId]
-                                                })
-                                            });
-                                            const data = await res.json().catch(() => ({}));
-                                            if (res.ok && data.success !== false) {
-                                                onRefreshTables?.();
-                                                setMergePickOpen(false);
-                                                alert(typeof data.message === 'string' ? data.message : 'Mesas unidas.');
-                                            } else {
-                                                alert(data?.message || 'No se pudo unir.');
-                                            }
-                                        } catch (e) {
-                                            console.error(e);
-                                            alert('Error de conexión.');
-                                        }
-                                    }}
-                                    className="px-4 py-2 rounded-xl bg-sky-600 text-white font-bold hover:bg-sky-500"
-                                >
-                                    Unir
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {isRestaurantMode && movePickOpen && (
-                    <div
-                        className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4"
-                        onClick={() => setMovePickOpen(false)}
-                    >
-                        <div
-                            className="bg-slate-900 border border-white/15 rounded-2xl p-6 max-w-md w-full shadow-2xl"
-                            onClick={e => e.stopPropagation()}
-                        >
-                            <h3 className="text-lg font-black text-white mb-1">Mover pedido</h3>
-                            <p className="text-xs text-slate-400 mb-4">De una mesa ocupada hacia una libre. La sala aparece como prefijo.</p>
-                            <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Origen (ocupada)</label>
-                            <select
-                                value={moveFromId}
-                                onChange={e => setMoveFromId(e.target.value)}
-                                className="w-full mb-3 bg-slate-800 text-white rounded-lg p-2.5 border border-white/10"
-                            >
-                                <option value="">—</option>
-                                {occupiedForTools.map(t => (
-                                    <option key={t.id} value={t.id}>
-                                        {getTableRoomLabel(t)}
-                                    </option>
-                                ))}
-                            </select>
-                            <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Destino (libre)</label>
-                            <select
-                                value={moveToId}
-                                onChange={e => setMoveToId(e.target.value)}
-                                className="w-full mb-4 bg-slate-800 text-white rounded-lg p-2.5 border border-white/10"
-                            >
-                                <option value="">—</option>
-                                {freeForTools.map(t => (
-                                    <option key={t.id} value={t.id}>
-                                        {getTableRoomLabel(t)}
-                                    </option>
-                                ))}
-                            </select>
-                            <div className="flex justify-end gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() => setMovePickOpen(false)}
-                                    className="px-4 py-2 rounded-xl text-slate-300 hover:bg-white/10"
-                                >
-                                    Cancelar
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={async () => {
-                                        if (!moveFromId || !moveToId) {
-                                            alert('Seleccione origen y destino.');
-                                            return;
-                                        }
-                                        try {
-                                            const res = await fetch('/api/mesas/mover', {
-                                                method: 'POST',
-                                                headers: { 'Content-Type': 'application/json' },
-                                                body: JSON.stringify({ fromTableId: moveFromId, toTableId: moveToId })
-                                            });
-                                            const data = await res.json();
-                                            if (data.success) {
-                                                onRefreshTables?.();
-                                                setMovePickOpen(false);
-                                                alert('Mesa movida correctamente');
-                                            } else {
-                                                alert('Error: ' + (data.message || 'No se pudo mover'));
-                                            }
-                                        } catch (error) {
-                                            console.error(error);
-                                            alert('Error de conexión');
-                                        }
-                                    }}
-                                    className="px-4 py-2 rounded-xl bg-sky-600 text-white font-bold hover:bg-sky-500"
-                                >
-                                    Mover
-                                </button>
-                            </div>
-                        </div>
-                    </div>
                 )}
 
                 {isRestaurantMode && subtotalPickOpen && (
@@ -1625,7 +1793,7 @@ const SmartTableNode = React.memo(({
                 top: model.table.posY,
                 width: model.table.width,
                 height: model.table.height,
-                transform: `rotate(${model.table.rotation || 0}deg)`,
+                rotate: `${model.table.rotation || 0}deg`,
                 willChange: 'transform, opacity'
             }}
         >
@@ -1707,14 +1875,6 @@ const SmartTableNode = React.memo(({
                             <p className="text-base font-black tracking-tight truncate">
                                 {model.table.nombre || model.table.name}
                             </p>
-                            <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-emerald-200">
-                                <Check size={10} />
-                                Disponible
-                            </div>
-                        </div>
-
-                        <div className="flex justify-center">
-                            <span className="text-[10px] text-emerald-100/80 font-semibold">Mesa lista</span>
                         </div>
                     </>
                 ) : (
@@ -1747,10 +1907,6 @@ const SmartTableNode = React.memo(({
                             <p className="text-base font-black tracking-tight drop-shadow-[0_2px_6px_rgba(2,6,23,0.5)] truncate">
                                 {model.table.nombre || model.table.name}
                             </p>
-                            <div className={`mt-1 inline-flex items-center gap-1 text-[11px] font-bold ${statusPalette[model.smartStatus].badge}`}>
-                                {statusPalette[model.smartStatus].icon}
-                                {statusPalette[model.smartStatus].label}
-                            </div>
                         </div>
 
                         <div className="flex items-center justify-between text-[11px] font-semibold">

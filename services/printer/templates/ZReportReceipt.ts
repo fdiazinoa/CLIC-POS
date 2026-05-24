@@ -2,6 +2,8 @@ import { ZReport } from '../../../types';
 
 export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] = []): string => {
   const width = '80mm'; // Standard thermal paper width
+  const isXReport = (report as any).reportType === 'X';
+  const reportTitle = isXReport ? 'CIERRE X (ARQUEO)' : 'REPORTE DE CIERRE (Z)';
 
   const formatCurrency = (amount: number, currency: string) => {
     return new Intl.NumberFormat('es-DO', { style: 'currency', currency }).format(amount);
@@ -21,7 +23,7 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
     <!DOCTYPE html>
     <html>
     <head>
-      <title>Z-Report ${report.sequenceNumber}</title>
+      <title>${isXReport ? 'X-Report' : 'Z-Report'} ${report.sequenceNumber}</title>
       <style>
         @page { margin: 0; size: auto; }
         body {
@@ -52,7 +54,7 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
         <div>RNC: 123456789</div>
         <div>Tel: 809-555-0123</div>
         <br/>
-        <div class="bold" style="font-size: 14px;">REPORTE DE CIERRE (Z)</div>
+        <div class="bold" style="font-size: 14px;">${reportTitle}</div>
         <div class="bold">${report.sequenceNumber}</div>
       </div>
 
@@ -177,6 +179,7 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
         __________________________<br/>
         Firma del Cajero
       </div>
+      ${isXReport ? '<div class="center bold" style="font-size: 10px; margin-top: 8px;">ARQUEO PARCIAL - NO LIMPIA VENTAS</div>' : ''}
       <br/>
       <div class="center" style="font-size: 10px;">
         Generado por CLIC POS<br/>

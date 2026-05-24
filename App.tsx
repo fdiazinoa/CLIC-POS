@@ -20,6 +20,7 @@ import {
   ParkedTicket,
   StockTransfer,
   ZReport,
+  XReport,
   DeviceRole,
   Reception,
   ProductStock,
@@ -33,7 +34,8 @@ import {
   RedeemedCouponRef,
   RefundProcessingOptions,
   PaymentMethodDefinition,
-  FiscalDocumentCorrectionInput
+  FiscalDocumentCorrectionInput,
+  TerminalConfig
 } from './types';
 import {
   DEFAULT_ROLES,
@@ -59,6 +61,7 @@ import { calculateTransactionFiscalSummary } from './utils/fiscalBreakdown';
 import { extractTerminalOperationalDocumentState } from './utils/terminalConfigSnapshot';
 import { mergeDocumentSeriesCollection, resolveDocumentAssignmentId } from './utils/documentSeriesIdentity';
 import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
+import { ThermalPrinterService } from './services/printer/ThermalPrinterService';
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
@@ -143,12 +146,21 @@ import {
 import {
   clearStoredErpSyncBinding,
   ensureErpSyncLifecycle,
+  ERP_FULL_BOOTSTRAP_REQUIRED_EVENT,
   getLifecycleActivationBlockMessage,
   getLifecycleBlockingMessageFromError,
   isLifecycleActivationBlocked,
   persistStoredErpSyncBinding
 } from './utils/erpSyncLifecycle';
+import {
+  DEVICE_REVOKED_EVENT,
+  DEVICE_SUPERSEDED_MESSAGE,
+  persistLocalDeviceId,
+  resolveLocalDeviceId,
+  type DeviceRevocationDetail
+} from './utils/deviceRevocation';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
+import type { RuntimeTerminalRecoveryState } from './services/setup/erpTerminalSetup';
 import { resolveCustomerImageSrc } from './utils/entityImage';
 import { posCatalogDebugElapsedMs, posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugNow, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
 import { buildTerminalConfigRefreshRequest, type TerminalConfigSyncRequestDetail } from './utils/terminalConfigPushScopes';
@@ -184,6 +196,11 @@ type ReceivableRepairSummary = {
   totalPendingAfter: number;
   transactionIds: string[];
   creditNoteIds: string[];
+};
+
+type RecoverySequencePromptState = RuntimeTerminalRecoveryState & {
+  terminalId: string;
+  terminalName?: string | null;
 };
 
 const LICENSE_REFRESH_BASE_MS = 60_000;
@@ -499,6 +516,23 @@ const getTerminalBindingMode = (setupMode: TerminalSetupMode | null): 'MASTER' |
 
 const hasPendingTerminalSetup = (): boolean => localStorage.getItem(TERMINAL_SETUP_PENDING_KEY) === '1';
 
+const isNativeStandaloneTerminalRuntime = (terminal?: { config?: TerminalConfig } | null): boolean => {
+  if (!isNativeAndroidRuntime()) return false;
+
+  const setupMode = getStoredTerminalSetupMode();
+  if (setupMode === 'CLIENT') return false;
+
+  const terminalConfig = terminal?.config;
+  if (terminalConfig?.isPrimaryNode === false && terminalConfig?.governedByMaster) {
+    return false;
+  }
+
+  if (setupMode === 'SERVER_LOCAL') return true;
+  if (!normalizeMasterHost(localStorage.getItem('pos_master_ip'))) return true;
+
+  return terminalConfig?.isPrimaryNode === true && terminalConfig?.governedByMaster !== true;
+};
+
 const buildConfigSyncUrl = (): string | null => {
   const masterHost = normalizeMasterHost(localStorage.getItem('pos_master_ip'));
   const isLoopbackMaster = masterHost === 'localhost' || masterHost === '127.0.0.1';
@@ -744,6 +778,8 @@ const AppContent: React.FC = () => {
   const [terminalConfigRestartNotice, setTerminalConfigRestartNotice] = useState<TerminalConfigRestartNotice | null>(() => readTerminalConfigRestartNotice());
   const [posApkUpdate, setPosApkUpdate] = useState<PosApkUpdateAvailable | null>(null);
   const posApkUpdateCheckStartedRef = useRef(false);
+  const [recoverySequencePrompt, setRecoverySequencePrompt] = useState<RecoverySequencePromptState | null>(null);
+  const [recoverySequenceInput, setRecoverySequenceInput] = useState('');
 
   // --- SECURITY BOOTSTRAP STATE ---
   const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
@@ -777,6 +813,29 @@ const AppContent: React.FC = () => {
     if (!isNativeAndroidRuntime()) {
       return;
     }
+
+    let wakeLock: any = null;
+    let wakeLockRequested = false;
+
+    const requestWakeLock = async () => {
+      const runtimeNavigator = navigator as any;
+      if (!runtimeNavigator?.wakeLock?.request || document.visibilityState !== 'visible') {
+        return;
+      }
+
+      try {
+        wakeLock = await runtimeNavigator.wakeLock.request('screen');
+        wakeLockRequested = true;
+        wakeLock?.addEventListener?.('release', () => {
+          wakeLock = null;
+        });
+      } catch (error) {
+        if (!wakeLockRequested) {
+          console.info('[Android] Screen Wake Lock no disponible; usando FLAG_KEEP_SCREEN_ON nativo.', error);
+          wakeLockRequested = true;
+        }
+      }
+    };
 
     const installAndroidPrinterShim = (): boolean => {
       const runtimeWindow = window as any;
@@ -851,6 +910,13 @@ const AppContent: React.FC = () => {
       applyInputRuntimeHints(event.target);
     };
 
+    const handleVisibilityChange = () => {
+      if (!document.hidden && !wakeLock) {
+        void requestWakeLock();
+      }
+    };
+
+    void requestWakeLock();
     installAndroidPrinterShim();
     const printerShimPoll = window.setInterval(() => {
       if (installAndroidPrinterShim()) {
@@ -860,10 +926,13 @@ const AppContent: React.FC = () => {
 
     seedExistingInputs();
     document.addEventListener('focusin', handleFocusIn, true);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       window.clearInterval(printerShimPoll);
       document.removeEventListener('focusin', handleFocusIn, true);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      wakeLock?.release?.().catch?.(() => undefined);
     };
   }, []);
 
@@ -925,6 +994,51 @@ const AppContent: React.FC = () => {
     window.addEventListener('terminalConfigSyncRequested', handleTerminalConfigSyncRequested as EventListener);
     return () => {
       window.removeEventListener('terminalConfigSyncRequested', handleTerminalConfigSyncRequested as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
+    let fullBootstrapInFlight = false;
+
+    const handleErpFullBootstrapRequired = async () => {
+      if (fullBootstrapInFlight) return;
+      fullBootstrapInFlight = true;
+
+      try {
+        await syncManager.fullPull();
+
+        const refreshedConfigRaw = await db.get('config') as unknown;
+        if (refreshedConfigRaw && !Array.isArray(refreshedConfigRaw) && (refreshedConfigRaw as BusinessConfig).terminals) {
+          setConfig(refreshedConfigRaw as BusinessConfig);
+        }
+
+        const refreshedProducts = await db.get('products') as Product[];
+        if (Array.isArray(refreshedProducts)) {
+          setProducts(refreshedProducts);
+        }
+
+        const refreshedUsers = await db.get('users') as User[];
+        if (Array.isArray(refreshedUsers)) {
+          setUsers(refreshedUsers);
+        }
+
+        const refreshedRoles = await db.get('roles') as RoleDefinition[];
+        if (Array.isArray(refreshedRoles)) {
+          setRoles(refreshedRoles);
+        }
+
+        localStorage.removeItem('clic_erp_sync_full_bootstrap_required');
+        localStorage.removeItem('clic_erp_sync_full_bootstrap_reason');
+      } catch (error) {
+        console.warn('⚠️ Failed to apply ERP full bootstrap requested by auth:', error);
+      } finally {
+        fullBootstrapInFlight = false;
+      }
+    };
+
+    window.addEventListener(ERP_FULL_BOOTSTRAP_REQUIRED_EVENT, handleErpFullBootstrapRequired as EventListener);
+    return () => {
+      window.removeEventListener(ERP_FULL_BOOTSTRAP_REQUIRED_EVENT, handleErpFullBootstrapRequired as EventListener);
     };
   }, []);
 
@@ -991,6 +1105,16 @@ const AppContent: React.FC = () => {
       console.warn('Failed to clear Supabase session during lockdown', error);
     });
   }, []);
+
+  useEffect(() => {
+    const handleDeviceRevoked = (event: Event) => {
+      const detail = (event as CustomEvent<DeviceRevocationDetail>).detail;
+      triggerLockdown(detail?.message || DEVICE_SUPERSEDED_MESSAGE);
+    };
+
+    window.addEventListener(DEVICE_REVOKED_EVENT, handleDeviceRevoked as EventListener);
+    return () => window.removeEventListener(DEVICE_REVOKED_EVENT, handleDeviceRevoked as EventListener);
+  }, [triggerLockdown]);
 
   // --- REALTIME KILL SWITCH (FALLBACK: SMART POLLING) ---
   useEffect(() => {
@@ -1127,7 +1251,12 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     const currentTerminal = getCurrentTerminal();
-    const autoLogoutMinutes = currentTerminal?.config?.security?.autoLogoutMinutes ?? 0;
+    const isNativeStandaloneApk = isNativeStandaloneTerminalRuntime(currentTerminal);
+    if (isNativeStandaloneApk && normalizeMasterHost(localStorage.getItem('pos_master_ip'))) {
+      console.info('[Security] Native standalone terminal detected; clearing stale master pointer for inactivity policy.');
+      localStorage.removeItem('pos_master_ip');
+    }
+    const autoLogoutMinutes = isNativeStandaloneApk ? 0 : (currentTerminal?.config?.security?.autoLogoutMinutes ?? 0);
     const shouldTrackInactivity =
       Boolean(currentUser) &&
       currentView !== 'LOGIN' &&
@@ -1171,6 +1300,27 @@ const AppContent: React.FC = () => {
       }
     };
   }, [currentUser, currentView, getCurrentTerminal, navigateToUserLogin]);
+
+  useEffect(() => {
+    if (!isNativeAndroidRuntime()) return;
+
+    const applyNativeKeyboardGuard = () => {
+      document.querySelectorAll('input, textarea').forEach((element) => {
+        if (!(element instanceof HTMLElement)) return;
+        if (element.dataset.allowNativeKeyboard === 'true') return;
+        element.setAttribute('inputmode', 'none');
+        element.setAttribute('autocomplete', 'off');
+        element.setAttribute('autocorrect', 'off');
+        element.setAttribute('autocapitalize', 'off');
+      });
+    };
+
+    applyNativeKeyboardGuard();
+    const observer = new MutationObserver(applyNativeKeyboardGuard);
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (currentView !== 'POS') return;
@@ -1567,6 +1717,7 @@ const AppContent: React.FC = () => {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   const [zReports, setZReports] = useState<ZReport[]>([]);
+  const [xReports, setXReports] = useState<XReport[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [parkedTickets, setParkedTickets] = useState<ParkedTicket[]>([]);
@@ -1835,6 +1986,14 @@ const AppContent: React.FC = () => {
     });
   };
 
+  const belongsToCurrentCashier = useCallback((record?: { userId?: string | null; userName?: string | null }) => {
+    if (!currentUser) return false;
+    const currentUserId = (currentUser.id || '').trim();
+    if (currentUserId && (record?.userId || '').trim() === currentUserId) return true;
+    const currentUserName = (currentUser.name || '').trim().toLowerCase();
+    return Boolean(currentUserName && (record?.userName || '').trim().toLowerCase() === currentUserName);
+  }, [currentUser]);
+
   const reconcileTablesWithParkedTickets = useCallback((sourceTables: Table[], tickets: ParkedTicket[] = []): Table[] => {
     const hasItems = (ticket?: ParkedTicket | null) =>
       Boolean(ticket && Array.isArray(ticket.items) && ticket.items.some(item => Number(item.quantity || 0) > 0));
@@ -1854,9 +2013,41 @@ const AppContent: React.FC = () => {
     });
 
     return (sourceTables || []).map(table => {
-      const linkedTicket = (table.currentOrderId ? byOrderId.get(String(table.currentOrderId)) : undefined)
-        || byTableId.get(String(table.id));
-      if (!linkedTicket) return table;
+      const tableId = String(table.id);
+      const orderTicket = table.currentOrderId ? byOrderId.get(String(table.currentOrderId)) : undefined;
+      const orderTicketTableId = orderTicket?.tableId !== undefined && orderTicket?.tableId !== null
+        ? String(orderTicket.tableId)
+        : '';
+      const joinedTableIds = Array.isArray((orderTicket as any)?.joinedTableIds)
+        ? (orderTicket as any).joinedTableIds.map((id: unknown) => String(id))
+        : [];
+      const canLinkByOrder = Boolean(
+        orderTicket &&
+        (
+          !orderTicketTableId ||
+          orderTicketTableId === tableId ||
+          joinedTableIds.includes(tableId) ||
+          String((table as any).joinedTableId || '') === orderTicketTableId ||
+          String((table as any).joinedSourceTableId || '') === tableId
+        )
+      );
+      const linkedTicket = (canLinkByOrder ? orderTicket : undefined)
+        || byTableId.get(tableId);
+      if (!linkedTicket) {
+        const hasStaleOccupancy =
+          table.status === 'OCCUPIED' &&
+          (table.currentOrderId || Number(table.currentOrderTotal || 0) > 0);
+        if (!hasStaleOccupancy) return table;
+        return {
+          ...table,
+          status: 'FREE',
+          currentOrderId: undefined,
+          currentOrderTotal: undefined,
+          timeSeated: undefined,
+          waiterId: undefined,
+          waiterName: undefined
+        } as Table;
+      }
 
       return {
         ...table,
@@ -2362,11 +2553,11 @@ const AppContent: React.FC = () => {
         }
 
         // 2. Gestión de Identidad de Dispositivo (early, used for safe config source selection)
-        let storedDeviceId = localStorage.getItem('pos_device_id');
+        let storedDeviceId = resolveLocalDeviceId();
         if (!storedDeviceId) {
           storedDeviceId = 'DEV-' + Math.random().toString(36).substring(2, 10).toUpperCase();
-          localStorage.setItem('pos_device_id', storedDeviceId);
         }
+        persistLocalDeviceId(storedDeviceId);
         setDeviceId(storedDeviceId);
 
         const persistedTenantId = (localStorage.getItem('clic_tenant_id') || '').trim();
@@ -2661,6 +2852,7 @@ const AppContent: React.FC = () => {
           setWarehouses(data.warehouses || []);
           setCashMovements(data.cashMovements || []);
           setZReports(data.zReports || []);
+          setXReports(Array.isArray(data.xReports) ? data.xReports : []);
           setPurchaseOrders(data.purchaseOrders || []);
           setSuppliers(data.suppliers || []);
           setParkedTickets(Array.isArray(data.parkedTickets) ? data.parkedTickets : []);
@@ -3083,6 +3275,7 @@ const AppContent: React.FC = () => {
         case 'transactions': setTransactions(Array.isArray(freshData) ? freshData as Transaction[] : []); break;
         case 'cashMovements': setCashMovements(freshData as CashMovement[]); break;
         case 'zReports': setZReports(freshData as ZReport[]); break;
+        case 'xReports': setXReports(Array.isArray(freshData) ? freshData as XReport[] : []); break;
         case 'warehouses': setWarehouses(Array.isArray(freshData) ? freshData as Warehouse[] : []); break;
       }
     };
@@ -3262,6 +3455,7 @@ const AppContent: React.FC = () => {
         resolutionError?: unknown;
       };
       progress?: (update: { stepId?: 'claim' | 'config' | 'apply' | 'sync' | 'cache' | 'finish'; message?: string }) => void;
+      recoveryState?: RuntimeTerminalRecoveryState | null;
     },
     options?: { forceTakeover?: boolean }
   ) => {
@@ -3452,6 +3646,7 @@ const AppContent: React.FC = () => {
           setProducts(freshData.products);
           setCashMovements(freshData.cashMovements);
           setZReports(freshData.zReports || []);
+          setXReports(Array.isArray(freshData.xReports) ? freshData.xReports : []);
         } catch (error) {
           console.error('Failed to restore history:', error);
           alert(shouldTakeover
@@ -3524,6 +3719,7 @@ const AppContent: React.FC = () => {
       if (Array.isArray(freshData.warehouses)) setWarehouses(freshData.warehouses);
       if (Array.isArray(freshData.cashMovements)) setCashMovements(freshData.cashMovements);
       if (Array.isArray(freshData.zReports)) setZReports(freshData.zReports);
+      if (Array.isArray(freshData.xReports)) setXReports(freshData.xReports);
       if (Array.isArray(freshData.purchaseOrders)) setPurchaseOrders(freshData.purchaseOrders);
       if (Array.isArray(freshData.suppliers)) setSuppliers(freshData.suppliers);
       if (Array.isArray(freshData.parkedTickets)) setParkedTickets(freshData.parkedTickets);
@@ -3555,6 +3751,17 @@ const AppContent: React.FC = () => {
         companyId: setupResult?.companyId || null,
         storeId: setupResult?.storeId || null,
       });
+
+      const recoveryState = setupResult?.recoveryState;
+      if (shouldTakeover && recoveryState) {
+        const cloudLastSequence = Number(recoveryState.last_global_sequence || 0);
+        setRecoverySequenceInput(String(Math.max(0, cloudLastSequence)));
+        setRecoverySequencePrompt({
+          ...recoveryState,
+          terminalId,
+          terminalName: resolvedTerminalName,
+        });
+      }
 
       setCurrentView('LOGIN');
     } catch (error) {
@@ -3636,6 +3843,28 @@ const AppContent: React.FC = () => {
       console.error('❌ Failed to complete setup wizard:', error);
       alert('No se pudo guardar la configuración inicial. Intenta nuevamente.');
     }
+  };
+
+  const handleConfirmRecoverySequence = async () => {
+    if (!recoverySequencePrompt) return;
+
+    const cloudLastSequence = Number(recoverySequencePrompt.last_global_sequence || 0);
+    const enteredSequence = Number(recoverySequenceInput);
+
+    if (!Number.isFinite(enteredSequence) || enteredSequence < 0 || !Number.isInteger(enteredSequence)) {
+      alert('Digite un número de secuencia válido.');
+      return;
+    }
+
+    if (enteredSequence < cloudLastSequence) {
+      alert(`El número ingresado debe ser mayor o igual al último número en la nube (${cloudLastSequence}).`);
+      return;
+    }
+
+    await dbAdapter.saveCollection('globalSequenceCounter', enteredSequence as any);
+    setRecoverySequencePrompt(null);
+    setRecoverySequenceInput('');
+    alert('Secuencia fiscal local alineada correctamente.');
   };
 
   const handleConfigUpdate = async (newConfig: BusinessConfig) => {
@@ -4793,6 +5022,192 @@ const AppContent: React.FC = () => {
     }
   };
 
+  const handleXReport = async (cashCounted: number, notes = 'Arqueo parcial') => {
+    const currentTerminal = getCurrentTerminal() || (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
+    const terminalId = currentTerminal?.id || 'T1';
+
+    try {
+      const terminalKey = normalizeTerminalId(terminalId);
+      const isDefaultTerminal = terminalKey === 't1';
+      const belongsToCurrentTerminal = (value?: string | null) =>
+        normalizeTerminalId(value) === terminalKey || (!value && isDefaultTerminal);
+
+      const terminalTransactions = getPendingTransactionsForTerminal(terminalId).filter(belongsToCurrentCashier);
+      const terminalCashMovements = getPendingCashMovementsForTerminal(terminalId).filter(belongsToCurrentCashier);
+      const terminalCollections = collections.filter(c =>
+        belongsToCurrentTerminal(c.terminalId) &&
+        belongsToCurrentCashier(c) &&
+        !c.zReportId
+      );
+
+      if (terminalTransactions.length === 0 && terminalCashMovements.length === 0 && terminalCollections.length === 0) {
+        throw new Error('Este cajero no tiene movimientos abiertos para generar Cierre X.');
+      }
+
+      const totalsByMethod = terminalTransactions.flatMap(t => t?.payments || []).reduce((acc: Record<string, number>, p) => {
+        if (p && p.method) {
+          acc[p.method] = (acc[p.method] || 0) + Number(p.amount || 0);
+        }
+        return acc;
+      }, {});
+
+      const baseCurrency = (config.currencies || []).find(c => c.isBase) || (config.currencies || [])[0];
+      const baseCurrencyCode = baseCurrency?.code || 'DOP';
+      const cashSales = totalsByMethod.CASH || 0;
+      const cardTotal = totalsByMethod.CARD || 0;
+      const otherTotal = Object.entries(totalsByMethod)
+        .filter(([method]) => method !== 'CASH' && method !== 'CARD')
+        .reduce((sum, [, amount]) => sum + Number(amount || 0), 0);
+      const cashIn = terminalCashMovements
+        .filter(m => m.type === 'IN' && (!m.currencyCode || m.currencyCode === baseCurrencyCode))
+        .reduce((sum, movement) => sum + Number(movement.amount || 0), 0);
+      const cashOut = terminalCashMovements
+        .filter(m => m.type === 'OUT' && (!m.currencyCode || m.currencyCode === baseCurrencyCode))
+        .reduce((sum, movement) => sum + Number(movement.amount || 0), 0);
+      const expectedCash = cashSales + cashIn - cashOut;
+      const discrepancy = Number(cashCounted || 0) - expectedCash;
+      const stats = calculateZReportStats(terminalTransactions, terminalCollections);
+
+      const orderedTicketRefs = terminalTransactions
+        .map((transaction) => transaction.displayId || transaction.id)
+        .filter(Boolean);
+      const openedAtCandidates = [
+        ...terminalTransactions.map(t => new Date(t.date).getTime()),
+        ...terminalCashMovements.map(m => new Date(m.timestamp).getTime())
+      ].filter((value) => Number.isFinite(value)) as number[];
+      const openedAt = openedAtCandidates.length > 0
+        ? new Date(Math.min(...openedAtCandidates)).toISOString()
+        : new Date().toISOString();
+
+      let sequenceNumber = '';
+      let xReportSeriesId: string | undefined;
+      let xReportSeriesNumber: number | undefined;
+
+      const rawInternalSequences = ((await db.get('internalSequences')) as DocumentSeries[]) || [];
+      const terminalSeriesList = currentTerminal?.config?.documentSeries || [];
+      const availableSeries = mergeDocumentSeriesCollection([
+        ...rawInternalSequences,
+        ...terminalSeriesList
+      ]);
+      const assignedSeriesId = currentTerminal?.config?.documentAssignments?.['X_REPORT'];
+      const resolvedSeriesId = resolveDocumentAssignmentId('X_REPORT', availableSeries, assignedSeriesId)
+        || resolveDocumentAssignmentId('X_REPORT', availableSeries, 'X_REPORT');
+      const xReportSeries = resolvedSeriesId
+        ? availableSeries.find(s => s.id === resolvedSeriesId)
+        : undefined;
+
+      if (xReportSeries) {
+        const prefix = xReportSeries.prefix || 'X';
+        const num = Math.max(1, Number(xReportSeries.nextNumber) || 1);
+        const padding = xReportSeries.padding || 6;
+        sequenceNumber = `${prefix}${num.toString().padStart(padding, '0')}`;
+        xReportSeriesId = xReportSeries.id;
+        xReportSeriesNumber = num;
+
+        const updatedSeries = {
+          ...xReportSeries,
+          nextNumber: num + 1
+        };
+        const updatedSequences = mergeDocumentSeriesCollection([
+          ...rawInternalSequences,
+          updatedSeries
+        ]);
+        setInternalSequences(updatedSequences);
+        await db.save('internalSequences', updatedSequences);
+
+        const hasTerminalSeries = terminalSeriesList.some(s => s.id === xReportSeries.id);
+        const updatedTerminalSeries = hasTerminalSeries
+          ? terminalSeriesList.map(s => s.id === xReportSeries.id ? updatedSeries : s)
+          : [...terminalSeriesList, updatedSeries];
+        const updatedTerminals = (config.terminals || []).map(t => {
+          if (t.id !== terminalId) return t;
+          return {
+            ...t,
+            config: {
+              ...t.config,
+              documentSeries: updatedTerminalSeries,
+              documentAssignments: {
+                ...(t.config.documentAssignments || {}),
+                X_REPORT: xReportSeries.id
+              }
+            }
+          };
+        });
+        const updatedConfig = { ...config, terminals: updatedTerminals };
+        setConfig(updatedConfig);
+        await db.save('config', updatedConfig);
+
+        if (permissionService.isMasterTerminal()) {
+          try {
+            await syncManager.pushCatalog('internalSequences');
+          } catch (sequenceSyncError) {
+            console.warn('⚠️ [App.tsx] X-Report sequence push failed; local counter is already advanced:', sequenceSyncError);
+          }
+        }
+      } else {
+        const existingXReports = await db.get('xReports') as XReport[];
+        const nextSeqNum = ((Array.isArray(existingXReports) ? existingXReports.length : 0) + 1).toString().padStart(6, '0');
+        sequenceNumber = `X-${nextSeqNum}`;
+      }
+
+      const newXReport: XReport = {
+        id: `XR-${Date.now()}`,
+        reportType: 'X',
+        terminalId,
+        sequenceNumber,
+        seriesId: xReportSeriesId,
+        seriesNumber: xReportSeriesNumber,
+        source_terminal_id: terminalId,
+        openedAt,
+        closedAt: new Date().toISOString(),
+        closedByUserId: currentUser?.id || 'sys',
+        closedByUserName: currentUser?.name || 'System',
+        baseCurrency: baseCurrencyCode,
+        totalsByMethod,
+        cashExpected: { [baseCurrencyCode]: expectedCash },
+        cashCounted: { [baseCurrencyCode]: Number(cashCounted || 0) },
+        cashDiscrepancy: { [baseCurrencyCode]: discrepancy },
+        cashSales,
+        cashIn,
+        cashOut,
+        transactionCount: terminalTransactions.length,
+        notes,
+        declared_totals: {
+          cash: Number(cashCounted || 0),
+          card: cardTotal,
+          other: otherTotal,
+          total_declared: Number(cashCounted || 0) + cardTotal + otherTotal,
+        },
+        system_totals: {
+          expected_cash: expectedCash,
+          expected_card: cardTotal,
+          expected_other: otherTotal,
+          total_expected: Object.values(totalsByMethod).reduce<number>((sum, amount) => sum + Number(amount || 0), 0),
+          cash_difference: discrepancy,
+          total_difference: discrepancy,
+        },
+        sync_audit: {
+          total_tickets_issued: terminalTransactions.length,
+          first_ticket_id: orderedTicketRefs[0] || null,
+          last_ticket_id: orderedTicketRefs[orderedTicketRefs.length - 1] || null,
+        },
+        stats,
+        syncStatus: 'PENDING' as const
+      };
+
+      await db.saveDocument('xReports', newXReport);
+      setXReports(prev => [newXReport, ...prev].sort((a, b) => new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime()));
+
+      const userRole = roles.find(r => r.id === (currentUser?.roleId || currentUser?.role));
+      const hiddenModules = userRole?.zReportConfig?.hiddenModules || [];
+      const printed = await ThermalPrinterService.printZReport(newXReport, hiddenModules, config);
+      alert(`Cierre X ${sequenceNumber} generado${printed ? ' e impreso' : ', pero no se pudo imprimir automáticamente'}.`);
+    } catch (error: any) {
+      console.error('❌ X-Report failed:', error);
+      alert(`No se pudo generar el Cierre X: ${error?.message || 'Error desconocido'}`);
+    }
+  };
+
   const handleZReport = async (cashCounted: number, notes: string, reportData?: any) => {
     // 1. Robust Terminal ID Discovery.
     // The Z modal already knows the active terminal; prefer it over rediscovering by deviceId
@@ -5606,8 +6021,10 @@ const AppContent: React.FC = () => {
                     }
                     const fromTx = (transactions || []).find(t => t.id === table.currentOrderId);
                     if (parked?.items?.length) {
+                      const joinedSourceName = String((selectedTable as any).joinedSourceTableName || '').trim();
                       selectedTable = {
                         ...table,
+                        ...(joinedSourceName ? { name: joinedSourceName, nombre: joinedSourceName } : {}),
                         status: 'OCCUPIED',
                         currentOrderId: parked.id,
                         currentOrderTotal: typeof parked.total === 'number'
@@ -5630,8 +6047,10 @@ const AppContent: React.FC = () => {
                       }
                     }
                     if (parked?.items?.length) {
+                      const joinedSourceName = String((selectedTable as any).joinedSourceTableName || '').trim();
                       selectedTable = {
                         ...table,
+                        ...(joinedSourceName ? { name: joinedSourceName, nombre: joinedSourceName } : {}),
                         status: 'OCCUPIED',
                         currentOrderId: parked.id,
                         currentOrderTotal: typeof parked.total === 'number'
@@ -5647,6 +6066,11 @@ const AppContent: React.FC = () => {
                   setCurrentView('POS');
                 }}
                 onRefreshTables={fetchTables}
+                onUpdateTables={async (nextTables) => {
+                  setTables(nextTables);
+                  await db.save('tables', nextTables);
+                }}
+                onUpdateParkedTickets={handleUpdateParkedTickets}
                 currencySymbol={config.currencySymbol}
                 currentUser={currentUser!}
                 isAdmin={currentUser?.role === 'ADMIN'}
@@ -5882,6 +6306,7 @@ const AppContent: React.FC = () => {
               const freshStocks = await db.get('productStocks') as ProductStock[] || [];
               setProductStocks(freshStocks);
             }}
+            onOpenFinance={() => setCurrentView('FINANCE')}
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
@@ -5948,6 +6373,7 @@ const AppContent: React.FC = () => {
               const freshStocks = await db.get('productStocks') as ProductStock[] || [];
               setProductStocks(freshStocks);
             }}
+            onOpenFinance={() => setCurrentView('FINANCE')}
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
@@ -6048,19 +6474,25 @@ const AppContent: React.FC = () => {
         {
           const financeTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
           const currentTerminalId = financeTerminal?.id || 'T1';
-          const terminalTransactions = getPendingTransactionsForTerminal(currentTerminalId);
-          const terminalMovements = getPendingCashMovementsForTerminal(currentTerminalId);
+          const terminalTransactions = getPendingTransactionsForTerminal(currentTerminalId).filter(belongsToCurrentCashier);
+          const terminalMovements = getPendingCashMovementsForTerminal(currentTerminalId).filter(belongsToCurrentCashier);
+          const terminalXReports = xReports.filter(report =>
+            normalizeTerminalId(report.terminalId) === normalizeTerminalId(currentTerminalId) &&
+            belongsToCurrentCashier({ userId: report.closedByUserId, userName: report.closedByUserName })
+          );
           const allowPartialXReport = financeTerminal?.config?.workflow?.session?.allowPartialXReport !== false;
 
           return (
             <FinanceDashboard
               transactions={terminalTransactions}
               cashMovements={terminalMovements}
+              xReports={terminalXReports}
               config={config}
               currentUser={currentUser}
               roles={roles}
               allowPartialXReport={allowPartialXReport}
               onRegisterMovement={handleRegisterMovement}
+              onCloseXReport={handleXReport}
               onOpenZReport={() => setCurrentView('Z_REPORT')}
               onClose={() => setCurrentView('POS')}
             />
@@ -6964,6 +7396,41 @@ const AppContent: React.FC = () => {
   return (
     <ErrorBoundary componentName="App Root">
       <>
+        {recoverySequencePrompt && (
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/70 p-6">
+            <div className="w-full max-w-xl rounded-3xl bg-white p-7 shadow-2xl">
+              <p className="text-xs font-black uppercase tracking-[0.22em] text-blue-600">Recuperación de terminal</p>
+              <h2 className="mt-2 text-2xl font-black text-slate-950">Alinear secuencia fiscal</h2>
+              <p className="mt-3 text-sm font-semibold leading-6 text-slate-600">
+                Nuestra última factura en la nube fue {recoverySequencePrompt.last_display_id || recoverySequencePrompt.last_ncf || `#${recoverySequencePrompt.last_global_sequence || 0}`}.
+                Revise el último recibo físico impreso e ingrese el último número usado en esta caja.
+              </p>
+              <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-bold text-slate-700">
+                <div>Terminal: {recoverySequencePrompt.terminalName || recoverySequencePrompt.terminalId}</div>
+                <div>Última secuencia cloud: {recoverySequencePrompt.last_global_sequence ?? 0}</div>
+                {recoverySequencePrompt.last_transaction_date && (
+                  <div>Última fecha cloud: {recoverySequencePrompt.last_transaction_date}</div>
+                )}
+              </div>
+              <label className="mt-5 block text-xs font-black uppercase tracking-[0.16em] text-slate-500">
+                Último número usado
+              </label>
+              <input
+                type="number"
+                min={recoverySequencePrompt.last_global_sequence ?? 0}
+                value={recoverySequenceInput}
+                onChange={(event) => setRecoverySequenceInput(event.target.value)}
+                className="mt-2 w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-4 text-2xl font-black text-slate-950 outline-none focus:border-blue-500"
+              />
+              <button
+                onClick={handleConfirmRecoverySequence}
+                className="mt-6 w-full rounded-2xl bg-blue-600 py-4 text-base font-black text-white shadow-xl shadow-blue-200 active:scale-[0.98]"
+              >
+                Confirmar y continuar
+              </button>
+            </div>
+          </div>
+        )}
         {renderReconnectionBanner()}
         {renderTerminalConfigRestartBanner()}
         {posApkUpdate && (

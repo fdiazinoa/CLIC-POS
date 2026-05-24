@@ -283,24 +283,18 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh] border border-gray-100">
         
         {/* Header */}
-        <div className="relative h-28 bg-gray-100">
-          <img 
-            src={product.image || "https://picsum.photos/400/200"} 
-            alt={product.name} 
-            className="w-full h-full object-cover"
-          />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/75 to-transparent flex items-end p-5">
-            <div>
-              <h2 className="text-2xl font-black text-white shadow-sm">{product.name}</h2>
-              <p className="text-xs font-bold uppercase tracking-widest text-white/70">{currencySymbol}{Number(product.price || 0).toFixed(2)} base</p>
-            </div>
+        <div className="flex items-start justify-between gap-4 border-b border-gray-100 bg-white px-6 py-5">
+          <div className="min-w-0">
+            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">Modificadores</p>
+            <h2 className="mt-1 truncate text-2xl font-black leading-tight text-gray-900">{product.name}</h2>
+            <p className="mt-1 text-xs font-black uppercase tracking-widest text-gray-500">{currencySymbol}{Number(product.price || 0).toFixed(2)} base</p>
           </div>
           <button 
             onClick={onClose}
-            className="absolute top-4 right-4 p-2 bg-black/30 hover:bg-black/50 text-white rounded-full transition-colors backdrop-blur-md"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gray-100 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900"
           >
             <X size={20} />
           </button>

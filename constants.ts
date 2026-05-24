@@ -5,12 +5,16 @@ export const DEFAULT_DOCUMENT_SERIES: DocumentSeries[] = [
   { id: 'TICKET', documentType: 'TICKET', name: 'Ticket de Venta', description: 'Comprobante estándar para todas las ventas.', prefix: 'TCK', nextNumber: 1, padding: 6, icon: 'Receipt', color: 'blue' },
   { id: 'REFUND', documentType: 'REFUND', name: 'Devolución / Abono', description: 'Notas de crédito por devoluciones.', prefix: 'NC', nextNumber: 1, padding: 6, icon: 'RotateCcw', color: 'orange' },
   { id: 'TRANSFER', documentType: 'TRANSFER', name: 'Nota de Traspaso', description: 'Movimiento de inventario entre almacenes.', prefix: 'TR', nextNumber: 1, padding: 6, icon: 'ArrowRightLeft', color: 'purple' },
+  { id: 'Z_REPORT', documentType: 'Z_REPORT', name: 'Cierre Z', description: 'Cierre final de caja.', prefix: 'Z', nextNumber: 1, padding: 6, icon: 'FileText', color: 'gray' },
+  { id: 'X_REPORT', documentType: 'X_REPORT', name: 'Cierre X', description: 'Arqueo parcial sin limpiar ventas.', prefix: 'X', nextNumber: 1, padding: 6, icon: 'FileText', color: 'gray' },
 ];
 
 export const DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS = {
   TICKET: 'TICKET',
   REFUND: 'REFUND',
-  TRANSFER: 'TRANSFER'
+  TRANSFER: 'TRANSFER',
+  Z_REPORT: 'Z_REPORT',
+  X_REPORT: 'X_REPORT'
 } as const;
 
 export const INITIAL_TAXES: TaxDefinition[] = [
@@ -185,7 +189,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
       'ALL',
       'POS_VOID_ITEM', 'POS_VOID_TICKET', 'POS_DISCOUNT',
       'POS_PRICE_OVERRIDE', 'POS_OPEN_DRAWER', 'POS_RETURNS',
-      'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHANGE_TARIFF', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'TABLE_CONTROL_CENTER', 'SETTINGS_ACCESS', 'POS_ALLOW_ZERO_PRICE'
+      'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHANGE_TARIFF', 'POS_VIEW_X_REPORT', 'POS_CLOSE_X', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'TABLE_CONTROL_CENTER', 'SETTINGS_ACCESS', 'POS_ALLOW_ZERO_PRICE'
     ],
     isSystem: true,
     maxDiscountPercent: 100
@@ -195,7 +199,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
     name: 'Supervisor',
     permissions: [
       'POS_VOID_ITEM', 'POS_DISCOUNT', 'POS_OPEN_DRAWER',
-      'POS_RETURNS', 'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHANGE_TARIFF', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'TABLE_CONTROL_CENTER'
+      'POS_RETURNS', 'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHANGE_TARIFF', 'POS_VIEW_X_REPORT', 'POS_CLOSE_X', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'TABLE_CONTROL_CENTER'
     ],
     isSystem: true,
     maxDiscountPercent: 20
@@ -407,6 +411,7 @@ export const AVAILABLE_PERMISSIONS = [
 
   // --- CASH & FINANCE ---
   { key: 'POS_OPEN_DRAWER', label: 'Abrir Cajón', description: 'Sin venta', category: 'CASH' },
+  { key: 'POS_CLOSE_X', label: 'Hacer Cierre X', description: 'Generar arqueo parcial sin limpiar ventas ni movimientos', category: 'CASH' },
   { key: 'POS_CLOSE_Z', label: 'Cierre Z (Corte)', description: 'Realizar cierre de caja', category: 'CASH' },
   { key: 'POS_REPEAT_Z_REPORT', label: 'Repetir Cierre Z', description: 'Permite repetir/imprimir un cierre Z desde el historial', category: 'CASH' },
   { key: 'POS_VIEW_X_REPORT', label: 'Ver Reporte X', description: 'Consultar ventas en Monitor (Reporte X)', category: 'CASH' },

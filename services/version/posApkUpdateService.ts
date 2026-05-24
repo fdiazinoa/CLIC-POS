@@ -50,7 +50,9 @@ type CheckOptions = {
 };
 
 const DEFAULT_POS_APK_LATEST_URL = 'https://cloud-admin-gamma.vercel.app/api/pos-apk/latest';
+const DEFAULT_POS_APK_PORTAL_URL = 'https://cloud-admin-gamma.vercel.app/apk-pos';
 const POS_APK_LATEST_URL_STORAGE_KEY = 'clic_pos_apk_latest_url';
+const POS_APK_PORTAL_URL_STORAGE_KEY = 'clic_pos_apk_portal_url';
 const POS_APK_LOCAL_VERSION_CODE_OVERRIDE_KEY = 'clic_pos_apk_local_version_code_override';
 const POS_APK_LOCAL_VERSION_NAME_OVERRIDE_KEY = 'clic_pos_apk_local_version_name_override';
 
@@ -88,14 +90,20 @@ const getLocalStorageValue = (key: string): string => {
   }
 };
 
-export const resolvePosApkLatestUrl = (config?: BusinessConfig | null): string => {
+const resolveCloudAdminBaseUrl = (config?: BusinessConfig | null): string => {
   const env = getEnv();
   const metadata = (config?.metadata || {}) as Record<string, unknown>;
-  const configuredBaseUrl = normalizeString(
+  return normalizeString(
     metadata.cloudAdminBaseUrl
     || metadata.cloud_admin_base_url
     || env.VITE_CLOUD_ADMIN_BASE_URL
   ).replace(/\/$/, '');
+};
+
+export const resolvePosApkLatestUrl = (config?: BusinessConfig | null): string => {
+  const env = getEnv();
+  const metadata = (config?.metadata || {}) as Record<string, unknown>;
+  const configuredBaseUrl = resolveCloudAdminBaseUrl(config);
 
   const explicitUrl = normalizeString(
     metadata.posApkLatestUrl
@@ -108,6 +116,26 @@ export const resolvePosApkLatestUrl = (config?: BusinessConfig | null): string =
   if (explicitUrl) return explicitUrl;
   if (configuredBaseUrl) return `${configuredBaseUrl}/api/pos-apk/latest`;
   return DEFAULT_POS_APK_LATEST_URL;
+};
+
+export const resolvePosApkPortalUrl = (config?: BusinessConfig | null): string => {
+  const env = getEnv();
+  const metadata = (config?.metadata || {}) as Record<string, unknown>;
+  const configuredBaseUrl = resolveCloudAdminBaseUrl(config);
+
+  const explicitUrl = normalizeString(
+    metadata.posApkPortalUrl
+    || metadata.pos_apk_portal_url
+    || metadata.posApkManualUrl
+    || metadata.pos_apk_manual_url
+    || getLocalStorageValue(POS_APK_PORTAL_URL_STORAGE_KEY)
+    || env.VITE_POS_APK_PORTAL_URL
+    || env.VITE_CLOUD_ADMIN_POS_APK_PORTAL_URL
+  );
+
+  if (explicitUrl) return explicitUrl;
+  if (configuredBaseUrl) return `${configuredBaseUrl}/apk-pos`;
+  return DEFAULT_POS_APK_PORTAL_URL;
 };
 
 const fetchWithTimeout = async (url: string, timeoutMs: number): Promise<Response> => {
@@ -250,6 +278,33 @@ export const openPosApkDownloadUrl = async (release: PosApkRelease): Promise<voi
     console.warn('[posApkUpdate] No se pudo abrir URL de descarga:', error);
     window.open(url, '_blank', 'noopener,noreferrer');
   }
+};
+
+export const openExternalUrl = async (url: string): Promise<void> => {
+  const normalizedUrl = normalizeString(url);
+  if (!normalizedUrl) return;
+
+  try {
+    const runtimeWindow = window as any;
+    const browserPlugin = runtimeWindow.Capacitor?.Plugins?.Browser;
+    if (browserPlugin && typeof browserPlugin.open === 'function') {
+      await browserPlugin.open({ url: normalizedUrl });
+      return;
+    }
+
+    const target = Capacitor.isNativePlatform() ? '_system' : '_blank';
+    const opened = window.open(normalizedUrl, target, 'noopener,noreferrer');
+    if (!opened && !Capacitor.isNativePlatform()) {
+      window.location.assign(normalizedUrl);
+    }
+  } catch (error) {
+    console.warn('[posApkUpdate] No se pudo abrir URL externa:', error);
+    window.open(normalizedUrl, '_blank', 'noopener,noreferrer');
+  }
+};
+
+export const openPosApkPortalUrl = async (config?: BusinessConfig | null): Promise<void> => {
+  await openExternalUrl(resolvePosApkPortalUrl(config));
 };
 
 export const resetPosApkUpdateCheckForTests = () => {

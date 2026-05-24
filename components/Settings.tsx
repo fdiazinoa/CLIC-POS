@@ -31,7 +31,13 @@ import {
 } from '../types';
 
 import { getInventorySnapshotAtDate, getLeadTimePerformance, getABCRanking, getHRPerformance } from './AnalyticsLogic';
-import { checkForPosApkUpdate, openPosApkDownloadUrl } from '../services/version/posApkUpdateService';
+import {
+  checkForPosApkUpdate,
+  openPosApkDownloadUrl,
+  openPosApkPortalUrl,
+  resolvePosApkLatestUrl,
+  resolvePosApkPortalUrl,
+} from '../services/version/posApkUpdateService';
 
 const AgendaManager = React.lazy(() => import('./AgendaManager'));
 const SpacesManager = React.lazy(() => import('./SpacesManager'));
@@ -111,6 +117,7 @@ interface SettingsProps {
     creditNoteIds: string[];
   }>;
   onAdjustStock: (adjustments: { productId: string; quantity: number }[]) => void;
+  onOpenFinance?: () => void;
   onOpenZReport: () => void;
   onOpenSupplyChain: () => void;
   onOpenFranchise: () => void;
@@ -284,7 +291,17 @@ const Settings: React.FC<SettingsProps> = (props) => {
       alert(`El POS está actualizado. Versión actual: ${currentVersion}.`);
     } catch (error: any) {
       console.info('[posApkUpdate] Consulta manual fallida:', error);
-      alert(`No se pudo consultar la actualización del APK. La operación del POS no se bloquea.\n\n${error?.message || 'Error de red'}`);
+      const endpointUrl = resolvePosApkLatestUrl(props.config);
+      const portalUrl = resolvePosApkPortalUrl(props.config);
+      const shouldOpenPortal = window.confirm(
+        `No se pudo consultar la actualización del APK.\n\n` +
+        `El POS sigue operando normal. Esto suele pasar cuando el endpoint de Cloud-Admin todavía no está publicado, no tiene CORS habilitado o no hay conexión.\n\n` +
+        `Endpoint consultado:\n${endpointUrl}\n\n` +
+        `¿Desea abrir la pantalla de APK POS para descarga manual?\n${portalUrl}`
+      );
+      if (shouldOpenPortal) {
+        await openPosApkPortalUrl(props.config);
+      }
     } finally {
       setIsCheckingApkUpdate(false);
     }
@@ -875,6 +892,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   <SettingsCard icon={PlugZap} label="Integraciones" description="AZUL, CardNet y adquirentes" color="bg-sky-600" onClick={() => setCurrentView('INTEGRATIONS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ArrowRightLeft} label="Divisas y Cambio" description="Multi-moneda y Tasas" color="bg-teal-500" onClick={() => setCurrentView('EXCHANGE')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Percent} label="Impuestos" description="ITBIS, Exentos y Cargos" color="bg-emerald-500" onClick={() => setCurrentView('TAXES')} locked={!hasPermission('SETTINGS_TAXES')} />
+                  <SettingsCard icon={ListChecks} label="Cierre X" description="Arqueo parcial sin limpiar ventas" color="bg-blue-700" onClick={props.onOpenFinance || props.onOpenZReport} locked={!hasPermission('POS_CLOSE_X')} />
                   <SettingsCard icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" onClick={props.onOpenZReport} locked={!hasPermission('POS_CLOSE_Z')} />
                   <SettingsCard icon={FileText} label="Documentos" description="Series, NCF, Prefijos" color="bg-blue-400" onClick={() => setCurrentView('DOCUMENTS')} locked={!hasPermission('SETTINGS_TAXES')} />
                 </div>

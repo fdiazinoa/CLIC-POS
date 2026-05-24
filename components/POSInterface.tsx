@@ -297,6 +297,19 @@ const isKdsReturnedCartItem = (item?: Partial<CartItem> | null): boolean => {
    return status === 'DEVUELTO' || Boolean((item as any)?.kdsReturnedAt);
 };
 
+const isKitchenDispatchedCartItem = (item?: Partial<CartItem> | null): boolean => {
+   const status = String((item as any)?.kdsStatus || '').trim().toUpperCase();
+   return Boolean(
+      (item as any)?.dispatched ||
+      (item as any)?.kdsOrderId ||
+      (item as any)?.kdsAreaId ||
+      ((item as any)?.kdsItemIds && (item as any).kdsItemIds.length > 0) ||
+      status === 'ENVIADO' ||
+      status === 'DEVUELTO' ||
+      status === 'RETURN_PENDING'
+   );
+};
+
 const buildKdsDispatchItems = (items: CartItem[], areaId?: string) => items.map((item, index) => ({
    id: item.cartId || `${item.id}-${index}`,
    producto_id: item.id,
@@ -1142,7 +1155,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       operationalVertical === 'RESTAURANT' ||
       operationalVertical === 'RESTAURANTE' ||
       config.vertical === 'RESTAURANT';
+   const showTableMapButton = Boolean(activeTerminalConfig?.operational?.usa_mesas);
    const hideTableExtras = isRestaurantMode && !!activeTable;
+   const restaurantActionGridClass = !isRestaurantMode
+      ? 'grid-cols-[112px_minmax(0,1fr)]'
+      : showTableMapButton
+         ? (hideTableExtras ? 'grid-cols-4' : 'grid-cols-5')
+         : (hideTableExtras ? 'grid-cols-3' : 'grid-cols-4');
    const reservationPolicy = activeTerminalConfig?.operational?.reservationPolicy || {
       validityDays: 7,
       printCopies: 1,
@@ -2383,6 +2402,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                ...existing,
                quantity: existing.quantity + quantity,
                appliedTaxIds: effectiveTaxIds,
+               createdAt: existing.createdAt || new Date().toISOString(),
                production_area_id: resolveProductionAreaId(existing) || productionAreaId || undefined,
             };
             return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
@@ -2393,6 +2413,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const newItem = {
             ...product,
             cartId: newCartId,
+            createdAt: new Date().toISOString(),
             quantity,
             price: finalPrice,
             modifiers,
@@ -3059,6 +3080,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       () => processedCart.reduce((sum, item) => sum + Math.abs(Number(item.quantity || 0)), 0),
       [processedCart]
    );
+   const hasClearableFreshItems = useMemo(
+      () => cart.some(item => !isKitchenDispatchedCartItem(item)),
+      [cart]
+   );
 
    const isTaxIncluded = activeTariff?.taxIncluded || false;
    const grossLineTotal = useMemo(
@@ -3420,7 +3445,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (cartIdToDelete || updatedItem === null) {
          const targetCartId = cartIdToDelete || editingItem?.cartId;
          const originalItem = (cart || []).find(i => i.cartId === targetCartId);
-         if (originalItem?.dispatched) {
+         if (isKitchenDispatchedCartItem(originalItem)) {
             alert(isKdsReturnedCartItem(originalItem)
                ? 'Este artículo ya fue devuelto en cocina y queda bloqueado para auditoría.'
                : 'Este artículo ya fue enviado al KDS. Usa Devolver para marcarlo en cocina; no se puede borrar directamente.'
@@ -3441,7 +3466,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // Update Check (Price Override / Discount)
          const originalItem = (cart || []).find(i => i.cartId === updatedItem.cartId);
 
-         if (originalItem?.dispatched) {
+         if (isKitchenDispatchedCartItem(originalItem)) {
             const originalQty = Number(originalItem.quantity || 0);
             const nextQty = Number(updatedItem.quantity || 0);
             if (Math.abs(nextQty - originalQty) > 0.0001) {
@@ -3485,6 +3510,67 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             console.error("Auto-sync delete failed:", e);
          }
       }
+   };
+
+   const handleClearFreshCartItems = async () => {
+      if (blockRecoveredUberOrderMutation('limpiar los artículos nuevos del ticket')) return;
+      if (cart.length === 0) return;
+
+      const freshItems = cart.filter(item => !isKitchenDispatchedCartItem(item));
+      const dispatchedItems = cart.filter(item => isKitchenDispatchedCartItem(item));
+
+      if (freshItems.length === 0) {
+         alert('No hay artículos nuevos para borrar. Los artículos enviados a cocina deben devolverse.');
+         return;
+      }
+
+      const confirmMessage = dispatchedItems.length > 0
+         ? `Se borrarán ${freshItems.length} artículo(s) nuevo(s). ${dispatchedItems.length} artículo(s) ya enviados a cocina se mantendrán en el ticket.`
+         : `Se borrarán todos los artículos nuevos del ticket (${freshItems.length}).`;
+
+      if (!window.confirm(`${confirmMessage}\n\n¿Continuar?`)) return;
+
+      const authorized = await requestApproval({
+         permission: 'POS_VOID_ITEM',
+         actionDescription: 'Limpiar artículos nuevos del ticket',
+         context: {
+            ticketId: activeTable?.currentOrderId,
+            reason: `Limpiar ${freshItems.length} artículo(s) nuevo(s); mantener ${dispatchedItems.length} enviado(s) a cocina`,
+         }
+      });
+      if (!authorized) return;
+
+      onUpdateCart(dispatchedItems);
+      setActiveCartItemId(null);
+      setEditingItem(null);
+
+      if (activeTable) {
+         const ticketId = activeTable.currentOrderId;
+         if (dispatchedItems.length === 0) {
+            await releaseActiveEmptyTable({ silent: true, force: true });
+         } else if (ticketId) {
+            const total = dispatchedItems.reduce((sum, i) => sum + (Number(i.price || 0) * Number(i.quantity || 0)), 0);
+            const updatedTickets = (Array.isArray(parkedTickets) ? parkedTickets : []).map(p =>
+               p.id === ticketId ? { ...p, items: dispatchedItems, total } : p
+            );
+            await Promise.resolve(onUpdateParkedTickets(updatedTickets));
+
+            try {
+               fetch(`http://localhost:8001/api/ordenes/${ticketId}`, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ items: dispatchedItems, total, status: 'OCCUPIED' })
+               });
+            } catch (e) {
+               console.error('Auto-sync clear failed:', e);
+            }
+         }
+      }
+
+      const keptMessage = dispatchedItems.length > 0
+         ? ` ${dispatchedItems.length} enviado(s) a cocina se mantienen.`
+         : '';
+      setSuccessToast(`${freshItems.length} artículo(s) nuevo(s) borrado(s).${keptMessage}`);
    };
 
 
@@ -3678,7 +3764,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ? Math.round(((saleTotal - saleTaxAmount) + Number.EPSILON) * 100) / 100
                   : saleTotal;
                const salePayments = payments.filter(p => !['WALLET', 'ADVANCE'].includes(p.method));
-               const saleSettlement = buildTransactionSettlementFields(salePayments, saleTotal, baseCurrency.code);
+               const salePayableTotal = saleTotal + (voluntaryTip || 0);
+               const saleSettlement = buildTransactionSettlementFields(salePayments, salePayableTotal, baseCurrency.code);
 
                // Prepare wallet operations
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
@@ -3702,7 +3789,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         documentType: 'TICKET' as const,
                         seriesId: assignedSequenceId,
                         items: saleItems,
-                        total: saleTotal + (voluntaryTip || 0),
+                        total: saleTotal,
                         payments: salePayments,
                         serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
                         voluntaryTipAmount: voluntaryTip,
@@ -3837,8 +3924,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const documentItems = !isRefundOnly
                   ? applyOrderContextToItems(rawDocumentItems, saleOrderNumber)
                   : rawDocumentItems;
-               const documentTotal = (isRefundOnly ? refundDocumentTotal : cartTotal) + (voluntaryTip || 0);
-               const transactionSettlement = buildTransactionSettlementFields(paymentsForTransaction, documentTotal, baseCurrency.code);
+               const documentTotal = isRefundOnly ? refundDocumentTotal : cartTotal;
+               const payableTotal = documentTotal + (voluntaryTip || 0);
+               const transactionSettlement = buildTransactionSettlementFields(paymentsForTransaction, payableTotal, baseCurrency.code);
 
                const txn = await withTimeout(transactionService.createTransaction({
                   documentType: hasReturns ? 'REFUND' : 'TICKET',
@@ -4363,10 +4451,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const handlePrintPrecuenta = async () => {
       if (cart.length === 0) return;
       setSuccessToast('Generando Precuenta...');
-      // In a more complete implementation, this would call printer.ts with a dummy transaction
-      setTimeout(() => {
-         setSuccessToast('Precuenta enviada a impresora');
-      }, 1000);
+      try {
+         const printed = await printPrecuenta(config, {
+            items: processedCart.filter(item => Number(item.quantity || 0) > 0),
+            subtotal: cartSubtotal,
+            discountTotal: discountAmount,
+            taxTotal: cartTax,
+            finalTotal: cartTotal,
+            table: activeTable,
+            customerName: effectiveSelectedCustomer?.name,
+            terminalId,
+            orderNumber: readCartOrderNumber(cart),
+            tableDisplayLabel: activeTableContext.compactLabel || activeTableContext.tableLabel,
+         });
+
+         if (printed) {
+            setSuccessToast('Precuenta enviada a impresora');
+            return;
+         }
+
+         setSuccessToast(null);
+         setErrorToast('No se pudo imprimir la precuenta. Verifica la impresora de ticket.');
+         window.setTimeout(() => setErrorToast(null), 3000);
+      } catch (error) {
+         console.error('Error imprimiendo precuenta:', error);
+         setSuccessToast(null);
+         setErrorToast('No se pudo imprimir la precuenta.');
+         window.setTimeout(() => setErrorToast(null), 3000);
+      }
    };
 
    const openReservationModal = () => {
@@ -4394,8 +4506,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setShowReservationModal(true);
    };
 
-   const releaseActiveEmptyTable = async (options: { silent?: boolean } = {}): Promise<boolean> => {
-      if (!activeTable || cart.length > 0) return false;
+   const releaseActiveEmptyTable = async (options: { silent?: boolean; force?: boolean } = {}): Promise<boolean> => {
+      if (!activeTable || (!options.force && cart.length > 0)) return false;
 
       const tableToRelease = activeTable;
 
@@ -4748,6 +4860,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          case 'DRAWER': handleOpenDrawer(); break;
          case 'SAVE': openParkAliasModal(); break;
          case 'TABLES':
+            if (!showTableMapButton) break;
             if ((config.vertical === 'RESTAURANT' || config.vertical === 'RETAIL') && cart.length > 0) {
                handleSendAndExit();
             } else {
@@ -5095,6 +5208,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </h2>
                   </div>
                   <div className="flex gap-1">
+                     {cart.length > 0 && (
+                        <button
+                           onClick={handleClearFreshCartItems}
+                           disabled={!hasClearableFreshItems}
+                           className="p-2 text-gray-400 hover:text-red-600 disabled:opacity-40 disabled:hover:text-gray-400"
+                           title={hasClearableFreshItems ? 'Borrar artículos nuevos' : 'No hay artículos nuevos para borrar'}
+                        >
+                           <Trash2 size={20} />
+                        </button>
+                     )}
                      <button onClick={openParkAliasModal} className="p-2 text-gray-400 hover:text-blue-600" title="Guardar Ticket">
                         <Save size={20} />
                      </button>
@@ -5108,6 +5231,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <button className="p-2 text-gray-400 hover:text-gray-600"><MoreVertical size={20} /></button>
                         <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-xl border border-gray-100 hidden group-hover:block z-50">
                            <button onClick={onOpenHistory} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><History size={16} /> Historial</button>
+                           <button onClick={onOpenFinance} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><ClipboardCheck size={16} /> Cierre X</button>
                            <button onClick={onOpenZReport || onOpenFinance} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><Lock size={16} /> Cierre Z</button>
                            <button onClick={() => onOpenSettings()} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><Settings size={16} /> Ajustes</button>
                            <button onClick={onLogout} className="w-full px-4 py-3 text-left text-sm font-bold text-red-600 hover:bg-red-50 flex items-center gap-2 border-t border-gray-50"><LogOut size={16} /> Salir</button>
@@ -5255,7 +5379,28 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
-                  <div className="ml-auto flex max-w-[180px] shrink-0 items-center justify-end gap-2">
+                  <div className="ml-auto flex max-w-[240px] shrink-0 items-center justify-end gap-2">
+                     {cart.length > 0 && (
+                        <button
+                           onClick={handleClearFreshCartItems}
+                           disabled={!hasClearableFreshItems}
+                           aria-label="Borrar artículos nuevos del ticket"
+                           title={hasClearableFreshItems ? 'Borrar artículos nuevos' : 'No hay artículos nuevos para borrar'}
+                           className={`group flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
+                              hasClearableFreshItems
+                                 ? 'border-rose-200 bg-white text-rose-500 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700'
+                                 : 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-300'
+                           }`}
+                        >
+                           <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition-all ${
+                              hasClearableFreshItems
+                                 ? 'border-rose-100 bg-rose-50 text-rose-500 group-hover:border-rose-200 group-hover:bg-white group-hover:text-rose-700'
+                                 : 'border-slate-100 bg-white text-slate-300'
+                           }`}>
+                              <Trash2 size={18} strokeWidth={2.3} />
+                           </span>
+                        </button>
+                     )}
                      <button
                         onClick={() => setRightSidebarTab('CART')}
                         aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${cartQuantity} artículos` : ''}`}
@@ -5969,7 +6114,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
 
-                               <div className={`grid ${isRestaurantMode ? (hideTableExtras ? 'grid-cols-4' : 'grid-cols-5') : 'grid-cols-[112px_minmax(0,1fr)]'} items-center gap-3 pt-5 px-1`}>
+                               <div className={`grid ${restaurantActionGridClass} items-center gap-3 pt-5 px-1`}>
                                  {!isRestaurantMode ? (
                                     <>
                                        <button
@@ -6002,13 +6147,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     </>
                                  ) : (
                                     <>
-                                       <button
-                                          onClick={() => { void handleBackToMap(); }}
-                                          className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase border-2 border-slate-200 bg-slate-50 text-slate-700 hover:bg-white hover:border-slate-300 shadow-sm hover:shadow-md transition-all active:scale-95"
-                                       >
-                                          <Layout size={24} />
-                                          <span>Mesas</span>
-                                       </button>
+                                       {showTableMapButton && (
+                                          <button
+                                             onClick={() => { void handleBackToMap(); }}
+                                             className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase border-2 border-slate-200 bg-slate-50 text-slate-700 hover:bg-white hover:border-slate-300 shadow-sm hover:shadow-md transition-all active:scale-95"
+                                          >
+                                             <Layout size={24} />
+                                             <span>Mesas</span>
+                                          </button>
+                                       )}
                                        <button
                                           onClick={handleDispatchCommand}
                                           className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase border-2 border-orange-200 bg-orange-50 text-orange-600 hover:bg-orange-100 hover:border-orange-300 shadow-sm hover:shadow-md transition-all active:scale-95"

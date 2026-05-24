@@ -44,6 +44,7 @@ import {
 import { canonicalizeTariffEntries, resolveTariffId } from '../../utils/masterIdentity';
 import { ensureSyncDeviceToken } from './deviceToken';
 import { normalizeRestaurantProductConfig } from '../../utils/restaurantProductConfig';
+import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked } from '../../utils/deviceRevocation';
 
 export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'productPrices' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities' | 'crmOpportunities' | 'erp_sales_documents';
 
@@ -730,6 +731,56 @@ class SyncManager {
         return `clic_pos_terminal_startup_manifest_synced:${localTerminalId}`;
     }
 
+    private buildPosDeviceHeaders(deviceId: string | null | undefined): Record<string, string> {
+        const resolvedDeviceId = typeof deviceId === 'string' ? deviceId.trim() : '';
+        return resolvedDeviceId
+            ? {
+                'X-Device-Id': resolvedDeviceId,
+                'X-POS-Device-Id': resolvedDeviceId,
+            }
+            : {};
+    }
+
+    private async buildTerminalEndpointError(
+        response: Response,
+        fallbackMessage: string,
+        context?: { terminalId?: string | null; posDeviceId?: string | null }
+    ): Promise<Error> {
+        let payload: Record<string, any> | null = null;
+        let detail = '';
+
+        try {
+            const clonedPayload = await response.clone().json();
+            payload = clonedPayload && typeof clonedPayload === 'object' && !Array.isArray(clonedPayload)
+                ? clonedPayload
+                : null;
+        } catch {
+            // Fall back to text below.
+        }
+
+        if (payload) {
+            const code = String(payload.code || '').trim().toUpperCase();
+            if (response.status === 403 && code === 'DEVICE_SUPERSEDED') {
+                dispatchDeviceRevoked({
+                    reason: 'DEVICE_SUPERSEDED',
+                    message: String(payload.message || '').trim() || DEVICE_SUPERSEDED_MESSAGE,
+                    terminalId: context?.terminalId || payload.terminal_id || null,
+                    previousDeviceId: context?.posDeviceId || null,
+                    newDeviceId: payload.canonical_device_id || payload.new_device_id || null,
+                    payload,
+                });
+            }
+
+            detail = String(payload.message || payload.error || '').trim();
+        }
+
+        if (!detail) {
+            detail = await response.text().catch(() => '');
+        }
+
+        return new Error(detail || fallbackMessage);
+    }
+
     private readStoredCatalogCursor(localTerminalId: string | null): string | null {
         if (!localTerminalId) return null;
         const raw = localStorage.getItem(this.getCatalogCursorStorageKey(localTerminalId));
@@ -1064,8 +1115,10 @@ class SyncManager {
             const startedAt = posCatalogDebugNow();
             const params = new URLSearchParams();
             params.set('tenant_id', context.tenantId);
+            params.set('terminal_id', context.terminalId);
             if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
             if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+            if (context.posDeviceId) params.set('device_id', context.posDeviceId);
             if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
             if (cursorMap.terminal) params.set('terminal_cursor', cursorMap.terminal);
             if (cursorMap.items) params.set('items_cursor', cursorMap.items);
@@ -1087,12 +1140,16 @@ class SyncManager {
                 const response = await fetch(endpoint, {
                     headers: {
                         Accept: 'application/json',
+                        ...this.buildPosDeviceHeaders(context.posDeviceId),
                     },
                 });
 
                 if (!response.ok) {
-                    const detail = await response.text().catch(() => '');
-                    throw new Error(detail || `No se pudo consultar el manifest de maestros (${response.status}).`);
+                    throw await this.buildTerminalEndpointError(
+                        response,
+                        `No se pudo consultar el manifest de maestros (${response.status}).`,
+                        { terminalId: context.terminalId, posDeviceId: context.posDeviceId },
+                    );
                 }
 
                 const payload = await response.json();
@@ -1163,8 +1220,10 @@ class SyncManager {
             const startedAt = posCatalogDebugNow();
             const params = new URLSearchParams();
             params.set('tenant_id', context.tenantId);
+            params.set('terminal_id', context.terminalId);
             if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
             if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+            if (context.posDeviceId) params.set('device_id', context.posDeviceId);
             if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
             if (cursor) params.set('inventory_cursor', cursor);
 
@@ -1180,12 +1239,16 @@ class SyncManager {
                 const response = await fetch(endpoint, {
                     headers: {
                         Accept: 'application/json',
+                        ...this.buildPosDeviceHeaders(context.posDeviceId),
                     },
                 });
 
                 if (!response.ok) {
-                    const detail = await response.text().catch(() => '');
-                    throw new Error(detail || `No se pudo consultar el bloque inventory (${response.status}).`);
+                    throw await this.buildTerminalEndpointError(
+                        response,
+                        `No se pudo consultar el bloque inventory (${response.status}).`,
+                        { terminalId: context.terminalId, posDeviceId: context.posDeviceId },
+                    );
                 }
 
                 const payload = await response.json();
@@ -1283,8 +1346,10 @@ class SyncManager {
             const startedAt = posCatalogDebugNow();
             const params = new URLSearchParams();
             params.set('tenant_id', context.tenantId);
+            params.set('terminal_id', context.terminalId);
             if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
             if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+            if (context.posDeviceId) params.set('device_id', context.posDeviceId);
             if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
             if (cursor) params.set('product_prices_cursor', cursor);
 
@@ -1300,12 +1365,16 @@ class SyncManager {
                 const response = await fetch(endpoint, {
                     headers: {
                         Accept: 'application/json',
+                        ...this.buildPosDeviceHeaders(context.posDeviceId),
                     },
                 });
 
                 if (!response.ok) {
-                    const detail = await response.text().catch(() => '');
-                    throw new Error(detail || `No se pudo consultar el bloque product_prices (${response.status}).`);
+                    throw await this.buildTerminalEndpointError(
+                        response,
+                        `No se pudo consultar el bloque product_prices (${response.status}).`,
+                        { terminalId: context.terminalId, posDeviceId: context.posDeviceId },
+                    );
                 }
 
                 const payload = await response.json();
@@ -2192,8 +2261,10 @@ class SyncManager {
                 const fetchAttemptStartedAt = posCatalogDebugNow();
                 const params = new URLSearchParams();
                 if (context.tenantId) params.set('tenant_id', context.tenantId);
+                if (context.terminalId) params.set('terminal_id', context.terminalId);
                 if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
                 if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+                if (context.posDeviceId) params.set('device_id', context.posDeviceId);
                 if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
                 if (!options?.forceFullCatalog && currentCatalogCursor) params.set('catalog_cursor', currentCatalogCursor);
                 if (requestedMasterScopes) {
@@ -2219,11 +2290,15 @@ class SyncManager {
                     const response = await fetch(endpoint, {
                         headers: {
                             Accept: 'application/json',
+                            ...this.buildPosDeviceHeaders(context.posDeviceId),
                         },
                     });
                     if (!response.ok) {
-                        const detail = await response.text().catch(() => '');
-                        throw new Error(detail || `No se pudo refrescar la configuración de terminal (${response.status}).`);
+                        throw await this.buildTerminalEndpointError(
+                            response,
+                            `No se pudo refrescar la configuración de terminal (${response.status}).`,
+                            { terminalId: context.terminalId, posDeviceId: context.posDeviceId },
+                        );
                     }
 
                     const responseContentType = response.headers.get('content-type') || null;
