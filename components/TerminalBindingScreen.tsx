@@ -3,6 +3,7 @@ import { ChevronRight, Lock, Server, Smartphone, Wifi } from 'lucide-react';
 import { BusinessConfig, User as UserType } from '../types';
 import TerminalSelector from './TerminalSelector';
 import { buildMasterUrlCandidates, buildMasterUrlFromHost, normalizeMasterHost } from '../utils/cloudMasterRegistry';
+import type { RuntimeTerminalRecoveryState } from '../services/setup/erpTerminalSetup';
 
 interface PairingResult {
   tenantId?: string;
@@ -19,6 +20,7 @@ interface PairingResult {
     resolutionError?: unknown;
   };
   progress?: (update: { stepId?: 'claim' | 'config' | 'apply' | 'sync' | 'cache' | 'finish'; message?: string }) => void;
+  recoveryState?: RuntimeTerminalRecoveryState | null;
 }
 
 interface PairingOptions {
@@ -376,7 +378,8 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                 users,
                 masterIp: resolvedMasterIp,
                 snapshotMeta,
-                progress
+                progress,
+                recoveryState
               }) => {
                 await onConfigUpdate?.(boundConfig);
                 if (Array.isArray(users)) {
@@ -394,6 +397,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                   masterIp: resolvedMasterIp,
                   snapshotMeta,
                   progress,
+                  recoveryState,
                 }, { forceTakeover: Boolean(forceTakeover) });
               }}
             />

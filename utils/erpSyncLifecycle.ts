@@ -4,6 +4,7 @@ import { mergeTerminalConfigSnapshots } from './terminalConfigSnapshot';
 import { db } from './db';
 import { DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS } from '../constants';
 import { getDefaultRoleConfig, normalizeDeviceRoleValue, resolveDeviceRoleValue } from './deviceRoleHelpers';
+import { dispatchDeviceRevoked, isDeviceSupersededError, resolveLocalDeviceId } from './deviceRevocation';
 import {
     AuthLevel,
     BusinessConfig,
@@ -206,6 +207,15 @@ export const getLifecycleBlockingMessageFromError = (error: unknown): string | n
     }
 
     if (
+        code === 'DEVICE_SUPERSEDED'
+        || message.includes('ya no es la terminal autorizada')
+        || message.includes('dispositivo ya no está autorizado')
+        || message.includes('dispositivo ya no esta autorizado')
+    ) {
+        return 'Este equipo fue reemplazado por otro dispositivo. La operación queda bloqueada en esta tablet.';
+    }
+
+    if (
         code === 'LICENSE_BLOCKED'
         || code === 'TERMINAL_DISABLED'
         || code === 'LICENSE_EXCEEDED_INACTIVE'
@@ -343,11 +353,8 @@ const shouldRecoverErpBinding = (error: unknown) => {
     const message = normalizeOptional(requestError?.message || null).toLowerCase();
 
     return (
-        code === 'DEVICE_SUPERSEDED'
-        || requestError?.status === 404
+        requestError?.status === 404
         || message.includes('terminal no encontrada')
-        || message.includes('ya no es la terminal autorizada')
-        || message.includes('dispositivo ya no está autorizado')
     );
 };
 
@@ -1024,7 +1031,7 @@ const pullErpOutbox = async (bindingTerminalId: string | null, deviceId: string)
 
     return getJson<SyncOutboxPullResponse>('/outbox/pull', {
         terminal_id: bindingTerminalId || undefined,
-        device_id: bindingTerminalId ? undefined : deviceId,
+        device_id: deviceId || undefined,
         limit: 20,
     });
 };
@@ -1138,7 +1145,7 @@ export const heartbeatErpSyncTerminal = async (
 
     const runtimeTelemetry = await resolveRuntimeTelemetry();
     const storedBinding = getStoredErpSyncBinding();
-    const resolvedDeviceId = params.deviceId || fallbackDeviceId || '';
+    const resolvedDeviceId = params.deviceId || fallbackDeviceId || resolveLocalDeviceId();
     const terminalRef = storedBinding.terminalId || null;
 
     if (!terminalRef && !resolvedDeviceId) {
@@ -1147,7 +1154,7 @@ export const heartbeatErpSyncTerminal = async (
 
     const payload = await postJson<SyncHeartbeatResponse>('/terminals/heartbeat', {
         terminal_id: terminalRef || undefined,
-        device_id: terminalRef ? undefined : resolvedDeviceId,
+        device_id: resolvedDeviceId || undefined,
         app_version: runtimeTelemetry.appVersion || null,
         ip_address: runtimeTelemetry.ipAddress || null,
         pending_events: params.pendingEvents || 0,
@@ -1262,6 +1269,17 @@ export const ensureErpSyncLifecycle = async (params: EnsureLifecycleParams): Pro
     try {
         heartbeat = await heartbeatErpSyncTerminal(params, params.deviceId);
     } catch (error) {
+        if (isDeviceSupersededError(error)) {
+            dispatchDeviceRevoked({
+                reason: 'DEVICE_SUPERSEDED',
+                message: getLifecycleBlockingMessageFromError(error) || 'Este equipo fue reemplazado por otro dispositivo.',
+                terminalId: storedBinding.terminalId || params.terminalId,
+                previousDeviceId: params.deviceId,
+                payload: (error as SyncRequestError)?.payload || null,
+            });
+            throw error;
+        }
+
         if (!shouldRecoverErpBinding(error)) {
             throw error;
         }

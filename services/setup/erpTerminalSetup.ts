@@ -1,5 +1,6 @@
 import { BusinessConfig, Product, TerminalConfig } from '../../types';
 import { getDefaultRoleConfig, resolveDeviceRoleValue } from '../../utils/deviceRoleHelpers';
+import { supabase } from '../../utils/supabase';
 
 export interface RuntimeTerminalCard {
   id: string;
@@ -27,7 +28,16 @@ export interface RuntimeBindTerminalResponse {
   store_id?: string | null;
   transferred?: boolean;
   previous_device_id?: string | null;
+  recovery_state?: RuntimeTerminalRecoveryState | null;
   config: BusinessConfig;
+}
+
+export interface RuntimeTerminalRecoveryState {
+  terminal_id?: string | null;
+  last_ncf?: string | null;
+  last_display_id?: string | null;
+  last_global_sequence?: number | null;
+  last_transaction_date?: string | null;
 }
 
 export interface RuntimeInitialConfigResponse {
@@ -127,6 +137,67 @@ const fetchErpJson = async (
   }
 
   return payload;
+};
+
+const getSupabaseAuthHeaders = async (): Promise<Record<string, string>> => {
+  const session = await supabase.auth.getSession().catch(() => null);
+  const token = session?.data?.session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
+const takeoverTerminalInErp = async (input: {
+  erpBaseUrl: string;
+  erpTerminalId: string;
+  posDeviceId: string;
+  terminalName?: string | null;
+}) => {
+  return fetchErpJson(
+    input.erpBaseUrl,
+    `/api/settings/terminals/${encodeURIComponent(input.erpTerminalId)}/takeover`,
+    {
+      method: 'POST',
+      headers: {
+        ...(await getSupabaseAuthHeaders()),
+        'X-Device-Id': input.posDeviceId,
+      },
+      body: {
+        device_id: input.posDeviceId,
+        device_name: input.terminalName || null,
+        source: 'CLIC_POS_SELF_SERVICE_RECOVERY',
+      },
+    }
+  );
+};
+
+export const fetchTerminalRecoveryStateFromErp = async (input: {
+  erpBaseUrl: string;
+  erpTerminalId: string;
+  posDeviceId: string;
+}): Promise<RuntimeTerminalRecoveryState | null> => {
+  const params = new URLSearchParams({ device_id: input.posDeviceId });
+  const payload = await fetchErpJson(
+    input.erpBaseUrl,
+    `/api/sync/terminals/${encodeURIComponent(input.erpTerminalId)}/recovery-state?${params.toString()}`,
+    {
+      headers: {
+        ...(await getSupabaseAuthHeaders()),
+        'X-Device-Id': input.posDeviceId,
+      },
+    }
+  );
+
+  const source = asObject(payload?.recovery_state || payload?.state || payload);
+  if (!Object.keys(source).length) return null;
+
+  return {
+    terminal_id: asString(source.terminal_id) || input.erpTerminalId,
+    last_ncf: asString(source.last_ncf) || null,
+    last_display_id: asString(source.last_display_id) || null,
+    last_global_sequence: Number.isFinite(Number(source.last_global_sequence))
+      ? Number(source.last_global_sequence)
+      : null,
+    last_transaction_date: asString(source.last_transaction_date) || null,
+  };
 };
 
 const fetchErpTerminals = async (
@@ -658,6 +729,16 @@ export const bindTerminalFromErp = async (input: {
     throw new TerminalOccupiedError('La terminal ya está ocupada por otro equipo.', occupiedDeviceId);
   }
 
+  let takeoverPayload: any = null;
+  if (occupiedDeviceId && occupiedDeviceId !== input.posDeviceId && input.forceTransfer) {
+    takeoverPayload = await takeoverTerminalInErp({
+      erpBaseUrl: input.erpBaseUrl,
+      erpTerminalId: targetErpTerminalId,
+      posDeviceId: input.posDeviceId,
+      terminalName: targetTerminalName,
+    });
+  }
+
   const mergedMetadata = {
     ...currentMetadata,
     bound_device_id: input.posDeviceId,
@@ -707,6 +788,19 @@ export const bindTerminalFromErp = async (input: {
   );
 
   const profilesByTerminalId = new Map<string, any>(profiles);
+  let recoveryState: RuntimeTerminalRecoveryState | null = null;
+  if (takeoverPayload || (occupiedDeviceId && occupiedDeviceId !== input.posDeviceId && input.forceTransfer)) {
+    try {
+      recoveryState = await fetchTerminalRecoveryStateFromErp({
+        erpBaseUrl: input.erpBaseUrl,
+        erpTerminalId: targetErpTerminalId,
+        posDeviceId: input.posDeviceId,
+      });
+    } catch (error) {
+      console.warn('⚠️ No se pudo consultar recovery-state después del takeover:', error);
+    }
+  }
+
   const boundConfig = buildBoundConfig({
     currentConfig: input.currentConfig,
     terminals: erpTerminals,
@@ -726,7 +820,10 @@ export const bindTerminalFromErp = async (input: {
     company_id: asString(targetTerminal.company_id) || resolvedContext.companyId || null,
     store_id: asString(targetTerminal.store_id) || resolvedContext.storeId || null,
     transferred: Boolean(occupiedDeviceId && occupiedDeviceId !== input.posDeviceId),
-    previous_device_id: occupiedDeviceId && occupiedDeviceId !== input.posDeviceId ? occupiedDeviceId : null,
+    previous_device_id:
+      asString(takeoverPayload?.previous_device_id)
+      || (occupiedDeviceId && occupiedDeviceId !== input.posDeviceId ? occupiedDeviceId : null),
+    recovery_state: recoveryState,
     config: boundConfig,
   };
 };

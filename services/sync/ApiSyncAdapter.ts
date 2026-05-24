@@ -9,6 +9,7 @@ import {
 } from './erpOutboundPayloads';
 import { permissionService } from './PermissionService';
 import { getSyncDeviceToken } from './deviceToken';
+import { dispatchDeviceRevoked, resolveLocalDeviceId } from '../../utils/deviceRevocation';
 
 /**
  * API Sync Adapter
@@ -469,11 +470,13 @@ class ApiSyncAdapter {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         terminalId: this.config!.terminalId,
-                        deviceToken: getSyncDeviceToken()
+                        deviceToken: this.getLocalDeviceId(),
+                        device_id: this.getLocalDeviceId()
                     })
                 }, 2, 500, channel);
 
                 if (!response.ok) {
+                    await this.handleDeviceSupersededResponse(response, this.config!.terminalId);
                     let errorMessage = `Authentication failed: ${response.status} ${response.statusText}`;
                     try {
                         const errorData = await response.json();
@@ -513,6 +516,36 @@ class ApiSyncAdapter {
     private buildSyncApiBase(url: string): string {
         const trimmed = url.replace(/\/$/, '');
         return /\/api\/sync$/i.test(trimmed) ? trimmed : `${trimmed}/api/sync`;
+    }
+
+    private getLocalDeviceId(): string | null {
+        return resolveLocalDeviceId() || getSyncDeviceToken();
+    }
+
+    private async parseErrorPayload(response: Response): Promise<Record<string, any>> {
+        try {
+            const payload = await response.clone().json();
+            return payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+        } catch {
+            return {};
+        }
+    }
+
+    private async handleDeviceSupersededResponse(response: Response, terminalId?: string | null): Promise<void> {
+        if (response.status !== 403) return;
+
+        const payload = await this.parseErrorPayload(response);
+        const code = String(payload.code || '').trim().toUpperCase();
+        if (code !== 'DEVICE_SUPERSEDED') return;
+
+        dispatchDeviceRevoked({
+            reason: 'DEVICE_SUPERSEDED',
+            message: String(payload.message || '').trim() || 'Este equipo fue reemplazado por otro dispositivo.',
+            terminalId: terminalId || payload.terminal_id || null,
+            previousDeviceId: this.getLocalDeviceId(),
+            newDeviceId: payload.canonical_device_id || payload.new_device_id || null,
+            payload,
+        });
     }
 
     private resolveConfigErpBaseUrl(value: unknown): string | null {
@@ -801,11 +834,13 @@ class ApiSyncAdapter {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     terminalId: target.terminalId,
-                    deviceToken: getSyncDeviceToken()
+                    deviceToken: this.getLocalDeviceId(),
+                    device_id: this.getLocalDeviceId()
                 })
             }, 2, 500, channel);
 
             if (!response.ok) {
+                await this.handleDeviceSupersededResponse(response, target.terminalId);
                 let errorMessage = `ERP authentication failed: ${response.status} ${response.statusText}`;
                 try {
                     const errorData = await response.json();
@@ -848,7 +883,8 @@ class ApiSyncAdapter {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-Sync-Token': target.token
+                'X-Sync-Token': target.token,
+                ...(this.getLocalDeviceId() ? { 'X-Device-Id': this.getLocalDeviceId() || '' } : {})
             },
             body: JSON.stringify(requestBody)
         });
@@ -866,12 +902,14 @@ class ApiSyncAdapter {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-Sync-Token': retriedTarget.token
+                    'X-Sync-Token': retriedTarget.token,
+                    ...(this.getLocalDeviceId() ? { 'X-Device-Id': this.getLocalDeviceId() || '' } : {})
                 },
                 body: JSON.stringify(retryBody)
             });
 
             if (!retryResponse.ok) {
+                await this.handleDeviceSupersededResponse(retryResponse, retriedTarget.terminalId);
                 throw new Error(`Operational sync failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
             }
 
@@ -879,6 +917,7 @@ class ApiSyncAdapter {
         }
 
         if (!response.ok) {
+            await this.handleDeviceSupersededResponse(response, target.terminalId);
             throw new Error(`Operational sync failed: ${response.status} ${response.statusText}`);
         }
     }
@@ -887,7 +926,8 @@ class ApiSyncAdapter {
         const target = await this.authenticateOperationalTarget();
         const response = await this.fetchWithRetry(`${target.baseUrl}${path}`, {
             headers: {
-                'X-Sync-Token': target.token
+                'X-Sync-Token': target.token,
+                ...(this.getLocalDeviceId() ? { 'X-Device-Id': this.getLocalDeviceId() || '' } : {})
             }
         });
 
@@ -901,11 +941,13 @@ class ApiSyncAdapter {
             const retriedTarget = await this.authenticateOperationalTarget(true);
             const retryResponse = await this.fetchWithRetry(`${retriedTarget.baseUrl}${path}`, {
                 headers: {
-                    'X-Sync-Token': retriedTarget.token
+                    'X-Sync-Token': retriedTarget.token,
+                    ...(this.getLocalDeviceId() ? { 'X-Device-Id': this.getLocalDeviceId() || '' } : {})
                 }
             });
 
             if (!retryResponse.ok) {
+                await this.handleDeviceSupersededResponse(retryResponse, retriedTarget.terminalId);
                 throw new Error(`Operational fetch failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
             }
 
@@ -913,6 +955,7 @@ class ApiSyncAdapter {
         }
 
         if (!response.ok) {
+            await this.handleDeviceSupersededResponse(response, target.terminalId);
             throw new Error(`Operational fetch failed: ${response.status} ${response.statusText}`);
         }
 

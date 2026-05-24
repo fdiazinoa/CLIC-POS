@@ -151,7 +151,14 @@ import {
   isLifecycleActivationBlocked,
   persistStoredErpSyncBinding
 } from './utils/erpSyncLifecycle';
+import {
+  DEVICE_REVOKED_EVENT,
+  persistLocalDeviceId,
+  resolveLocalDeviceId,
+  type DeviceRevocationDetail
+} from './utils/deviceRevocation';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
+import type { RuntimeTerminalRecoveryState } from './services/setup/erpTerminalSetup';
 import { resolveCustomerImageSrc } from './utils/entityImage';
 import { posCatalogDebugElapsedMs, posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugNow, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
 import { buildTerminalConfigRefreshRequest, type TerminalConfigSyncRequestDetail } from './utils/terminalConfigPushScopes';
@@ -187,6 +194,11 @@ type ReceivableRepairSummary = {
   totalPendingAfter: number;
   transactionIds: string[];
   creditNoteIds: string[];
+};
+
+type RecoverySequencePromptState = RuntimeTerminalRecoveryState & {
+  terminalId: string;
+  terminalName?: string | null;
 };
 
 const LICENSE_REFRESH_BASE_MS = 60_000;
@@ -764,6 +776,8 @@ const AppContent: React.FC = () => {
   const [terminalConfigRestartNotice, setTerminalConfigRestartNotice] = useState<TerminalConfigRestartNotice | null>(() => readTerminalConfigRestartNotice());
   const [posApkUpdate, setPosApkUpdate] = useState<PosApkUpdateAvailable | null>(null);
   const posApkUpdateCheckStartedRef = useRef(false);
+  const [recoverySequencePrompt, setRecoverySequencePrompt] = useState<RecoverySequencePromptState | null>(null);
+  const [recoverySequenceInput, setRecoverySequenceInput] = useState('');
 
   // --- SECURITY BOOTSTRAP STATE ---
   const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
@@ -1044,6 +1058,16 @@ const AppContent: React.FC = () => {
       console.warn('Failed to clear Supabase session during lockdown', error);
     });
   }, []);
+
+  useEffect(() => {
+    const handleDeviceRevoked = (event: Event) => {
+      const detail = (event as CustomEvent<DeviceRevocationDetail>).detail;
+      triggerLockdown(detail?.message || 'Este equipo fue reemplazado por otro dispositivo.');
+    };
+
+    window.addEventListener(DEVICE_REVOKED_EVENT, handleDeviceRevoked as EventListener);
+    return () => window.removeEventListener(DEVICE_REVOKED_EVENT, handleDeviceRevoked as EventListener);
+  }, [triggerLockdown]);
 
   // --- REALTIME KILL SWITCH (FALLBACK: SMART POLLING) ---
   useEffect(() => {
@@ -2482,11 +2506,11 @@ const AppContent: React.FC = () => {
         }
 
         // 2. Gestión de Identidad de Dispositivo (early, used for safe config source selection)
-        let storedDeviceId = localStorage.getItem('pos_device_id');
+        let storedDeviceId = resolveLocalDeviceId();
         if (!storedDeviceId) {
           storedDeviceId = 'DEV-' + Math.random().toString(36).substring(2, 10).toUpperCase();
-          localStorage.setItem('pos_device_id', storedDeviceId);
         }
+        persistLocalDeviceId(storedDeviceId);
         setDeviceId(storedDeviceId);
 
         const persistedTenantId = (localStorage.getItem('clic_tenant_id') || '').trim();
@@ -3384,6 +3408,7 @@ const AppContent: React.FC = () => {
         resolutionError?: unknown;
       };
       progress?: (update: { stepId?: 'claim' | 'config' | 'apply' | 'sync' | 'cache' | 'finish'; message?: string }) => void;
+      recoveryState?: RuntimeTerminalRecoveryState | null;
     },
     options?: { forceTakeover?: boolean }
   ) => {
@@ -3680,6 +3705,17 @@ const AppContent: React.FC = () => {
         storeId: setupResult?.storeId || null,
       });
 
+      const recoveryState = setupResult?.recoveryState;
+      if (shouldTakeover && recoveryState) {
+        const cloudLastSequence = Number(recoveryState.last_global_sequence || 0);
+        setRecoverySequenceInput(String(Math.max(0, cloudLastSequence)));
+        setRecoverySequencePrompt({
+          ...recoveryState,
+          terminalId,
+          terminalName: resolvedTerminalName,
+        });
+      }
+
       setCurrentView('LOGIN');
     } catch (error) {
       console.error('❌ Failed to take terminal control:', error);
@@ -3760,6 +3796,28 @@ const AppContent: React.FC = () => {
       console.error('❌ Failed to complete setup wizard:', error);
       alert('No se pudo guardar la configuración inicial. Intenta nuevamente.');
     }
+  };
+
+  const handleConfirmRecoverySequence = async () => {
+    if (!recoverySequencePrompt) return;
+
+    const cloudLastSequence = Number(recoverySequencePrompt.last_global_sequence || 0);
+    const enteredSequence = Number(recoverySequenceInput);
+
+    if (!Number.isFinite(enteredSequence) || enteredSequence < 0 || !Number.isInteger(enteredSequence)) {
+      alert('Digite un número de secuencia válido.');
+      return;
+    }
+
+    if (enteredSequence < cloudLastSequence) {
+      alert(`El número ingresado debe ser mayor o igual al último número en la nube (${cloudLastSequence}).`);
+      return;
+    }
+
+    await dbAdapter.saveCollection('globalSequenceCounter', enteredSequence as any);
+    setRecoverySequencePrompt(null);
+    setRecoverySequenceInput('');
+    alert('Secuencia fiscal local alineada correctamente.');
   };
 
   const handleConfigUpdate = async (newConfig: BusinessConfig) => {
@@ -7291,6 +7349,41 @@ const AppContent: React.FC = () => {
   return (
     <ErrorBoundary componentName="App Root">
       <>
+        {recoverySequencePrompt && (
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/70 p-6">
+            <div className="w-full max-w-xl rounded-3xl bg-white p-7 shadow-2xl">
+              <p className="text-xs font-black uppercase tracking-[0.22em] text-blue-600">Recuperación de terminal</p>
+              <h2 className="mt-2 text-2xl font-black text-slate-950">Alinear secuencia fiscal</h2>
+              <p className="mt-3 text-sm font-semibold leading-6 text-slate-600">
+                Nuestra última factura en la nube fue {recoverySequencePrompt.last_display_id || recoverySequencePrompt.last_ncf || `#${recoverySequencePrompt.last_global_sequence || 0}`}.
+                Revise el último recibo físico impreso e ingrese el último número usado en esta caja.
+              </p>
+              <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-bold text-slate-700">
+                <div>Terminal: {recoverySequencePrompt.terminalName || recoverySequencePrompt.terminalId}</div>
+                <div>Última secuencia cloud: {recoverySequencePrompt.last_global_sequence ?? 0}</div>
+                {recoverySequencePrompt.last_transaction_date && (
+                  <div>Última fecha cloud: {recoverySequencePrompt.last_transaction_date}</div>
+                )}
+              </div>
+              <label className="mt-5 block text-xs font-black uppercase tracking-[0.16em] text-slate-500">
+                Último número usado
+              </label>
+              <input
+                type="number"
+                min={recoverySequencePrompt.last_global_sequence ?? 0}
+                value={recoverySequenceInput}
+                onChange={(event) => setRecoverySequenceInput(event.target.value)}
+                className="mt-2 w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-4 text-2xl font-black text-slate-950 outline-none focus:border-blue-500"
+              />
+              <button
+                onClick={handleConfirmRecoverySequence}
+                className="mt-6 w-full rounded-2xl bg-blue-600 py-4 text-base font-black text-white shadow-xl shadow-blue-200 active:scale-[0.98]"
+              >
+                Confirmar y continuar
+              </button>
+            </div>
+          </div>
+        )}
         {renderReconnectionBanner()}
         {renderTerminalConfigRestartBanner()}
         {posApkUpdate && (
