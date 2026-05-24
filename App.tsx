@@ -50,6 +50,7 @@ import {
 import { parseScaleBarcode } from './utils/barcodeParser';
 import { useKioskMode } from './hooks/useKioskMode';
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
+import { useAppReadiness } from './hooks/useAppReadiness';
 import { db } from './utils/db'; // Import Local DB
 import { dbAdapter } from './services/db'; // Import Adapter for Healthcheck
 import { syncManager } from './services/sync/SyncManager';
@@ -64,6 +65,7 @@ import { extractTerminalOperationalDocumentState } from './utils/terminalConfigS
 import { mergeDocumentSeriesCollection, resolveDocumentAssignmentId } from './utils/documentSeriesIdentity';
 import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
 import { ThermalPrinterService } from './services/printer/ThermalPrinterService';
+import { evaluateLocalReadiness } from './services/appReadiness';
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
@@ -1496,6 +1498,85 @@ const AppContent: React.FC = () => {
     const terminal = getCurrentTerminal();
     return terminal?.config?.deviceRole?.role || DeviceRole.STANDARD_POS;
   }, [getCurrentTerminal]);
+
+  const currentReadinessTerminal = useMemo(() => getCurrentTerminal() || null, [getCurrentTerminal]);
+  const readinessCloudTenantId = useMemo(() => (
+    localStorage.getItem('active_tenant_id') ||
+    localStorage.getItem('clic_tenant_id') ||
+    localStorage.getItem('clic_erp_tenant_id') ||
+    ''
+  ).trim(), [currentView, deviceId]);
+  const readinessRequest = useMemo(() => {
+    if (!readinessCloudTenantId || !deviceId || !currentReadinessTerminal) return null;
+
+    const terminalConfig = currentReadinessTerminal.config || {} as TerminalConfig;
+    const terminalId =
+      terminalConfig.erpBinding?.terminalId ||
+      terminalConfig.erpTerminalId ||
+      terminalConfig.stationNumber ||
+      currentReadinessTerminal.id;
+    const terminalName =
+      terminalConfig.terminalName ||
+      terminalConfig.erpBinding?.terminalName ||
+      terminalConfig.stationNumber ||
+      currentReadinessTerminal.id;
+
+    return {
+      cloudAdminTenantId: readinessCloudTenantId,
+      deviceId,
+      terminalId,
+      terminalName,
+    };
+  }, [currentReadinessTerminal, deviceId, readinessCloudTenantId]);
+
+  const isSetupOrRecoveryView = (
+    currentView === 'ACTIVATION' ||
+    currentView === 'TERMINAL_MODE_SELECTOR' ||
+    currentView === 'VERTICAL_SELECTOR' ||
+    currentView === 'SETUP' ||
+    currentView === 'WIZARD' ||
+    currentView === 'TERMINAL_PAIRING' ||
+    currentView === 'DEVICE_UNAUTHORIZED' ||
+    currentView === 'VISOR'
+  );
+  const appReadinessEnabled = Boolean(
+    isDataLoaded &&
+    isSecurityLoaded &&
+    readinessRequest &&
+    currentReadinessTerminal &&
+    !isSetupOrRecoveryView &&
+    localStorage.getItem(TERMINAL_SETUP_PENDING_KEY) !== '1'
+  );
+  const validateCurrentLocalReadiness = useCallback(() => evaluateLocalReadiness({
+    config,
+    deviceId,
+    terminal: currentReadinessTerminal,
+  }), [config, currentReadinessTerminal, deviceId]);
+  const downloadReadinessBootstrap = useCallback(async () => {
+    if (!currentReadinessTerminal) return;
+
+    permissionService.initialize(config, currentReadinessTerminal.id);
+    await syncManager.initialize(config, currentReadinessTerminal.id);
+    await syncManager.fullPull();
+    await syncManager.syncAllCatalogs();
+
+    const freshData = await db.init();
+    const nextConfig = resolvePersistedBusinessConfig(await db.get('config') as unknown) || config;
+    setConfig(nextConfig);
+    if (Array.isArray(freshData.products)) setProducts(freshData.products);
+    if (Array.isArray(freshData.users)) setUsers(freshData.users);
+    if (Array.isArray(freshData.roles)) setRoles(freshData.roles);
+    if (Array.isArray(freshData.customers)) setCustomers(freshData.customers);
+    if (Array.isArray(freshData.warehouses)) setWarehouses(freshData.warehouses);
+    if (Array.isArray(freshData.productStocks)) setProductStocks(freshData.productStocks);
+    if (Array.isArray(freshData.internalSequences)) setInternalSequences(freshData.internalSequences);
+  }, [config, currentReadinessTerminal]);
+  const appReadiness = useAppReadiness({
+    enabled: appReadinessEnabled,
+    request: readinessRequest,
+    validateLocal: validateCurrentLocalReadiness,
+    downloadBootstrap: downloadReadinessBootstrap,
+  });
 
   const navigateToUserLogin = React.useCallback(() => {
     clearSecurityState();
@@ -6811,6 +6892,9 @@ const AppContent: React.FC = () => {
           setCurrentView('DEVICE_UNAUTHORIZED');
           return null;
         }
+        if (appReadinessEnabled && !appReadiness.isReady) {
+          return null;
+        }
         if (!currentUser) { setCurrentView('LOGIN'); return null; }
         return (
           <POSInterface
@@ -8088,6 +8172,63 @@ const AppContent: React.FC = () => {
                 >
                   <RefreshCw size={20} className={masterBootstrapBlock.retrying ? 'animate-spin' : ''} />
                   {masterBootstrapBlock.retrying ? 'Descargando maestros...' : 'Reintentar descarga'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {appReadiness.isBlocking && !masterBootstrapBlock && (
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/75 p-6 backdrop-blur-sm">
+            <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-amber-100 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.34)]">
+              <div className="p-7">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-amber-50 text-amber-600 shadow-inner">
+                    <RefreshCw size={34} className={appReadiness.isChecking ? 'animate-spin' : ''} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-black uppercase tracking-[0.22em] text-amber-600">Entorno operativo</p>
+                    <h2 className="mt-2 text-2xl font-black text-slate-950">Preparando entorno operativo</h2>
+                    <p className="mt-3 text-base font-bold leading-6 text-slate-600">
+                      {appReadiness.message || 'Preparando entorno operativo... esto puede tomar unos segundos.'}
+                    </p>
+                    {appReadiness.detail && (
+                      <p className="mt-2 text-sm font-semibold leading-5 text-slate-500">{appReadiness.detail}</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-6 grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-bold text-slate-700 sm:grid-cols-2">
+                  <div>
+                    <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Tenant Cloud</span>
+                    {readinessRequest?.cloudAdminTenantId || 'No identificado'}
+                  </div>
+                  <div>
+                    <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Device</span>
+                    {readinessRequest?.deviceId || 'No identificado'}
+                  </div>
+                  <div>
+                    <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Terminal</span>
+                    {readinessRequest?.terminalName || readinessRequest?.terminalId || 'No identificada'}
+                  </div>
+                  <div>
+                    <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Estado</span>
+                    {appReadiness.backend?.code || appReadiness.local?.code || 'CHECKING'}
+                  </div>
+                </div>
+
+                <div className="mt-5 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-black leading-5 text-amber-800">
+                  El POS puede estar ONLINE en Cloud-Admin, pero no queda operativo hasta tener ERP tenant,
+                  terminal profile, catálogo, métodos de pago y secuencias listas localmente.
+                </div>
+              </div>
+              <div className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50 px-6 py-5 sm:flex-row">
+                <button
+                  onClick={() => void appReadiness.retry()}
+                  disabled={appReadiness.isChecking}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-slate-950 py-4 text-base font-black text-white shadow-xl shadow-slate-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-400"
+                >
+                  <RefreshCw size={20} className={appReadiness.isChecking ? 'animate-spin' : ''} />
+                  {appReadiness.isChecking ? 'Validando...' : 'Reintentar'}
                 </button>
               </div>
             </div>
