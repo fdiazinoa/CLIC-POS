@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { Layout, RefreshCw } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Layout, RefreshCw } from 'lucide-react';
 import {
   User,
   RoleDefinition,
@@ -849,6 +849,10 @@ const AppContent: React.FC = () => {
   const posApkUpdateCheckStartedRef = useRef(false);
   const [recoverySequencePrompt, setRecoverySequencePrompt] = useState<RecoverySequencePromptState | null>(null);
   const [recoverySequenceInput, setRecoverySequenceInput] = useState('');
+  const [recoverySequenceFeedback, setRecoverySequenceFeedback] = useState<{
+    type: 'error' | 'success';
+    message: string;
+  } | null>(null);
   const [erpRebuildRecovery, setErpRebuildRecovery] = useState<ErpRebuildRecoveryState | null>(null);
   const erpRebuildRecoveryInFlightRef = useRef(false);
 
@@ -4233,19 +4237,28 @@ const AppContent: React.FC = () => {
     const enteredSequence = Number(recoverySequenceInput);
 
     if (!Number.isFinite(enteredSequence) || enteredSequence < 0 || !Number.isInteger(enteredSequence)) {
-      alert('Digite un número de secuencia válido.');
+      setRecoverySequenceFeedback({
+        type: 'error',
+        message: 'Digite un número de secuencia válido.',
+      });
       return;
     }
 
     if (enteredSequence < cloudLastSequence) {
-      alert(`El número ingresado debe ser mayor o igual al último número en la nube (${cloudLastSequence}).`);
+      setRecoverySequenceFeedback({
+        type: 'error',
+        message: `El número ingresado debe ser mayor o igual al último número en la nube (${cloudLastSequence}).`,
+      });
       return;
     }
 
     await dbAdapter.saveCollection('globalSequenceCounter', enteredSequence as any);
     setRecoverySequencePrompt(null);
     setRecoverySequenceInput('');
-    alert('Secuencia fiscal local alineada correctamente.');
+    setRecoverySequenceFeedback({
+      type: 'success',
+      message: 'Secuencia fiscal local alineada correctamente.',
+    });
   };
 
   const handleConfigUpdate = async (newConfig: BusinessConfig) => {
@@ -7866,15 +7879,50 @@ const AppContent: React.FC = () => {
                 type="number"
                 min={recoverySequencePrompt.last_global_sequence ?? 0}
                 value={recoverySequenceInput}
-                onChange={(event) => setRecoverySequenceInput(event.target.value)}
+                onChange={(event) => {
+                  setRecoverySequenceInput(event.target.value);
+                  if (recoverySequenceFeedback?.type === 'error') {
+                    setRecoverySequenceFeedback(null);
+                  }
+                }}
                 className="mt-2 w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-4 text-2xl font-black text-slate-950 outline-none focus:border-blue-500"
               />
+              {recoverySequenceFeedback?.type === 'error' && (
+                <div className="mt-4 flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-red-700">
+                  <AlertCircle className="mt-0.5 shrink-0" size={18} />
+                  <p className="text-sm font-black leading-5">{recoverySequenceFeedback.message}</p>
+                </div>
+              )}
               <button
                 onClick={handleConfirmRecoverySequence}
                 className="mt-6 w-full rounded-2xl bg-blue-600 py-4 text-base font-black text-white shadow-xl shadow-blue-200 active:scale-[0.98]"
               >
                 Confirmar y continuar
               </button>
+            </div>
+          </div>
+        )}
+        {recoverySequenceFeedback?.type === 'success' && !recoverySequencePrompt && (
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/70 p-6 backdrop-blur-sm">
+            <div className="w-full max-w-md overflow-hidden rounded-3xl border border-white/70 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.32)]">
+              <div className="p-7 text-center">
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 shadow-inner">
+                  <CheckCircle2 size={34} />
+                </div>
+                <p className="mt-5 text-xs font-black uppercase tracking-[0.22em] text-emerald-600">Recuperación completada</p>
+                <h2 className="mt-2 text-2xl font-black text-slate-950">Terminal lista</h2>
+                <p className="mt-3 text-base font-bold leading-6 text-slate-600">
+                  {recoverySequenceFeedback.message}
+                </p>
+              </div>
+              <div className="border-t border-slate-100 bg-slate-50 px-6 py-5">
+                <button
+                  onClick={() => setRecoverySequenceFeedback(null)}
+                  className="w-full rounded-2xl bg-slate-950 py-4 text-base font-black text-white shadow-xl shadow-slate-200 active:scale-[0.98]"
+                >
+                  Continuar
+                </button>
+              </div>
             </div>
           </div>
         )}
