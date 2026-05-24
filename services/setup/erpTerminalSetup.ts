@@ -196,6 +196,9 @@ const getSupabaseAuthHeaders = async (): Promise<Record<string, string>> => {
 const takeoverTerminalInErp = async (input: {
   erpBaseUrl: string;
   erpTerminalId: string;
+  tenantId: string;
+  companyId?: string | null;
+  storeId?: string | null;
   posDeviceId: string;
   terminalName?: string | null;
 }) => {
@@ -207,8 +210,13 @@ const takeoverTerminalInErp = async (input: {
       headers: {
         ...(await getSupabaseAuthHeaders()),
         ...buildDeviceHeaders(input.posDeviceId),
+        'X-Tenant-Id': input.tenantId,
       },
       body: {
+        tenant_id: input.tenantId,
+        tenantId: input.tenantId,
+        company_id: input.companyId || null,
+        store_id: input.storeId || null,
         terminal_id: input.erpTerminalId,
         device_id: input.posDeviceId,
         device_name: input.terminalName || null,
@@ -786,6 +794,9 @@ export const bindTerminalFromErp = async (input: {
     takeoverPayload = await takeoverTerminalInErp({
       erpBaseUrl: input.erpBaseUrl,
       erpTerminalId: targetErpTerminalId,
+      tenantId: resolvedContext.tenantId,
+      companyId: asString(targetTerminal.company_id) || resolvedContext.companyId || null,
+      storeId: asString(targetTerminal.store_id) || resolvedContext.storeId || null,
       posDeviceId: input.posDeviceId,
       terminalName: targetTerminalName,
     });
