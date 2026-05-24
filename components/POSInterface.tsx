@@ -1152,9 +1152,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const isRetailMode = activeTerminalConfig?.ux?.viewMode === 'RETAIL';
    const operationalVertical = String(activeTerminalConfig?.operational?.vertical_negocio || '');
    const isRestaurantMode =
-      operationalVertical === 'RESTAURANT' ||
-      operationalVertical === 'RESTAURANTE' ||
-      config.vertical === 'RESTAURANT';
+      !isRetailMode && (
+         operationalVertical === 'RESTAURANT' ||
+         operationalVertical === 'RESTAURANTE' ||
+         config.vertical === 'RESTAURANT'
+      );
    const showTableMapButton = Boolean(activeTerminalConfig?.operational?.usa_mesas);
    const hideTableExtras = isRestaurantMode && !!activeTable;
    const restaurantActionGridClass = !isRestaurantMode
@@ -6248,7 +6250,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               </button>
                            </>
                         )}
-                        {activeTerminalConfig?.operational?.usa_modulos_cocina && (
+                        {isRestaurantMode && activeTerminalConfig?.operational?.usa_modulos_cocina && (
                            <button onClick={handleDispatchCommand} className="flex flex-col items-center gap-1 text-gray-400 hover:text-orange-600">
                               <ChefHat size={18} />
                               <span className="text-[9px] font-bold uppercase">March.</span>
