@@ -165,7 +165,11 @@ import {
   type DeviceRevocationDetail
 } from './utils/deviceRevocation';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
-import type { RuntimeTerminalRecoveryState } from './services/setup/erpTerminalSetup';
+import {
+  bindTerminalFromErp,
+  listTerminalsFromErp,
+  type RuntimeTerminalRecoveryState
+} from './services/setup/erpTerminalSetup';
 import { resolveCustomerImageSrc } from './utils/entityImage';
 import { posCatalogDebugElapsedMs, posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugNow, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
 import { buildTerminalConfigRefreshRequest, type TerminalConfigSyncRequestDetail } from './utils/terminalConfigPushScopes';
@@ -251,6 +255,8 @@ const normalizeSetupBaseUrl = (value?: string | null): string | null => {
   }
 };
 
+const DEFAULT_PUBLIC_ERP_BASE_URL = 'https://clic-erp.vercel.app';
+
 const resolveSetupErpBaseUrl = (): string | null => {
   const env = (import.meta as any).env || {};
   const candidates = [
@@ -259,6 +265,7 @@ const resolveSetupErpBaseUrl = (): string | null => {
     env.VITE_ERP_BASE_URL,
     env.VITE_ERP_SYNC_API_URL,
     env.VITE_SYNC_API_URL,
+    DEFAULT_PUBLIC_ERP_BASE_URL,
   ];
 
   for (const candidate of candidates) {
@@ -4094,6 +4101,79 @@ const AppContent: React.FC = () => {
     }
   };
 
+  const recoverActivatedTerminalFromErp = async (input: {
+    tenantId: string;
+    tenantSlug?: string | null;
+    tenantEmail?: string | null;
+    erpBaseUrl: string;
+    posDeviceId: string;
+  }): Promise<boolean> => {
+    const recoveryBaseConfig = Array.isArray(config?.terminals) && config.terminals.length > 0
+      ? config
+      : getInitialConfig(SubVertical.SUPERMARKET);
+
+    const terminalList = await listTerminalsFromErp({
+      currentConfig: recoveryBaseConfig,
+      posDeviceId: input.posDeviceId,
+      tenantId: input.tenantId,
+      tenantSlug: input.tenantSlug,
+      tenantEmail: input.tenantEmail,
+      erpBaseUrl: input.erpBaseUrl,
+    });
+
+    const terminals = Array.isArray(terminalList.terminals) ? terminalList.terminals : [];
+    const sameDeviceTerminal = terminals.find((terminal) =>
+      String(terminal.currentDeviceId || '').trim() === input.posDeviceId
+    );
+
+    if (!sameDeviceTerminal) {
+      return false;
+    }
+
+    setErpRebuildRecovery({
+      status: 'RUNNING',
+      reason: 'LOCAL_DB_REBUILD',
+      pendingCount: 0,
+      message: `Recuperando ${sameDeviceTerminal.name || sameDeviceTerminal.id} desde Cloud/ERP. No se abrirá el wizard de instalación nueva.`,
+    });
+
+    localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
+    localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_ERP');
+    localStorage.removeItem(SETUP_FLOW_STAGE_KEY);
+    localStorage.removeItem(SETUP_FLOW_VERSION_KEY);
+    localStorage.setItem('active_tenant_id', input.tenantId);
+    localStorage.setItem('clic_tenant_id', input.tenantId);
+    persistSetupErpBaseUrls(input.erpBaseUrl);
+
+    const bound = await bindTerminalFromErp({
+      currentConfig: recoveryBaseConfig,
+      posDeviceId: input.posDeviceId,
+      terminalId: sameDeviceTerminal.id,
+      erpTerminalId: sameDeviceTerminal.erpTerminalId,
+      bindingMode: 'MASTER',
+      forceTransfer: false,
+      tenantId: input.tenantId,
+      tenantSlug: input.tenantSlug,
+      tenantEmail: input.tenantEmail,
+      erpBaseUrl: input.erpBaseUrl,
+    });
+
+    await handlePairTerminal(bound.terminal_id, {
+      tenantId: bound.tenant_id,
+      erpTerminalId: bound.erp_terminal_id,
+      erpBaseUrl: input.erpBaseUrl,
+      terminalName: bound.terminal_name || sameDeviceTerminal.name,
+      companyId: bound.company_id,
+      storeId: bound.store_id,
+      boundConfig: bound.config,
+      snapshotMeta: { fullPullOnPairing: true },
+      recoveryState: bound.recovery_state || null,
+    });
+
+    setErpRebuildRecovery(null);
+    return true;
+  };
+
   const handleSetupWizardComplete = async (finalConfig: BusinessConfig) => {
     try {
       const nextConfig = {
@@ -6183,19 +6263,44 @@ const AppContent: React.FC = () => {
 
                 if (activatedTenantId) {
                   localStorage.setItem('active_tenant_id', activatedTenantId);
+                  localStorage.setItem('clic_tenant_id', activatedTenantId);
                 }
 
                 if (activatedErpBaseUrl) {
                   persistSetupErpBaseUrls(activatedErpBaseUrl);
                 }
 
+                if (activatedTenantId && activatedErpBaseUrl && resolvedDeviceId) {
+                  try {
+                    const recovered = await recoverActivatedTerminalFromErp({
+                      tenantId: activatedTenantId,
+                      tenantSlug: tenantData?.slug || localStorage.getItem('clic_tenant_slug') || null,
+                      tenantEmail: tenantData?.email || localStorage.getItem('clic_tenant_email') || null,
+                      erpBaseUrl: activatedErpBaseUrl,
+                      posDeviceId: resolvedDeviceId,
+                    });
+
+                    if (recovered) {
+                      console.log('[ACTIVATION] Terminal recuperada desde ERP para este mismo device_id.');
+                      return;
+                    }
+                  } catch (recoveryError) {
+                    console.warn('[ACTIVATION] No se pudo auto-recuperar la terminal desde ERP. Se mostrará selección de terminal.', recoveryError);
+                    setErpRebuildRecovery(null);
+                  }
+                }
+
                 localStorage.removeItem(SETUP_WIZARD_COMPLETED_KEY);
                 localStorage.removeItem(SETUP_FLOW_STAGE_KEY);
                 localStorage.removeItem(SETUP_FLOW_VERSION_KEY);
-                localStorage.removeItem(TERMINAL_SETUP_MODE_KEY);
                 localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
-                clearStoredErpSyncBinding();
-                setCurrentView('TERMINAL_MODE_SELECTOR');
+                if (activatedErpBaseUrl) {
+                  localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_ERP');
+                  setCurrentView('TERMINAL_PAIRING');
+                } else {
+                  localStorage.removeItem(TERMINAL_SETUP_MODE_KEY);
+                  setCurrentView('TERMINAL_MODE_SELECTOR');
+                }
               })();
             }}
           />
