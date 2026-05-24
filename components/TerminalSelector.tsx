@@ -227,6 +227,18 @@ const resolveTenantDisplayName = (tenantId?: string | null): string => {
   return (tenantId || '').trim() || 'Tenant no identificado';
 };
 
+const shortTerminalRef = (terminal: TerminalCard): string => {
+  const candidates = [
+    terminal.erpTerminalId,
+    terminal.id,
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+
+  const source = candidates[0] || 'terminal';
+  return source.length > 10 ? source.slice(0, 8).toUpperCase() : source.toUpperCase();
+};
+
 const DEFAULT_PUBLIC_ERP_BASE_URL = 'https://clic-erp.vercel.app';
 
 const resolveErpBaseUrl = (): string | null => {
@@ -360,6 +372,15 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   const usesErpDirect = expectsErpDirect && Boolean(erpBaseUrl) && !isNativeAndroid;
   const isSetupPending = localStorage.getItem('clic_pos_terminal_setup_pending') === '1';
   const shouldBlockAlreadyBound = isAlreadyBound && !isSetupPending;
+  const terminalNameCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    terminals.forEach((terminal) => {
+      const key = String(terminal.name || terminal.id || '').trim().toLowerCase();
+      if (!key) return;
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return counts;
+  }, [terminals]);
 
   useEffect(() => {
     const resolvedTenantId = (initialTenantId || '').trim();
@@ -560,7 +581,12 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
     try {
       let data: BindTerminalResponse | null = null;
       let dataFromCloudDirect = false;
-      const shouldValidateTakeoverInCloud = Boolean(forceTransfer && erpBaseUrl && bindingMode === 'MASTER');
+      const shouldValidateTakeoverInCloud = Boolean(
+        forceTransfer &&
+        erpBaseUrl &&
+        bindingMode === 'MASTER' &&
+        !useErpDirectMasterAndroid
+      );
 
       if (expectsErpDirect && !erpBaseUrl) {
         throw new Error('No encontramos la URL base del ERP para completar la vinculación.');
@@ -588,6 +614,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         });
         dataFromCloudDirect = true;
       } else if (useErpDirectMasterAndroid) {
+        let proxyError: unknown = null;
         try {
           const response = await fetch(`${buildAndroidEmbeddedSetupBase()}/bind-terminal`, {
             method: 'POST',
@@ -613,12 +640,22 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
           if (response.ok) {
             data = (await response.json()) as BindTerminalResponse;
+          } else {
+            const detail = await response.text().catch(() => '');
+            proxyError = new Error(`Proxy setup respondió ${response.status}${detail ? `: ${detail}` : ''}`);
           }
         } catch (proxyBindErr) {
           console.warn('proxy bind-terminal failed, falling back to ERP direct', proxyBindErr);
+          proxyError = proxyBindErr;
         }
 
         if (!data) {
+          if (forceTransfer && proxyError) {
+            throw proxyError instanceof Error
+              ? proxyError
+              : new Error('No se pudo contactar el proxy local para completar el traspaso.');
+          }
+
           data = await bindTerminalFromErp({
             currentConfig,
             posDeviceId: deviceId,
@@ -1026,14 +1063,17 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
               </div>
             ))
           ) : terminals.length > 0 ? (
-            terminals.map((terminal) => {
+            terminals.map((terminal, index) => {
               const occupiedByOtherDevice = Boolean(
                 terminal.occupied && terminal.currentDeviceId && terminal.currentDeviceId !== deviceId
               );
+              const terminalNameKey = String(terminal.name || terminal.id || '').trim().toLowerCase();
+              const hasDuplicateName = Boolean(terminalNameKey && (terminalNameCounts.get(terminalNameKey) || 0) > 1);
+              const terminalRef = shortTerminalRef(terminal);
 
               return (
                 <button
-                  key={terminal.id}
+                  key={`${terminal.erpTerminalId || terminal.id}-${index}`}
                   onClick={() => void handleCardClick(terminal)}
                   disabled={isBinding}
                   className={`group relative overflow-hidden rounded-[1.75rem] border p-5 text-left shadow-[0_22px_54px_rgba(15,23,42,0.08)] backdrop-blur-xl transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60 sm:rounded-[2rem] sm:p-6 ${
@@ -1051,8 +1091,13 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                         <Monitor size={22} />
                       </div>
                       <div className="min-w-0">
-                        <p className="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400 break-all sm:tracking-[0.25em]">{terminal.id.toUpperCase()}</p>
-                        <h4 className="mt-1 text-xl font-black tracking-tight text-slate-900 sm:text-2xl">{terminal.name}</h4>
+                        <p className="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400 break-all sm:tracking-[0.25em]">
+                          {terminal.id.toUpperCase()}
+                          {hasDuplicateName && <span className="ml-2 text-amber-600">#{terminalRef}</span>}
+                        </p>
+                        <h4 className="mt-1 text-xl font-black tracking-tight text-slate-900 sm:text-2xl">
+                          {terminal.name}
+                        </h4>
                         <div className="mt-3 flex items-center gap-2 text-sm font-medium text-slate-500">
                           <MapPin size={14} />
                           <span className="truncate">{terminal.location}</span>
