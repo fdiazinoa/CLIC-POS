@@ -152,6 +152,7 @@ import {
   ERP_FULL_BOOTSTRAP_REQUIRED_EVENT,
   getPersistedErpInstallIdentity,
   getPendingErpFullBootstrapRequest,
+  getStoredErpSyncBinding,
   getLifecycleActivationBlockMessage,
   getLifecycleBlockingMessageFromError,
   isLifecycleActivationBlocked,
@@ -218,6 +219,16 @@ type ErpRebuildRecoveryState = {
   message: string;
   pendingCount: number;
   error?: string | null;
+};
+
+type MasterBootstrapBlockState = {
+  terminalId?: string | null;
+  terminalName?: string | null;
+  tenantId?: string | null;
+  erpTerminalId?: string | null;
+  message: string;
+  detail?: string | null;
+  retrying?: boolean;
 };
 
 const LICENSE_REFRESH_BASE_MS = 60_000;
@@ -529,6 +540,7 @@ const SETUP_FLOW_VERSION_KEY = 'clic_pos_setup_flow_version';
 const TERMINAL_SETUP_MODE_KEY = 'clic_pos_terminal_setup_mode';
 const TERMINAL_SETUP_PENDING_KEY = 'clic_pos_terminal_setup_pending';
 const TERMINAL_CONFIG_RESTART_NOTICE_KEY = 'clic_pos_terminal_config_restart_notice';
+const MASTER_BOOTSTRAP_BLOCK_KEY = 'clic_pos_master_bootstrap_block';
 const SETUP_FLOW_VERSION = '2';
 const buildRuntimeMasterUrl = () => buildMasterUrlFromHost(window.location.hostname);
 const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -562,6 +574,40 @@ const readTerminalConfigRestartNotice = (): TerminalConfigRestartNotice | null =
   } catch {
     return null;
   }
+};
+
+const readMasterBootstrapBlock = (): MasterBootstrapBlockState | null => {
+  const raw = localStorage.getItem(MASTER_BOOTSTRAP_BLOCK_KEY);
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      terminalId: typeof parsed.terminalId === 'string' ? parsed.terminalId : null,
+      terminalName: typeof parsed.terminalName === 'string' ? parsed.terminalName : null,
+      tenantId: typeof parsed.tenantId === 'string' ? parsed.tenantId : null,
+      erpTerminalId: typeof parsed.erpTerminalId === 'string' ? parsed.erpTerminalId : null,
+      message:
+        typeof parsed.message === 'string' && parsed.message.trim()
+          ? parsed.message
+          : 'No se pudieron descargar los maestros del ERP/Cloud.',
+      detail: typeof parsed.detail === 'string' ? parsed.detail : null,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const persistMasterBootstrapBlock = (block: MasterBootstrapBlockState | null) => {
+  if (!block) {
+    localStorage.removeItem(MASTER_BOOTSTRAP_BLOCK_KEY);
+    return;
+  }
+  localStorage.setItem(MASTER_BOOTSTRAP_BLOCK_KEY, JSON.stringify({
+    ...block,
+    retrying: false,
+  }));
 };
 
 const getStoredTerminalSetupMode = (): TerminalSetupMode | null => {
@@ -854,6 +900,7 @@ const AppContent: React.FC = () => {
     message: string;
   } | null>(null);
   const [erpRebuildRecovery, setErpRebuildRecovery] = useState<ErpRebuildRecoveryState | null>(null);
+  const [masterBootstrapBlock, setMasterBootstrapBlock] = useState<MasterBootstrapBlockState | null>(() => readMasterBootstrapBlock());
   const erpRebuildRecoveryInFlightRef = useRef(false);
 
   // --- SECURITY BOOTSTRAP STATE ---
@@ -3749,6 +3796,112 @@ const AppContent: React.FC = () => {
 
   // --- CORE EVENT HANDLERS ---
 
+  const setMasterBootstrapBlocked = useCallback((block: MasterBootstrapBlockState | null) => {
+    persistMasterBootstrapBlock(block);
+    setMasterBootstrapBlock(block);
+  }, []);
+
+  const buildMasterBootstrapBlock = useCallback((input: {
+    terminalId?: string | null;
+    terminalName?: string | null;
+    tenantId?: string | null;
+    erpTerminalId?: string | null;
+    productCount: number;
+    detail?: string | null;
+  }): MasterBootstrapBlockState | null => {
+    if (input.productCount > 0) return null;
+
+    return {
+      terminalId: input.terminalId || null,
+      terminalName: input.terminalName || null,
+      tenantId: input.tenantId || null,
+      erpTerminalId: input.erpTerminalId || null,
+      message: 'Catálogo maestro no disponible',
+      detail:
+        input.detail ||
+        'El ERP/Cloud no devolvió artículos para esta terminal. Debe publicar maestros en ERP antes de permitir ventas: artículos, precios, impuestos, almacenes, métodos de pago, series y rangos fiscales.',
+    };
+  }, []);
+
+  const retryMasterBootstrap = useCallback(async () => {
+    if (!masterBootstrapBlock?.terminalId) return;
+
+    setMasterBootstrapBlock((current) => current ? { ...current, retrying: true } : current);
+    try {
+      const terminalId = masterBootstrapBlock.terminalId;
+      const activeConfig = resolvePersistedBusinessConfig(await db.get('config') as unknown) || config;
+      permissionService.initialize(activeConfig, terminalId);
+      await syncManager.initialize(activeConfig, terminalId);
+      await syncManager.fullPull();
+      await syncManager.syncAllCatalogs();
+
+      const freshData = await db.init();
+      const nextConfig = resolvePersistedBusinessConfig(await db.get('config') as unknown) || activeConfig;
+      const nextProducts = Array.isArray(freshData.products) ? freshData.products : [];
+
+      if (nextProducts.length === 0) {
+        const nextBlock = buildMasterBootstrapBlock({
+          terminalId,
+          terminalName: masterBootstrapBlock.terminalName,
+          tenantId: masterBootstrapBlock.tenantId,
+          erpTerminalId: masterBootstrapBlock.erpTerminalId,
+          productCount: 0,
+          detail: 'El reintento terminó, pero el ERP/Cloud sigue devolviendo cero artículos para esta terminal.',
+        });
+        setMasterBootstrapBlocked(nextBlock);
+        return;
+      }
+
+      setConfig(nextConfig);
+      if (Array.isArray(freshData.users)) setUsers(freshData.users);
+      if (Array.isArray(freshData.roles)) setRoles(freshData.roles);
+      if (Array.isArray(freshData.customers)) setCustomers(freshData.customers);
+      setProducts(nextProducts);
+      if (Array.isArray(freshData.warehouses)) setWarehouses(freshData.warehouses);
+      if (Array.isArray(freshData.productStocks)) setProductStocks(freshData.productStocks);
+      if (Array.isArray(freshData.internalSequences)) setInternalSequences(freshData.internalSequences);
+      if (Array.isArray(freshData.collections)) setCollections(freshData.collections);
+      setMasterBootstrapBlocked(null);
+    } catch (error) {
+      setMasterBootstrapBlocked({
+        ...masterBootstrapBlock,
+        retrying: false,
+        detail: error instanceof Error ? error.message : String(error || 'No se pudo reintentar la descarga de maestros.'),
+      });
+    }
+  }, [buildMasterBootstrapBlock, config, masterBootstrapBlock, setMasterBootstrapBlocked]);
+
+  useEffect(() => {
+    if (masterBootstrapBlock) return;
+    if (products.length > 0) return;
+    if (localStorage.getItem(TERMINAL_SETUP_PENDING_KEY) === '1') return;
+    if (
+      currentView === 'ACTIVATION' ||
+      currentView === 'TERMINAL_MODE_SELECTOR' ||
+      currentView === 'VERTICAL_SELECTOR' ||
+      currentView === 'SETUP' ||
+      currentView === 'WIZARD' ||
+      currentView === 'TERMINAL_PAIRING' ||
+      currentView === 'DEVICE_UNAUTHORIZED'
+    ) {
+      return;
+    }
+
+    const binding = getStoredErpSyncBinding();
+    const hasErpBinding = Boolean(binding.tenantId && (binding.terminalId || binding.localTerminalId));
+    if (!hasErpBinding) return;
+
+    setMasterBootstrapBlocked(buildMasterBootstrapBlock({
+      terminalId: binding.localTerminalId || binding.terminalId,
+      terminalName: binding.terminalName,
+      tenantId: binding.tenantId,
+      erpTerminalId: binding.terminalId || binding.terminalUuid,
+      productCount: 0,
+      detail:
+        'La terminal tiene vínculo ERP/Cloud, pero el catálogo local está vacío. Descargue maestros antes de vender para evitar facturas con artículos no resolubles en erp_sync_inbox.',
+    }));
+  }, [buildMasterBootstrapBlock, currentView, masterBootstrapBlock, products.length, setMasterBootstrapBlocked]);
+
   const handlePairTerminal = async (
     terminalId: string,
     pairingContext?: string | {
@@ -4031,12 +4184,24 @@ const AppContent: React.FC = () => {
 
       const freshData = await db.init();
       const hydratedConfig = resolvePersistedBusinessConfig(await db.get('config') as unknown) || postSyncConfig;
+      const freshProducts = Array.isArray(freshData.products) ? freshData.products : [];
+      const bootstrapBlock = buildMasterBootstrapBlock({
+        terminalId,
+        terminalName: resolvedTerminalName,
+        tenantId: setupResult?.tenantId || resolvedTenantId,
+        erpTerminalId: resolvedErpTerminalId,
+        productCount: freshProducts.length,
+        detail: shouldTakeover
+          ? 'La terminal fue recuperada, pero el ERP/Cloud devolvió cero artículos. El POS queda bloqueado para evitar ventas que fallen luego en erp_sync_inbox por artículos no resueltos.'
+          : undefined,
+      });
+      setMasterBootstrapBlocked(bootstrapBlock);
       setConfig(hydratedConfig);
       if (Array.isArray(freshData.users)) setUsers(freshData.users);
       if (Array.isArray(freshData.roles)) setRoles(freshData.roles);
       if (Array.isArray(freshData.customers)) setCustomers(freshData.customers);
       if (Array.isArray(freshData.transactions)) setTransactions(freshData.transactions);
-      if (Array.isArray(freshData.products)) setProducts(freshData.products);
+      setProducts(freshProducts);
       if (Array.isArray(freshData.warehouses)) setWarehouses(freshData.warehouses);
       if (Array.isArray(freshData.cashMovements)) setCashMovements(freshData.cashMovements);
       if (Array.isArray(freshData.zReports)) setZReports(freshData.zReports);
@@ -4074,7 +4239,7 @@ const AppContent: React.FC = () => {
       });
 
       const recoveryState = setupResult?.recoveryState;
-      if (shouldTakeover && recoveryState) {
+      if (shouldTakeover && recoveryState && !bootstrapBlock) {
         const cloudLastSequence = Number(recoveryState.last_global_sequence || 0);
         setRecoverySequenceInput(String(Math.max(0, cloudLastSequence)));
         setRecoverySequencePrompt({
@@ -7865,7 +8030,57 @@ const AppContent: React.FC = () => {
   return (
     <ErrorBoundary componentName="App Root">
       <>
-        {recoverySequencePrompt && (
+        {masterBootstrapBlock && (
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/75 p-6 backdrop-blur-sm">
+            <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-red-100 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.34)]">
+              <div className="p-7">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-red-50 text-red-600 shadow-inner">
+                    <AlertCircle size={34} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-black uppercase tracking-[0.22em] text-red-600">Bootstrap detenido</p>
+                    <h2 className="mt-2 text-2xl font-black text-slate-950">Maestros no disponibles</h2>
+                    <p className="mt-3 text-base font-bold leading-6 text-slate-600">
+                      {masterBootstrapBlock.detail || masterBootstrapBlock.message}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-6 grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-bold text-slate-700 sm:grid-cols-2">
+                  <div>
+                    <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Terminal POS</span>
+                    {masterBootstrapBlock.terminalName || masterBootstrapBlock.terminalId || 'No identificada'}
+                  </div>
+                  <div>
+                    <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Tenant</span>
+                    {masterBootstrapBlock.tenantId || 'No identificado'}
+                  </div>
+                  <div className="sm:col-span-2">
+                    <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Terminal ERP</span>
+                    {masterBootstrapBlock.erpTerminalId || masterBootstrapBlock.terminalId || 'No identificada'}
+                  </div>
+                </div>
+
+                <div className="mt-5 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-black leading-5 text-amber-800">
+                  El POS queda bloqueado para ventas hasta que ERP/Cloud publique artículos, precios, impuestos,
+                  almacenes, métodos de pago, series y rangos fiscales para esta terminal.
+                </div>
+              </div>
+              <div className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50 px-6 py-5 sm:flex-row">
+                <button
+                  onClick={retryMasterBootstrap}
+                  disabled={masterBootstrapBlock.retrying}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-slate-950 py-4 text-base font-black text-white shadow-xl shadow-slate-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-400"
+                >
+                  <RefreshCw size={20} className={masterBootstrapBlock.retrying ? 'animate-spin' : ''} />
+                  {masterBootstrapBlock.retrying ? 'Descargando maestros...' : 'Reintentar descarga'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {recoverySequencePrompt && !masterBootstrapBlock && (
           <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/70 p-6">
             <div className="w-full max-w-xl rounded-3xl bg-white p-7 shadow-2xl">
               <p className="text-xs font-black uppercase tracking-[0.22em] text-blue-600">Recuperación de terminal</p>

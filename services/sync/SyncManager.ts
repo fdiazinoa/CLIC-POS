@@ -4637,12 +4637,17 @@ class SyncManager {
         const modules = [
             { id: 'config', label: 'Configuración Global (Tarifas)' },
             { id: 'products', label: 'Catálogo de Productos' },
+            { id: 'productPrices', label: 'Tarifas de Productos' },
+            { id: 'productStocks', label: 'Existencias por Almacén' },
             { id: 'customers', label: 'Base de Clientes' },
             { id: 'suppliers', label: 'Proveedores' },
             { id: 'users', label: 'Operadores de Sistema' },
             { id: 'roles', label: 'Roles y Permisos' },
+            { id: 'paymentMethods', label: 'Métodos de Pago' },
             { id: 'internalSequences', label: 'Secuencias de Documentos' },
             { id: 'fiscalRanges', label: 'Rangos Fiscales DGII' },
+            { id: 'transfers', label: 'Transferencias' },
+            { id: 'receptions', label: 'Recepciones' },
         ];
 
         if (permissionService.isMasterTerminal()) {
@@ -4702,7 +4707,35 @@ class SyncManager {
 
     async fullPull(): Promise<void> {
         try {
-            await this.refreshTerminalResolvedConfig(undefined, { dispatchEvent: false });
+            await this.refreshTerminalResolvedConfig(undefined, {
+                dispatchEvent: false,
+                forceRemoteFetch: true,
+                forceFullCatalog: true,
+                masterScopes: [
+                    'items',
+                    'customers',
+                    'suppliers',
+                    'users',
+                    'pos_users',
+                    'roles',
+                    'pos_roles',
+                    'purchase_orders',
+                    'transfers',
+                ],
+                blockScopes: ['inventory', 'product_prices'],
+                resolvedScopes: [
+                    'identity',
+                    'terminal',
+                    'device_role',
+                    'role',
+                    'pricing',
+                    'inventory',
+                    'documents',
+                    'catalog',
+                    'promotions',
+                    'loyalty',
+                ],
+            });
         } catch (error) {
             console.warn('⚠️ SyncManager: Could not refresh terminal snapshot before full pull:', error);
         }

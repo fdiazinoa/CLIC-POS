@@ -239,6 +239,84 @@ const shortTerminalRef = (terminal: TerminalCard): string => {
   return source.length > 10 ? source.slice(0, 8).toUpperCase() : source.toUpperCase();
 };
 
+const asPlainObject = (value: unknown): Record<string, any> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as Record<string, any>;
+};
+
+const asArray = (value: unknown): unknown[] | null => (Array.isArray(value) ? value : null);
+
+const getNestedObject = (source: Record<string, any>, keys: string[]): Record<string, any> => {
+  for (const key of keys) {
+    const value = asPlainObject(source[key]);
+    if (Object.keys(value).length > 0) return value;
+  }
+  return {};
+};
+
+const assessInitialMasterBootstrap = (payload: InitialConfigResponse | null | undefined): {
+  ok: boolean;
+  message?: string;
+} => {
+  const root = asPlainObject(payload);
+  const terminalConfig = asPlainObject(root.terminal_config);
+  const snapshot = extractTerminalConfigSnapshot(payload);
+  const masters = asPlainObject(snapshot?.masters || terminalConfig.masters);
+  const profile = getNestedObject(root, ['profile', 'terminal_profile', 'terminalProfile']);
+  const terminalProfile = Object.keys(profile).length > 0
+    ? profile
+    : getNestedObject(terminalConfig, ['profile', 'terminal_profile', 'terminalProfile']);
+
+  const items =
+    asArray(root.items) ||
+    asArray(masters.items) ||
+    asArray(terminalConfig.items) ||
+    null;
+  const itemCodes =
+    asArray(terminalProfile.item_codes) ||
+    asArray(terminalProfile.itemCodes) ||
+    asArray(terminalConfig.item_codes) ||
+    asArray(terminalConfig.itemCodes) ||
+    null;
+  const seriesCodes =
+    asArray(terminalProfile.series_codes) ||
+    asArray(terminalProfile.seriesCodes) ||
+    asArray(terminalConfig.series_codes) ||
+    asArray(terminalConfig.seriesCodes) ||
+    null;
+  const profileStatus = String(
+    terminalProfile.profile_status ||
+    terminalProfile.profileStatus ||
+    terminalConfig.profile_status ||
+    terminalConfig.profileStatus ||
+    ''
+  ).trim().toUpperCase();
+
+  if (items && items.length > 0) {
+    return { ok: true };
+  }
+
+  const hasExplicitEmptyMasters =
+    (items && items.length === 0) ||
+    (itemCodes && itemCodes.length === 0) ||
+    (seriesCodes && seriesCodes.length === 0) ||
+    profileStatus === 'DRAFT';
+
+  if (hasExplicitEmptyMasters) {
+    return {
+      ok: false,
+      message:
+        'El ERP/Cloud respondió sin maestros para esta terminal. El perfil está vacío o en DRAFT; debe publicar artículos, series, impuestos, almacenes y métodos de pago antes de operar.',
+    };
+  }
+
+  return {
+    ok: false,
+    message:
+      'El ERP/Cloud no devolvió artículos en el bootstrap inicial. No se puede activar la terminal sin catálogo maestro.',
+  };
+};
+
 const DEFAULT_PUBLIC_ERP_BASE_URL = 'https://clic-erp.vercel.app';
 
 const resolveErpBaseUrl = (): string | null => {
@@ -890,6 +968,20 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             stepId: 'sync',
             message: 'Sincronizando maestros y preparando datos locales del POS...',
           });
+        }
+
+        const requiresMasterBootstrap = Boolean(
+          expectsErpDirect ||
+          usesErpDirect ||
+          useErpDirectMasterAndroid ||
+          forceTransfer ||
+          data.transferred
+        );
+        if (requiresMasterBootstrap) {
+          const bootstrapReadiness = assessInitialMasterBootstrap(initialConfigData);
+          if (!bootstrapReadiness.ok) {
+            throw new Error(bootstrapReadiness.message);
+          }
         }
 
         await onBound({
