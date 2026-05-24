@@ -9,7 +9,13 @@ import {
 } from './erpOutboundPayloads';
 import { permissionService } from './PermissionService';
 import { getSyncDeviceToken } from './deviceToken';
-import { dispatchDeviceRevoked, resolveLocalDeviceId } from '../../utils/deviceRevocation';
+import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked, resolveLocalDeviceId } from '../../utils/deviceRevocation';
+import {
+    clearErpIncrementalSyncState,
+    erpSyncAuthRequiresFullBootstrap,
+    markErpFullBootstrapRequired,
+    persistErpSyncAuthIdentity,
+} from '../../utils/erpSyncLifecycle';
 
 /**
  * API Sync Adapter
@@ -467,9 +473,13 @@ class ApiSyncAdapter {
             try {
                 const response = await this.fetchWithRetry(`${this.config!.masterUrl}/api/sync/auth`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...this.getLocalDeviceHeaders(),
+                    },
                     body: JSON.stringify({
                         terminalId: this.config!.terminalId,
+                        terminal_id: this.config!.terminalId,
                         deviceToken: this.getLocalDeviceId(),
                         device_id: this.getLocalDeviceId()
                     })
@@ -492,6 +502,14 @@ class ApiSyncAdapter {
                 }
 
                 const data = await response.json();
+                if (data?.terminal_id || data?.terminal_uuid || data?.operational_identity || data?.sync_state) {
+                    persistErpSyncAuthIdentity(data, this.config!.terminalId);
+                    if (erpSyncAuthRequiresFullBootstrap(data)) {
+                        clearErpIncrementalSyncState();
+                        markErpFullBootstrapRequired(data);
+                        this.resetCircuitBreaker();
+                    }
+                }
                 this.authToken = data.token;
                 this.isOnline = true;
                 console.log(`✅ Authenticated with Master terminal: ${this.config!.terminalId}`);
@@ -522,6 +540,16 @@ class ApiSyncAdapter {
         return resolveLocalDeviceId() || getSyncDeviceToken();
     }
 
+    private getLocalDeviceHeaders(): Record<string, string> {
+        const deviceId = this.getLocalDeviceId();
+        return deviceId
+            ? {
+                'X-Device-Id': deviceId,
+                'X-POS-Device-Id': deviceId,
+            }
+            : {};
+    }
+
     private async parseErrorPayload(response: Response): Promise<Record<string, any>> {
         try {
             const payload = await response.clone().json();
@@ -540,7 +568,7 @@ class ApiSyncAdapter {
 
         dispatchDeviceRevoked({
             reason: 'DEVICE_SUPERSEDED',
-            message: String(payload.message || '').trim() || 'Este equipo fue reemplazado por otro dispositivo.',
+            message: String(payload.message || '').trim() || DEVICE_SUPERSEDED_MESSAGE,
             terminalId: terminalId || payload.terminal_id || null,
             previousDeviceId: this.getLocalDeviceId(),
             newDeviceId: payload.canonical_device_id || payload.new_device_id || null,
@@ -831,9 +859,13 @@ class ApiSyncAdapter {
         const erpAuthPromise = (async () => {
             const response = await this.fetchWithRetry(`${target.baseUrl}/auth`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...this.getLocalDeviceHeaders(),
+                },
                 body: JSON.stringify({
                     terminalId: target.terminalId,
+                    terminal_id: target.terminalId,
                     deviceToken: this.getLocalDeviceId(),
                     device_id: this.getLocalDeviceId()
                 })
@@ -852,6 +884,15 @@ class ApiSyncAdapter {
             }
 
             const data = await response.json();
+            const identity = persistErpSyncAuthIdentity(data, target.terminalId);
+            if (identity.terminalId && identity.terminalId !== target.terminalId) {
+                this.operationalTargetHint.terminalId = identity.terminalId;
+            }
+            if (erpSyncAuthRequiresFullBootstrap(data)) {
+                clearErpIncrementalSyncState();
+                markErpFullBootstrapRequired(data);
+                this.resetCircuitBreaker();
+            }
             return String(data.token || '');
         })();
 
@@ -870,8 +911,10 @@ class ApiSyncAdapter {
             throw new Error('Operational sync token unavailable for ERP target');
         }
 
+        const refreshedTarget = this.resolveOperationalTarget() || target;
+
         return {
-            ...target,
+            ...refreshedTarget,
             token: this.erpAuthToken
         };
     }
@@ -884,7 +927,7 @@ class ApiSyncAdapter {
             headers: {
                 'Content-Type': 'application/json',
                 'X-Sync-Token': target.token,
-                ...(this.getLocalDeviceId() ? { 'X-Device-Id': this.getLocalDeviceId() || '' } : {})
+                ...this.getLocalDeviceHeaders(),
             },
             body: JSON.stringify(requestBody)
         });
@@ -903,7 +946,7 @@ class ApiSyncAdapter {
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Sync-Token': retriedTarget.token,
-                    ...(this.getLocalDeviceId() ? { 'X-Device-Id': this.getLocalDeviceId() || '' } : {})
+                    ...this.getLocalDeviceHeaders(),
                 },
                 body: JSON.stringify(retryBody)
             });
@@ -927,7 +970,7 @@ class ApiSyncAdapter {
         const response = await this.fetchWithRetry(`${target.baseUrl}${path}`, {
             headers: {
                 'X-Sync-Token': target.token,
-                ...(this.getLocalDeviceId() ? { 'X-Device-Id': this.getLocalDeviceId() || '' } : {})
+                ...this.getLocalDeviceHeaders(),
             }
         });
 
@@ -942,7 +985,7 @@ class ApiSyncAdapter {
             const retryResponse = await this.fetchWithRetry(`${retriedTarget.baseUrl}${path}`, {
                 headers: {
                     'X-Sync-Token': retriedTarget.token,
-                    ...(this.getLocalDeviceId() ? { 'X-Device-Id': this.getLocalDeviceId() || '' } : {})
+                    ...this.getLocalDeviceHeaders(),
                 }
             });
 

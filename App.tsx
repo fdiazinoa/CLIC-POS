@@ -146,6 +146,7 @@ import {
 import {
   clearStoredErpSyncBinding,
   ensureErpSyncLifecycle,
+  ERP_FULL_BOOTSTRAP_REQUIRED_EVENT,
   getLifecycleActivationBlockMessage,
   getLifecycleBlockingMessageFromError,
   isLifecycleActivationBlocked,
@@ -153,6 +154,7 @@ import {
 } from './utils/erpSyncLifecycle';
 import {
   DEVICE_REVOKED_EVENT,
+  DEVICE_SUPERSEDED_MESSAGE,
   persistLocalDeviceId,
   resolveLocalDeviceId,
   type DeviceRevocationDetail
@@ -995,6 +997,51 @@ const AppContent: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    let fullBootstrapInFlight = false;
+
+    const handleErpFullBootstrapRequired = async () => {
+      if (fullBootstrapInFlight) return;
+      fullBootstrapInFlight = true;
+
+      try {
+        await syncManager.fullPull();
+
+        const refreshedConfigRaw = await db.get('config') as unknown;
+        if (refreshedConfigRaw && !Array.isArray(refreshedConfigRaw) && (refreshedConfigRaw as BusinessConfig).terminals) {
+          setConfig(refreshedConfigRaw as BusinessConfig);
+        }
+
+        const refreshedProducts = await db.get('products') as Product[];
+        if (Array.isArray(refreshedProducts)) {
+          setProducts(refreshedProducts);
+        }
+
+        const refreshedUsers = await db.get('users') as User[];
+        if (Array.isArray(refreshedUsers)) {
+          setUsers(refreshedUsers);
+        }
+
+        const refreshedRoles = await db.get('roles') as RoleDefinition[];
+        if (Array.isArray(refreshedRoles)) {
+          setRoles(refreshedRoles);
+        }
+
+        localStorage.removeItem('clic_erp_sync_full_bootstrap_required');
+        localStorage.removeItem('clic_erp_sync_full_bootstrap_reason');
+      } catch (error) {
+        console.warn('⚠️ Failed to apply ERP full bootstrap requested by auth:', error);
+      } finally {
+        fullBootstrapInFlight = false;
+      }
+    };
+
+    window.addEventListener(ERP_FULL_BOOTSTRAP_REQUIRED_EVENT, handleErpFullBootstrapRequired as EventListener);
+    return () => {
+      window.removeEventListener(ERP_FULL_BOOTSTRAP_REQUIRED_EVENT, handleErpFullBootstrapRequired as EventListener);
+    };
+  }, []);
+
   const dismissTerminalConfigRestartNotice = useCallback(() => {
     localStorage.removeItem(TERMINAL_CONFIG_RESTART_NOTICE_KEY);
     setTerminalConfigRestartNotice(null);
@@ -1062,7 +1109,7 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     const handleDeviceRevoked = (event: Event) => {
       const detail = (event as CustomEvent<DeviceRevocationDetail>).detail;
-      triggerLockdown(detail?.message || 'Este equipo fue reemplazado por otro dispositivo.');
+      triggerLockdown(detail?.message || DEVICE_SUPERSEDED_MESSAGE);
     };
 
     window.addEventListener(DEVICE_REVOKED_EVENT, handleDeviceRevoked as EventListener);

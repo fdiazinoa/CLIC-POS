@@ -97,6 +97,16 @@ const withTimeout = async <T>(promise: Promise<T>, label: string): Promise<T> =>
 
 const stripTrailingSlashes = (value: string): string => value.replace(/\/+$/, '');
 
+const buildDeviceHeaders = (deviceId?: string | null): Record<string, string> => {
+  const resolvedDeviceId = asString(deviceId);
+  return resolvedDeviceId
+    ? {
+      'X-Device-Id': resolvedDeviceId,
+      'X-POS-Device-Id': resolvedDeviceId,
+    }
+    : {};
+};
+
 const fetchErpJson = async (
   baseUrl: string,
   path: string,
@@ -158,9 +168,10 @@ const takeoverTerminalInErp = async (input: {
       method: 'POST',
       headers: {
         ...(await getSupabaseAuthHeaders()),
-        'X-Device-Id': input.posDeviceId,
+        ...buildDeviceHeaders(input.posDeviceId),
       },
       body: {
+        terminal_id: input.erpTerminalId,
         device_id: input.posDeviceId,
         device_name: input.terminalName || null,
         source: 'CLIC_POS_SELF_SERVICE_RECOVERY',
@@ -174,14 +185,17 @@ export const fetchTerminalRecoveryStateFromErp = async (input: {
   erpTerminalId: string;
   posDeviceId: string;
 }): Promise<RuntimeTerminalRecoveryState | null> => {
-  const params = new URLSearchParams({ device_id: input.posDeviceId });
+  const params = new URLSearchParams({
+    terminal_id: input.erpTerminalId,
+    device_id: input.posDeviceId,
+  });
   const payload = await fetchErpJson(
     input.erpBaseUrl,
     `/api/sync/terminals/${encodeURIComponent(input.erpTerminalId)}/recovery-state?${params.toString()}`,
     {
       headers: {
         ...(await getSupabaseAuthHeaders()),
-        'X-Device-Id': input.posDeviceId,
+        ...buildDeviceHeaders(input.posDeviceId),
       },
     }
   );
@@ -751,6 +765,7 @@ export const bindTerminalFromErp = async (input: {
 
   const persistedProfilePayload = await fetchErpJson(input.erpBaseUrl, '/api/sync/bootstrap/terminal-profile', {
     method: 'POST',
+    headers: buildDeviceHeaders(input.posDeviceId),
     body: {
       tenant_id: resolvedContext.tenantId,
       company_id: asString(targetTerminal.company_id) || resolvedContext.companyId,
@@ -834,9 +849,17 @@ export const fetchInitialConfigFromErp = async (input: {
   erpTerminalId: string;
   posDeviceId: string;
 }): Promise<RuntimeInitialConfigResponse> => {
+  const params = new URLSearchParams({
+    tenant_id: input.tenantId,
+    terminal_id: input.erpTerminalId,
+    device_id: input.posDeviceId,
+  });
   const payload = await fetchErpJson(
     input.erpBaseUrl,
-    `/api/sync/terminals/${encodeURIComponent(input.erpTerminalId)}/config`
+    `/api/sync/terminals/${encodeURIComponent(input.erpTerminalId)}/config?${params.toString()}`,
+    {
+      headers: buildDeviceHeaders(input.posDeviceId),
+    }
   );
 
   const terminalConfig = asObject(payload?.terminal_config);

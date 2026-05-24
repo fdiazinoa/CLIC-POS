@@ -4,7 +4,13 @@ import { mergeTerminalConfigSnapshots } from './terminalConfigSnapshot';
 import { db } from './db';
 import { DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS } from '../constants';
 import { getDefaultRoleConfig, normalizeDeviceRoleValue, resolveDeviceRoleValue } from './deviceRoleHelpers';
-import { dispatchDeviceRevoked, isDeviceSupersededError, resolveLocalDeviceId } from './deviceRevocation';
+import {
+    DEVICE_SUPERSEDED_MESSAGE,
+    dispatchDeviceRevoked,
+    isDeviceSupersededError,
+    persistLocalDeviceId,
+    resolveLocalDeviceId,
+} from './deviceRevocation';
 import {
     AuthLevel,
     BusinessConfig,
@@ -128,6 +134,10 @@ const SYNC_BINDING_COMPANY_KEY = 'clic_erp_sync_company_id';
 const SYNC_BINDING_STORE_KEY = 'clic_erp_sync_store_id';
 const SYNC_BINDING_LAST_SEEN_KEY = 'clic_erp_sync_last_seen';
 const SYNC_BINDING_STATUS_KEY = 'clic_erp_sync_status';
+const SYNC_BINDING_TERMINAL_UUID_KEY = 'clic_erp_sync_terminal_uuid';
+const ERP_FULL_BOOTSTRAP_REQUIRED_KEY = 'clic_erp_sync_full_bootstrap_required';
+const ERP_FULL_BOOTSTRAP_REASON_KEY = 'clic_erp_sync_full_bootstrap_reason';
+export const ERP_FULL_BOOTSTRAP_REQUIRED_EVENT = 'clic-pos-erp-full-bootstrap-required';
 const TERMINAL_CONFIG_RESTART_NOTICE_KEY = 'clic_pos_terminal_config_restart_notice';
 const TERMINAL_CONFIG_PENDING_SNAPSHOT_KEY = 'clic_pos_terminal_config_pending_snapshot';
 
@@ -212,7 +222,7 @@ export const getLifecycleBlockingMessageFromError = (error: unknown): string | n
         || message.includes('dispositivo ya no está autorizado')
         || message.includes('dispositivo ya no esta autorizado')
     ) {
-        return 'Este equipo fue reemplazado por otro dispositivo. La operación queda bloqueada en esta tablet.';
+        return DEVICE_SUPERSEDED_MESSAGE;
     }
 
     if (
@@ -436,6 +446,7 @@ const persistBinding = (
 export const persistStoredErpSyncBinding = (input: {
     tenantId?: string | null;
     terminalId?: string | null;
+    terminalUuid?: string | null;
     localTerminalId?: string | null;
     terminalName?: string | null;
     companyId?: string | null;
@@ -445,6 +456,7 @@ export const persistStoredErpSyncBinding = (input: {
 }) => {
     const tenantId = normalizeOptional(input.tenantId || null);
     const terminalId = normalizeOptional(input.terminalId || null);
+    const terminalUuid = normalizeOptional(input.terminalUuid || null);
     const localTerminalId = normalizeOptional(input.localTerminalId || null);
     const terminalName = normalizeOptional(input.terminalName || null);
     const companyId = normalizeOptional(input.companyId || null);
@@ -458,6 +470,10 @@ export const persistStoredErpSyncBinding = (input: {
 
     if (terminalId) {
         localStorage.setItem(SYNC_BINDING_TERMINAL_KEY, terminalId);
+    }
+
+    if (terminalUuid) {
+        localStorage.setItem(SYNC_BINDING_TERMINAL_UUID_KEY, terminalUuid);
     }
 
     if (localTerminalId) {
@@ -485,6 +501,137 @@ export const persistStoredErpSyncBinding = (input: {
     }
 };
 
+export type ErpSyncAuthIdentity = {
+    terminalId: string | null;
+    terminalUuid: string | null;
+    tenantId: string | null;
+    companyId: string | null;
+    storeId: string | null;
+    deviceId: string | null;
+};
+
+export const persistErpSyncAuthIdentity = (
+    payload: unknown,
+    fallbackTerminalId?: string | null
+): ErpSyncAuthIdentity => {
+    const root = asObject<Record<string, unknown>>(payload);
+    const operationalIdentity = asObject<Record<string, unknown>>(root.operational_identity);
+    const terminal = asObject<Record<string, unknown>>(root.terminal);
+
+    const terminalId =
+        normalizeOptional(String(root.terminal_id || root.terminalId || terminal.id || fallbackTerminalId || ''))
+        || null;
+    const terminalUuid =
+        normalizeOptional(String(root.terminal_uuid || root.terminalUuid || terminal.uuid || ''))
+        || null;
+    const tenantId =
+        normalizeOptional(String(operationalIdentity.tenant_id || root.tenant_id || terminal.tenant_id || ''))
+        || null;
+    const companyId =
+        normalizeOptional(String(operationalIdentity.company_id || root.company_id || terminal.company_id || ''))
+        || null;
+    const storeId =
+        normalizeOptional(String(operationalIdentity.store_id || root.store_id || terminal.store_id || ''))
+        || null;
+    const deviceId =
+        normalizeOptional(String(root.device_id || root.deviceId || terminal.device_id || ''))
+        || null;
+
+    persistStoredErpSyncBinding({
+        tenantId,
+        terminalId,
+        terminalUuid,
+        companyId,
+        storeId,
+    });
+
+    if (tenantId) {
+        localStorage.setItem('active_tenant_id', tenantId);
+        localStorage.setItem('clic_tenant_id', tenantId);
+    }
+
+    if (deviceId) {
+        persistLocalDeviceId(deviceId);
+    }
+
+    return {
+        terminalId,
+        terminalUuid,
+        tenantId,
+        companyId,
+        storeId,
+        deviceId,
+    };
+};
+
+export const erpSyncAuthRequiresFullBootstrap = (payload: unknown): boolean => {
+    const root = asObject<Record<string, unknown>>(payload);
+    const syncState = asObject<Record<string, unknown>>(root.sync_state);
+    const resetReason = normalizeOptional(String(syncState.reset_reason || root.bootstrap_reason || '')).toUpperCase();
+
+    return (
+        root.requires_full_bootstrap === true
+        || root.sync_reset_required === true
+        || resetReason === 'TERMINAL_TAKEOVER'
+    );
+};
+
+export const clearErpIncrementalSyncState = () => {
+    const removeByPrefix = (storage: Storage, prefixes: string[]) => {
+        const keys: string[] = [];
+        for (let index = 0; index < storage.length; index += 1) {
+            const key = storage.key(index);
+            if (key && prefixes.some((prefix) => key.startsWith(prefix))) {
+                keys.push(key);
+            }
+        }
+        keys.forEach((key) => storage.removeItem(key));
+    };
+
+    removeByPrefix(localStorage, [
+        'clic_pos_terminal_catalog_cursor:',
+        'clic_pos_terminal_manifest_cursor_map:',
+        'clic_pos_terminal_config_',
+        'clic_erp_manifest_',
+        'clic_erp_config_',
+        'clic_erp_inventory_',
+        'clic_erp_product_prices_',
+        'erp_manifest_',
+        'erp_inventory_',
+        'erp_product_prices_',
+    ]);
+
+    removeByPrefix(sessionStorage, [
+        'clic_pos_terminal_startup_manifest_synced:',
+    ]);
+
+    localStorage.removeItem(TERMINAL_CONFIG_PENDING_SNAPSHOT_KEY);
+    localStorage.removeItem(TERMINAL_CONFIG_RESTART_NOTICE_KEY);
+};
+
+export const markErpFullBootstrapRequired = (payload: unknown) => {
+    const root = asObject<Record<string, unknown>>(payload);
+    const syncState = asObject<Record<string, unknown>>(root.sync_state);
+    const reason =
+        normalizeOptional(String(syncState.reset_reason || root.bootstrap_reason || 'TERMINAL_TAKEOVER'))
+        || 'TERMINAL_TAKEOVER';
+
+    const alreadyMarked =
+        localStorage.getItem(ERP_FULL_BOOTSTRAP_REQUIRED_KEY) === 'true'
+        && localStorage.getItem(ERP_FULL_BOOTSTRAP_REASON_KEY) === reason;
+
+    localStorage.setItem(ERP_FULL_BOOTSTRAP_REQUIRED_KEY, 'true');
+    localStorage.setItem(ERP_FULL_BOOTSTRAP_REASON_KEY, reason);
+    if (alreadyMarked) return;
+
+    window.dispatchEvent(new CustomEvent(ERP_FULL_BOOTSTRAP_REQUIRED_EVENT, {
+        detail: {
+            reason,
+            payload,
+        },
+    }));
+};
+
 const clearBindingIfTenantChanged = (identity: TenantIdentity) => {
     const currentTenantId = normalizeOptional(identity.tenantId || null);
     const activeErpTenantId = normalizeOptional(localStorage.getItem('active_tenant_id'));
@@ -499,6 +646,16 @@ const clearBindingIfTenantChanged = (identity: TenantIdentity) => {
     }
 };
 
+const buildDeviceHeaders = (deviceId?: unknown): Record<string, string> => {
+    const resolvedDeviceId = normalizeOptional(String(deviceId || resolveLocalDeviceId() || ''));
+    return resolvedDeviceId
+        ? {
+            'X-Device-Id': resolvedDeviceId,
+            'X-POS-Device-Id': resolvedDeviceId,
+        }
+        : {};
+};
+
 const postJson = async <T>(path: string, body: Record<string, unknown>): Promise<T> => {
     const baseUrl = getSyncApiBase();
     if (!baseUrl) {
@@ -509,6 +666,7 @@ const postJson = async <T>(path: string, body: Record<string, unknown>): Promise
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
+            ...buildDeviceHeaders(body.device_id as string | null | undefined),
         },
         body: JSON.stringify(body),
     });
@@ -532,6 +690,7 @@ const getJson = async <T>(path: string, query: Record<string, string | number | 
         method: 'GET',
         headers: {
             'Content-Type': 'application/json',
+            ...buildDeviceHeaders(query.device_id as string | number | null | undefined),
         },
     });
 
@@ -1053,6 +1212,7 @@ const ackErpOutboxEvent = async (
 export const clearStoredErpSyncBinding = () => {
     localStorage.removeItem(SYNC_BINDING_TENANT_KEY);
     localStorage.removeItem(SYNC_BINDING_TERMINAL_KEY);
+    localStorage.removeItem(SYNC_BINDING_TERMINAL_UUID_KEY);
     localStorage.removeItem(SYNC_BINDING_LOCAL_TERMINAL_KEY);
     localStorage.removeItem(SYNC_BINDING_TERMINAL_NAME_KEY);
     localStorage.removeItem(SYNC_BINDING_COMPANY_KEY);
@@ -1064,6 +1224,7 @@ export const clearStoredErpSyncBinding = () => {
 export const getStoredErpSyncBinding = () => ({
     tenantId: normalizeOptional(localStorage.getItem(SYNC_BINDING_TENANT_KEY)) || null,
     terminalId: normalizeOptional(localStorage.getItem(SYNC_BINDING_TERMINAL_KEY)) || null,
+    terminalUuid: normalizeOptional(localStorage.getItem(SYNC_BINDING_TERMINAL_UUID_KEY)) || null,
     localTerminalId: normalizeOptional(localStorage.getItem(SYNC_BINDING_LOCAL_TERMINAL_KEY)) || null,
     terminalName: normalizeOptional(localStorage.getItem(SYNC_BINDING_TERMINAL_NAME_KEY)) || null,
     companyId: normalizeOptional(localStorage.getItem(SYNC_BINDING_COMPANY_KEY)) || null,

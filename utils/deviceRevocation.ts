@@ -1,4 +1,5 @@
 export const DEVICE_REVOKED_EVENT = 'clic-pos-device-revoked';
+export const DEVICE_SUPERSEDED_MESSAGE = 'Este equipo ya no está autorizado para esta terminal. La caja fue tomada por otro dispositivo.';
 
 export type DeviceRevocationReason = 'DEVICE_SUPERSEDED' | 'DEVICE_REVOKED' | 'TERMINAL_TAKEOVER';
 
@@ -47,4 +48,3 @@ export const dispatchDeviceRevoked = (detail: DeviceRevocationDetail) => {
     detail,
   }));
 };
-
