@@ -81,6 +81,8 @@ interface TooltipState {
 
 interface ParkedOrderSummary {
     orderId: string;
+    tableId?: string;
+    joinedTableIds: string[];
     itemCount: number;
     calculatedTotal: number;
     finalTotal: number;
@@ -172,6 +174,10 @@ const summarizeParkedTicket = (ticket: ParkedTicket): ParkedOrderSummary | null 
 
     return {
         orderId: ticket.id,
+        tableId: ticket.tableId !== undefined && ticket.tableId !== null ? String(ticket.tableId) : undefined,
+        joinedTableIds: Array.isArray((ticket as any).joinedTableIds)
+            ? (ticket as any).joinedTableIds.map((id: unknown) => String(id))
+            : [],
         itemCount,
         calculatedTotal,
         finalTotal,
@@ -468,9 +474,22 @@ const TableMap: React.FC<TableMapProps> = ({
     }, [parkedTickets]);
 
     const getParkedSummaryForTable = useCallback(
-        (table: Table) =>
-            (table.currentOrderId ? parkedSummaryByOrderId.get(String(table.currentOrderId)) : undefined)
-            || parkedSummaryByTableId.get(String(table.id)),
+        (table: Table) => {
+            const tableId = String(table.id);
+            const byOrder = table.currentOrderId ? parkedSummaryByOrderId.get(String(table.currentOrderId)) : undefined;
+            const orderBelongsToTable = Boolean(
+                byOrder &&
+                (
+                    !byOrder.tableId ||
+                    byOrder.tableId === tableId ||
+                    byOrder.joinedTableIds.includes(tableId) ||
+                    String((table as any).joinedTableId || '') === byOrder.tableId ||
+                    String((table as any).joinedSourceTableId || '') === tableId
+                )
+            );
+            return (orderBelongsToTable ? byOrder : undefined)
+                || parkedSummaryByTableId.get(tableId);
+        },
         [parkedSummaryByOrderId, parkedSummaryByTableId]
     );
 
