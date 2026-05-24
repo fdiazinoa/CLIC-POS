@@ -137,6 +137,7 @@ const SYNC_BINDING_STATUS_KEY = 'clic_erp_sync_status';
 const SYNC_BINDING_TERMINAL_UUID_KEY = 'clic_erp_sync_terminal_uuid';
 const ERP_FULL_BOOTSTRAP_REQUIRED_KEY = 'clic_erp_sync_full_bootstrap_required';
 const ERP_FULL_BOOTSTRAP_REASON_KEY = 'clic_erp_sync_full_bootstrap_reason';
+const ERP_INSTALL_IDENTITY_KEY = 'clic_pos_persisted_install_identity';
 export const ERP_FULL_BOOTSTRAP_REQUIRED_EVENT = 'clic-pos-erp-full-bootstrap-required';
 const TERMINAL_CONFIG_RESTART_NOTICE_KEY = 'clic_pos_terminal_config_restart_notice';
 const TERMINAL_CONFIG_PENDING_SNAPSHOT_KEY = 'clic_pos_terminal_config_pending_snapshot';
@@ -499,6 +500,64 @@ export const persistStoredErpSyncBinding = (input: {
     if (status) {
         localStorage.setItem(SYNC_BINDING_STATUS_KEY, status);
     }
+
+    persistErpInstallIdentitySnapshot({
+        tenantId,
+        terminalId,
+        terminalUuid,
+        companyId,
+        storeId,
+    });
+};
+
+type PersistedErpInstallIdentityInput = {
+    deviceId?: string | null;
+    tenantId?: string | null;
+    terminalId?: string | null;
+    terminalUuid?: string | null;
+    localTerminalId?: string | null;
+    companyId?: string | null;
+    storeId?: string | null;
+    terminalName?: string | null;
+    setupMode?: string | null;
+    erpBaseUrl?: string | null;
+    syncApiUrl?: string | null;
+};
+
+const persistErpInstallIdentitySnapshot = (input: PersistedErpInstallIdentityInput = {}) => {
+    const existing = getPersistedErpInstallIdentity();
+    const deviceId = normalizeOptional(input.deviceId || resolveLocalDeviceId() || existing.deviceId || null) || null;
+    const tenantId = normalizeOptional(input.tenantId || localStorage.getItem(SYNC_BINDING_TENANT_KEY) || localStorage.getItem('active_tenant_id') || localStorage.getItem('clic_tenant_id') || existing.tenantId || null) || null;
+    const terminalId = normalizeOptional(input.terminalId || localStorage.getItem(SYNC_BINDING_TERMINAL_KEY) || existing.terminalId || null) || null;
+    const terminalUuid = normalizeOptional(input.terminalUuid || localStorage.getItem(SYNC_BINDING_TERMINAL_UUID_KEY) || existing.terminalUuid || null) || null;
+    const localTerminalId = normalizeOptional(input.localTerminalId || localStorage.getItem(SYNC_BINDING_LOCAL_TERMINAL_KEY) || existing.localTerminalId || terminalId || null) || null;
+    const companyId = normalizeOptional(input.companyId || localStorage.getItem(SYNC_BINDING_COMPANY_KEY) || existing.companyId || null) || null;
+    const storeId = normalizeOptional(input.storeId || localStorage.getItem(SYNC_BINDING_STORE_KEY) || existing.storeId || null) || null;
+    const terminalName = normalizeOptional(input.terminalName || localStorage.getItem(SYNC_BINDING_TERMINAL_NAME_KEY) || existing.terminalName || null) || null;
+    const setupMode = normalizeOptional(input.setupMode || localStorage.getItem('clic_pos_terminal_setup_mode') || existing.setupMode || null) || null;
+    const erpBaseUrl =
+        normalizeOptional(input.erpBaseUrl || localStorage.getItem('CLIC_ERP_BASE_URL') || localStorage.getItem('erp_base_url') || existing.erpBaseUrl || null)
+        || null;
+    const syncApiUrl =
+        normalizeOptional(input.syncApiUrl || localStorage.getItem('CLIC_ERP_SYNC_URL') || (erpBaseUrl ? `${erpBaseUrl.replace(/\/+$/, '')}/api/sync` : null) || existing.syncApiUrl || null)
+        || null;
+
+    const snapshot = {
+        deviceId,
+        tenantId,
+        terminalId,
+        terminalUuid,
+        localTerminalId,
+        companyId,
+        storeId,
+        terminalName,
+        setupMode,
+        erpBaseUrl,
+        syncApiUrl,
+        updatedAt: new Date().toISOString(),
+    };
+
+    localStorage.setItem(ERP_INSTALL_IDENTITY_KEY, JSON.stringify(snapshot));
 };
 
 export type ErpSyncAuthIdentity = {
@@ -554,6 +613,15 @@ export const persistErpSyncAuthIdentity = (
         persistLocalDeviceId(deviceId);
     }
 
+    persistErpInstallIdentitySnapshot({
+        deviceId,
+        tenantId,
+        terminalId,
+        terminalUuid,
+        companyId,
+        storeId,
+    });
+
     return {
         terminalId,
         terminalUuid,
@@ -561,6 +629,68 @@ export const persistErpSyncAuthIdentity = (
         companyId,
         storeId,
         deviceId,
+    };
+};
+
+export const getPersistedErpInstallIdentity = () => {
+    let parsed: Record<string, unknown> = {};
+    const raw = localStorage.getItem(ERP_INSTALL_IDENTITY_KEY);
+    if (raw) {
+        try {
+            const value = JSON.parse(raw);
+            if (value && typeof value === 'object' && !Array.isArray(value)) {
+                parsed = value as Record<string, unknown>;
+            }
+        } catch {
+            parsed = {};
+        }
+    }
+
+    const deviceId = normalizeOptional(String(parsed.deviceId || resolveLocalDeviceId() || '')) || null;
+    const tenantId =
+        normalizeOptional(String(parsed.tenantId || localStorage.getItem(SYNC_BINDING_TENANT_KEY) || localStorage.getItem('active_tenant_id') || localStorage.getItem('clic_tenant_id') || ''))
+        || null;
+    const terminalId =
+        normalizeOptional(String(parsed.terminalId || localStorage.getItem(SYNC_BINDING_TERMINAL_KEY) || ''))
+        || null;
+    const terminalUuid =
+        normalizeOptional(String(parsed.terminalUuid || localStorage.getItem(SYNC_BINDING_TERMINAL_UUID_KEY) || ''))
+        || null;
+    const localTerminalId =
+        normalizeOptional(String(parsed.localTerminalId || localStorage.getItem(SYNC_BINDING_LOCAL_TERMINAL_KEY) || terminalId || ''))
+        || null;
+    const companyId =
+        normalizeOptional(String(parsed.companyId || localStorage.getItem(SYNC_BINDING_COMPANY_KEY) || ''))
+        || null;
+    const storeId =
+        normalizeOptional(String(parsed.storeId || localStorage.getItem(SYNC_BINDING_STORE_KEY) || ''))
+        || null;
+    const terminalName =
+        normalizeOptional(String(parsed.terminalName || localStorage.getItem(SYNC_BINDING_TERMINAL_NAME_KEY) || ''))
+        || null;
+    const setupMode =
+        normalizeOptional(String(parsed.setupMode || localStorage.getItem('clic_pos_terminal_setup_mode') || ''))
+        || null;
+    const erpBaseUrl =
+        normalizeOptional(String(parsed.erpBaseUrl || localStorage.getItem('CLIC_ERP_BASE_URL') || localStorage.getItem('erp_base_url') || ''))
+        || null;
+    const syncApiUrl =
+        normalizeOptional(String(parsed.syncApiUrl || localStorage.getItem('CLIC_ERP_SYNC_URL') || (erpBaseUrl ? `${erpBaseUrl.replace(/\/+$/, '')}/api/sync` : '') || ''))
+        || null;
+
+    return {
+        deviceId,
+        tenantId,
+        terminalId,
+        terminalUuid,
+        localTerminalId,
+        companyId,
+        storeId,
+        terminalName,
+        setupMode,
+        erpBaseUrl,
+        syncApiUrl,
+        updatedAt: normalizeOptional(String(parsed.updatedAt || '')) || null,
     };
 };
 
@@ -1229,6 +1359,7 @@ export const clearStoredErpSyncBinding = () => {
     localStorage.removeItem(SYNC_BINDING_STORE_KEY);
     localStorage.removeItem(SYNC_BINDING_LAST_SEEN_KEY);
     localStorage.removeItem(SYNC_BINDING_STATUS_KEY);
+    localStorage.removeItem(ERP_INSTALL_IDENTITY_KEY);
 };
 
 export const getStoredErpSyncBinding = () => ({

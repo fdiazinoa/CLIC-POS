@@ -35,10 +35,12 @@ import {
   RefundProcessingOptions,
   PaymentMethodDefinition,
   FiscalDocumentCorrectionInput,
-  TerminalConfig
+  TerminalConfig,
+  SubVertical
 } from './types';
 import {
   DEFAULT_ROLES,
+  DEFAULT_TERMINAL_CONFIG,
   DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS,
   DEFAULT_LABEL_TEMPLATES,
   FOOD_PRODUCTS,
@@ -148,6 +150,7 @@ import {
   clearStoredErpSyncBinding,
   ensureErpSyncLifecycle,
   ERP_FULL_BOOTSTRAP_REQUIRED_EVENT,
+  getPersistedErpInstallIdentity,
   getPendingErpFullBootstrapRequest,
   getLifecycleActivationBlockMessage,
   getLifecycleBlockingMessageFromError,
@@ -273,6 +276,55 @@ const persistSetupErpBaseUrls = (value?: string | null) => {
   localStorage.setItem('CLIC_ERP_BASE_URL', normalized);
   localStorage.setItem('erp_base_url', normalized);
   localStorage.setItem('CLIC_ERP_SYNC_URL', `${normalized}/api/sync`);
+};
+
+const buildMinimalRecoveryConfig = (
+  identity: ReturnType<typeof getPersistedErpInstallIdentity>,
+  deviceId: string
+): { config: BusinessConfig; localTerminalId: string } => {
+  const localTerminalId = identity.localTerminalId || identity.terminalId || 't1';
+  const terminalName = identity.terminalName || localTerminalId;
+  const baseConfig = getInitialConfig(SubVertical.SUPERMARKET);
+  const terminalConfig = {
+    ...DEFAULT_TERMINAL_CONFIG,
+    isPrimaryNode: identity.setupMode === 'CLIENT' ? false : true,
+    currentDeviceId: deviceId,
+    terminalName,
+    erpTerminalId: identity.terminalId || undefined,
+    erpBinding: {
+      terminalId: identity.terminalId || undefined,
+      terminalUuid: identity.terminalUuid || undefined,
+      tenantId: identity.tenantId || undefined,
+      companyId: identity.companyId || undefined,
+      storeId: identity.storeId || undefined,
+      terminalName,
+      deviceId,
+    },
+    metadata: {
+      erp_base_url: identity.erpBaseUrl || undefined,
+      erp_sync_url: identity.syncApiUrl || undefined,
+      recovered_from_persisted_identity: true,
+    },
+    syncConfig: {
+      mode: identity.setupMode === 'CLIENT' ? 'SLAVE' : 'MASTER',
+      masterUrl: localStorage.getItem('CLIC_POS_MASTER_URL') || buildMasterUrlFromHost(window.location.hostname),
+      autoSyncIntervalMs: 30000,
+      isEnabled: true,
+    },
+  } as TerminalConfig;
+
+  return {
+    localTerminalId,
+    config: {
+      ...baseConfig,
+      terminals: [
+        {
+          id: localTerminalId,
+          config: terminalConfig,
+        },
+      ],
+    },
+  };
 };
 
 const resolveFriendlyTerminalName = (terminal: any): string => {
@@ -2695,16 +2747,43 @@ const AppContent: React.FC = () => {
         }
 
         // 2. Gestión de Identidad de Dispositivo (early, used for safe config source selection)
+        const persistedInstallIdentity = getPersistedErpInstallIdentity();
         let storedDeviceId = resolveLocalDeviceId();
+        if (!storedDeviceId && persistedInstallIdentity.deviceId) {
+          storedDeviceId = persistedInstallIdentity.deviceId;
+        }
         if (!storedDeviceId) {
           storedDeviceId = 'DEV-' + Math.random().toString(36).substring(2, 10).toUpperCase();
         }
         persistLocalDeviceId(storedDeviceId);
         setDeviceId(storedDeviceId);
+        if (persistedInstallIdentity.erpBaseUrl) {
+          persistSetupErpBaseUrls(persistedInstallIdentity.erpBaseUrl);
+        }
+        if (persistedInstallIdentity.tenantId) {
+          localStorage.setItem('active_tenant_id', persistedInstallIdentity.tenantId);
+          localStorage.setItem('clic_tenant_id', persistedInstallIdentity.tenantId);
+        }
+        if (persistedInstallIdentity.terminalId) {
+          localStorage.setItem('clic_erp_sync_terminal_id', persistedInstallIdentity.terminalId);
+        }
+        if (persistedInstallIdentity.localTerminalId) {
+          localStorage.setItem('clic_erp_sync_local_terminal_id', persistedInstallIdentity.localTerminalId);
+        }
+        if (persistedInstallIdentity.storeId) {
+          localStorage.setItem('clic_erp_sync_store_id', persistedInstallIdentity.storeId);
+        }
 
         const persistedTenantId = (localStorage.getItem('clic_tenant_id') || '').trim();
         const persistedTenantEmail = (localStorage.getItem('clic_tenant_email') || '').trim().toLowerCase();
-        const hasActivationIdentity = Boolean(persistedTenantId && persistedTenantEmail);
+        const recoveryTenantId = persistedInstallIdentity.tenantId || persistedTenantId || '';
+        const hasPersistedRecoveryIdentity = Boolean(
+          persistedInstallIdentity.deviceId &&
+          persistedInstallIdentity.terminalId &&
+          persistedInstallIdentity.tenantId &&
+          (persistedInstallIdentity.erpBaseUrl || persistedInstallIdentity.syncApiUrl)
+        );
+        const hasActivationIdentity = Boolean((persistedTenantId && persistedTenantEmail) || hasPersistedRecoveryIdentity);
         if (!hasActivationIdentity) {
           // En primera activacion, forzamos sesion cloud limpia para evitar auto-login heredado.
           clearTenantIdentity();
@@ -2726,7 +2805,7 @@ const AppContent: React.FC = () => {
         }
 
         // --- LICENSE / KILL-SWITCH VALIDATION ---
-        const license = await checkLicenseStatus(persistedTenantId, storedDeviceId);
+        const license = await checkLicenseStatus(recoveryTenantId, storedDeviceId);
         if (!license.isValid) {
           triggerLockdown(license.reason || 'Servicio Suspendido.');
           return;
@@ -2786,6 +2865,86 @@ const AppContent: React.FC = () => {
           !isVisorMode &&
           setupMode === 'CLIENT' &&
           !localPairedTerminal;
+
+        const shouldRecoverLocalFromPersistedIdentity =
+          hasPersistedRecoveryIdentity &&
+          !isVisorMode &&
+          !terminalSetupPending &&
+          !localPairedTerminal;
+
+        if (shouldRecoverLocalFromPersistedIdentity) {
+          console.warn('[BOOT] BD local sin vinculación, pero existe identidad persistida. Iniciando rebuild local desde ERP...');
+          backgroundSyncManager.pauseForRecovery();
+          setErpRebuildRecovery({
+            status: 'CHECKING',
+            reason: 'LOCAL_DB_REBUILD',
+            pendingCount: 0,
+            message: 'Reconstruyendo instalación local desde la identidad segura del equipo. No se abrirá el wizard de instalación nueva.',
+          });
+
+          try {
+            const pendingCount = await countPendingLocalRecoveryItems();
+            if (pendingCount > 0) {
+              setErpRebuildRecovery({
+                status: 'WAITING_CONFIRMATION',
+                reason: 'LOCAL_DB_REBUILD',
+                pendingCount,
+                message: `Hay ${pendingCount} operación(es) locales pendientes. No se borrarán automáticamente sin confirmación de auditoría.`,
+              });
+              const shouldContinue = window.confirm(
+                `Se detectó una identidad de terminal existente, pero la base local necesita reconstruirse.\n\n` +
+                `Hay ${pendingCount} operación(es) locales pendientes de sincronizar.\n` +
+                `El POS no las borrará automáticamente. Continúe solo si ya fueron auditadas o el ERP será la autoridad de recuperación.\n\n` +
+                `¿Desea reconstruir la base local ahora?`
+              );
+              if (!shouldContinue) {
+                throw new Error('Reconstrucción local pausada: existen operaciones pendientes sin confirmación.');
+              }
+            }
+
+            setErpRebuildRecovery({
+              status: 'RUNNING',
+              reason: 'LOCAL_DB_REBUILD',
+              pendingCount,
+              message: 'Descargando configuración, productos, precios, stock, series, secuencias y estado operativo desde ERP...',
+            });
+
+            const { config: recoveryConfig, localTerminalId } = buildMinimalRecoveryConfig(persistedInstallIdentity, storedDeviceId);
+            localStorage.setItem('active_terminal_id', localTerminalId);
+            localStorage.setItem('CLIC_POS_TERMINAL_ID', localTerminalId);
+            localStorage.setItem(SETUP_WIZARD_COMPLETED_KEY, '1');
+            localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
+            localStorage.removeItem(SETUP_FLOW_STAGE_KEY);
+            localStorage.setItem(SETUP_FLOW_VERSION_KEY, SETUP_FLOW_VERSION);
+
+            await db.save('config', recoveryConfig);
+            await clearLocalSequenceStateForErpRebuild();
+            await syncManager.initialize(recoveryConfig, localTerminalId);
+            await syncManager.fullPull();
+            clearPendingErpFullBootstrapRequest();
+
+            setErpRebuildRecovery({
+              status: 'RUNNING',
+              reason: 'LOCAL_DB_REBUILD',
+              pendingCount,
+              message: 'Reconstrucción completada. Reiniciando POS con la configuración recuperada...',
+            });
+            window.setTimeout(() => window.location.reload(), 300);
+            return;
+          } catch (rebuildError) {
+            console.error('❌ Local DB rebuild from persisted identity failed:', rebuildError);
+            setErpRebuildRecovery({
+              status: 'ERROR',
+              reason: 'LOCAL_DB_REBUILD',
+              pendingCount: await countPendingLocalRecoveryItems().catch(() => 0),
+              message: 'No se pudo reconstruir la instalación local. La operación queda bloqueada para evitar duplicidad de documentos.',
+              error: rebuildError instanceof Error ? rebuildError.message : String(rebuildError),
+            });
+            setIsDataLoaded(true);
+            setIsSecurityLoaded(true);
+            return;
+          }
+        }
 
         const shouldResolveMasterFromCloud = !masterIp && (
           shouldPairAsClient || localPairedTerminal?.config?.isPrimaryNode === false
