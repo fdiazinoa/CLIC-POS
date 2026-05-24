@@ -226,6 +226,60 @@ const takeoverTerminalInErp = async (input: {
   );
 };
 
+const isTakeoverPermissionError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error || '');
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('permiso')
+    || normalized.includes('permission')
+    || normalized.includes('forbidden')
+    || normalized.includes('403')
+  ) && normalized.includes('takeover');
+};
+
+const registerTerminalTakeoverInErp = async (input: {
+  erpBaseUrl: string;
+  erpTerminalId: string;
+  terminalId: string;
+  terminalName?: string | null;
+  tenantId: string;
+  companyId?: string | null;
+  storeId?: string | null;
+  tenantSlug?: string | null;
+  posDeviceId: string;
+  bindingMode: BindingMode;
+}) => {
+  const payload = await fetchErpJson(input.erpBaseUrl, '/api/sync/terminals/register', {
+    method: 'POST',
+    headers: buildDeviceHeaders(input.posDeviceId),
+    body: {
+      device_id: input.posDeviceId,
+      tenant_id: input.tenantId,
+      company_ref: input.tenantSlug || null,
+      company_id: input.companyId || null,
+      store_id: input.storeId || null,
+      name: input.terminalName || input.terminalId || input.erpTerminalId,
+      metadata: {
+        source: 'CLIC_POS_SELF_SERVICE_RECOVERY',
+        terminal_id: input.terminalId,
+        erp_terminal_id: input.erpTerminalId,
+        terminal_name: input.terminalName || input.terminalId || input.erpTerminalId,
+        binding_mode: input.bindingMode,
+        takeover_fallback: true,
+      },
+    },
+  });
+
+  const updatedTerminalId = asString(payload?.terminal?.id);
+  if (updatedTerminalId && updatedTerminalId !== input.erpTerminalId) {
+    throw new Error(
+      `El ERP reasignó una terminal distinta (${updatedTerminalId}). Detenido para evitar vincular la caja equivocada.`
+    );
+  }
+
+  return payload;
+};
+
 export const fetchTerminalRecoveryStateFromErp = async (input: {
   erpBaseUrl: string;
   erpTerminalId: string;
@@ -791,7 +845,7 @@ export const bindTerminalFromErp = async (input: {
 
   let takeoverPayload: any = null;
   if (occupiedDeviceId && occupiedDeviceId !== input.posDeviceId && input.forceTransfer) {
-    takeoverPayload = await takeoverTerminalInErp({
+    const takeoverInput = {
       erpBaseUrl: input.erpBaseUrl,
       erpTerminalId: targetErpTerminalId,
       tenantId: resolvedContext.tenantId,
@@ -799,7 +853,23 @@ export const bindTerminalFromErp = async (input: {
       storeId: asString(targetTerminal.store_id) || resolvedContext.storeId || null,
       posDeviceId: input.posDeviceId,
       terminalName: targetTerminalName,
-    });
+    };
+
+    try {
+      takeoverPayload = await takeoverTerminalInErp(takeoverInput);
+    } catch (error) {
+      if (!isTakeoverPermissionError(error)) {
+        throw error;
+      }
+
+      console.warn('⚠️ Takeover administrativo rechazado por permisos; usando registro operativo POS.', error);
+      takeoverPayload = await registerTerminalTakeoverInErp({
+        ...takeoverInput,
+        terminalId: targetTerminalId,
+        tenantSlug: input.tenantSlug,
+        bindingMode: input.bindingMode,
+      });
+    }
   }
 
   const mergedMetadata = {
