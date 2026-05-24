@@ -503,6 +503,7 @@ class ApiSyncAdapter {
 
                 const data = await response.json();
                 if (data?.terminal_id || data?.terminal_uuid || data?.operational_identity || data?.sync_state) {
+                    this.assertAuthorizedDeviceFromAuthPayload(data, this.config!.terminalId);
                     persistErpSyncAuthIdentity(data, this.config!.terminalId);
                     if (erpSyncAuthRequiresFullBootstrap(data)) {
                         clearErpIncrementalSyncState();
@@ -574,6 +575,25 @@ class ApiSyncAdapter {
             newDeviceId: payload.canonical_device_id || payload.new_device_id || null,
             payload,
         });
+    }
+
+    private assertAuthorizedDeviceFromAuthPayload(payload: unknown, terminalId?: string | null): void {
+        const record = payload && typeof payload === 'object' && !Array.isArray(payload)
+            ? payload as Record<string, any>
+            : {};
+        const authorizedDeviceId = String(record.device_id || record.deviceId || record.terminal?.device_id || '').trim();
+        const currentDeviceId = String(this.getLocalDeviceId() || '').trim();
+        if (!authorizedDeviceId || !currentDeviceId || authorizedDeviceId === currentDeviceId) return;
+
+        dispatchDeviceRevoked({
+            reason: 'DEVICE_SUPERSEDED',
+            message: DEVICE_SUPERSEDED_MESSAGE,
+            terminalId: terminalId || record.terminal_id || null,
+            previousDeviceId: currentDeviceId,
+            newDeviceId: authorizedDeviceId,
+            payload,
+        });
+        throw new Error('DEVICE_SUPERSEDED');
     }
 
     private resolveConfigErpBaseUrl(value: unknown): string | null {
@@ -884,6 +904,7 @@ class ApiSyncAdapter {
             }
 
             const data = await response.json();
+            this.assertAuthorizedDeviceFromAuthPayload(data, target.terminalId);
             const identity = persistErpSyncAuthIdentity(data, target.terminalId);
             if (identity.terminalId && identity.terminalId !== target.terminalId) {
                 this.operationalTargetHint.terminalId = identity.terminalId;

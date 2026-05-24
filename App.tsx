@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { Layout } from 'lucide-react';
+import { Layout, RefreshCw } from 'lucide-react';
 import {
   User,
   RoleDefinition,
@@ -144,9 +144,11 @@ import {
   resolveMasterEndpointFromCloud
 } from './utils/cloudMasterRegistry';
 import {
+  clearPendingErpFullBootstrapRequest,
   clearStoredErpSyncBinding,
   ensureErpSyncLifecycle,
   ERP_FULL_BOOTSTRAP_REQUIRED_EVENT,
+  getPendingErpFullBootstrapRequest,
   getLifecycleActivationBlockMessage,
   getLifecycleBlockingMessageFromError,
   isLifecycleActivationBlocked,
@@ -201,6 +203,14 @@ type ReceivableRepairSummary = {
 type RecoverySequencePromptState = RuntimeTerminalRecoveryState & {
   terminalId: string;
   terminalName?: string | null;
+};
+
+type ErpRebuildRecoveryState = {
+  status: 'BLOCKED' | 'CHECKING' | 'RUNNING' | 'WAITING_CONFIRMATION' | 'ERROR';
+  reason: string | null;
+  message: string;
+  pendingCount: number;
+  error?: string | null;
 };
 
 const LICENSE_REFRESH_BASE_MS = 60_000;
@@ -780,6 +790,8 @@ const AppContent: React.FC = () => {
   const posApkUpdateCheckStartedRef = useRef(false);
   const [recoverySequencePrompt, setRecoverySequencePrompt] = useState<RecoverySequencePromptState | null>(null);
   const [recoverySequenceInput, setRecoverySequenceInput] = useState('');
+  const [erpRebuildRecovery, setErpRebuildRecovery] = useState<ErpRebuildRecoveryState | null>(null);
+  const erpRebuildRecoveryInFlightRef = useRef(false);
 
   // --- SECURITY BOOTSTRAP STATE ---
   const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
@@ -997,50 +1009,180 @@ const AppContent: React.FC = () => {
     };
   }, []);
 
+  const countPendingLocalRecoveryItems = useCallback(async (): Promise<number> => {
+    const pendingCollections = [
+      'transactions',
+      'inventoryLedger',
+      'cashMovements',
+      'zReports',
+      'wallet_transactions',
+      'loyalty_events',
+      'offline_reception_queue',
+      'offline_inventory_count_queue',
+      'offline_print_queue',
+    ];
+    let pendingCount = 0;
+
+    for (const collection of pendingCollections) {
+      try {
+        const rows = await db.get(collection as any);
+        if (!Array.isArray(rows)) continue;
+        pendingCount += rows.filter((row: any) => {
+          const status = String(row?.syncStatus || row?.status || '').trim().toUpperCase();
+          return status === 'PENDING' || status === 'ERROR' || status === 'SYNCING';
+        }).length;
+      } catch {
+        // Optional collections may not exist in every runtime.
+      }
+    }
+
+    if (typeof dbAdapter.executeSQL === 'function') {
+      try {
+        const result = await dbAdapter.executeSQL(
+          "SELECT COUNT(*) AS count FROM sync_queue WHERE status IN ('PENDING', 'ERROR')"
+        );
+        const firstResult = Array.isArray(result) ? result[0] : null;
+        if (Array.isArray(firstResult?.values) && firstResult.values[0]) {
+          pendingCount += Number(firstResult.values[0][0] || 0);
+        } else if (Array.isArray((result as any)?.values) && (result as any).values[0]) {
+          pendingCount += Number((result as any).values[0]?.count || (result as any).values[0]?.[0] || 0);
+        }
+      } catch {
+        // sync_queue is best-effort; the document collections above still protect local-first data.
+      }
+    }
+
+    return pendingCount;
+  }, []);
+
+  const clearLocalSequenceStateForErpRebuild = useCallback(async () => {
+    await Promise.all([
+      db.save('internalSequences', [] as any),
+      db.save('fiscalRanges', [] as any),
+      db.save('fiscalAllocations', [] as any),
+      db.save('localFiscalBuffer', [] as any),
+      db.save('globalSequenceCounter' as any, 0 as any),
+    ]);
+  }, []);
+
+  const refreshRuntimeStateAfterErpRebuild = useCallback(async () => {
+    const refreshedConfigRaw = await db.get('config') as unknown;
+    if (refreshedConfigRaw && !Array.isArray(refreshedConfigRaw) && (refreshedConfigRaw as BusinessConfig).terminals) {
+      setConfig(refreshedConfigRaw as BusinessConfig);
+    }
+
+    const refreshedProducts = await db.get('products') as Product[];
+    if (Array.isArray(refreshedProducts)) {
+      setProducts(refreshedProducts);
+    }
+
+    const refreshedUsers = await db.get('users') as User[];
+    if (Array.isArray(refreshedUsers)) {
+      setUsers(refreshedUsers);
+    }
+
+    const refreshedRoles = await db.get('roles') as RoleDefinition[];
+    if (Array.isArray(refreshedRoles)) {
+      setRoles(refreshedRoles);
+    }
+
+    const refreshedTransactions = await db.get('transactions') as Transaction[];
+    if (Array.isArray(refreshedTransactions)) {
+      setTransactions(refreshedTransactions);
+    }
+
+    const refreshedCashMovements = await db.get('cashMovements') as CashMovement[];
+    if (Array.isArray(refreshedCashMovements)) {
+      setCashMovements(refreshedCashMovements);
+    }
+
+    const refreshedZReports = await db.get('zReports') as ZReport[];
+    if (Array.isArray(refreshedZReports)) {
+      setZReports(refreshedZReports);
+    }
+  }, []);
+
   useEffect(() => {
     let fullBootstrapInFlight = false;
 
-    const handleErpFullBootstrapRequired = async () => {
-      if (fullBootstrapInFlight) return;
+    const handleErpFullBootstrapRequired = async (event?: Event) => {
+      if (fullBootstrapInFlight || erpRebuildRecoveryInFlightRef.current) return;
       fullBootstrapInFlight = true;
+      erpRebuildRecoveryInFlightRef.current = true;
+      const detail = (event as CustomEvent<{ reason?: string | null }> | undefined)?.detail || {};
+      const storedRequest = getPendingErpFullBootstrapRequest();
+      const reason = String(detail.reason || storedRequest.reason || 'LOCAL_REBUILD').trim() || 'LOCAL_REBUILD';
+      const isTakeoverReset = reason.toUpperCase() === 'TERMINAL_TAKEOVER';
+
+      backgroundSyncManager.pauseForRecovery();
+      setErpRebuildRecovery({
+        status: 'CHECKING',
+        reason,
+        pendingCount: 0,
+        message: isTakeoverReset
+          ? 'La terminal fue reasignada. Estamos reconstruyendo la información operativa desde el ERP.'
+          : 'El ERP solicitó reconstruir la base local de esta terminal. La operación queda pausada hasta completar el bootstrap.',
+      });
 
       try {
+        const pendingCount = await countPendingLocalRecoveryItems();
+        if (pendingCount > 0) {
+          setErpRebuildRecovery({
+            status: 'WAITING_CONFIRMATION',
+            reason,
+            pendingCount,
+            message: `Hay ${pendingCount} operación(es) locales pendientes de sincronizar. No se borrarán automáticamente. Debe confirmarse esta reconstrucción para fines de auditoría.`,
+          });
+          const shouldContinue = window.confirm(
+            `El ERP solicitó reconstruir la base local de esta terminal.\n\n` +
+            `Hay ${pendingCount} operación(es) locales pendientes de sincronizar.\n` +
+            `El POS no las borrará automáticamente. Continúe solo si ya fueron auditadas o si el ERP será la autoridad para esta recuperación.\n\n` +
+            `¿Desea continuar con el rebuild local ahora?`
+          );
+          if (!shouldContinue) {
+            throw new Error('Rebuild local pausado: existen operaciones pendientes sin confirmación.');
+          }
+        }
+
+        setErpRebuildRecovery({
+          status: 'RUNNING',
+          reason,
+          pendingCount,
+          message: 'Reconstruyendo configuración, maestros, stock, series, secuencias y estado operativo desde ERP...',
+        });
+
+        await clearLocalSequenceStateForErpRebuild();
         await syncManager.fullPull();
+        await refreshRuntimeStateAfterErpRebuild();
 
-        const refreshedConfigRaw = await db.get('config') as unknown;
-        if (refreshedConfigRaw && !Array.isArray(refreshedConfigRaw) && (refreshedConfigRaw as BusinessConfig).terminals) {
-          setConfig(refreshedConfigRaw as BusinessConfig);
-        }
-
-        const refreshedProducts = await db.get('products') as Product[];
-        if (Array.isArray(refreshedProducts)) {
-          setProducts(refreshedProducts);
-        }
-
-        const refreshedUsers = await db.get('users') as User[];
-        if (Array.isArray(refreshedUsers)) {
-          setUsers(refreshedUsers);
-        }
-
-        const refreshedRoles = await db.get('roles') as RoleDefinition[];
-        if (Array.isArray(refreshedRoles)) {
-          setRoles(refreshedRoles);
-        }
-
-        localStorage.removeItem('clic_erp_sync_full_bootstrap_required');
-        localStorage.removeItem('clic_erp_sync_full_bootstrap_reason');
+        clearPendingErpFullBootstrapRequest();
+        setErpRebuildRecovery(null);
+        backgroundSyncManager.resumeAfterRecovery();
       } catch (error) {
         console.warn('⚠️ Failed to apply ERP full bootstrap requested by auth:', error);
+        setErpRebuildRecovery({
+          status: 'ERROR',
+          reason,
+          pendingCount: await countPendingLocalRecoveryItems().catch(() => 0),
+          message: 'La reconstrucción local quedó pausada. La caja seguirá bloqueada para evitar secuencias o documentos duplicados.',
+          error: error instanceof Error ? error.message : String(error),
+        });
       } finally {
         fullBootstrapInFlight = false;
+        erpRebuildRecoveryInFlightRef.current = false;
       }
     };
 
     window.addEventListener(ERP_FULL_BOOTSTRAP_REQUIRED_EVENT, handleErpFullBootstrapRequired as EventListener);
+    if (getPendingErpFullBootstrapRequest().required) {
+      window.setTimeout(() => {
+        void handleErpFullBootstrapRequired();
+      }, 0);
+    }
     return () => {
       window.removeEventListener(ERP_FULL_BOOTSTRAP_REQUIRED_EVENT, handleErpFullBootstrapRequired as EventListener);
     };
-  }, []);
+  }, [clearLocalSequenceStateForErpRebuild, countPendingLocalRecoveryItems, refreshRuntimeStateAfterErpRebuild]);
 
   const dismissTerminalConfigRestartNotice = useCallback(() => {
     localStorage.removeItem(TERMINAL_CONFIG_RESTART_NOTICE_KEY);
@@ -5530,6 +5672,47 @@ const AppContent: React.FC = () => {
           >
             Reintentar Conexión
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (erpRebuildRecovery) {
+    const isRunning = erpRebuildRecovery.status === 'RUNNING' || erpRebuildRecovery.status === 'CHECKING';
+    return (
+      <div className="h-screen w-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-center text-white">
+        <div className="bg-white text-slate-900 p-10 rounded-3xl shadow-2xl border border-slate-200 max-w-xl z-50">
+          <div className="w-24 h-24 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-6">
+            <RefreshCw size={48} className={isRunning ? 'animate-spin' : ''} />
+          </div>
+          <h1 className="text-3xl font-black mb-4 tracking-tight">Reconstrucción Local</h1>
+          <p className="text-lg text-slate-600 font-medium mb-6 leading-relaxed">
+            {erpRebuildRecovery.message}
+          </p>
+          <div className="grid gap-3 text-left text-sm font-bold text-slate-600">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              Terminal estable: {localStorage.getItem('clic_erp_sync_terminal_id') || 'pendiente'}
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              Equipo autorizado: {deviceId || resolveLocalDeviceId() || 'pendiente'}
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              Pendientes locales detectados: {erpRebuildRecovery.pendingCount}
+            </div>
+          </div>
+          {erpRebuildRecovery.error && (
+            <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700">
+              {erpRebuildRecovery.error}
+            </div>
+          )}
+          {erpRebuildRecovery.status === 'ERROR' && (
+            <button
+              onClick={() => window.location.reload()}
+              className="mt-8 w-full py-4 bg-slate-900 hover:bg-black text-white rounded-xl font-bold transition-transform active:scale-95"
+            >
+              Reintentar reconstrucción
+            </button>
+          )}
         </div>
       </div>
     );

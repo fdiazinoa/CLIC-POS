@@ -613,8 +613,8 @@ export const markErpFullBootstrapRequired = (payload: unknown) => {
     const root = asObject<Record<string, unknown>>(payload);
     const syncState = asObject<Record<string, unknown>>(root.sync_state);
     const reason =
-        normalizeOptional(String(syncState.reset_reason || root.bootstrap_reason || 'TERMINAL_TAKEOVER'))
-        || 'TERMINAL_TAKEOVER';
+        normalizeOptional(String(syncState.reset_reason || root.bootstrap_reason || 'LOCAL_REBUILD'))
+        || 'LOCAL_REBUILD';
 
     const alreadyMarked =
         localStorage.getItem(ERP_FULL_BOOTSTRAP_REQUIRED_KEY) === 'true'
@@ -630,6 +630,16 @@ export const markErpFullBootstrapRequired = (payload: unknown) => {
             payload,
         },
     }));
+};
+
+export const getPendingErpFullBootstrapRequest = (): { required: boolean; reason: string | null } => ({
+    required: localStorage.getItem(ERP_FULL_BOOTSTRAP_REQUIRED_KEY) === 'true',
+    reason: normalizeOptional(localStorage.getItem(ERP_FULL_BOOTSTRAP_REASON_KEY)) || null,
+});
+
+export const clearPendingErpFullBootstrapRequest = () => {
+    localStorage.removeItem(ERP_FULL_BOOTSTRAP_REQUIRED_KEY);
+    localStorage.removeItem(ERP_FULL_BOOTSTRAP_REASON_KEY);
 };
 
 const clearBindingIfTenantChanged = (identity: TenantIdentity) => {

@@ -23,6 +23,7 @@ class BackgroundSyncManager {
     private focusHandler: (() => void) | null = null;
     private visibilityHandler: (() => void) | null = null;
     private saleActivityHandler: (() => void) | null = null;
+    private isPausedForRecovery = false;
     private nextRetryDelayMs: number | null = null;
     private state: SyncState = {
         pendingCount: 0,
@@ -101,6 +102,20 @@ class BackgroundSyncManager {
         if (this.interval) clearInterval(this.interval);
         this.interval = setInterval(() => this.sync(), this.WORKER_INTERVAL_MS);
         console.log(`⚙️ BackgroundSyncManager: Worker started (${this.WORKER_INTERVAL_MS / 1000}s interval)`);
+    }
+
+    pauseForRecovery() {
+        this.isPausedForRecovery = true;
+        this.clearRetryTimeout();
+        this.updateState({ isSyncing: false });
+    }
+
+    resumeAfterRecovery() {
+        this.isPausedForRecovery = false;
+        void this.updatePendingCount();
+        if (navigator.onLine) {
+            this.scheduleSync(0);
+        }
     }
 
     private clearRetryTimeout() {
@@ -211,7 +226,7 @@ class BackgroundSyncManager {
      * Main sync loop
      */
     async sync() {
-        if (this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
+        if (this.isPausedForRecovery || this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
 
         // We only sync if we are a SLAVE or if we are a MASTER that needs to push to a central server
         // (In this architecture, Master also pushes to its own server to keep db.json as source of truth)
@@ -467,6 +482,7 @@ class BackgroundSyncManager {
      * Trigger an immediate sync attempt (e.g. after creating a document)
      */
     async triggerSync() {
+        if (this.isPausedForRecovery) return;
         await this.updatePendingCount();
         if (navigator.onLine) {
             apiSyncAdapter.resetCircuit();
@@ -475,6 +491,7 @@ class BackgroundSyncManager {
     }
 
     async triggerSyncAndWait() {
+        if (this.isPausedForRecovery) return;
         await this.updatePendingCount();
         if (navigator.onLine) {
             apiSyncAdapter.resetCircuit();
