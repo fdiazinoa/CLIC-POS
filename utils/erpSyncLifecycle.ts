@@ -922,6 +922,36 @@ const persistPendingTerminalConfigSnapshot = (event: SyncOutboxEvent) => {
     }));
 };
 
+const countConfigPushMasters = (payload: Record<string, unknown>) => {
+    const terminalConfig = asObject<Record<string, unknown>>(payload.terminal_config);
+    const masters = asObject<Record<string, unknown>>(terminalConfig.masters);
+    const resolved = asObject<Record<string, unknown>>(terminalConfig.resolved);
+    const pricing = asObject<Record<string, unknown>>(resolved.pricing);
+    const inventory = asObject<Record<string, unknown>>(resolved.inventory);
+    const documents = asObject<Record<string, unknown>>(resolved.documents);
+    const count = (...values: unknown[]) => {
+        const value = values.find(Array.isArray);
+        return Array.isArray(value) ? value.length : 0;
+    };
+
+    return {
+        items: count(masters.items),
+        customers: count(masters.customers),
+        suppliers: count(masters.suppliers),
+        sellers: count(masters.sellers),
+        users: count(masters.users, masters.pos_users),
+        roles: count(masters.roles, masters.pos_roles),
+        payment_methods: count(masters.payment_methods, masters.paymentMethods),
+        document_series: count(masters.document_series, masters.documentSeries, masters.series, documents.document_series),
+        taxes: count(masters.taxes, resolved.taxes),
+        warehouses: count(masters.warehouses, inventory.warehouses),
+        tariffs: count(masters.tariffs, pricing.tariffs),
+        promotions: count(masters.promotions, resolved.promotions),
+        inventory: count(masters.inventory, masters.stock_balances, masters.product_stocks),
+        product_prices: count(masters.product_prices, masters.productPrices, masters.prices),
+    };
+};
+
 const buildCompatibleDeviceRoleConfig = (
     currentRoleConfig: DeviceRoleConfig | null | undefined,
     incomingRoleConfig: unknown
@@ -1499,20 +1529,60 @@ export const processErpSyncOutbox = async (
             try {
                 if (eventType === 'CONFIG_PUSH') {
                     const payload = asObject<Record<string, unknown>>(event.payload);
+                    const terminalConfig = asObject<Record<string, unknown>>(payload.terminal_config);
+                    const requestedScopes = extractTerminalConfigRequestedScopes(payload);
+                    const { syncManager } = await import('../services/sync/SyncManager');
+
+                    console.info('[ERP SYNC] CONFIG_PUSH recibido desde outbox.', {
+                        outboxId: event.id,
+                        eventType,
+                        terminalId: normalizeOptional(String(payload.terminal_id || payload.terminalId || '')) || binding.terminalId || params.terminalId,
+                        deviceId: normalizeOptional(String(payload.device_id || payload.deviceId || '')) || params.deviceId,
+                        selective: requestedScopes.selective,
+                        masterScopes: requestedScopes.masterScopes || null,
+                        blockScopes: requestedScopes.blockScopes || null,
+                        resolvedScopes: requestedScopes.resolvedScopes || null,
+                        counts: countConfigPushMasters(payload),
+                    });
+
                     const appliedLocally = await applyErpConfigPushToLocalTerminal({
                         deviceId: params.deviceId,
                         fallbackTerminalId: binding.terminalId || params.terminalId,
                         payload,
                     });
 
+                    if (Object.keys(terminalConfig).length > 0) {
+                        await syncManager.refreshTerminalResolvedConfig(terminalConfig, {
+                            forceRemoteFetch: false,
+                            forceFullCatalog: !requestedScopes.selective,
+                            masterScopes: requestedScopes.selective ? (requestedScopes.masterScopes || []) : undefined,
+                            blockScopes: requestedScopes.selective ? (requestedScopes.blockScopes || []) : undefined,
+                            resolvedScopes: requestedScopes.selective ? (requestedScopes.resolvedScopes || []) : undefined,
+                            dispatchEvent: true,
+                        });
+                    } else {
+                        await syncManager.refreshTerminalResolvedConfig(undefined, {
+                            forceRemoteFetch: true,
+                            forceFullCatalog: !requestedScopes.selective,
+                            masterScopes: requestedScopes.selective ? (requestedScopes.masterScopes || []) : undefined,
+                            blockScopes: requestedScopes.selective ? (requestedScopes.blockScopes || []) : undefined,
+                            resolvedScopes: requestedScopes.selective ? (requestedScopes.resolvedScopes || []) : undefined,
+                            dispatchEvent: true,
+                        });
+                    }
+
+                    await syncManager.syncAllCatalogs();
+
                     console.info(
                         appliedLocally
-                            ? '[ERP SYNC] CONFIG_PUSH aplicado localmente y se marca reinicio requerido.'
-                            : '[ERP SYNC] CONFIG_PUSH recibido sin cambios locales aplicables. Se marca reinicio requerido.'
+                            ? '[ERP SYNC] CONFIG_PUSH aplicado localmente.'
+                            : '[ERP SYNC] CONFIG_PUSH aplicado sin cambios de rol local.'
                     );
-                    persistPendingTerminalConfigSnapshot(event);
-                    persistTerminalConfigRestartNotice(event);
                     await ackErpOutboxEvent(event.id, 'APPLIED');
+                    console.info('[ERP SYNC] CONFIG_PUSH ack enviado.', {
+                        outboxId: event.id,
+                        status: 'APPLIED',
+                    });
                     applied += 1;
                     continue;
                 }
@@ -1522,6 +1592,11 @@ export const processErpSyncOutbox = async (
             } catch (error: any) {
                 console.warn(`[ERP SYNC] Error procesando ${eventType || 'UNKNOWN'}:`, error);
                 await ackErpOutboxEvent(event.id, 'FAILED', error?.message || 'Error procesando evento ERP outbox');
+                console.info('[ERP SYNC] CONFIG_PUSH ack enviado.', {
+                    outboxId: event.id,
+                    status: 'FAILED',
+                    error: error?.message || String(error || ''),
+                });
                 failed += 1;
             }
         }

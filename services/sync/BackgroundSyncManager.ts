@@ -4,6 +4,8 @@ import { apiSyncAdapter } from './ApiSyncAdapter';
 import { permissionService } from './PermissionService';
 import { InventoryLedgerEntry, CashMovement, ZReport, SyncStatus } from '../../types';
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from '../../utils/posSaleActivity';
+import { getStoredErpSyncBinding, processErpSyncOutbox } from '../../utils/erpSyncLifecycle';
+import { resolveLocalDeviceId } from '../../utils/deviceRevocation';
 
 export interface SyncState {
     pendingCount: number;
@@ -204,6 +206,26 @@ class BackgroundSyncManager {
         return itemTerminalId === currentTerminalId;
     }
 
+    private async processRemoteOutbox(): Promise<void> {
+        if (!this.isErpOperationalPushConfigured()) return;
+
+        const binding = getStoredErpSyncBinding();
+        const deviceId = resolveLocalDeviceId();
+        const terminalId = binding.terminalId || permissionService.getTerminalId();
+        if (!deviceId || !terminalId) return;
+
+        const result = await processErpSyncOutbox({
+            deviceId,
+            terminalId,
+            localTerminalId: binding.localTerminalId || permissionService.getTerminalId(),
+            terminalName: binding.terminalName || permissionService.getTerminalId(),
+        });
+
+        if (result && result.processed > 0) {
+            console.log('📬 BackgroundSyncManager: ERP outbox processed during natural sync.', result);
+        }
+    }
+
     /**
      * Resolve the best timestamp field across heterogeneous operational documents.
      * Z-Reports use closedAt/openedAt, while others usually use createdAt/timestamp/date.
@@ -241,6 +263,11 @@ class BackgroundSyncManager {
         let pausedForSaleActivity = false;
 
         try {
+            // 0) Inbound first: apply ERP/Cloud CONFIG_PUSH events even if Realtime was missed.
+            await this.processRemoteOutbox().catch((error: any) => {
+                collectionErrors.push(`erp_outbox: ${error?.message || 'unknown error'}`);
+            });
+
             // 1) Transactions first to prioritize sales visibility at central terminal.
             await this.processCollection<any>('transactions', async (item) => {
                 await apiSyncAdapter.pushTransaction(item);

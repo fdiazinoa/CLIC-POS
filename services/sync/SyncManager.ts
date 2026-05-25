@@ -16,7 +16,7 @@ import { realtimeNotificationService } from './RealtimeNotificationService';
 import { productImageCacheService } from './ProductImageCacheService';
 import { masterDataImageCacheService, type ImageBackedCollection } from './MasterDataImageCacheService';
 import { DEFAULT_ROLES } from '../../constants';
-import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig, PurchaseOrder, StockTransfer, ProductStock, ProductPrice, TariffPrice, Warehouse, User, RoleDefinition, Permission } from '../../types';
+import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig, TerminalConfigSnapshot, PurchaseOrder, StockTransfer, ProductStock, ProductPrice, TariffPrice, Warehouse, User, RoleDefinition, Permission } from '../../types';
 import {
     applyTerminalConfigSnapshot,
     extractTerminalConfigSnapshot,
@@ -89,6 +89,26 @@ interface TerminalCursorMap {
     inventory?: string | null;
     product_prices?: string | null;
 }
+
+const recordFrom = (value: unknown): Record<string, any> => (
+    value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, any>
+        : {}
+);
+
+const arrayFrom = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
+
+const hasArrayProperty = (record: Record<string, any>, ...keys: string[]) =>
+    keys.some((key) => Object.prototype.hasOwnProperty.call(record, key) && Array.isArray(record[key]));
+
+const firstArrayProperty = (record: Record<string, any>, ...keys: string[]) => {
+    for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(record, key) && Array.isArray(record[key])) {
+            return record[key] as unknown[];
+        }
+    }
+    return undefined;
+};
 
 interface TerminalManifestPayload {
     cursor_map?: TerminalCursorMap;
@@ -2156,6 +2176,146 @@ class SyncManager {
         };
     }
 
+    private hydrateConfigPushSnapshotMasters(snapshotValue: unknown): TerminalConfigSnapshot | null {
+        const snapshot = extractTerminalConfigSnapshot(snapshotValue);
+        if (!snapshot) return null;
+
+        const masters = recordFrom(snapshot.masters);
+        if (Object.keys(masters).length === 0) return snapshot;
+
+        const resolved = { ...recordFrom(snapshot.resolved) };
+        const pricing = { ...recordFrom(resolved.pricing) };
+        const inventory = { ...recordFrom(resolved.inventory) };
+        const documents = { ...recordFrom(resolved.documents) };
+        const catalog = { ...recordFrom(resolved.catalog) };
+        const config = { ...recordFrom(snapshot.config) };
+
+        if (hasArrayProperty(masters, 'tariffs', 'tarifas')) {
+            pricing.tariffs = firstArrayProperty(masters, 'tariffs', 'tarifas');
+        }
+        if (hasArrayProperty(masters, 'warehouses', 'almacenes')) {
+            inventory.warehouses = firstArrayProperty(masters, 'warehouses', 'almacenes');
+        }
+        if (hasArrayProperty(masters, 'taxes', 'impuestos')) {
+            resolved.taxes = firstArrayProperty(masters, 'taxes', 'impuestos');
+        }
+        if (hasArrayProperty(masters, 'document_series', 'documentSeries', 'series')) {
+            documents.document_series = firstArrayProperty(masters, 'document_series', 'documentSeries', 'series');
+        }
+        if (hasArrayProperty(masters, 'fiscal_ranges', 'fiscalRanges')) {
+            documents.fiscal_ranges = firstArrayProperty(masters, 'fiscal_ranges', 'fiscalRanges');
+        }
+        if (hasArrayProperty(masters, 'fiscal_allocations', 'fiscalAllocations')) {
+            documents.fiscal_allocations = firstArrayProperty(masters, 'fiscal_allocations', 'fiscalAllocations');
+        }
+        if (hasArrayProperty(masters, 'promotions', 'promociones')) {
+            resolved.promotions = firstArrayProperty(masters, 'promotions', 'promociones');
+        }
+        if (hasArrayProperty(masters, 'product_groups', 'productGroups', 'groups')) {
+            catalog.product_groups = firstArrayProperty(masters, 'product_groups', 'productGroups', 'groups');
+        }
+        if (hasArrayProperty(masters, 'seasons', 'seasonality')) {
+            catalog.seasons = firstArrayProperty(masters, 'seasons', 'seasonality');
+        }
+        if (hasArrayProperty(masters, 'payment_methods', 'paymentMethods')) {
+            config.paymentMethods = firstArrayProperty(masters, 'payment_methods', 'paymentMethods');
+        }
+        if (hasArrayProperty(masters, 'currencies', 'monedas')) {
+            config.currencies = firstArrayProperty(masters, 'currencies', 'monedas');
+        }
+
+        resolved.pricing = pricing;
+        resolved.inventory = inventory;
+        resolved.documents = documents;
+        resolved.catalog = catalog;
+
+        return {
+            ...snapshot,
+            resolved: resolved as TerminalConfigSnapshot['resolved'],
+            config,
+        };
+    }
+
+    private applySnapshotConfigMasters(config: BusinessConfig, snapshotValue: unknown): BusinessConfig {
+        const snapshot = extractTerminalConfigSnapshot(snapshotValue);
+        const masters = recordFrom(snapshot?.masters);
+        if (Object.keys(masters).length === 0) return config;
+
+        const nextConfig: BusinessConfig = { ...config };
+        const paymentMethods = firstArrayProperty(masters, 'payment_methods', 'paymentMethods');
+        if (paymentMethods) {
+            nextConfig.paymentMethods = paymentMethods as BusinessConfig['paymentMethods'];
+        }
+
+        const currencies = firstArrayProperty(masters, 'currencies', 'monedas');
+        if (currencies) {
+            nextConfig.currencies = currencies as BusinessConfig['currencies'];
+        }
+
+        return nextConfig;
+    }
+
+    private countSnapshotMasters(snapshotValue: unknown): Record<string, number> {
+        const snapshot = extractTerminalConfigSnapshot(snapshotValue);
+        const masters = recordFrom(snapshot?.masters);
+        const resolved = recordFrom(snapshot?.resolved);
+        const pricing = recordFrom(resolved.pricing);
+        const inventory = recordFrom(resolved.inventory);
+        const documents = recordFrom(resolved.documents);
+
+        return {
+            items: arrayFrom(masters.items).length,
+            customers: arrayFrom(masters.customers).length,
+            suppliers: arrayFrom(masters.suppliers).length,
+            sellers: arrayFrom(masters.sellers).length,
+            users: arrayFrom(masters.users).length + arrayFrom(masters.pos_users).length,
+            roles: arrayFrom(masters.roles).length + arrayFrom(masters.pos_roles).length,
+            payment_methods: arrayFrom(masters.payment_methods || masters.paymentMethods).length,
+            document_series: arrayFrom(masters.document_series || masters.documentSeries || masters.series || documents.document_series).length,
+            taxes: arrayFrom(masters.taxes || resolved.taxes).length,
+            warehouses: arrayFrom(masters.warehouses || inventory.warehouses).length,
+            tariffs: arrayFrom(masters.tariffs || pricing.tariffs).length,
+            promotions: arrayFrom(masters.promotions || resolved.promotions).length,
+            inventory: arrayFrom(masters.inventory || masters.stock_balances || masters.product_stocks).length,
+            product_prices: arrayFrom(masters.product_prices || masters.productPrices || masters.prices).length,
+        };
+    }
+
+    private async persistSnapshotRuntimeConfigForMasterApply(
+        baseConfig: BusinessConfig,
+        snapshotValue: unknown,
+        context: ReturnType<SyncManager['getActiveTerminalContext']>,
+        snapshotTerminalId: string,
+        cachedSnapshot: TerminalConfigSnapshot | null
+    ): Promise<void> {
+        const snapshot = this.hydrateConfigPushSnapshotMasters(snapshotValue);
+        if (!snapshot) return;
+
+        const applied = applyTerminalConfigSnapshot(baseConfig, {
+            terminalId: snapshotTerminalId,
+            posDeviceId: context.posDeviceId || undefined,
+            bindingMode: context.bindingMode,
+            incomingSnapshot: snapshot,
+            cachedSnapshot,
+        });
+        const nextConfig = this.applySnapshotConfigMasters(applied.config, snapshot);
+        await db.save('config', nextConfig);
+
+        const nextRuntimeWarehouses = this.resolveRuntimeWarehousesFromConfig(nextConfig, applied.terminalId);
+        if (nextRuntimeWarehouses.length > 0) {
+            await db.save('warehouses', nextRuntimeWarehouses);
+            window.dispatchEvent(new CustomEvent('warehousesUpdated'));
+        }
+
+        const operationalDocumentState = extractTerminalOperationalDocumentState(nextConfig, applied.terminalId);
+        await db.rehydrateOperationalDocumentState(
+            operationalDocumentState.documentSeries,
+            operationalDocumentState.fiscalRanges,
+            operationalDocumentState.fiscalAllocations,
+            operationalDocumentState.terminalId,
+        );
+    }
+
     async refreshTerminalResolvedConfig(
         snapshotOverride?: unknown,
         options?: {
@@ -2202,7 +2362,7 @@ class SyncManager {
         let catalogDelta: Record<string, unknown> | null = null;
         let nextCatalogCursor: string | null = null;
 
-        let snapshot = extractTerminalConfigSnapshot(snapshotOverride);
+        let snapshot = this.hydrateConfigPushSnapshotMasters(snapshotOverride);
         const pendingSnapshot = snapshot
             ? null
             : this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId);
@@ -2319,7 +2479,7 @@ class SyncManager {
 
                     const responseContentType = response.headers.get('content-type') || null;
                     payload = await response.json();
-                    snapshot = extractTerminalConfigSnapshot(payload?.terminal_config ?? payload);
+                    snapshot = this.hydrateConfigPushSnapshotMasters(payload?.terminal_config ?? payload);
                     catalogDelta = payload?.catalog_delta && typeof payload.catalog_delta === 'object'
                         ? payload.catalog_delta
                         : null;
@@ -2393,12 +2553,14 @@ class SyncManager {
             posCatalogDebugLog('refreshTerminalResolvedConfig: using pending snapshot fallback', {
                 traceRows,
             });
-            snapshot = pendingSnapshot;
+            snapshot = this.hydrateConfigPushSnapshotMasters(pendingSnapshot);
         }
 
         if (!snapshot) {
             return null;
         }
+
+        await this.persistSnapshotRuntimeConfigForMasterApply(baseConfig, snapshot, context, snapshotTerminalId, cachedSnapshot);
 
         try {
             const applyStartedAt = posCatalogDebugNow();
@@ -2438,7 +2600,10 @@ class SyncManager {
         });
 
         const localProducts = ((await db.get('products')) as Product[]) || [];
-        const nextConfig = this.reconcileCatalogProductIds(applied.config, localProducts);
+        const nextConfig = this.applySnapshotConfigMasters(
+            this.reconcileCatalogProductIds(applied.config, localProducts),
+            snapshot,
+        );
         const nextRuntimeWarehouses = this.resolveRuntimeWarehousesFromConfig(nextConfig, applied.terminalId);
         const operationalDocumentState = extractTerminalOperationalDocumentState(nextConfig, applied.terminalId);
         const changed =
@@ -2535,6 +2700,24 @@ class SyncManager {
 
         if (JSON.stringify(nextTerminalCursorMap) !== JSON.stringify(currentTerminalCursorMap)) {
             this.persistTerminalCursorMap(snapshotTerminalId, nextTerminalCursorMap);
+        }
+
+        const inlineProductPrices = this.collectSnapshotMasterRows(snapshot, ['product_prices', 'productPrices', 'prices']);
+        if (inlineProductPrices !== null) {
+            const appliedPrices = await this.applyTerminalProductPricesBlock(inlineProductPrices as TerminalProductPricePayload[]);
+            posCatalogDebugLog('refreshTerminalResolvedConfig: inline product prices applied', {
+                payloadPriceCount: inlineProductPrices.length,
+                productPricesAppliedCount: appliedPrices,
+            });
+        }
+
+        const inlineInventory = this.collectSnapshotMasterRows(snapshot, ['inventory', 'stock_balances', 'product_stocks', 'stockBalances']);
+        if (inlineInventory !== null) {
+            const appliedInventory = await this.applyTerminalInventoryBlock(inlineInventory as TerminalInventoryBalancePayload[]);
+            posCatalogDebugLog('refreshTerminalResolvedConfig: inline inventory applied', {
+                payloadBalanceCount: inlineInventory.length,
+                inventoryAppliedCount: appliedInventory,
+            });
         }
 
         try {
@@ -2885,16 +3068,7 @@ class SyncManager {
 
     private snapshotMasterRows(
         snapshot: unknown,
-        key:
-            | 'customers'
-            | 'suppliers'
-            | 'users'
-            | 'pos_users'
-            | 'roles'
-            | 'pos_roles'
-            | 'purchaseOrders'
-            | 'purchase_orders'
-            | 'transfers'
+        key: string
     ): unknown[] | null {
         const masters = snapshot && typeof snapshot === 'object'
             ? (snapshot as Record<string, any>).masters
@@ -2915,7 +3089,7 @@ class SyncManager {
 
     private collectSnapshotMasterRows(
         snapshot: unknown,
-        keys: Array<'users' | 'pos_users' | 'roles' | 'pos_roles'>
+        keys: string[]
     ): unknown[] | null {
         let found = false;
         const rows: unknown[] = [];

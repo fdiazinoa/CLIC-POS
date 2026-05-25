@@ -1,7 +1,7 @@
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { syncManager } from './SyncManager';
 import { ensureSupabaseSessionRestored, supabase } from '../../utils/supabase';
-import { getStoredErpSyncBinding } from '../../utils/erpSyncLifecycle';
+import { getStoredErpSyncBinding, processErpSyncOutbox } from '../../utils/erpSyncLifecycle';
 import { dispatchDeviceRevoked, resolveLocalDeviceId } from '../../utils/deviceRevocation';
 
 const FORCE_SYNC_NOTICE_KEY = 'clic_pos_force_sync_notice';
@@ -30,6 +30,10 @@ const persistForceSyncNotice = (payload: unknown) => {
     localStorage.setItem(FORCE_SYNC_NOTICE_KEY, JSON.stringify(notice));
 };
 
+const text = (value: unknown): string => (
+    typeof value === 'string' ? value.trim() : String(value || '').trim()
+);
+
 class RealtimeNotificationService {
     private channel: RealtimeChannel | null = null;
     private storeId: string | null = null;
@@ -54,20 +58,74 @@ class RealtimeNotificationService {
             config: { presence: { key: terminalId } },
         });
 
-        channel.on('broadcast', { event: 'force_sync' }, async ({ payload }) => {
-            console.log('📡 RealtimeNotificationService: Received force_sync broadcast.', payload);
+        const processConfigPushBroadcast = async (eventName: 'force_sync' | 'CONFIG_PUSH', payload: unknown) => {
+            console.log(`📡 RealtimeNotificationService: Received ${eventName} broadcast.`, payload);
             persistForceSyncNotice(payload);
 
             if (syncManager.getIsInternalSyncing()) {
-                console.log('📡 RealtimeNotificationService: Sync already running, skipping force_sync.');
+                console.log(`📡 RealtimeNotificationService: Sync already running, skipping ${eventName}.`);
+                return;
+            }
+
+            const eventPayload = asObject(payload);
+            const bindingNow = getStoredErpSyncBinding();
+            const localDeviceId = resolveLocalDeviceId();
+            const payloadTerminalId = text(eventPayload.terminal_id || eventPayload.terminalId);
+            const payloadDeviceId = text(eventPayload.device_id || eventPayload.deviceId);
+            const boundTerminalId = text(bindingNow.terminalId);
+            const boundLocalTerminalId = text(bindingNow.localTerminalId);
+            const appliesToThisTerminal =
+                !payloadTerminalId ||
+                payloadTerminalId === boundTerminalId ||
+                payloadTerminalId === boundLocalTerminalId ||
+                payloadTerminalId === terminalId;
+            const appliesToThisDevice =
+                !payloadDeviceId ||
+                Boolean(localDeviceId && payloadDeviceId === localDeviceId);
+
+            if (!appliesToThisTerminal && !appliesToThisDevice) {
+                console.log('📡 RealtimeNotificationService: Broadcast ignored for different terminal/device.', {
+                    eventName,
+                    payloadTerminalId,
+                    payloadDeviceId,
+                    boundTerminalId,
+                    boundLocalTerminalId,
+                    localDeviceId,
+                });
                 return;
             }
 
             try {
-                await syncManager.fullPull();
+                const outboxResult = await processErpSyncOutbox({
+                    deviceId: localDeviceId || payloadDeviceId,
+                    terminalId: payloadTerminalId || boundTerminalId || terminalId,
+                    localTerminalId: boundLocalTerminalId || terminalId,
+                    terminalName: bindingNow.terminalName || terminalId,
+                });
+
+                console.log('📡 RealtimeNotificationService: outbox pull completed.', {
+                    eventName,
+                    outboxId: eventPayload.outbox_id || eventPayload.outboxId || null,
+                    eventId: eventPayload.event_id || eventPayload.eventId || null,
+                    processed: outboxResult?.processed || 0,
+                    applied: outboxResult?.applied || 0,
+                    failed: outboxResult?.failed || 0,
+                });
+
+                if (!outboxResult || outboxResult.processed === 0) {
+                    await syncManager.fullPull();
+                }
             } catch (error) {
-                console.error('❌ RealtimeNotificationService: Error during force_sync handling:', error);
+                console.error(`❌ RealtimeNotificationService: Error during ${eventName} handling:`, error);
             }
+        };
+
+        channel.on('broadcast', { event: 'force_sync' }, async ({ payload }) => {
+            await processConfigPushBroadcast('force_sync', payload);
+        });
+
+        channel.on('broadcast', { event: 'CONFIG_PUSH' }, async ({ payload }) => {
+            await processConfigPushBroadcast('CONFIG_PUSH', payload);
         });
 
         channel.on('broadcast', { event: 'device_revoked' }, ({ payload }) => {
