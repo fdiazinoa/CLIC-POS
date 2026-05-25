@@ -4685,7 +4685,7 @@ class SyncManager {
                     // Standard collection sync
                     this.syncVersions.set(module.id as SyncableCollection, 0); // Reset local version to force full pull
                     localStorage.setItem(`sync_version_${module.id}`, '0');
-                    count = await this.pullCatalog(module.id as SyncableCollection);
+                    count = await this.pullCatalog(module.id as SyncableCollection, true, { ignoreThrottle: true });
                 }
 
                 // Update UI: Success

@@ -77,6 +77,7 @@ interface BoundTerminalPayload {
   erpBaseUrl?: string;
   terminalName?: string;
   tenantId: string;
+  cloudTenantId?: string;
   companyId?: string;
   storeId?: string;
   forceTakeover?: boolean;
@@ -990,6 +991,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           erpBaseUrl: erpBaseUrl || undefined,
           terminalName: data.terminal_name || terminal.name || data.terminal_id || terminal.id,
           tenantId: initialConfigData.tenant_id || data.tenant_id || tenantId,
+          cloudTenantId: tenantId,
           companyId: data.company_id || undefined,
           storeId: data.store_id || undefined,
           forceTakeover: forceTransfer || Boolean(data.transferred),

@@ -7,6 +7,7 @@ import type { RuntimeTerminalRecoveryState } from '../services/setup/erpTerminal
 
 interface PairingResult {
   tenantId?: string;
+  cloudTenantId?: string;
   erpTerminalId?: string;
   erpBaseUrl?: string;
   terminalName?: string;
@@ -371,6 +372,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                 tenantId,
                 erpTerminalId,
                 terminalName,
+                cloudTenantId,
                 companyId,
                 storeId,
                 forceTakeover,
@@ -387,6 +389,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                 }
                 await onPair(terminalId, {
                   tenantId,
+                  cloudTenantId,
                   erpTerminalId,
                   erpBaseUrl,
                   terminalName,

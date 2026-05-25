@@ -81,6 +81,34 @@ const asObject = (value: unknown): Record<string, any> => {
 
 const asString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 
+const extractInitialConfigItems = (payload: unknown): Product[] => {
+  const root = asObject(payload);
+  const terminalConfig = asObject(root.terminal_config);
+  const candidates = [
+    root.items,
+    asObject(root.data).items,
+    asObject(root.masters).items,
+    asObject(root.catalog).items,
+    asObject(terminalConfig.masters).items,
+    asObject(terminalConfig.catalog).items,
+    asObject(root.catalog_delta).items,
+    asObject(root.catalog_delta).items_upsert,
+    asObject(root.catalog_delta).products,
+    asObject(root.catalog_delta).products_upsert,
+  ];
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate) && candidate.length > 0) {
+      return candidate.filter((item) => {
+        const row = asObject(item);
+        return asString(row._op).toUpperCase() !== 'DELETE' && row.deletedAt !== true && row.isActive !== false;
+      }) as Product[];
+    }
+  }
+
+  return [];
+};
+
 const cloneDeep = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
 const withTimeout = async <T>(promise: Promise<T>, label: string): Promise<T> => {
@@ -1030,6 +1058,33 @@ export const fetchInitialConfigFromErp = async (input: {
     tenant_id: input.tenantId,
     terminal_id: input.erpTerminalId,
     device_id: input.posDeviceId,
+    pos_device_id: input.posDeviceId,
+    force_full_catalog: '1',
+    include_items: '1',
+    master_scopes: [
+      'items',
+      'customers',
+      'suppliers',
+      'users',
+      'pos_users',
+      'roles',
+      'pos_roles',
+      'purchase_orders',
+      'transfers',
+    ].join(','),
+    block_scopes: ['inventory', 'product_prices'].join(','),
+    resolved_scopes: [
+      'identity',
+      'terminal',
+      'device_role',
+      'role',
+      'pricing',
+      'inventory',
+      'documents',
+      'catalog',
+      'promotions',
+      'loyalty',
+    ].join(','),
   });
   const payload = await fetchErpJson(
     input.erpBaseUrl,
@@ -1046,10 +1101,12 @@ export const fetchInitialConfigFromErp = async (input: {
     tenant_id: asString(terminalConfig.tenant_id) || input.tenantId,
     terminal_id: asString(terminalConfig.terminal_id) || input.erpTerminalId,
     erp_terminal_id: input.erpTerminalId,
+    config: payload?.config && typeof payload.config === 'object' && !Array.isArray(payload.config)
+      ? payload.config as BusinessConfig
+      : undefined,
     terminal_config: terminalConfig,
-    items: Array.isArray(payload?.items)
-      ? payload.items
-      : (Array.isArray(terminalConfig?.masters?.items) ? terminalConfig.masters.items : []),
+    snapshot_meta: asObject(payload?.snapshot_meta),
+    items: extractInitialConfigItems(payload),
   };
 };
 

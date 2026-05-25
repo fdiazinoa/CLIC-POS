@@ -228,6 +228,8 @@ type MasterBootstrapBlockState = {
   terminalId?: string | null;
   terminalName?: string | null;
   tenantId?: string | null;
+  cloudTenantId?: string | null;
+  erpTenantId?: string | null;
   erpTerminalId?: string | null;
   message: string;
   detail?: string | null;
@@ -4012,6 +4014,8 @@ const AppContent: React.FC = () => {
     terminalId?: string | null;
     terminalName?: string | null;
     tenantId?: string | null;
+    cloudTenantId?: string | null;
+    erpTenantId?: string | null;
     erpTerminalId?: string | null;
     productCount: number;
     detail?: string | null;
@@ -4022,6 +4026,8 @@ const AppContent: React.FC = () => {
       terminalId: input.terminalId || null,
       terminalName: input.terminalName || null,
       tenantId: input.tenantId || null,
+      cloudTenantId: input.cloudTenantId || null,
+      erpTenantId: input.erpTenantId || input.tenantId || null,
       erpTerminalId: input.erpTerminalId || null,
       message: 'Catálogo maestro no disponible',
       detail:
@@ -4044,13 +4050,38 @@ const AppContent: React.FC = () => {
 
       const freshData = await db.init();
       const nextConfig = resolvePersistedBusinessConfig(await db.get('config') as unknown) || activeConfig;
-      const nextProducts = Array.isArray(freshData.products) ? freshData.products : [];
+      let nextProducts = Array.isArray(freshData.products) ? freshData.products : [];
+      if (nextProducts.length === 0 && masterBootstrapBlock.tenantId && masterBootstrapBlock.erpTerminalId) {
+        const erpBaseUrl = resolveSetupErpBaseUrl();
+        if (erpBaseUrl) {
+          const directInitialConfig = await fetchInitialConfigFromErp({
+            erpBaseUrl,
+            tenantId: masterBootstrapBlock.tenantId,
+            erpTerminalId: masterBootstrapBlock.erpTerminalId,
+            posDeviceId: deviceId,
+          }).catch((error) => {
+            console.warn('⚠️ Direct ERP catalog retry fallback failed:', error);
+            return null;
+          });
+
+          const directItems = Array.isArray(directInitialConfig?.items) ? directInitialConfig.items : [];
+          if (directItems.length > 0) {
+            nextProducts = await productImageCacheService.normalizeIncomingProducts(directItems);
+            await db.save('products', nextProducts);
+            void productImageCacheService.syncSnapshotItems(nextProducts).catch((error) => {
+              console.warn('⚠️ Direct ERP catalog retry image sync failed:', error);
+            });
+          }
+        }
+      }
 
       if (nextProducts.length === 0) {
         const nextBlock = buildMasterBootstrapBlock({
           terminalId,
           terminalName: masterBootstrapBlock.terminalName,
           tenantId: masterBootstrapBlock.tenantId,
+          cloudTenantId: masterBootstrapBlock.cloudTenantId,
+          erpTenantId: masterBootstrapBlock.erpTenantId,
           erpTerminalId: masterBootstrapBlock.erpTerminalId,
           productCount: 0,
           detail: 'El reintento terminó, pero el ERP/Cloud sigue devolviendo cero artículos para esta terminal.',
@@ -4102,6 +4133,7 @@ const AppContent: React.FC = () => {
       terminalId: binding.localTerminalId || binding.terminalId,
       terminalName: binding.terminalName,
       tenantId: binding.tenantId,
+      erpTenantId: binding.tenantId,
       erpTerminalId: binding.terminalId || binding.terminalUuid,
       productCount: 0,
       detail:
@@ -4113,6 +4145,7 @@ const AppContent: React.FC = () => {
     terminalId: string,
     pairingContext?: string | {
       tenantId?: string;
+      cloudTenantId?: string;
       erpTerminalId?: string;
       erpBaseUrl?: string;
       terminalName?: string;
@@ -4204,9 +4237,16 @@ const AppContent: React.FC = () => {
       localStorage.setItem(TERMINAL_SETUP_MODE_KEY, nextSetupMode);
       const resolvedTenantId =
         setupResult?.tenantId || localStorage.getItem('active_tenant_id') || 'default-tenant';
+      const resolvedCloudTenantId =
+        setupResult?.cloudTenantId
+        || localStorage.getItem('clic_cloud_admin_tenant_id')
+        || null;
       localStorage.setItem('active_tenant_id', resolvedTenantId);
       if (resolvedTenantId && resolvedTenantId !== 'default-tenant') {
         localStorage.setItem('clic_tenant_id', resolvedTenantId);
+      }
+      if (resolvedCloudTenantId) {
+        localStorage.setItem('clic_cloud_admin_tenant_id', resolvedCloudTenantId);
       }
       persistStoredErpSyncBinding({
         tenantId: setupResult?.tenantId || resolvedTenantId || null,
@@ -4412,10 +4452,37 @@ const AppContent: React.FC = () => {
           console.warn('⚠️ Snapshot product image sync failed after ERP pairing fallback:', error);
         });
       }
+      if (freshProducts.length === 0 && resolvedErpBaseUrl && resolvedTenantId && resolvedErpTerminalId) {
+        setupResult.progress?.({
+          stepId: 'cache',
+          message: 'Solicitando catálogo completo directamente al ERP...',
+        });
+        const directInitialConfig = await fetchInitialConfigFromErp({
+          erpBaseUrl: resolvedErpBaseUrl,
+          tenantId: resolvedTenantId,
+          erpTerminalId: resolvedErpTerminalId,
+          posDeviceId: deviceId,
+        }).catch((error) => {
+          console.warn('⚠️ Direct ERP catalog bootstrap fallback failed after pairing:', error);
+          return null;
+        });
+
+        const directItems = Array.isArray(directInitialConfig?.items) ? directInitialConfig.items : [];
+        if (directItems.length > 0) {
+          const normalizedDirectItems = await productImageCacheService.normalizeIncomingProducts(directItems);
+          await db.save('products', normalizedDirectItems);
+          freshProducts = normalizedDirectItems;
+          void productImageCacheService.syncSnapshotItems(normalizedDirectItems).catch((error) => {
+            console.warn('⚠️ Direct ERP catalog image sync failed after pairing fallback:', error);
+          });
+        }
+      }
       const bootstrapBlock = buildMasterBootstrapBlock({
         terminalId,
         terminalName: resolvedTerminalName,
         tenantId: setupResult?.tenantId || resolvedTenantId,
+        cloudTenantId: resolvedCloudTenantId,
+        erpTenantId: setupResult?.tenantId || resolvedTenantId,
         erpTerminalId: resolvedErpTerminalId,
         productCount: freshProducts.length,
         detail: shouldTakeover
@@ -4579,6 +4646,7 @@ const AppContent: React.FC = () => {
 
     await handlePairTerminal(bound.terminal_id, {
       tenantId: bound.tenant_id,
+      cloudTenantId: input.tenantId,
       erpTerminalId: bound.erp_terminal_id,
       erpBaseUrl: input.erpBaseUrl,
       terminalName: bound.terminal_name || sameDeviceTerminal.name,
@@ -8324,8 +8392,12 @@ const AppContent: React.FC = () => {
                     {masterBootstrapBlock.terminalName || masterBootstrapBlock.terminalId || 'No identificada'}
                   </div>
                   <div>
-                    <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Tenant</span>
-                    {masterBootstrapBlock.tenantId || 'No identificado'}
+                    <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Tenant Cloud</span>
+                    {masterBootstrapBlock.cloudTenantId || 'No identificado'}
+                  </div>
+                  <div>
+                    <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Tenant ERP</span>
+                    {masterBootstrapBlock.erpTenantId || masterBootstrapBlock.tenantId || 'No identificado'}
                   </div>
                   <div className="sm:col-span-2">
                     <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Terminal ERP</span>
