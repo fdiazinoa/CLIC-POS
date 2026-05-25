@@ -35,7 +35,7 @@ export interface ServiceType {
 
 // --- SYNC CONFIGURATION TYPES ---
 export type SyncMode = 'MASTER' | 'SLAVE';
-export type SyncStatus = 'PENDING' | 'SYNCING' | 'COMPLETED' | 'ERROR';
+export type SyncStatus = 'PENDING' | 'SYNCING' | 'COMPLETED' | 'ERROR' | 'BLOCKED_FUNCTIONAL';
 export type CloudSyncStatus = 'PENDING' | 'SYNCED' | 'ERROR';
 
 export interface SyncConfig {

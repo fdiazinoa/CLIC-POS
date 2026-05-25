@@ -731,7 +731,9 @@ class ApiSyncAdapter {
             }
 
             if (!response.ok) {
-                throw new Error(`Push transaction failed: ${response.statusText}`);
+                const detail = await response.text().catch(() => '');
+                const message = `Push transaction failed: ${response.status} ${response.statusText}${detail ? ` ${detail}` : ''}`;
+                throw Object.assign(new Error(message), { status: response.status, detail });
             }
             console.log(`📤 ApiSyncAdapter: Pushed transaction ${transaction.id}`);
         } catch (error) {
