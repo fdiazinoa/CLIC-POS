@@ -3505,9 +3505,9 @@ const AppContent: React.FC = () => {
         isPrimary: !isSlave,
       });
 
-      const shouldRestoreRemoteData = !!finalResolvedMasterIp && (isSlave || shouldTakeover);
+      const shouldRestoreRemoteData = !!finalResolvedMasterIp && isSlave;
 
-      // If we're taking over a previous server or pairing as slave, hydrate from the remote box first.
+      // Only slave terminals restore from a LAN master. ERP/master takeovers use the ERP snapshot instead.
       if (shouldRestoreRemoteData) {
         try {
           setupResult.progress?.({
