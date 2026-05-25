@@ -799,19 +799,6 @@ class ApiSyncAdapter {
     }
 
     private resolveOperationalTarget(): { baseUrl: string; terminalId: string; useLocalTarget: boolean } | null {
-        const syncMode = localStorage.getItem('clic_sync_mode');
-        if (syncMode === 'POS_LOCAL') return null;
-        if (syncMode === 'POS_SLAVE') {
-            const masterUrl = localStorage.getItem('masterUrl');
-            const masterTerminalId = localStorage.getItem('terminalId');
-            if (!masterUrl || !masterTerminalId) return null;
-            return {
-                baseUrl: this.buildSyncApiBase(masterUrl),
-                terminalId: masterTerminalId,
-                useLocalTarget: true
-            };
-        }
-
         const localMasterTarget: { baseUrl: string; terminalId: string; useLocalTarget: boolean } | null = this.config?.masterUrl && this.config?.terminalId
             ? {
                 baseUrl: this.buildSyncApiBase(this.config.masterUrl),
