@@ -3583,7 +3583,29 @@ const AppContent: React.FC = () => {
           stepId: 'sync',
           message: 'Sincronizando maestros: productos, tarifas, clientes, usuarios y documentos...',
         });
-        await syncManager.fullPull();
+        try {
+          await Promise.race([
+            syncManager.fullPull(),
+            new Promise<never>((_, reject) => {
+              window.setTimeout(() => {
+                reject(new Error('Tiempo agotado sincronizando maestros durante la activación.'));
+              }, 15000);
+            }),
+          ]);
+        } catch (pullError) {
+          console.warn('⚠️ Initial master sync failed after terminal pairing; continuing with local snapshot/config.', pullError);
+          if (Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
+            setupResult.progress?.({
+              stepId: 'sync',
+              message: 'Guardando productos recibidos en el snapshot inicial...',
+            });
+            const normalizedSnapshotItems = await productImageCacheService.normalizeIncomingProducts(setupResult.snapshotItems);
+            await db.save('products', normalizedSnapshotItems);
+            void productImageCacheService.syncSnapshotItems(normalizedSnapshotItems).catch((error) => {
+              console.warn('⚠️ Snapshot product image sync failed after pairing fallback:', error);
+            });
+          }
+        }
       } else {
         if (Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
           setupResult.progress?.({
