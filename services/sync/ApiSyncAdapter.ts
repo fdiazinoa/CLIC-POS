@@ -9,6 +9,7 @@ import {
 } from './erpOutboundPayloads';
 import { permissionService } from './PermissionService';
 import { getSyncDeviceToken } from './deviceToken';
+import { resolveSyncTarget, ResolvedSyncTarget } from './SyncProfile';
 
 /**
  * API Sync Adapter
@@ -279,7 +280,7 @@ class ApiSyncAdapter {
         return list.length > 0 && list.every(issue => this.isIdempotentAppliedResponse(issue, JSON.stringify(issue), true));
     }
 
-    private attachTransactionSyncAudit(transaction: any, response: any, mode: 'APPLIED' | 'SKIPPED_ALREADY_APPLIED') {
+    private attachTransactionSyncAudit(transaction: any, response: any, mode: 'APPLIED' | 'SKIPPED_ALREADY_APPLIED' | 'STAGED') {
         if (!transaction || typeof transaction !== 'object') return;
         const appliedAt = new Date().toISOString();
         transaction.syncResponse = response;
@@ -677,7 +678,7 @@ class ApiSyncAdapter {
     }
 
     private buildOperationalPostBody(
-        target: { terminalId: string; useLocalTarget: boolean },
+        target: { terminalId: string; useLocalTarget: boolean; kind?: string },
         body: Record<string, unknown>
     ): Record<string, unknown> {
         if (target.useLocalTarget) return body;
@@ -696,6 +697,7 @@ class ApiSyncAdapter {
             ...body,
             terminalId: target.terminalId,
             terminal_id: target.terminalId,
+            ...(target.kind ? { sync_channel: target.kind } : {}),
             ...(deviceId ? { device_id: deviceId } : {})
         };
 
@@ -717,7 +719,25 @@ class ApiSyncAdapter {
         return normalizedBody;
     }
 
-    private resolveOperationalTarget(): { baseUrl: string; terminalId: string; useLocalTarget: boolean } | null {
+    private resolveOperationalTarget(): ({ baseUrl: string; terminalId: string; useLocalTarget: boolean; kind: ResolvedSyncTarget['kind'] }) | null {
+        const routedTarget = resolveSyncTarget();
+        console.log(
+            `[SYNC_ROUTER] kind=${routedTarget.kind} dataMaster=${routedTarget.dataMaster} customerErpAccess=${routedTarget.customerErpAccess ? 'yes' : 'no'} canPullMasters=${routedTarget.canPullMasters ? 'yes' : 'no'} reason=${routedTarget.reason || 'OK'}`
+        );
+
+        if (routedTarget.kind === 'NONE' || !routedTarget.canPushOperations) {
+            return null;
+        }
+
+        if (routedTarget.baseUrl && routedTarget.terminalId) {
+            return {
+                baseUrl: routedTarget.baseUrl,
+                terminalId: routedTarget.terminalId,
+                useLocalTarget: routedTarget.kind === 'POS_MASTER',
+                kind: routedTarget.kind,
+            };
+        }
+
         const localMasterTarget: { baseUrl: string; terminalId: string; useLocalTarget: boolean } | null = this.config?.masterUrl && this.config?.terminalId
             ? {
                 baseUrl: this.buildSyncApiBase(this.config.masterUrl),
@@ -726,28 +746,11 @@ class ApiSyncAdapter {
             }
             : null;
 
-        const boundErpTerminalId =
-            this.operationalTargetHint.terminalId ||
-            localStorage.getItem('clic_erp_sync_terminal_id');
-        const erpBaseUrl =
-            this.operationalTargetHint.baseUrl ||
-            localStorage.getItem('CLIC_ERP_SYNC_URL') ||
-            localStorage.getItem('CLIC_ERP_BASE_URL') ||
-            localStorage.getItem('erp_base_url');
-
-        if (boundErpTerminalId && erpBaseUrl) {
-            return {
-                baseUrl: this.buildSyncApiBase(erpBaseUrl),
-                terminalId: boundErpTerminalId,
-                useLocalTarget: false
-            };
-        }
-
         if (localMasterTarget && permissionService.isSlaveTerminal()) {
-            return localMasterTarget;
+            return { ...localMasterTarget, kind: 'POS_MASTER' };
         }
 
-        return localMasterTarget;
+        return localMasterTarget ? { ...localMasterTarget, kind: 'POS_MASTER' } : null;
     }
 
     private async authenticateOperationalTarget(force = false, channel: CircuitBreakerChannel = 'background'): Promise<{
@@ -755,6 +758,7 @@ class ApiSyncAdapter {
         terminalId: string;
         token: string;
         useLocalTarget: boolean;
+        kind: ResolvedSyncTarget['kind'];
     }> {
         const target = this.resolveOperationalTarget();
         if (!target) {
@@ -1431,7 +1435,7 @@ class ApiSyncAdapter {
         normalizedTransaction: any,
         txId: string
     ): Promise<{
-        target: { baseUrl: string; terminalId: string; token: string; useLocalTarget: boolean };
+        target: { baseUrl: string; terminalId: string; token: string; useLocalTarget: boolean; kind: ResolvedSyncTarget['kind'] };
         response: Response;
         text: string;
     }> {
@@ -1552,21 +1556,35 @@ class ApiSyncAdapter {
                 const { target, response, text } = await this.postErpSalesTransactionWithSmartAuth(normalizedTransaction, txId);
                 const syncBody = this.safeParseSyncJson(text);
                 const responseAudit = syncBody || { raw: text };
+                const isCloudStaging = target.kind === 'POS_CLOUD_STAGING';
 
                 if (!response.ok) {
                     if (this.isIdempotentAppliedResponse(syncBody, text, false)) {
                         this.attachTransactionSyncAudit(transaction, responseAudit, 'SKIPPED_ALREADY_APPLIED');
                         console.warn(
                             `[SYNC_TX_PUSH] ERP direct idempotent OK tx=${txId} status=${response.status} body=${text.slice(0, 400)}`
-                        );
+	                    );
+	                    return;
+	                }
+                    if (isCloudStaging && response.status >= 200 && response.status < 300) {
+                        this.attachTransactionSyncAudit(transaction, responseAudit, 'STAGED');
+                        console.warn(`[SYNC_TX_PUSH] Cloud staging accepted tx=${txId} with non-standard response body=${text.slice(0, 400)}`);
                         return;
                     }
-                    throw new Error(
-                        `ERP transaction sync failed: ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 400)}` : ''}`
-                    );
-                }
+	                    throw new Error(
+	                        `ERP transaction sync failed: ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 400)}` : ''}`
+	                    );
+	                }
 
-                if (syncBody && typeof syncBody.applyFailedCount === 'number' && syncBody.applyFailedCount > 0) {
+                if (isCloudStaging) {
+                    this.attachTransactionSyncAudit(transaction, responseAudit, 'STAGED');
+                    console.log(
+                        `[SYNC_TX_PUSH] Cloud staging OK tx=${txId} host=${target.baseUrl} terminal=${target.terminalId} body=${text.slice(0, 400)}`
+                    );
+                    return;
+                }
+	
+	                if (syncBody && typeof syncBody.applyFailedCount === 'number' && syncBody.applyFailedCount > 0) {
                     if (this.allApplyIssuesAreIdempotent(syncBody.applyIssues || syncBody.results || syncBody)) {
                         this.attachTransactionSyncAudit(transaction, syncBody, 'SKIPPED_ALREADY_APPLIED');
                         console.warn(

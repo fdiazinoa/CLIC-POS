@@ -4,6 +4,7 @@ import { apiSyncAdapter } from './ApiSyncAdapter';
 import { permissionService } from './PermissionService';
 import { InventoryLedgerEntry, CashMovement, ZReport, SyncStatus } from '../../types';
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from '../../utils/posSaleActivity';
+import { syncPolicy } from './SyncProfile';
 
 export interface SyncState {
     pendingCount: number;
@@ -145,17 +146,29 @@ class BackgroundSyncManager {
         );
     }
 
+    private isFunctionalSyncError(error: unknown): boolean {
+        const message = error instanceof Error
+            ? error.message
+            : typeof error === 'string'
+                ? error
+                : JSON.stringify(error || '');
+        const normalized = message.toLowerCase();
+        return [
+            'erp_context_missing',
+            'catalog_missing',
+            'item_mapping_missing',
+            'terminal_disabled',
+            'erp_disabled',
+            'slave_direct_erp_sync_forbidden',
+            'no se pudo resolver el artículo pos',
+            'no se pudo resolver el articulo pos',
+            '409'
+        ].some((needle) => normalized.includes(needle));
+    }
+
     private isErpOperationalPushConfigured(): boolean {
-        try {
-            const erpBaseUrl =
-                localStorage.getItem('CLIC_ERP_SYNC_URL') ||
-                localStorage.getItem('CLIC_ERP_BASE_URL') ||
-                localStorage.getItem('erp_base_url');
-            const erpTerminalId = localStorage.getItem('clic_erp_sync_terminal_id');
-            return Boolean(erpBaseUrl && erpTerminalId);
-        } catch {
-            return false;
-        }
+        const target = syncPolicy.resolve();
+        return target.canPushOperations && target.kind !== 'NONE';
     }
 
     /**
@@ -339,7 +352,20 @@ class BackgroundSyncManager {
             }
 
             const status = item.syncStatus;
-            if (status === 'PENDING' || status === 'ERROR' || status === 'SYNCING') return true;
+            if (status === 'PENDING') return true;
+            if (status === 'SYNCING') return true;
+            if (status === 'RETRY_WAIT') return true;
+            if (status === 'ERROR') {
+                const errorText = String((item as any).syncError || '');
+                return !this.isFunctionalSyncError(errorText);
+            }
+            if (
+                status === 'SYNCED_CLOUD' ||
+                status === 'SYNCED_ACTIVE' ||
+                status === 'SYNCED_MASTER' ||
+                status === 'BLOCKED_FUNCTIONAL' ||
+                status === 'FAILED_FINAL'
+            ) return false;
             // Legacy safeguard: older transactions may not have syncStatus set.
             if (collectionName === 'transactions' && (status === undefined || status === null || (item as any).syncStatus === '')) {
                 return true;
@@ -385,9 +411,18 @@ class BackgroundSyncManager {
                 // Attempt push
                 await pushFn(item);
 
+                const targetKind = syncPolicy.targetKind();
                 // Mark as completed
-                item.syncStatus = 'COMPLETED';
+                item.syncStatus = targetKind === 'POS_CLOUD_STAGING'
+                    ? 'SYNCED_CLOUD'
+                    : targetKind === 'ERP_ACTIVE'
+                        ? 'SYNCED_ACTIVE'
+                        : targetKind === 'POS_MASTER'
+                            ? 'SYNCED_MASTER'
+                            : 'COMPLETED';
                 item.syncError = undefined;
+                (item as any).syncBlockedReason = undefined;
+                (item as any).syncBlockedAt = undefined;
                 if (item._forceSyncReplay) {
                     item._forceSyncReplay = false;
                 }
@@ -405,7 +440,7 @@ class BackgroundSyncManager {
                         `⏳ BackgroundSyncManager: Deferred recoverable transaction sync ${item.id}:`,
                         error?.message || error
                     );
-                    item.syncStatus = 'PENDING';
+                    item.syncStatus = 'RETRY_WAIT';
                     item.syncError = undefined;
                     item._forceSyncReplay = true;
                     (item as any).syncRetryAfter = new Date(Date.now() + this.RECOVERABLE_TRANSACTION_RETRY_DELAY_MS).toISOString();
@@ -416,9 +451,24 @@ class BackgroundSyncManager {
                     break;
                 }
 
+                if (this.isFunctionalSyncError(error)) {
+                    console.error(`🚧 BackgroundSyncManager: Functional sync block ${collectionName} item ${item.id}:`, error);
+                    item.syncStatus = 'BLOCKED_FUNCTIONAL';
+                    item.syncError = error?.message || String(error || 'Functional sync error');
+                    (item as any).syncBlockedReason = item.syncError;
+                    (item as any).syncBlockedAt = new Date().toISOString();
+                    if (item._forceSyncReplay) {
+                        item._forceSyncReplay = false;
+                    }
+                    delete (item as any).syncRetryAfter;
+                    await db.saveDocument(collectionName as any, item as any);
+                    continue;
+                }
+
                 console.error(`❌ BackgroundSyncManager: Failed to sync ${collectionName} item ${item.id}:`, error);
-                item.syncStatus = 'ERROR';
+                item.syncStatus = 'RETRY_WAIT';
                 item.syncError = error.message;
+                (item as any).syncRetryAfter = new Date(Date.now() + this.RECOVERABLE_TRANSACTION_RETRY_DELAY_MS).toISOString();
                 await db.saveDocument(collectionName as any, item as any);
 
                 // Stop processing this collection to maintain FIFO order on next retry
@@ -437,8 +487,9 @@ class BackgroundSyncManager {
                 count += data.filter((item: any) =>
                     this.shouldSyncItem(col, item) &&
                     (item.syncStatus === 'PENDING' ||
-                        item.syncStatus === 'ERROR' ||
-                        item.syncStatus === 'SYNCING')
+                        item.syncStatus === 'RETRY_WAIT' ||
+                        item.syncStatus === 'SYNCING' ||
+                        (item.syncStatus === 'ERROR' && !this.isFunctionalSyncError(item.syncError)))
                 ).length;
             }
         }

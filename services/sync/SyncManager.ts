@@ -44,6 +44,7 @@ import {
 import { canonicalizeTariffEntries, resolveTariffId } from '../../utils/masterIdentity';
 import { ensureSyncDeviceToken } from './deviceToken';
 import { normalizeRestaurantProductConfig } from '../../utils/restaurantProductConfig';
+import { syncPolicy } from './SyncProfile';
 
 export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'productPrices' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities' | 'crmOpportunities' | 'erp_sales_documents';
 
@@ -4026,6 +4027,27 @@ class SyncManager {
         }
     ): Promise<number> {
         if (this.isDisabled) return 0;
+        const masterDataCollections = new Set<SyncableCollection>([
+            'products',
+            'customers',
+            'suppliers',
+            'users',
+            'roles',
+            'internalSequences',
+            'fiscalRanges',
+            'productStocks',
+            'productPrices',
+            'paymentMethods',
+            'purchaseOrders',
+            'supplierProductPrices'
+        ]);
+        const target = syncPolicy.resolve();
+        if (masterDataCollections.has(collection) && !target.canPullMasters) {
+            console.warn(
+                `[SYNC_ROUTER] pullCatalog skipped collection=${collection} channel=${target.kind} dataMaster=${target.dataMaster}. POS local remains source of truth.`
+            );
+            return 0;
+        }
 
         // Throttling...
         // Throttling...
@@ -4183,6 +4205,15 @@ class SyncManager {
                 const safeItems = collection === 'transactions'
                     ? await this.mergeTransactionsFullSnapshot(cleanItems)
                     : cleanItems;
+
+                if (collection === 'products' && safeItems.length === 0) {
+                    const localProducts = await db.get('products');
+                    const localCount = Array.isArray(localProducts) ? localProducts.length : 0;
+                    if (localCount > 0) {
+                        console.warn('REMOTE_CATALOG_EMPTY_GUARD: ERP returned zero products; keeping local catalog intact.');
+                        return 0;
+                    }
+                }
                 await db.save(collection, safeItems);
 
                 if (collection === 'products') {
@@ -4557,6 +4588,17 @@ class SyncManager {
      */
     async forcePullAll(): Promise<void> {
         console.log('🔄 Forcing full pull of all catalogs...');
+        const target = syncPolicy.resolve();
+        if (!target.canPullMasters) {
+            console.warn(
+                `[SYNC_ROUTER] forcePullAll skipped channel=${target.kind} dataMaster=${target.dataMaster}. This terminal must not download ERP masters.`
+            );
+            window.dispatchEvent(new CustomEvent('syncStart', { detail: { modules: [] } }));
+            window.dispatchEvent(new CustomEvent('syncProgress', {
+                detail: { id: 'sync-profile', status: 'SUCCESS', message: 'Canal POS: maestros locales protegidos', count: 0 }
+            }));
+            return;
+        }
 
         // Define modules to sync
         const modules = [
