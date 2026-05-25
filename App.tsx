@@ -236,6 +236,17 @@ type MasterBootstrapBlockState = {
   retrying?: boolean;
 };
 
+type TerminalPairingFailureState = {
+  title: string;
+  message: string;
+  detail?: string | null;
+  terminalId?: string | null;
+  terminalName?: string | null;
+  cloudTenantId?: string | null;
+  erpTenantId?: string | null;
+  erpTerminalId?: string | null;
+};
+
 type ActivationErpRecoveryResult = 'RECOVERED' | 'TERMINALS_AVAILABLE' | 'NO_TERMINALS';
 
 const LICENSE_REFRESH_BASE_MS = 60_000;
@@ -908,6 +919,7 @@ const AppContent: React.FC = () => {
   } | null>(null);
   const [erpRebuildRecovery, setErpRebuildRecovery] = useState<ErpRebuildRecoveryState | null>(null);
   const [masterBootstrapBlock, setMasterBootstrapBlock] = useState<MasterBootstrapBlockState | null>(() => readMasterBootstrapBlock());
+  const [terminalPairingFailure, setTerminalPairingFailure] = useState<TerminalPairingFailureState | null>(null);
   const erpRebuildRecoveryInFlightRef = useRef(false);
 
   // --- SECURITY BOOTSTRAP STATE ---
@@ -4165,6 +4177,7 @@ const AppContent: React.FC = () => {
     options?: { forceTakeover?: boolean }
   ) => {
     setRestoringHistory(true);
+    setTerminalPairingFailure(null);
     const previousConfig = config;
     const previousUsers = users;
     const previousActiveTerminalId = localStorage.getItem('active_terminal_id');
@@ -4545,7 +4558,7 @@ const AppContent: React.FC = () => {
 
       setCurrentView('LOGIN');
     } catch (error) {
-      console.error('❌ Failed to take terminal control:', error);
+      console.error('❌ Failed to pair/take terminal control:', error);
       clearStoredErpSyncBinding();
       localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
       if (previousActiveTerminalId) {
@@ -4567,7 +4580,28 @@ const AppContent: React.FC = () => {
       await db.save('config', previousConfig);
       setUsers(previousUsers);
       await db.save('users', previousUsers);
-      alert('No se pudo tomar control de la terminal. Revisa conexión y vuelve a intentar.');
+
+      const setupResult = typeof pairingContext === 'object' && pairingContext !== null ? pairingContext : undefined;
+      const pairingErrorMessage = error instanceof Error ? error.message : String(error || 'Error desconocido');
+      const pairingWasTakeover = Boolean(options?.forceTakeover);
+      setTerminalPairingFailure({
+        title: pairingWasTakeover ? 'No se pudo tomar control de la terminal' : 'No se pudo vincular la terminal',
+        message: pairingWasTakeover
+          ? 'La reasignación no pudo completarse. Revisa conexión y vuelve a intentar.'
+          : 'La terminal no pudo quedar lista en este equipo. Revisa el detalle y vuelve a intentar.',
+        detail: pairingErrorMessage,
+        terminalId,
+        terminalName: setupResult?.terminalName || terminalId,
+        cloudTenantId:
+          setupResult?.cloudTenantId
+          || localStorage.getItem('clic_cloud_admin_tenant_id')
+          || null,
+        erpTenantId:
+          setupResult?.tenantId
+          || localStorage.getItem('active_tenant_id')
+          || null,
+        erpTerminalId: setupResult?.erpTerminalId || terminalId,
+      });
     } finally {
       setRestoringHistory(false);
     }
@@ -8369,6 +8403,57 @@ const AppContent: React.FC = () => {
   return (
     <ErrorBoundary componentName="App Root">
       <>
+        {terminalPairingFailure && (
+          <div className="fixed inset-0 z-[10020] flex items-center justify-center bg-slate-950/75 p-6 backdrop-blur-sm">
+            <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-red-100 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.34)]">
+              <div className="p-7">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-red-50 text-red-600 shadow-inner">
+                    <AlertCircle size={34} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-black uppercase tracking-[0.22em] text-red-600">Vinculación detenida</p>
+                    <h2 className="mt-2 text-2xl font-black text-slate-950">{terminalPairingFailure.title}</h2>
+                    <p className="mt-3 text-base font-bold leading-6 text-slate-600">
+                      {terminalPairingFailure.message}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-6 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-black leading-5 text-red-700">
+                  {terminalPairingFailure.detail || 'No se recibió detalle técnico del error.'}
+                </div>
+
+                <div className="mt-6 grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-bold text-slate-700 sm:grid-cols-2">
+                  <div>
+                    <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Terminal POS</span>
+                    {terminalPairingFailure.terminalName || terminalPairingFailure.terminalId || 'No identificada'}
+                  </div>
+                  <div>
+                    <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Tenant Cloud</span>
+                    {terminalPairingFailure.cloudTenantId || 'No identificado'}
+                  </div>
+                  <div>
+                    <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Tenant ERP</span>
+                    {terminalPairingFailure.erpTenantId || 'No identificado'}
+                  </div>
+                  <div>
+                    <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Terminal ERP</span>
+                    {terminalPairingFailure.erpTerminalId || terminalPairingFailure.terminalId || 'No identificada'}
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50 px-6 py-5 sm:flex-row">
+                <button
+                  onClick={() => setTerminalPairingFailure(null)}
+                  className="flex flex-1 items-center justify-center rounded-2xl bg-slate-950 py-4 text-base font-black text-white shadow-xl shadow-slate-200 active:scale-[0.98]"
+                >
+                  Entendido
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {masterBootstrapBlock && (
           <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/75 p-6 backdrop-blur-sm">
             <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-red-100 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.34)]">
