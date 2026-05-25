@@ -46,7 +46,7 @@ import { ensureSyncDeviceToken } from './deviceToken';
 import { normalizeRestaurantProductConfig } from '../../utils/restaurantProductConfig';
 import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked } from '../../utils/deviceRevocation';
 
-export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'productPrices' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities' | 'crmOpportunities' | 'erp_sales_documents';
+export type SyncableCollection = 'config' | 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'productPrices' | 'warehouses' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities' | 'crmOpportunities' | 'erp_sales_documents';
 
 interface SyncStatus {
     collection: string;
@@ -79,6 +79,7 @@ interface TerminalCursorMap {
     items?: string | null;
     customers?: string | null;
     suppliers?: string | null;
+    sellers?: string | null;
     users?: string | null;
     pos_users?: string | null;
     roles?: string | null;
@@ -1016,7 +1017,7 @@ class SyncManager {
             if (['product_price', 'product_prices', 'price', 'prices', 'tariff', 'tariffs', 'tarifa', 'tarifas'].includes(token)) {
                 return 'product_prices';
             }
-            return ['terminal', 'items', 'customers', 'suppliers', 'sellers', 'purchase_orders', 'transfers'].includes(token)
+            return ['terminal', 'items', 'customers', 'suppliers', 'sellers', 'users', 'pos_users', 'roles', 'pos_roles', 'purchase_orders', 'transfers'].includes(token)
                 ? token as TerminalManifestScope
                 : null;
         };
@@ -1042,6 +1043,11 @@ class SyncManager {
                 items: readCursor('items'),
                 customers: readCursor('customers'),
                 suppliers: readCursor('suppliers'),
+                sellers: readCursor('sellers', 'vendedores', 'salespeople', 'salespersons'),
+                users: readCursor('users'),
+                pos_users: readCursor('pos_users', 'posUsers'),
+                roles: readCursor('roles'),
+                pos_roles: readCursor('pos_roles', 'posRoles'),
                 purchase_orders: readCursor('purchase_orders', 'purchaseOrders'),
                 transfers: readCursor('transfers'),
                 inventory: readCursor('inventory', 'stock', 'stocks', 'stock_balances', 'inventory_stock'),
@@ -1052,6 +1058,11 @@ class SyncManager {
                 items: readBoolean('items'),
                 customers: readBoolean('customers'),
                 suppliers: readBoolean('suppliers'),
+                sellers: readBoolean('sellers', 'vendedores', 'salespeople', 'salespersons'),
+                users: readBoolean('users'),
+                pos_users: readBoolean('pos_users', 'posUsers'),
+                roles: readBoolean('roles'),
+                pos_roles: readBoolean('pos_roles', 'posRoles'),
                 purchase_orders: readBoolean('purchase_orders', 'purchaseOrders'),
                 transfers: readBoolean('transfers'),
                 inventory: readBoolean('inventory', 'stock', 'stocks', 'stock_balances', 'inventory_stock'),
@@ -1066,6 +1077,11 @@ class SyncManager {
                 items: readCount('items'),
                 customers: readCount('customers'),
                 suppliers: readCount('suppliers'),
+                sellers: readCount('sellers', 'vendedores', 'salespeople', 'salespersons'),
+                users: readCount('users'),
+                pos_users: readCount('pos_users', 'posUsers'),
+                roles: readCount('roles'),
+                pos_roles: readCount('pos_roles', 'posRoles'),
                 purchase_orders: readCount('purchase_orders', 'purchaseOrders'),
                 transfers: readCount('transfers'),
                 inventory: readCount('inventory', 'stock', 'stocks', 'stock_balances', 'inventory_stock'),
@@ -4003,7 +4019,7 @@ class SyncManager {
 
         try {
             const data = await db.get(collection);
-            const items = Array.isArray(data) ? data : [];
+            const items = Array.isArray(data) ? data : (data && typeof data === 'object' ? [data] : []);
 
             // Push to server API
             // const timestamp = new Date().toISOString();
@@ -4399,6 +4415,7 @@ class SyncManager {
             'internalSequences',
             'fiscalRanges',
             'paymentMethods',
+            'productPrices',
             'productStocks',
             ...(isMaster || permissionService.shouldShowGlobalSales() ? ['inventoryLedger' as SyncableCollection] : []),
             ...(permissionService.shouldShowGlobalSales() ? ['transactions' as SyncableCollection] : []),
@@ -4564,6 +4581,7 @@ class SyncManager {
             'roles',
             'internalSequences',
             'fiscalRanges',
+            'productPrices',
             'productStocks',
             'transfers',
             'receptions',
@@ -4616,11 +4634,35 @@ class SyncManager {
             throw new Error('Solo la terminal Master puede forzar la subida de datos.');
         }
 
-        const collections: SyncableCollection[] = ['products', 'customers', 'suppliers', 'users', 'roles', 'internalSequences'];
+        const collections: SyncableCollection[] = [
+            'config',
+            'warehouses',
+            'products',
+            'customers',
+            'suppliers',
+            'users',
+            'roles',
+            'paymentMethods',
+            'internalSequences',
+            'fiscalRanges',
+            'productStocks',
+            'productPrices',
+        ];
         console.log('🚀 Force pushing all collections...');
 
+        const errors: Array<{ collection: SyncableCollection; error: unknown }> = [];
+
         for (const collection of collections) {
-            await this.pushCatalog(collection);
+            try {
+                await this.pushCatalog(collection);
+            } catch (error) {
+                errors.push({ collection, error });
+                console.warn(`⚠️ Force push continued after ${collection} failed:`, error);
+            }
+        }
+
+        if (errors.length > 0) {
+            throw new Error(`No se pudieron subir ${errors.length} colección(es): ${errors.map((entry) => entry.collection).join(', ')}`);
         }
 
         console.log('✅ Force push completed');
@@ -4715,6 +4757,7 @@ class SyncManager {
                     'items',
                     'customers',
                     'suppliers',
+                    'sellers',
                     'users',
                     'pos_users',
                     'roles',

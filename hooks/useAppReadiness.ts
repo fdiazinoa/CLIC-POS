@@ -153,7 +153,7 @@ export const useAppReadiness = (options: UseAppReadinessOptions): UseAppReadines
   return {
     status,
     isReady: status === 'ready',
-    isBlocking: enabled && status !== 'idle' && status !== 'ready',
+    isBlocking: enabled && status === 'blocked',
     isChecking: status === 'checking',
     local,
     backend,

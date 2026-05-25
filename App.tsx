@@ -1717,8 +1717,8 @@ const AppContent: React.FC = () => {
       const nextQueue = currentQueue.filter((entry: any) => entry?.eventKey !== eventKey);
       localStorage.setItem(queueKey, JSON.stringify(nextQueue));
       localStorage.setItem(eventKey, 'sent');
-      void syncManager.syncAllCatalogs().catch((error) => {
-        console.warn('[Readiness] No se pudo iniciar sync inicial de maestros locales:', error);
+      void syncManager.forcePushAll().catch((error) => {
+        console.warn('[Readiness] No se pudo iniciar subida inicial de maestros locales:', error);
       });
     } catch (error) {
       console.warn('[Readiness] Bootstrap local listo; evento a nube queda en cola:', error);

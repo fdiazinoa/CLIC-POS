@@ -64,12 +64,7 @@ class RealtimeNotificationService {
             }
 
             try {
-                await syncManager.refreshTerminalResolvedConfig(undefined, {
-                    forceRemoteFetch: true,
-                    forceFullCatalog: false,
-                    dispatchEvent: true,
-                });
-                await syncManager.syncAllCatalogs();
+                await syncManager.fullPull();
             } catch (error) {
                 console.error('❌ RealtimeNotificationService: Error during force_sync handling:', error);
             }
