@@ -1728,7 +1728,7 @@ const AppContent: React.FC = () => {
   const appReadiness = useAppReadiness({
     enabled: appReadinessEnabled,
     request: readinessRequest,
-    backendRequired: !isLocalStandaloneReadiness,
+    backendRequired: true,
     allowBackendCatalogDiagnostic: true,
     validateLocal: validateCurrentLocalReadiness,
     downloadBootstrap: downloadReadinessBootstrap,

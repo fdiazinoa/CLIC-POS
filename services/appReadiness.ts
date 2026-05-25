@@ -330,6 +330,16 @@ export const evaluateLocalReadiness = async (input: LocalReadinessInput): Promis
     };
   }
 
+  if (input.requireErpContext !== false) {
+    return {
+      ok: true,
+      code: 'OK',
+      nextAction: 'none',
+      message: 'Terminal validada para operar con ERP.',
+      raw: snapshot,
+    };
+  }
+
   if (!snapshot.checks.items) {
     return {
       ok: false,
