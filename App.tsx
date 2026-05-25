@@ -252,6 +252,8 @@ type ActivationErpRecoveryResult = 'RECOVERED' | 'TERMINALS_AVAILABLE' | 'NO_TER
 const LICENSE_REFRESH_BASE_MS = 60_000;
 const TIMER_JITTER_MIN_MS = 3_000;
 const TIMER_JITTER_MAX_MS = 5_000;
+const INITIAL_TERMINAL_CONFIG_KEY = 'initial_terminal_config';
+const CLOUD_ADMIN_TENANT_ID_KEY = 'clic_cloud_admin_tenant_id';
 
 const getTimerJitterMs = (): number => (
   TIMER_JITTER_MIN_MS + Math.floor(Math.random() * (TIMER_JITTER_MAX_MS - TIMER_JITTER_MIN_MS + 1))
@@ -259,11 +261,46 @@ const getTimerJitterMs = (): number => (
 
 const resolveSetupTenantId = (): string => {
   const candidates = [
+    localStorage.getItem(CLOUD_ADMIN_TENANT_ID_KEY),
     localStorage.getItem('active_tenant_id'),
     localStorage.getItem('clic_tenant_id'),
   ];
 
   return candidates.map((value) => (value || '').trim()).find(Boolean) || 'default-tenant';
+};
+
+const persistInitialTerminalConfigSnapshot = (
+  sourceConfig: BusinessConfig,
+  terminalId: string,
+  currentDeviceId?: string | null
+) => {
+  try {
+    localStorage.removeItem(INITIAL_TERMINAL_CONFIG_KEY);
+    const terminals = Array.isArray(sourceConfig.terminals) ? sourceConfig.terminals : [];
+    const selectedTerminal = terminals.find((terminal) =>
+      terminal.id === terminalId ||
+      terminal.config?.erpTerminalId === terminalId ||
+      (currentDeviceId && terminal.config?.currentDeviceId === currentDeviceId)
+    );
+
+    if (!selectedTerminal) return;
+
+    const compactConfig: Partial<BusinessConfig> = {
+      terminals: [selectedTerminal],
+      currencySymbol: sourceConfig.currencySymbol,
+      taxRate: sourceConfig.taxRate,
+      taxes: sourceConfig.taxes,
+      themeColor: sourceConfig.themeColor,
+      features: sourceConfig.features,
+      companyInfo: sourceConfig.companyInfo,
+      currencies: sourceConfig.currencies,
+      paymentMethods: sourceConfig.paymentMethods,
+    };
+
+    localStorage.setItem(INITIAL_TERMINAL_CONFIG_KEY, JSON.stringify(compactConfig));
+  } catch (error) {
+    console.warn('⚠️ No se pudo guardar snapshot compacto de terminal en localStorage:', error);
+  }
 };
 
 const normalizeSetupBaseUrl = (value?: string | null): string | null => {
@@ -605,6 +642,8 @@ const readMasterBootstrapBlock = (): MasterBootstrapBlockState | null => {
       terminalId: typeof parsed.terminalId === 'string' ? parsed.terminalId : null,
       terminalName: typeof parsed.terminalName === 'string' ? parsed.terminalName : null,
       tenantId: typeof parsed.tenantId === 'string' ? parsed.tenantId : null,
+      cloudTenantId: typeof parsed.cloudTenantId === 'string' ? parsed.cloudTenantId : null,
+      erpTenantId: typeof parsed.erpTenantId === 'string' ? parsed.erpTenantId : null,
       erpTerminalId: typeof parsed.erpTerminalId === 'string' ? parsed.erpTerminalId : null,
       message:
         typeof parsed.message === 'string' && parsed.message.trim()
@@ -1903,7 +1942,7 @@ const AppContent: React.FC = () => {
   const handleVerticalSelection = React.useCallback(async (selectedConfig: BusinessConfig) => {
     clearStoredErpSyncBinding();
     localStorage.removeItem('active_terminal_id');
-    localStorage.removeItem('initial_terminal_config');
+    localStorage.removeItem(INITIAL_TERMINAL_CONFIG_KEY);
     localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
     localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_LOCAL');
     localStorage.setItem(SETUP_FLOW_STAGE_KEY, 'VERTICAL_SELECTED');
@@ -1916,7 +1955,7 @@ const AppContent: React.FC = () => {
   const handleTerminalModeSelection = React.useCallback((mode: TerminalSetupMode) => {
     clearStoredErpSyncBinding();
     localStorage.removeItem('active_terminal_id');
-    localStorage.removeItem('initial_terminal_config');
+    localStorage.removeItem(INITIAL_TERMINAL_CONFIG_KEY);
     localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
     localStorage.setItem(TERMINAL_SETUP_MODE_KEY, mode);
 
@@ -3066,6 +3105,7 @@ const AppContent: React.FC = () => {
         if (!hasActivationIdentity) {
           // En primera activacion, forzamos sesion cloud limpia para evitar auto-login heredado.
           clearTenantIdentity();
+          localStorage.removeItem(CLOUD_ADMIN_TENANT_ID_KEY);
           localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
           localStorage.removeItem(TERMINAL_SETUP_MODE_KEY);
           Object.keys(localStorage)
@@ -4182,7 +4222,7 @@ const AppContent: React.FC = () => {
     const previousUsers = users;
     const previousActiveTerminalId = localStorage.getItem('active_terminal_id');
     const previousTerminalStorageId = localStorage.getItem('CLIC_POS_TERMINAL_ID');
-    const previousInitialTerminalConfig = localStorage.getItem('initial_terminal_config');
+    const previousInitialTerminalConfig = localStorage.getItem(INITIAL_TERMINAL_CONFIG_KEY);
     try {
       const setupResult = typeof pairingContext === 'object' && pairingContext !== null ? pairingContext : undefined;
       const resolvedMasterIp = typeof pairingContext === 'string' ? pairingContext : setupResult?.masterIp;
@@ -4252,14 +4292,14 @@ const AppContent: React.FC = () => {
         setupResult?.tenantId || localStorage.getItem('active_tenant_id') || 'default-tenant';
       const resolvedCloudTenantId =
         setupResult?.cloudTenantId
-        || localStorage.getItem('clic_cloud_admin_tenant_id')
+        || localStorage.getItem(CLOUD_ADMIN_TENANT_ID_KEY)
         || null;
       localStorage.setItem('active_tenant_id', resolvedTenantId);
       if (resolvedTenantId && resolvedTenantId !== 'default-tenant') {
         localStorage.setItem('clic_tenant_id', resolvedTenantId);
       }
       if (resolvedCloudTenantId) {
-        localStorage.setItem('clic_cloud_admin_tenant_id', resolvedCloudTenantId);
+        localStorage.setItem(CLOUD_ADMIN_TENANT_ID_KEY, resolvedCloudTenantId);
       }
       persistStoredErpSyncBinding({
         tenantId: setupResult?.tenantId || resolvedTenantId || null,
@@ -4528,7 +4568,7 @@ const AppContent: React.FC = () => {
       localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
       localStorage.setItem('active_terminal_id', terminalId);
       localStorage.setItem('CLIC_POS_TERMINAL_ID', terminalId);
-      localStorage.setItem('initial_terminal_config', JSON.stringify(hydratedConfig));
+      persistInitialTerminalConfigSnapshot(hydratedConfig, terminalId, deviceId);
       if (resolvedErpBaseUrl) {
         persistSetupErpBaseUrls(resolvedErpBaseUrl);
       }
@@ -4572,9 +4612,13 @@ const AppContent: React.FC = () => {
         localStorage.removeItem('CLIC_POS_TERMINAL_ID');
       }
       if (previousInitialTerminalConfig) {
-        localStorage.setItem('initial_terminal_config', previousInitialTerminalConfig);
+        try {
+          localStorage.setItem(INITIAL_TERMINAL_CONFIG_KEY, previousInitialTerminalConfig);
+        } catch {
+          localStorage.removeItem(INITIAL_TERMINAL_CONFIG_KEY);
+        }
       } else {
-        localStorage.removeItem('initial_terminal_config');
+        localStorage.removeItem(INITIAL_TERMINAL_CONFIG_KEY);
       }
       setConfig(previousConfig);
       await db.save('config', previousConfig);
@@ -4594,7 +4638,7 @@ const AppContent: React.FC = () => {
         terminalName: setupResult?.terminalName || terminalId,
         cloudTenantId:
           setupResult?.cloudTenantId
-          || localStorage.getItem('clic_cloud_admin_tenant_id')
+          || localStorage.getItem(CLOUD_ADMIN_TENANT_ID_KEY)
           || null,
         erpTenantId:
           setupResult?.tenantId
@@ -4731,7 +4775,7 @@ const AppContent: React.FC = () => {
         if (binding) {
           localStorage.setItem('active_terminal_id', binding.terminalId);
           localStorage.setItem('CLIC_POS_TERMINAL_ID', binding.terminalId);
-          localStorage.setItem('initial_terminal_config', JSON.stringify(binding.nextConfig || nextConfig));
+          persistInitialTerminalConfigSnapshot(binding.nextConfig || nextConfig, binding.terminalId, effectiveDeviceId);
           setCurrentView('LOGIN');
           return;
         }
@@ -6796,6 +6840,7 @@ const AppContent: React.FC = () => {
                 }
 
                 if (activatedTenantId) {
+                  localStorage.setItem(CLOUD_ADMIN_TENANT_ID_KEY, activatedTenantId);
                   localStorage.setItem('active_tenant_id', activatedTenantId);
                   localStorage.setItem('clic_tenant_id', activatedTenantId);
                 }
@@ -6911,7 +6956,7 @@ const AppContent: React.FC = () => {
 
       case 'LOGIN':
         if (!getCurrentTerminal()) {
-          const storedInitialConfig = localStorage.getItem('initial_terminal_config');
+          const storedInitialConfig = localStorage.getItem(INITIAL_TERMINAL_CONFIG_KEY);
           const activeTerminalId =
             localStorage.getItem('active_terminal_id')
             || localStorage.getItem('CLIC_POS_TERMINAL_ID')
@@ -6927,7 +6972,11 @@ const AppContent: React.FC = () => {
               );
 
               if (hydratedTerminal) {
-                setConfig(parsedConfig);
+                setConfig({
+                  ...config,
+                  ...parsedConfig,
+                  terminals: parsedConfig.terminals || config.terminals,
+                });
                 return null;
               }
             } catch (error) {
