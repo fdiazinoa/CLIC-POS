@@ -3581,19 +3581,9 @@ const AppContent: React.FC = () => {
       if (shouldFullPullOnPairing) {
         setupResult.progress?.({
           stepId: 'sync',
-          message: 'Sincronizando maestros: productos, tarifas, clientes, usuarios y documentos...',
+          message: 'Preparando maestros locales recibidos...',
         });
         try {
-          await Promise.race([
-            syncManager.fullPull(),
-            new Promise<never>((_, reject) => {
-              window.setTimeout(() => {
-                reject(new Error('Tiempo agotado sincronizando maestros durante la activación.'));
-              }, 15000);
-            }),
-          ]);
-        } catch (pullError) {
-          console.warn('⚠️ Initial master sync failed after terminal pairing; continuing with local snapshot/config.', pullError);
           if (Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
             setupResult.progress?.({
               stepId: 'sync',
@@ -3605,6 +3595,11 @@ const AppContent: React.FC = () => {
               console.warn('⚠️ Snapshot product image sync failed after pairing fallback:', error);
             });
           }
+          void syncManager.fullPull().catch((pullError) => {
+            console.warn('⚠️ Background master sync failed after terminal pairing; continuing with local snapshot/config.', pullError);
+          });
+        } catch (pullError) {
+          console.warn('⚠️ Initial snapshot persistence failed after terminal pairing; continuing with local config.', pullError);
         }
       } else {
         if (Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
