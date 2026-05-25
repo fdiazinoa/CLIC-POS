@@ -714,8 +714,22 @@ const buildBoundConfig = (input: {
   selectedTerminalId: string;
   posDeviceId: string;
   bindingMode: BindingMode;
+  tenantId?: string | null;
+  companyId?: string | null;
+  storeId?: string | null;
 }) => {
-  const { currentConfig, terminals, profilesByTerminalId, selectedTerminalErpId, selectedTerminalId, posDeviceId, bindingMode } = input;
+  const {
+    currentConfig,
+    terminals,
+    profilesByTerminalId,
+    selectedTerminalErpId,
+    selectedTerminalId,
+    posDeviceId,
+    bindingMode,
+    tenantId,
+    companyId,
+    storeId,
+  } = input;
   const now = new Date().toISOString();
   const nextTerminals = terminals.map((terminal: any) => {
     const erpTerminalId = asString(terminal.id);
@@ -752,6 +766,17 @@ const buildBoundConfig = (input: {
         mode: erpTerminalId === selectedTerminalErpId ? bindingMode : baseConfig?.syncConfig?.mode || 'MASTER',
         autoSyncIntervalMs: Number(baseConfig?.syncConfig?.autoSyncIntervalMs) || 30000,
         isEnabled: true,
+      },
+      erpBinding: {
+        ...asObject(baseConfig.erpBinding),
+        terminalId: erpTerminalId,
+        tenantId: tenantId || undefined,
+        companyId: asString(terminal.company_id) || companyId || undefined,
+        storeId: asString(terminal.store_id) || storeId || undefined,
+        deviceId: nextCurrentDeviceId || undefined,
+        terminalName,
+        stationNumber: terminalId,
+        role: asString(asObject(baseConfig.erpBinding).role) || undefined,
       },
     };
 
@@ -973,6 +998,9 @@ export const bindTerminalFromErp = async (input: {
     selectedTerminalId: targetTerminalId,
     posDeviceId: input.posDeviceId,
     bindingMode: input.bindingMode,
+    tenantId: resolvedContext.tenantId,
+    companyId: resolvedContext.companyId,
+    storeId: resolvedContext.storeId,
   });
 
   return {

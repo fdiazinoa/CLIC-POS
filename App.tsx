@@ -170,6 +170,7 @@ import {
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
 import {
   bindTerminalFromErp,
+  fetchInitialConfigFromErp,
   listTerminalsFromErp,
   type RuntimeTerminalRecoveryState
 } from './services/setup/erpTerminalSetup';
@@ -4207,6 +4208,14 @@ const AppContent: React.FC = () => {
       if (resolvedTenantId && resolvedTenantId !== 'default-tenant') {
         localStorage.setItem('clic_tenant_id', resolvedTenantId);
       }
+      persistStoredErpSyncBinding({
+        tenantId: setupResult?.tenantId || resolvedTenantId || null,
+        terminalId: resolvedErpTerminalId,
+        localTerminalId: terminalId,
+        terminalName: resolvedTerminalName,
+        companyId: setupResult?.companyId || null,
+        storeId: setupResult?.storeId || null,
+      });
 
       if (Array.isArray(setupResult?.boundUsers)) {
         setupResult.progress?.({
@@ -4390,7 +4399,19 @@ const AppContent: React.FC = () => {
 
       const freshData = await db.init();
       const hydratedConfig = resolvePersistedBusinessConfig(await db.get('config') as unknown) || postSyncConfig;
-      const freshProducts = Array.isArray(freshData.products) ? freshData.products : [];
+      let freshProducts = Array.isArray(freshData.products) ? freshData.products : [];
+      if (freshProducts.length === 0 && Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
+        setupResult.progress?.({
+          stepId: 'cache',
+          message: 'Usando catálogo recibido en el snapshot inicial de la terminal...',
+        });
+        const normalizedSnapshotItems = await productImageCacheService.normalizeIncomingProducts(setupResult.snapshotItems);
+        await db.save('products', normalizedSnapshotItems);
+        freshProducts = normalizedSnapshotItems;
+        void productImageCacheService.syncSnapshotItems(normalizedSnapshotItems).catch((error) => {
+          console.warn('⚠️ Snapshot product image sync failed after ERP pairing fallback:', error);
+        });
+      }
       const bootstrapBlock = buildMasterBootstrapBlock({
         terminalId,
         terminalName: resolvedTerminalName,
@@ -4546,6 +4567,16 @@ const AppContent: React.FC = () => {
       erpBaseUrl: input.erpBaseUrl,
     });
 
+    const initialConfigData = await fetchInitialConfigFromErp({
+      erpBaseUrl: input.erpBaseUrl,
+      tenantId: bound.tenant_id,
+      erpTerminalId: bound.erp_terminal_id,
+      posDeviceId: input.posDeviceId,
+    }).catch((error) => {
+      console.warn('[ACTIVATION] No se pudo descargar configuración inicial ERP durante recovery:', error);
+      return null;
+    });
+
     await handlePairTerminal(bound.terminal_id, {
       tenantId: bound.tenant_id,
       erpTerminalId: bound.erp_terminal_id,
@@ -4553,8 +4584,12 @@ const AppContent: React.FC = () => {
       terminalName: bound.terminal_name || sameDeviceTerminal.name,
       companyId: bound.company_id,
       storeId: bound.store_id,
-      boundConfig: bound.config,
-      snapshotMeta: { fullPullOnPairing: true },
+      boundConfig: initialConfigData?.config || bound.config,
+      snapshotItems: Array.isArray(initialConfigData?.items) ? initialConfigData.items : [],
+      snapshotMeta: {
+        fullPullOnPairing: initialConfigData?.snapshot_meta?.full_pull_on_pairing ?? true,
+        resolutionError: initialConfigData?.snapshot_meta?.resolution_error,
+      },
       recoveryState: bound.recovery_state || null,
     });
 
