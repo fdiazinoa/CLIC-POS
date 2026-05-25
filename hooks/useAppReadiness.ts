@@ -10,9 +10,11 @@ export type AppReadinessStatus = 'idle' | 'checking' | 'blocked' | 'ready';
 export interface UseAppReadinessOptions {
   enabled: boolean;
   request: AppReadinessRequest | null;
+  backendRequired?: boolean;
   pollIntervalMs?: number;
   validateLocal: () => Promise<AppReadinessCheckResult>;
   downloadBootstrap?: () => Promise<void>;
+  onLocalReady?: (local: AppReadinessCheckResult) => void | Promise<void>;
 }
 
 export interface UseAppReadinessResult {
@@ -42,9 +44,11 @@ export const useAppReadiness = (options: UseAppReadinessOptions): UseAppReadines
   const {
     enabled,
     request,
+    backendRequired = true,
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
     validateLocal,
     downloadBootstrap,
+    onLocalReady,
   } = options;
 
   const [status, setStatus] = useState<AppReadinessStatus>('idle');
@@ -68,22 +72,28 @@ export const useAppReadiness = (options: UseAppReadinessOptions): UseAppReadines
 
     try {
       let localResult = await validateLocal();
-      let backendResult = await checkBackendReadiness(request);
+      let backendResult: AppReadinessCheckResult | null = backendRequired
+        ? await checkBackendReadiness(request)
+        : null;
 
       if (
         downloadBootstrap &&
-        (backendResult.nextAction === 'download_bootstrap' || localResult.nextAction === 'download_bootstrap')
+        ((backendResult?.nextAction === 'download_bootstrap') || localResult.nextAction === 'download_bootstrap')
       ) {
         await downloadBootstrap();
         localResult = await validateLocal();
-        backendResult = await checkBackendReadiness(request);
+        backendResult = backendRequired ? await checkBackendReadiness(request) : null;
       }
 
       if (!mountedRef.current) return;
 
       setLocal(localResult);
       setBackend(backendResult);
-      setStatus(localResult.ok && backendResult.ok ? 'ready' : 'blocked');
+      const ready = localResult.ok && (!backendRequired || backendResult?.ok);
+      setStatus(ready ? 'ready' : 'blocked');
+      if (ready) {
+        void onLocalReady?.(localResult);
+      }
     } catch (error: any) {
       if (!mountedRef.current) return;
 
@@ -97,7 +107,7 @@ export const useAppReadiness = (options: UseAppReadinessOptions): UseAppReadines
     } finally {
       inFlightRef.current = false;
     }
-  }, [downloadBootstrap, enabled, request, validateLocal]);
+  }, [backendRequired, downloadBootstrap, enabled, onLocalReady, request, validateLocal]);
 
   useEffect(() => {
     if (!enabled || !request) {

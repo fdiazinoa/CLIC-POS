@@ -239,6 +239,10 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
                 email: result.email,
                 tempPassword: result.tempPassword,
             });
+            localStorage.setItem('clic_tenant_type', provisionFormData.type);
+            localStorage.setItem('clic_activation_tenant_type', provisionFormData.type);
+            localStorage.setItem('clic_tenant_cloud_sync', String(provisionFormData.cloudSync));
+            localStorage.setItem('clic_activation_cloud_sync', String(provisionFormData.cloudSync));
             setEmail(result.email);
             setPassword(result.tempPassword);
             setProvisionFormData(INITIAL_PROVISION_FORM);

@@ -65,7 +65,7 @@ import { extractTerminalOperationalDocumentState } from './utils/terminalConfigS
 import { mergeDocumentSeriesCollection, resolveDocumentAssignmentId } from './utils/documentSeriesIdentity';
 import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
 import { ThermalPrinterService } from './services/printer/ThermalPrinterService';
-import { evaluateLocalReadiness } from './services/appReadiness';
+import { collectLocalReadinessSnapshot, evaluateLocalReadiness, isLocalStandaloneMode } from './services/appReadiness';
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
@@ -1500,6 +1500,29 @@ const AppContent: React.FC = () => {
   }, [getCurrentTerminal]);
 
   const currentReadinessTerminal = useMemo(() => getCurrentTerminal() || null, [getCurrentTerminal]);
+  const readinessTenantType = useMemo(() => (
+    localStorage.getItem('clic_tenant_type') ||
+    localStorage.getItem('tenant_type') ||
+    localStorage.getItem('clic_activation_tenant_type') ||
+    ''
+  ).trim(), [currentView, deviceId]);
+  const readinessCloudSync = useMemo(() => {
+    const raw = (
+      localStorage.getItem('clic_tenant_cloud_sync') ||
+      localStorage.getItem('cloud_sync') ||
+      localStorage.getItem('clic_activation_cloud_sync') ||
+      ''
+    ).trim().toLowerCase();
+    if (['1', 'true', 'yes', 'si', 'sí'].includes(raw)) return true;
+    if (['0', 'false', 'no'].includes(raw)) return false;
+    return null;
+  }, [currentView, deviceId]);
+  const readinessSetupMode = useMemo(() => getStoredTerminalSetupMode(), [currentView, deviceId]);
+  const isLocalStandaloneReadiness = useMemo(() => isLocalStandaloneMode({
+    setupMode: readinessSetupMode,
+    tenantType: readinessTenantType,
+    cloudSync: readinessCloudSync,
+  }), [readinessCloudSync, readinessSetupMode, readinessTenantType]);
   const readinessCloudTenantId = useMemo(() => (
     localStorage.getItem('active_tenant_id') ||
     localStorage.getItem('clic_tenant_id') ||
@@ -1526,8 +1549,10 @@ const AppContent: React.FC = () => {
       deviceId,
       terminalId,
       terminalName,
+      mode: isLocalStandaloneReadiness ? 'pos_only' : 'erp',
+      cloudSync: readinessCloudSync,
     };
-  }, [currentReadinessTerminal, deviceId, readinessCloudTenantId]);
+  }, [currentReadinessTerminal, deviceId, isLocalStandaloneReadiness, readinessCloudSync, readinessCloudTenantId]);
 
   const isSetupOrRecoveryView = (
     currentView === 'ACTIVATION' ||
@@ -1551,7 +1576,8 @@ const AppContent: React.FC = () => {
     config,
     deviceId,
     terminal: currentReadinessTerminal,
-  }), [config, currentReadinessTerminal, deviceId]);
+    requireErpContext: !isLocalStandaloneReadiness,
+  }), [config, currentReadinessTerminal, deviceId, isLocalStandaloneReadiness]);
   const downloadReadinessBootstrap = useCallback(async () => {
     if (!currentReadinessTerminal) return;
 
@@ -1571,11 +1597,91 @@ const AppContent: React.FC = () => {
     if (Array.isArray(freshData.productStocks)) setProductStocks(freshData.productStocks);
     if (Array.isArray(freshData.internalSequences)) setInternalSequences(freshData.internalSequences);
   }, [config, currentReadinessTerminal]);
+  const notifyLocalStandaloneBootstrapReady = useCallback(async () => {
+    if (!isLocalStandaloneReadiness || !currentReadinessTerminal || !readinessRequest) return;
+
+    const snapshot = await collectLocalReadinessSnapshot({
+      config,
+      deviceId,
+      terminal: currentReadinessTerminal,
+      requireErpContext: false,
+    });
+
+    const localReady = Object.values(snapshot.checks).every(Boolean);
+    if (!localReady) return;
+
+    localStorage.setItem('local_bootstrap_completed', 'true');
+    localStorage.setItem('local_catalog_ready', 'true');
+    localStorage.setItem('terminal_ready', 'true');
+
+    const eventKey = [
+      'clic_pos_bootstrap_completed',
+      readinessRequest.cloudAdminTenantId,
+      readinessRequest.deviceId,
+      readinessRequest.terminalId,
+    ].join(':');
+    if (localStorage.getItem(eventKey) === 'sent') return;
+
+    const payload = {
+      event: 'POS_BOOTSTRAP_COMPLETED',
+      cloudAdminTenantId: readinessRequest.cloudAdminTenantId,
+      deviceId: readinessRequest.deviceId,
+      terminalId: readinessRequest.terminalId,
+      terminalName: readinessRequest.terminalName,
+      mode: 'pos_only',
+      cloudSync: false,
+      localReadiness: snapshot.checks,
+      counts: snapshot.counts,
+      completedAt: new Date().toISOString(),
+    };
+
+    const queueKey = 'clic_pos_pending_bootstrap_events';
+    const currentQueue = (() => {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(queueKey) || '[]');
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    })();
+    if (!currentQueue.some((entry: any) => entry?.eventKey === eventKey)) {
+      localStorage.setItem(queueKey, JSON.stringify([...currentQueue, { eventKey, payload }]));
+    }
+
+    const baseUrl = resolveSetupErpBaseUrl();
+    if (!baseUrl) return;
+
+    try {
+      const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/pos/provisioning/bootstrap-completed`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-Device-Id': readinessRequest.deviceId,
+          'X-POS-Device-Id': readinessRequest.deviceId,
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const nextQueue = currentQueue.filter((entry: any) => entry?.eventKey !== eventKey);
+      localStorage.setItem(queueKey, JSON.stringify(nextQueue));
+      localStorage.setItem(eventKey, 'sent');
+      void syncManager.syncAllCatalogs().catch((error) => {
+        console.warn('[Readiness] No se pudo iniciar sync inicial de maestros locales:', error);
+      });
+    } catch (error) {
+      console.warn('[Readiness] Bootstrap local listo; evento a nube queda en cola:', error);
+    }
+  }, [config, currentReadinessTerminal, deviceId, isLocalStandaloneReadiness, readinessRequest]);
+
   const appReadiness = useAppReadiness({
     enabled: appReadinessEnabled,
     request: readinessRequest,
+    backendRequired: !isLocalStandaloneReadiness,
     validateLocal: validateCurrentLocalReadiness,
     downloadBootstrap: downloadReadinessBootstrap,
+    onLocalReady: notifyLocalStandaloneBootstrapReady,
   });
 
   const navigateToUserLogin = React.useCallback(() => {
@@ -6538,6 +6644,22 @@ const AppContent: React.FC = () => {
                 if (activatedTenantId) {
                   localStorage.setItem('active_tenant_id', activatedTenantId);
                   localStorage.setItem('clic_tenant_id', activatedTenantId);
+                }
+
+                const activatedTenantType = String(
+                  tenantData?.type ||
+                  tenantData?.tenant_type ||
+                  tenantData?.tenantType ||
+                  ''
+                ).trim();
+                const activatedCloudSync = tenantData?.cloudSync ?? tenantData?.cloud_sync;
+                if (activatedTenantType) {
+                  localStorage.setItem('clic_tenant_type', activatedTenantType);
+                  localStorage.setItem('clic_activation_tenant_type', activatedTenantType);
+                }
+                if (typeof activatedCloudSync === 'boolean') {
+                  localStorage.setItem('clic_tenant_cloud_sync', String(activatedCloudSync));
+                  localStorage.setItem('clic_activation_cloud_sync', String(activatedCloudSync));
                 }
 
                 if (activatedErpBaseUrl) {
