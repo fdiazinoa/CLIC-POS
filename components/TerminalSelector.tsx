@@ -33,6 +33,7 @@ interface TerminalCard {
 
 interface TerminalSelectorResponse {
   tenant_id: string;
+  cloud_tenant_id?: string | null;
   erp_base_url?: string | null;
   source?: string | null;
   terminals: TerminalCard[];
@@ -42,6 +43,7 @@ interface BindTerminalResponse {
   success: boolean;
   source?: string | null;
   tenant_id: string;
+  cloud_tenant_id?: string | null;
   terminal_id: string;
   erp_terminal_id?: string | null;
   terminal_name?: string | null;
@@ -57,6 +59,7 @@ interface BindTerminalResponse {
 interface InitialConfigResponse {
   success: boolean;
   tenant_id?: string;
+  cloud_tenant_id?: string | null;
   terminal_id?: string;
   erp_terminal_id?: string;
   config?: BusinessConfig;
@@ -545,13 +548,17 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
     setError(null);
 
     const persistListMeta = (data: TerminalSelectorResponse) => {
+      const cloudTenantId = (data.cloud_tenant_id || initialTenantId || '').trim();
       setTerminals(Array.isArray(data.terminals) ? data.terminals : []);
-      setTenantId(data.tenant_id || 'default-tenant');
+      setTenantId(cloudTenantId || data.tenant_id || 'default-tenant');
       const resolvedBase = normalizeBaseUrl(data.erp_base_url || erpBaseUrl) || erpBaseUrl;
       setErpBaseUrl(resolvedBase);
 
       if (data.tenant_id) {
         localStorage.setItem('active_tenant_id', data.tenant_id);
+      }
+      if (cloudTenantId) {
+        localStorage.setItem('clic_cloud_admin_tenant_id', cloudTenantId);
       }
 
       if (resolvedBase) {
@@ -604,6 +611,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
         persistListMeta({
           tenant_id: erpData.tenant_id,
+          cloud_tenant_id: erpData.cloud_tenant_id || resolvedTenantId || null,
           erp_base_url: erpData.erp_base_url || erpBaseUrl!,
           terminals: erpData.terminals as TerminalCard[],
           source: 'ERP',
@@ -878,6 +886,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           initialConfigData = {
             ...erpInitialConfigData,
             tenant_id: erpInitialConfigData.tenant_id || data.tenant_id || tenantId,
+            cloud_tenant_id: erpInitialConfigData.cloud_tenant_id || data.cloud_tenant_id || tenantId,
             terminal_id: data.terminal_id || terminal.id,
             erp_terminal_id: data.erp_terminal_id || terminal.erpTerminalId || data.terminal_id || terminal.id,
             config: applied.config,
@@ -923,6 +932,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           initialConfigData = {
             ...erpInitialConfigData,
             tenant_id: erpInitialConfigData.tenant_id || data.tenant_id || tenantId,
+            cloud_tenant_id: erpInitialConfigData.cloud_tenant_id || data.cloud_tenant_id || tenantId,
             terminal_id: data.terminal_id || terminal.id,
             erp_terminal_id: data.erp_terminal_id || terminal.erpTerminalId || data.terminal_id || terminal.id,
             config: applied.config,
@@ -955,6 +965,14 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
         if (data.tenant_id) {
           localStorage.setItem('active_tenant_id', data.tenant_id);
+        }
+        const resolvedCloudTenantId =
+          initialConfigData.cloud_tenant_id
+          || data.cloud_tenant_id
+          || localStorage.getItem('clic_cloud_admin_tenant_id')
+          || tenantId;
+        if (resolvedCloudTenantId) {
+          localStorage.setItem('clic_cloud_admin_tenant_id', resolvedCloudTenantId);
         }
         if (erpBaseUrl) {
           persistErpBaseUrls(erpBaseUrl);
@@ -991,7 +1009,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           erpBaseUrl: erpBaseUrl || undefined,
           terminalName: data.terminal_name || terminal.name || data.terminal_id || terminal.id,
           tenantId: initialConfigData.tenant_id || data.tenant_id || tenantId,
-          cloudTenantId: tenantId,
+          cloudTenantId: resolvedCloudTenantId,
           companyId: data.company_id || undefined,
           storeId: data.store_id || undefined,
           forceTakeover: forceTransfer || Boolean(data.transferred),

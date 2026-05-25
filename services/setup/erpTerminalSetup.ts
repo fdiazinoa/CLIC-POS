@@ -15,6 +15,7 @@ export interface RuntimeTerminalCard {
 
 export interface RuntimeTerminalListResponse {
   tenant_id: string;
+  cloud_tenant_id?: string | null;
   erp_base_url?: string | null;
   terminals: RuntimeTerminalCard[];
 }
@@ -22,6 +23,7 @@ export interface RuntimeTerminalListResponse {
 export interface RuntimeBindTerminalResponse {
   success: boolean;
   tenant_id: string;
+  cloud_tenant_id?: string | null;
   terminal_id: string;
   erp_terminal_id: string;
   terminal_name?: string | null;
@@ -44,6 +46,7 @@ export interface RuntimeTerminalRecoveryState {
 export interface RuntimeInitialConfigResponse {
   success: boolean;
   tenant_id?: string;
+  cloud_tenant_id?: string | null;
   terminal_id?: string;
   erp_terminal_id?: string;
   config?: BusinessConfig;
@@ -495,6 +498,12 @@ const resolveTenantDirectoryContext = async (
 
   return {
     tenantId: asString(matchedTenant?.id) || null,
+    cloudTenantId:
+      asString(asObject(matchedTenant?.activation).cloud_admin_tenant_id)
+      || asString(matchedTenant?.cloud_admin_tenant_id)
+      || asString(matchedTenant?.external_tenant_id)
+      || asString(identity.tenantId)
+      || null,
     tenantName: asString(matchedTenant?.name) || null,
     companyId: asString(asObject(matchedTenant?.primary_company).id) || null,
     storeId: asString(asObject(matchedTenant?.primary_store).id) || null,
@@ -872,6 +881,7 @@ export const listTerminalsFromErp = async (input: {
 
   return {
     tenant_id: resolvedContext.tenantId,
+    cloud_tenant_id: resolvedContext.cloudTenantId || input.tenantId || null,
     erp_base_url: input.erpBaseUrl,
     terminals,
   };
@@ -1034,6 +1044,7 @@ export const bindTerminalFromErp = async (input: {
   return {
     success: true,
     tenant_id: resolvedContext.tenantId,
+    cloud_tenant_id: resolvedContext.cloudTenantId || input.tenantId || null,
     terminal_id: targetTerminalId,
     erp_terminal_id: targetErpTerminalId,
     terminal_name: targetTerminalName,
@@ -1099,6 +1110,13 @@ export const fetchInitialConfigFromErp = async (input: {
   return {
     success: asString(payload?.status).toLowerCase() === 'success',
     tenant_id: asString(terminalConfig.tenant_id) || input.tenantId,
+    cloud_tenant_id:
+      asString(payload?.cloud_tenant_id)
+      || asString(payload?.cloudAdminTenantId)
+      || asString(terminalConfig.cloud_tenant_id)
+      || asString(terminalConfig.cloudAdminTenantId)
+      || asString(asObject(terminalConfig.activation).cloud_admin_tenant_id)
+      || null,
     terminal_id: asString(terminalConfig.terminal_id) || input.erpTerminalId,
     erp_terminal_id: input.erpTerminalId,
     config: payload?.config && typeof payload.config === 'object' && !Array.isArray(payload.config)

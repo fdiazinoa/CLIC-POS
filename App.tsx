@@ -1594,9 +1594,9 @@ const AppContent: React.FC = () => {
     readinessTenantType,
   ]);
   const readinessCloudTenantId = useMemo(() => (
+    localStorage.getItem(CLOUD_ADMIN_TENANT_ID_KEY) ||
     localStorage.getItem('active_tenant_id') ||
     localStorage.getItem('clic_tenant_id') ||
-    localStorage.getItem('clic_erp_tenant_id') ||
     ''
   ).trim(), [currentView, deviceId]);
   const readinessRequest = useMemo(() => {
@@ -4586,7 +4586,7 @@ const AppContent: React.FC = () => {
       });
 
       const recoveryState = setupResult?.recoveryState;
-      if (shouldTakeover && recoveryState && !bootstrapBlock) {
+      if (shouldTakeover && recoveryState && !bootstrapBlock && nextSetupMode !== 'SERVER_ERP') {
         const cloudLastSequence = Number(recoveryState.last_global_sequence || 0);
         setRecoverySequenceInput(String(Math.max(0, cloudLastSequence)));
         setRecoverySequencePrompt({
