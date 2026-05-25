@@ -201,6 +201,7 @@ class BackgroundSyncManager {
         // Filter pending items and sort by date (FIFO)
         const isSyncPending = (item: T): boolean => {
             const status = item.syncStatus;
+            if (status === 'BLOCKED_FUNCTIONAL') return false;
             if (status === 'PENDING' || status === 'ERROR' || status === 'SYNCING') return true;
             // Legacy safeguard: older transactions may not have syncStatus set.
             if (collectionName === 'transactions' && (status === undefined || status === null || (item as any).syncStatus === '')) {
@@ -243,6 +244,28 @@ class BackgroundSyncManager {
                 }
                 await db.saveDocument(collectionName as any, item as any);
             } catch (error: any) {
+                const errorCode = String(error?.code || error?.status || '');
+                const errorMessage = String(error?.message || error?.detail || error || '');
+                const isFunctionalBlock =
+                    errorCode.includes('CATALOG_MISSING') ||
+                    errorCode.includes('ERP_CONTEXT_MISSING') ||
+                    errorCode.includes('409') ||
+                    errorMessage.includes('CATALOG_MISSING') ||
+                    errorMessage.includes('ERP_CONTEXT_MISSING') ||
+                    errorMessage.includes('No se pudo resolver el artículo') ||
+                    errorMessage.includes('409');
+
+                if (collectionName === 'transactions' && isFunctionalBlock) {
+                    console.warn(
+                        `⛔ BackgroundSyncManager: Transaction ${item.id} blocked by functional sync precondition:`,
+                        errorMessage
+                    );
+                    item.syncStatus = 'BLOCKED_FUNCTIONAL';
+                    item.syncError = errorMessage;
+                    await db.saveDocument(collectionName as any, item as any);
+                    continue;
+                }
+
                 console.error(`❌ BackgroundSyncManager: Failed to sync ${collectionName} item ${item.id}:`, error);
                 item.syncStatus = 'ERROR';
                 item.syncError = error.message;
