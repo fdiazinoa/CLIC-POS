@@ -11,6 +11,7 @@ export interface UseAppReadinessOptions {
   enabled: boolean;
   request: AppReadinessRequest | null;
   backendRequired?: boolean;
+  allowBackendCatalogDiagnostic?: boolean;
   pollIntervalMs?: number;
   validateLocal: () => Promise<AppReadinessCheckResult>;
   downloadBootstrap?: () => Promise<void>;
@@ -45,6 +46,7 @@ export const useAppReadiness = (options: UseAppReadinessOptions): UseAppReadines
     enabled,
     request,
     backendRequired = true,
+    allowBackendCatalogDiagnostic = false,
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
     validateLocal,
     downloadBootstrap,
@@ -68,7 +70,7 @@ export const useAppReadiness = (options: UseAppReadinessOptions): UseAppReadines
     if (!enabled || !request || inFlightRef.current) return;
 
     inFlightRef.current = true;
-    setStatus((current) => current === 'ready' ? 'checking' : current === 'idle' ? 'checking' : current);
+    setStatus((current) => current === 'idle' ? 'checking' : current);
 
     try {
       let localResult = await validateLocal();
@@ -76,9 +78,18 @@ export const useAppReadiness = (options: UseAppReadinessOptions): UseAppReadines
         ? await checkBackendReadiness(request)
         : null;
 
+      const backendCatalogOnlyDiagnostic =
+        allowBackendCatalogDiagnostic &&
+        localResult.ok &&
+        backendResult?.ok === false &&
+        backendResult.code === 'CATALOG_MISSING';
+
       if (
         downloadBootstrap &&
-        ((backendResult?.nextAction === 'download_bootstrap') || localResult.nextAction === 'download_bootstrap')
+        (
+          localResult.nextAction === 'download_bootstrap' ||
+          (backendResult?.nextAction === 'download_bootstrap' && !backendCatalogOnlyDiagnostic)
+        )
       ) {
         await downloadBootstrap();
         localResult = await validateLocal();
@@ -89,7 +100,14 @@ export const useAppReadiness = (options: UseAppReadinessOptions): UseAppReadines
 
       setLocal(localResult);
       setBackend(backendResult);
-      const ready = localResult.ok && (!backendRequired || backendResult?.ok);
+      const ready = localResult.ok && (
+        !backendRequired ||
+        backendResult?.ok ||
+        (
+          allowBackendCatalogDiagnostic &&
+          backendResult?.code === 'CATALOG_MISSING'
+        )
+      );
       setStatus(ready ? 'ready' : 'blocked');
       if (ready) {
         void onLocalReady?.(localResult);
@@ -103,11 +121,11 @@ export const useAppReadiness = (options: UseAppReadinessOptions): UseAppReadines
         nextAction: 'retry',
         message: error?.message || 'No se pudo validar el entorno operativo.',
       });
-      setStatus('blocked');
+      setStatus((current) => current === 'ready' ? 'ready' : 'blocked');
     } finally {
       inFlightRef.current = false;
     }
-  }, [backendRequired, downloadBootstrap, enabled, onLocalReady, request, validateLocal]);
+  }, [allowBackendCatalogDiagnostic, backendRequired, downloadBootstrap, enabled, onLocalReady, request, validateLocal]);
 
   useEffect(() => {
     if (!enabled || !request) {

@@ -1518,11 +1518,27 @@ const AppContent: React.FC = () => {
     return null;
   }, [currentView, deviceId]);
   const readinessSetupMode = useMemo(() => getStoredTerminalSetupMode(), [currentView, deviceId]);
+  const currentReadinessHasErpBinding = useMemo(() => {
+    const terminalConfig = currentReadinessTerminal?.config;
+    if (!terminalConfig) return false;
+    return Boolean(
+      terminalConfig.erpBinding?.terminalId ||
+      terminalConfig.erpBinding?.tenantId ||
+      terminalConfig.erpTerminalId ||
+      localStorage.getItem('clic_erp_sync_terminal_id') ||
+      localStorage.getItem('clic_erp_sync_tenant_id')
+    );
+  }, [currentReadinessTerminal, currentView, deviceId]);
   const isLocalStandaloneReadiness = useMemo(() => isLocalStandaloneMode({
     setupMode: readinessSetupMode,
     tenantType: readinessTenantType,
     cloudSync: readinessCloudSync,
-  }), [readinessCloudSync, readinessSetupMode, readinessTenantType]);
+  }) || !currentReadinessHasErpBinding, [
+    currentReadinessHasErpBinding,
+    readinessCloudSync,
+    readinessSetupMode,
+    readinessTenantType,
+  ]);
   const readinessCloudTenantId = useMemo(() => (
     localStorage.getItem('active_tenant_id') ||
     localStorage.getItem('clic_tenant_id') ||
@@ -1679,6 +1695,7 @@ const AppContent: React.FC = () => {
     enabled: appReadinessEnabled,
     request: readinessRequest,
     backendRequired: !isLocalStandaloneReadiness,
+    allowBackendCatalogDiagnostic: true,
     validateLocal: validateCurrentLocalReadiness,
     downloadBootstrap: downloadReadinessBootstrap,
     onLocalReady: notifyLocalStandaloneBootstrapReady,
