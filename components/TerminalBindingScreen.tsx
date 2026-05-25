@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ChevronRight, Lock, Server, Smartphone, Wifi } from 'lucide-react';
-import { BusinessConfig, User as UserType } from '../types';
+import { BusinessConfig, Product, User as UserType } from '../types';
 import TerminalSelector from './TerminalSelector';
 import { buildMasterUrlCandidates, buildMasterUrlFromHost, normalizeMasterHost } from '../utils/cloudMasterRegistry';
 
@@ -14,6 +14,7 @@ interface PairingResult {
   boundConfig?: BusinessConfig;
   boundUsers?: UserType[];
   masterIp?: string;
+  snapshotItems?: Product[];
   snapshotMeta?: {
     fullPullOnPairing?: boolean;
     resolutionError?: unknown;
@@ -375,6 +376,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                 config: boundConfig,
                 users,
                 masterIp: resolvedMasterIp,
+                snapshotItems,
                 snapshotMeta,
                 progress
               }) => {
@@ -392,6 +394,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                   boundConfig,
                   boundUsers: users,
                   masterIp: resolvedMasterIp,
+                  snapshotItems,
                   snapshotMeta,
                   progress,
                 }, { forceTakeover: Boolean(forceTakeover) });

@@ -3708,7 +3708,7 @@ const AppContent: React.FC = () => {
       await db.save('config', previousConfig);
       setUsers(previousUsers);
       await db.save('users', previousUsers);
-      alert('No se pudo tomar control de la terminal. Revisa conexión y vuelve a intentar.');
+      throw error instanceof Error ? error : new Error('No se pudo tomar control de la terminal. Revisa conexión y vuelve a intentar.');
     } finally {
       setRestoringHistory(false);
     }
