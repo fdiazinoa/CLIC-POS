@@ -17,9 +17,9 @@ const TerminalModeSelector: React.FC<TerminalModeSelectorProps> = ({ onSelect })
                         <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-blue-600 to-cyan-500 shadow-lg shadow-blue-500/20 mb-5">
                             <MonitorSmartphone className="text-white" size={34} />
                         </div>
-                        <h1 className="text-3xl md:text-4xl font-black text-white mb-3">Modo del Dispositivo</h1>
+                        <h1 className="text-3xl md:text-4xl font-black text-white mb-3">Tipo de POS</h1>
                         <p className="text-slate-400 max-w-xl mx-auto">
-                            Define si este equipo operará como caja maestra local, caja maestra conectada al ERP o terminal esclava de otra caja.
+                            Define si este equipo operará local, conectado al ERP o como terminal esclava de otra caja.
                         </p>
                     </div>
 
@@ -32,12 +32,12 @@ const TerminalModeSelector: React.FC<TerminalModeSelectorProps> = ({ onSelect })
                             <div className="w-14 h-14 rounded-2xl bg-blue-600/15 text-blue-400 flex items-center justify-center mb-5 group-hover:bg-blue-600 group-hover:text-white transition-colors">
                                 <Server size={26} />
                             </div>
-                            <h2 className="text-2xl font-black text-white mb-2">Master Local</h2>
+                            <h2 className="text-2xl font-black text-white mb-2">POS Local</h2>
                             <p className="text-slate-400 text-sm leading-relaxed mb-6">
-                                Opera localmente en esta unidad. Puede funcionar sola o servir de maestra para otras cajas sin depender del ERP.
+                                Opera localmente. Envía configuración, maestros y transacciones al ERP silencioso en segundo plano.
                             </p>
                             <div className="inline-flex items-center gap-2 text-blue-300 font-bold">
-                                Configurar modo local <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
+                                Configurar POS Local <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
                             </div>
                         </button>
 
@@ -49,9 +49,9 @@ const TerminalModeSelector: React.FC<TerminalModeSelectorProps> = ({ onSelect })
                             <div className="w-14 h-14 rounded-2xl bg-emerald-500/15 text-emerald-300 flex items-center justify-center mb-5 group-hover:bg-emerald-500 group-hover:text-slate-950 transition-colors">
                                 <Building2 size={26} />
                             </div>
-                            <h2 className="text-2xl font-black text-white mb-2">Master + ERP</h2>
+                            <h2 className="text-2xl font-black text-white mb-2">POS + ERP</h2>
                             <p className="text-slate-400 text-sm leading-relaxed mb-6">
-                                Esta caja se vincula directo con el ERP. Puede operar sola o ser la maestra que sincroniza hacia el ERP.
+                                Se vincula directamente a una terminal ERP y usa el ERP como fuente operativa de configuración.
                             </p>
                             <div className="inline-flex items-center gap-2 text-emerald-300 font-bold">
                                 Vincular con ERP <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
@@ -66,7 +66,7 @@ const TerminalModeSelector: React.FC<TerminalModeSelectorProps> = ({ onSelect })
                             <div className="w-14 h-14 rounded-2xl bg-cyan-500/15 text-cyan-300 flex items-center justify-center mb-5 group-hover:bg-cyan-500 group-hover:text-slate-950 transition-colors">
                                 <Wifi size={26} />
                             </div>
-                            <h2 className="text-2xl font-black text-white mb-2">Cliente</h2>
+                            <h2 className="text-2xl font-black text-white mb-2">POS Esclavo</h2>
                             <p className="text-slate-400 text-sm leading-relaxed mb-6">
                                 Se conecta a una caja maestra existente dentro de la red local para operar como terminal adicional.
                             </p>

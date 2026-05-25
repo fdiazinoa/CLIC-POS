@@ -632,28 +632,8 @@ const readTerminalConfigRestartNotice = (): TerminalConfigRestartNotice | null =
 };
 
 const readMasterBootstrapBlock = (): MasterBootstrapBlockState | null => {
-  const raw = localStorage.getItem(MASTER_BOOTSTRAP_BLOCK_KEY);
-  if (!raw) return null;
-
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return null;
-    return {
-      terminalId: typeof parsed.terminalId === 'string' ? parsed.terminalId : null,
-      terminalName: typeof parsed.terminalName === 'string' ? parsed.terminalName : null,
-      tenantId: typeof parsed.tenantId === 'string' ? parsed.tenantId : null,
-      cloudTenantId: typeof parsed.cloudTenantId === 'string' ? parsed.cloudTenantId : null,
-      erpTenantId: typeof parsed.erpTenantId === 'string' ? parsed.erpTenantId : null,
-      erpTerminalId: typeof parsed.erpTerminalId === 'string' ? parsed.erpTerminalId : null,
-      message:
-        typeof parsed.message === 'string' && parsed.message.trim()
-          ? parsed.message
-          : 'No se pudieron descargar los maestros del ERP/Cloud.',
-      detail: typeof parsed.detail === 'string' ? parsed.detail : null,
-    };
-  } catch {
-    return null;
-  }
+  localStorage.removeItem(MASTER_BOOTSTRAP_BLOCK_KEY);
+  return null;
 };
 
 const persistMasterBootstrapBlock = (block: MasterBootstrapBlockState | null) => {
@@ -4162,6 +4142,9 @@ const AppContent: React.FC = () => {
   }, [buildMasterBootstrapBlock, config, masterBootstrapBlock, setMasterBootstrapBlocked]);
 
   useEffect(() => {
+    // El catálogo local vacío no debe bloquear la operación global: en POS+ERP se consulta
+    // el ERP y en POS Local el wizard/sync inicial preparan maestros en segundo plano.
+    localStorage.removeItem(MASTER_BOOTSTRAP_BLOCK_KEY);
     if (masterBootstrapBlock) return;
     if (products.length > 0) return;
     if (localStorage.getItem(TERMINAL_SETUP_PENDING_KEY) === '1') return;
@@ -4180,17 +4163,7 @@ const AppContent: React.FC = () => {
     const binding = getStoredErpSyncBinding();
     const hasErpBinding = Boolean(binding.tenantId && (binding.terminalId || binding.localTerminalId));
     if (!hasErpBinding) return;
-
-    setMasterBootstrapBlocked(buildMasterBootstrapBlock({
-      terminalId: binding.localTerminalId || binding.terminalId,
-      terminalName: binding.terminalName,
-      tenantId: binding.tenantId,
-      erpTenantId: binding.tenantId,
-      erpTerminalId: binding.terminalId || binding.terminalUuid,
-      productCount: 0,
-      detail:
-        'La terminal tiene vínculo ERP/Cloud, pero el catálogo local está vacío. Descargue maestros antes de vender para evitar facturas con artículos no resolubles en erp_sync_inbox.',
-    }));
+    setMasterBootstrapBlocked(null);
   }, [buildMasterBootstrapBlock, currentView, masterBootstrapBlock, products.length, setMasterBootstrapBlocked]);
 
   const handlePairTerminal = async (
@@ -4530,19 +4503,8 @@ const AppContent: React.FC = () => {
           });
         }
       }
-      const bootstrapBlock = buildMasterBootstrapBlock({
-        terminalId,
-        terminalName: resolvedTerminalName,
-        tenantId: setupResult?.tenantId || resolvedTenantId,
-        cloudTenantId: resolvedCloudTenantId,
-        erpTenantId: setupResult?.tenantId || resolvedTenantId,
-        erpTerminalId: resolvedErpTerminalId,
-        productCount: freshProducts.length,
-        detail: shouldTakeover
-          ? 'La terminal fue recuperada, pero el ERP/Cloud devolvió cero artículos. El POS queda bloqueado para evitar ventas que fallen luego en erp_sync_inbox por artículos no resueltos.'
-          : undefined,
-      });
-      setMasterBootstrapBlocked(bootstrapBlock);
+      const bootstrapBlock = null;
+      setMasterBootstrapBlocked(null);
       setConfig(hydratedConfig);
       if (Array.isArray(freshData.users)) setUsers(freshData.users);
       if (Array.isArray(freshData.roles)) setRoles(freshData.roles);
@@ -6865,44 +6827,15 @@ const AppContent: React.FC = () => {
                   persistSetupErpBaseUrls(activatedErpBaseUrl);
                 }
 
-                let shouldOpenErpTerminalPairing = false;
-                if (activatedTenantId && activatedErpBaseUrl && resolvedDeviceId) {
-                  try {
-                    const recoveryResult = await recoverActivatedTerminalFromErp({
-                      tenantId: activatedTenantId,
-                      tenantSlug: tenantData?.slug || localStorage.getItem('clic_tenant_slug') || null,
-                      tenantEmail: tenantData?.email || localStorage.getItem('clic_tenant_email') || null,
-                      erpBaseUrl: activatedErpBaseUrl,
-                      posDeviceId: resolvedDeviceId,
-                    });
-
-                    if (recoveryResult === 'RECOVERED') {
-                      console.log('[ACTIVATION] Terminal recuperada desde ERP para este mismo device_id.');
-                      return;
-                    }
-
-                    shouldOpenErpTerminalPairing = recoveryResult === 'TERMINALS_AVAILABLE';
-                  } catch (recoveryError) {
-                    console.warn('[ACTIVATION] ERP no tiene terminal operativa para este tenant. Continuando wizard local-first.', recoveryError);
-                    setErpRebuildRecovery(null);
-                  }
-                }
-
                 localStorage.removeItem(SETUP_WIZARD_COMPLETED_KEY);
                 localStorage.removeItem(SETUP_FLOW_STAGE_KEY);
                 localStorage.removeItem(SETUP_FLOW_VERSION_KEY);
+                localStorage.removeItem(TERMINAL_SETUP_MODE_KEY);
+                localStorage.removeItem(MASTER_BOOTSTRAP_BLOCK_KEY);
                 localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
-                if (shouldOpenErpTerminalPairing) {
-                  localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_ERP');
-                  setCurrentView('TERMINAL_PAIRING');
-                } else {
-                  localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_LOCAL');
-                  localStorage.setItem(SETUP_FLOW_STAGE_KEY, 'ACTIVATED_LOCAL_FIRST');
-                  localStorage.setItem(SETUP_FLOW_VERSION_KEY, SETUP_FLOW_VERSION);
-                  localStorage.removeItem('pos_master_ip');
-                  localStorage.setItem('CLIC_POS_MASTER_URL', buildRuntimeMasterUrl());
-                  setCurrentView('VERTICAL_SELECTOR');
-                }
+                localStorage.removeItem('pos_master_ip');
+                localStorage.setItem('CLIC_POS_MASTER_URL', buildRuntimeMasterUrl());
+                setCurrentView('TERMINAL_MODE_SELECTOR');
               })();
             }}
           />
