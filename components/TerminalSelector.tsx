@@ -19,6 +19,7 @@ import {
   isTerminalOccupiedError,
   listTerminalsFromErp,
 } from '../services/setup/erpTerminalSetup';
+import { persistSyncDeviceToken, previewSyncDeviceToken } from '../services/sync/deviceToken';
 import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../services/sync/SyncProfile';
 
 interface TerminalCard {
@@ -67,6 +68,18 @@ interface BindTerminalResponse {
   erpUiEnabled?: boolean;
   erp_ready_for_sales?: boolean;
   erpReadyForSales?: boolean;
+  deviceToken?: string;
+  device_token?: string;
+  terminalToken?: string;
+  terminal_token?: string;
+  activationToken?: string;
+  activation_token?: string;
+  syncToken?: string;
+  sync_token?: string;
+  syncAuthToken?: string;
+  sync_auth_token?: string;
+  tokenExpiresAt?: string;
+  token_expires_at?: string;
 }
 
 interface InitialConfigResponse {
@@ -93,6 +106,18 @@ interface InitialConfigResponse {
   erpUiEnabled?: boolean;
   erp_ready_for_sales?: boolean;
   erpReadyForSales?: boolean;
+  deviceToken?: string;
+  device_token?: string;
+  terminalToken?: string;
+  terminal_token?: string;
+  activationToken?: string;
+  activation_token?: string;
+  syncToken?: string;
+  sync_token?: string;
+  syncAuthToken?: string;
+  sync_auth_token?: string;
+  tokenExpiresAt?: string;
+  token_expires_at?: string;
   snapshot_meta?: {
     used_resolved?: boolean;
     used_fallback_config?: boolean;
@@ -123,6 +148,11 @@ interface BoundTerminalPayload {
   syncProfile?: Partial<SyncProfile>;
   syncPermissions?: SyncPermissions;
   contractSource?: SyncProfileSource;
+  deviceToken?: string;
+  terminalToken?: string;
+  activationToken?: string;
+  syncToken?: string;
+  tokenExpiresAt?: string;
   progress?: (update: TerminalBindingProgressUpdate) => void;
 }
 
@@ -291,6 +321,67 @@ const extractPolicyObject = (...sources: unknown[]): Partial<SyncProfile> => {
     }
   }
   return {};
+};
+
+const pickAuthString = (...values: unknown[]): string | undefined => {
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.replace(/[\r\n\t]/g, '').trim();
+    if (!trimmed || ['undefined', 'null', 'nan', '[object object]'].includes(trimmed.toLowerCase())) continue;
+    return trimmed;
+  }
+  return undefined;
+};
+
+const extractRegisterAuthPayload = (...sources: unknown[]) => {
+  const records = sources
+    .filter((source): source is Record<string, any> => Boolean(source && typeof source === 'object' && !Array.isArray(source)))
+    .flatMap((record) => [
+      record,
+      record.terminal_config,
+      record.config,
+      record.config?.security,
+      record.config?.runtime,
+      record.session,
+    ])
+    .filter((source): source is Record<string, any> => Boolean(source && typeof source === 'object' && !Array.isArray(source)));
+
+  const deviceToken = pickAuthString(...records.flatMap((record) => [
+    record.deviceToken,
+    record.device_token,
+    record.terminalToken,
+    record.terminal_token,
+    record.activationToken,
+    record.activation_token,
+  ]));
+  const terminalToken = pickAuthString(...records.flatMap((record) => [record.terminalToken, record.terminal_token]));
+  const activationToken = pickAuthString(...records.flatMap((record) => [record.activationToken, record.activation_token]));
+  const syncToken = pickAuthString(...records.flatMap((record) => [
+    record.syncToken,
+    record.sync_token,
+    record.syncAuthToken,
+    record.sync_auth_token,
+  ]));
+  const tokenExpiresAt = pickAuthString(...records.flatMap((record) => [
+    record.tokenExpiresAt,
+    record.token_expires_at,
+    record.expiresAt,
+    record.expires_at,
+  ]));
+
+  return { deviceToken, terminalToken, activationToken, syncToken, tokenExpiresAt };
+};
+
+const logRegisterResponseAuth = (auth: ReturnType<typeof extractRegisterAuthPayload>) => {
+  console.log('[REGISTER_RESPONSE_AUTH]', {
+    deviceToken: Boolean(auth.deviceToken),
+    terminalToken: Boolean(auth.terminalToken),
+    activationToken: Boolean(auth.activationToken),
+    syncToken: Boolean(auth.syncToken),
+    tokenExpiresAt: auth.tokenExpiresAt || null,
+    deviceTokenPreview: previewSyncDeviceToken(auth.deviceToken),
+    syncTokenPreview: previewSyncDeviceToken(auth.syncToken),
+  });
 };
 
 const buildTerminalSyncProfile = (params: {
@@ -993,6 +1084,18 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           initialConfigData.syncPermissions ||
           initialConfigData.sync_permissions ||
           syncProfile.syncPermissions;
+        const registerAuth = extractRegisterAuthPayload(data, initialConfigData, initialConfigData.terminal_config);
+        logRegisterResponseAuth(registerAuth);
+        if (registerAuth.deviceToken) {
+          persistSyncDeviceToken(registerAuth.deviceToken, 'ERP_REGISTER', registerAuth.tokenExpiresAt);
+        }
+        if (registerAuth.syncToken) {
+          localStorage.setItem('clic_erp_sync_token', registerAuth.syncToken);
+          localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
+          if (registerAuth.tokenExpiresAt) {
+            localStorage.setItem('clic_erp_sync_token_expires_at', registerAuth.tokenExpiresAt);
+          }
+        }
 
         if (showProgress) {
           updateBindingProgress({
@@ -1024,6 +1127,11 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           syncProfile,
           syncPermissions,
           contractSource: expectsErpDirect ? 'ERP_REGISTER' : 'CLOUD_ADMIN',
+          deviceToken: registerAuth.deviceToken,
+          terminalToken: registerAuth.terminalToken,
+          activationToken: registerAuth.activationToken,
+          syncToken: registerAuth.syncToken,
+          tokenExpiresAt: registerAuth.tokenExpiresAt,
           progress: showProgress ? updateBindingProgress : undefined,
         });
         completed = true;

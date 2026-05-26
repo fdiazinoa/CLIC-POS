@@ -16,6 +16,11 @@ interface PairingResult {
   boundUsers?: UserType[];
   masterIp?: string;
   snapshotItems?: Product[];
+  deviceToken?: string;
+  terminalToken?: string;
+  activationToken?: string;
+  syncToken?: string;
+  tokenExpiresAt?: string;
   snapshotMeta?: {
     fullPullOnPairing?: boolean;
     resolutionError?: unknown;
@@ -385,6 +390,11 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                 syncProfile,
                 syncPermissions,
                 contractSource,
+                deviceToken,
+                terminalToken,
+                activationToken,
+                syncToken,
+                tokenExpiresAt,
                 progress
               }) => {
                 await onConfigUpdate?.(boundConfig);
@@ -406,6 +416,11 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                   syncProfile,
                   syncPermissions,
                   contractSource,
+                  deviceToken,
+                  terminalToken,
+                  activationToken,
+                  syncToken,
+                  tokenExpiresAt,
                   progress,
                 }, { forceTakeover: Boolean(forceTakeover) });
               }}

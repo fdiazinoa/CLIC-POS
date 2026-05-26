@@ -8,7 +8,7 @@ import {
     buildErpZReportPayload
 } from './erpOutboundPayloads';
 import { permissionService } from './PermissionService';
-import { getSyncDeviceToken } from './deviceToken';
+import { getSyncDeviceToken, previewSyncDeviceToken, resolveSyncDeviceToken } from './deviceToken';
 import {
     getSyncProfileSourcePriority,
     loadSyncProfile,
@@ -98,6 +98,7 @@ const ERP_SYNC_TOKEN_KEYS = [
     'erp_sync_token',
 ];
 const ERP_SYNC_TOKEN_EXPIRES_AT_KEY = 'clic_erp_sync_token_expires_at';
+const ERP_SYNC_TOKEN_UPDATED_AT_KEY = 'clic_erp_sync_token_updated_at';
 const ERP_MASTER_PULL_COLLECTIONS = new Set([
     'products',
     'items',
@@ -550,6 +551,7 @@ class ApiSyncAdapter {
                 xSyncToken: headersSummary.xSyncToken,
                 xTerminalId: headersSummary.xTerminalId,
                 xDeviceId: headersSummary.xDeviceId,
+                xDeviceToken: headersSummary.xDeviceToken,
             },
             tokenPresent: Boolean(headersSummary.tokenPreview),
             tokenPreview: headersSummary.tokenPreview,
@@ -962,18 +964,19 @@ class ApiSyncAdapter {
                 return {
                     token,
                     source: key,
-                    updatedAt: safeLocalStorageGet(ERP_SYNC_TOKEN_EXPIRES_AT_KEY),
+                    updatedAt: safeLocalStorageGet(ERP_SYNC_TOKEN_UPDATED_AT_KEY),
                     length: token.length,
                 };
             }
         }
-        return { token: null, source: null, updatedAt: safeLocalStorageGet(ERP_SYNC_TOKEN_EXPIRES_AT_KEY), length: 0 };
+        return { token: null, source: null, updatedAt: safeLocalStorageGet(ERP_SYNC_TOKEN_UPDATED_AT_KEY), length: 0 };
     }
 
     private persistErpSyncToken(token: string, expiresAt?: unknown): void {
         const normalized = sanitizeSyncToken(token);
         if (!normalized) return;
         safeLocalStorageSet('clic_erp_sync_token', normalized);
+        safeLocalStorageSet(ERP_SYNC_TOKEN_UPDATED_AT_KEY, new Date().toISOString());
         if (typeof expiresAt === 'string' && expiresAt.trim()) {
             safeLocalStorageSet(ERP_SYNC_TOKEN_EXPIRES_AT_KEY, expiresAt.trim());
         }
@@ -982,6 +985,7 @@ class ApiSyncAdapter {
     private clearCanonicalErpSyncToken(): void {
         safeLocalStorageRemove('clic_erp_sync_token');
         safeLocalStorageRemove(ERP_SYNC_TOKEN_EXPIRES_AT_KEY);
+        safeLocalStorageRemove(ERP_SYNC_TOKEN_UPDATED_AT_KEY);
     }
 
     private buildOperationalHeaders(
@@ -1070,13 +1074,16 @@ class ApiSyncAdapter {
     private summarizeFetchHeaders(headers: Record<string, string>) {
         const syncToken = headers['X-Sync-Token'] || headers['x-sync-token'] || '';
         const authorization = headers.Authorization || headers.authorization || '';
+        const deviceToken = headers['X-Device-Token'] || headers['x-device-token'] || '';
+        const effectiveToken = syncToken || authorization.replace(/^Bearer\s+/i, '') || deviceToken;
         return {
             authorization: Boolean(authorization),
             xSyncToken: Boolean(syncToken),
             xTerminalId: Boolean(headers['X-Terminal-Id'] || headers['X-POS-Terminal-Id'] || headers['x-terminal-id'] || headers['x-pos-terminal-id']),
             xDeviceId: Boolean(headers['X-Device-Id'] || headers['X-POS-Device-Id'] || headers['x-device-id'] || headers['x-pos-device-id']),
-            tokenPreview: previewSyncToken(syncToken || authorization.replace(/^Bearer\s+/i, '')),
-            tokenLength: sanitizeSyncToken(syncToken || authorization.replace(/^Bearer\s+/i, ''))?.length || 0,
+            xDeviceToken: Boolean(deviceToken),
+            tokenPreview: previewSyncToken(syncToken || authorization.replace(/^Bearer\s+/i, '')) || previewSyncDeviceToken(deviceToken),
+            tokenLength: sanitizeSyncToken(effectiveToken)?.length || deviceToken.length || 0,
             contentType: headers['Content-Type'] || headers['content-type'] || null,
         };
     }
@@ -1318,13 +1325,47 @@ class ApiSyncAdapter {
         const erpAuthPromise = (async () => {
             const deviceId = this.resolveCurrentDeviceId();
             const tenantId = this.resolveCurrentTenantId();
+            const deviceTokenResolution = resolveSyncDeviceToken();
+            const deviceToken = deviceTokenResolution.token;
+            console.log('[SYNC_AUTH_PREPARE]', {
+                tokenPresent: Boolean(deviceToken),
+                tokenSource: deviceTokenResolution.sourceKey,
+                tokenLength: deviceToken?.length || 0,
+                tokenUpdatedAt: deviceTokenResolution.updatedAt || null,
+                terminalId: target.terminalId,
+                deviceId,
+            });
+
+            if (!deviceToken) {
+                const error = new Error('DEVICE_TOKEN_MISSING_LOCAL: No hay deviceToken local para autenticar la terminal vinculada.');
+                reportSyncErrorDiagnostic({
+                    operation,
+                    endpoint: `${target.baseUrl}/auth`,
+                    httpStatus: null,
+                    error,
+                    requestAuth: {
+                        authorizationPresent: false,
+                        syncTokenPresent: false,
+                        syncTokenPreview: null,
+                        terminalIdHeaderPresent: Boolean(target.terminalId),
+                        deviceIdHeaderPresent: Boolean(deviceId),
+                    },
+                    blockedByLocalGuard: true,
+                    guardReason: 'DEVICE_TOKEN_MISSING_LOCAL',
+                });
+                throw error;
+            }
+
             const response = await this.fetchWithRetry(`${target.baseUrl}/auth`, {
                 method: 'POST',
-                headers: this.buildOperationalHeaders(target, '', true),
+                headers: {
+                    ...this.buildOperationalHeaders(target, '', true),
+                    'X-Device-Token': deviceToken,
+                },
                 body: JSON.stringify({
                     terminalId: target.terminalId,
                     terminal_id: target.terminalId,
-                    deviceToken: getSyncDeviceToken(),
+                    deviceToken,
                     deviceId,
                     device_id: deviceId,
                     tenantId,

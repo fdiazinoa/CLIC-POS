@@ -34,6 +34,7 @@ export interface SyncFetchDiagnostic {
         xSyncToken?: boolean;
         xTerminalId?: boolean;
         xDeviceId?: boolean;
+        xDeviceToken?: boolean;
     };
     tokenPresent?: boolean;
     tokenPreview?: string | null;

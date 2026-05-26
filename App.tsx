@@ -177,6 +177,7 @@ import {
   type SyncProfilePersistenceDiagnostic,
   type SyncProfileSource
 } from './services/sync/SyncProfile';
+import { persistSyncDeviceToken, previewSyncDeviceToken } from './services/sync/deviceToken';
 import {
   canRetryFiscalTransaction,
   getEffectiveFiscalComplianceConfig,
@@ -268,6 +269,77 @@ const persistSetupErpBaseUrls = (value?: string | null) => {
   localStorage.setItem('CLIC_ERP_SYNC_URL', `${normalized}/api/sync`);
 };
 
+const pickSetupAuthString = (...values: unknown[]): string | undefined => {
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const normalized = value.replace(/[\r\n\t]/g, '').trim();
+    if (!normalized) continue;
+    if (['undefined', 'null', 'nan', '[object object]'].includes(normalized.toLowerCase())) continue;
+    return normalized;
+  }
+  return undefined;
+};
+
+const extractSetupAuthPayload = (...sources: unknown[]) => {
+  const records = sources
+    .filter((source): source is Record<string, any> => Boolean(source) && typeof source === 'object');
+
+  const deviceToken = pickSetupAuthString(...records.flatMap((record) => [
+    record.deviceToken,
+    record.device_token,
+    record.terminalToken,
+    record.terminal_token,
+    record.activationToken,
+    record.activation_token,
+    record.syncAuth?.deviceToken,
+    record.syncAuth?.device_token,
+  ]));
+  const terminalToken = pickSetupAuthString(...records.flatMap((record) => [
+    record.terminalToken,
+    record.terminal_token,
+    record.syncAuth?.terminalToken,
+    record.syncAuth?.terminal_token,
+  ]));
+  const activationToken = pickSetupAuthString(...records.flatMap((record) => [
+    record.activationToken,
+    record.activation_token,
+    record.syncAuth?.activationToken,
+    record.syncAuth?.activation_token,
+  ]));
+  const syncToken = pickSetupAuthString(...records.flatMap((record) => [
+    record.syncToken,
+    record.sync_token,
+    record.syncAuthToken,
+    record.sync_auth_token,
+    record.syncAuth?.syncToken,
+    record.syncAuth?.sync_token,
+    record.syncAuth?.syncAuthToken,
+    record.syncAuth?.sync_auth_token,
+  ]));
+  const tokenExpiresAt = pickSetupAuthString(...records.flatMap((record) => [
+    record.tokenExpiresAt,
+    record.token_expires_at,
+    record.expiresAt,
+    record.expires_at,
+    record.syncAuth?.tokenExpiresAt,
+    record.syncAuth?.token_expires_at,
+  ]));
+
+  return { deviceToken, terminalToken, activationToken, syncToken, tokenExpiresAt };
+};
+
+const logRegisterResponseAuth = (auth: ReturnType<typeof extractSetupAuthPayload>) => {
+  console.log('[REGISTER_RESPONSE_AUTH]', {
+    deviceToken: Boolean(auth.deviceToken),
+    terminalToken: Boolean(auth.terminalToken),
+    activationToken: Boolean(auth.activationToken),
+    syncToken: Boolean(auth.syncToken),
+    tokenExpiresAt: Boolean(auth.tokenExpiresAt),
+    deviceTokenPreview: previewSyncDeviceToken(auth.deviceToken),
+    syncTokenPreview: auth.syncToken ? `${auth.syncToken.slice(0, 6)}...${auth.syncToken.slice(-4)}` : null,
+  });
+};
+
 const buildInitialTerminalConfigSnapshot = (config: BusinessConfig): BusinessConfig => {
   const metadata = config.metadata && typeof config.metadata === 'object'
     ? {
@@ -279,6 +351,10 @@ const buildInitialTerminalConfigSnapshot = (config: BusinessConfig): BusinessCon
         cloudSync: config.metadata.cloudSync,
         erpTenantId: config.metadata.erpTenantId,
         erpBaseUrl: config.metadata.erpBaseUrl,
+        syncAuth: config.metadata.syncAuth,
+        deviceToken: config.metadata.deviceToken,
+        syncToken: config.metadata.syncToken,
+        tokenExpiresAt: config.metadata.tokenExpiresAt,
       }
     : undefined;
 
@@ -3475,6 +3551,18 @@ const AppContent: React.FC = () => {
       boundUsers?: User[];
       masterIp?: string;
       snapshotItems?: Product[];
+      deviceToken?: string;
+      device_token?: string;
+      terminalToken?: string;
+      terminal_token?: string;
+      activationToken?: string;
+      activation_token?: string;
+      syncToken?: string;
+      sync_token?: string;
+      syncAuthToken?: string;
+      sync_auth_token?: string;
+      tokenExpiresAt?: string;
+      token_expires_at?: string;
       snapshotMeta?: {
         fullPullOnPairing?: boolean;
         resolutionError?: unknown;
@@ -3518,7 +3606,51 @@ const AppContent: React.FC = () => {
         stepId: 'apply',
         message: 'Guardando configuración de terminal y permisos locales...',
       });
-      const updatedConfig = clearDuplicateDeviceAssignments(setupResult.boundConfig, deviceId, {
+      const setupRegisterAuth = extractSetupAuthPayload(
+        setupResult,
+        (setupResult as any)?.initialConfigData,
+        (setupResult as any)?.terminal_config,
+        setupResult.boundConfig?.metadata,
+        setupResult.boundConfig?.metadata?.syncAuth
+      );
+      logRegisterResponseAuth(setupRegisterAuth);
+      const normalizedDeviceToken =
+        setupRegisterAuth.deviceToken
+        || setupRegisterAuth.terminalToken
+        || setupRegisterAuth.activationToken;
+      if (normalizedDeviceToken) {
+        persistSyncDeviceToken(normalizedDeviceToken, 'ERP_REGISTER', setupRegisterAuth.tokenExpiresAt);
+      }
+      if (setupRegisterAuth.syncToken) {
+        localStorage.setItem('clic_erp_sync_token', setupRegisterAuth.syncToken);
+        localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
+        if (setupRegisterAuth.tokenExpiresAt) {
+          localStorage.setItem('clic_erp_sync_token_expires_at', setupRegisterAuth.tokenExpiresAt);
+        }
+      }
+      const authMetadata = normalizedDeviceToken || setupRegisterAuth.syncToken
+        ? {
+            ...(setupResult.boundConfig?.metadata?.syncAuth || {}),
+            deviceToken: normalizedDeviceToken,
+            terminalToken: setupRegisterAuth.terminalToken,
+            activationToken: setupRegisterAuth.activationToken,
+            syncToken: setupRegisterAuth.syncToken,
+            tokenExpiresAt: setupRegisterAuth.tokenExpiresAt,
+            tokenSource: 'ERP_REGISTER',
+            tokenUpdatedAt: new Date().toISOString(),
+          }
+        : setupResult.boundConfig?.metadata?.syncAuth;
+      const configWithAuthMetadata: BusinessConfig = {
+        ...setupResult.boundConfig,
+        metadata: {
+          ...(setupResult.boundConfig.metadata || {}),
+          ...(authMetadata ? { syncAuth: authMetadata } : {}),
+          ...(normalizedDeviceToken ? { deviceToken: normalizedDeviceToken } : {}),
+          ...(setupRegisterAuth.syncToken ? { syncToken: setupRegisterAuth.syncToken } : {}),
+          ...(setupRegisterAuth.tokenExpiresAt ? { tokenExpiresAt: setupRegisterAuth.tokenExpiresAt } : {}),
+        },
+      };
+      const updatedConfig = clearDuplicateDeviceAssignments(configWithAuthMetadata, deviceId, {
         activeTerminalId: terminalId,
         bindingTerminalId: setupResult?.erpTerminalId || terminalId,
         bindingLocalTerminalId: terminalId,
@@ -3685,29 +3817,6 @@ const AppContent: React.FC = () => {
         companyId: setupResult?.companyId || null,
         storeId: setupResult?.storeId || null,
       });
-      const setupTokenSource = setupResult as any;
-      const setupSyncToken =
-        setupTokenSource?.syncToken ||
-        setupTokenSource?.sync_token ||
-        setupTokenSource?.syncAuthToken ||
-        setupTokenSource?.sync_auth_token ||
-        setupTokenSource?.initialConfigData?.syncToken ||
-        setupTokenSource?.initialConfigData?.sync_token ||
-        setupTokenSource?.terminal_config?.syncToken ||
-        setupTokenSource?.terminal_config?.sync_token ||
-        setupTokenSource?.terminal_config?.syncAuthToken ||
-        setupTokenSource?.terminal_config?.sync_auth_token;
-      if (typeof setupSyncToken === 'string' && setupSyncToken.trim()) {
-        localStorage.setItem('clic_erp_sync_token', setupSyncToken.trim());
-        const setupTokenExpiresAt =
-          setupTokenSource?.tokenExpiresAt ||
-          setupTokenSource?.token_expires_at ||
-          setupTokenSource?.expiresAt ||
-          setupTokenSource?.expires_at;
-        if (typeof setupTokenExpiresAt === 'string' && setupTokenExpiresAt.trim()) {
-          localStorage.setItem('clic_erp_sync_token_expires_at', setupTokenExpiresAt.trim());
-        }
-      }
       setTerminalBindingDiagnosticStatus('BOUND');
 
       const shouldRestoreRemoteData = !!finalResolvedMasterIp && isSlave;
@@ -3852,7 +3961,27 @@ const AppContent: React.FC = () => {
       );
 
       const freshData = await db.init();
-      const hydratedConfig = resolvePersistedBusinessConfig(await db.get('config') as unknown) || postSyncConfig;
+      const hydratedConfigFromDb = resolvePersistedBusinessConfig(await db.get('config') as unknown) || postSyncConfig;
+      const preservedSyncAuth = hydratedConfigFromDb.metadata?.syncAuth || updatedConfig.metadata?.syncAuth;
+      const hydratedConfig: BusinessConfig = {
+        ...hydratedConfigFromDb,
+        metadata: {
+          ...(hydratedConfigFromDb.metadata || {}),
+          ...(preservedSyncAuth ? { syncAuth: preservedSyncAuth } : {}),
+          ...(hydratedConfigFromDb.metadata?.deviceToken || updatedConfig.metadata?.deviceToken
+            ? { deviceToken: hydratedConfigFromDb.metadata?.deviceToken || updatedConfig.metadata?.deviceToken }
+            : {}),
+          ...(hydratedConfigFromDb.metadata?.syncToken || updatedConfig.metadata?.syncToken
+            ? { syncToken: hydratedConfigFromDb.metadata?.syncToken || updatedConfig.metadata?.syncToken }
+            : {}),
+          ...(hydratedConfigFromDb.metadata?.tokenExpiresAt || updatedConfig.metadata?.tokenExpiresAt
+            ? { tokenExpiresAt: hydratedConfigFromDb.metadata?.tokenExpiresAt || updatedConfig.metadata?.tokenExpiresAt }
+            : {}),
+        },
+      };
+      if (preservedSyncAuth || updatedConfig.metadata?.deviceToken || updatedConfig.metadata?.syncToken) {
+        await db.save('config', hydratedConfig);
+      }
       setConfig(hydratedConfig);
       if (Array.isArray(freshData.users)) setUsers(freshData.users);
       if (Array.isArray(freshData.roles)) setRoles(freshData.roles);

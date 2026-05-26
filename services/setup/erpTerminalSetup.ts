@@ -28,6 +28,18 @@ export interface RuntimeBindTerminalResponse {
   transferred?: boolean;
   previous_device_id?: string | null;
   config: BusinessConfig;
+  deviceToken?: string;
+  device_token?: string;
+  terminalToken?: string;
+  terminal_token?: string;
+  activationToken?: string;
+  activation_token?: string;
+  syncToken?: string;
+  sync_token?: string;
+  syncAuthToken?: string;
+  sync_auth_token?: string;
+  tokenExpiresAt?: string;
+  token_expires_at?: string;
 }
 
 export interface RuntimeInitialConfigResponse {
@@ -39,6 +51,18 @@ export interface RuntimeInitialConfigResponse {
   terminal_config?: Record<string, any>;
   snapshot_meta?: Record<string, any>;
   items?: Product[];
+  deviceToken?: string;
+  device_token?: string;
+  terminalToken?: string;
+  terminal_token?: string;
+  activationToken?: string;
+  activation_token?: string;
+  syncToken?: string;
+  sync_token?: string;
+  syncAuthToken?: string;
+  sync_auth_token?: string;
+  tokenExpiresAt?: string;
+  token_expires_at?: string;
 }
 
 type BindingMode = 'MASTER' | 'SLAVE';
@@ -69,6 +93,64 @@ const asObject = (value: unknown): Record<string, any> => {
 };
 
 const asString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+
+const pickAuthString = (...values: unknown[]): string | undefined => {
+  for (const value of values) {
+    const normalized = asString(value).replace(/[\r\n\t]/g, '').trim();
+    if (!normalized) continue;
+    if (['undefined', 'null', 'nan', '[object object]'].includes(normalized.toLowerCase())) continue;
+    return normalized;
+  }
+  return undefined;
+};
+
+const extractRuntimeAuthPayload = (...sources: unknown[]) => {
+  const records = sources.map(asObject).filter((record) => Object.keys(record).length > 0);
+  const deviceToken = pickAuthString(...records.flatMap((record) => [
+    record.deviceToken,
+    record.device_token,
+    record.terminalToken,
+    record.terminal_token,
+    record.activationToken,
+    record.activation_token,
+    asObject(record.security).deviceToken,
+    asObject(record.security).device_token,
+    asObject(record.metadata).deviceToken,
+    asObject(record.metadata).device_token,
+  ]));
+  const terminalToken = pickAuthString(...records.flatMap((record) => [
+    record.terminalToken,
+    record.terminal_token,
+    asObject(record.security).terminalToken,
+    asObject(record.security).terminal_token,
+  ]));
+  const activationToken = pickAuthString(...records.flatMap((record) => [
+    record.activationToken,
+    record.activation_token,
+    asObject(record.security).activationToken,
+    asObject(record.security).activation_token,
+  ]));
+  const syncToken = pickAuthString(...records.flatMap((record) => [
+    record.syncToken,
+    record.sync_token,
+    record.syncAuthToken,
+    record.sync_auth_token,
+    asObject(record.security).syncToken,
+    asObject(record.security).sync_token,
+    asObject(record.runtime).syncAuthToken,
+    asObject(record.runtime).sync_auth_token,
+  ]));
+  const tokenExpiresAt = pickAuthString(...records.flatMap((record) => [
+    record.tokenExpiresAt,
+    record.token_expires_at,
+    record.expiresAt,
+    record.expires_at,
+    asObject(record.security).tokenExpiresAt,
+    asObject(record.security).token_expires_at,
+  ]));
+
+  return { deviceToken, terminalToken, activationToken, syncToken, tokenExpiresAt };
+};
 
 const cloneDeep = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
@@ -716,6 +798,15 @@ export const bindTerminalFromErp = async (input: {
     posDeviceId: input.posDeviceId,
     bindingMode: input.bindingMode,
   });
+  const runtimeAuth = extractRuntimeAuthPayload(
+    persistedProfilePayload,
+    persistedProfilePayload?.profile,
+    selectedProfilePayload,
+    selectedProfilePayload?.profile,
+    currentProfilePayload,
+    currentProfilePayload?.profile,
+    targetTerminal
+  );
 
   return {
     success: true,
@@ -728,6 +819,11 @@ export const bindTerminalFromErp = async (input: {
     transferred: Boolean(occupiedDeviceId && occupiedDeviceId !== input.posDeviceId),
     previous_device_id: occupiedDeviceId && occupiedDeviceId !== input.posDeviceId ? occupiedDeviceId : null,
     config: boundConfig,
+    deviceToken: runtimeAuth.deviceToken,
+    terminalToken: runtimeAuth.terminalToken,
+    activationToken: runtimeAuth.activationToken,
+    syncToken: runtimeAuth.syncToken,
+    tokenExpiresAt: runtimeAuth.tokenExpiresAt,
   };
 };
 
@@ -743,6 +839,7 @@ export const fetchInitialConfigFromErp = async (input: {
   );
 
   const terminalConfig = asObject(payload?.terminal_config);
+  const runtimeAuth = extractRuntimeAuthPayload(payload, terminalConfig);
 
   return {
     success: asString(payload?.status).toLowerCase() === 'success',
@@ -753,6 +850,11 @@ export const fetchInitialConfigFromErp = async (input: {
     items: Array.isArray(payload?.items)
       ? payload.items
       : (Array.isArray(terminalConfig?.masters?.items) ? terminalConfig.masters.items : []),
+    deviceToken: runtimeAuth.deviceToken,
+    terminalToken: runtimeAuth.terminalToken,
+    activationToken: runtimeAuth.activationToken,
+    syncToken: runtimeAuth.syncToken,
+    tokenExpiresAt: runtimeAuth.tokenExpiresAt,
   };
 };
 
