@@ -79,6 +79,9 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <Field label="HTTP status" value={diagnostic.httpStatus} />
             <Field label="deviceId" value={diagnostic.deviceId} />
             <Field label="terminalId" value={diagnostic.terminalId} />
+            <Field label="contractSource" value={diagnostic.contractSource} />
+            <Field label="mismatchDetected" value={diagnostic.mismatchDetected ? 'true' : 'false'} />
+            <Field label="mismatchFixed" value={diagnostic.mismatchFixed ? 'true' : 'false'} />
           </div>
 
           <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -96,6 +99,19 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
               <pre className="mt-3 max-h-64 overflow-auto rounded-xl bg-slate-950 p-4 text-xs font-semibold text-slate-100">{JSON.stringify(diagnostic.syncProfile, null, 2)}</pre>
             </div>
           </div>
+
+          {(diagnostic.existingProfile || diagnostic.incomingProfile) && (
+            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <p className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-400">existingProfile</p>
+                <pre className="mt-3 max-h-64 overflow-auto rounded-xl bg-slate-950 p-4 text-xs font-semibold text-slate-100">{JSON.stringify(diagnostic.existingProfile || null, null, 2)}</pre>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <p className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-400">incomingProfile</p>
+                <pre className="mt-3 max-h-64 overflow-auto rounded-xl bg-slate-950 p-4 text-xs font-semibold text-slate-100">{JSON.stringify(diagnostic.incomingProfile || null, null, 2)}</pre>
+              </div>
+            </div>
+          )}
 
           <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 p-4">
             <p className="text-[10px] font-black uppercase tracking-[0.24em] text-red-500">error.message</p>

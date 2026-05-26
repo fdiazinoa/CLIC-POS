@@ -171,6 +171,13 @@ import {
   type PosApkUpdateAvailable
 } from './services/version/posApkUpdateService';
 import {
+  saveSyncProfileFromContract,
+  type SyncPermissions,
+  type SyncProfile,
+  type SyncProfilePersistenceDiagnostic,
+  type SyncProfileSource
+} from './services/sync/SyncProfile';
+import {
   canRetryFiscalTransaction,
   getEffectiveFiscalComplianceConfig,
   getFiscalDisplayCode,
@@ -572,6 +579,18 @@ const getTerminalSetupIntegrationMode = (setupMode: TerminalSetupMode | null): T
 
 const getTerminalBindingMode = (setupMode: TerminalSetupMode | null): 'MASTER' | 'SLAVE' => {
   return setupMode === 'CLIENT' ? 'SLAVE' : 'MASTER';
+};
+
+const coerceOptionalBoolean = (...values: unknown[]): boolean | undefined => {
+  for (const value of values) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (['true', '1', 'yes', 'si', 'sí', 'on'].includes(normalized)) return true;
+      if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+    }
+  }
+  return undefined;
 };
 
 const hasPendingTerminalSetup = (): boolean => localStorage.getItem(TERMINAL_SETUP_PENDING_KEY) === '1';
@@ -1452,6 +1471,7 @@ const AppContent: React.FC = () => {
     clearStoredErpSyncBinding();
     localStorage.removeItem('active_terminal_id');
     localStorage.removeItem('initial_terminal_config');
+    localStorage.setItem('clic_sync_mode', 'POS_LOCAL');
     localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
     localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_LOCAL');
     localStorage.setItem(SETUP_FLOW_STAGE_KEY, 'VERTICAL_SELECTED');
@@ -1465,6 +1485,7 @@ const AppContent: React.FC = () => {
     clearStoredErpSyncBinding();
     localStorage.removeItem('active_terminal_id');
     localStorage.removeItem('initial_terminal_config');
+    localStorage.setItem('clic_sync_mode', mode === 'SERVER_ERP' ? 'POS_ERP' : mode === 'CLIENT' ? 'POS_SLAVE' : 'POS_LOCAL');
     localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
     localStorage.setItem(TERMINAL_SETUP_MODE_KEY, mode);
 
@@ -3458,6 +3479,9 @@ const AppContent: React.FC = () => {
         fullPullOnPairing?: boolean;
         resolutionError?: unknown;
       };
+      syncProfile?: Partial<SyncProfile>;
+      syncPermissions?: SyncPermissions;
+      contractSource?: SyncProfileSource;
       progress?: (update: { stepId?: 'claim' | 'config' | 'apply' | 'sync' | 'cache' | 'finish'; message?: string }) => void;
     },
     options?: { forceTakeover?: boolean }
@@ -3466,6 +3490,8 @@ const AppContent: React.FC = () => {
     setTerminalBindingDiagnosticStatus('BINDING');
     setCatalogDiagnosticStatus('IDLE');
     let preserveTerminalBindingAfterRegister = false;
+    let syncProfilePersistence: SyncProfilePersistenceDiagnostic | null = null;
+    let isErpDirectBinding = false;
     const previousConfig = config;
     const previousUsers = users;
     const previousActiveTerminalId = localStorage.getItem('active_terminal_id');
@@ -3543,6 +3569,55 @@ const AppContent: React.FC = () => {
       if (resolvedTenantId && resolvedTenantId !== 'default-tenant') {
         localStorage.setItem('clic_tenant_id', resolvedTenantId);
       }
+
+      isErpDirectBinding =
+        !isSlave &&
+        (
+          nextSetupMode === 'SERVER_ERP' ||
+          setupResult?.syncProfile?.contractedProduct === 'POS_ERP' ||
+          setupResult?.syncProfile?.cloudChannel === 'ERP_ACTIVE' ||
+          setupResult?.syncProfile?.dataMaster === 'ERP' ||
+          setupResult?.syncProfile?.customerErpAccess === true ||
+          setupResult?.syncProfile?.erpUiEnabled === true
+        );
+      const resolvedSyncPermissions = setupResult?.syncPermissions || setupResult?.syncProfile?.syncPermissions;
+      const resolvedErpReadyForSales = coerceOptionalBoolean(
+        setupResult?.syncProfile?.erpReadyForSales,
+        resolvedSyncPermissions?.canPushOperations,
+        resolvedSyncPermissions?.pushOperations
+      ) ?? false;
+      const incomingSyncProfile: Partial<SyncProfile> = {
+        ...(setupResult?.syncProfile || {}),
+        syncPermissions: resolvedSyncPermissions,
+        contractedProduct: isErpDirectBinding ? 'POS_ERP' : 'POS_ONLY',
+        posRuntime: isSlave ? 'SLAVE' : 'MASTER',
+        cloudChannel: isSlave ? 'POS_MASTER' : isErpDirectBinding ? 'ERP_ACTIVE' : 'POS_CLOUD_STAGING',
+        dataMaster: isSlave ? 'POS_MASTER' : isErpDirectBinding ? 'ERP' : 'POS',
+        cloudSyncEnabled: !isSlave,
+        customerErpAccess: isErpDirectBinding,
+        erpUiEnabled: isErpDirectBinding,
+        localTenantId: resolvedTenantId,
+        localStoreId: setupResult?.storeId || setupResult?.syncProfile?.localStoreId,
+        localTerminalId: terminalId,
+        cloudBaseUrl: resolvedErpBaseUrl || setupResult?.syncProfile?.cloudBaseUrl,
+        erpBaseUrl: resolvedErpBaseUrl || setupResult?.syncProfile?.erpBaseUrl,
+        cloudTenantId: setupResult?.syncProfile?.cloudTenantId || localStorage.getItem('clic_cloud_tenant_id') || localStorage.getItem('active_tenant_id') || resolvedTenantId,
+        erpTenantId: setupResult?.syncProfile?.erpTenantId || resolvedTenantId,
+        erpTerminalId: resolvedErpTerminalId,
+        masterUrl: isSlave ? finalResolvedMasterUrl : undefined,
+        masterTerminalId: isSlave ? terminalId : undefined,
+        masterReady: Boolean(isSlave && finalResolvedMasterUrl),
+        cloudStagingReady: !isErpDirectBinding && !isSlave,
+        erpReadyForSales: resolvedErpReadyForSales,
+      };
+      const contractSource: SyncProfileSource =
+        setupResult?.contractSource || (isErpDirectBinding ? 'ERP_REGISTER' : 'CLOUD_ADMIN');
+      syncProfilePersistence = saveSyncProfileFromContract(incomingSyncProfile, contractSource);
+      localStorage.setItem('clic_sync_mode', isSlave ? 'POS_SLAVE' : isErpDirectBinding ? 'POS_ERP' : 'POS_LOCAL');
+      localStorage.setItem('clic_customer_erp_access', String(isErpDirectBinding));
+      localStorage.setItem('clic_erp_ui_enabled', String(isErpDirectBinding));
+      localStorage.setItem('CLIC_ERP_ACTIVE', String(isErpDirectBinding));
+      localStorage.setItem('clic_erp_ready_for_sales', String(resolvedErpReadyForSales));
 
       if (Array.isArray(setupResult?.boundUsers)) {
         setupResult.progress?.({
@@ -3798,9 +3873,13 @@ const AppContent: React.FC = () => {
       });
       setTerminalBindingDiagnosticStatus('BOUND');
       setCatalogDiagnosticStatus('SYNCED');
-      void posCloudStagingService.sendSnapshot('TERMINAL_BINDING_COMPLETE').catch((error) => {
-        console.warn('⚠️ POS cloud staging snapshot failed after terminal binding:', error);
-      });
+      if (isErpDirectBinding) {
+        console.log('[SYNC_ROUTER] POS_ERP binding complete: skipping POS_CLOUD_STAGING snapshot and PUSH_MASTERS.');
+      } else {
+        void posCloudStagingService.sendSnapshot('TERMINAL_BINDING_COMPLETE').catch((error) => {
+          console.warn('⚠️ POS cloud staging snapshot failed after terminal binding:', error);
+        });
+      }
 
       setCurrentView('LOGIN');
     } catch (error) {
@@ -3812,6 +3891,11 @@ const AppContent: React.FC = () => {
           operation: 'REGISTER_TERMINAL',
           collection: 'products',
           error,
+          contractSource: syncProfilePersistence?.contractSource,
+          existingProfile: syncProfilePersistence?.existingProfile,
+          incomingProfile: syncProfilePersistence?.incomingProfile,
+          mismatchDetected: syncProfilePersistence?.mismatchDetected,
+          mismatchFixed: syncProfilePersistence?.mismatchFixed,
         });
       } else {
         setTerminalBindingDiagnosticStatus('BINDING_ERROR');

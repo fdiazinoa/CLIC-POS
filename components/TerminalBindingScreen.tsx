@@ -3,6 +3,7 @@ import { ChevronRight, Lock, Server, Smartphone, Wifi } from 'lucide-react';
 import { BusinessConfig, Product, User as UserType } from '../types';
 import TerminalSelector from './TerminalSelector';
 import { buildMasterUrlCandidates, buildMasterUrlFromHost, normalizeMasterHost } from '../utils/cloudMasterRegistry';
+import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../services/sync/SyncProfile';
 
 interface PairingResult {
   tenantId?: string;
@@ -19,6 +20,9 @@ interface PairingResult {
     fullPullOnPairing?: boolean;
     resolutionError?: unknown;
   };
+  syncProfile?: Partial<SyncProfile>;
+  syncPermissions?: SyncPermissions;
+  contractSource?: SyncProfileSource;
   progress?: (update: { stepId?: 'claim' | 'config' | 'apply' | 'sync' | 'cache' | 'finish'; message?: string }) => void;
 }
 
@@ -378,6 +382,9 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                 masterIp: resolvedMasterIp,
                 snapshotItems,
                 snapshotMeta,
+                syncProfile,
+                syncPermissions,
+                contractSource,
                 progress
               }) => {
                 await onConfigUpdate?.(boundConfig);
@@ -396,6 +403,9 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                   masterIp: resolvedMasterIp,
                   snapshotItems,
                   snapshotMeta,
+                  syncProfile,
+                  syncPermissions,
+                  contractSource,
                   progress,
                 }, { forceTakeover: Boolean(forceTakeover) });
               }}

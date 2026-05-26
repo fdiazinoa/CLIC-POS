@@ -9,7 +9,7 @@ import {
 } from './erpOutboundPayloads';
 import { permissionService } from './PermissionService';
 import { getSyncDeviceToken } from './deviceToken';
-import { resolveSyncTarget, ResolvedSyncTarget } from './SyncProfile';
+import { loadSyncProfile, resolveSyncTarget, ResolvedSyncTarget } from './SyncProfile';
 import { reportSyncErrorDiagnostic } from './SyncErrorDiagnostic';
 
 /**
@@ -1027,7 +1027,19 @@ class ApiSyncAdapter {
         action: SyncChange['action'] = 'BULK_UPDATE',
         mode: 'UPSERT' | 'FULL_REPLACE' = 'UPSERT'
     ): Promise<void> {
-        const routedTarget = resolveSyncTarget();
+        const activeProfile = loadSyncProfile();
+        const routedTarget = resolveSyncTarget(activeProfile);
+        if (activeProfile.contractedProduct === 'POS_ERP') {
+            console.warn('[INVALID_PUSH_MASTERS_FOR_POS_ERP]', {
+                collection,
+                action,
+                mode,
+                targetKind: routedTarget.kind,
+                erpTerminalId: activeProfile.erpTerminalId,
+                erpReadyForSales: activeProfile.erpReadyForSales,
+            });
+            return;
+        }
         if (routedTarget.kind === 'POS_CLOUD_STAGING' && routedTarget.canPushMasters) {
             const target = await this.authenticateOperationalTarget(false, 'background');
             const buildBody = () => JSON.stringify({

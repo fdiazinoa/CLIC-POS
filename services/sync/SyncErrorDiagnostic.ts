@@ -1,4 +1,11 @@
-import { loadSyncProfile, resolveSyncTarget, type ResolvedSyncTarget, type SyncProfile } from './SyncProfile';
+import {
+    getLastSyncProfilePersistenceDiagnostic,
+    loadSyncProfile,
+    resolveSyncTarget,
+    type ResolvedSyncTarget,
+    type SyncProfile,
+    type SyncProfileSource
+} from './SyncProfile';
 
 export type SyncDiagnosticOperation =
     | 'PULL_MASTERS'
@@ -34,6 +41,8 @@ export interface SyncErrorDiagnostic {
         | 'cloudSyncEnabled'
         | 'customerErpAccess'
         | 'erpUiEnabled'
+        | 'contractSource'
+        | 'syncPermissions'
         | 'erpReadyForSales'
         | 'cloudStagingReady'
         | 'erpBaseUrl'
@@ -44,6 +53,11 @@ export interface SyncErrorDiagnostic {
         | 'masterUrl'
         | 'masterTerminalId'
     >;
+    contractSource: SyncProfileSource | 'UNKNOWN';
+    existingProfile?: Partial<SyncProfile> | null;
+    incomingProfile?: Partial<SyncProfile> | null;
+    mismatchDetected?: boolean;
+    mismatchFixed?: boolean;
     terminalBindingStatus: TerminalBindingStatus;
     catalogSyncStatus: CatalogSyncStatus;
     salesPushStatus: SalesPushStatus;
@@ -133,9 +147,15 @@ export const buildSyncErrorDiagnostic = (input: {
     httpStatus?: number | string | null;
     responseBody?: unknown;
     error?: unknown;
+    contractSource?: SyncProfileSource;
+    existingProfile?: Partial<SyncProfile> | null;
+    incomingProfile?: Partial<SyncProfile> | null;
+    mismatchDetected?: boolean;
+    mismatchFixed?: boolean;
 }): SyncErrorDiagnostic => {
     const syncProfile = loadSyncProfile();
     const resolvedTarget = resolveSyncTarget(syncProfile);
+    const lastProfileDiagnostic = getLastSyncProfilePersistenceDiagnostic();
     const error = input.error instanceof Error ? input.error : null;
 
     return {
@@ -161,6 +181,8 @@ export const buildSyncErrorDiagnostic = (input: {
             cloudSyncEnabled: syncProfile.cloudSyncEnabled,
             customerErpAccess: syncProfile.customerErpAccess,
             erpUiEnabled: syncProfile.erpUiEnabled,
+            contractSource: syncProfile.contractSource,
+            syncPermissions: syncProfile.syncPermissions,
             erpReadyForSales: syncProfile.erpReadyForSales,
             cloudStagingReady: syncProfile.cloudStagingReady,
             erpBaseUrl: syncProfile.erpBaseUrl,
@@ -171,6 +193,11 @@ export const buildSyncErrorDiagnostic = (input: {
             masterUrl: syncProfile.masterUrl,
             masterTerminalId: syncProfile.masterTerminalId,
         },
+        contractSource: input.contractSource || syncProfile.contractSource || lastProfileDiagnostic?.contractSource || 'UNKNOWN',
+        existingProfile: input.existingProfile ?? lastProfileDiagnostic?.existingProfile ?? null,
+        incomingProfile: input.incomingProfile ?? lastProfileDiagnostic?.incomingProfile ?? null,
+        mismatchDetected: input.mismatchDetected ?? lastProfileDiagnostic?.mismatchDetected ?? false,
+        mismatchFixed: input.mismatchFixed ?? lastProfileDiagnostic?.mismatchFixed ?? false,
         terminalBindingStatus: resolveBindingStatus(),
         catalogSyncStatus: resolveCatalogStatus(),
         salesPushStatus: resolveSalesPushStatus(resolvedTarget),

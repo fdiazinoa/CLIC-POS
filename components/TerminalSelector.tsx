@@ -19,6 +19,7 @@ import {
   isTerminalOccupiedError,
   listTerminalsFromErp,
 } from '../services/setup/erpTerminalSetup';
+import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../services/sync/SyncProfile';
 
 interface TerminalCard {
   id: string;
@@ -50,6 +51,22 @@ interface BindTerminalResponse {
   previous_device_id?: string | null;
   config: BusinessConfig;
   users?: UserType[];
+  sync_profile?: Partial<SyncProfile>;
+  syncProfile?: Partial<SyncProfile>;
+  sync_permissions?: SyncPermissions;
+  syncPermissions?: SyncPermissions;
+  contracted_product?: string;
+  contractedProduct?: string;
+  cloud_channel?: string;
+  cloudChannel?: string;
+  data_master?: string;
+  dataMaster?: string;
+  customer_erp_access?: boolean;
+  customerErpAccess?: boolean;
+  erp_ui_enabled?: boolean;
+  erpUiEnabled?: boolean;
+  erp_ready_for_sales?: boolean;
+  erpReadyForSales?: boolean;
 }
 
 interface InitialConfigResponse {
@@ -60,6 +77,22 @@ interface InitialConfigResponse {
   config?: BusinessConfig;
   items?: Product[];
   terminal_config?: Record<string, any>;
+  sync_profile?: Partial<SyncProfile>;
+  syncProfile?: Partial<SyncProfile>;
+  sync_permissions?: SyncPermissions;
+  syncPermissions?: SyncPermissions;
+  contracted_product?: string;
+  contractedProduct?: string;
+  cloud_channel?: string;
+  cloudChannel?: string;
+  data_master?: string;
+  dataMaster?: string;
+  customer_erp_access?: boolean;
+  customerErpAccess?: boolean;
+  erp_ui_enabled?: boolean;
+  erpUiEnabled?: boolean;
+  erp_ready_for_sales?: boolean;
+  erpReadyForSales?: boolean;
   snapshot_meta?: {
     used_resolved?: boolean;
     used_fallback_config?: boolean;
@@ -87,6 +120,9 @@ interface BoundTerminalPayload {
     fullPullOnPairing?: boolean;
     resolutionError?: unknown;
   };
+  syncProfile?: Partial<SyncProfile>;
+  syncPermissions?: SyncPermissions;
+  contractSource?: SyncProfileSource;
   progress?: (update: TerminalBindingProgressUpdate) => void;
 }
 
@@ -222,6 +258,113 @@ const resolveTenantDisplayName = (tenantId?: string | null): string => {
   if (email) return email;
 
   return (tenantId || '').trim() || 'Tenant no identificado';
+};
+
+const pickBoolean = (...values: unknown[]): boolean | undefined => {
+  for (const value of values) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (['true', '1', 'yes', 'si', 'sí', 'on'].includes(normalized)) return true;
+      if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+    }
+  }
+  return undefined;
+};
+
+const pickString = (...values: unknown[]): string | undefined => {
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
+};
+
+const extractPolicyObject = (...sources: unknown[]): Partial<SyncProfile> => {
+  for (const source of sources) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
+    const record = source as Record<string, any>;
+    const nested = record.sync_profile || record.syncProfile || record.policy || record.sync_policy || record.syncPolicy;
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      return nested as Partial<SyncProfile>;
+    }
+  }
+  return {};
+};
+
+const buildTerminalSyncProfile = (params: {
+  bindingMode: 'MASTER' | 'SLAVE';
+  expectsErpDirect: boolean;
+  erpBaseUrl?: string | null;
+  terminalId: string;
+  erpTerminalId?: string | null;
+  tenantId?: string | null;
+  storeId?: string | null;
+  data?: BindTerminalResponse | null;
+  initialConfigData?: InitialConfigResponse | null;
+}): Partial<SyncProfile> => {
+  const terminalConfig = params.initialConfigData?.terminal_config || {};
+  const candidate = extractPolicyObject(params.data, params.initialConfigData, terminalConfig);
+  const syncPermissions =
+    params.data?.syncPermissions ||
+    params.data?.sync_permissions ||
+    params.initialConfigData?.syncPermissions ||
+    params.initialConfigData?.sync_permissions ||
+    (candidate.syncPermissions as SyncPermissions | undefined);
+
+  const isSlave = params.bindingMode === 'SLAVE';
+  const isErpDirect = params.expectsErpDirect && !isSlave;
+  const erpReadyForSales = pickBoolean(
+    params.data?.erpReadyForSales,
+    params.data?.erp_ready_for_sales,
+    params.initialConfigData?.erpReadyForSales,
+    params.initialConfigData?.erp_ready_for_sales,
+    terminalConfig.erpReadyForSales,
+    terminalConfig.erp_ready_for_sales,
+    (candidate as any).erpReadyForSales,
+    syncPermissions?.canPushOperations
+  );
+
+  return {
+    ...candidate,
+    syncPermissions,
+    contractedProduct: isErpDirect ? 'POS_ERP' : 'POS_ONLY',
+    posRuntime: isSlave ? 'SLAVE' : 'MASTER',
+    cloudChannel: isSlave ? 'POS_MASTER' : isErpDirect ? 'ERP_ACTIVE' : 'POS_CLOUD_STAGING',
+    dataMaster: isSlave ? 'POS_MASTER' : isErpDirect ? 'ERP' : 'POS',
+    cloudSyncEnabled: !isSlave,
+    customerErpAccess: isErpDirect ? true : pickBoolean(
+      params.data?.customerErpAccess,
+      params.data?.customer_erp_access,
+      params.initialConfigData?.customerErpAccess,
+      params.initialConfigData?.customer_erp_access,
+      terminalConfig.customerErpAccess,
+      terminalConfig.customer_erp_access,
+      (candidate as any).customerErpAccess,
+      false
+    ) || false,
+    erpUiEnabled: isErpDirect ? true : pickBoolean(
+      params.data?.erpUiEnabled,
+      params.data?.erp_ui_enabled,
+      params.initialConfigData?.erpUiEnabled,
+      params.initialConfigData?.erp_ui_enabled,
+      terminalConfig.erpUiEnabled,
+      terminalConfig.erp_ui_enabled,
+      (candidate as any).erpUiEnabled,
+      false
+    ) || false,
+    cloudBaseUrl: pickString((candidate as any).cloudBaseUrl, params.erpBaseUrl),
+    erpBaseUrl: pickString((candidate as any).erpBaseUrl, params.erpBaseUrl),
+    cloudTenantId: pickString((candidate as any).cloudTenantId, params.tenantId),
+    erpTenantId: pickString((candidate as any).erpTenantId, params.tenantId),
+    localTenantId: pickString((candidate as any).localTenantId, params.tenantId),
+    localStoreId: pickString((candidate as any).localStoreId, params.storeId),
+    localTerminalId: pickString((candidate as any).localTerminalId, params.terminalId),
+    erpTerminalId: pickString((candidate as any).erpTerminalId, params.erpTerminalId, params.terminalId),
+    cloudStagingReady: !isErpDirect && !isSlave,
+    erpReadyForSales: Boolean(erpReadyForSales),
+  };
 };
 
 const DEFAULT_PUBLIC_ERP_BASE_URL = 'https://clic-erp.vercel.app';
@@ -831,6 +974,25 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           bindingMode === 'SLAVE'
             ? normalizeMasterHost(masterIpInput) || masterIpInput.trim() || undefined
             : undefined;
+        const resolvedTerminalId = initialConfigData.terminal_id || data.terminal_id || terminal.id;
+        const resolvedErpTerminalId = data.erp_terminal_id || terminal.erpTerminalId || undefined;
+        const syncProfile = buildTerminalSyncProfile({
+          bindingMode,
+          expectsErpDirect,
+          erpBaseUrl,
+          terminalId: resolvedTerminalId,
+          erpTerminalId: resolvedErpTerminalId,
+          tenantId: initialConfigData.tenant_id || data.tenant_id || tenantId,
+          storeId: data.store_id || undefined,
+          data,
+          initialConfigData,
+        });
+        const syncPermissions =
+          data.syncPermissions ||
+          data.sync_permissions ||
+          initialConfigData.syncPermissions ||
+          initialConfigData.sync_permissions ||
+          syncProfile.syncPermissions;
 
         if (showProgress) {
           updateBindingProgress({
@@ -840,8 +1002,8 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         }
 
         await onBound({
-          terminalId: initialConfigData.terminal_id || data.terminal_id || terminal.id,
-          erpTerminalId: data.erp_terminal_id || terminal.erpTerminalId || undefined,
+          terminalId: resolvedTerminalId,
+          erpTerminalId: resolvedErpTerminalId,
           erpBaseUrl: erpBaseUrl || undefined,
           terminalName: data.terminal_name || terminal.name || data.terminal_id || terminal.id,
           tenantId: initialConfigData.tenant_id || data.tenant_id || tenantId,
@@ -859,6 +1021,9 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             fullPullOnPairing: initialConfigData.snapshot_meta?.full_pull_on_pairing,
             resolutionError: initialConfigData.snapshot_meta?.resolution_error,
           },
+          syncProfile,
+          syncPermissions,
+          contractSource: expectsErpDirect ? 'ERP_REGISTER' : 'CLOUD_ADMIN',
           progress: showProgress ? updateBindingProgress : undefined,
         });
         completed = true;
