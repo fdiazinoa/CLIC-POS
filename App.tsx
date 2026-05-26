@@ -261,6 +261,70 @@ const persistSetupErpBaseUrls = (value?: string | null) => {
   localStorage.setItem('CLIC_ERP_SYNC_URL', `${normalized}/api/sync`);
 };
 
+const buildInitialTerminalConfigSnapshot = (config: BusinessConfig): BusinessConfig => {
+  const metadata = config.metadata && typeof config.metadata === 'object'
+    ? {
+        tenantId: config.metadata.tenantId,
+        tenantSlug: config.metadata.tenantSlug,
+        setupMode: config.metadata.setupMode,
+        syncMode: config.metadata.syncMode,
+        integrationMode: config.metadata.integrationMode,
+        cloudSync: config.metadata.cloudSync,
+        erpTenantId: config.metadata.erpTenantId,
+        erpBaseUrl: config.metadata.erpBaseUrl,
+      }
+    : undefined;
+
+  return {
+    vertical: config.vertical,
+    subVertical: config.subVertical,
+    currencySymbol: config.currencySymbol,
+    taxRate: config.taxRate,
+    taxes: Array.isArray(config.taxes) ? config.taxes : [],
+    themeColor: config.themeColor,
+    features: config.features || { stockTracking: false },
+    units: Array.isArray(config.units) ? config.units : [],
+    loyalty: config.loyalty,
+    companyInfo: config.companyInfo,
+    currencies: Array.isArray(config.currencies) ? config.currencies : [],
+    paymentMethods: Array.isArray(config.paymentMethods) ? config.paymentMethods : [],
+    integrations: Array.isArray(config.integrations) ? config.integrations : [],
+    terminals: Array.isArray(config.terminals) ? config.terminals : [],
+    tariffs: Array.isArray(config.tariffs) ? config.tariffs : [],
+    receiptConfig: config.receiptConfig,
+    labelTemplates: Array.isArray(config.labelTemplates) ? config.labelTemplates : [],
+    tipsConfig: config.tipsConfig,
+    emailConfig: config.emailConfig,
+    fiscalCompliance: config.fiscalCompliance,
+    availablePrinters: Array.isArray(config.availablePrinters) ? config.availablePrinters : [],
+    scales: Array.isArray(config.scales) ? config.scales : [],
+    scaleLabelConfig: config.scaleLabelConfig,
+    roles: Array.isArray(config.roles) ? config.roles : [],
+    inventoryScope: config.inventoryScope,
+    operational: config.operational,
+    ux: config.ux,
+    metadata,
+  };
+};
+
+const persistInitialTerminalConfig = (config: BusinessConfig) => {
+  const key = 'initial_terminal_config';
+  try {
+    localStorage.setItem(key, JSON.stringify(config));
+    return;
+  } catch (error) {
+    console.warn('⚠️ initial_terminal_config completo excede cuota; guardando snapshot liviano.', error);
+  }
+
+  try {
+    const snapshot = buildInitialTerminalConfigSnapshot(config);
+    localStorage.setItem(key, JSON.stringify(snapshot));
+  } catch (error) {
+    console.warn('⚠️ No se pudo guardar initial_terminal_config liviano; se preserva config en SQLite.', error);
+    localStorage.removeItem(key);
+  }
+};
+
 const resolveFriendlyTerminalName = (terminal: any): string => {
   const candidates = [
     terminal?.config?.terminalName,
@@ -3716,7 +3780,7 @@ const AppContent: React.FC = () => {
       localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
       localStorage.setItem('active_terminal_id', terminalId);
       localStorage.setItem('CLIC_POS_TERMINAL_ID', terminalId);
-      localStorage.setItem('initial_terminal_config', JSON.stringify(hydratedConfig));
+      persistInitialTerminalConfig(hydratedConfig);
       if (resolvedErpBaseUrl) {
         persistSetupErpBaseUrls(resolvedErpBaseUrl);
       }
@@ -3811,7 +3875,7 @@ const AppContent: React.FC = () => {
 	        if (binding) {
 	          localStorage.setItem('active_terminal_id', binding.terminalId);
 	          localStorage.setItem('CLIC_POS_TERMINAL_ID', binding.terminalId);
-	          localStorage.setItem('initial_terminal_config', JSON.stringify(binding.nextConfig || nextConfig));
+	          persistInitialTerminalConfig(binding.nextConfig || nextConfig);
 	          void posCloudStagingService.sendSnapshot('SETUP_WIZARD_COMPLETE').catch((error) => {
 	            console.warn('⚠️ POS cloud staging snapshot failed after setup wizard:', error);
 	          });
