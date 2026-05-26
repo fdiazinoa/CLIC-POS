@@ -82,6 +82,11 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <Field label="contractSource" value={diagnostic.contractSource} />
             <Field label="mismatchDetected" value={diagnostic.mismatchDetected ? 'true' : 'false'} />
             <Field label="mismatchFixed" value={diagnostic.mismatchFixed ? 'true' : 'false'} />
+            <Field label="isMasterCollection" value={diagnostic.isMasterCollection === undefined ? 'N/A' : diagnostic.isMasterCollection ? 'true' : 'false'} />
+            <Field label="isOperationCollection" value={diagnostic.isOperationCollection === undefined ? 'N/A' : diagnostic.isOperationCollection ? 'true' : 'false'} />
+            <Field label="isCriticalMaster" value={diagnostic.isCriticalMaster === undefined ? 'N/A' : diagnostic.isCriticalMaster ? 'true' : 'false'} />
+            <Field label="skippedReason" value={diagnostic.skippedReason} />
+            <Field label="severity" value={diagnostic.userVisibleSeverity} />
           </div>
 
           <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">

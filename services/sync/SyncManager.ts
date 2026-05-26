@@ -47,36 +47,134 @@ import { normalizeRestaurantProductConfig } from '../../utils/restaurantProductC
 import { syncPolicy } from './SyncProfile';
 import { reportSyncErrorDiagnostic, setCatalogDiagnosticStatus } from './SyncErrorDiagnostic';
 
-export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'productPrices' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities' | 'crmOpportunities' | 'erp_sales_documents';
+export type SyncableCollection =
+    | 'products' | 'items' | 'taxes' | 'customers' | 'suppliers' | 'warehouses'
+    | 'paymentMethods' | 'priceLists' | 'productPrices' | 'categories' | 'collections'
+    | 'serviceTypes' | 'rooms' | 'tables' | 'productionAreas'
+    | 'documentSeries' | 'documentTypes' | 'fiscalRanges' | 'fiscalReceiptTypes'
+    | 'fiscalReceipts' | 'fiscalSequences' | 'internalSequences' | 'terminalFiscalConfig'
+    | 'promotions' | 'campaigns' | 'coupons' | 'discountRules' | 'promotionRules'
+    | 'promotionConditions' | 'promotionBenefits'
+    | 'pointsPrograms' | 'loyaltyPrograms' | 'pointsRules' | 'earningRules'
+    | 'redemptionRules' | 'customerPointBalances' | 'loyaltyTiers'
+    | 'users' | 'roles' | 'productStocks' | 'supplierProductPrices'
+    | 'inventoryLedger' | 'transactions' | 'payments' | 'cashClosures' | 'cashOpenings'
+    | 'zReports' | 'cashMovements' | 'cashDrawerEvents' | 'inventoryMovements'
+    | 'transfers' | 'receptions' | 'returns' | 'creditNotes'
+    | 'promotionRedemptions' | 'couponRedemptions'
+    | 'loyaltyPointMovements' | 'loyaltyPointAccruals' | 'loyaltyPointRedemptions'
+    | 'pointAdjustments' | 'issuedFiscalDocuments' | 'fiscalDocumentUsages'
+    | 'purchaseOrders' | 'activities' | 'crmOpportunities' | 'erp_sales_documents';
 
 const MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
     'products',
+    'items',
+    'taxes',
     'customers',
     'suppliers',
-    'users',
-    'roles',
-    'internalSequences',
-    'fiscalRanges',
+    'warehouses',
+    'paymentMethods',
+    'priceLists',
     'productStocks',
     'productPrices',
-    'paymentMethods',
     'supplierProductPrices',
+    'categories',
+    'collections',
+    'serviceTypes',
+    'rooms',
+    'tables',
+    'productionAreas',
+    'documentSeries',
+    'documentTypes',
+    'fiscalRanges',
+    'fiscalReceiptTypes',
+    'fiscalReceipts',
+    'fiscalSequences',
+    'internalSequences',
+    'terminalFiscalConfig',
+    'promotions',
+    'campaigns',
+    'coupons',
+    'discountRules',
+    'promotionRules',
+    'promotionConditions',
+    'promotionBenefits',
+    'pointsPrograms',
+    'loyaltyPrograms',
+    'pointsRules',
+    'earningRules',
+    'redemptionRules',
+    'customerPointBalances',
+    'loyaltyTiers',
+    'users',
+    'roles',
 ]);
 
 const CRITICAL_MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
     'products',
-    'internalSequences',
-    'fiscalRanges',
+    'taxes',
+    'warehouses',
     'paymentMethods',
+    'documentSeries',
+    'fiscalRanges',
+    'fiscalSequences',
+    'internalSequences',
+    'terminalFiscalConfig',
+]);
+
+const FISCAL_MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
+    'documentSeries',
+    'documentTypes',
+    'fiscalRanges',
+    'fiscalReceiptTypes',
+    'fiscalReceipts',
+    'fiscalSequences',
+    'internalSequences',
+    'terminalFiscalConfig',
+]);
+
+const PROMOTION_MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
+    'promotions',
+    'campaigns',
+    'coupons',
+    'discountRules',
+    'promotionRules',
+    'promotionConditions',
+    'promotionBenefits',
+]);
+
+const LOYALTY_MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
+    'pointsPrograms',
+    'loyaltyPrograms',
+    'pointsRules',
+    'earningRules',
+    'redemptionRules',
+    'customerPointBalances',
+    'loyaltyTiers',
 ]);
 
 const OPERATION_COLLECTIONS_FOR_ERP_PUSH = new Set<SyncableCollection>([
     'transactions',
+    'payments',
+    'cashClosures',
+    'cashOpenings',
     'zReports',
     'cashMovements',
+    'cashDrawerEvents',
     'inventoryLedger',
+    'inventoryMovements',
     'transfers',
     'receptions',
+    'returns',
+    'creditNotes',
+    'promotionRedemptions',
+    'couponRedemptions',
+    'loyaltyPointMovements',
+    'loyaltyPointAccruals',
+    'loyaltyPointRedemptions',
+    'pointAdjustments',
+    'issuedFiscalDocuments',
+    'fiscalDocumentUsages',
     'purchaseOrders',
     'activities',
     'crmOpportunities',
@@ -89,10 +187,13 @@ const isErpMasterPullCollection = (collection: SyncableCollection): boolean =>
 const isErpOperationCollection = (collection: SyncableCollection): boolean =>
     OPERATION_COLLECTIONS_FOR_ERP_PUSH.has(collection);
 
+const isErpCriticalMasterCollection = (collection: SyncableCollection): boolean =>
+    CRITICAL_MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection);
+
 const logSkippedNonMasterPull = (
     collection: SyncableCollection,
     targetKind: string,
-    reason = 'NOT_A_MASTER_ERP_COLLECTION'
+    reason = isErpOperationCollection(collection) ? 'OPERATION_COLLECTION' : 'NOT_A_MASTER_ERP_COLLECTION'
 ): void => {
     console.warn('[SYNC_COLLECTION_SKIPPED_NOT_A_MASTER]', {
         collection,
@@ -100,7 +201,10 @@ const logSkippedNonMasterPull = (
         targetKind,
         isMasterCollection: isErpMasterPullCollection(collection),
         isOperationCollection: isErpOperationCollection(collection),
-        isCriticalMaster: CRITICAL_MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection),
+        isCriticalMaster: isErpCriticalMasterCollection(collection),
+        isFiscalMaster: FISCAL_MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection),
+        isPromotionMaster: PROMOTION_MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection),
+        isLoyaltyMaster: LOYALTY_MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection),
         skippedReason: reason,
         userVisibleSeverity: 'warning',
     });
@@ -3872,7 +3976,7 @@ class SyncManager {
                 continue;
             }
 
-            const localData = await db.get(collection);
+            const localData = await db.get(collection as any);
             const localCount = Array.isArray(localData) ? localData.length : 0;
             const isEmpty = localCount === 0;
 
@@ -3916,7 +4020,7 @@ class SyncManager {
                     const serverItems = await apiSyncAdapter.pull(collection);
                     if (serverItems && serverItems.length > localCount) {
                         console.log(`📥 Master Init: Restoring ${serverItems.length} items from Server for ${collection}`);
-                        await db.save(collection, serverItems);
+                        await db.save(collection as any, serverItems);
 
                         // Update version
                         const metadata = await apiSyncAdapter.getMetadata(collection);
@@ -3939,7 +4043,23 @@ class SyncManager {
      * For API mode, we track versions locally
      */
     private async loadSyncVersions() {
-        const collections: (SyncableCollection | 'config')[] = ['products', 'customers', 'suppliers', 'users', 'roles', 'internalSequences', 'fiscalRanges', 'config'];
+        const collections: (SyncableCollection | 'config')[] = [
+            'products',
+            'taxes',
+            'customers',
+            'suppliers',
+            'warehouses',
+            'paymentMethods',
+            'productPrices',
+            'users',
+            'roles',
+            'documentSeries',
+            'fiscalRanges',
+            'fiscalSequences',
+            'internalSequences',
+            'terminalFiscalConfig',
+            'config',
+        ];
 
         for (const collection of collections) {
             // Load timestamp from localStorage
@@ -3986,7 +4106,7 @@ class SyncManager {
         }
 
         try {
-            const data = await db.get(collection);
+            const data = await db.get(collection as any);
             const items = Array.isArray(data) ? data : [];
 
             // Push to server API
@@ -4146,7 +4266,7 @@ class SyncManager {
             console.log(`📦 SyncManager: Received ${items.length} items for ${collection} (${isFullDownload ? 'Full' : 'Delta'})`);
 
             if (items.length === 0 && !isFullDownload) {
-                const localData = await db.get(collection);
+                const localData = await db.get(collection as any);
                 const localCount = Array.isArray(localData) ? localData.length : 0;
                 const metadata = await getMetadataOnce();
                 const remoteCount = metadata?.itemCount || 0;
@@ -4186,7 +4306,7 @@ class SyncManager {
                             ? await this.mergeTransactionsFullSnapshot(cleanItems)
                             : cleanItems;
 
-                        await db.save(collection, safeItems);
+                        await db.save(collection as any, safeItems);
 
                         if (typeof remoteVersion === 'number') {
                             this.syncVersions.set(collection, remoteVersion);
@@ -4265,7 +4385,7 @@ class SyncManager {
                         return 0;
                     }
                 }
-                await db.save(collection, safeItems);
+                await db.save(collection as any, safeItems);
 
                 if (collection === 'products') {
                     await productImageCacheService.syncSnapshotItems(safeItems as Product[]);
@@ -4282,7 +4402,7 @@ class SyncManager {
                     const { _op, ...cleanItem } = item;
                     if (op === 'DELETE' || item.deletedAt || item.isActive === false) {
                         console.log(`🗑️ SyncManager: Deleting item ${item.id} from ${collection}`);
-                        await db.deleteDocument(collection, item.id);
+                        await db.deleteDocument(collection as any, item.id);
                     } else {
                         // Add repair logic for internalSequences
                         let finalItem = collection === 'internalSequences' ? this.repairSequenceData(cleanItem) : cleanItem;
@@ -4299,7 +4419,7 @@ class SyncManager {
                             if (!finalItem.cloudSyncStatus) finalItem.cloudSyncStatus = 'PENDING';
                         }
 
-                        await db.saveDocument(collection, finalItem);
+                        await db.saveDocument(collection as any, finalItem);
                         if (collection === 'products') {
                             updatedProductsForImageSync.push(finalItem as Product);
                         } else if (this.isImageBackedCollection(collection)) {
@@ -4405,13 +4525,43 @@ class SyncManager {
         const isMaster = permissionService.isMasterTerminal();
         const defaultCatalogs: SyncableCollection[] = [
             'products',
+            'taxes',
             'customers',
             'suppliers',
+            'warehouses',
+            'paymentMethods',
+            'priceLists',
+            'productPrices',
+            'categories',
+            'collections',
+            'serviceTypes',
+            'rooms',
+            'tables',
+            'productionAreas',
             'users',
             'roles',
+            'documentSeries',
+            'documentTypes',
             'internalSequences',
             'fiscalRanges',
-            'paymentMethods',
+            'fiscalReceiptTypes',
+            'fiscalReceipts',
+            'fiscalSequences',
+            'terminalFiscalConfig',
+            'promotions',
+            'campaigns',
+            'coupons',
+            'discountRules',
+            'promotionRules',
+            'promotionConditions',
+            'promotionBenefits',
+            'pointsPrograms',
+            'loyaltyPrograms',
+            'pointsRules',
+            'earningRules',
+            'redemptionRules',
+            'customerPointBalances',
+            'loyaltyTiers',
             'productStocks',
             ...(isMaster || permissionService.shouldShowGlobalSales() ? ['inventoryLedger' as SyncableCollection] : []),
             ...(permissionService.shouldShowGlobalSales() ? ['transactions' as SyncableCollection] : []),
@@ -4618,12 +4768,43 @@ class SyncManager {
         const target = syncPolicy.resolve();
         const defaultCollections: SyncableCollection[] = [
             'products',
+            'taxes',
             'customers',
             'suppliers',
+            'warehouses',
+            'paymentMethods',
+            'priceLists',
+            'productPrices',
+            'categories',
+            'collections',
+            'serviceTypes',
+            'rooms',
+            'tables',
+            'productionAreas',
             'users',
             'roles',
+            'documentSeries',
+            'documentTypes',
             'internalSequences',
             'fiscalRanges',
+            'fiscalReceiptTypes',
+            'fiscalReceipts',
+            'fiscalSequences',
+            'terminalFiscalConfig',
+            'promotions',
+            'campaigns',
+            'coupons',
+            'discountRules',
+            'promotionRules',
+            'promotionConditions',
+            'promotionBenefits',
+            'pointsPrograms',
+            'loyaltyPrograms',
+            'pointsRules',
+            'earningRules',
+            'redemptionRules',
+            'customerPointBalances',
+            'loyaltyTiers',
             'productStocks',
             'transfers',
             'receptions',
@@ -4643,7 +4824,7 @@ class SyncManager {
 
             // CRITICAL: Also check if local collection is empty. 
             // This handles the case where remote version is 0 but server has data (Slave first pull).
-            const localData = await db.get(collection);
+            const localData = await db.get(collection as any);
             const localCount = Array.isArray(localData) ? localData.length : 0;
             const isEmpty = localCount === 0;
             const hasCountDrift = remoteCount > localCount;
@@ -4711,12 +4892,26 @@ class SyncManager {
         const baseModules = [
             { id: 'config', label: 'Configuración Global (Tarifas)' },
             { id: 'products', label: 'Catálogo de Productos' },
+            { id: 'taxes', label: 'Impuestos' },
             { id: 'customers', label: 'Base de Clientes' },
             { id: 'suppliers', label: 'Proveedores' },
+            { id: 'warehouses', label: 'Almacenes' },
+            { id: 'paymentMethods', label: 'Métodos de Pago' },
+            { id: 'productPrices', label: 'Precios de Productos' },
+            { id: 'priceLists', label: 'Tarifas' },
             { id: 'users', label: 'Operadores de Sistema' },
             { id: 'roles', label: 'Roles y Permisos' },
+            { id: 'documentSeries', label: 'Series Documentales' },
             { id: 'internalSequences', label: 'Secuencias de Documentos' },
             { id: 'fiscalRanges', label: 'Rangos Fiscales DGII' },
+            { id: 'fiscalSequences', label: 'Secuencias Fiscales' },
+            { id: 'terminalFiscalConfig', label: 'Configuración Fiscal de Terminal' },
+            { id: 'promotions', label: 'Promociones' },
+            { id: 'campaigns', label: 'Campañas' },
+            { id: 'coupons', label: 'Cupones' },
+            { id: 'pointsPrograms', label: 'Programas de Puntos' },
+            { id: 'loyaltyPrograms', label: 'Programas de Fidelidad' },
+            { id: 'pointsRules', label: 'Reglas de Puntos' },
         ];
         const modules = target.kind === 'ERP_ACTIVE'
             ? baseModules.filter(module => module.id === 'config' || isErpMasterPullCollection(module.id as SyncableCollection))
@@ -4869,7 +5064,7 @@ class SyncManager {
             const hasNew = metadata ? await apiSyncAdapter.hasNewData(collection, localVersion) : false;
 
             // Get local item count
-            const localData = await db.get(collection);
+            const localData = await db.get(collection as any);
             const itemCount = Array.isArray(localData) ? localData.length : 0;
 
             statuses.push({

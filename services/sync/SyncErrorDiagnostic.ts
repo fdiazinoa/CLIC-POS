@@ -58,6 +58,11 @@ export interface SyncErrorDiagnostic {
     incomingProfile?: Partial<SyncProfile> | null;
     mismatchDetected?: boolean;
     mismatchFixed?: boolean;
+    isMasterCollection?: boolean;
+    isOperationCollection?: boolean;
+    isCriticalMaster?: boolean;
+    skippedReason?: string | null;
+    userVisibleSeverity?: 'info' | 'warning' | 'critical';
     blockedByLocalGuard?: boolean;
     guardReason?: string | null;
     terminalBindingStatus: TerminalBindingStatus;
@@ -154,6 +159,11 @@ export const buildSyncErrorDiagnostic = (input: {
     incomingProfile?: Partial<SyncProfile> | null;
     mismatchDetected?: boolean;
     mismatchFixed?: boolean;
+    isMasterCollection?: boolean;
+    isOperationCollection?: boolean;
+    isCriticalMaster?: boolean;
+    skippedReason?: string | null;
+    userVisibleSeverity?: 'info' | 'warning' | 'critical';
     blockedByLocalGuard?: boolean;
     guardReason?: string | null;
 }): SyncErrorDiagnostic => {
@@ -202,6 +212,11 @@ export const buildSyncErrorDiagnostic = (input: {
         incomingProfile: input.incomingProfile ?? lastProfileDiagnostic?.incomingProfile ?? null,
         mismatchDetected: input.mismatchDetected ?? lastProfileDiagnostic?.mismatchDetected ?? false,
         mismatchFixed: input.mismatchFixed ?? lastProfileDiagnostic?.mismatchFixed ?? false,
+        isMasterCollection: input.isMasterCollection,
+        isOperationCollection: input.isOperationCollection,
+        isCriticalMaster: input.isCriticalMaster,
+        skippedReason: input.skippedReason || null,
+        userVisibleSeverity: input.userVisibleSeverity || 'critical',
         blockedByLocalGuard: Boolean(input.blockedByLocalGuard),
         guardReason: input.guardReason || null,
         terminalBindingStatus: resolveBindingStatus(),

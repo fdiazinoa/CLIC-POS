@@ -84,7 +84,111 @@ type CircuitBreakerChannel = 'sales' | 'background';
 type OperationalSyncOperation = Exclude<SyncDiagnosticOperation, 'REGISTER_TERMINAL'>;
 
 const ERP_TEMPORARILY_UNAVAILABLE_ERROR = 'ERP temporalmente no disponible';
-const ERP_CRITICAL_MASTER_COLLECTIONS = new Set(['products', 'internalSequences', 'fiscalRanges', 'paymentMethods']);
+const ERP_MASTER_PULL_COLLECTIONS = new Set([
+    'products',
+    'items',
+    'taxes',
+    'customers',
+    'suppliers',
+    'warehouses',
+    'paymentMethods',
+    'priceLists',
+    'productPrices',
+    'categories',
+    'collections',
+    'serviceTypes',
+    'rooms',
+    'tables',
+    'productionAreas',
+    'documentSeries',
+    'documentTypes',
+    'fiscalRanges',
+    'fiscalReceiptTypes',
+    'fiscalReceipts',
+    'fiscalSequences',
+    'internalSequences',
+    'terminalFiscalConfig',
+    'promotions',
+    'campaigns',
+    'coupons',
+    'discountRules',
+    'promotionRules',
+    'promotionConditions',
+    'promotionBenefits',
+    'pointsPrograms',
+    'loyaltyPrograms',
+    'pointsRules',
+    'earningRules',
+    'redemptionRules',
+    'customerPointBalances',
+    'loyaltyTiers',
+    'users',
+    'roles',
+    'productStocks',
+    'supplierProductPrices',
+]);
+const ERP_OPERATION_PUSH_COLLECTIONS = new Set([
+    'transactions',
+    'payments',
+    'cashClosures',
+    'cashOpenings',
+    'zReports',
+    'cashMovements',
+    'cashDrawerEvents',
+    'inventoryLedger',
+    'inventoryMovements',
+    'transfers',
+    'receptions',
+    'returns',
+    'creditNotes',
+    'promotionRedemptions',
+    'couponRedemptions',
+    'loyaltyPointMovements',
+    'loyaltyPointAccruals',
+    'loyaltyPointRedemptions',
+    'pointAdjustments',
+    'issuedFiscalDocuments',
+    'fiscalDocumentUsages',
+    'purchaseOrders',
+    'activities',
+    'crmOpportunities',
+    'erp_sales_documents',
+]);
+const ERP_CRITICAL_MASTER_COLLECTIONS = new Set([
+    'products',
+    'taxes',
+    'warehouses',
+    'paymentMethods',
+    'documentSeries',
+    'internalSequences',
+    'fiscalRanges',
+    'fiscalSequences',
+    'terminalFiscalConfig',
+]);
+
+const isErpMasterPullCollection = (collection: string): boolean =>
+    ERP_MASTER_PULL_COLLECTIONS.has(collection);
+
+const isErpOperationPushCollection = (collection: string): boolean =>
+    ERP_OPERATION_PUSH_COLLECTIONS.has(collection);
+
+const logSkippedNonMasterPull = (
+    collection: string,
+    operation: OperationalSyncOperation,
+    endpoint?: string
+): void => {
+    console.warn('[SYNC_COLLECTION_SKIPPED_NOT_A_MASTER]', {
+        collection,
+        operation,
+        endpoint,
+        isMasterCollection: isErpMasterPullCollection(collection),
+        isOperationCollection: isErpOperationPushCollection(collection),
+        isCriticalMaster: ERP_CRITICAL_MASTER_COLLECTIONS.has(collection),
+        skippedReason: isErpOperationPushCollection(collection) ? 'OPERATION_COLLECTION' : 'NOT_A_MASTER_ERP_COLLECTION',
+        userVisibleSeverity: 'warning',
+        message: 'Colección omitida: no es maestro ERP.',
+    });
+};
 
 class SyncCircuitBreaker {
     private consecutiveFailures = 0;
@@ -1204,6 +1308,10 @@ class ApiSyncAdapter {
     async pull(collection: string, sinceVersion?: number): Promise<any[]> {
         const operationalTarget = this.resolveOperationalTarget('PULL_MASTERS');
         if (operationalTarget && !operationalTarget.useLocalTarget) {
+            if (!isErpMasterPullCollection(collection)) {
+                logSkippedNonMasterPull(collection, 'PULL_MASTERS', `${operationalTarget.baseUrl}/collections/${collection}/data`);
+                return [];
+            }
             const target = await this.authenticateOperationalTarget(false, 'background', 'PULL_MASTERS');
             const url = new URL(`${target.baseUrl}/collections/${collection}/data`);
             if (sinceVersion) {
@@ -1242,7 +1350,12 @@ class ApiSyncAdapter {
                         return [];
                     }
                     const responseBody = await response.text().catch(() => '');
-                    const error = new Error(`Pull failed: ${response.status} ${response.statusText}`);
+                    const isCriticalMaster = ERP_CRITICAL_MASTER_COLLECTIONS.has(collection);
+                    const error = new Error(
+                        response.status === 404 && isCriticalMaster
+                            ? `ERP no expone endpoint de maestro crítico: ${collection}`
+                            : `Pull failed: ${response.status} ${response.statusText}`
+                    );
                     reportSyncErrorDiagnostic({
                         operation: 'PULL_MASTERS',
                         collection,
@@ -1250,6 +1363,10 @@ class ApiSyncAdapter {
                         httpStatus: response.status,
                         responseBody,
                         error,
+                        isMasterCollection: true,
+                        isOperationCollection: false,
+                        isCriticalMaster,
+                        userVisibleSeverity: isCriticalMaster ? 'critical' : 'warning',
                     });
                     throw error;
                 }
@@ -1361,6 +1478,15 @@ class ApiSyncAdapter {
     async pullDelta(collection: string, sinceVersion?: number): Promise<{ items: any[], serverTime: string, isFullDownload: boolean, latestVersion?: number }> {
         const operationalTarget = this.resolveOperationalTarget('PULL_MASTERS');
         if (operationalTarget && !operationalTarget.useLocalTarget) {
+            if (!isErpMasterPullCollection(collection)) {
+                logSkippedNonMasterPull(collection, 'PULL_MASTERS', `${operationalTarget.baseUrl}/delta/${collection}`);
+                return {
+                    items: [],
+                    serverTime: new Date().toISOString(),
+                    isFullDownload: false,
+                    latestVersion: sinceVersion || 0,
+                };
+            }
             const target = await this.authenticateOperationalTarget(false, 'background', 'PULL_MASTERS');
             const url = new URL(`${target.baseUrl}/delta/${collection}`);
             if (sinceVersion !== undefined) {
@@ -1395,7 +1521,12 @@ class ApiSyncAdapter {
                         };
                     }
                     const responseBody = await response.text().catch(() => '');
-                    const error = new Error(`Delta pull failed: ${response.status} ${response.statusText}`);
+                    const isCriticalMaster = ERP_CRITICAL_MASTER_COLLECTIONS.has(collection);
+                    const error = new Error(
+                        response.status === 404 && isCriticalMaster
+                            ? `ERP no expone endpoint de maestro crítico: ${collection}`
+                            : `Delta pull failed: ${response.status} ${response.statusText}`
+                    );
                     reportSyncErrorDiagnostic({
                         operation: 'PULL_MASTERS',
                         collection,
@@ -1403,6 +1534,10 @@ class ApiSyncAdapter {
                         httpStatus: response.status,
                         responseBody,
                         error,
+                        isMasterCollection: true,
+                        isOperationCollection: false,
+                        isCriticalMaster,
+                        userVisibleSeverity: isCriticalMaster ? 'critical' : 'warning',
                     });
                     throw error;
                 }
@@ -1580,6 +1715,10 @@ class ApiSyncAdapter {
         const operation: OperationalSyncOperation = collection === 'config' ? 'PULL_CONFIG' : 'PULL_MASTERS';
         const operationalTarget = this.resolveOperationalTarget(operation);
         if (operationalTarget && !operationalTarget.useLocalTarget) {
+            if (operation === 'PULL_MASTERS' && !isErpMasterPullCollection(collection)) {
+                logSkippedNonMasterPull(collection, operation, `${operationalTarget.baseUrl}/collections/${collection}/metadata`);
+                return null;
+            }
             const target = await this.authenticateOperationalTarget(false, 'background', operation);
             const endpoint = `${target.baseUrl}/collections/${collection}/metadata`;
             try {
@@ -1619,7 +1758,12 @@ class ApiSyncAdapter {
                         return null;
                     }
                     const responseBody = await response.text().catch(() => '');
-                    const error = new Error(`Get metadata failed: ${response.status} ${response.statusText}`);
+                    const isCriticalMaster = ERP_CRITICAL_MASTER_COLLECTIONS.has(collection);
+                    const error = new Error(
+                        response.status === 404 && isCriticalMaster
+                            ? `ERP no expone endpoint de maestro crítico: ${collection}`
+                            : `Get metadata failed: ${response.status} ${response.statusText}`
+                    );
                     reportSyncErrorDiagnostic({
                         operation,
                         collection,
@@ -1627,6 +1771,10 @@ class ApiSyncAdapter {
                         httpStatus: response.status,
                         responseBody,
                         error,
+                        isMasterCollection: operation === 'PULL_CONFIG' || isErpMasterPullCollection(collection),
+                        isOperationCollection: isErpOperationPushCollection(collection),
+                        isCriticalMaster,
+                        userVisibleSeverity: isCriticalMaster ? 'critical' : 'warning',
                     });
                     return null;
                 }
