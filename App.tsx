@@ -3685,6 +3685,29 @@ const AppContent: React.FC = () => {
         companyId: setupResult?.companyId || null,
         storeId: setupResult?.storeId || null,
       });
+      const setupTokenSource = setupResult as any;
+      const setupSyncToken =
+        setupTokenSource?.syncToken ||
+        setupTokenSource?.sync_token ||
+        setupTokenSource?.syncAuthToken ||
+        setupTokenSource?.sync_auth_token ||
+        setupTokenSource?.initialConfigData?.syncToken ||
+        setupTokenSource?.initialConfigData?.sync_token ||
+        setupTokenSource?.terminal_config?.syncToken ||
+        setupTokenSource?.terminal_config?.sync_token ||
+        setupTokenSource?.terminal_config?.syncAuthToken ||
+        setupTokenSource?.terminal_config?.sync_auth_token;
+      if (typeof setupSyncToken === 'string' && setupSyncToken.trim()) {
+        localStorage.setItem('clic_erp_sync_token', setupSyncToken.trim());
+        const setupTokenExpiresAt =
+          setupTokenSource?.tokenExpiresAt ||
+          setupTokenSource?.token_expires_at ||
+          setupTokenSource?.expiresAt ||
+          setupTokenSource?.expires_at;
+        if (typeof setupTokenExpiresAt === 'string' && setupTokenExpiresAt.trim()) {
+          localStorage.setItem('clic_erp_sync_token_expires_at', setupTokenExpiresAt.trim());
+        }
+      }
       setTerminalBindingDiagnosticStatus('BOUND');
 
       const shouldRestoreRemoteData = !!finalResolvedMasterIp && isSlave;

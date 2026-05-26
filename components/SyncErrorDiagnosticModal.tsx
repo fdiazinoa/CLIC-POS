@@ -87,6 +87,11 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <Field label="isCriticalMaster" value={diagnostic.isCriticalMaster === undefined ? 'N/A' : diagnostic.isCriticalMaster ? 'true' : 'false'} />
             <Field label="skippedReason" value={diagnostic.skippedReason} />
             <Field label="severity" value={diagnostic.userVisibleSeverity} />
+            <Field label="auth.authorization" value={diagnostic.requestAuth?.authorizationPresent === undefined ? 'N/A' : diagnostic.requestAuth.authorizationPresent ? 'true' : 'false'} />
+            <Field label="auth.syncToken" value={diagnostic.requestAuth?.syncTokenPresent === undefined ? 'N/A' : diagnostic.requestAuth.syncTokenPresent ? 'true' : 'false'} />
+            <Field label="auth.tokenPreview" value={diagnostic.requestAuth?.syncTokenPreview} />
+            <Field label="auth.terminalHeader" value={diagnostic.requestAuth?.terminalIdHeaderPresent === undefined ? 'N/A' : diagnostic.requestAuth.terminalIdHeaderPresent ? 'true' : 'false'} />
+            <Field label="auth.deviceHeader" value={diagnostic.requestAuth?.deviceIdHeaderPresent === undefined ? 'N/A' : diagnostic.requestAuth.deviceIdHeaderPresent ? 'true' : 'false'} />
           </div>
 
           <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -102,6 +107,10 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
               <p className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-400">SyncProfile</p>
               <pre className="mt-3 max-h-64 overflow-auto rounded-xl bg-slate-950 p-4 text-xs font-semibold text-slate-100">{JSON.stringify(diagnostic.syncProfile, null, 2)}</pre>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 lg:col-span-2">
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-400">requestAuth</p>
+              <pre className="mt-3 max-h-64 overflow-auto rounded-xl bg-slate-950 p-4 text-xs font-semibold text-slate-100">{JSON.stringify(diagnostic.requestAuth || null, null, 2)}</pre>
             </div>
           </div>
 

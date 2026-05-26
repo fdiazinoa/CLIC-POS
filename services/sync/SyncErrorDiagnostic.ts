@@ -18,6 +18,14 @@ export type TerminalBindingStatus = 'UNBOUND' | 'BINDING' | 'BOUND' | 'BINDING_E
 export type CatalogSyncStatus = 'IDLE' | 'SYNCING' | 'SYNCED' | 'ERROR';
 export type SalesPushStatus = 'DISABLED' | 'LOCKED_UNTIL_ERP_READY' | 'ENABLED';
 
+export interface SyncRequestAuthDiagnostic {
+    authorizationPresent: boolean;
+    syncTokenPresent: boolean;
+    syncTokenPreview?: string | null;
+    terminalIdHeaderPresent: boolean;
+    deviceIdHeaderPresent: boolean;
+}
+
 export interface SyncErrorDiagnostic {
     operation: SyncDiagnosticOperation;
     collection?: string | null;
@@ -65,6 +73,7 @@ export interface SyncErrorDiagnostic {
     userVisibleSeverity?: 'info' | 'warning' | 'critical';
     blockedByLocalGuard?: boolean;
     guardReason?: string | null;
+    requestAuth?: SyncRequestAuthDiagnostic | null;
     terminalBindingStatus: TerminalBindingStatus;
     catalogSyncStatus: CatalogSyncStatus;
     salesPushStatus: SalesPushStatus;
@@ -166,6 +175,7 @@ export const buildSyncErrorDiagnostic = (input: {
     userVisibleSeverity?: 'info' | 'warning' | 'critical';
     blockedByLocalGuard?: boolean;
     guardReason?: string | null;
+    requestAuth?: SyncRequestAuthDiagnostic | null;
 }): SyncErrorDiagnostic => {
     const syncProfile = loadSyncProfile();
     const resolvedTarget = resolveSyncTarget(syncProfile);
@@ -219,6 +229,7 @@ export const buildSyncErrorDiagnostic = (input: {
         userVisibleSeverity: input.userVisibleSeverity || 'critical',
         blockedByLocalGuard: Boolean(input.blockedByLocalGuard),
         guardReason: input.guardReason || null,
+        requestAuth: input.requestAuth || null,
         terminalBindingStatus: resolveBindingStatus(),
         catalogSyncStatus: resolveCatalogStatus(),
         salesPushStatus: resolveSalesPushStatus(resolvedTarget),

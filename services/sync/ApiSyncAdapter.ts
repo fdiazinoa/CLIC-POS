@@ -84,6 +84,15 @@ type CircuitBreakerChannel = 'sales' | 'background';
 type OperationalSyncOperation = Exclude<SyncDiagnosticOperation, 'REGISTER_TERMINAL'>;
 
 const ERP_TEMPORARILY_UNAVAILABLE_ERROR = 'ERP temporalmente no disponible';
+const ERP_SYNC_TOKEN_KEYS = [
+    'clic_erp_sync_token',
+    'clic_erp_sync_auth_token',
+    'CLIC_ERP_SYNC_TOKEN',
+    'syncAuthToken',
+    'sync_auth_token',
+    'erp_sync_token',
+];
+const ERP_SYNC_TOKEN_EXPIRES_AT_KEY = 'clic_erp_sync_token_expires_at';
 const ERP_MASTER_PULL_COLLECTIONS = new Set([
     'products',
     'items',
@@ -188,6 +197,46 @@ const logSkippedNonMasterPull = (
         userVisibleSeverity: 'warning',
         message: 'Colección omitida: no es maestro ERP.',
     });
+};
+
+const safeLocalStorageGet = (key: string): string | null => {
+    try {
+        return localStorage.getItem(key);
+    } catch {
+        return null;
+    }
+};
+
+const safeLocalStorageSet = (key: string, value: string): void => {
+    try {
+        localStorage.setItem(key, value);
+    } catch {
+        // Storage quota must not break the operational binding.
+    }
+};
+
+const safeLocalStorageRemove = (key: string): void => {
+    try {
+        localStorage.removeItem(key);
+    } catch {
+        // Non-critical cleanup.
+    }
+};
+
+const previewSyncToken = (token?: string | null): string | null => {
+    const normalized = String(token || '').trim();
+    if (!normalized) return null;
+    if (normalized.length <= 10) return `${normalized.slice(0, 2)}...${normalized.slice(-2)}`;
+    return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
+};
+
+const pickFirstString = (...values: unknown[]): string | null => {
+    for (const value of values) {
+        if (typeof value !== 'string') continue;
+        const trimmed = value.trim();
+        if (trimmed) return trimmed;
+    }
+    return null;
 };
 
 class SyncCircuitBreaker {
@@ -788,21 +837,144 @@ class ApiSyncAdapter {
         return this.resolveOperationalTarget()?.useLocalTarget === false;
     }
 
+    private resolveCurrentDeviceId(): string | null {
+        return pickFirstString(
+            safeLocalStorageGet('CLIC_POS_DEVICE_ID'),
+            safeLocalStorageGet('pos_device_id'),
+            safeLocalStorageGet('clic_pos_device_id')
+        );
+    }
+
+    private resolveCurrentTenantId(): string | null {
+        const profile = loadSyncProfile();
+        return pickFirstString(
+            safeLocalStorageGet('clic_erp_sync_tenant_id'),
+            safeLocalStorageGet('active_tenant_id'),
+            safeLocalStorageGet('clic_tenant_id'),
+            profile.erpTenantId,
+            profile.cloudTenantId,
+            profile.localTenantId
+        );
+    }
+
+    private resolveStoredErpSyncToken(): string | null {
+        for (const key of ERP_SYNC_TOKEN_KEYS) {
+            const token = safeLocalStorageGet(key);
+            if (token?.trim()) return token.trim();
+        }
+        return null;
+    }
+
+    private persistErpSyncToken(token: string, expiresAt?: unknown): void {
+        const normalized = token.trim();
+        if (!normalized) return;
+        safeLocalStorageSet('clic_erp_sync_token', normalized);
+        if (typeof expiresAt === 'string' && expiresAt.trim()) {
+            safeLocalStorageSet(ERP_SYNC_TOKEN_EXPIRES_AT_KEY, expiresAt.trim());
+        }
+    }
+
+    private clearCanonicalErpSyncToken(): void {
+        safeLocalStorageRemove('clic_erp_sync_token');
+        safeLocalStorageRemove(ERP_SYNC_TOKEN_EXPIRES_AT_KEY);
+    }
+
+    private buildOperationalHeaders(
+        target: { terminalId: string; useLocalTarget: boolean },
+        token: string,
+        includeContentType = false
+    ): Record<string, string> {
+        const headers: Record<string, string> = {};
+        if (includeContentType) {
+            headers['Content-Type'] = 'application/json';
+        }
+
+        if (token) {
+            headers.Authorization = `Bearer ${token}`;
+            headers['X-Sync-Token'] = token;
+        }
+
+        if (!target.useLocalTarget && target.terminalId) {
+            headers['X-Terminal-Id'] = target.terminalId;
+            headers['X-POS-Terminal-Id'] = target.terminalId;
+        }
+
+        const deviceId = this.resolveCurrentDeviceId();
+        if (!target.useLocalTarget && deviceId) {
+            headers['X-Device-Id'] = deviceId;
+            headers['X-POS-Device-Id'] = deviceId;
+        }
+
+        const tenantId = this.resolveCurrentTenantId();
+        if (!target.useLocalTarget && tenantId) {
+            headers['X-Tenant-Id'] = tenantId;
+            headers['X-POS-Tenant-Id'] = tenantId;
+        }
+
+        return headers;
+    }
+
+    private buildRequestAuthDiagnostic(headers: Record<string, string>) {
+        const authHeader = headers.Authorization || '';
+        const syncToken = headers['X-Sync-Token'] || '';
+        return {
+            authorizationPresent: Boolean(authHeader),
+            syncTokenPresent: Boolean(syncToken),
+            syncTokenPreview: previewSyncToken(syncToken || authHeader.replace(/^Bearer\s+/i, '')),
+            terminalIdHeaderPresent: Boolean(headers['X-Terminal-Id'] || headers['X-POS-Terminal-Id']),
+            deviceIdHeaderPresent: Boolean(headers['X-Device-Id'] || headers['X-POS-Device-Id']),
+        };
+    }
+
+    private extractSyncTokenFromAuthResponse(data: any): { token: string | null; expiresAt?: unknown } {
+        const token = pickFirstString(
+            data?.token,
+            data?.syncToken,
+            data?.sync_token,
+            data?.syncAuthToken,
+            data?.sync_auth_token,
+            data?.access_token,
+            data?.session?.syncToken,
+            data?.session?.sync_token,
+            data?.terminal_config?.syncToken,
+            data?.terminal_config?.sync_token,
+            data?.terminal_config?.syncAuthToken,
+            data?.terminal_config?.sync_auth_token,
+            data?.config?.syncToken,
+            data?.config?.sync_token,
+            data?.config?.security?.syncAuthToken,
+            data?.config?.runtime?.syncAuthToken
+        );
+
+        const expiresAt = pickFirstString(
+            data?.tokenExpiresAt,
+            data?.token_expires_at,
+            data?.expiresAt,
+            data?.expires_at,
+            data?.session?.tokenExpiresAt,
+            data?.session?.expires_at
+        );
+
+        return { token, expiresAt };
+    }
+
+    private buildSyncTokenError(
+        code: 'SYNC_TOKEN_MISSING_LOCAL' | 'SYNC_TOKEN_REJECTED',
+        detail?: string
+    ): Error {
+        const message = code === 'SYNC_TOKEN_MISSING_LOCAL'
+            ? 'SYNC_TOKEN_MISSING_LOCAL: No hay syncToken local para la terminal vinculada.'
+            : 'SYNC_TOKEN_REJECTED: El ERP rechazó el token de sincronización.';
+        return new Error(detail ? `${message} ${detail}` : message);
+    }
+
     private buildOperationalPostBody(
         target: { terminalId: string; useLocalTarget: boolean; kind?: string },
         body: Record<string, unknown>
     ): Record<string, unknown> {
         if (target.useLocalTarget) return body;
 
-        let deviceId: string | null = null;
-        try {
-            deviceId =
-                localStorage.getItem('CLIC_POS_DEVICE_ID') ||
-                localStorage.getItem('pos_device_id') ||
-                null;
-        } catch {
-            deviceId = null;
-        }
+        const deviceId = this.resolveCurrentDeviceId();
 
         const normalizedBody: Record<string, unknown> = {
             ...body,
@@ -935,6 +1107,17 @@ class ApiSyncAdapter {
             };
         }
 
+        if (!force) {
+            const storedToken = this.resolveStoredErpSyncToken();
+            if (storedToken) {
+                this.erpAuthToken = storedToken;
+                return {
+                    ...target,
+                    token: storedToken
+                };
+            }
+        }
+
         if (!force && this.erpAuthInFlight[channel]) {
             const token = await this.erpAuthInFlight[channel]!;
             return {
@@ -944,12 +1127,19 @@ class ApiSyncAdapter {
         }
 
         const erpAuthPromise = (async () => {
+            const deviceId = this.resolveCurrentDeviceId();
+            const tenantId = this.resolveCurrentTenantId();
             const response = await this.fetchWithRetry(`${target.baseUrl}/auth`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: this.buildOperationalHeaders(target, '', true),
                 body: JSON.stringify({
                     terminalId: target.terminalId,
-                    deviceToken: getSyncDeviceToken()
+                    terminal_id: target.terminalId,
+                    deviceToken: getSyncDeviceToken(),
+                    deviceId,
+                    device_id: deviceId,
+                    tenantId,
+                    tenant_id: tenantId
                 })
             }, 2, 500, channel, operation);
 
@@ -965,7 +1155,11 @@ class ApiSyncAdapter {
             }
 
             const data = await response.json();
-            return String(data.token || '');
+            const { token, expiresAt } = this.extractSyncTokenFromAuthResponse(data);
+            if (token) {
+                this.persistErpSyncToken(token, expiresAt);
+            }
+            return token || '';
         })();
 
         this.erpAuthInFlight[channel] = erpAuthPromise.finally(() => {
@@ -980,7 +1174,15 @@ class ApiSyncAdapter {
         }
 
         if (!this.erpAuthToken) {
-            throw new Error('Operational sync token unavailable for ERP target');
+            const error = this.buildSyncTokenError('SYNC_TOKEN_MISSING_LOCAL');
+            reportSyncErrorDiagnostic({
+                operation,
+                endpoint: `${target.baseUrl}/auth`,
+                httpStatus: null,
+                error,
+                requestAuth: this.buildRequestAuthDiagnostic(this.buildOperationalHeaders(target, '', true)),
+            });
+            throw error;
         }
 
         return {
@@ -994,10 +1196,7 @@ class ApiSyncAdapter {
         const requestBody = this.buildOperationalPostBody(target, body);
         const response = await this.fetchWithRetry(`${target.baseUrl}${path}`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Sync-Token': target.token
-            },
+            headers: this.buildOperationalHeaders(target, target.token, true),
             body: JSON.stringify(requestBody)
         }, 2, 500, 'sales', 'PUSH_OPERATIONS');
 
@@ -1012,10 +1211,7 @@ class ApiSyncAdapter {
             const retryBody = this.buildOperationalPostBody(retriedTarget, body);
             const retryResponse = await this.fetchWithRetry(`${retriedTarget.baseUrl}${path}`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Sync-Token': retriedTarget.token
-                },
+                headers: this.buildOperationalHeaders(retriedTarget, retriedTarget.token, true),
                 body: JSON.stringify(retryBody)
             }, 2, 500, 'sales', 'PUSH_OPERATIONS');
 
@@ -1037,9 +1233,7 @@ class ApiSyncAdapter {
     ): Promise<T> {
         const target = await this.authenticateOperationalTarget(false, 'background', operation);
         const response = await this.fetchWithRetry(`${target.baseUrl}${path}`, {
-            headers: {
-                'X-Sync-Token': target.token
-            }
+            headers: this.buildOperationalHeaders(target, target.token)
         }, 2, 500, 'background', operation);
 
         if (response.status === 401) {
@@ -1051,9 +1245,7 @@ class ApiSyncAdapter {
 
             const retriedTarget = await this.authenticateOperationalTarget(true, 'background', operation);
             const retryResponse = await this.fetchWithRetry(`${retriedTarget.baseUrl}${path}`, {
-                headers: {
-                    'X-Sync-Token': retriedTarget.token
-                }
+                headers: this.buildOperationalHeaders(retriedTarget, retriedTarget.token)
             }, 2, 500, 'background', operation);
 
             if (!retryResponse.ok) {
@@ -1207,10 +1399,7 @@ class ApiSyncAdapter {
                 const primaryUrl = `${authTarget.baseUrl}/cloud-staging/masters/${collection}`;
                 const primaryResponse = await this.fetchWithRetry(primaryUrl, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Sync-Token': authTarget.token
-                    },
+                    headers: this.buildOperationalHeaders(authTarget, authTarget.token, true),
                     body: buildBody()
                 }, 2, 500, 'background', 'PUSH_MASTERS');
 
@@ -1221,10 +1410,7 @@ class ApiSyncAdapter {
                 console.warn(`[POS_CLOUD_STAGING] ${primaryUrl} unavailable (${primaryResponse.status}); falling back to legacy collection push.`);
                 return this.fetchWithRetry(`${authTarget.baseUrl}/collections/${collection}/push`, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Sync-Token': authTarget.token
-                    },
+                    headers: this.buildOperationalHeaders(authTarget, authTarget.token, true),
                     body: buildBody()
                 }, 2, 500, 'background', 'PUSH_MASTERS');
             };
@@ -1319,19 +1505,40 @@ class ApiSyncAdapter {
             }
 
             try {
+                const headers = this.buildOperationalHeaders(target, target.token);
                 const response = await this.fetchWithRetry(url.toString(), {
                     method: 'GET',
-                    headers: { 'X-Sync-Token': target.token }
+                    headers
                 }, 2, 500, 'background', 'PULL_MASTERS');
 
                 if (response.status === 401) {
                     this.erpAuthToken = null;
+                    this.clearCanonicalErpSyncToken();
                     const retryTarget = await this.authenticateOperationalTarget(true, 'background', 'PULL_MASTERS');
+                    const retryHeaders = this.buildOperationalHeaders(retryTarget, retryTarget.token);
                     const retryResponse = await this.fetchWithRetry(url.toString(), {
                         method: 'GET',
-                        headers: { 'X-Sync-Token': retryTarget.token }
+                        headers: retryHeaders
                     }, 2, 500, 'background', 'PULL_MASTERS');
                     if (!retryResponse.ok) {
+                        const responseBody = await retryResponse.text().catch(() => '');
+                        if (retryResponse.status === 401) {
+                            const error = this.buildSyncTokenError('SYNC_TOKEN_REJECTED');
+                            reportSyncErrorDiagnostic({
+                                operation: 'PULL_MASTERS',
+                                collection,
+                                endpoint: url.toString(),
+                                httpStatus: retryResponse.status,
+                                responseBody,
+                                error,
+                                requestAuth: this.buildRequestAuthDiagnostic(retryHeaders),
+                                isMasterCollection: true,
+                                isOperationCollection: false,
+                                isCriticalMaster: ERP_CRITICAL_MASTER_COLLECTIONS.has(collection),
+                                userVisibleSeverity: 'critical',
+                            });
+                            throw error;
+                        }
                         throw new Error(`Pull failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
                     }
                     const retryData = await retryResponse.json();
@@ -1363,6 +1570,7 @@ class ApiSyncAdapter {
                         httpStatus: response.status,
                         responseBody,
                         error,
+                        requestAuth: this.buildRequestAuthDiagnostic(headers),
                         isMasterCollection: true,
                         isOperationCollection: false,
                         isCriticalMaster,
@@ -1381,6 +1589,7 @@ class ApiSyncAdapter {
                     endpoint: url.toString(),
                     httpStatus: error instanceof TypeError ? 'network error' : null,
                     error,
+                    requestAuth: this.buildRequestAuthDiagnostic(this.buildOperationalHeaders(target, target.token)),
                 });
                 throw error;
             }
@@ -1494,14 +1703,43 @@ class ApiSyncAdapter {
             }
 
             try {
+                const headers = this.buildOperationalHeaders(target, target.token);
                 const response = await this.fetchWithRetry(url.toString(), {
                     method: 'GET',
-                    headers: { 'X-Sync-Token': target.token }
+                    headers
                 }, 2, 500, 'background', 'PULL_MASTERS');
 
                 if (response.status === 401) {
                     this.erpAuthToken = null;
-                    return this.pullDelta(collection, sinceVersion);
+                    this.clearCanonicalErpSyncToken();
+                    const retryTarget = await this.authenticateOperationalTarget(true, 'background', 'PULL_MASTERS');
+                    const retryHeaders = this.buildOperationalHeaders(retryTarget, retryTarget.token);
+                    const retryResponse = await this.fetchWithRetry(url.toString(), {
+                        method: 'GET',
+                        headers: retryHeaders
+                    }, 2, 500, 'background', 'PULL_MASTERS');
+                    if (!retryResponse.ok) {
+                        const responseBody = await retryResponse.text().catch(() => '');
+                        if (retryResponse.status === 401) {
+                            const error = this.buildSyncTokenError('SYNC_TOKEN_REJECTED');
+                            reportSyncErrorDiagnostic({
+                                operation: 'PULL_MASTERS',
+                                collection,
+                                endpoint: url.toString(),
+                                httpStatus: retryResponse.status,
+                                responseBody,
+                                error,
+                                requestAuth: this.buildRequestAuthDiagnostic(retryHeaders),
+                                isMasterCollection: true,
+                                isOperationCollection: false,
+                                isCriticalMaster: ERP_CRITICAL_MASTER_COLLECTIONS.has(collection),
+                                userVisibleSeverity: 'critical',
+                            });
+                            throw error;
+                        }
+                        throw new Error(`Delta pull failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
+                    }
+                    return await retryResponse.json();
                 }
 
                 if (!response.ok) {
@@ -1534,6 +1772,7 @@ class ApiSyncAdapter {
                         httpStatus: response.status,
                         responseBody,
                         error,
+                        requestAuth: this.buildRequestAuthDiagnostic(headers),
                         isMasterCollection: true,
                         isOperationCollection: false,
                         isCriticalMaster,
@@ -1551,6 +1790,7 @@ class ApiSyncAdapter {
                     endpoint: url.toString(),
                     httpStatus: error instanceof TypeError ? 'network error' : null,
                     error,
+                    requestAuth: this.buildRequestAuthDiagnostic(this.buildOperationalHeaders(target, target.token)),
                 });
                 throw error;
             }
@@ -1722,19 +1962,41 @@ class ApiSyncAdapter {
             const target = await this.authenticateOperationalTarget(false, 'background', operation);
             const endpoint = `${target.baseUrl}/collections/${collection}/metadata`;
             try {
+                const headers = this.buildOperationalHeaders(target, target.token);
                 const response = await this.fetchWithRetry(endpoint, {
                     method: 'GET',
-                    headers: { 'X-Sync-Token': target.token }
+                    headers
                 }, 2, 500, 'background', operation);
 
                 if (response.status === 401) {
                     this.erpAuthToken = null;
+                    this.clearCanonicalErpSyncToken();
                     const retryTarget = await this.authenticateOperationalTarget(true, 'background', operation);
+                    const retryHeaders = this.buildOperationalHeaders(retryTarget, retryTarget.token);
                     const retryResponse = await this.fetchWithRetry(endpoint, {
                         method: 'GET',
-                        headers: { 'X-Sync-Token': retryTarget.token }
+                        headers: retryHeaders
                     }, 2, 500, 'background', operation);
-                    if (!retryResponse.ok) return null;
+                    if (!retryResponse.ok) {
+                        const responseBody = await retryResponse.text().catch(() => '');
+                        if (retryResponse.status === 401) {
+                            const error = this.buildSyncTokenError('SYNC_TOKEN_REJECTED');
+                            reportSyncErrorDiagnostic({
+                                operation,
+                                collection,
+                                endpoint,
+                                httpStatus: retryResponse.status,
+                                responseBody,
+                                error,
+                                requestAuth: this.buildRequestAuthDiagnostic(retryHeaders),
+                                isMasterCollection: operation === 'PULL_CONFIG' || isErpMasterPullCollection(collection),
+                                isOperationCollection: isErpOperationPushCollection(collection),
+                                isCriticalMaster: ERP_CRITICAL_MASTER_COLLECTIONS.has(collection),
+                                userVisibleSeverity: 'critical',
+                            });
+                        }
+                        return null;
+                    }
                     const retryData = await retryResponse.json();
                     const retryMetadata = retryData.metadata || retryData;
                     return {
@@ -1771,6 +2033,7 @@ class ApiSyncAdapter {
                         httpStatus: response.status,
                         responseBody,
                         error,
+                        requestAuth: this.buildRequestAuthDiagnostic(headers),
                         isMasterCollection: operation === 'PULL_CONFIG' || isErpMasterPullCollection(collection),
                         isOperationCollection: isErpOperationPushCollection(collection),
                         isCriticalMaster,
@@ -1796,6 +2059,7 @@ class ApiSyncAdapter {
                     endpoint,
                     httpStatus: error instanceof TypeError ? 'network error' : null,
                     error,
+                    requestAuth: this.buildRequestAuthDiagnostic(this.buildOperationalHeaders(target, target.token)),
                 });
                 return null;
             }
@@ -1990,10 +2254,7 @@ class ApiSyncAdapter {
             });
             const response = await this.fetchWithRetry(postUrl, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Sync-Token': target.token
-                },
+                headers: this.buildOperationalHeaders(target, target.token, true),
                 body: JSON.stringify(requestBody)
             }, 2, 500, 'sales', 'PUSH_OPERATIONS');
             const text = await response.text();
