@@ -230,6 +230,17 @@ const previewSyncToken = (token?: string | null): string | null => {
     return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
 };
 
+const sanitizeSyncToken = (token?: string | null): string | null => {
+    const normalized = String(token || '')
+        .replace(/[\r\n\t]/g, '')
+        .trim();
+
+    if (!normalized) return null;
+    if (['undefined', 'null', 'nan'].includes(normalized.toLowerCase())) return null;
+    if (normalized.length < 8) return null;
+    return normalized;
+};
+
 const pickFirstString = (...values: unknown[]): string | null => {
     for (const value of values) {
         if (typeof value !== 'string') continue;
@@ -517,12 +528,53 @@ class ApiSyncAdapter {
             circuitBreaker.assertAvailable();
         }
 
+        const method = String(options.method || 'GET').toUpperCase();
+        const headers = this.normalizeFetchHeaders(options.headers);
+        const headersSummary = this.summarizeFetchHeaders(headers);
+        const bodySize = this.getBodySize(options.body);
+        const capacitorPlatform = this.resolveCapacitorPlatform();
+        const fetchContext = {
+            method,
+            url,
+            headersPresent: {
+                authorization: headersSummary.authorization,
+                xSyncToken: headersSummary.xSyncToken,
+                xTerminalId: headersSummary.xTerminalId,
+                xDeviceId: headersSummary.xDeviceId,
+            },
+            tokenPreview: headersSummary.tokenPreview,
+            bodySize,
+            contentType: headersSummary.contentType,
+            networkOnline: typeof navigator !== 'undefined' ? navigator.onLine : null,
+            navigatorUserAgent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
+            platform: typeof navigator !== 'undefined' ? navigator.platform : null,
+            capacitorPlatform,
+            origin: typeof window !== 'undefined' ? window.location.origin : null,
+        };
+
+        console.log('[FETCH_PREPARE]', { ...fetchContext, fetchStage: 'PREPARE_HEADERS' });
+        console.log('[FETCH_HEADERS]', {
+            method,
+            url,
+            headersPresent: fetchContext.headersPresent,
+            tokenPreview: headersSummary.tokenPreview,
+            contentType: headersSummary.contentType,
+        });
+
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000); // Reduced timeout to 5s
 
         try {
-            const response = await fetch(url, { ...options, signal: controller.signal });
+            console.log('[FETCH_SENT]', { ...fetchContext, fetchStage: 'FETCH_SENT' });
+            const response = await fetch(url, { ...options, headers, signal: controller.signal });
             clearTimeout(timeoutId);
+            console.log('[FETCH_RESPONSE]', {
+                ...fetchContext,
+                fetchStage: 'RESPONSE_RECEIVED',
+                httpStatus: response.status,
+                ok: response.ok,
+                statusText: response.statusText,
+            });
 
             // Success resets the breaker
             if (response.ok) {
@@ -551,6 +603,28 @@ class ApiSyncAdapter {
 
             const isConnectionError = error.name === 'TypeError' && error.message === 'Failed to fetch';
             const isTimeout = error.name === 'AbortError';
+            const fetchStage = isConnectionError && (headersSummary.authorization || headersSummary.xSyncToken || headersSummary.xTerminalId || headersSummary.xDeviceId)
+                ? 'PREFLIGHT_FAILED'
+                : 'FETCH_FAILED';
+            const fetchDiagnostic = {
+                ...fetchContext,
+                fetchStage,
+                errorName: error?.name || null,
+                errorMessage: error?.message || String(error || ''),
+                errorStack: error?.stack || null,
+                errorCause: error?.cause ? String(error.cause) : null,
+                corsExpectedHeaders: [
+                    'Authorization',
+                    'X-Sync-Token',
+                    'X-Terminal-Id',
+                    'X-POS-Terminal-Id',
+                    'X-Device-Id',
+                    'X-POS-Device-Id',
+                    'Content-Type',
+                ],
+            };
+            this.attachFetchDiagnostic(error, fetchDiagnostic);
+            console.error('[FETCH_FAILED]', fetchDiagnostic);
 
             // Increment failure count on network errors
             if (isConnectionError || isTimeout) {
@@ -859,14 +933,14 @@ class ApiSyncAdapter {
 
     private resolveStoredErpSyncToken(): string | null {
         for (const key of ERP_SYNC_TOKEN_KEYS) {
-            const token = safeLocalStorageGet(key);
-            if (token?.trim()) return token.trim();
+            const token = sanitizeSyncToken(safeLocalStorageGet(key));
+            if (token) return token;
         }
         return null;
     }
 
     private persistErpSyncToken(token: string, expiresAt?: unknown): void {
-        const normalized = token.trim();
+        const normalized = sanitizeSyncToken(token);
         if (!normalized) return;
         safeLocalStorageSet('clic_erp_sync_token', normalized);
         if (typeof expiresAt === 'string' && expiresAt.trim()) {
@@ -889,9 +963,15 @@ class ApiSyncAdapter {
             headers['Content-Type'] = 'application/json';
         }
 
-        if (token) {
-            headers.Authorization = `Bearer ${token}`;
-            headers['X-Sync-Token'] = token;
+        const normalizedToken = sanitizeSyncToken(token);
+        if (normalizedToken) {
+            headers.Authorization = `Bearer ${normalizedToken}`;
+            headers['X-Sync-Token'] = normalizedToken;
+        } else if (token) {
+            console.warn('[INVALID_SYNC_HEADERS]', {
+                reason: 'INVALID_OR_EMPTY_SYNC_TOKEN',
+                tokenPreview: previewSyncToken(token),
+            });
         }
 
         if (!target.useLocalTarget && target.terminalId) {
@@ -924,6 +1004,83 @@ class ApiSyncAdapter {
             terminalIdHeaderPresent: Boolean(headers['X-Terminal-Id'] || headers['X-POS-Terminal-Id']),
             deviceIdHeaderPresent: Boolean(headers['X-Device-Id'] || headers['X-POS-Device-Id']),
         };
+    }
+
+    private normalizeFetchHeaders(headers: HeadersInit | undefined): Record<string, string> {
+        const normalized: Record<string, string> = {};
+        if (!headers) return normalized;
+
+        const assign = (key: string, value: unknown) => {
+            const headerName = String(key || '').trim();
+            const headerValue = String(value ?? '').replace(/[\r\n]/g, '').trim();
+            if (!headerName || !headerValue || ['undefined', 'null'].includes(headerValue.toLowerCase())) {
+                if (headerName) {
+                    console.warn('[INVALID_SYNC_HEADERS]', { headerName, reason: 'EMPTY_OR_INVALID_VALUE' });
+                }
+                return;
+            }
+            normalized[headerName] = headerValue;
+        };
+
+        if (headers instanceof Headers) {
+            headers.forEach((value, key) => assign(key, value));
+            return normalized;
+        }
+
+        if (Array.isArray(headers)) {
+            headers.forEach(([key, value]) => assign(key, value));
+            return normalized;
+        }
+
+        Object.entries(headers).forEach(([key, value]) => assign(key, value));
+        return normalized;
+    }
+
+    private summarizeFetchHeaders(headers: Record<string, string>) {
+        const syncToken = headers['X-Sync-Token'] || headers['x-sync-token'] || '';
+        const authorization = headers.Authorization || headers.authorization || '';
+        return {
+            authorization: Boolean(authorization),
+            xSyncToken: Boolean(syncToken),
+            xTerminalId: Boolean(headers['X-Terminal-Id'] || headers['X-POS-Terminal-Id'] || headers['x-terminal-id'] || headers['x-pos-terminal-id']),
+            xDeviceId: Boolean(headers['X-Device-Id'] || headers['X-POS-Device-Id'] || headers['x-device-id'] || headers['x-pos-device-id']),
+            tokenPreview: previewSyncToken(syncToken || authorization.replace(/^Bearer\s+/i, '')),
+            contentType: headers['Content-Type'] || headers['content-type'] || null,
+        };
+    }
+
+    private resolveCapacitorPlatform(): string {
+        try {
+            const capacitor = (window as any)?.Capacitor;
+            if (capacitor && typeof capacitor.getPlatform === 'function') {
+                return String(capacitor.getPlatform() || 'unknown');
+            }
+        } catch {
+            // ignore
+        }
+        return 'web';
+    }
+
+    private getBodySize(body: BodyInit | null | undefined): number {
+        if (!body) return 0;
+        if (typeof body === 'string') return body.length;
+        if (body instanceof Blob) return body.size;
+        if (body instanceof FormData) return -1;
+        if (body instanceof URLSearchParams) return body.toString().length;
+        return -1;
+    }
+
+    private attachFetchDiagnostic(error: unknown, diagnostic: Record<string, unknown>): void {
+        if (!error || typeof error !== 'object') return;
+        try {
+            Object.defineProperty(error, '__syncFetchDiagnostic', {
+                value: diagnostic,
+                configurable: true,
+                enumerable: false,
+            });
+        } catch {
+            (error as any).__syncFetchDiagnostic = diagnostic;
+        }
     }
 
     private extractSyncTokenFromAuthResponse(data: any): { token: string | null; expiresAt?: unknown } {

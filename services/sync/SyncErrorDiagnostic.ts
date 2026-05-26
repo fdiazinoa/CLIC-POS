@@ -26,6 +26,29 @@ export interface SyncRequestAuthDiagnostic {
     deviceIdHeaderPresent: boolean;
 }
 
+export interface SyncFetchDiagnostic {
+    fetchStage?: 'PREPARE_HEADERS' | 'PREFLIGHT' | 'PREFLIGHT_FAILED' | 'FETCH_SENT' | 'FETCH_FAILED' | 'RESPONSE_RECEIVED' | 'RESPONSE_PARSED' | string;
+    method?: string | null;
+    headersPresent?: {
+        authorization?: boolean;
+        xSyncToken?: boolean;
+        xTerminalId?: boolean;
+        xDeviceId?: boolean;
+    };
+    tokenPreview?: string | null;
+    bodySize?: number | null;
+    contentType?: string | null;
+    networkOnline?: boolean | null;
+    navigatorUserAgent?: string | null;
+    platform?: string | null;
+    capacitorPlatform?: string | null;
+    origin?: string | null;
+    errorName?: string | null;
+    errorMessage?: string | null;
+    errorCause?: string | null;
+    corsExpectedHeaders?: string[];
+}
+
 export interface SyncErrorDiagnostic {
     operation: SyncDiagnosticOperation;
     collection?: string | null;
@@ -74,6 +97,11 @@ export interface SyncErrorDiagnostic {
     blockedByLocalGuard?: boolean;
     guardReason?: string | null;
     requestAuth?: SyncRequestAuthDiagnostic | null;
+    fetchDiagnostic?: SyncFetchDiagnostic | null;
+    fetchStage?: string | null;
+    httpMethod?: string | null;
+    networkOnline?: boolean | null;
+    capacitorPlatform?: string | null;
     terminalBindingStatus: TerminalBindingStatus;
     catalogSyncStatus: CatalogSyncStatus;
     salesPushStatus: SalesPushStatus;
@@ -176,11 +204,15 @@ export const buildSyncErrorDiagnostic = (input: {
     blockedByLocalGuard?: boolean;
     guardReason?: string | null;
     requestAuth?: SyncRequestAuthDiagnostic | null;
+    fetchDiagnostic?: SyncFetchDiagnostic | null;
 }): SyncErrorDiagnostic => {
     const syncProfile = loadSyncProfile();
     const resolvedTarget = resolveSyncTarget(syncProfile);
     const lastProfileDiagnostic = getLastSyncProfilePersistenceDiagnostic();
     const error = input.error instanceof Error ? input.error : null;
+    const attachedFetchDiagnostic = input.fetchDiagnostic || (input.error && typeof input.error === 'object'
+        ? ((input.error as any).__syncFetchDiagnostic as SyncFetchDiagnostic | undefined)
+        : undefined);
 
     return {
         operation: input.operation,
@@ -230,6 +262,11 @@ export const buildSyncErrorDiagnostic = (input: {
         blockedByLocalGuard: Boolean(input.blockedByLocalGuard),
         guardReason: input.guardReason || null,
         requestAuth: input.requestAuth || null,
+        fetchDiagnostic: attachedFetchDiagnostic || null,
+        fetchStage: attachedFetchDiagnostic?.fetchStage || null,
+        httpMethod: attachedFetchDiagnostic?.method || null,
+        networkOnline: attachedFetchDiagnostic?.networkOnline ?? null,
+        capacitorPlatform: attachedFetchDiagnostic?.capacitorPlatform || null,
         terminalBindingStatus: resolveBindingStatus(),
         catalogSyncStatus: resolveCatalogStatus(),
         salesPushStatus: resolveSalesPushStatus(resolvedTarget),
