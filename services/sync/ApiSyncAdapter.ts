@@ -1029,38 +1029,53 @@ class ApiSyncAdapter {
         const routedTarget = resolveSyncTarget();
         if (routedTarget.kind === 'POS_CLOUD_STAGING' && routedTarget.canPushMasters) {
             const target = await this.authenticateOperationalTarget(false, 'background');
-            const response = await this.fetchWithRetry(`${target.baseUrl}/collections/${collection}/push`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Sync-Token': target.token
-                },
-                body: JSON.stringify({
-                    items,
-                    mode,
-                    action,
-                    source: 'POS',
-                    sync_channel: routedTarget.kind
-                })
+            const buildBody = () => JSON.stringify({
+                items,
+                mode,
+                action,
+                source: 'POS',
+                sync_channel: routedTarget.kind,
+                master_type: collection,
+                collection
             });
+            const postCloudStaging = async (authTarget: {
+                baseUrl: string;
+                terminalId: string;
+                token: string;
+                useLocalTarget: boolean;
+                kind: ResolvedSyncTarget['kind'];
+            }) => {
+                const primaryUrl = `${authTarget.baseUrl}/cloud-staging/masters/${collection}`;
+                const primaryResponse = await this.fetchWithRetry(primaryUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Sync-Token': authTarget.token
+                    },
+                    body: buildBody()
+                });
+
+                if (primaryResponse.status !== 404 && primaryResponse.status !== 405) {
+                    return primaryResponse;
+                }
+
+                console.warn(`[POS_CLOUD_STAGING] ${primaryUrl} unavailable (${primaryResponse.status}); falling back to legacy collection push.`);
+                return this.fetchWithRetry(`${authTarget.baseUrl}/collections/${collection}/push`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Sync-Token': authTarget.token
+                    },
+                    body: buildBody()
+                });
+            };
+
+            const response = await postCloudStaging(target);
 
             if (response.status === 401) {
                 this.erpAuthToken = null;
                 const retriedTarget = await this.authenticateOperationalTarget(true, 'background');
-                const retryResponse = await this.fetchWithRetry(`${retriedTarget.baseUrl}/collections/${collection}/push`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Sync-Token': retriedTarget.token
-                    },
-                    body: JSON.stringify({
-                        items,
-                        mode,
-                        action,
-                        source: 'POS',
-                        sync_channel: routedTarget.kind
-                    })
-                });
+                const retryResponse = await postCloudStaging(retriedTarget);
                 if (!retryResponse.ok) {
                     throw new Error(`Cloud staging push failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
                 }

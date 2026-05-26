@@ -54,7 +54,7 @@ interface SyncStatus {
     localVersion: number;
     remoteVersion: number | null;
     lastSyncTimestamp?: string | null;
-    status: 'SYNCED' | 'PENDING' | 'ERROR';
+    status: 'SYNCED' | 'SYNCED_CLOUD' | 'PENDING' | 'ERROR';
     error?: string;
 }
 
@@ -4399,6 +4399,17 @@ class SyncManager {
             try {
                 if (target.canPushMasters && target.dataMaster === 'POS') {
                     await this.pushCatalog(collection);
+                    const localData = await db.get(collection as any);
+                    const localVersion = this.syncVersions.get(collection) || 0;
+
+                    results.push({
+                        collection,
+                        lastSyncedAt: new Date().toISOString(),
+                        localVersion,
+                        remoteVersion: Array.isArray(localData) ? localData.length : null,
+                        status: 'SYNCED_CLOUD'
+                    });
+                    continue;
                 } else {
                     // Pull only when the channel allows remote masters (ERP_ACTIVE or POS_MASTER).
                     await this.pullCatalog(collection);
@@ -4427,7 +4438,7 @@ class SyncManager {
         }
 
         // 2. Sync Operations (Master Only - PULL)
-        if (permissionService.isMasterTerminal()) {
+        if (permissionService.isMasterTerminal() && target.kind !== 'POS_CLOUD_STAGING') {
             for (const collection of operations) {
                 try {
                     // Master pulls operations from Server to see what Slaves have sent

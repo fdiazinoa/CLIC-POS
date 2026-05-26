@@ -187,7 +187,7 @@ export function inferLegacySyncProfile(): SyncProfile {
         erpTenantId: firstValue(readStorage('clic_erp_sync_tenant_id'), readStorage('erp_tenant_id')),
         erpTerminalId,
         cloudStagingReady: Boolean(!isPosErp && erpBaseUrl && erpTerminalId),
-        erpReadyForSales: isPosErp ? readBoolean(['clic_erp_ready_for_sales', 'erpReadyForSales'], true) : false,
+        erpReadyForSales: isPosErp ? readBoolean(['clic_erp_ready_for_sales', 'erpReadyForSales'], false) : false,
     });
 }
 

@@ -34,6 +34,7 @@ class BackgroundSyncManager {
     private readonly WORKER_INTERVAL_MS = 30000;
     private readonly FAST_RETRY_DELAY_MS = 5000;
     private readonly RECOVERABLE_TRANSACTION_RETRY_DELAY_MS = 15000;
+    private readonly STUCK_SYNCING_TIMEOUT_MS = 120000;
 
     /**
      * Initialize the background sync manager
@@ -159,11 +160,51 @@ class BackgroundSyncManager {
             'item_mapping_missing',
             'terminal_disabled',
             'erp_disabled',
+            'erp_not_ready_for_sales',
             'slave_direct_erp_sync_forbidden',
+            'operational sync target is not configured',
             'no se pudo resolver el artículo pos',
             'no se pudo resolver el articulo pos',
             '409'
         ].some((needle) => normalized.includes(needle));
+    }
+
+    private isOperationalSyncPending(item: any, collectionName: string): boolean {
+        const retryAfter = Date.parse(String(item?.syncRetryAfter || ''));
+        if (Number.isFinite(retryAfter) && retryAfter > Date.now()) {
+            const delay = Math.max(1000, retryAfter - Date.now());
+            this.nextRetryDelayMs = this.nextRetryDelayMs === null
+                ? delay
+                : Math.min(this.nextRetryDelayMs, delay);
+            return false;
+        }
+
+        const status = item?.syncStatus;
+        if (status === 'PENDING') return true;
+        if (status === 'RETRY_WAIT') return true;
+        if (status === 'SYNCING') {
+            const startedAt = Date.parse(String(item?.syncStartedAt || ''));
+            return Number.isFinite(startedAt) && Date.now() - startedAt > this.STUCK_SYNCING_TIMEOUT_MS;
+        }
+        if (
+            status === 'ERROR' ||
+            status === 'SYNCED_CLOUD' ||
+            status === 'SYNCED_ACTIVE' ||
+            status === 'SYNCED_MASTER' ||
+            status === 'BLOCKED_FUNCTIONAL' ||
+            status === 'FAILED_FINAL'
+        ) return false;
+
+        if (collectionName === 'transactions' && (status === undefined || status === null || status === '')) {
+            return true;
+        }
+        if (
+            (collectionName === 'wallet_transactions' || collectionName === 'loyalty_events') &&
+            (status === undefined || status === null || status === '')
+        ) {
+            return false;
+        }
+        return false;
     }
 
     private isErpOperationalPushConfigured(): boolean {
@@ -225,6 +266,14 @@ class BackgroundSyncManager {
      */
     async sync() {
         if (this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
+        const operationalTarget = syncPolicy.resolve();
+        if (operationalTarget.kind === 'NONE' || !operationalTarget.canPushOperations) {
+            console.log(
+                `[SYNC_ROUTER] operational sync skipped kind=${operationalTarget.kind} canPushOperations=${operationalTarget.canPushOperations} reason=${operationalTarget.reason || 'n/a'}`
+            );
+            await this.updatePendingCount();
+            return;
+        }
 
         // We only sync if we are a SLAVE or if we are a MASTER that needs to push to a central server
         // (In this architecture, Master also pushes to its own server to keep db.json as source of truth)
@@ -341,46 +390,9 @@ class BackgroundSyncManager {
         if (!Array.isArray(data)) return;
 
         // Filter pending items and sort by date (FIFO)
-        const isSyncPending = (item: T): boolean => {
-            const retryAfter = Date.parse(String((item as any).syncRetryAfter || ''));
-            if (Number.isFinite(retryAfter) && retryAfter > Date.now()) {
-                const delay = Math.max(1000, retryAfter - Date.now());
-                this.nextRetryDelayMs = this.nextRetryDelayMs === null
-                    ? delay
-                    : Math.min(this.nextRetryDelayMs, delay);
-                return false;
-            }
-
-            const status = item.syncStatus;
-            if (status === 'PENDING') return true;
-            if (status === 'SYNCING') return true;
-            if (status === 'RETRY_WAIT') return true;
-            if (status === 'ERROR') {
-                const errorText = String((item as any).syncError || '');
-                return !this.isFunctionalSyncError(errorText);
-            }
-            if (
-                status === 'SYNCED_CLOUD' ||
-                status === 'SYNCED_ACTIVE' ||
-                status === 'SYNCED_MASTER' ||
-                status === 'BLOCKED_FUNCTIONAL' ||
-                status === 'FAILED_FINAL'
-            ) return false;
-            // Legacy safeguard: older transactions may not have syncStatus set.
-            if (collectionName === 'transactions' && (status === undefined || status === null || (item as any).syncStatus === '')) {
-                return true;
-            }
-            if (
-                (collectionName === 'wallet_transactions' || collectionName === 'loyalty_events') &&
-                (status === undefined || status === null || (item as any).syncStatus === '')
-            ) {
-                return false;
-            }
-            return false;
-        };
         const pending = data.filter(item =>
             (this.shouldSyncItem(collectionName, item) || (collectionName === 'transactions' && item._forceSyncReplay === true)) &&
-            isSyncPending(item)
+            this.isOperationalSyncPending(item, collectionName)
         );
 
         if (pending.length === 0) {
@@ -405,6 +417,7 @@ class BackgroundSyncManager {
             try {
                 // Mark as syncing
                 item.syncStatus = 'SYNCING';
+                (item as any).syncStartedAt = new Date().toISOString();
                 delete (item as any).syncRetryAfter;
                 await db.saveDocument(collectionName as any, item as any);
 
@@ -427,6 +440,7 @@ class BackgroundSyncManager {
                     item._forceSyncReplay = false;
                 }
                 delete (item as any).syncRetryAfter;
+                delete (item as any).syncStartedAt;
                 await db.saveDocument(collectionName as any, item as any);
                 if (collectionName === 'transactions') {
                     const transaction = item as any;
@@ -444,6 +458,7 @@ class BackgroundSyncManager {
                     item.syncError = undefined;
                     item._forceSyncReplay = true;
                     (item as any).syncRetryAfter = new Date(Date.now() + this.RECOVERABLE_TRANSACTION_RETRY_DELAY_MS).toISOString();
+                    delete (item as any).syncStartedAt;
                     this.nextRetryDelayMs = this.nextRetryDelayMs === null
                         ? this.RECOVERABLE_TRANSACTION_RETRY_DELAY_MS
                         : Math.min(this.nextRetryDelayMs, this.RECOVERABLE_TRANSACTION_RETRY_DELAY_MS);
@@ -461,6 +476,7 @@ class BackgroundSyncManager {
                         item._forceSyncReplay = false;
                     }
                     delete (item as any).syncRetryAfter;
+                    delete (item as any).syncStartedAt;
                     await db.saveDocument(collectionName as any, item as any);
                     continue;
                 }
@@ -469,6 +485,7 @@ class BackgroundSyncManager {
                 item.syncStatus = 'RETRY_WAIT';
                 item.syncError = error.message;
                 (item as any).syncRetryAfter = new Date(Date.now() + this.RECOVERABLE_TRANSACTION_RETRY_DELAY_MS).toISOString();
+                delete (item as any).syncStartedAt;
                 await db.saveDocument(collectionName as any, item as any);
 
                 // Stop processing this collection to maintain FIFO order on next retry
@@ -486,10 +503,7 @@ class BackgroundSyncManager {
             if (Array.isArray(data)) {
                 count += data.filter((item: any) =>
                     this.shouldSyncItem(col, item) &&
-                    (item.syncStatus === 'PENDING' ||
-                        item.syncStatus === 'RETRY_WAIT' ||
-                        item.syncStatus === 'SYNCING' ||
-                        (item.syncStatus === 'ERROR' && !this.isFunctionalSyncError(item.syncError)))
+                    this.isOperationalSyncPending(item, col)
                 ).length;
             }
         }
