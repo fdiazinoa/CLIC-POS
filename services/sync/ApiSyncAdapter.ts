@@ -16,6 +16,7 @@ import {
     ResolvedSyncTarget
 } from './SyncProfile';
 import { reportSyncErrorDiagnostic, type SyncDiagnosticOperation } from './SyncErrorDiagnostic';
+import { requestJson } from '../network/httpClient';
 
 /**
  * API Sync Adapter
@@ -583,16 +584,23 @@ class ApiSyncAdapter {
             profileSourcePriority: fetchContext.profileSourcePriority,
         });
 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000); // Reduced timeout to 5s
-
         try {
-            console.log('[FETCH_SENT]', { ...fetchContext, fetchStage: 'FETCH_SENT' });
-            const response = await fetch(url, { ...options, headers, signal: controller.signal });
-            clearTimeout(timeoutId);
+            const nativeResponse = await requestJson({
+                url,
+                method,
+                headers,
+                body: options.body,
+                timeoutMs: 5000,
+                diagnosticContext: fetchContext,
+            });
+            const response = new Response(nativeResponse.text, {
+                status: nativeResponse.status,
+                headers: nativeResponse.headers,
+            });
             console.log('[FETCH_RESPONSE]', {
                 ...fetchContext,
-                fetchStage: 'RESPONSE_RECEIVED',
+                networkEngine: nativeResponse.networkEngine,
+                fetchStage: nativeResponse.fetchStage || 'RESPONSE_RECEIVED',
                 httpStatus: response.status,
                 ok: response.ok,
                 statusText: response.statusText,
@@ -621,15 +629,18 @@ class ApiSyncAdapter {
 
             return response;
         } catch (error: any) {
-            clearTimeout(timeoutId);
-
             const isConnectionError = error.name === 'TypeError' && error.message === 'Failed to fetch';
             const isTimeout = error.name === 'AbortError';
-            const fetchStage = isConnectionError && (headersSummary.authorization || headersSummary.xSyncToken || headersSummary.xTerminalId || headersSummary.xDeviceId)
-                ? 'PREFLIGHT_FAILED'
-                : 'FETCH_FAILED';
+            const httpClientDiagnostic = error?.__httpClientDiagnostic;
+            const networkEngine = httpClientDiagnostic?.networkEngine || 'fetch';
+            const fetchStage = httpClientDiagnostic?.fetchStage
+                || (isConnectionError && networkEngine !== 'capacitor-http' && (headersSummary.authorization || headersSummary.xSyncToken || headersSummary.xTerminalId || headersSummary.xDeviceId)
+                    ? 'PREFLIGHT_FAILED'
+                    : 'FETCH_FAILED');
             const fetchDiagnostic = {
                 ...fetchContext,
+                ...(httpClientDiagnostic || {}),
+                networkEngine,
                 fetchStage,
                 errorName: error?.name || null,
                 errorMessage: error?.message || String(error || ''),
@@ -670,14 +681,20 @@ class ApiSyncAdapter {
     }
 
     private async fetchWithoutCircuitBreaker(url: string, options: RequestInit = {}, timeoutMs = 5000): Promise<Response> {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-        try {
-            return await fetch(url, { ...options, signal: controller.signal });
-        } finally {
-            clearTimeout(timeoutId);
-        }
+        const method = String(options.method || 'GET').toUpperCase();
+        const headers = this.normalizeFetchHeaders(options.headers);
+        const nativeResponse = await requestJson({
+            url,
+            method,
+            headers,
+            body: options.body,
+            timeoutMs,
+            diagnosticContext: { method, url, endpoint: url, circuitBreaker: false },
+        });
+        return new Response(nativeResponse.text, {
+            status: nativeResponse.status,
+            headers: nativeResponse.headers,
+        });
     }
 
     /**

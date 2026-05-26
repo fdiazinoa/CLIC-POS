@@ -28,6 +28,7 @@ export interface SyncRequestAuthDiagnostic {
 
 export interface SyncFetchDiagnostic {
     fetchStage?: 'PREPARE_HEADERS' | 'PREFLIGHT' | 'PREFLIGHT_FAILED' | 'FETCH_SENT' | 'FETCH_FAILED' | 'RESPONSE_RECEIVED' | 'RESPONSE_PARSED' | string;
+    networkEngine?: 'capacitor-http' | 'fetch' | string;
     method?: string | null;
     headersPresent?: {
         authorization?: boolean;
@@ -109,6 +110,7 @@ export interface SyncErrorDiagnostic {
     requestAuth?: SyncRequestAuthDiagnostic | null;
     fetchDiagnostic?: SyncFetchDiagnostic | null;
     fetchStage?: string | null;
+    networkEngine?: string | null;
     httpMethod?: string | null;
     networkOnline?: boolean | null;
     capacitorPlatform?: string | null;
@@ -276,6 +278,7 @@ export const buildSyncErrorDiagnostic = (input: {
         requestAuth: input.requestAuth || null,
         fetchDiagnostic: attachedFetchDiagnostic || null,
         fetchStage: attachedFetchDiagnostic?.fetchStage || null,
+        networkEngine: attachedFetchDiagnostic?.networkEngine || null,
         httpMethod: attachedFetchDiagnostic?.method || null,
         networkOnline: attachedFetchDiagnostic?.networkOnline ?? null,
         capacitorPlatform: attachedFetchDiagnostic?.capacitorPlatform || null,

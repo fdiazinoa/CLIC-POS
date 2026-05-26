@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
-import { AlertTriangle, Clipboard, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, Clipboard, RefreshCw, Server, X } from 'lucide-react';
 import type { SyncErrorDiagnostic } from '../services/sync/SyncErrorDiagnostic';
+import { requestJson } from '../services/network/httpClient';
+import { resolveSyncDeviceToken } from '../services/sync/deviceToken';
 
 interface SyncErrorDiagnosticModalProps {
   diagnostic: SyncErrorDiagnostic | null;
@@ -18,6 +20,8 @@ const Field: React.FC<{ label: string; value: unknown }> = ({ label, value }) =>
 const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ diagnostic, onClose, onRetryProducts }) => {
   const [copyLabel, setCopyLabel] = useState('Copiar diagnóstico');
   const [isRetrying, setIsRetrying] = useState(false);
+  const [isTestingNative, setIsTestingNative] = useState(false);
+  const [nativeTestResult, setNativeTestResult] = useState<unknown>(null);
   const diagnosticJson = useMemo(() => diagnostic ? JSON.stringify(diagnostic, null, 2) : '', [diagnostic]);
 
   if (!diagnostic) return null;
@@ -39,6 +43,87 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
       await onRetryProducts();
     } finally {
       setIsRetrying(false);
+    }
+  };
+
+  const pickSyncToken = (payload: any): string | null => {
+    const candidates = [
+      payload?.token,
+      payload?.syncToken,
+      payload?.sync_token,
+      payload?.syncAuthToken,
+      payload?.sync_auth_token,
+      payload?.access_token,
+      payload?.session?.syncToken,
+      payload?.session?.sync_token,
+    ];
+    const found = candidates.find((value) => typeof value === 'string' && value.trim());
+    return found ? found.trim() : null;
+  };
+
+  const handleNativeErpTest = async () => {
+    setIsTestingNative(true);
+    const deviceToken = resolveSyncDeviceToken().token;
+    const deviceId = diagnostic.deviceId || localStorage.getItem('pos_device_id') || localStorage.getItem('CLIC_POS_DEVICE_ID') || '';
+    const terminalId = diagnostic.resolvedTarget?.terminalId || diagnostic.terminalId || '';
+    const baseUrl = diagnostic.resolvedTarget?.baseUrl || diagnostic.syncProfile?.erpBaseUrl || '';
+    const result: Record<string, unknown> = {
+      engine: 'pending',
+      baseUrl,
+      terminalId,
+      deviceId,
+      tokenPresent: Boolean(deviceToken),
+      syncTokenPresent: false,
+    };
+
+    try {
+      if (!baseUrl || !terminalId || !deviceId || !deviceToken) {
+        throw new Error('Faltan baseUrl, terminalId, deviceId o deviceToken para probar conexion ERP nativa.');
+      }
+
+      const auth = await requestJson<any>({
+        url: `${baseUrl}/auth`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Terminal-Id': terminalId,
+          'X-Device-Id': deviceId,
+          'X-Device-Token': deviceToken,
+        },
+        body: JSON.stringify({ terminalId, deviceId, deviceToken }),
+        timeoutMs: 8000,
+        diagnosticContext: { operation: 'NATIVE_ERP_TEST_AUTH' },
+      });
+      result.engine = auth.networkEngine;
+      result.authStatus = auth.status;
+      result.authBody = auth.text.slice(0, 1000);
+
+      const syncToken = pickSyncToken(auth.data);
+      result.syncTokenPresent = Boolean(syncToken);
+      if (syncToken) {
+        localStorage.setItem('clic_erp_sync_token', syncToken);
+        localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
+        const metadata = await requestJson<any>({
+          url: `${baseUrl}/collections/products/metadata`,
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${syncToken}`,
+            'X-Sync-Token': syncToken,
+            'X-Terminal-Id': terminalId,
+            'X-Device-Id': deviceId,
+          },
+          timeoutMs: 8000,
+          diagnosticContext: { operation: 'NATIVE_ERP_TEST_METADATA', collection: 'products' },
+        });
+        result.metadataStatus = metadata.status;
+        result.metadataBody = metadata.text.slice(0, 1000);
+      }
+    } catch (error: any) {
+      result.error = error?.message || String(error || '');
+      result.errorDiagnostic = error?.__httpClientDiagnostic || null;
+    } finally {
+      setNativeTestResult(result);
+      setIsTestingNative(false);
     }
   };
 
@@ -93,6 +178,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <Field label="auth.tokenPreview" value={diagnostic.requestAuth?.syncTokenPreview} />
             <Field label="auth.terminalHeader" value={diagnostic.requestAuth?.terminalIdHeaderPresent === undefined ? 'N/A' : diagnostic.requestAuth.terminalIdHeaderPresent ? 'true' : 'false'} />
             <Field label="auth.deviceHeader" value={diagnostic.requestAuth?.deviceIdHeaderPresent === undefined ? 'N/A' : diagnostic.requestAuth.deviceIdHeaderPresent ? 'true' : 'false'} />
+            <Field label="networkEngine" value={diagnostic.networkEngine || diagnostic.fetchDiagnostic?.networkEngine} />
             <Field label="fetchStage" value={diagnostic.fetchStage} />
             <Field label="HTTP method" value={diagnostic.httpMethod} />
             <Field label="fetch.tokenPresent" value={diagnostic.fetchDiagnostic?.tokenPresent === undefined ? 'N/A' : diagnostic.fetchDiagnostic.tokenPresent ? 'true' : 'false'} />
@@ -125,6 +211,12 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
               <p className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-400">fetchDiagnostic</p>
               <pre className="mt-3 max-h-64 overflow-auto rounded-xl bg-slate-950 p-4 text-xs font-semibold text-slate-100">{JSON.stringify(diagnostic.fetchDiagnostic || null, null, 2)}</pre>
             </div>
+            {nativeTestResult !== null && (
+              <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 lg:col-span-2">
+                <p className="text-[10px] font-black uppercase tracking-[0.24em] text-blue-500">Prueba ERP nativa</p>
+                <pre className="mt-3 max-h-64 overflow-auto rounded-xl bg-white p-4 text-xs font-semibold text-blue-950">{JSON.stringify(nativeTestResult, null, 2)}</pre>
+              </div>
+            )}
           </div>
 
           {(diagnostic.existingProfile || diagnostic.incomingProfile) && (
@@ -175,6 +267,15 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
           >
             <RefreshCw size={18} className={isRetrying ? 'animate-spin' : ''} />
             {isRetrying ? 'Reintentando...' : 'Reintentar artículos'}
+          </button>
+          <button
+            type="button"
+            onClick={handleNativeErpTest}
+            disabled={isTestingNative}
+            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white shadow-sm hover:bg-blue-500 disabled:opacity-60"
+          >
+            <Server size={18} />
+            {isTestingNative ? 'Probando...' : 'Probar conexión ERP nativa'}
           </button>
         </div>
       </div>
