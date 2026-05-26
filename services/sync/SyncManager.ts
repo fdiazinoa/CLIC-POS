@@ -4366,6 +4366,7 @@ class SyncManager {
         const operations: SyncableCollection[] = ['inventoryLedger', 'zReports'];
 
         const results: SyncStatus[] = [];
+        const target = syncPolicy.resolve();
 
         // 0. Pull singleton config first on slaves (document assignments/terminal behavior live there).
         if (!permissionService.isMasterTerminal()) {
@@ -4396,9 +4397,12 @@ class SyncManager {
         // 1. Sync Catalogs
         for (const collection of catalogs) {
             try {
-                // Always PULL to get updates from Server/Other Terminals
-                // (Master pushes changes via broadcastChange immediately)
-                await this.pullCatalog(collection);
+                if (target.canPushMasters && target.dataMaster === 'POS') {
+                    await this.pushCatalog(collection);
+                } else {
+                    // Pull only when the channel allows remote masters (ERP_ACTIVE or POS_MASTER).
+                    await this.pullCatalog(collection);
+                }
 
                 const metadata = await apiSyncAdapter.getMetadata(collection);
                 const localVersion = this.syncVersions.get(collection) || 0;

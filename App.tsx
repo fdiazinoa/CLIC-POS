@@ -54,6 +54,7 @@ import { syncManager } from './services/sync/SyncManager';
 import { apiSyncAdapter } from './services/sync/ApiSyncAdapter';
 import { backgroundSyncManager } from './services/sync/BackgroundSyncManager';
 import { productImageCacheService } from './services/sync/ProductImageCacheService';
+import { posCloudStagingService } from './services/sync/PosCloudStagingService';
 import { calculateZReportStats } from './utils/analytics';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
 import { calculateTransactionTaxSummary } from './utils/taxSummary';
@@ -3678,6 +3679,9 @@ const AppContent: React.FC = () => {
         companyId: setupResult?.companyId || null,
         storeId: setupResult?.storeId || null,
       });
+      void posCloudStagingService.sendSnapshot('TERMINAL_BINDING_COMPLETE').catch((error) => {
+        console.warn('⚠️ POS cloud staging snapshot failed after terminal binding:', error);
+      });
 
       setCurrentView('LOGIN');
     } catch (error) {
@@ -3738,13 +3742,16 @@ const AppContent: React.FC = () => {
       const setupMode = getStoredTerminalSetupMode();
       if (setupMode === 'SERVER_LOCAL') {
         const binding = await activateLocalPrimaryTerminal(nextConfig, effectiveDeviceId);
-        if (binding) {
-          localStorage.setItem('active_terminal_id', binding.terminalId);
-          localStorage.setItem('CLIC_POS_TERMINAL_ID', binding.terminalId);
-          localStorage.setItem('initial_terminal_config', JSON.stringify(binding.nextConfig || nextConfig));
-          setCurrentView('LOGIN');
-          return;
-        }
+	        if (binding) {
+	          localStorage.setItem('active_terminal_id', binding.terminalId);
+	          localStorage.setItem('CLIC_POS_TERMINAL_ID', binding.terminalId);
+	          localStorage.setItem('initial_terminal_config', JSON.stringify(binding.nextConfig || nextConfig));
+	          void posCloudStagingService.sendSnapshot('SETUP_WIZARD_COMPLETE').catch((error) => {
+	            console.warn('⚠️ POS cloud staging snapshot failed after setup wizard:', error);
+	          });
+	          setCurrentView('LOGIN');
+	          return;
+	        }
       }
 
       setConfig(nextConfig);

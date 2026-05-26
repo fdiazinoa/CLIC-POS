@@ -1026,6 +1026,67 @@ class ApiSyncAdapter {
         action: SyncChange['action'] = 'BULK_UPDATE',
         mode: 'UPSERT' | 'FULL_REPLACE' = 'UPSERT'
     ): Promise<void> {
+        const routedTarget = resolveSyncTarget();
+        if (routedTarget.kind === 'POS_CLOUD_STAGING' && routedTarget.canPushMasters) {
+            const target = await this.authenticateOperationalTarget(false, 'background');
+            const response = await this.fetchWithRetry(`${target.baseUrl}/collections/${collection}/push`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Sync-Token': target.token
+                },
+                body: JSON.stringify({
+                    items,
+                    mode,
+                    action,
+                    source: 'POS',
+                    sync_channel: routedTarget.kind
+                })
+            });
+
+            if (response.status === 401) {
+                this.erpAuthToken = null;
+                const retriedTarget = await this.authenticateOperationalTarget(true, 'background');
+                const retryResponse = await this.fetchWithRetry(`${retriedTarget.baseUrl}/collections/${collection}/push`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Sync-Token': retriedTarget.token
+                    },
+                    body: JSON.stringify({
+                        items,
+                        mode,
+                        action,
+                        source: 'POS',
+                        sync_channel: routedTarget.kind
+                    })
+                });
+                if (!retryResponse.ok) {
+                    throw new Error(`Cloud staging push failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
+                }
+                console.log(`📤 ApiSyncAdapter: Staged ${items.length} ${collection} item(s) after re-auth.`);
+                return;
+            }
+
+            if (!response.ok) {
+                const detail = await response.text().catch(() => '');
+                throw new Error(`Cloud staging push failed: ${response.status} ${response.statusText}${detail ? ` — ${detail.slice(0, 300)}` : ''}`);
+            }
+
+            console.log(`📤 ApiSyncAdapter: Staged ${items.length} ${collection} item(s) to cloud.`);
+            return;
+        }
+
+        if (routedTarget.kind === 'ERP_ACTIVE' && !routedTarget.canPushMasters) {
+            console.warn(`[SYNC_ROUTER] push(${collection}) skipped: ERP_ACTIVE masters are governed by ERP.`);
+            return;
+        }
+
+        if (routedTarget.kind === 'NONE') {
+            console.warn(`[SYNC_ROUTER] push(${collection}) skipped: no cloud sync target.`);
+            return;
+        }
+
         if (!this.config) {
             throw new Error('Sync configuration missing in ApiSyncAdapter. Ensure SyncManager is initialized.');
         }
