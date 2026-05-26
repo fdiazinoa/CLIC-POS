@@ -9,7 +9,12 @@ import {
 } from './erpOutboundPayloads';
 import { permissionService } from './PermissionService';
 import { getSyncDeviceToken } from './deviceToken';
-import { loadSyncProfile, resolveSyncTarget, ResolvedSyncTarget } from './SyncProfile';
+import {
+    getSyncProfileSourcePriority,
+    loadSyncProfile,
+    resolveSyncTarget,
+    ResolvedSyncTarget
+} from './SyncProfile';
 import { reportSyncErrorDiagnostic, type SyncDiagnosticOperation } from './SyncErrorDiagnostic';
 
 /**
@@ -237,6 +242,7 @@ const sanitizeSyncToken = (token?: string | null): string | null => {
 
     if (!normalized) return null;
     if (['undefined', 'null', 'nan'].includes(normalized.toLowerCase())) return null;
+    if (normalized === '[object Object]') return null;
     if (normalized.length < 8) return null;
     return normalized;
 };
@@ -533,18 +539,27 @@ class ApiSyncAdapter {
         const headersSummary = this.summarizeFetchHeaders(headers);
         const bodySize = this.getBodySize(options.body);
         const capacitorPlatform = this.resolveCapacitorPlatform();
+        const syncProfile = loadSyncProfile();
+        const tokenDiagnostic = this.resolveStoredErpSyncTokenDiagnostic();
         const fetchContext = {
             method,
             url,
+            endpoint: url,
             headersPresent: {
                 authorization: headersSummary.authorization,
                 xSyncToken: headersSummary.xSyncToken,
                 xTerminalId: headersSummary.xTerminalId,
                 xDeviceId: headersSummary.xDeviceId,
             },
+            tokenPresent: Boolean(headersSummary.tokenPreview),
             tokenPreview: headersSummary.tokenPreview,
+            tokenLength: headersSummary.tokenLength || tokenDiagnostic.length || 0,
+            tokenSource: tokenDiagnostic.source,
+            tokenUpdatedAt: tokenDiagnostic.updatedAt,
             bodySize,
             contentType: headersSummary.contentType,
+            contractSource: syncProfile.contractSource || null,
+            profileSourcePriority: syncProfile.profileSourcePriority ?? getSyncProfileSourcePriority(syncProfile.contractSource),
             networkOnline: typeof navigator !== 'undefined' ? navigator.onLine : null,
             navigatorUserAgent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
             platform: typeof navigator !== 'undefined' ? navigator.platform : null,
@@ -558,7 +573,12 @@ class ApiSyncAdapter {
             url,
             headersPresent: fetchContext.headersPresent,
             tokenPreview: headersSummary.tokenPreview,
+            tokenLength: fetchContext.tokenLength,
+            tokenSource: fetchContext.tokenSource,
+            tokenUpdatedAt: fetchContext.tokenUpdatedAt,
             contentType: headersSummary.contentType,
+            contractSource: fetchContext.contractSource,
+            profileSourcePriority: fetchContext.profileSourcePriority,
         });
 
         const controller = new AbortController();
@@ -932,11 +952,22 @@ class ApiSyncAdapter {
     }
 
     private resolveStoredErpSyncToken(): string | null {
+        return this.resolveStoredErpSyncTokenDiagnostic().token;
+    }
+
+    private resolveStoredErpSyncTokenDiagnostic(): { token: string | null; source: string | null; updatedAt: string | null; length: number } {
         for (const key of ERP_SYNC_TOKEN_KEYS) {
             const token = sanitizeSyncToken(safeLocalStorageGet(key));
-            if (token) return token;
+            if (token) {
+                return {
+                    token,
+                    source: key,
+                    updatedAt: safeLocalStorageGet(ERP_SYNC_TOKEN_EXPIRES_AT_KEY),
+                    length: token.length,
+                };
+            }
         }
-        return null;
+        return { token: null, source: null, updatedAt: safeLocalStorageGet(ERP_SYNC_TOKEN_EXPIRES_AT_KEY), length: 0 };
     }
 
     private persistErpSyncToken(token: string, expiresAt?: unknown): void {
@@ -1013,7 +1044,7 @@ class ApiSyncAdapter {
         const assign = (key: string, value: unknown) => {
             const headerName = String(key || '').trim();
             const headerValue = String(value ?? '').replace(/[\r\n]/g, '').trim();
-            if (!headerName || !headerValue || ['undefined', 'null'].includes(headerValue.toLowerCase())) {
+            if (!headerName || !headerValue || ['undefined', 'null', '[object object]'].includes(headerValue.toLowerCase())) {
                 if (headerName) {
                     console.warn('[INVALID_SYNC_HEADERS]', { headerName, reason: 'EMPTY_OR_INVALID_VALUE' });
                 }
@@ -1045,6 +1076,7 @@ class ApiSyncAdapter {
             xTerminalId: Boolean(headers['X-Terminal-Id'] || headers['X-POS-Terminal-Id'] || headers['x-terminal-id'] || headers['x-pos-terminal-id']),
             xDeviceId: Boolean(headers['X-Device-Id'] || headers['X-POS-Device-Id'] || headers['x-device-id'] || headers['x-pos-device-id']),
             tokenPreview: previewSyncToken(syncToken || authorization.replace(/^Bearer\s+/i, '')),
+            tokenLength: sanitizeSyncToken(syncToken || authorization.replace(/^Bearer\s+/i, ''))?.length || 0,
             contentType: headers['Content-Type'] || headers['content-type'] || null,
         };
     }

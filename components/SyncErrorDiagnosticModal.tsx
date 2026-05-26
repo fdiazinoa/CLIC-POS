@@ -80,6 +80,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <Field label="deviceId" value={diagnostic.deviceId} />
             <Field label="terminalId" value={diagnostic.terminalId} />
             <Field label="contractSource" value={diagnostic.contractSource} />
+            <Field label="profilePriority" value={diagnostic.profileSourcePriority} />
             <Field label="mismatchDetected" value={diagnostic.mismatchDetected ? 'true' : 'false'} />
             <Field label="mismatchFixed" value={diagnostic.mismatchFixed ? 'true' : 'false'} />
             <Field label="isMasterCollection" value={diagnostic.isMasterCollection === undefined ? 'N/A' : diagnostic.isMasterCollection ? 'true' : 'false'} />
@@ -94,6 +95,10 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <Field label="auth.deviceHeader" value={diagnostic.requestAuth?.deviceIdHeaderPresent === undefined ? 'N/A' : diagnostic.requestAuth.deviceIdHeaderPresent ? 'true' : 'false'} />
             <Field label="fetchStage" value={diagnostic.fetchStage} />
             <Field label="HTTP method" value={diagnostic.httpMethod} />
+            <Field label="fetch.tokenPresent" value={diagnostic.fetchDiagnostic?.tokenPresent === undefined ? 'N/A' : diagnostic.fetchDiagnostic.tokenPresent ? 'true' : 'false'} />
+            <Field label="fetch.tokenPreview" value={diagnostic.fetchDiagnostic?.tokenPreview} />
+            <Field label="fetch.tokenLength" value={diagnostic.fetchDiagnostic?.tokenLength} />
+            <Field label="fetch.tokenSource" value={diagnostic.fetchDiagnostic?.tokenSource} />
             <Field label="networkOnline" value={diagnostic.networkOnline === undefined || diagnostic.networkOnline === null ? 'N/A' : diagnostic.networkOnline ? 'true' : 'false'} />
             <Field label="capacitorPlatform" value={diagnostic.capacitorPlatform} />
           </div>

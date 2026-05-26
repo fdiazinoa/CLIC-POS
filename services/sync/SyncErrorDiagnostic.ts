@@ -35,7 +35,14 @@ export interface SyncFetchDiagnostic {
         xTerminalId?: boolean;
         xDeviceId?: boolean;
     };
+    tokenPresent?: boolean;
     tokenPreview?: string | null;
+    tokenLength?: number | null;
+    tokenSource?: string | null;
+    tokenUpdatedAt?: string | null;
+    endpoint?: string | null;
+    contractSource?: string | null;
+    profileSourcePriority?: number | null;
     bodySize?: number | null;
     contentType?: string | null;
     networkOnline?: boolean | null;
@@ -76,15 +83,17 @@ export interface SyncErrorDiagnostic {
         | 'syncPermissions'
         | 'erpReadyForSales'
         | 'cloudStagingReady'
-        | 'erpBaseUrl'
-        | 'cloudBaseUrl'
-        | 'erpTenantId'
-        | 'erpTerminalId'
-        | 'localTerminalId'
-        | 'masterUrl'
-        | 'masterTerminalId'
+    | 'erpBaseUrl'
+    | 'cloudBaseUrl'
+    | 'erpTenantId'
+    | 'erpTerminalId'
+    | 'localTerminalId'
+    | 'masterUrl'
+    | 'masterTerminalId'
+    | 'profileSourcePriority'
     >;
     contractSource: SyncProfileSource | 'UNKNOWN';
+    profileSourcePriority?: number;
     existingProfile?: Partial<SyncProfile> | null;
     incomingProfile?: Partial<SyncProfile> | null;
     mismatchDetected?: boolean;
@@ -248,8 +257,10 @@ export const buildSyncErrorDiagnostic = (input: {
             localTerminalId: syncProfile.localTerminalId,
             masterUrl: syncProfile.masterUrl,
             masterTerminalId: syncProfile.masterTerminalId,
+            profileSourcePriority: syncProfile.profileSourcePriority,
         },
         contractSource: input.contractSource || syncProfile.contractSource || lastProfileDiagnostic?.contractSource || 'UNKNOWN',
+        profileSourcePriority: syncProfile.profileSourcePriority ?? lastProfileDiagnostic?.profileSourcePriority,
         existingProfile: input.existingProfile ?? lastProfileDiagnostic?.existingProfile ?? null,
         incomingProfile: input.incomingProfile ?? lastProfileDiagnostic?.incomingProfile ?? null,
         mismatchDetected: input.mismatchDetected ?? lastProfileDiagnostic?.mismatchDetected ?? false,
@@ -270,7 +281,7 @@ export const buildSyncErrorDiagnostic = (input: {
         terminalBindingStatus: resolveBindingStatus(),
         catalogSyncStatus: resolveCatalogStatus(),
         salesPushStatus: resolveSalesPushStatus(resolvedTarget),
-        endpoint: sanitizeEndpoint(input.endpoint),
+        endpoint: sanitizeEndpoint(input.endpoint || attachedFetchDiagnostic?.endpoint),
         httpStatus: input.httpStatus ?? null,
         responseBody: truncateBody(input.responseBody),
         errorMessage: error?.message || (typeof input.error === 'string' ? input.error : null),

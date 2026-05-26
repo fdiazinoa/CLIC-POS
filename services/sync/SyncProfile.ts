@@ -2,7 +2,14 @@ export type ContractedProduct = 'POS_ONLY' | 'POS_ERP';
 export type PosRuntime = 'LOCAL_SQLITE' | 'MASTER' | 'SLAVE';
 export type CloudChannel = 'NONE' | 'POS_CLOUD_STAGING' | 'ERP_ACTIVE' | 'POS_MASTER';
 export type DataMaster = 'POS' | 'ERP' | 'POS_MASTER';
-export type SyncProfileSource = 'CLOUD_ADMIN' | 'ERP_REGISTER' | 'LOCAL_SNAPSHOT' | 'LEGACY_LOCAL_STORAGE';
+export type SyncProfileSource =
+    | 'ERP_REGISTER'
+    | 'BACKEND_REGISTER'
+    | 'CLOUD_ADMIN'
+    | 'SQLITE_SYNC_PROFILE'
+    | 'INITIAL_TERMINAL_CONFIG'
+    | 'LOCAL_SNAPSHOT'
+    | 'LEGACY_LOCAL_STORAGE';
 
 export interface SyncPermissions {
     canPullMasters?: boolean;
@@ -23,6 +30,7 @@ export interface SyncProfile {
     customerErpAccess: boolean;
     erpUiEnabled: boolean;
     contractSource?: SyncProfileSource;
+    profileSourcePriority?: number;
     syncPermissions?: SyncPermissions;
     localTenantId?: string;
     localStoreId?: string;
@@ -51,6 +59,7 @@ export interface SyncProfilePersistenceDiagnostic {
     savedProfile: SyncProfile;
     mismatchDetected: boolean;
     mismatchFixed: boolean;
+    profileSourcePriority: number;
     fixedAt: string;
 }
 
@@ -69,6 +78,19 @@ export interface ResolvedSyncTarget {
 
 const PROFILE_STORAGE_KEY = 'clic_sync_profile';
 const PROFILE_MISMATCH_STORAGE_KEY = 'clic_last_sync_profile_mismatch';
+
+export const SYNC_PROFILE_SOURCE_PRIORITY: Record<SyncProfileSource, number> = {
+    ERP_REGISTER: 100,
+    BACKEND_REGISTER: 90,
+    CLOUD_ADMIN: 90,
+    SQLITE_SYNC_PROFILE: 70,
+    INITIAL_TERMINAL_CONFIG: 50,
+    LOCAL_SNAPSHOT: 50,
+    LEGACY_LOCAL_STORAGE: 10,
+};
+
+export const getSyncProfileSourcePriority = (source?: SyncProfileSource | null): number =>
+    source ? SYNC_PROFILE_SOURCE_PRIORITY[source] ?? 0 : 0;
 
 const readStorage = (key: string): string | null => {
     try {
@@ -148,6 +170,7 @@ export function loadSyncProfile(): SyncProfile {
                         savedProfile: corrected,
                         mismatchDetected: true,
                         mismatchFixed: true,
+                        profileSourcePriority: getSyncProfileSourcePriority(corrected.contractSource),
                         fixedAt: new Date().toISOString(),
                     });
                     return corrected;
@@ -155,8 +178,19 @@ export function loadSyncProfile(): SyncProfile {
                 return normalized;
             }
         } catch {
-            console.warn('⚠️ SyncProfile: invalid persisted profile, falling back to legacy storage.');
+            console.warn('⚠️ SyncProfile: invalid persisted profile, trying last backend profile before legacy storage.');
         }
+    }
+
+    const lastDiagnostic = getLastSyncProfilePersistenceDiagnostic();
+    const lastSavedProfile = lastDiagnostic?.savedProfile ? normalizeProfile(lastDiagnostic.savedProfile) : null;
+    if (lastSavedProfile && getSyncProfileSourcePriority(lastSavedProfile.contractSource) > getSyncProfileSourcePriority('LEGACY_LOCAL_STORAGE')) {
+        console.warn('[SYNC_PROFILE_RECOVERED_FROM_BACKEND_DIAGNOSTIC]', {
+            contractSource: lastSavedProfile.contractSource,
+            profileSourcePriority: lastSavedProfile.profileSourcePriority,
+        });
+        saveSyncProfile(lastSavedProfile);
+        return lastSavedProfile;
     }
 
     return inferLegacySyncProfile();
@@ -164,7 +198,27 @@ export function loadSyncProfile(): SyncProfile {
 
 export function saveSyncProfile(profile: SyncProfile): void {
     try {
-        localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(normalizeProfile(profile)));
+        const normalized = normalizeProfile(profile);
+        const persisted = readStorage(PROFILE_STORAGE_KEY);
+        if (persisted) {
+            try {
+                const existing = normalizeProfile(JSON.parse(persisted) as Partial<SyncProfile>);
+                const existingPriority = getSyncProfileSourcePriority(existing.contractSource);
+                const incomingPriority = getSyncProfileSourcePriority(normalized.contractSource);
+                if (existingPriority > incomingPriority) {
+                    console.warn('[SYNC_PROFILE_LOWER_PRIORITY_SAVE_BLOCKED]', {
+                        existingSource: existing.contractSource,
+                        existingPriority,
+                        incomingSource: normalized.contractSource,
+                        incomingPriority,
+                    });
+                    return;
+                }
+            } catch {
+                // Invalid stored profile can be replaced by the normalized incoming profile.
+            }
+        }
+        localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(normalized));
     } catch (error) {
         console.warn('⚠️ SyncProfile: could not persist profile:', error);
     }
@@ -217,17 +271,31 @@ export function saveSyncProfileFromContract(
         ...incoming,
         contractSource,
     });
+    const existingPriority = getSyncProfileSourcePriority(existingProfile?.contractSource);
+    const incomingPriority = getSyncProfileSourcePriority(incomingProfile.contractSource);
     const mismatchDetected = hasProfileMismatch(existingProfile, incomingProfile);
+    const shouldPreserveExisting = Boolean(existingProfile && existingPriority > incomingPriority);
+    const savedProfile = shouldPreserveExisting ? existingProfile! : incomingProfile;
 
-    saveSyncProfile(incomingProfile);
+    if (shouldPreserveExisting) {
+        console.warn('[SYNC_PROFILE_LOWER_PRIORITY_IGNORED]', {
+            existingSource: existingProfile?.contractSource,
+            existingPriority,
+            incomingSource: incomingProfile.contractSource,
+            incomingPriority,
+        });
+    } else {
+        saveSyncProfile(incomingProfile);
+    }
 
     const diagnostic: SyncProfilePersistenceDiagnostic = {
-        contractSource,
+        contractSource: savedProfile.contractSource || contractSource,
         existingProfile,
         incomingProfile,
-        savedProfile: incomingProfile,
-        mismatchDetected,
-        mismatchFixed: mismatchDetected,
+        savedProfile,
+        mismatchDetected: mismatchDetected || shouldPreserveExisting,
+        mismatchFixed: mismatchDetected && !shouldPreserveExisting,
+        profileSourcePriority: getSyncProfileSourcePriority(savedProfile.contractSource),
         fixedAt: new Date().toISOString(),
     };
 
@@ -236,7 +304,7 @@ export function saveSyncProfileFromContract(
             contractSource,
             existingProfile,
             incomingProfile,
-            savedProfile: incomingProfile,
+            savedProfile,
         });
     }
 
@@ -353,6 +421,7 @@ function normalizeProfile(input: Partial<SyncProfile>): SyncProfile {
         customerErpAccess: contractedProduct === 'POS_ERP' ? true : Boolean(input.customerErpAccess),
         erpUiEnabled: contractedProduct === 'POS_ERP' ? true : Boolean(input.erpUiEnabled),
         contractSource: input.contractSource,
+        profileSourcePriority: input.profileSourcePriority ?? getSyncProfileSourcePriority(input.contractSource),
         syncPermissions: input.syncPermissions,
         localTenantId: input.localTenantId,
         localStoreId: input.localStoreId,
