@@ -49,6 +49,63 @@ import { reportSyncErrorDiagnostic, setCatalogDiagnosticStatus } from './SyncErr
 
 export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'productPrices' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities' | 'crmOpportunities' | 'erp_sales_documents';
 
+const MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
+    'products',
+    'customers',
+    'suppliers',
+    'users',
+    'roles',
+    'internalSequences',
+    'fiscalRanges',
+    'productStocks',
+    'productPrices',
+    'paymentMethods',
+    'supplierProductPrices',
+]);
+
+const CRITICAL_MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
+    'products',
+    'internalSequences',
+    'fiscalRanges',
+    'paymentMethods',
+]);
+
+const OPERATION_COLLECTIONS_FOR_ERP_PUSH = new Set<SyncableCollection>([
+    'transactions',
+    'zReports',
+    'cashMovements',
+    'inventoryLedger',
+    'transfers',
+    'receptions',
+    'purchaseOrders',
+    'activities',
+    'crmOpportunities',
+    'erp_sales_documents',
+]);
+
+const isErpMasterPullCollection = (collection: SyncableCollection): boolean =>
+    MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection);
+
+const isErpOperationCollection = (collection: SyncableCollection): boolean =>
+    OPERATION_COLLECTIONS_FOR_ERP_PUSH.has(collection);
+
+const logSkippedNonMasterPull = (
+    collection: SyncableCollection,
+    targetKind: string,
+    reason = 'NOT_A_MASTER_ERP_COLLECTION'
+): void => {
+    console.warn('[SYNC_COLLECTION_SKIPPED_NOT_A_MASTER]', {
+        collection,
+        operation: 'PULL_MASTERS',
+        targetKind,
+        isMasterCollection: isErpMasterPullCollection(collection),
+        isOperationCollection: isErpOperationCollection(collection),
+        isCriticalMaster: CRITICAL_MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection),
+        skippedReason: reason,
+        userVisibleSeverity: 'warning',
+    });
+};
+
 interface SyncStatus {
     collection: string;
     lastSyncedAt: string | null;
@@ -4028,22 +4085,12 @@ class SyncManager {
         }
     ): Promise<number> {
         if (this.isDisabled) return 0;
-        const masterDataCollections = new Set<SyncableCollection>([
-            'products',
-            'customers',
-            'suppliers',
-            'users',
-            'roles',
-            'internalSequences',
-            'fiscalRanges',
-            'productStocks',
-            'productPrices',
-            'paymentMethods',
-            'purchaseOrders',
-            'supplierProductPrices'
-        ]);
         const target = syncPolicy.resolve();
-        if (masterDataCollections.has(collection) && !target.canPullMasters) {
+        if (target.kind === 'ERP_ACTIVE' && !isErpMasterPullCollection(collection)) {
+            logSkippedNonMasterPull(collection, target.kind);
+            return 0;
+        }
+        if (isErpMasterPullCollection(collection) && !target.canPullMasters) {
             console.warn(
                 `[SYNC_ROUTER] pullCatalog skipped collection=${collection} channel=${target.kind} dataMaster=${target.dataMaster}. POS local remains source of truth.`
             );
@@ -4356,7 +4403,7 @@ class SyncManager {
         // Catalogs: Master PUSHES, Slaves PULL
         // Added inventoryLedger and transactions so slaves can see history from other terminals
         const isMaster = permissionService.isMasterTerminal();
-        const catalogs: SyncableCollection[] = [
+        const defaultCatalogs: SyncableCollection[] = [
             'products',
             'customers',
             'suppliers',
@@ -4377,6 +4424,16 @@ class SyncManager {
 
         const results: SyncStatus[] = [];
         const target = syncPolicy.resolve();
+        const catalogs: SyncableCollection[] = target.kind === 'ERP_ACTIVE'
+            ? defaultCatalogs.filter(isErpMasterPullCollection)
+            : defaultCatalogs;
+        if (target.kind === 'ERP_ACTIVE') {
+            for (const collection of defaultCatalogs) {
+                if (!isErpMasterPullCollection(collection)) {
+                    logSkippedNonMasterPull(collection, target.kind, 'REMOVED_FROM_ERP_ACTIVE_CATALOG_PULL');
+                }
+            }
+        }
 
         // 0. Pull singleton config first on slaves (document assignments/terminal behavior live there).
         if (!permissionService.isMasterTerminal()) {
@@ -4459,6 +4516,12 @@ class SyncManager {
 
         // 2. Sync Operations (Master Only - PULL)
         if (permissionService.isMasterTerminal() && target.kind !== 'POS_CLOUD_STAGING') {
+            if (target.kind === 'ERP_ACTIVE') {
+                for (const collection of operations) {
+                    logSkippedNonMasterPull(collection, target.kind, 'ERP_OPERATIONS_ARE_PUSH_ONLY');
+                }
+                return results;
+            }
             for (const collection of operations) {
                 try {
                     // Master pulls operations from Server to see what Slaves have sent
@@ -4552,7 +4615,8 @@ class SyncManager {
      * Check for catalog updates without pulling
      */
     async checkForUpdates(): Promise<string[]> {
-        const collections: SyncableCollection[] = [
+        const target = syncPolicy.resolve();
+        const defaultCollections: SyncableCollection[] = [
             'products',
             'customers',
             'suppliers',
@@ -4565,6 +4629,9 @@ class SyncManager {
             'receptions',
             ...(permissionService.shouldShowGlobalSales() ? ['transactions' as SyncableCollection] : [])
         ];
+        const collections = target.kind === 'ERP_ACTIVE'
+            ? defaultCollections.filter(isErpMasterPullCollection)
+            : defaultCollections;
         const updatesAvailable: string[] = [];
 
         for (const collection of collections) {
@@ -4640,8 +4707,8 @@ class SyncManager {
             return;
         }
 
-        // Define modules to sync
-        const modules = [
+        // Define modules to sync. ERP_ACTIVE must pull only masters/config, never POS operations.
+        const baseModules = [
             { id: 'config', label: 'Configuración Global (Tarifas)' },
             { id: 'products', label: 'Catálogo de Productos' },
             { id: 'customers', label: 'Base de Clientes' },
@@ -4651,15 +4718,18 @@ class SyncManager {
             { id: 'internalSequences', label: 'Secuencias de Documentos' },
             { id: 'fiscalRanges', label: 'Rangos Fiscales DGII' },
         ];
+        const modules = target.kind === 'ERP_ACTIVE'
+            ? baseModules.filter(module => module.id === 'config' || isErpMasterPullCollection(module.id as SyncableCollection))
+            : [...baseModules];
 
-        if (permissionService.isMasterTerminal()) {
+        if (permissionService.isMasterTerminal() && target.kind !== 'ERP_ACTIVE') {
             modules.push(
                 { id: 'transactions', label: 'Historial de Ventas' },
                 { id: 'zReports', label: 'Cierres de Caja (Z)' },
                 { id: 'inventoryLedger', label: 'Movimientos de Inventario' },
                 { id: 'cashMovements', label: 'Movimientos de Efectivo' }
             );
-        } else if (permissionService.shouldShowGlobalSales()) {
+        } else if (permissionService.shouldShowGlobalSales() && target.kind !== 'ERP_ACTIVE') {
             modules.push(
                 { id: 'transactions', label: 'Historial de Ventas Globales' }
             );

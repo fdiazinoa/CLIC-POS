@@ -84,6 +84,7 @@ type CircuitBreakerChannel = 'sales' | 'background';
 type OperationalSyncOperation = Exclude<SyncDiagnosticOperation, 'REGISTER_TERMINAL'>;
 
 const ERP_TEMPORARILY_UNAVAILABLE_ERROR = 'ERP temporalmente no disponible';
+const ERP_CRITICAL_MASTER_COLLECTIONS = new Set(['products', 'internalSequences', 'fiscalRanges', 'paymentMethods']);
 
 class SyncCircuitBreaker {
     private consecutiveFailures = 0;
@@ -1230,6 +1231,16 @@ class ApiSyncAdapter {
                 }
 
                 if (!response.ok) {
+                    if (response.status === 404 && !ERP_CRITICAL_MASTER_COLLECTIONS.has(collection)) {
+                        console.warn('[SYNC_COLLECTION_SKIPPED_UNSUPPORTED_COLLECTION]', {
+                            collection,
+                            operation: 'PULL_MASTERS',
+                            endpoint: url.toString(),
+                            httpStatus: response.status,
+                            userVisibleSeverity: 'warning',
+                        });
+                        return [];
+                    }
                     const responseBody = await response.text().catch(() => '');
                     const error = new Error(`Pull failed: ${response.status} ${response.statusText}`);
                     reportSyncErrorDiagnostic({
@@ -1368,6 +1379,21 @@ class ApiSyncAdapter {
                 }
 
                 if (!response.ok) {
+                    if (response.status === 404 && !ERP_CRITICAL_MASTER_COLLECTIONS.has(collection)) {
+                        console.warn('[SYNC_COLLECTION_SKIPPED_UNSUPPORTED_COLLECTION]', {
+                            collection,
+                            operation: 'PULL_MASTERS',
+                            endpoint: url.toString(),
+                            httpStatus: response.status,
+                            userVisibleSeverity: 'warning',
+                        });
+                        return {
+                            items: [],
+                            serverTime: new Date().toISOString(),
+                            isFullDownload: false,
+                            latestVersion: sinceVersion || 0,
+                        };
+                    }
                     const responseBody = await response.text().catch(() => '');
                     const error = new Error(`Delta pull failed: ${response.status} ${response.statusText}`);
                     reportSyncErrorDiagnostic({
@@ -1582,6 +1608,16 @@ class ApiSyncAdapter {
                 }
 
                 if (!response.ok) {
+                    if (response.status === 404 && !ERP_CRITICAL_MASTER_COLLECTIONS.has(collection)) {
+                        console.warn('[SYNC_COLLECTION_SKIPPED_UNSUPPORTED_COLLECTION]', {
+                            collection,
+                            operation,
+                            endpoint,
+                            httpStatus: response.status,
+                            userVisibleSeverity: 'warning',
+                        });
+                        return null;
+                    }
                     const responseBody = await response.text().catch(() => '');
                     const error = new Error(`Get metadata failed: ${response.status} ${response.statusText}`);
                     reportSyncErrorDiagnostic({
