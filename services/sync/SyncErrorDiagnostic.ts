@@ -58,6 +58,8 @@ export interface SyncErrorDiagnostic {
     incomingProfile?: Partial<SyncProfile> | null;
     mismatchDetected?: boolean;
     mismatchFixed?: boolean;
+    blockedByLocalGuard?: boolean;
+    guardReason?: string | null;
     terminalBindingStatus: TerminalBindingStatus;
     catalogSyncStatus: CatalogSyncStatus;
     salesPushStatus: SalesPushStatus;
@@ -152,6 +154,8 @@ export const buildSyncErrorDiagnostic = (input: {
     incomingProfile?: Partial<SyncProfile> | null;
     mismatchDetected?: boolean;
     mismatchFixed?: boolean;
+    blockedByLocalGuard?: boolean;
+    guardReason?: string | null;
 }): SyncErrorDiagnostic => {
     const syncProfile = loadSyncProfile();
     const resolvedTarget = resolveSyncTarget(syncProfile);
@@ -198,6 +202,8 @@ export const buildSyncErrorDiagnostic = (input: {
         incomingProfile: input.incomingProfile ?? lastProfileDiagnostic?.incomingProfile ?? null,
         mismatchDetected: input.mismatchDetected ?? lastProfileDiagnostic?.mismatchDetected ?? false,
         mismatchFixed: input.mismatchFixed ?? lastProfileDiagnostic?.mismatchFixed ?? false,
+        blockedByLocalGuard: Boolean(input.blockedByLocalGuard),
+        guardReason: input.guardReason || null,
         terminalBindingStatus: resolveBindingStatus(),
         catalogSyncStatus: resolveCatalogStatus(),
         salesPushStatus: resolveSalesPushStatus(resolvedTarget),

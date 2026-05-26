@@ -10,7 +10,7 @@ import {
 import { permissionService } from './PermissionService';
 import { getSyncDeviceToken } from './deviceToken';
 import { loadSyncProfile, resolveSyncTarget, ResolvedSyncTarget } from './SyncProfile';
-import { reportSyncErrorDiagnostic } from './SyncErrorDiagnostic';
+import { reportSyncErrorDiagnostic, type SyncDiagnosticOperation } from './SyncErrorDiagnostic';
 
 /**
  * API Sync Adapter
@@ -81,6 +81,7 @@ interface TerminalInventoryPayload {
 }
 
 type CircuitBreakerChannel = 'sales' | 'background';
+type OperationalSyncOperation = Exclude<SyncDiagnosticOperation, 'REGISTER_TERMINAL'>;
 
 const ERP_TEMPORARILY_UNAVAILABLE_ERROR = 'ERP temporalmente no disponible';
 
@@ -350,13 +351,17 @@ class ApiSyncAdapter {
         options: RequestInit = {},
         retries = 2,
         backoff = 500,
-        channel: CircuitBreakerChannel = 'background'
+        channel: CircuitBreakerChannel = 'background',
+        operation: OperationalSyncOperation = channel === 'sales' ? 'PUSH_OPERATIONS' : 'PULL_MASTERS'
     ): Promise<Response> {
         // Add jitter to backoff (±20% randomness)
         const jitter = backoff * 0.2;
         const effectiveBackoff = backoff + (Math.random() * jitter * 2 - jitter);
         const circuitBreaker = this.getCircuitBreaker(channel);
-        circuitBreaker.assertAvailable();
+        const shouldGateWithCircuit = operation === 'PUSH_OPERATIONS' || channel === 'sales';
+        if (shouldGateWithCircuit) {
+            circuitBreaker.assertAvailable();
+        }
 
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000); // Reduced timeout to 5s
@@ -383,7 +388,7 @@ class ApiSyncAdapter {
             if ((response.status === 503 || response.status === 504) && retries > 0) {
                 console.warn(`⚠️ Request failed with ${response.status}, retrying in ${Math.round(effectiveBackoff)}ms...`);
                 await new Promise(r => setTimeout(r, effectiveBackoff));
-                return this.fetchWithRetry(url, options, retries - 1, backoff * 2, channel);
+                return this.fetchWithRetry(url, options, retries - 1, backoff * 2, channel, operation);
             }
 
             return response;
@@ -407,7 +412,7 @@ class ApiSyncAdapter {
             if ((isConnectionError || isTimeout) && retries > 0 && circuitBreaker.canRetry()) {
                 console.warn(`⚠️ Connection error (${error.message}), retrying in ${Math.round(effectiveBackoff)}ms...`);
                 await new Promise(r => setTimeout(r, effectiveBackoff));
-                return this.fetchWithRetry(url, options, retries - 1, backoff * 1.5, channel);
+                return this.fetchWithRetry(url, options, retries - 1, backoff * 1.5, channel, operation);
             }
 
             throw error;
@@ -720,13 +725,27 @@ class ApiSyncAdapter {
         return normalizedBody;
     }
 
-    private resolveOperationalTarget(): ({ baseUrl: string; terminalId: string; useLocalTarget: boolean; kind: ResolvedSyncTarget['kind'] }) | null {
+    private resolveOperationalTarget(
+        operation: OperationalSyncOperation = 'PUSH_OPERATIONS'
+    ): ({ baseUrl: string; terminalId: string; useLocalTarget: boolean; kind: ResolvedSyncTarget['kind'] }) | null {
         const routedTarget = resolveSyncTarget();
         console.log(
-            `[SYNC_ROUTER] kind=${routedTarget.kind} dataMaster=${routedTarget.dataMaster} customerErpAccess=${routedTarget.customerErpAccess ? 'yes' : 'no'} canPullMasters=${routedTarget.canPullMasters ? 'yes' : 'no'} reason=${routedTarget.reason || 'OK'}`
+            `[SYNC_ROUTER] operation=${operation} kind=${routedTarget.kind} dataMaster=${routedTarget.dataMaster} customerErpAccess=${routedTarget.customerErpAccess ? 'yes' : 'no'} canPullMasters=${routedTarget.canPullMasters ? 'yes' : 'no'} canPushOperations=${routedTarget.canPushOperations ? 'yes' : 'no'} reason=${routedTarget.reason || 'OK'}`
         );
 
-        if (routedTarget.kind === 'NONE' || !routedTarget.canPushOperations) {
+        const canRunOperation =
+            operation === 'PULL_MASTERS'
+                ? routedTarget.canPullMasters
+                : operation === 'PULL_CONFIG'
+                    ? routedTarget.canPullMasters
+                    : operation === 'PUSH_MASTERS'
+                        ? routedTarget.canPushMasters
+                        : routedTarget.canPushOperations;
+
+        if (routedTarget.kind === 'NONE' || !canRunOperation) {
+            console.warn(
+                `[SYNC_ROUTER] operation=${operation} blocked locally kind=${routedTarget.kind} reason=${routedTarget.reason || 'INSUFFICIENT_SYNC_PERMISSION'} canPullMasters=${routedTarget.canPullMasters ? 'yes' : 'no'} canPushOperations=${routedTarget.canPushOperations ? 'yes' : 'no'}`
+            );
             return null;
         }
 
@@ -754,16 +773,35 @@ class ApiSyncAdapter {
         return localMasterTarget ? { ...localMasterTarget, kind: 'POS_MASTER' } : null;
     }
 
-    private async authenticateOperationalTarget(force = false, channel: CircuitBreakerChannel = 'background'): Promise<{
+    private async authenticateOperationalTarget(
+        force = false,
+        channel: CircuitBreakerChannel = 'background',
+        operation: OperationalSyncOperation = channel === 'sales' ? 'PUSH_OPERATIONS' : 'PULL_MASTERS'
+    ): Promise<{
         baseUrl: string;
         terminalId: string;
         token: string;
         useLocalTarget: boolean;
         kind: ResolvedSyncTarget['kind'];
     }> {
-        const target = this.resolveOperationalTarget();
+        const target = this.resolveOperationalTarget(operation);
         if (!target) {
-            throw new Error('Operational sync target is not configured');
+            const routedTarget = resolveSyncTarget();
+            const guardReason = routedTarget.reason || 'INSUFFICIENT_SYNC_PERMISSION';
+            const error = new Error(
+                operation === 'PULL_MASTERS' || operation === 'PULL_CONFIG'
+                    ? 'No se pudo iniciar descarga de maestros'
+                    : 'Operational sync target is not configured'
+            );
+            reportSyncErrorDiagnostic({
+                operation,
+                endpoint: null,
+                httpStatus: null,
+                error,
+                blockedByLocalGuard: true,
+                guardReason,
+            });
+            throw error;
         }
 
         if (target.useLocalTarget) {
@@ -808,7 +846,7 @@ class ApiSyncAdapter {
                     terminalId: target.terminalId,
                     deviceToken: getSyncDeviceToken()
                 })
-            }, 2, 500, channel);
+            }, 2, 500, channel, operation);
 
             if (!response.ok) {
                 let errorMessage = `ERP authentication failed: ${response.status} ${response.statusText}`;
@@ -847,7 +885,7 @@ class ApiSyncAdapter {
     }
 
     private async postOperationalPayload(path: string, body: Record<string, unknown>): Promise<void> {
-        const target = await this.authenticateOperationalTarget();
+        const target = await this.authenticateOperationalTarget(false, 'sales', 'PUSH_OPERATIONS');
         const requestBody = this.buildOperationalPostBody(target, body);
         const response = await this.fetchWithRetry(`${target.baseUrl}${path}`, {
             method: 'POST',
@@ -856,7 +894,7 @@ class ApiSyncAdapter {
                 'X-Sync-Token': target.token
             },
             body: JSON.stringify(requestBody)
-        });
+        }, 2, 500, 'sales', 'PUSH_OPERATIONS');
 
         if (response.status === 401) {
             if (target.useLocalTarget) {
@@ -865,7 +903,7 @@ class ApiSyncAdapter {
                 this.erpAuthToken = null;
             }
 
-            const retriedTarget = await this.authenticateOperationalTarget(true);
+            const retriedTarget = await this.authenticateOperationalTarget(true, 'sales', 'PUSH_OPERATIONS');
             const retryBody = this.buildOperationalPostBody(retriedTarget, body);
             const retryResponse = await this.fetchWithRetry(`${retriedTarget.baseUrl}${path}`, {
                 method: 'POST',
@@ -874,7 +912,7 @@ class ApiSyncAdapter {
                     'X-Sync-Token': retriedTarget.token
                 },
                 body: JSON.stringify(retryBody)
-            });
+            }, 2, 500, 'sales', 'PUSH_OPERATIONS');
 
             if (!retryResponse.ok) {
                 throw new Error(`Operational sync failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
@@ -888,13 +926,16 @@ class ApiSyncAdapter {
         }
     }
 
-    private async getOperationalPayload<T = any>(path: string): Promise<T> {
-        const target = await this.authenticateOperationalTarget();
+    private async getOperationalPayload<T = any>(
+        path: string,
+        operation: OperationalSyncOperation = 'PULL_CONFIG'
+    ): Promise<T> {
+        const target = await this.authenticateOperationalTarget(false, 'background', operation);
         const response = await this.fetchWithRetry(`${target.baseUrl}${path}`, {
             headers: {
                 'X-Sync-Token': target.token
             }
-        });
+        }, 2, 500, 'background', operation);
 
         if (response.status === 401) {
             if (target.useLocalTarget) {
@@ -903,12 +944,12 @@ class ApiSyncAdapter {
                 this.erpAuthToken = null;
             }
 
-            const retriedTarget = await this.authenticateOperationalTarget(true);
+            const retriedTarget = await this.authenticateOperationalTarget(true, 'background', operation);
             const retryResponse = await this.fetchWithRetry(`${retriedTarget.baseUrl}${path}`, {
                 headers: {
                     'X-Sync-Token': retriedTarget.token
                 }
-            });
+            }, 2, 500, 'background', operation);
 
             if (!retryResponse.ok) {
                 throw new Error(`Operational fetch failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
@@ -1041,7 +1082,7 @@ class ApiSyncAdapter {
             return;
         }
         if (routedTarget.kind === 'POS_CLOUD_STAGING' && routedTarget.canPushMasters) {
-            const target = await this.authenticateOperationalTarget(false, 'background');
+            const target = await this.authenticateOperationalTarget(false, 'background', 'PUSH_MASTERS');
             const buildBody = () => JSON.stringify({
                 items,
                 mode,
@@ -1066,7 +1107,7 @@ class ApiSyncAdapter {
                         'X-Sync-Token': authTarget.token
                     },
                     body: buildBody()
-                });
+                }, 2, 500, 'background', 'PUSH_MASTERS');
 
                 if (primaryResponse.status !== 404 && primaryResponse.status !== 405) {
                     return primaryResponse;
@@ -1080,14 +1121,14 @@ class ApiSyncAdapter {
                         'X-Sync-Token': authTarget.token
                     },
                     body: buildBody()
-                });
+                }, 2, 500, 'background', 'PUSH_MASTERS');
             };
 
             const response = await postCloudStaging(target);
 
             if (response.status === 401) {
                 this.erpAuthToken = null;
-                const retriedTarget = await this.authenticateOperationalTarget(true, 'background');
+                const retriedTarget = await this.authenticateOperationalTarget(true, 'background', 'PUSH_MASTERS');
                 const retryResponse = await postCloudStaging(retriedTarget);
                 if (!retryResponse.ok) {
                     throw new Error(`Cloud staging push failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
@@ -1135,7 +1176,7 @@ class ApiSyncAdapter {
                     'X-Sync-Token': this.authToken
                 },
                 body: JSON.stringify({ items, mode })
-            });
+            }, 2, 500, 'background', 'PUSH_MASTERS');
 
             if (response.status === 401) {
                 // Token expired, re-authenticate
@@ -1160,6 +1201,63 @@ class ApiSyncAdapter {
      * Pull latest changes from Master (called by Slave terminals)
      */
     async pull(collection: string, sinceVersion?: number): Promise<any[]> {
+        const operationalTarget = this.resolveOperationalTarget('PULL_MASTERS');
+        if (operationalTarget && !operationalTarget.useLocalTarget) {
+            const target = await this.authenticateOperationalTarget(false, 'background', 'PULL_MASTERS');
+            const url = new URL(`${target.baseUrl}/collections/${collection}/data`);
+            if (sinceVersion) {
+                url.searchParams.set('sinceVersion', sinceVersion.toString());
+            }
+
+            try {
+                const response = await this.fetchWithRetry(url.toString(), {
+                    method: 'GET',
+                    headers: { 'X-Sync-Token': target.token }
+                }, 2, 500, 'background', 'PULL_MASTERS');
+
+                if (response.status === 401) {
+                    this.erpAuthToken = null;
+                    const retryTarget = await this.authenticateOperationalTarget(true, 'background', 'PULL_MASTERS');
+                    const retryResponse = await this.fetchWithRetry(url.toString(), {
+                        method: 'GET',
+                        headers: { 'X-Sync-Token': retryTarget.token }
+                    }, 2, 500, 'background', 'PULL_MASTERS');
+                    if (!retryResponse.ok) {
+                        throw new Error(`Pull failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
+                    }
+                    const retryData = await retryResponse.json();
+                    return retryData.items || [];
+                }
+
+                if (!response.ok) {
+                    const responseBody = await response.text().catch(() => '');
+                    const error = new Error(`Pull failed: ${response.status} ${response.statusText}`);
+                    reportSyncErrorDiagnostic({
+                        operation: 'PULL_MASTERS',
+                        collection,
+                        endpoint: url.toString(),
+                        httpStatus: response.status,
+                        responseBody,
+                        error,
+                    });
+                    throw error;
+                }
+
+                const data = await response.json();
+                return data.items || [];
+            } catch (error) {
+                console.error(`❌ ApiSyncAdapter: Error pulling ${collection} from ERP target:`, error);
+                reportSyncErrorDiagnostic({
+                    operation: 'PULL_MASTERS',
+                    collection,
+                    endpoint: url.toString(),
+                    httpStatus: error instanceof TypeError ? 'network error' : null,
+                    error,
+                });
+                throw error;
+            }
+        }
+
         if (!this.config) {
             throw new Error('Sync configuration missing');
         }
@@ -1189,7 +1287,7 @@ class ApiSyncAdapter {
                 headers: {
                     'X-Sync-Token': this.authToken
                 }
-            });
+            }, 2, 500, 'background', 'PULL_MASTERS');
 
             if (response.status === 401) {
                 // Token expired, re-authenticate
@@ -1250,6 +1348,53 @@ class ApiSyncAdapter {
      * Pull incremental changes from Master (Delta Sync)
      */
     async pullDelta(collection: string, sinceVersion?: number): Promise<{ items: any[], serverTime: string, isFullDownload: boolean, latestVersion?: number }> {
+        const operationalTarget = this.resolveOperationalTarget('PULL_MASTERS');
+        if (operationalTarget && !operationalTarget.useLocalTarget) {
+            const target = await this.authenticateOperationalTarget(false, 'background', 'PULL_MASTERS');
+            const url = new URL(`${target.baseUrl}/delta/${collection}`);
+            if (sinceVersion !== undefined) {
+                url.searchParams.set('sinceVersion', sinceVersion.toString());
+            }
+
+            try {
+                const response = await this.fetchWithRetry(url.toString(), {
+                    method: 'GET',
+                    headers: { 'X-Sync-Token': target.token }
+                }, 2, 500, 'background', 'PULL_MASTERS');
+
+                if (response.status === 401) {
+                    this.erpAuthToken = null;
+                    return this.pullDelta(collection, sinceVersion);
+                }
+
+                if (!response.ok) {
+                    const responseBody = await response.text().catch(() => '');
+                    const error = new Error(`Delta pull failed: ${response.status} ${response.statusText}`);
+                    reportSyncErrorDiagnostic({
+                        operation: 'PULL_MASTERS',
+                        collection,
+                        endpoint: url.toString(),
+                        httpStatus: response.status,
+                        responseBody,
+                        error,
+                    });
+                    throw error;
+                }
+
+                return await response.json();
+            } catch (error) {
+                console.error(`❌ ApiSyncAdapter: Error pulling ERP delta for ${collection}:`, error);
+                reportSyncErrorDiagnostic({
+                    operation: 'PULL_MASTERS',
+                    collection,
+                    endpoint: url.toString(),
+                    httpStatus: error instanceof TypeError ? 'network error' : null,
+                    error,
+                });
+                throw error;
+            }
+        }
+
         if (!this.config) {
             throw new Error('Sync configuration missing');
         }
@@ -1269,7 +1414,7 @@ class ApiSyncAdapter {
                 headers: {
                     'X-Sync-Token': this.authToken || ''
                 }
-            });
+            }, 2, 500, 'background', 'PULL_MASTERS');
 
             if (response.status === 401) {
                 await this.authenticate();
@@ -1406,6 +1551,72 @@ class ApiSyncAdapter {
      * Get metadata for a collection
      */
     async getMetadata(collection: string): Promise<SyncMetadata | null> {
+        const operation: OperationalSyncOperation = collection === 'config' ? 'PULL_CONFIG' : 'PULL_MASTERS';
+        const operationalTarget = this.resolveOperationalTarget(operation);
+        if (operationalTarget && !operationalTarget.useLocalTarget) {
+            const target = await this.authenticateOperationalTarget(false, 'background', operation);
+            const endpoint = `${target.baseUrl}/collections/${collection}/metadata`;
+            try {
+                const response = await this.fetchWithRetry(endpoint, {
+                    method: 'GET',
+                    headers: { 'X-Sync-Token': target.token }
+                }, 2, 500, 'background', operation);
+
+                if (response.status === 401) {
+                    this.erpAuthToken = null;
+                    const retryTarget = await this.authenticateOperationalTarget(true, 'background', operation);
+                    const retryResponse = await this.fetchWithRetry(endpoint, {
+                        method: 'GET',
+                        headers: { 'X-Sync-Token': retryTarget.token }
+                    }, 2, 500, 'background', operation);
+                    if (!retryResponse.ok) return null;
+                    const retryData = await retryResponse.json();
+                    const retryMetadata = retryData.metadata || retryData;
+                    return {
+                        collection,
+                        lastSyncedAt: retryMetadata.lastUpdated || retryMetadata.lastSyncedAt || new Date().toISOString(),
+                        version: Number(retryMetadata.version || 0),
+                        itemCount: Number(retryMetadata.itemCount || retryMetadata.count || 0),
+                        fullSyncVersion: retryMetadata.fullSyncVersion
+                    };
+                }
+
+                if (!response.ok) {
+                    const responseBody = await response.text().catch(() => '');
+                    const error = new Error(`Get metadata failed: ${response.status} ${response.statusText}`);
+                    reportSyncErrorDiagnostic({
+                        operation,
+                        collection,
+                        endpoint,
+                        httpStatus: response.status,
+                        responseBody,
+                        error,
+                    });
+                    return null;
+                }
+
+                const data = await response.json();
+                const metadata = data.metadata || data;
+                return {
+                    collection,
+                    lastSyncedAt: metadata.lastUpdated || metadata.lastSyncedAt || new Date().toISOString(),
+                    version: Number(metadata.version || 0),
+                    itemCount: Number(metadata.itemCount || metadata.count || 0),
+                    fullSyncVersion: metadata.fullSyncVersion
+                };
+            } catch (error) {
+                console.error(`❌ ApiSyncAdapter: Error getting ERP metadata for ${collection}:`, error);
+                reportSyncErrorDiagnostic({
+                    operation,
+                    collection,
+                    endpoint,
+                    httpStatus: error instanceof TypeError ? 'network error' : null,
+                    error,
+                });
+                return null;
+            }
+        }
+
         if (!this.config) {
             return null;
         }
@@ -1579,7 +1790,7 @@ class ApiSyncAdapter {
         response: Response;
         text: string;
     }> {
-        let target = await this.authenticateOperationalTarget(false, 'sales');
+        let target = await this.authenticateOperationalTarget(false, 'sales', 'PUSH_OPERATIONS');
         const postUrl = `${target.baseUrl}/transactions`;
         const authUrl = `${target.baseUrl}/auth`;
 
@@ -1600,7 +1811,7 @@ class ApiSyncAdapter {
                     'X-Sync-Token': target.token
                 },
                 body: JSON.stringify(requestBody)
-            }, 2, 500, 'sales');
+            }, 2, 500, 'sales', 'PUSH_OPERATIONS');
             const text = await response.text();
 
             if (response.status !== 401 || retryCount === 1) {
@@ -1609,7 +1820,7 @@ class ApiSyncAdapter {
 
             console.warn(`[SYNC_SALES_HTTP] 401 for tx=${txId}; refreshing ERP sync token and replaying request immediately.`);
             this.erpAuthToken = null;
-            target = await this.authenticateOperationalTarget(true, 'sales');
+            target = await this.authenticateOperationalTarget(true, 'sales', 'PUSH_OPERATIONS');
         }
 
         throw new Error('ERP transaction sync failed: request was not attempted');
@@ -2214,13 +2425,19 @@ class ApiSyncAdapter {
      * Pull global configuration from Master
      */
     async pullConfig(): Promise<any> {
+        const operationalTarget = this.resolveOperationalTarget('PULL_CONFIG');
+        if (operationalTarget && !operationalTarget.useLocalTarget) {
+            const data = await this.getOperationalPayload<{ config?: any }>('/config', 'PULL_CONFIG');
+            return data?.config || data || null;
+        }
+
         if (!this.config) return null;
         if (!this.authToken) await this.authenticate();
 
         try {
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/config`, {
                 headers: { 'X-Sync-Token': this.authToken || '' }
-            });
+            }, 2, 500, 'background', 'PULL_CONFIG');
 
             if (response.status === 401) {
                 await this.authenticate();
