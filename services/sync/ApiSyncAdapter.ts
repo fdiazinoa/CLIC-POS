@@ -10,6 +10,7 @@ import {
 import { permissionService } from './PermissionService';
 import { getSyncDeviceToken } from './deviceToken';
 import { resolveSyncTarget, ResolvedSyncTarget } from './SyncProfile';
+import { reportSyncErrorDiagnostic } from './SyncErrorDiagnostic';
 
 /**
  * API Sync Adapter
@@ -1185,7 +1186,17 @@ class ApiSyncAdapter {
             }
 
             if (!response.ok) {
-                throw new Error(`Pull failed: ${response.statusText}`);
+                const responseBody = await response.text().catch(() => '');
+                const error = new Error(`Pull failed: ${response.status} ${response.statusText}`);
+                reportSyncErrorDiagnostic({
+                    operation: 'PULL_MASTERS',
+                    collection,
+                    endpoint: `${this.config.masterUrl}/api/sync/collections/${collection}/data`,
+                    httpStatus: response.status,
+                    responseBody,
+                    error,
+                });
+                throw error;
             }
 
             const data = await response.json();
@@ -1211,6 +1222,13 @@ class ApiSyncAdapter {
 
         } catch (error) {
             console.error(`❌ ApiSyncAdapter: Error pulling ${collection}:`, error);
+            reportSyncErrorDiagnostic({
+                operation: 'PULL_MASTERS',
+                collection,
+                endpoint: `${this.config.masterUrl}/api/sync/collections/${collection}/data`,
+                httpStatus: error instanceof TypeError ? 'network error' : null,
+                error,
+            });
             this.isOnline = false;
             throw error;
         }
@@ -1247,12 +1265,29 @@ class ApiSyncAdapter {
             }
 
             if (!response.ok) {
-                throw new Error(`Delta pull failed: ${response.statusText}`);
+                const responseBody = await response.text().catch(() => '');
+                const error = new Error(`Delta pull failed: ${response.status} ${response.statusText}`);
+                reportSyncErrorDiagnostic({
+                    operation: 'PULL_MASTERS',
+                    collection,
+                    endpoint: url.toString(),
+                    httpStatus: response.status,
+                    responseBody,
+                    error,
+                });
+                throw error;
             }
 
             return await response.json();
         } catch (error) {
             console.error(`❌ ApiSyncAdapter: Error pulling delta for ${collection}:`, error);
+            reportSyncErrorDiagnostic({
+                operation: 'PULL_MASTERS',
+                collection,
+                endpoint: `${this.config.masterUrl}/api/sync/delta/${collection}`,
+                httpStatus: error instanceof TypeError ? 'network error' : null,
+                error,
+            });
             throw error;
         }
     }
@@ -1389,7 +1424,17 @@ class ApiSyncAdapter {
             }
 
             if (!response.ok) {
-                throw new Error(`Get metadata failed: ${response.statusText}`);
+                const responseBody = await response.text().catch(() => '');
+                const error = new Error(`Get metadata failed: ${response.status} ${response.statusText}`);
+                reportSyncErrorDiagnostic({
+                    operation: collection === 'config' ? 'PULL_CONFIG' : 'PULL_MASTERS',
+                    collection,
+                    endpoint: `${this.config.masterUrl}/api/sync/collections/${collection}/metadata`,
+                    httpStatus: response.status,
+                    responseBody,
+                    error,
+                });
+                throw error;
             }
 
             const data = await response.json();
@@ -1403,6 +1448,13 @@ class ApiSyncAdapter {
 
         } catch (error) {
             console.error(`❌ ApiSyncAdapter: Error getting metadata for ${collection}:`, error);
+            reportSyncErrorDiagnostic({
+                operation: collection === 'config' ? 'PULL_CONFIG' : 'PULL_MASTERS',
+                collection,
+                endpoint: `${this.config.masterUrl}/api/sync/collections/${collection}/metadata`,
+                httpStatus: error instanceof TypeError ? 'network error' : null,
+                error,
+            });
             this.isOnline = false;
             return null;
         }

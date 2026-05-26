@@ -74,6 +74,7 @@ import SetupWizard from './components/SetupWizard';
 import ActivationScreen from './components/ActivationScreen';
 import TerminalModeSelector from './components/TerminalModeSelector';
 import TerminalBindingScreen from './components/TerminalBindingScreen';
+import SyncErrorDiagnosticModal from './components/SyncErrorDiagnosticModal';
 import CustomerVisor from './components/CustomerVisor';
 import PosApkUpdateBanner from './components/PosApkUpdateBanner';
 import { visorSync } from './utils/visorSync';
@@ -152,6 +153,14 @@ import {
   isLifecycleActivationBlocked,
   persistStoredErpSyncBinding
 } from './utils/erpSyncLifecycle';
+import {
+  SYNC_DIAGNOSTIC_EVENT,
+  SYNC_DIAGNOSTIC_STORAGE_KEY,
+  reportSyncErrorDiagnostic,
+  setCatalogDiagnosticStatus,
+  setTerminalBindingDiagnosticStatus,
+  type SyncErrorDiagnostic
+} from './services/sync/SyncErrorDiagnostic';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
 import { resolveCustomerImageSrc } from './utils/entityImage';
 import { posCatalogDebugElapsedMs, posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugNow, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
@@ -764,6 +773,14 @@ const AppContent: React.FC = () => {
   const [reconnectionStatus, setReconnectionStatus] = useState<'idle' | 'searching' | 'connected' | 'failed'>('idle');
   const [terminalConfigRestartNotice, setTerminalConfigRestartNotice] = useState<TerminalConfigRestartNotice | null>(() => readTerminalConfigRestartNotice());
   const [posApkUpdate, setPosApkUpdate] = useState<PosApkUpdateAvailable | null>(null);
+  const [syncDiagnostic, setSyncDiagnostic] = useState<SyncErrorDiagnostic | null>(() => {
+    try {
+      const stored = localStorage.getItem(SYNC_DIAGNOSTIC_STORAGE_KEY);
+      return stored ? JSON.parse(stored) as SyncErrorDiagnostic : null;
+    } catch {
+      return null;
+    }
+  });
   const posApkUpdateCheckStartedRef = useRef(false);
 
   // --- SECURITY BOOTSTRAP STATE ---
@@ -773,6 +790,16 @@ const AppContent: React.FC = () => {
   const inactivityTimerRef = useRef<number | null>(null);
 
   // Security bootstrap logic moved to loadData
+
+  useEffect(() => {
+    const handleDiagnostic = (event: Event) => {
+      const detail = (event as CustomEvent<SyncErrorDiagnostic>).detail;
+      if (detail) setSyncDiagnostic(detail);
+    };
+
+    window.addEventListener(SYNC_DIAGNOSTIC_EVENT, handleDiagnostic as EventListener);
+    return () => window.removeEventListener(SYNC_DIAGNOSTIC_EVENT, handleDiagnostic as EventListener);
+  }, []);
 
   useEffect(() => {
     if (!isDataLoaded || posApkUpdateCheckStartedRef.current) return;
@@ -2590,7 +2617,7 @@ const AppContent: React.FC = () => {
         }
 
         if (shouldPairAsClient) {
-          console.log('[BOOT] Client mode selected. Redirecting to terminal pairing...');
+          console.warn('[ACTIVATION_REDIRECT_REASON]', 'CLIENT_MODE_SELECTED', { currentView, deviceId, terminalSetupMode: getStoredTerminalSetupMode() });
           setCurrentView('TERMINAL_PAIRING');
           setIsDataLoaded(true);
           setIsSecurityLoaded(true);
@@ -2598,7 +2625,7 @@ const AppContent: React.FC = () => {
         }
 
         if (shouldPairAsServerErp) {
-          console.log('[BOOT] ERP direct mode selected. Redirecting to ERP terminal pairing...');
+          console.warn('[ACTIVATION_REDIRECT_REASON]', 'ERP_DIRECT_MODE_SELECTED', { currentView, deviceId, terminalSetupMode: getStoredTerminalSetupMode() });
           setCurrentView('TERMINAL_PAIRING');
           setIsDataLoaded(true);
           setIsSecurityLoaded(true);
@@ -2609,7 +2636,7 @@ const AppContent: React.FC = () => {
         // If no local pairing exists and we have no master IP, we are definitely unpaired.
         // We must bail OUT of the loading sequence to let the user pair.
         if (!localPairedTerminal && setupWizardCompleted) {
-          console.warn('[BOOT] Dispositivo no vinculado. Redirigiendo a selección de terminal para evitar autoasignaciones silenciosas...');
+          console.warn('[ACTIVATION_REDIRECT_REASON]', 'NO_LOCAL_PAIRED_TERMINAL_AFTER_SETUP', { currentView, deviceId, setupWizardCompleted });
           setIsDataLoaded(true); // Stop "Loading CLIC POS..."
           setIsSecurityLoaded(true); // Bypass "Loading Security..."
           setCurrentView('TERMINAL_PAIRING');
@@ -2808,6 +2835,7 @@ const AppContent: React.FC = () => {
           }
 
           if (!pairedTerminal && !isVisorMode && currentView !== 'VISOR') {
+            console.warn('[ACTIVATION_REDIRECT_REASON]', 'PAIRED_TERMINAL_NOT_FOUND', { currentView, deviceId, isVisorMode });
             setCurrentView('DEVICE_UNAUTHORIZED');
           }
 
@@ -3371,6 +3399,9 @@ const AppContent: React.FC = () => {
     options?: { forceTakeover?: boolean }
   ) => {
     setRestoringHistory(true);
+    setTerminalBindingDiagnosticStatus('BINDING');
+    setCatalogDiagnosticStatus('IDLE');
+    let preserveTerminalBindingAfterRegister = false;
     const previousConfig = config;
     const previousUsers = users;
     const previousActiveTerminalId = localStorage.getItem('active_terminal_id');
@@ -3392,6 +3423,7 @@ const AppContent: React.FC = () => {
       if (!setupResult?.boundConfig) {
         throw new Error('La vinculación debe provenir del backend central de setup. No se recibió configuración enlazada.');
       }
+      preserveTerminalBindingAfterRegister = true;
       setupResult.progress?.({
         stepId: 'apply',
         message: 'Guardando configuración de terminal y permisos locales...',
@@ -3506,6 +3538,16 @@ const AppContent: React.FC = () => {
         isPrimary: !isSlave,
       });
 
+      persistStoredErpSyncBinding({
+        tenantId: setupResult?.tenantId || localStorage.getItem('active_tenant_id') || null,
+        terminalId: resolvedErpTerminalId,
+        localTerminalId: terminalId,
+        terminalName: resolvedTerminalName,
+        companyId: setupResult?.companyId || null,
+        storeId: setupResult?.storeId || null,
+      });
+      setTerminalBindingDiagnosticStatus('BOUND');
+
       const shouldRestoreRemoteData = !!finalResolvedMasterIp && isSlave;
 
       // Only slave terminals restore from a LAN master. ERP/master takeovers use the ERP snapshot instead.
@@ -3585,6 +3627,7 @@ const AppContent: React.FC = () => {
           message: 'Preparando maestros locales recibidos...',
         });
         try {
+          setCatalogDiagnosticStatus('SYNCING');
           if (Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
             setupResult.progress?.({
               stepId: 'sync',
@@ -3598,9 +3641,19 @@ const AppContent: React.FC = () => {
           }
           void syncManager.fullPull().catch((pullError) => {
             console.warn('⚠️ Background master sync failed after terminal pairing; continuing with local snapshot/config.', pullError);
+            reportSyncErrorDiagnostic({
+              operation: 'PULL_MASTERS',
+              collection: 'products',
+              error: pullError,
+            });
           });
         } catch (pullError) {
           console.warn('⚠️ Initial snapshot persistence failed after terminal pairing; continuing with local config.', pullError);
+          reportSyncErrorDiagnostic({
+            operation: 'PULL_MASTERS',
+            collection: 'products',
+            error: pullError,
+          });
         }
       } else {
         if (Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
@@ -3679,6 +3732,8 @@ const AppContent: React.FC = () => {
         companyId: setupResult?.companyId || null,
         storeId: setupResult?.storeId || null,
       });
+      setTerminalBindingDiagnosticStatus('BOUND');
+      setCatalogDiagnosticStatus('SYNCED');
       void posCloudStagingService.sendSnapshot('TERMINAL_BINDING_COMPLETE').catch((error) => {
         console.warn('⚠️ POS cloud staging snapshot failed after terminal binding:', error);
       });
@@ -3686,27 +3741,38 @@ const AppContent: React.FC = () => {
       setCurrentView('LOGIN');
     } catch (error) {
       console.error('❌ Failed to take terminal control:', error);
-      clearStoredErpSyncBinding();
-      localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
-      if (previousActiveTerminalId) {
-        localStorage.setItem('active_terminal_id', previousActiveTerminalId);
+      if (preserveTerminalBindingAfterRegister) {
+        setTerminalBindingDiagnosticStatus('BOUND');
+        setCatalogDiagnosticStatus('ERROR');
+        reportSyncErrorDiagnostic({
+          operation: 'REGISTER_TERMINAL',
+          collection: 'products',
+          error,
+        });
       } else {
-        localStorage.removeItem('active_terminal_id');
+        setTerminalBindingDiagnosticStatus('BINDING_ERROR');
+        clearStoredErpSyncBinding();
+        localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
+        if (previousActiveTerminalId) {
+          localStorage.setItem('active_terminal_id', previousActiveTerminalId);
+        } else {
+          localStorage.removeItem('active_terminal_id');
+        }
+        if (previousTerminalStorageId) {
+          localStorage.setItem('CLIC_POS_TERMINAL_ID', previousTerminalStorageId);
+        } else {
+          localStorage.removeItem('CLIC_POS_TERMINAL_ID');
+        }
+        if (previousInitialTerminalConfig) {
+          localStorage.setItem('initial_terminal_config', previousInitialTerminalConfig);
+        } else {
+          localStorage.removeItem('initial_terminal_config');
+        }
+        setConfig(previousConfig);
+        await db.save('config', previousConfig);
+        setUsers(previousUsers);
+        await db.save('users', previousUsers);
       }
-      if (previousTerminalStorageId) {
-        localStorage.setItem('CLIC_POS_TERMINAL_ID', previousTerminalStorageId);
-      } else {
-        localStorage.removeItem('CLIC_POS_TERMINAL_ID');
-      }
-      if (previousInitialTerminalConfig) {
-        localStorage.setItem('initial_terminal_config', previousInitialTerminalConfig);
-      } else {
-        localStorage.removeItem('initial_terminal_config');
-      }
-      setConfig(previousConfig);
-      await db.save('config', previousConfig);
-      setUsers(previousUsers);
-      await db.save('users', previousUsers);
       throw error instanceof Error ? error : new Error('No se pudo tomar control de la terminal. Revisa conexión y vuelve a intentar.');
     } finally {
       setRestoringHistory(false);
@@ -5835,6 +5901,13 @@ const AppContent: React.FC = () => {
           // If we are in LOGIN state but have no terminal config, 
           // we must have failed to load key data. 
           // Redirect to Pairing to attempt recovery/re-pair.
+          console.warn('[ACTIVATION_REDIRECT_REASON]', 'LOGIN_WITHOUT_CURRENT_TERMINAL', {
+            currentView,
+            deviceId,
+            activeTerminalId,
+            hasInitialTerminalConfig: Boolean(storedInitialConfig),
+            lastSyncDiagnostic: localStorage.getItem(SYNC_DIAGNOSTIC_STORAGE_KEY) || null,
+          });
           setCurrentView('TERMINAL_PAIRING');
           return null;
         }
@@ -6053,6 +6126,7 @@ const AppContent: React.FC = () => {
 
       case 'POS':
         if (!getCurrentTerminal()) {
+          console.warn('[ACTIVATION_REDIRECT_REASON]', 'POS_WITHOUT_CURRENT_TERMINAL', { currentView, deviceId });
           setCurrentView('DEVICE_UNAUTHORIZED');
           return null;
         }
@@ -7284,6 +7358,25 @@ const AppContent: React.FC = () => {
     if (!posApkUpdate) return;
     void openPosApkDownloadUrl(posApkUpdate.release);
   };
+  const handleRetryProductSyncDiagnostic = async () => {
+    setCatalogDiagnosticStatus('SYNCING');
+    try {
+      await syncManager.pullCatalog('products', true);
+      const freshProducts = await db.get('products') as Product[];
+      if (Array.isArray(freshProducts)) {
+        setProducts(freshProducts);
+      }
+      setCatalogDiagnosticStatus('SYNCED');
+      setSyncDiagnostic(null);
+    } catch (error) {
+      setCatalogDiagnosticStatus('ERROR');
+      reportSyncErrorDiagnostic({
+        operation: 'PULL_MASTERS',
+        collection: 'products',
+        error,
+      });
+    }
+  };
 
   return (
     <ErrorBoundary componentName="App Root">
@@ -7297,6 +7390,11 @@ const AppContent: React.FC = () => {
             onDismiss={() => setPosApkUpdate(null)}
           />
         )}
+        <SyncErrorDiagnosticModal
+          diagnostic={syncDiagnostic}
+          onClose={() => setSyncDiagnostic(null)}
+          onRetryProducts={handleRetryProductSyncDiagnostic}
+        />
         <div
           className={`fixed inset-0 w-full h-full bg-gray-50 flex flex-col font-sans select-none text-gray-900 ${allowsViewportScroll ? '' : 'overflow-hidden'}`}
           style={{

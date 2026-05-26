@@ -45,6 +45,7 @@ import { canonicalizeTariffEntries, resolveTariffId } from '../../utils/masterId
 import { ensureSyncDeviceToken } from './deviceToken';
 import { normalizeRestaurantProductConfig } from '../../utils/restaurantProductConfig';
 import { syncPolicy } from './SyncProfile';
+import { reportSyncErrorDiagnostic, setCatalogDiagnosticStatus } from './SyncErrorDiagnostic';
 
 export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'productPrices' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities' | 'crmOpportunities' | 'erp_sales_documents';
 
@@ -4064,6 +4065,9 @@ class SyncManager {
 
         // Start critical section
         try {
+            if (collection === 'products') {
+                setCatalogDiagnosticStatus('SYNCING');
+            }
             this.isInternalSyncing = true;
             this.isInternalPulling = true; // LOCK LOCAL PUSH TRIGGERS
             this.lastSyncTime = now;
@@ -4313,6 +4317,7 @@ class SyncManager {
                 } catch (error) {
                     console.warn('⚠️ Image sync side-channel failed after products pull:', error);
                 }
+                setCatalogDiagnosticStatus('SYNCED');
             }
 
             console.log(`✅ SyncManager: Pulled ${items.length} items for ${collection}. New version: ${newVersion ?? 'unknown'}`);
@@ -4326,6 +4331,11 @@ class SyncManager {
             return items.length;
         } catch (error) {
             console.error(`❌ SyncManager: Error pulling ${collection}:`, error);
+            reportSyncErrorDiagnostic({
+                operation: 'PULL_MASTERS',
+                collection,
+                error,
+            });
             throw error;
         } finally {
             if (this.watchdogTimer) {
@@ -4383,6 +4393,11 @@ class SyncManager {
                     status: 'SYNCED'
                 });
             } catch (error: any) {
+                reportSyncErrorDiagnostic({
+                    operation: 'PULL_CONFIG',
+                    collection: 'config',
+                    error,
+                });
                 results.push({
                     collection: 'config',
                     lastSyncedAt: null,
@@ -4426,6 +4441,11 @@ class SyncManager {
                     status: 'SYNCED'
                 });
             } catch (error: any) {
+                reportSyncErrorDiagnostic({
+                    operation: target.canPushMasters && target.dataMaster === 'POS' ? 'PUSH_MASTERS' : 'PULL_MASTERS',
+                    collection,
+                    error,
+                });
                 results.push({
                     collection,
                     lastSyncedAt: null,
@@ -4455,6 +4475,11 @@ class SyncManager {
                         status: 'SYNCED'
                     });
                 } catch (error: any) {
+                    reportSyncErrorDiagnostic({
+                        operation: 'PULL_MASTERS',
+                        collection,
+                        error,
+                    });
                     results.push({
                         collection,
                         lastSyncedAt: null,
