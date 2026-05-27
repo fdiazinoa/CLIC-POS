@@ -158,6 +158,8 @@ import {
   SYNC_DIAGNOSTIC_STORAGE_KEY,
   reportSyncErrorDiagnostic,
   setCatalogDiagnosticStatus,
+  setSalesPushDiagnosticStatus,
+  setSyncAuthDiagnosticStatus,
   setTerminalBindingDiagnosticStatus,
   type SyncErrorDiagnostic
 } from './services/sync/SyncErrorDiagnostic';
@@ -177,7 +179,8 @@ import {
   type SyncProfilePersistenceDiagnostic,
   type SyncProfileSource
 } from './services/sync/SyncProfile';
-import { persistSyncDeviceToken, previewSyncDeviceToken } from './services/sync/deviceToken';
+import { persistSyncDeviceToken } from './services/sync/deviceToken';
+import { saveTerminalCredentialsSync } from './services/sync/TerminalCredentialStore';
 import {
   canRetryFiscalTransaction,
   getEffectiveFiscalComplianceConfig,
@@ -282,6 +285,30 @@ const pickSetupAuthString = (...values: unknown[]): string | undefined => {
 
 const extractSetupAuthPayload = (...sources: unknown[]) => {
   const records = sources
+    .filter((source): source is Record<string, any> => Boolean(source) && typeof source === 'object')
+    .flatMap((record) => [
+      record,
+      record.auth,
+      record.syncAuth,
+      record.terminal_config,
+      record.terminal_config?.auth,
+      record.terminal_config?.metadata,
+      record.terminal_config?.metadata?.syncAuth,
+      record.terminal,
+      record.terminal?.auth,
+      record.terminal?.config,
+      record.terminal?.config?.auth,
+      record.terminal?.config?.metadata,
+      record.terminal?.config?.metadata?.syncAuth,
+      record.config,
+      record.config?.auth,
+      record.config?.security,
+      record.config?.runtime,
+      record.metadata,
+      record.metadata?.auth,
+      record.metadata?.syncAuth,
+      record.session,
+    ])
     .filter((source): source is Record<string, any> => Boolean(source) && typeof source === 'object');
 
   const deviceToken = pickSetupAuthString(...records.flatMap((record) => [
@@ -291,18 +318,28 @@ const extractSetupAuthPayload = (...sources: unknown[]) => {
     record.terminal_token,
     record.activationToken,
     record.activation_token,
+    record.auth?.deviceToken,
+    record.auth?.device_token,
+    record.auth?.terminalToken,
+    record.auth?.terminal_token,
+    record.auth?.activationToken,
+    record.auth?.activation_token,
     record.syncAuth?.deviceToken,
     record.syncAuth?.device_token,
   ]));
   const terminalToken = pickSetupAuthString(...records.flatMap((record) => [
     record.terminalToken,
     record.terminal_token,
+    record.auth?.terminalToken,
+    record.auth?.terminal_token,
     record.syncAuth?.terminalToken,
     record.syncAuth?.terminal_token,
   ]));
   const activationToken = pickSetupAuthString(...records.flatMap((record) => [
     record.activationToken,
     record.activation_token,
+    record.auth?.activationToken,
+    record.auth?.activation_token,
     record.syncAuth?.activationToken,
     record.syncAuth?.activation_token,
   ]));
@@ -311,6 +348,10 @@ const extractSetupAuthPayload = (...sources: unknown[]) => {
     record.sync_token,
     record.syncAuthToken,
     record.sync_auth_token,
+    record.auth?.syncToken,
+    record.auth?.sync_token,
+    record.auth?.syncAuthToken,
+    record.auth?.sync_auth_token,
     record.syncAuth?.syncToken,
     record.syncAuth?.sync_token,
     record.syncAuth?.syncAuthToken,
@@ -330,13 +371,12 @@ const extractSetupAuthPayload = (...sources: unknown[]) => {
 
 const logRegisterResponseAuth = (auth: ReturnType<typeof extractSetupAuthPayload>) => {
   console.log('[REGISTER_RESPONSE_AUTH]', {
-    deviceToken: Boolean(auth.deviceToken),
-    terminalToken: Boolean(auth.terminalToken),
-    activationToken: Boolean(auth.activationToken),
-    syncToken: Boolean(auth.syncToken),
-    tokenExpiresAt: Boolean(auth.tokenExpiresAt),
-    deviceTokenPreview: previewSyncDeviceToken(auth.deviceToken),
-    syncTokenPreview: auth.syncToken ? `${auth.syncToken.slice(0, 6)}...${auth.syncToken.slice(-4)}` : null,
+    deviceTokenPresent: Boolean(auth.deviceToken),
+    terminalTokenPresent: Boolean(auth.terminalToken),
+    activationTokenPresent: Boolean(auth.activationToken),
+    syncTokenPresent: Boolean(auth.syncToken),
+    tokenExpiresAt: auth.tokenExpiresAt || null,
+    responseKeys: Object.keys(auth).filter((key) => Boolean((auth as Record<string, unknown>)[key])),
   });
 };
 
@@ -3618,6 +3658,30 @@ const AppContent: React.FC = () => {
         setupRegisterAuth.deviceToken
         || setupRegisterAuth.terminalToken
         || setupRegisterAuth.activationToken;
+      if (!normalizedDeviceToken) {
+        const missingTokenError = new Error('DEVICE_TOKEN_MISSING_FROM_REGISTER: El ERP vinculó la terminal pero no devolvió deviceToken.');
+        setTerminalBindingDiagnosticStatus('BOUND');
+        setCatalogDiagnosticStatus('AUTH_ERROR');
+        setSalesPushDiagnosticStatus('LOCKED_AUTH_REQUIRED');
+        setSyncAuthDiagnosticStatus('DEVICE_TOKEN_MISSING_FROM_REGISTER');
+        reportSyncErrorDiagnostic({
+          operation: 'REGISTER_TERMINAL',
+          endpoint: `${resolvedErpBaseUrl || 'ERP'}/api/sync/terminals/register`,
+          httpStatus: null,
+          error: missingTokenError,
+          authStatus: 'DEVICE_TOKEN_MISSING_FROM_REGISTER',
+          backendCode: 'DEVICE_TOKEN_MISSING_FROM_REGISTER',
+          nextAction: 'REPAIR_TERMINAL_CREDENTIALS',
+          requestAuth: {
+            authorizationPresent: false,
+            syncTokenPresent: Boolean(setupRegisterAuth.syncToken),
+            syncTokenPreview: null,
+            terminalIdHeaderPresent: Boolean(setupResult?.erpTerminalId || terminalId),
+            deviceIdHeaderPresent: Boolean(deviceId),
+          },
+          userVisibleSeverity: 'critical',
+        });
+      }
       if (normalizedDeviceToken) {
         persistSyncDeviceToken(normalizedDeviceToken, 'ERP_REGISTER', setupRegisterAuth.tokenExpiresAt);
       }
@@ -3628,6 +3692,21 @@ const AppContent: React.FC = () => {
           localStorage.setItem('clic_erp_sync_token_expires_at', setupRegisterAuth.tokenExpiresAt);
         }
       }
+      saveTerminalCredentialsSync({
+        terminalId: setupResult?.erpTerminalId || terminalId,
+        deviceId,
+        ...(normalizedDeviceToken ? {
+          deviceToken: normalizedDeviceToken,
+          deviceTokenSource: 'ERP_REGISTER',
+          deviceTokenUpdatedAt: new Date().toISOString(),
+          deviceTokenExpiresAt: setupRegisterAuth.tokenExpiresAt || null,
+        } : {}),
+        ...(setupRegisterAuth.syncToken ? {
+          syncToken: setupRegisterAuth.syncToken,
+          syncTokenUpdatedAt: new Date().toISOString(),
+          syncTokenExpiresAt: setupRegisterAuth.tokenExpiresAt || null,
+        } : {}),
+      });
       const authMetadata = normalizedDeviceToken || setupRegisterAuth.syncToken
         ? {
             ...(setupResult.boundConfig?.metadata?.syncAuth || {}),

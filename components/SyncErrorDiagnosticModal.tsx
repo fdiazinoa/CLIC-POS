@@ -3,6 +3,7 @@ import { AlertTriangle, Clipboard, RefreshCw, Server, X } from 'lucide-react';
 import type { SyncErrorDiagnostic } from '../services/sync/SyncErrorDiagnostic';
 import { requestJson } from '../services/network/httpClient';
 import { persistSyncDeviceToken, resolveSyncDeviceToken } from '../services/sync/deviceToken';
+import { clearStoredSyncToken, saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
 
 interface SyncErrorDiagnosticModalProps {
   diagnostic: SyncErrorDiagnostic | null;
@@ -22,6 +23,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
   const [isRetrying, setIsRetrying] = useState(false);
   const [isTestingNative, setIsTestingNative] = useState(false);
   const [isRotatingToken, setIsRotatingToken] = useState(false);
+  const [isRepairingToken, setIsRepairingToken] = useState(false);
   const [nativeTestResult, setNativeTestResult] = useState<unknown>(null);
   const diagnosticJson = useMemo(() => diagnostic ? JSON.stringify(diagnostic, null, 2) : '', [diagnostic]);
 
@@ -71,9 +73,17 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
       payload?.activationToken,
       payload?.activation_token,
       payload?.session?.deviceToken,
+      payload?.session?.terminalToken,
+      payload?.session?.activationToken,
       payload?.terminal_config?.deviceToken,
+      payload?.terminal_config?.auth?.deviceToken,
+      payload?.terminal_config?.auth?.terminalToken,
+      payload?.terminal_config?.auth?.activationToken,
       payload?.terminal_config?.metadata?.deviceToken,
       payload?.terminal_config?.metadata?.syncAuth?.deviceToken,
+      payload?.terminal?.config?.auth?.deviceToken,
+      payload?.terminal?.config?.auth?.terminalToken,
+      payload?.terminal?.config?.auth?.activationToken,
     ];
     const found = candidates.find((value) => typeof value === 'string' && value.trim());
     return found ? found.trim() : null;
@@ -121,6 +131,12 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
       if (syncToken) {
         localStorage.setItem('clic_erp_sync_token', syncToken);
         localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
+        saveTerminalCredentialsSync({
+          terminalId,
+          deviceId,
+          syncToken,
+          syncTokenUpdatedAt: new Date().toISOString(),
+        });
         const metadata = await requestJson<any>({
           url: `${baseUrl}/collections/products/metadata`,
           method: 'GET',
@@ -192,6 +208,14 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
       localStorage.removeItem('clic_erp_sync_token');
       localStorage.removeItem('clic_erp_sync_token_updated_at');
       localStorage.removeItem('clic_erp_sync_token_expires_at');
+      clearStoredSyncToken();
+      saveTerminalCredentialsSync({
+        terminalId,
+        deviceId,
+        deviceToken: newDeviceToken,
+        deviceTokenSource: 'ROTATED',
+        deviceTokenUpdatedAt: new Date().toISOString(),
+      });
 
       const auth = await requestJson<any>({
         url: `${baseUrl}/auth`,
@@ -214,6 +238,12 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
       if (syncToken) {
         localStorage.setItem('clic_erp_sync_token', syncToken);
         localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
+        saveTerminalCredentialsSync({
+          terminalId,
+          deviceId,
+          syncToken,
+          syncTokenUpdatedAt: new Date().toISOString(),
+        });
       }
     } catch (error: any) {
       result.error = error?.message || String(error || '');
@@ -221,6 +251,104 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
     } finally {
       setNativeTestResult(result);
       setIsRotatingToken(false);
+    }
+  };
+
+  const handleRepairTerminalCredentials = async () => {
+    setIsRepairingToken(true);
+    const currentDeviceToken = resolveSyncDeviceToken().token;
+    const deviceId = diagnostic.deviceId || localStorage.getItem('pos_device_id') || localStorage.getItem('CLIC_POS_DEVICE_ID') || '';
+    const terminalId = diagnostic.resolvedTarget?.terminalId || diagnostic.terminalId || '';
+    const baseUrl = diagnostic.resolvedTarget?.baseUrl || diagnostic.syncProfile?.erpBaseUrl || '';
+    const result: Record<string, unknown> = {
+      action: 'REPAIR_TERMINAL_CREDENTIALS',
+      baseUrl,
+      terminalId,
+      deviceId,
+      oldTokenPresent: Boolean(currentDeviceToken),
+    };
+
+    try {
+      if (!baseUrl || !terminalId || !deviceId) {
+        throw new Error('Faltan baseUrl, terminalId o deviceId para reparar credenciales de terminal.');
+      }
+
+      const register = await requestJson<any>({
+        url: `${baseUrl}/terminals/register`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Terminal-Id': terminalId,
+          'X-Device-Id': deviceId,
+          ...(currentDeviceToken ? { 'X-Device-Token': currentDeviceToken } : {}),
+        },
+        body: JSON.stringify({
+          terminalId,
+          terminal_id: terminalId,
+          deviceId,
+          device_id: deviceId,
+          rotateDeviceToken: true,
+          forceIssueDeviceToken: true,
+          repairCredentials: true,
+        }),
+        timeoutMs: 8000,
+        diagnosticContext: { operation: 'REPAIR_TERMINAL_CREDENTIALS' },
+      });
+
+      result.engine = register.networkEngine;
+      result.registerStatus = register.status;
+      result.registerBody = register.text.slice(0, 1000);
+
+      const repairedDeviceToken = pickDeviceToken(register.data);
+      result.deviceTokenPresent = Boolean(repairedDeviceToken);
+      if (!register.ok || !repairedDeviceToken) {
+        throw new Error(`El ERP no devolvió deviceToken al reparar credenciales (${register.status}).`);
+      }
+
+      persistSyncDeviceToken(repairedDeviceToken, 'ERP_REGISTER');
+      clearStoredSyncToken();
+      saveTerminalCredentialsSync({
+        terminalId,
+        deviceId,
+        deviceToken: repairedDeviceToken,
+        deviceTokenSource: 'ERP_REGISTER',
+        deviceTokenUpdatedAt: new Date().toISOString(),
+      });
+
+      const auth = await requestJson<any>({
+        url: `${baseUrl}/auth`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Terminal-Id': terminalId,
+          'X-Device-Id': deviceId,
+          'X-Device-Token': repairedDeviceToken,
+        },
+        body: JSON.stringify({ terminalId, deviceId, deviceToken: repairedDeviceToken }),
+        timeoutMs: 8000,
+        diagnosticContext: { operation: 'REPAIR_TERMINAL_CREDENTIALS_AUTH' },
+      });
+
+      result.authStatus = auth.status;
+      result.authBody = auth.text.slice(0, 1000);
+      const syncToken = pickSyncToken(auth.data);
+      result.syncTokenPresent = Boolean(syncToken);
+      if (syncToken) {
+        localStorage.setItem('clic_erp_sync_token', syncToken);
+        localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
+        saveTerminalCredentialsSync({
+          terminalId,
+          deviceId,
+          syncToken,
+          syncTokenUpdatedAt: new Date().toISOString(),
+        });
+      }
+    } catch (error: any) {
+      result.error = error?.message || String(error || '');
+      result.errorDiagnostic = error?.__httpClientDiagnostic || null;
+    } finally {
+      setNativeTestResult(result);
+      setIsRepairingToken(false);
     }
   };
 
@@ -386,6 +514,20 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             >
               <RefreshCw size={18} className={isRotatingToken ? 'animate-spin' : ''} />
               {isRotatingToken ? 'Renovando...' : 'Renovar token de terminal'}
+            </button>
+          ) : null}
+          {diagnostic.authStatus === 'DEVICE_TOKEN_MISSING_LOCAL'
+            || diagnostic.authStatus === 'DEVICE_TOKEN_MISSING_FROM_REGISTER'
+            || diagnostic.backendCode === 'DEVICE_TOKEN_MISSING_LOCAL'
+            || diagnostic.backendCode === 'DEVICE_TOKEN_MISSING_FROM_REGISTER' ? (
+            <button
+              type="button"
+              onClick={handleRepairTerminalCredentials}
+              disabled={isRepairingToken}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-black text-white shadow-sm hover:bg-emerald-500 disabled:opacity-60"
+            >
+              <RefreshCw size={18} className={isRepairingToken ? 'animate-spin' : ''} />
+              {isRepairingToken ? 'Reparando...' : 'Reparar credenciales de terminal'}
             </button>
           ) : null}
         </div>

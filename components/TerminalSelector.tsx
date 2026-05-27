@@ -19,7 +19,8 @@ import {
   isTerminalOccupiedError,
   listTerminalsFromErp,
 } from '../services/setup/erpTerminalSetup';
-import { persistSyncDeviceToken, previewSyncDeviceToken } from '../services/sync/deviceToken';
+import { persistSyncDeviceToken } from '../services/sync/deviceToken';
+import { saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
 import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../services/sync/SyncProfile';
 
 interface TerminalCard {
@@ -338,10 +339,25 @@ const extractRegisterAuthPayload = (...sources: unknown[]) => {
     .filter((source): source is Record<string, any> => Boolean(source && typeof source === 'object' && !Array.isArray(source)))
     .flatMap((record) => [
       record,
+      record.auth,
+      record.syncAuth,
       record.terminal_config,
+      record.terminal_config?.auth,
+      record.terminal_config?.metadata,
+      record.terminal_config?.metadata?.syncAuth,
+      record.terminal,
+      record.terminal?.auth,
+      record.terminal?.config,
+      record.terminal?.config?.auth,
+      record.terminal?.config?.metadata,
+      record.terminal?.config?.metadata?.syncAuth,
       record.config,
+      record.config?.auth,
       record.config?.security,
       record.config?.runtime,
+      record.metadata,
+      record.metadata?.auth,
+      record.metadata?.syncAuth,
       record.session,
     ])
     .filter((source): source is Record<string, any> => Boolean(source && typeof source === 'object' && !Array.isArray(source)));
@@ -353,14 +369,44 @@ const extractRegisterAuthPayload = (...sources: unknown[]) => {
     record.terminal_token,
     record.activationToken,
     record.activation_token,
+    record.auth?.deviceToken,
+    record.auth?.device_token,
+    record.auth?.terminalToken,
+    record.auth?.terminal_token,
+    record.auth?.activationToken,
+    record.auth?.activation_token,
+    record.syncAuth?.deviceToken,
+    record.syncAuth?.device_token,
   ]));
-  const terminalToken = pickAuthString(...records.flatMap((record) => [record.terminalToken, record.terminal_token]));
-  const activationToken = pickAuthString(...records.flatMap((record) => [record.activationToken, record.activation_token]));
+  const terminalToken = pickAuthString(...records.flatMap((record) => [
+    record.terminalToken,
+    record.terminal_token,
+    record.auth?.terminalToken,
+    record.auth?.terminal_token,
+    record.syncAuth?.terminalToken,
+    record.syncAuth?.terminal_token,
+  ]));
+  const activationToken = pickAuthString(...records.flatMap((record) => [
+    record.activationToken,
+    record.activation_token,
+    record.auth?.activationToken,
+    record.auth?.activation_token,
+    record.syncAuth?.activationToken,
+    record.syncAuth?.activation_token,
+  ]));
   const syncToken = pickAuthString(...records.flatMap((record) => [
     record.syncToken,
     record.sync_token,
     record.syncAuthToken,
     record.sync_auth_token,
+    record.auth?.syncToken,
+    record.auth?.sync_token,
+    record.auth?.syncAuthToken,
+    record.auth?.sync_auth_token,
+    record.syncAuth?.syncToken,
+    record.syncAuth?.sync_token,
+    record.syncAuth?.syncAuthToken,
+    record.syncAuth?.sync_auth_token,
   ]));
   const tokenExpiresAt = pickAuthString(...records.flatMap((record) => [
     record.tokenExpiresAt,
@@ -374,13 +420,12 @@ const extractRegisterAuthPayload = (...sources: unknown[]) => {
 
 const logRegisterResponseAuth = (auth: ReturnType<typeof extractRegisterAuthPayload>) => {
   console.log('[REGISTER_RESPONSE_AUTH]', {
-    deviceToken: Boolean(auth.deviceToken),
-    terminalToken: Boolean(auth.terminalToken),
-    activationToken: Boolean(auth.activationToken),
-    syncToken: Boolean(auth.syncToken),
+    deviceTokenPresent: Boolean(auth.deviceToken),
+    terminalTokenPresent: Boolean(auth.terminalToken),
+    activationTokenPresent: Boolean(auth.activationToken),
+    syncTokenPresent: Boolean(auth.syncToken),
     tokenExpiresAt: auth.tokenExpiresAt || null,
-    deviceTokenPreview: previewSyncDeviceToken(auth.deviceToken),
-    syncTokenPreview: previewSyncDeviceToken(auth.syncToken),
+    responseKeys: Object.keys(auth).filter((key) => Boolean((auth as Record<string, unknown>)[key])),
   });
 };
 
@@ -1086,8 +1131,9 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           syncProfile.syncPermissions;
         const registerAuth = extractRegisterAuthPayload(data, initialConfigData, initialConfigData.terminal_config);
         logRegisterResponseAuth(registerAuth);
-        if (registerAuth.deviceToken) {
-          persistSyncDeviceToken(registerAuth.deviceToken, 'ERP_REGISTER', registerAuth.tokenExpiresAt);
+        const normalizedDeviceToken = registerAuth.deviceToken || registerAuth.terminalToken || registerAuth.activationToken;
+        if (normalizedDeviceToken) {
+          persistSyncDeviceToken(normalizedDeviceToken, 'ERP_REGISTER', registerAuth.tokenExpiresAt);
         }
         if (registerAuth.syncToken) {
           localStorage.setItem('clic_erp_sync_token', registerAuth.syncToken);
@@ -1096,6 +1142,21 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             localStorage.setItem('clic_erp_sync_token_expires_at', registerAuth.tokenExpiresAt);
           }
         }
+        saveTerminalCredentialsSync({
+          terminalId: resolvedErpTerminalId || resolvedTerminalId,
+          deviceId,
+          ...(normalizedDeviceToken ? {
+            deviceToken: normalizedDeviceToken,
+            deviceTokenSource: 'ERP_REGISTER',
+            deviceTokenUpdatedAt: new Date().toISOString(),
+            deviceTokenExpiresAt: registerAuth.tokenExpiresAt || null,
+          } : {}),
+          ...(registerAuth.syncToken ? {
+            syncToken: registerAuth.syncToken,
+            syncTokenUpdatedAt: new Date().toISOString(),
+            syncTokenExpiresAt: registerAuth.tokenExpiresAt || null,
+          } : {}),
+        });
 
         if (showProgress) {
           updateBindingProgress({
@@ -1127,7 +1188,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           syncProfile,
           syncPermissions,
           contractSource: expectsErpDirect ? 'ERP_REGISTER' : 'CLOUD_ADMIN',
-          deviceToken: registerAuth.deviceToken,
+          deviceToken: normalizedDeviceToken,
           terminalToken: registerAuth.terminalToken,
           activationToken: registerAuth.activationToken,
           syncToken: registerAuth.syncToken,

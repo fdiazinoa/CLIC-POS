@@ -105,7 +105,30 @@ const pickAuthString = (...values: unknown[]): string | undefined => {
 };
 
 const extractRuntimeAuthPayload = (...sources: unknown[]) => {
-  const records = sources.map(asObject).filter((record) => Object.keys(record).length > 0);
+  const records = sources
+    .map(asObject)
+    .filter((record) => Object.keys(record).length > 0)
+    .flatMap((record) => [
+      record,
+      asObject(record.auth),
+      asObject(record.syncAuth),
+      asObject(record.terminal_config),
+      asObject(asObject(record.terminal_config).auth),
+      asObject(asObject(record.terminal_config).metadata),
+      asObject(asObject(asObject(record.terminal_config).metadata).syncAuth),
+      asObject(record.terminal),
+      asObject(asObject(record.terminal).auth),
+      asObject(asObject(record.terminal).config),
+      asObject(asObject(asObject(record.terminal).config).auth),
+      asObject(record.config),
+      asObject(asObject(record.config).auth),
+      asObject(record.security),
+      asObject(record.metadata),
+      asObject(asObject(record.metadata).syncAuth),
+      asObject(record.runtime),
+      asObject(record.session),
+    ])
+    .filter((record) => Object.keys(record).length > 0);
   const deviceToken = pickAuthString(...records.flatMap((record) => [
     record.deviceToken,
     record.device_token,
@@ -113,6 +136,14 @@ const extractRuntimeAuthPayload = (...sources: unknown[]) => {
     record.terminal_token,
     record.activationToken,
     record.activation_token,
+    asObject(record.auth).deviceToken,
+    asObject(record.auth).device_token,
+    asObject(record.auth).terminalToken,
+    asObject(record.auth).terminal_token,
+    asObject(record.auth).activationToken,
+    asObject(record.auth).activation_token,
+    asObject(record.syncAuth).deviceToken,
+    asObject(record.syncAuth).device_token,
     asObject(record.security).deviceToken,
     asObject(record.security).device_token,
     asObject(record.metadata).deviceToken,
@@ -121,12 +152,20 @@ const extractRuntimeAuthPayload = (...sources: unknown[]) => {
   const terminalToken = pickAuthString(...records.flatMap((record) => [
     record.terminalToken,
     record.terminal_token,
+    asObject(record.auth).terminalToken,
+    asObject(record.auth).terminal_token,
+    asObject(record.syncAuth).terminalToken,
+    asObject(record.syncAuth).terminal_token,
     asObject(record.security).terminalToken,
     asObject(record.security).terminal_token,
   ]));
   const activationToken = pickAuthString(...records.flatMap((record) => [
     record.activationToken,
     record.activation_token,
+    asObject(record.auth).activationToken,
+    asObject(record.auth).activation_token,
+    asObject(record.syncAuth).activationToken,
+    asObject(record.syncAuth).activation_token,
     asObject(record.security).activationToken,
     asObject(record.security).activation_token,
   ]));
@@ -135,6 +174,14 @@ const extractRuntimeAuthPayload = (...sources: unknown[]) => {
     record.sync_token,
     record.syncAuthToken,
     record.sync_auth_token,
+    asObject(record.auth).syncToken,
+    asObject(record.auth).sync_token,
+    asObject(record.auth).syncAuthToken,
+    asObject(record.auth).sync_auth_token,
+    asObject(record.syncAuth).syncToken,
+    asObject(record.syncAuth).sync_token,
+    asObject(record.syncAuth).syncAuthToken,
+    asObject(record.syncAuth).sync_auth_token,
     asObject(record.security).syncToken,
     asObject(record.security).sync_token,
     asObject(record.runtime).syncAuthToken,

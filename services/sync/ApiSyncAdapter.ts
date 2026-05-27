@@ -24,6 +24,7 @@ import {
     type SyncDiagnosticOperation
 } from './SyncErrorDiagnostic';
 import { requestJson } from '../network/httpClient';
+import { clearStoredSyncToken, readTerminalCredentialsSync, saveTerminalCredentialsSync } from './TerminalCredentialStore';
 
 /**
  * API Sync Adapter
@@ -982,6 +983,17 @@ class ApiSyncAdapter {
     }
 
     private resolveStoredErpSyncTokenDiagnostic(): { token: string | null; source: string | null; updatedAt: string | null; length: number } {
+        const storedCredentials = readTerminalCredentialsSync();
+        const credentialToken = sanitizeSyncToken(storedCredentials.syncToken || null);
+        if (credentialToken) {
+            return {
+                token: credentialToken,
+                source: 'TERMINAL_CREDENTIAL_STORE',
+                updatedAt: storedCredentials.syncTokenUpdatedAt || null,
+                length: credentialToken.length,
+            };
+        }
+
         for (const key of ERP_SYNC_TOKEN_KEYS) {
             const token = sanitizeSyncToken(safeLocalStorageGet(key));
             if (token) {
@@ -1000,16 +1012,23 @@ class ApiSyncAdapter {
         const normalized = sanitizeSyncToken(token);
         if (!normalized) return;
         safeLocalStorageSet('clic_erp_sync_token', normalized);
-        safeLocalStorageSet(ERP_SYNC_TOKEN_UPDATED_AT_KEY, new Date().toISOString());
+        const updatedAt = new Date().toISOString();
+        safeLocalStorageSet(ERP_SYNC_TOKEN_UPDATED_AT_KEY, updatedAt);
         if (typeof expiresAt === 'string' && expiresAt.trim()) {
             safeLocalStorageSet(ERP_SYNC_TOKEN_EXPIRES_AT_KEY, expiresAt.trim());
         }
+        saveTerminalCredentialsSync({
+            syncToken: normalized,
+            syncTokenUpdatedAt: updatedAt,
+            syncTokenExpiresAt: typeof expiresAt === 'string' && expiresAt.trim() ? expiresAt.trim() : null,
+        });
     }
 
     private clearCanonicalErpSyncToken(): void {
         safeLocalStorageRemove('clic_erp_sync_token');
         safeLocalStorageRemove(ERP_SYNC_TOKEN_EXPIRES_AT_KEY);
         safeLocalStorageRemove(ERP_SYNC_TOKEN_UPDATED_AT_KEY);
+        clearStoredSyncToken();
     }
 
     private buildOperationalHeaders(
@@ -1429,22 +1448,32 @@ class ApiSyncAdapter {
             const tenantId = this.resolveCurrentTenantId();
             const deviceTokenResolution = resolveSyncDeviceToken();
             const deviceToken = deviceTokenResolution.token;
+            const storedSyncTokenDiagnostic = this.resolveStoredErpSyncTokenDiagnostic();
             console.log('[SYNC_AUTH_PREPARE]', {
+                baseUrl: target.baseUrl,
+                terminalId: target.terminalId,
+                deviceId,
                 tokenPresent: Boolean(deviceToken),
                 tokenSource: deviceTokenResolution.sourceKey,
                 tokenLength: deviceToken?.length || 0,
                 tokenUpdatedAt: deviceTokenResolution.updatedAt || null,
-                terminalId: target.terminalId,
-                deviceId,
+                syncTokenPresent: Boolean(storedSyncTokenDiagnostic.token),
             });
 
             if (!deviceToken) {
                 const error = new Error('DEVICE_TOKEN_MISSING_LOCAL: No hay deviceToken local para autenticar la terminal vinculada.');
+                setTerminalBindingDiagnosticStatus('BOUND');
+                setCatalogDiagnosticStatus('AUTH_ERROR');
+                setSalesPushDiagnosticStatus('LOCKED_AUTH_REQUIRED');
+                setSyncAuthDiagnosticStatus('DEVICE_TOKEN_MISSING_LOCAL');
                 reportSyncErrorDiagnostic({
                     operation,
                     endpoint: `${target.baseUrl}/auth`,
                     httpStatus: null,
                     error,
+                    authStatus: 'DEVICE_TOKEN_MISSING_LOCAL',
+                    backendCode: 'DEVICE_TOKEN_MISSING_LOCAL',
+                    nextAction: 'REPAIR_TERMINAL_CREDENTIALS',
                     requestAuth: {
                         authorizationPresent: false,
                         syncTokenPresent: false,

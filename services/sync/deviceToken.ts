@@ -1,5 +1,6 @@
-export const SYNC_DEVICE_TOKEN_KEY = 'CLIC_POS_DEVICE_TOKEN';
+import { readTerminalCredentialsSync, saveTerminalCredentialsSync } from './TerminalCredentialStore';
 
+export const SYNC_DEVICE_TOKEN_KEY = 'CLIC_POS_DEVICE_TOKEN';
 const SYNC_DEVICE_TOKEN_SOURCE_KEY = 'CLIC_POS_DEVICE_TOKEN_SOURCE';
 const SYNC_DEVICE_TOKEN_UPDATED_AT_KEY = 'CLIC_POS_DEVICE_TOKEN_UPDATED_AT';
 const SYNC_DEVICE_TOKEN_EXPIRES_AT_KEY = 'CLIC_POS_DEVICE_TOKEN_EXPIRES_AT';
@@ -55,6 +56,29 @@ export const resolveSyncDeviceToken = (): SyncDeviceTokenResolution => {
         return { token: null, sourceKey: null, migratedFrom: null };
     }
 
+    const storedCredentials = readTerminalCredentialsSync();
+    const storedToken = cleanToken(storedCredentials.deviceToken || null);
+    if (storedToken) {
+        if (isInvalidatedToken(storage, storedToken)) {
+            return { token: null, sourceKey: storedCredentials.deviceTokenSource || SYNC_DEVICE_TOKEN_KEY, migratedFrom: null };
+        }
+        storage.setItem(SYNC_DEVICE_TOKEN_KEY, storedToken);
+        storage.setItem(SYNC_DEVICE_TOKEN_SOURCE_KEY, storedCredentials.deviceTokenSource || 'TERMINAL_CREDENTIAL_STORE');
+        if (storedCredentials.deviceTokenUpdatedAt) {
+            storage.setItem(SYNC_DEVICE_TOKEN_UPDATED_AT_KEY, storedCredentials.deviceTokenUpdatedAt);
+        }
+        if (storedCredentials.deviceTokenExpiresAt) {
+            storage.setItem(SYNC_DEVICE_TOKEN_EXPIRES_AT_KEY, storedCredentials.deviceTokenExpiresAt);
+        }
+        return {
+            token: storedToken,
+            sourceKey: storedCredentials.deviceTokenSource || 'TERMINAL_CREDENTIAL_STORE',
+            migratedFrom: null,
+            updatedAt: storedCredentials.deviceTokenUpdatedAt || storage.getItem(SYNC_DEVICE_TOKEN_UPDATED_AT_KEY),
+            expiresAt: storedCredentials.deviceTokenExpiresAt || storage.getItem(SYNC_DEVICE_TOKEN_EXPIRES_AT_KEY),
+        };
+    }
+
     const primaryToken = cleanToken(storage.getItem(SYNC_DEVICE_TOKEN_KEY));
     if (primaryToken) {
         if (isInvalidatedToken(storage, primaryToken)) {
@@ -102,13 +126,20 @@ export const persistSyncDeviceToken = (
 
     storage.setItem(SYNC_DEVICE_TOKEN_KEY, cleaned);
     storage.setItem(SYNC_DEVICE_TOKEN_SOURCE_KEY, sourceKey);
-    storage.setItem(SYNC_DEVICE_TOKEN_UPDATED_AT_KEY, new Date().toISOString());
+    const updatedAt = new Date().toISOString();
+    storage.setItem(SYNC_DEVICE_TOKEN_UPDATED_AT_KEY, updatedAt);
     storage.removeItem(SYNC_DEVICE_TOKEN_INVALIDATED_KEY);
     storage.removeItem(SYNC_DEVICE_TOKEN_INVALIDATED_AT_KEY);
     storage.removeItem(SYNC_DEVICE_TOKEN_INVALIDATED_REASON_KEY);
     if (expiresAt && String(expiresAt).trim()) {
         storage.setItem(SYNC_DEVICE_TOKEN_EXPIRES_AT_KEY, String(expiresAt).trim());
     }
+    saveTerminalCredentialsSync({
+        deviceToken: cleaned,
+        deviceTokenSource: sourceKey,
+        deviceTokenUpdatedAt: updatedAt,
+        deviceTokenExpiresAt: expiresAt ? String(expiresAt).trim() : null,
+    });
     return true;
 };
 
@@ -123,6 +154,10 @@ export const markSyncDeviceTokenInvalid = (reason = 'DEVICE_TOKEN_INVALID'): voi
     }
     storage.removeItem(SYNC_DEVICE_TOKEN_KEY);
     storage.removeItem(SYNC_DEVICE_TOKEN_EXPIRES_AT_KEY);
+    saveTerminalCredentialsSync({
+        deviceToken: null,
+        deviceTokenExpiresAt: null,
+    });
 };
 
 export const getInvalidatedSyncDeviceTokenInfo = (): { tokenPreview: string | null; invalidatedAt: string | null; reason: string | null } => {
@@ -160,7 +195,13 @@ export const ensureSyncDeviceToken = (createToken: () => string): EnsureSyncDevi
     const storage = getStorage();
     storage?.setItem(SYNC_DEVICE_TOKEN_KEY, token);
     storage?.setItem(SYNC_DEVICE_TOKEN_SOURCE_KEY, 'LOCAL_GENERATED');
-    storage?.setItem(SYNC_DEVICE_TOKEN_UPDATED_AT_KEY, new Date().toISOString());
+    const updatedAt = new Date().toISOString();
+    storage?.setItem(SYNC_DEVICE_TOKEN_UPDATED_AT_KEY, updatedAt);
+    saveTerminalCredentialsSync({
+        deviceToken: token,
+        deviceTokenSource: 'LOCAL_GENERATED',
+        deviceTokenUpdatedAt: updatedAt,
+    });
 
     return {
         token,
