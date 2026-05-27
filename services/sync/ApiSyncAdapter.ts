@@ -1207,6 +1207,35 @@ class ApiSyncAdapter {
         return new Error(detail ? `${message} ${detail}` : message);
     }
 
+    private buildProtectedPullAuthError(input: {
+        collection: string;
+        endpoint: string;
+        status: number;
+        responseBody: string;
+        headers: Record<string, string>;
+        backendCode?: string | null;
+    }): Error {
+        const backendCode = input.backendCode
+            || (input.status === 401 ? 'AUTH_REQUIRED' : 'AUTH_FAILED');
+        const error = new Error(`AUTH_REQUIRED: Falta autenticación/syncToken para descargar ${input.collection}.`);
+        reportSyncErrorDiagnostic({
+            operation: 'PULL_MASTERS',
+            collection: input.collection,
+            endpoint: input.endpoint,
+            httpStatus: input.status,
+            responseBody: input.responseBody,
+            error,
+            authStatus: backendCode,
+            backendCode,
+            requestAuth: this.buildRequestAuthDiagnostic(input.headers),
+            isMasterCollection: true,
+            isOperationCollection: false,
+            isCriticalMaster: ERP_CRITICAL_MASTER_COLLECTIONS.has(input.collection),
+            userVisibleSeverity: 'critical',
+        });
+        return error;
+    }
+
     private normalizeBackendCode(payload: any): string | null {
         return pickFirstString(
             payload?.code,
@@ -2194,6 +2223,24 @@ class ApiSyncAdapter {
             fullStatus: fullResponse.status,
         });
 
+        if (fullResponse.status === 401 || fullResponse.status === 403) {
+            const responseBody = await fullResponse.text().catch(() => '');
+            let backendCode: string | null = null;
+            try {
+                backendCode = this.normalizeBackendCode(responseBody ? JSON.parse(responseBody) : null);
+            } catch {
+                backendCode = null;
+            }
+            throw this.buildProtectedPullAuthError({
+                collection,
+                endpoint: fullEndpoint,
+                status: fullResponse.status,
+                responseBody,
+                headers,
+                backendCode,
+            });
+        }
+
         if (!fullResponse.ok) {
             const responseBody = await fullResponse.text().catch(() => '');
             const error = new Error(`ERP no expone endpoint full de maestro crítico: ${collection}`);
@@ -2257,6 +2304,39 @@ class ApiSyncAdapter {
             }
 
             try {
+                if (!sanitizeSyncToken(target.token)) {
+                    console.warn('[PULL_BLOCKED_NO_SYNC_TOKEN]', {
+                        collection,
+                        operation: 'PULL_MASTERS',
+                        syncTokenPresent: false,
+                        authStatus: safeLocalStorageGet('clic_sync_auth_status') || 'AUTH_REQUIRED',
+                    });
+                    const error = new Error(`SYNC_TOKEN_REQUIRED_BEFORE_PULL: Falta autenticación/syncToken para descargar ${collection}.`);
+                    reportSyncErrorDiagnostic({
+                        operation: 'PULL_MASTERS',
+                        collection,
+                        endpoint: url.toString(),
+                        httpStatus: null,
+                        error,
+                        authStatus: 'AUTH_REQUIRED',
+                        backendCode: 'SYNC_TOKEN_REQUIRED_BEFORE_PULL',
+                        blockedByLocalGuard: true,
+                        guardReason: 'SYNC_TOKEN_REQUIRED_BEFORE_PULL',
+                        requestSkippedReason: 'SYNC_TOKEN_REQUIRED_BEFORE_PULL',
+                        requestAuth: {
+                            authorizationPresent: false,
+                            syncTokenPresent: false,
+                            syncTokenPreview: null,
+                            terminalIdHeaderPresent: Boolean(target.terminalId),
+                            deviceIdHeaderPresent: Boolean(this.resolveCurrentDeviceId()),
+                        },
+                        isMasterCollection: true,
+                        isOperationCollection: false,
+                        isCriticalMaster: ERP_CRITICAL_MASTER_COLLECTIONS.has(collection),
+                        userVisibleSeverity: 'critical',
+                    });
+                    throw error;
+                }
                 const headers = this.buildOperationalHeaders(target, target.token);
                 const response = await this.fetchWithRetry(url.toString(), {
                     method: 'GET',
@@ -2275,21 +2355,24 @@ class ApiSyncAdapter {
                     if (!retryResponse.ok) {
                         const responseBody = await retryResponse.text().catch(() => '');
                         if (retryResponse.status === 401) {
-                            const error = this.buildSyncTokenError('SYNC_TOKEN_REJECTED');
-                            reportSyncErrorDiagnostic({
-                                operation: 'PULL_MASTERS',
+                            const error = this.buildProtectedPullAuthError({
                                 collection,
                                 endpoint: url.toString(),
-                                httpStatus: retryResponse.status,
+                                status: retryResponse.status,
                                 responseBody,
-                                error,
-                                requestAuth: this.buildRequestAuthDiagnostic(retryHeaders),
-                                isMasterCollection: true,
-                                isOperationCollection: false,
-                                isCriticalMaster: ERP_CRITICAL_MASTER_COLLECTIONS.has(collection),
-                                userVisibleSeverity: 'critical',
+                                headers: retryHeaders,
+                                backendCode: 'SYNC_TOKEN_REJECTED',
                             });
                             throw error;
+                        }
+                        if (retryResponse.status === 403) {
+                            throw this.buildProtectedPullAuthError({
+                                collection,
+                                endpoint: url.toString(),
+                                status: retryResponse.status,
+                                responseBody,
+                                headers: retryHeaders,
+                            });
                         }
                         if (retryResponse.status === 404 && ERP_CRITICAL_MASTER_COLLECTIONS.has(collection)) {
                             return this.pullFullFallbackForCriticalMaster(collection, retryTarget, retryHeaders, retryResponse.status);
@@ -2300,6 +2383,16 @@ class ApiSyncAdapter {
                 }
 
                 if (!response.ok) {
+                    if (response.status === 403) {
+                        const responseBody = await response.text().catch(() => '');
+                        throw this.buildProtectedPullAuthError({
+                            collection,
+                            endpoint: url.toString(),
+                            status: response.status,
+                            responseBody,
+                            headers,
+                        });
+                    }
                     if (response.status === 404 && !ERP_CRITICAL_MASTER_COLLECTIONS.has(collection)) {
                         console.warn('[SYNC_COLLECTION_SKIPPED_UNSUPPORTED_COLLECTION]', {
                             collection,

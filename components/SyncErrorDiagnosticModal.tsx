@@ -559,6 +559,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <Field label="canTakeover" value={isDeviceNotAuthorized ? 'true' : 'N/A'} />
             <Field label="nextAction" value={diagnostic.nextAction} />
             <Field label="fetchStage" value={diagnostic.fetchStage} />
+            <Field label="requestSkippedReason" value={diagnostic.requestSkippedReason} />
             <Field label="HTTP method" value={diagnostic.httpMethod} />
             <Field label="fetch.tokenPresent" value={diagnostic.fetchDiagnostic?.tokenPresent === undefined ? 'N/A' : diagnostic.fetchDiagnostic.tokenPresent ? 'true' : 'false'} />
             <Field label="fetch.tokenPreview" value={diagnostic.fetchDiagnostic?.tokenPreview} />

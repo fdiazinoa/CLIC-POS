@@ -107,6 +107,7 @@ export interface SyncErrorDiagnostic {
     userVisibleSeverity?: 'info' | 'warning' | 'critical';
     blockedByLocalGuard?: boolean;
     guardReason?: string | null;
+    requestSkippedReason?: string | null;
     requestAuth?: SyncRequestAuthDiagnostic | null;
     authStatus?: string | null;
     backendCode?: string | null;
@@ -230,6 +231,7 @@ export const buildSyncErrorDiagnostic = (input: {
     userVisibleSeverity?: 'info' | 'warning' | 'critical';
     blockedByLocalGuard?: boolean;
     guardReason?: string | null;
+    requestSkippedReason?: string | null;
     requestAuth?: SyncRequestAuthDiagnostic | null;
     authStatus?: string | null;
     backendCode?: string | null;
@@ -293,6 +295,7 @@ export const buildSyncErrorDiagnostic = (input: {
         userVisibleSeverity: input.userVisibleSeverity || 'critical',
         blockedByLocalGuard: Boolean(input.blockedByLocalGuard),
         guardReason: input.guardReason || null,
+        requestSkippedReason: input.requestSkippedReason || null,
         requestAuth: input.requestAuth || null,
         authStatus: input.authStatus || safeLocalStorageGet(SYNC_AUTH_STATUS_KEY),
         backendCode: input.backendCode || null,
