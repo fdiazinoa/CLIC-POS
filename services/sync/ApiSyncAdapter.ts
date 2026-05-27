@@ -2170,7 +2170,75 @@ class ApiSyncAdapter {
     /**
      * Pull incremental changes from Master (Delta Sync)
      */
-    async pullDelta(collection: string, sinceVersion?: number): Promise<{ items: any[], serverTime: string, isFullDownload: boolean, latestVersion?: number }> {
+    private async pullFullFallbackForCriticalMaster(
+        collection: string,
+        target: {
+            baseUrl: string;
+            terminalId: string;
+            token: string;
+            useLocalTarget: boolean;
+            kind: ResolvedSyncTarget['kind'];
+        },
+        headers: Record<string, string>,
+        deltaStatus: number
+    ): Promise<{ items: any[], serverTime: string, isFullDownload: boolean, latestVersion?: number, syncStatus?: 'SYNCED_WITH_FULL_FALLBACK' }> {
+        const fullEndpoint = `${target.baseUrl}/collections/${collection}/full`;
+        const fullResponse = await this.fetchWithRetry(fullEndpoint, {
+            method: 'GET',
+            headers
+        }, 2, 500, 'background', 'PULL_MASTERS');
+
+        console.warn('[PULL_DELTA_FALLBACK_TO_FULL]', {
+            collection,
+            deltaStatus,
+            fullStatus: fullResponse.status,
+        });
+
+        if (!fullResponse.ok) {
+            const responseBody = await fullResponse.text().catch(() => '');
+            const error = new Error(`ERP no expone endpoint full de maestro crítico: ${collection}`);
+            reportSyncErrorDiagnostic({
+                operation: 'PULL_MASTERS',
+                collection,
+                endpoint: fullEndpoint,
+                httpStatus: fullResponse.status,
+                responseBody,
+                error,
+                requestAuth: this.buildRequestAuthDiagnostic(headers),
+                isMasterCollection: true,
+                isOperationCollection: false,
+                isCriticalMaster: true,
+                userVisibleSeverity: 'critical',
+            });
+            throw error;
+        }
+
+        const fullData = await fullResponse.json();
+        const items = Array.isArray(fullData.items)
+            ? fullData.items
+            : Array.isArray(fullData.data)
+                ? fullData.data
+                : Array.isArray(fullData.records)
+                    ? fullData.records
+                    : [];
+        const latestVersion = Number(
+            fullData.latestVersion
+            ?? fullData.version
+            ?? fullData.fullSyncVersion
+            ?? fullData.metadata?.version
+            ?? 0
+        );
+
+        return {
+            items,
+            serverTime: fullData.serverTime || fullData.timestamp || new Date().toISOString(),
+            isFullDownload: true,
+            latestVersion,
+            syncStatus: 'SYNCED_WITH_FULL_FALLBACK',
+        };
+    }
+
+    async pullDelta(collection: string, sinceVersion?: number): Promise<{ items: any[], serverTime: string, isFullDownload: boolean, latestVersion?: number, syncStatus?: 'SYNCED_WITH_FULL_FALLBACK' }> {
         const operationalTarget = this.resolveOperationalTarget('PULL_MASTERS');
         if (operationalTarget && !operationalTarget.useLocalTarget) {
             if (!isErpMasterPullCollection(collection)) {
@@ -2223,6 +2291,9 @@ class ApiSyncAdapter {
                             });
                             throw error;
                         }
+                        if (retryResponse.status === 404 && ERP_CRITICAL_MASTER_COLLECTIONS.has(collection)) {
+                            return this.pullFullFallbackForCriticalMaster(collection, retryTarget, retryHeaders, retryResponse.status);
+                        }
                         throw new Error(`Delta pull failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
                     }
                     return await retryResponse.json();
@@ -2244,8 +2315,11 @@ class ApiSyncAdapter {
                             latestVersion: sinceVersion || 0,
                         };
                     }
-                    const responseBody = await response.text().catch(() => '');
                     const isCriticalMaster = ERP_CRITICAL_MASTER_COLLECTIONS.has(collection);
+                    if (response.status === 404 && isCriticalMaster) {
+                        return this.pullFullFallbackForCriticalMaster(collection, target, headers, response.status);
+                    }
+                    const responseBody = await response.text().catch(() => '');
                     const error = new Error(
                         response.status === 404 && isCriticalMaster
                             ? `ERP no expone endpoint de maestro crítico: ${collection}`
