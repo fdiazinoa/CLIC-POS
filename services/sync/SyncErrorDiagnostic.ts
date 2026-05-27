@@ -14,9 +14,9 @@ export type SyncDiagnosticOperation =
     | 'PUSH_MASTERS'
     | 'REGISTER_TERMINAL';
 
-export type TerminalBindingStatus = 'UNBOUND' | 'BINDING' | 'BOUND' | 'BINDING_ERROR';
-export type CatalogSyncStatus = 'IDLE' | 'SYNCING' | 'SYNCED' | 'ERROR';
-export type SalesPushStatus = 'DISABLED' | 'LOCKED_UNTIL_ERP_READY' | 'ENABLED';
+export type TerminalBindingStatus = 'UNBOUND' | 'BINDING' | 'BOUND' | 'BINDING_ERROR' | 'TOKEN_INVALID';
+export type CatalogSyncStatus = 'IDLE' | 'SYNCING' | 'SYNCED' | 'ERROR' | 'AUTH_ERROR';
+export type SalesPushStatus = 'DISABLED' | 'LOCKED_UNTIL_ERP_READY' | 'LOCKED_AUTH_REQUIRED' | 'ENABLED';
 
 export interface SyncRequestAuthDiagnostic {
     authorizationPresent: boolean;
@@ -108,6 +108,9 @@ export interface SyncErrorDiagnostic {
     blockedByLocalGuard?: boolean;
     guardReason?: string | null;
     requestAuth?: SyncRequestAuthDiagnostic | null;
+    authStatus?: string | null;
+    backendCode?: string | null;
+    nextAction?: string | null;
     fetchDiagnostic?: SyncFetchDiagnostic | null;
     fetchStage?: string | null;
     networkEngine?: string | null;
@@ -133,6 +136,8 @@ export const SYNC_DIAGNOSTIC_STORAGE_KEY = 'clic_last_sync_error_diagnostic';
 export const SYNC_DIAGNOSTIC_EVENT = 'clic:sync-error-diagnostic';
 export const TERMINAL_BINDING_STATUS_KEY = 'clic_terminal_binding_status';
 export const CATALOG_SYNC_STATUS_KEY = 'clic_catalog_sync_status';
+export const SALES_PUSH_STATUS_KEY = 'clic_sales_push_status';
+export const SYNC_AUTH_STATUS_KEY = 'clic_sync_auth_status';
 
 const safeLocalStorageGet = (key: string): string | null => {
     try {
@@ -171,7 +176,7 @@ const truncateBody = (value: unknown): string | null => {
 
 const resolveBindingStatus = (): TerminalBindingStatus => {
     const explicit = safeLocalStorageGet(TERMINAL_BINDING_STATUS_KEY) as TerminalBindingStatus | null;
-    if (explicit && ['UNBOUND', 'BINDING', 'BOUND', 'BINDING_ERROR'].includes(explicit)) return explicit;
+    if (explicit && ['UNBOUND', 'BINDING', 'BOUND', 'BINDING_ERROR', 'TOKEN_INVALID'].includes(explicit)) return explicit;
     return safeLocalStorageGet('clic_erp_sync_terminal_id') || safeLocalStorageGet('active_terminal_id')
         ? 'BOUND'
         : 'UNBOUND';
@@ -179,10 +184,12 @@ const resolveBindingStatus = (): TerminalBindingStatus => {
 
 const resolveCatalogStatus = (): CatalogSyncStatus => {
     const explicit = safeLocalStorageGet(CATALOG_SYNC_STATUS_KEY) as CatalogSyncStatus | null;
-    return explicit && ['IDLE', 'SYNCING', 'SYNCED', 'ERROR'].includes(explicit) ? explicit : 'IDLE';
+    return explicit && ['IDLE', 'SYNCING', 'SYNCED', 'ERROR', 'AUTH_ERROR'].includes(explicit) ? explicit : 'IDLE';
 };
 
 const resolveSalesPushStatus = (target: ResolvedSyncTarget): SalesPushStatus => {
+    const explicit = safeLocalStorageGet(SALES_PUSH_STATUS_KEY) as SalesPushStatus | null;
+    if (explicit && ['DISABLED', 'LOCKED_UNTIL_ERP_READY', 'LOCKED_AUTH_REQUIRED', 'ENABLED'].includes(explicit)) return explicit;
     if (target.canPushOperations) return 'ENABLED';
     if (target.kind === 'ERP_ACTIVE') return 'LOCKED_UNTIL_ERP_READY';
     return 'DISABLED';
@@ -194,6 +201,14 @@ export const setTerminalBindingDiagnosticStatus = (status: TerminalBindingStatus
 
 export const setCatalogDiagnosticStatus = (status: CatalogSyncStatus): void => {
     safeLocalStorageSet(CATALOG_SYNC_STATUS_KEY, status);
+};
+
+export const setSalesPushDiagnosticStatus = (status: SalesPushStatus): void => {
+    safeLocalStorageSet(SALES_PUSH_STATUS_KEY, status);
+};
+
+export const setSyncAuthDiagnosticStatus = (status: string): void => {
+    safeLocalStorageSet(SYNC_AUTH_STATUS_KEY, status);
 };
 
 export const buildSyncErrorDiagnostic = (input: {
@@ -216,6 +231,9 @@ export const buildSyncErrorDiagnostic = (input: {
     blockedByLocalGuard?: boolean;
     guardReason?: string | null;
     requestAuth?: SyncRequestAuthDiagnostic | null;
+    authStatus?: string | null;
+    backendCode?: string | null;
+    nextAction?: string | null;
     fetchDiagnostic?: SyncFetchDiagnostic | null;
 }): SyncErrorDiagnostic => {
     const syncProfile = loadSyncProfile();
@@ -276,6 +294,9 @@ export const buildSyncErrorDiagnostic = (input: {
         blockedByLocalGuard: Boolean(input.blockedByLocalGuard),
         guardReason: input.guardReason || null,
         requestAuth: input.requestAuth || null,
+        authStatus: input.authStatus || safeLocalStorageGet(SYNC_AUTH_STATUS_KEY),
+        backendCode: input.backendCode || null,
+        nextAction: input.nextAction || null,
         fetchDiagnostic: attachedFetchDiagnostic || null,
         fetchStage: attachedFetchDiagnostic?.fetchStage || null,
         networkEngine: attachedFetchDiagnostic?.networkEngine || null,

@@ -8,14 +8,21 @@ import {
     buildErpZReportPayload
 } from './erpOutboundPayloads';
 import { permissionService } from './PermissionService';
-import { getSyncDeviceToken, previewSyncDeviceToken, resolveSyncDeviceToken } from './deviceToken';
+import { getSyncDeviceToken, markSyncDeviceTokenInvalid, previewSyncDeviceToken, resolveSyncDeviceToken } from './deviceToken';
 import {
     getSyncProfileSourcePriority,
     loadSyncProfile,
     resolveSyncTarget,
     ResolvedSyncTarget
 } from './SyncProfile';
-import { reportSyncErrorDiagnostic, type SyncDiagnosticOperation } from './SyncErrorDiagnostic';
+import {
+    reportSyncErrorDiagnostic,
+    setCatalogDiagnosticStatus,
+    setSalesPushDiagnosticStatus,
+    setSyncAuthDiagnosticStatus,
+    setTerminalBindingDiagnosticStatus,
+    type SyncDiagnosticOperation
+} from './SyncErrorDiagnostic';
 import { requestJson } from '../network/httpClient';
 
 /**
@@ -1181,6 +1188,84 @@ class ApiSyncAdapter {
         return new Error(detail ? `${message} ${detail}` : message);
     }
 
+    private normalizeBackendCode(payload: any): string | null {
+        return pickFirstString(
+            payload?.code,
+            payload?.errorCode,
+            payload?.error_code,
+            payload?.statusCode,
+            payload?.status_code,
+            payload?.error?.code
+        );
+    }
+
+    private isDeviceTokenInvalidResponse(status: number, payload: any, rawBody = ''): boolean {
+        if (status !== 403) return false;
+        const backendCode = this.normalizeBackendCode(payload);
+        const message = pickFirstString(payload?.message, payload?.error, payload?.detail, rawBody) || '';
+        return backendCode === 'DEVICE_TOKEN_INVALID' || /device token invalid/i.test(message);
+    }
+
+    private async parseJsonResponseSafely(response: Response): Promise<{ data: any; text: string }> {
+        const text = await response.text().catch(() => '');
+        if (!text) return { data: null, text: '' };
+        try {
+            return { data: JSON.parse(text), text };
+        } catch {
+            return { data: null, text };
+        }
+    }
+
+    private handleDeviceTokenInvalid(input: {
+        operation: OperationalSyncOperation;
+        endpoint: string;
+        response: Response;
+        payload: any;
+        responseBody: string;
+        requestHeaders: Record<string, string>;
+        tokenResolution: ReturnType<typeof resolveSyncDeviceToken>;
+    }): Error {
+        this.erpAuthToken = null;
+        this.clearCanonicalErpSyncToken();
+        markSyncDeviceTokenInvalid('DEVICE_TOKEN_INVALID');
+        setTerminalBindingDiagnosticStatus('TOKEN_INVALID');
+        setCatalogDiagnosticStatus('AUTH_ERROR');
+        setSalesPushDiagnosticStatus('LOCKED_AUTH_REQUIRED');
+        setSyncAuthDiagnosticStatus('DEVICE_TOKEN_INVALID');
+
+        const backendCode = this.normalizeBackendCode(input.payload) || 'DEVICE_TOKEN_INVALID';
+        const error = new Error('DEVICE_TOKEN_INVALID: El token de esta terminal no coincide con el registrado en el ERP. Debe renovarse el token de terminal o revincular la caja.');
+        console.warn('[DEVICE_TOKEN_INVALID]', {
+            endpoint: input.endpoint,
+            terminalId: this.resolveOperationalTarget(input.operation)?.terminalId || null,
+            deviceId: this.resolveCurrentDeviceId(),
+            tokenPresent: Boolean(input.tokenResolution.token),
+            tokenPreview: previewSyncDeviceToken(input.tokenResolution.token),
+            tokenSource: input.tokenResolution.sourceKey,
+            tokenUpdatedAt: input.tokenResolution.updatedAt || null,
+            backendCode,
+            nextAction: 'ROTATE_DEVICE_TOKEN_OR_REBIND',
+        });
+
+        reportSyncErrorDiagnostic({
+            operation: input.operation,
+            endpoint: input.endpoint,
+            httpStatus: input.response.status,
+            responseBody: input.responseBody,
+            error,
+            authStatus: 'DEVICE_TOKEN_INVALID',
+            backendCode,
+            nextAction: 'ROTATE_DEVICE_TOKEN_OR_REBIND',
+            requestAuth: {
+                ...this.buildRequestAuthDiagnostic(input.requestHeaders),
+                syncTokenPreview: previewSyncDeviceToken(input.tokenResolution.token),
+            },
+            userVisibleSeverity: 'critical',
+        });
+
+        return error;
+    }
+
     private buildOperationalPostBody(
         target: { terminalId: string; useLocalTarget: boolean; kind?: string },
         body: Record<string, unknown>
@@ -1373,12 +1458,14 @@ class ApiSyncAdapter {
                 throw error;
             }
 
-            const response = await this.fetchWithRetry(`${target.baseUrl}/auth`, {
+            const authEndpoint = `${target.baseUrl}/auth`;
+            const authHeaders = {
+                ...this.buildOperationalHeaders(target, '', true),
+                'X-Device-Token': deviceToken,
+            };
+            const response = await this.fetchWithRetry(authEndpoint, {
                 method: 'POST',
-                headers: {
-                    ...this.buildOperationalHeaders(target, '', true),
-                    'X-Device-Token': deviceToken,
-                },
+                headers: authHeaders,
                 body: JSON.stringify({
                     terminalId: target.terminalId,
                     terminal_id: target.terminalId,
@@ -1392,12 +1479,20 @@ class ApiSyncAdapter {
 
             if (!response.ok) {
                 let errorMessage = `ERP authentication failed: ${response.status} ${response.statusText}`;
-                try {
-                    const errorData = await response.json();
-                    errorMessage += ` - ${errorData.message || errorData.error || 'unknown error'}`;
-                } catch {
-                    // ignore JSON parse issues here
+                const parsedError = await this.parseJsonResponseSafely(response);
+                if (this.isDeviceTokenInvalidResponse(response.status, parsedError.data, parsedError.text)) {
+                    throw this.handleDeviceTokenInvalid({
+                        operation,
+                        endpoint: authEndpoint,
+                        response,
+                        payload: parsedError.data,
+                        responseBody: parsedError.text,
+                        requestHeaders: authHeaders,
+                        tokenResolution: deviceTokenResolution,
+                    });
                 }
+                const errorData = parsedError.data;
+                errorMessage += ` - ${errorData?.message || errorData?.error || parsedError.text || 'unknown error'}`;
                 throw new Error(errorMessage);
             }
 

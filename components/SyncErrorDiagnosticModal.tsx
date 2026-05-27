@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { AlertTriangle, Clipboard, RefreshCw, Server, X } from 'lucide-react';
 import type { SyncErrorDiagnostic } from '../services/sync/SyncErrorDiagnostic';
 import { requestJson } from '../services/network/httpClient';
-import { resolveSyncDeviceToken } from '../services/sync/deviceToken';
+import { persistSyncDeviceToken, resolveSyncDeviceToken } from '../services/sync/deviceToken';
 
 interface SyncErrorDiagnosticModalProps {
   diagnostic: SyncErrorDiagnostic | null;
@@ -21,6 +21,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
   const [copyLabel, setCopyLabel] = useState('Copiar diagnóstico');
   const [isRetrying, setIsRetrying] = useState(false);
   const [isTestingNative, setIsTestingNative] = useState(false);
+  const [isRotatingToken, setIsRotatingToken] = useState(false);
   const [nativeTestResult, setNativeTestResult] = useState<unknown>(null);
   const diagnosticJson = useMemo(() => diagnostic ? JSON.stringify(diagnostic, null, 2) : '', [diagnostic]);
 
@@ -56,6 +57,23 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
       payload?.access_token,
       payload?.session?.syncToken,
       payload?.session?.sync_token,
+    ];
+    const found = candidates.find((value) => typeof value === 'string' && value.trim());
+    return found ? found.trim() : null;
+  };
+
+  const pickDeviceToken = (payload: any): string | null => {
+    const candidates = [
+      payload?.deviceToken,
+      payload?.device_token,
+      payload?.terminalToken,
+      payload?.terminal_token,
+      payload?.activationToken,
+      payload?.activation_token,
+      payload?.session?.deviceToken,
+      payload?.terminal_config?.deviceToken,
+      payload?.terminal_config?.metadata?.deviceToken,
+      payload?.terminal_config?.metadata?.syncAuth?.deviceToken,
     ];
     const found = candidates.find((value) => typeof value === 'string' && value.trim());
     return found ? found.trim() : null;
@@ -127,6 +145,85 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
     }
   };
 
+  const handleRotateDeviceToken = async () => {
+    setIsRotatingToken(true);
+    const currentDeviceToken = resolveSyncDeviceToken().token;
+    const deviceId = diagnostic.deviceId || localStorage.getItem('pos_device_id') || localStorage.getItem('CLIC_POS_DEVICE_ID') || '';
+    const terminalId = diagnostic.resolvedTarget?.terminalId || diagnostic.terminalId || '';
+    const baseUrl = diagnostic.resolvedTarget?.baseUrl || diagnostic.syncProfile?.erpBaseUrl || '';
+    const result: Record<string, unknown> = {
+      action: 'ROTATE_DEVICE_TOKEN',
+      baseUrl,
+      terminalId,
+      deviceId,
+      oldTokenPresent: Boolean(currentDeviceToken),
+    };
+
+    try {
+      if (!baseUrl || !terminalId || !deviceId) {
+        throw new Error('Faltan baseUrl, terminalId o deviceId para renovar token de terminal.');
+      }
+
+      const rotate = await requestJson<any>({
+        url: `${baseUrl}/terminals/${encodeURIComponent(terminalId)}/rotate-device-token`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Terminal-Id': terminalId,
+          'X-Device-Id': deviceId,
+          ...(currentDeviceToken ? { 'X-Device-Token': currentDeviceToken } : {}),
+        },
+        body: JSON.stringify({ terminalId, deviceId, rotateDeviceToken: true }),
+        timeoutMs: 8000,
+        diagnosticContext: { operation: 'ROTATE_DEVICE_TOKEN' },
+      });
+
+      result.engine = rotate.networkEngine;
+      result.rotateStatus = rotate.status;
+      result.rotateBody = rotate.text.slice(0, 1000);
+
+      const newDeviceToken = pickDeviceToken(rotate.data);
+      result.newDeviceTokenPresent = Boolean(newDeviceToken);
+      if (!rotate.ok || !newDeviceToken) {
+        throw new Error(`No se pudo renovar el token de terminal (${rotate.status}).`);
+      }
+
+      persistSyncDeviceToken(newDeviceToken, 'ROTATED');
+      localStorage.removeItem('clic_erp_sync_token');
+      localStorage.removeItem('clic_erp_sync_token_updated_at');
+      localStorage.removeItem('clic_erp_sync_token_expires_at');
+
+      const auth = await requestJson<any>({
+        url: `${baseUrl}/auth`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Terminal-Id': terminalId,
+          'X-Device-Id': deviceId,
+          'X-Device-Token': newDeviceToken,
+        },
+        body: JSON.stringify({ terminalId, deviceId, deviceToken: newDeviceToken }),
+        timeoutMs: 8000,
+        diagnosticContext: { operation: 'ROTATE_DEVICE_TOKEN_AUTH' },
+      });
+      result.authStatus = auth.status;
+      result.authBody = auth.text.slice(0, 1000);
+
+      const syncToken = pickSyncToken(auth.data);
+      result.syncTokenPresent = Boolean(syncToken);
+      if (syncToken) {
+        localStorage.setItem('clic_erp_sync_token', syncToken);
+        localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
+      }
+    } catch (error: any) {
+      result.error = error?.message || String(error || '');
+      result.errorDiagnostic = error?.__httpClientDiagnostic || null;
+    } finally {
+      setNativeTestResult(result);
+      setIsRotatingToken(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm">
       <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-[2rem] border border-red-200 bg-white shadow-2xl">
@@ -179,6 +276,9 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <Field label="auth.terminalHeader" value={diagnostic.requestAuth?.terminalIdHeaderPresent === undefined ? 'N/A' : diagnostic.requestAuth.terminalIdHeaderPresent ? 'true' : 'false'} />
             <Field label="auth.deviceHeader" value={diagnostic.requestAuth?.deviceIdHeaderPresent === undefined ? 'N/A' : diagnostic.requestAuth.deviceIdHeaderPresent ? 'true' : 'false'} />
             <Field label="networkEngine" value={diagnostic.networkEngine || diagnostic.fetchDiagnostic?.networkEngine} />
+            <Field label="authStatus" value={diagnostic.authStatus} />
+            <Field label="backendCode" value={diagnostic.backendCode} />
+            <Field label="nextAction" value={diagnostic.nextAction} />
             <Field label="fetchStage" value={diagnostic.fetchStage} />
             <Field label="HTTP method" value={diagnostic.httpMethod} />
             <Field label="fetch.tokenPresent" value={diagnostic.fetchDiagnostic?.tokenPresent === undefined ? 'N/A' : diagnostic.fetchDiagnostic.tokenPresent ? 'true' : 'false'} />
@@ -277,6 +377,17 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <Server size={18} />
             {isTestingNative ? 'Probando...' : 'Probar conexión ERP nativa'}
           </button>
+          {diagnostic.authStatus === 'DEVICE_TOKEN_INVALID' || diagnostic.backendCode === 'DEVICE_TOKEN_INVALID' ? (
+            <button
+              type="button"
+              onClick={handleRotateDeviceToken}
+              disabled={isRotatingToken}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-amber-600 px-5 py-3 text-sm font-black text-white shadow-sm hover:bg-amber-500 disabled:opacity-60"
+            >
+              <RefreshCw size={18} className={isRotatingToken ? 'animate-spin' : ''} />
+              {isRotatingToken ? 'Renovando...' : 'Renovar token de terminal'}
+            </button>
+          ) : null}
         </div>
       </div>
     </div>
