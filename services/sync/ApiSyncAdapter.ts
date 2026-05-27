@@ -1261,6 +1261,87 @@ class ApiSyncAdapter {
         return backendCode === 'DEVICE_NOT_AUTHORIZED' || /este equipo ya no es la terminal autorizada/i.test(message);
     }
 
+    private isFiscalConfigMissingResponse(status: number, payload: any, rawBody = ''): boolean {
+        if (status !== 409) return false;
+        const backendCode = this.normalizeBackendCode(payload);
+        const collection = pickFirstString(payload?.collection, payload?.error?.collection);
+        const message = pickFirstString(payload?.message, payload?.error, payload?.detail, rawBody) || '';
+        return backendCode === 'FISCAL_CONFIG_MISSING'
+            || collection === 'fiscalSequences'
+            || /falta configuraci[oó]n fiscal/i.test(message);
+    }
+
+    private markDiagnosticReported(error: Error): Error {
+        try {
+            Object.defineProperty(error, '__syncDiagnosticReported', {
+                value: true,
+                configurable: true,
+                enumerable: false,
+            });
+        } catch {
+            (error as any).__syncDiagnosticReported = true;
+        }
+        return error;
+    }
+
+    private wasDiagnosticReported(error: unknown): boolean {
+        return Boolean(error && typeof error === 'object' && (error as any).__syncDiagnosticReported);
+    }
+
+    private handleFiscalConfigMissing(input: {
+        operation: SyncDiagnosticOperation;
+        collection: string;
+        endpoint: string;
+        status: number;
+        payload: any;
+        responseBody: string;
+        requestHeaders: Record<string, string>;
+    }): Error {
+        setCatalogDiagnosticStatus('FISCAL_CONFIG_MISSING');
+        setSalesPushDiagnosticStatus('LOCKED_FISCAL_CONFIG_REQUIRED');
+
+        const canIssueNonFiscalSales = safeLocalStorageGet('canIssueNonFiscalSales') === 'true'
+            || safeLocalStorageGet('clic_can_issue_non_fiscal_sales') === 'true';
+        const backendCode = this.normalizeBackendCode(input.payload) || 'FISCAL_CONFIG_MISSING';
+        const baseMessage = 'FISCAL_CONFIG_MISSING: Falta configuración fiscal para esta terminal. Configura las series, rangos y consecutivos en el ERP/Cloud-Admin.';
+        const error = new Error(canIssueNonFiscalSales
+            ? `${baseMessage} Las ventas no fiscales pueden habilitarse según la política de esta terminal.`
+            : baseMessage);
+
+        console.warn('[FISCAL_CONFIG_MISSING]', {
+            collection: input.collection,
+            endpoint: input.endpoint,
+            httpStatus: input.status,
+            backendCode,
+            catalogSyncStatus: 'FISCAL_CONFIG_MISSING',
+            salesPushStatus: 'LOCKED_FISCAL_CONFIG_REQUIRED',
+            canIssueNonFiscalSales,
+            nextAction: canIssueNonFiscalSales
+                ? 'CONFIGURE_FISCAL_OR_USE_NON_FISCAL_POLICY'
+                : 'CONFIGURE_FISCAL_SERIES_RANGES_SEQUENCES',
+        });
+
+        reportSyncErrorDiagnostic({
+            operation: input.operation,
+            collection: input.collection,
+            endpoint: input.endpoint,
+            httpStatus: input.status,
+            responseBody: input.responseBody,
+            error,
+            backendCode,
+            nextAction: canIssueNonFiscalSales
+                ? 'CONFIGURE_FISCAL_OR_USE_NON_FISCAL_POLICY'
+                : 'CONFIGURE_FISCAL_SERIES_RANGES_SEQUENCES',
+            requestAuth: this.buildRequestAuthDiagnostic(input.requestHeaders),
+            isMasterCollection: true,
+            isOperationCollection: false,
+            isCriticalMaster: true,
+            userVisibleSeverity: 'critical',
+        });
+
+        return this.markDiagnosticReported(error);
+    }
+
     private async parseJsonResponseSafely(response: Response): Promise<{ data: any; text: string }> {
         const text = await response.text().catch(() => '');
         if (!text) return { data: null, text: '' };
@@ -2243,6 +2324,23 @@ class ApiSyncAdapter {
 
         if (!fullResponse.ok) {
             const responseBody = await fullResponse.text().catch(() => '');
+            let payload: any = null;
+            try {
+                payload = responseBody ? JSON.parse(responseBody) : null;
+            } catch {
+                payload = null;
+            }
+            if (this.isFiscalConfigMissingResponse(fullResponse.status, payload, responseBody)) {
+                throw this.handleFiscalConfigMissing({
+                    operation: 'PULL_MASTERS',
+                    collection,
+                    endpoint: fullEndpoint,
+                    status: fullResponse.status,
+                    payload,
+                    responseBody,
+                    requestHeaders: headers,
+                });
+            }
             const error = new Error(`ERP no expone endpoint full de maestro crítico: ${collection}`);
             reportSyncErrorDiagnostic({
                 operation: 'PULL_MASTERS',
@@ -2374,6 +2472,23 @@ class ApiSyncAdapter {
                                 headers: retryHeaders,
                             });
                         }
+                        let retryPayload: any = null;
+                        try {
+                            retryPayload = responseBody ? JSON.parse(responseBody) : null;
+                        } catch {
+                            retryPayload = null;
+                        }
+                        if (this.isFiscalConfigMissingResponse(retryResponse.status, retryPayload, responseBody)) {
+                            throw this.handleFiscalConfigMissing({
+                                operation: 'PULL_MASTERS',
+                                collection,
+                                endpoint: url.toString(),
+                                status: retryResponse.status,
+                                payload: retryPayload,
+                                responseBody,
+                                requestHeaders: retryHeaders,
+                            });
+                        }
                         if (retryResponse.status === 404 && ERP_CRITICAL_MASTER_COLLECTIONS.has(collection)) {
                             return this.pullFullFallbackForCriticalMaster(collection, retryTarget, retryHeaders, retryResponse.status);
                         }
@@ -2413,6 +2528,23 @@ class ApiSyncAdapter {
                         return this.pullFullFallbackForCriticalMaster(collection, target, headers, response.status);
                     }
                     const responseBody = await response.text().catch(() => '');
+                    let payload: any = null;
+                    try {
+                        payload = responseBody ? JSON.parse(responseBody) : null;
+                    } catch {
+                        payload = null;
+                    }
+                    if (this.isFiscalConfigMissingResponse(response.status, payload, responseBody)) {
+                        throw this.handleFiscalConfigMissing({
+                            operation: 'PULL_MASTERS',
+                            collection,
+                            endpoint: url.toString(),
+                            status: response.status,
+                            payload,
+                            responseBody,
+                            requestHeaders: headers,
+                        });
+                    }
                     const error = new Error(
                         response.status === 404 && isCriticalMaster
                             ? `ERP no expone endpoint de maestro crítico: ${collection}`
@@ -2437,14 +2569,16 @@ class ApiSyncAdapter {
                 return await response.json();
             } catch (error) {
                 console.error(`❌ ApiSyncAdapter: Error pulling ERP delta for ${collection}:`, error);
-                reportSyncErrorDiagnostic({
-                    operation: 'PULL_MASTERS',
-                    collection,
-                    endpoint: url.toString(),
-                    httpStatus: error instanceof TypeError ? 'network error' : null,
-                    error,
-                    requestAuth: this.buildRequestAuthDiagnostic(this.buildOperationalHeaders(target, target.token)),
-                });
+                if (!this.wasDiagnosticReported(error)) {
+                    reportSyncErrorDiagnostic({
+                        operation: 'PULL_MASTERS',
+                        collection,
+                        endpoint: url.toString(),
+                        httpStatus: error instanceof TypeError ? 'network error' : null,
+                        error,
+                        requestAuth: this.buildRequestAuthDiagnostic(this.buildOperationalHeaders(target, target.token)),
+                    });
+                }
                 throw error;
             }
         }
@@ -2674,6 +2808,23 @@ class ApiSyncAdapter {
                     }
                     const responseBody = await response.text().catch(() => '');
                     const isCriticalMaster = ERP_CRITICAL_MASTER_COLLECTIONS.has(collection);
+                    let payload: any = null;
+                    try {
+                        payload = responseBody ? JSON.parse(responseBody) : null;
+                    } catch {
+                        payload = null;
+                    }
+                    if (operation === 'PULL_MASTERS' && this.isFiscalConfigMissingResponse(response.status, payload, responseBody)) {
+                        throw this.handleFiscalConfigMissing({
+                            operation,
+                            collection,
+                            endpoint,
+                            status: response.status,
+                            payload,
+                            responseBody,
+                            requestHeaders: headers,
+                        });
+                    }
                     const error = new Error(
                         response.status === 404 && isCriticalMaster
                             ? `ERP no expone endpoint de maestro crítico: ${collection}`
@@ -2706,14 +2857,16 @@ class ApiSyncAdapter {
                 };
             } catch (error) {
                 console.error(`❌ ApiSyncAdapter: Error getting ERP metadata for ${collection}:`, error);
-                reportSyncErrorDiagnostic({
-                    operation,
-                    collection,
-                    endpoint,
-                    httpStatus: error instanceof TypeError ? 'network error' : null,
-                    error,
-                    requestAuth: this.buildRequestAuthDiagnostic(this.buildOperationalHeaders(target, target.token)),
-                });
+                if (!this.wasDiagnosticReported(error)) {
+                    reportSyncErrorDiagnostic({
+                        operation,
+                        collection,
+                        endpoint,
+                        httpStatus: error instanceof TypeError ? 'network error' : null,
+                        error,
+                        requestAuth: this.buildRequestAuthDiagnostic(this.buildOperationalHeaders(target, target.token)),
+                    });
+                }
                 return null;
             }
         }

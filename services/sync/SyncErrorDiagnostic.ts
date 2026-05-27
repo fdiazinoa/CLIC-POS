@@ -15,8 +15,8 @@ export type SyncDiagnosticOperation =
     | 'REGISTER_TERMINAL';
 
 export type TerminalBindingStatus = 'UNBOUND' | 'BINDING' | 'BOUND' | 'BOUND_AUTH_MISMATCH' | 'BINDING_ERROR' | 'TOKEN_INVALID';
-export type CatalogSyncStatus = 'IDLE' | 'SYNCING' | 'SYNCED' | 'ERROR' | 'AUTH_ERROR';
-export type SalesPushStatus = 'DISABLED' | 'LOCKED_UNTIL_ERP_READY' | 'LOCKED_AUTH_REQUIRED' | 'ENABLED';
+export type CatalogSyncStatus = 'IDLE' | 'SYNCING' | 'SYNCED' | 'ERROR' | 'AUTH_ERROR' | 'FISCAL_CONFIG_MISSING';
+export type SalesPushStatus = 'DISABLED' | 'LOCKED_UNTIL_ERP_READY' | 'LOCKED_AUTH_REQUIRED' | 'LOCKED_FISCAL_CONFIG_REQUIRED' | 'ENABLED';
 
 export interface SyncRequestAuthDiagnostic {
     authorizationPresent: boolean;
@@ -185,12 +185,12 @@ const resolveBindingStatus = (): TerminalBindingStatus => {
 
 const resolveCatalogStatus = (): CatalogSyncStatus => {
     const explicit = safeLocalStorageGet(CATALOG_SYNC_STATUS_KEY) as CatalogSyncStatus | null;
-    return explicit && ['IDLE', 'SYNCING', 'SYNCED', 'ERROR', 'AUTH_ERROR'].includes(explicit) ? explicit : 'IDLE';
+    return explicit && ['IDLE', 'SYNCING', 'SYNCED', 'ERROR', 'AUTH_ERROR', 'FISCAL_CONFIG_MISSING'].includes(explicit) ? explicit : 'IDLE';
 };
 
 const resolveSalesPushStatus = (target: ResolvedSyncTarget): SalesPushStatus => {
     const explicit = safeLocalStorageGet(SALES_PUSH_STATUS_KEY) as SalesPushStatus | null;
-    if (explicit && ['DISABLED', 'LOCKED_UNTIL_ERP_READY', 'LOCKED_AUTH_REQUIRED', 'ENABLED'].includes(explicit)) return explicit;
+    if (explicit && ['DISABLED', 'LOCKED_UNTIL_ERP_READY', 'LOCKED_AUTH_REQUIRED', 'LOCKED_FISCAL_CONFIG_REQUIRED', 'ENABLED'].includes(explicit)) return explicit;
     if (target.canPushOperations) return 'ENABLED';
     if (target.kind === 'ERP_ACTIVE') return 'LOCKED_UNTIL_ERP_READY';
     return 'DISABLED';

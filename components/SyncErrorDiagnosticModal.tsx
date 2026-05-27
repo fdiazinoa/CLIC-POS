@@ -32,6 +32,9 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
   if (!diagnostic) return null;
 
   const isDeviceNotAuthorized = diagnostic.authStatus === 'DEVICE_NOT_AUTHORIZED' || diagnostic.backendCode === 'DEVICE_NOT_AUTHORIZED';
+  const isFiscalConfigMissing = diagnostic.catalogSyncStatus === 'FISCAL_CONFIG_MISSING'
+    || diagnostic.backendCode === 'FISCAL_CONFIG_MISSING';
+  const canIssueNonFiscalSales = diagnostic.nextAction === 'CONFIGURE_FISCAL_OR_USE_NON_FISCAL_POLICY';
   const deviceTokenPresent = diagnostic.fetchDiagnostic?.tokenPresent ?? Boolean(diagnostic.requestAuth?.syncTokenPreview);
   const currentDeviceId = diagnostic.deviceId || 'N/A';
   const localTerminalId = diagnostic.syncProfile?.localTerminalId || 'N/A';
@@ -583,6 +586,23 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
               <p className="mt-2 text-xs font-semibold text-amber-800">
                 La data local no se borra y la terminal no vuelve a la pantalla de activación. La sincronización queda bloqueada hasta renovar la autorización.
               </p>
+            </div>
+          ) : null}
+
+          {isFiscalConfigMissing ? (
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-600">Configuración fiscal requerida</p>
+              <p className="mt-2 text-sm font-bold leading-relaxed text-amber-900">
+                Falta configuración fiscal para esta terminal. Configura las series, rangos y consecutivos en el ERP/Cloud-Admin.
+              </p>
+              <p className="mt-2 text-xs font-semibold text-amber-800">
+                La terminal sigue vinculada y la data local no se borra. La sincronización de ventas queda bloqueada hasta completar la configuración fiscal y presionar Reintentar.
+              </p>
+              {canIssueNonFiscalSales ? (
+                <p className="mt-2 text-xs font-semibold text-amber-800">
+                  Esta terminal tiene política para ventas no fiscales; úsala solo si el negocio lo permite.
+                </p>
+              ) : null}
             </div>
           ) : null}
 
