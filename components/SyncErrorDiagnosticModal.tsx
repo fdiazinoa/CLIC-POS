@@ -24,6 +24,8 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
   const [isTestingNative, setIsTestingNative] = useState(false);
   const [isRotatingToken, setIsRotatingToken] = useState(false);
   const [isRepairingToken, setIsRepairingToken] = useState(false);
+  const [isReauthorizingTerminal, setIsReauthorizingTerminal] = useState(false);
+  const [pairingCode, setPairingCode] = useState('');
   const [nativeTestResult, setNativeTestResult] = useState<unknown>(null);
   const diagnosticJson = useMemo(() => diagnostic ? JSON.stringify(diagnostic, null, 2) : '', [diagnostic]);
 
@@ -81,6 +83,11 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
       payload?.terminal_config?.auth?.activationToken,
       payload?.terminal_config?.metadata?.deviceToken,
       payload?.terminal_config?.metadata?.syncAuth?.deviceToken,
+      payload?.terminal_config?.metadata?.syncAuth?.terminalToken,
+      payload?.terminal_config?.metadata?.syncAuth?.activationToken,
+      payload?.auth?.deviceToken,
+      payload?.auth?.terminalToken,
+      payload?.auth?.activationToken,
       payload?.terminal?.config?.auth?.deviceToken,
       payload?.terminal?.config?.auth?.terminalToken,
       payload?.terminal?.config?.auth?.activationToken,
@@ -131,6 +138,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
       if (syncToken) {
         localStorage.setItem('clic_erp_sync_token', syncToken);
         localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
+        localStorage.removeItem('clic_sync_auth_status');
         saveTerminalCredentialsSync({
           terminalId,
           deviceId,
@@ -238,6 +246,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
       if (syncToken) {
         localStorage.setItem('clic_erp_sync_token', syncToken);
         localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
+        localStorage.removeItem('clic_sync_auth_status');
         saveTerminalCredentialsSync({
           terminalId,
           deviceId,
@@ -336,6 +345,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
       if (syncToken) {
         localStorage.setItem('clic_erp_sync_token', syncToken);
         localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
+        localStorage.removeItem('clic_sync_auth_status');
         saveTerminalCredentialsSync({
           terminalId,
           deviceId,
@@ -349,6 +359,137 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
     } finally {
       setNativeTestResult(result);
       setIsRepairingToken(false);
+    }
+  };
+
+  const handleReauthorizeTerminal = async () => {
+    setIsReauthorizingTerminal(true);
+    const currentDeviceToken = resolveSyncDeviceToken().token;
+    const deviceId = diagnostic.deviceId || localStorage.getItem('pos_device_id') || localStorage.getItem('CLIC_POS_DEVICE_ID') || '';
+    const terminalId = diagnostic.resolvedTarget?.terminalId || diagnostic.terminalId || '';
+    const baseUrl = diagnostic.resolvedTarget?.baseUrl || diagnostic.syncProfile?.erpBaseUrl || '';
+    const result: Record<string, unknown> = {
+      action: 'REAUTHORIZE_TERMINAL',
+      baseUrl,
+      terminalId,
+      deviceId,
+      oldTokenPresent: Boolean(currentDeviceToken),
+      pairingCodePresent: Boolean(pairingCode.trim()),
+    };
+
+    try {
+      if (!baseUrl || !terminalId || !deviceId) {
+        throw new Error('Faltan baseUrl, terminalId o deviceId para reautorizar esta terminal.');
+      }
+
+      const takeover = await requestJson<any>({
+        url: `${baseUrl}/terminals/${encodeURIComponent(terminalId)}/takeover`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Terminal-Id': terminalId,
+          'X-Device-Id': deviceId,
+          ...(currentDeviceToken ? { 'X-Device-Token': currentDeviceToken } : {}),
+        },
+        body: JSON.stringify({
+          terminalId,
+          terminal_id: terminalId,
+          deviceId,
+          device_id: deviceId,
+          takeover: true,
+          rotateDeviceToken: true,
+          ...(pairingCode.trim() ? { pairingCode: pairingCode.trim(), pairing_code: pairingCode.trim() } : {}),
+        }),
+        timeoutMs: 10000,
+        diagnosticContext: { operation: 'REAUTHORIZE_TERMINAL_TAKEOVER' },
+      });
+
+      result.engine = takeover.networkEngine;
+      result.takeoverStatus = takeover.status;
+      result.takeoverBody = takeover.text.slice(0, 1000);
+
+      let newDeviceToken = pickDeviceToken(takeover.data);
+      if (!takeover.ok || !newDeviceToken) {
+        const register = await requestJson<any>({
+          url: `${baseUrl}/terminals/register`,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Terminal-Id': terminalId,
+            'X-Device-Id': deviceId,
+            ...(currentDeviceToken ? { 'X-Device-Token': currentDeviceToken } : {}),
+          },
+          body: JSON.stringify({
+            terminalId,
+            terminal_id: terminalId,
+            deviceId,
+            device_id: deviceId,
+            takeover: true,
+            rotateDeviceToken: true,
+            forceIssueDeviceToken: true,
+            ...(pairingCode.trim() ? { pairingCode: pairingCode.trim(), pairing_code: pairingCode.trim() } : {}),
+          }),
+          timeoutMs: 10000,
+          diagnosticContext: { operation: 'REAUTHORIZE_TERMINAL_REGISTER' },
+        });
+
+        result.registerFallbackStatus = register.status;
+        result.registerFallbackBody = register.text.slice(0, 1000);
+        newDeviceToken = pickDeviceToken(register.data);
+        if (!register.ok || !newDeviceToken) {
+          throw new Error(`No se pudo reautorizar la terminal (${takeover.status}/${register.status}).`);
+        }
+      }
+
+      persistSyncDeviceToken(newDeviceToken, 'TAKEOVER');
+      clearStoredSyncToken();
+      localStorage.removeItem('clic_erp_sync_token');
+      localStorage.removeItem('clic_erp_sync_token_updated_at');
+      localStorage.removeItem('clic_erp_sync_token_expires_at');
+      localStorage.removeItem('clic_sync_auth_status');
+      localStorage.setItem('clic_terminal_binding_status', 'BOUND');
+      saveTerminalCredentialsSync({
+        terminalId,
+        deviceId,
+        deviceToken: newDeviceToken,
+        deviceTokenSource: 'TAKEOVER',
+        deviceTokenUpdatedAt: new Date().toISOString(),
+      });
+
+      const auth = await requestJson<any>({
+        url: `${baseUrl}/auth`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Terminal-Id': terminalId,
+          'X-Device-Id': deviceId,
+          'X-Device-Token': newDeviceToken,
+        },
+        body: JSON.stringify({ terminalId, deviceId, deviceToken: newDeviceToken }),
+        timeoutMs: 10000,
+        diagnosticContext: { operation: 'REAUTHORIZE_TERMINAL_AUTH' },
+      });
+
+      result.authStatus = auth.status;
+      result.authBody = auth.text.slice(0, 1000);
+      const syncToken = pickSyncToken(auth.data);
+      result.syncTokenPresent = Boolean(syncToken);
+      if (syncToken) {
+        localStorage.setItem('clic_erp_sync_token', syncToken);
+        localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
+        saveTerminalCredentialsSync({
+          terminalId,
+          deviceId,
+          syncToken,
+          syncTokenUpdatedAt: new Date().toISOString(),
+        });
+      }
+    } catch (error: any) {
+      result.error = error?.message || String(error || '');
+      result.errorDiagnostic = error?.__httpClientDiagnostic || null;
+    } finally {
+      setNativeTestResult(result);
+      setIsReauthorizingTerminal(false);
     }
   };
 
@@ -406,6 +547,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <Field label="networkEngine" value={diagnostic.networkEngine || diagnostic.fetchDiagnostic?.networkEngine} />
             <Field label="authStatus" value={diagnostic.authStatus} />
             <Field label="backendCode" value={diagnostic.backendCode} />
+            <Field label="canTakeover" value={diagnostic.authStatus === 'DEVICE_NOT_AUTHORIZED' || diagnostic.backendCode === 'DEVICE_NOT_AUTHORIZED' ? 'true' : 'N/A'} />
             <Field label="nextAction" value={diagnostic.nextAction} />
             <Field label="fetchStage" value={diagnostic.fetchStage} />
             <Field label="HTTP method" value={diagnostic.httpMethod} />
@@ -515,6 +657,25 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
               <RefreshCw size={18} className={isRotatingToken ? 'animate-spin' : ''} />
               {isRotatingToken ? 'Renovando...' : 'Renovar token de terminal'}
             </button>
+          ) : null}
+          {diagnostic.authStatus === 'DEVICE_NOT_AUTHORIZED' || diagnostic.backendCode === 'DEVICE_NOT_AUTHORIZED' ? (
+            <div className="flex flex-col gap-2 sm:min-w-[18rem]">
+              <input
+                value={pairingCode}
+                onChange={(event) => setPairingCode(event.target.value)}
+                placeholder="Código de vinculación / pairing code"
+                className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500"
+              />
+              <button
+                type="button"
+                onClick={handleReauthorizeTerminal}
+                disabled={isReauthorizingTerminal}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white shadow-sm hover:bg-blue-500 disabled:opacity-60"
+              >
+                <RefreshCw size={18} className={isReauthorizingTerminal ? 'animate-spin' : ''} />
+                {isReauthorizingTerminal ? 'Reautorizando...' : 'Reautorizar esta terminal'}
+              </button>
+            </div>
           ) : null}
           {diagnostic.authStatus === 'DEVICE_TOKEN_MISSING_LOCAL'
             || diagnostic.authStatus === 'DEVICE_TOKEN_MISSING_FROM_REGISTER'

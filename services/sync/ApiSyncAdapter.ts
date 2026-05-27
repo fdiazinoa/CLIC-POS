@@ -1225,6 +1225,13 @@ class ApiSyncAdapter {
         return backendCode === 'DEVICE_TOKEN_INVALID' || /device token invalid/i.test(message);
     }
 
+    private isDeviceNotAuthorizedResponse(status: number, payload: any, rawBody = ''): boolean {
+        if (status !== 403) return false;
+        const backendCode = this.normalizeBackendCode(payload);
+        const message = pickFirstString(payload?.message, payload?.error, payload?.detail, rawBody) || '';
+        return backendCode === 'DEVICE_NOT_AUTHORIZED' || /este equipo ya no es la terminal autorizada/i.test(message);
+    }
+
     private async parseJsonResponseSafely(response: Response): Promise<{ data: any; text: string }> {
         const text = await response.text().catch(() => '');
         if (!text) return { data: null, text: '' };
@@ -1275,6 +1282,56 @@ class ApiSyncAdapter {
             authStatus: 'DEVICE_TOKEN_INVALID',
             backendCode,
             nextAction: 'ROTATE_DEVICE_TOKEN_OR_REBIND',
+            requestAuth: {
+                ...this.buildRequestAuthDiagnostic(input.requestHeaders),
+                syncTokenPreview: previewSyncDeviceToken(input.tokenResolution.token),
+            },
+            userVisibleSeverity: 'critical',
+        });
+
+        return error;
+    }
+
+    private handleDeviceNotAuthorized(input: {
+        operation: OperationalSyncOperation;
+        endpoint: string;
+        response: Response;
+        payload: any;
+        responseBody: string;
+        requestHeaders: Record<string, string>;
+        tokenResolution: ReturnType<typeof resolveSyncDeviceToken>;
+    }): Error {
+        this.erpAuthToken = null;
+        this.clearCanonicalErpSyncToken();
+        setTerminalBindingDiagnosticStatus('BOUND_AUTH_MISMATCH');
+        setCatalogDiagnosticStatus('AUTH_ERROR');
+        setSalesPushDiagnosticStatus('LOCKED_AUTH_REQUIRED');
+        setSyncAuthDiagnosticStatus('DEVICE_NOT_AUTHORIZED');
+
+        const backendCode = this.normalizeBackendCode(input.payload) || 'DEVICE_NOT_AUTHORIZED';
+        const error = new Error('DEVICE_NOT_AUTHORIZED: Esta caja está vinculada, pero este equipo no es el equipo autorizado en el ERP. Debes reautorizar o transferir la terminal a este equipo.');
+        console.warn('[DEVICE_NOT_AUTHORIZED]', {
+            endpoint: input.endpoint,
+            terminalId: this.resolveOperationalTarget(input.operation)?.terminalId || null,
+            deviceId: this.resolveCurrentDeviceId(),
+            tokenPresent: Boolean(input.tokenResolution.token),
+            tokenPreview: previewSyncDeviceToken(input.tokenResolution.token),
+            tokenSource: input.tokenResolution.sourceKey,
+            tokenUpdatedAt: input.tokenResolution.updatedAt || null,
+            backendCode,
+            canTakeover: true,
+            nextAction: 'REAUTHORIZE_TERMINAL',
+        });
+
+        reportSyncErrorDiagnostic({
+            operation: input.operation,
+            endpoint: input.endpoint,
+            httpStatus: input.response.status,
+            responseBody: input.responseBody,
+            error,
+            authStatus: 'DEVICE_NOT_AUTHORIZED',
+            backendCode,
+            nextAction: 'REAUTHORIZE_TERMINAL',
             requestAuth: {
                 ...this.buildRequestAuthDiagnostic(input.requestHeaders),
                 syncTokenPreview: previewSyncDeviceToken(input.tokenResolution.token),
@@ -1417,6 +1474,35 @@ class ApiSyncAdapter {
             throw new Error('Browser offline');
         }
 
+        if (!force && safeLocalStorageGet('clic_sync_auth_status') === 'DEVICE_NOT_AUTHORIZED') {
+            const deviceId = this.resolveCurrentDeviceId();
+            const deviceTokenResolution = resolveSyncDeviceToken();
+            const error = new Error('DEVICE_NOT_AUTHORIZED: Esta caja está vinculada, pero este equipo no es el equipo autorizado en el ERP. Debes reautorizar o transferir la terminal a este equipo.');
+            setTerminalBindingDiagnosticStatus('BOUND_AUTH_MISMATCH');
+            setCatalogDiagnosticStatus('AUTH_ERROR');
+            setSalesPushDiagnosticStatus('LOCKED_AUTH_REQUIRED');
+            reportSyncErrorDiagnostic({
+                operation,
+                endpoint: `${target.baseUrl}/auth`,
+                httpStatus: null,
+                error,
+                authStatus: 'DEVICE_NOT_AUTHORIZED',
+                backendCode: 'DEVICE_NOT_AUTHORIZED',
+                nextAction: 'REAUTHORIZE_TERMINAL',
+                blockedByLocalGuard: true,
+                guardReason: 'DEVICE_NOT_AUTHORIZED',
+                requestAuth: {
+                    authorizationPresent: false,
+                    syncTokenPresent: false,
+                    syncTokenPreview: previewSyncDeviceToken(deviceTokenResolution.token),
+                    terminalIdHeaderPresent: Boolean(target.terminalId),
+                    deviceIdHeaderPresent: Boolean(deviceId),
+                },
+                userVisibleSeverity: 'critical',
+            });
+            throw error;
+        }
+
         if (!force && this.erpAuthToken) {
             return {
                 ...target,
@@ -1509,6 +1595,17 @@ class ApiSyncAdapter {
             if (!response.ok) {
                 let errorMessage = `ERP authentication failed: ${response.status} ${response.statusText}`;
                 const parsedError = await this.parseJsonResponseSafely(response);
+                if (this.isDeviceNotAuthorizedResponse(response.status, parsedError.data, parsedError.text)) {
+                    throw this.handleDeviceNotAuthorized({
+                        operation,
+                        endpoint: authEndpoint,
+                        response,
+                        payload: parsedError.data,
+                        responseBody: parsedError.text,
+                        requestHeaders: authHeaders,
+                        tokenResolution: deviceTokenResolution,
+                    });
+                }
                 if (this.isDeviceTokenInvalidResponse(response.status, parsedError.data, parsedError.text)) {
                     throw this.handleDeviceTokenInvalid({
                         operation,
