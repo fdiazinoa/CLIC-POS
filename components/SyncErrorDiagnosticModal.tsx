@@ -31,6 +31,11 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
 
   if (!diagnostic) return null;
 
+  const isDeviceNotAuthorized = diagnostic.authStatus === 'DEVICE_NOT_AUTHORIZED' || diagnostic.backendCode === 'DEVICE_NOT_AUTHORIZED';
+  const deviceTokenPresent = diagnostic.fetchDiagnostic?.tokenPresent ?? Boolean(diagnostic.requestAuth?.syncTokenPreview);
+  const currentDeviceId = diagnostic.deviceId || 'N/A';
+  const localTerminalId = diagnostic.syncProfile?.localTerminalId || 'N/A';
+
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(diagnosticJson);
@@ -483,6 +488,8 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
           syncToken,
           syncTokenUpdatedAt: new Date().toISOString(),
         });
+        await onRetryProducts();
+        result.pullMastersRetried = true;
       }
     } catch (error: any) {
       result.error = error?.message || String(error || '');
@@ -528,8 +535,9 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <Field label="catalogSyncStatus" value={diagnostic.catalogSyncStatus} />
             <Field label="salesPushStatus" value={diagnostic.salesPushStatus} />
             <Field label="HTTP status" value={diagnostic.httpStatus} />
-            <Field label="deviceId" value={diagnostic.deviceId} />
+            <Field label="currentDeviceId" value={currentDeviceId} />
             <Field label="terminalId" value={diagnostic.terminalId} />
+            <Field label="localTerminalId" value={localTerminalId} />
             <Field label="contractSource" value={diagnostic.contractSource} />
             <Field label="profilePriority" value={diagnostic.profileSourcePriority} />
             <Field label="mismatchDetected" value={diagnostic.mismatchDetected ? 'true' : 'false'} />
@@ -547,7 +555,8 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <Field label="networkEngine" value={diagnostic.networkEngine || diagnostic.fetchDiagnostic?.networkEngine} />
             <Field label="authStatus" value={diagnostic.authStatus} />
             <Field label="backendCode" value={diagnostic.backendCode} />
-            <Field label="canTakeover" value={diagnostic.authStatus === 'DEVICE_NOT_AUTHORIZED' || diagnostic.backendCode === 'DEVICE_NOT_AUTHORIZED' ? 'true' : 'N/A'} />
+            <Field label="tokenPresent" value={deviceTokenPresent ? 'true' : 'false'} />
+            <Field label="canTakeover" value={isDeviceNotAuthorized ? 'true' : 'N/A'} />
             <Field label="nextAction" value={diagnostic.nextAction} />
             <Field label="fetchStage" value={diagnostic.fetchStage} />
             <Field label="HTTP method" value={diagnostic.httpMethod} />
@@ -563,6 +572,18 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <p className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-400">endpoint</p>
             <p className="mt-2 break-all text-sm font-bold text-slate-800">{diagnostic.endpoint || 'N/A'}</p>
           </div>
+
+          {isDeviceNotAuthorized ? (
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-600">Reautorización requerida</p>
+              <p className="mt-2 text-sm font-bold leading-relaxed text-amber-900">
+                Esta Caja está vinculada, pero este equipo no está autorizado en el ERP. Solicita reautorización desde Cloud-Admin o usa un código de vinculación.
+              </p>
+              <p className="mt-2 text-xs font-semibold text-amber-800">
+                La data local no se borra y la terminal no vuelve a la pantalla de activación. La sincronización queda bloqueada hasta renovar la autorización.
+              </p>
+            </div>
+          ) : null}
 
           <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -632,11 +653,11 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
           <button
             type="button"
             onClick={handleRetry}
-            disabled={isRetrying}
+            disabled={isRetrying || isDeviceNotAuthorized}
             className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white shadow-sm hover:bg-slate-800 disabled:opacity-60"
           >
             <RefreshCw size={18} className={isRetrying ? 'animate-spin' : ''} />
-            {isRetrying ? 'Reintentando...' : 'Reintentar artículos'}
+            {isDeviceNotAuthorized ? 'Reintento bloqueado por autorización' : isRetrying ? 'Reintentando...' : 'Reintentar artículos'}
           </button>
           <button
             type="button"
@@ -658,7 +679,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
               {isRotatingToken ? 'Renovando...' : 'Renovar token de terminal'}
             </button>
           ) : null}
-          {diagnostic.authStatus === 'DEVICE_NOT_AUTHORIZED' || diagnostic.backendCode === 'DEVICE_NOT_AUTHORIZED' ? (
+          {isDeviceNotAuthorized ? (
             <div className="flex flex-col gap-2 sm:min-w-[18rem]">
               <input
                 value={pairingCode}
@@ -673,7 +694,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
                 className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white shadow-sm hover:bg-blue-500 disabled:opacity-60"
               >
                 <RefreshCw size={18} className={isReauthorizingTerminal ? 'animate-spin' : ''} />
-                {isReauthorizingTerminal ? 'Reautorizando...' : 'Reautorizar esta terminal'}
+                {isReauthorizingTerminal ? 'Solicitando...' : 'Solicitar reautorización'}
               </button>
             </div>
           ) : null}

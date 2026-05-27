@@ -1309,7 +1309,7 @@ class ApiSyncAdapter {
         setSyncAuthDiagnosticStatus('DEVICE_NOT_AUTHORIZED');
 
         const backendCode = this.normalizeBackendCode(input.payload) || 'DEVICE_NOT_AUTHORIZED';
-        const error = new Error('DEVICE_NOT_AUTHORIZED: Esta caja está vinculada, pero este equipo no es el equipo autorizado en el ERP. Debes reautorizar o transferir la terminal a este equipo.');
+        const error = new Error('DEVICE_NOT_AUTHORIZED: Esta Caja está vinculada, pero este equipo no está autorizado en el ERP. Solicita reautorización desde Cloud-Admin o usa un código de vinculación.');
         console.warn('[DEVICE_NOT_AUTHORIZED]', {
             endpoint: input.endpoint,
             terminalId: this.resolveOperationalTarget(input.operation)?.terminalId || null,
@@ -1335,6 +1335,24 @@ class ApiSyncAdapter {
             requestAuth: {
                 ...this.buildRequestAuthDiagnostic(input.requestHeaders),
                 syncTokenPreview: previewSyncDeviceToken(input.tokenResolution.token),
+            },
+            fetchDiagnostic: {
+                fetchStage: 'RESPONSE_RECEIVED',
+                method: 'POST',
+                endpoint: input.endpoint,
+                tokenPresent: Boolean(input.tokenResolution.token),
+                tokenPreview: previewSyncDeviceToken(input.tokenResolution.token),
+                tokenLength: input.tokenResolution.token?.length || 0,
+                tokenSource: input.tokenResolution.sourceKey,
+                tokenUpdatedAt: input.tokenResolution.updatedAt || null,
+                headersPresent: {
+                    authorization: false,
+                    xSyncToken: false,
+                    xTerminalId: Boolean(input.requestHeaders['X-Terminal-Id']),
+                    xDeviceId: Boolean(input.requestHeaders['X-Device-Id']),
+                    xDeviceToken: Boolean(input.requestHeaders['X-Device-Token']),
+                },
+                networkOnline: typeof navigator !== 'undefined' ? navigator.onLine : null,
             },
             userVisibleSeverity: 'critical',
         });
@@ -1477,7 +1495,7 @@ class ApiSyncAdapter {
         if (!force && safeLocalStorageGet('clic_sync_auth_status') === 'DEVICE_NOT_AUTHORIZED') {
             const deviceId = this.resolveCurrentDeviceId();
             const deviceTokenResolution = resolveSyncDeviceToken();
-            const error = new Error('DEVICE_NOT_AUTHORIZED: Esta caja está vinculada, pero este equipo no es el equipo autorizado en el ERP. Debes reautorizar o transferir la terminal a este equipo.');
+            const error = new Error('DEVICE_NOT_AUTHORIZED: Esta Caja está vinculada, pero este equipo no está autorizado en el ERP. Solicita reautorización desde Cloud-Admin o usa un código de vinculación.');
             setTerminalBindingDiagnosticStatus('BOUND_AUTH_MISMATCH');
             setCatalogDiagnosticStatus('AUTH_ERROR');
             setSalesPushDiagnosticStatus('LOCKED_AUTH_REQUIRED');
