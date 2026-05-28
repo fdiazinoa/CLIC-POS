@@ -34,6 +34,9 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
   const isDeviceNotAuthorized = diagnostic.authStatus === 'DEVICE_NOT_AUTHORIZED' || diagnostic.backendCode === 'DEVICE_NOT_AUTHORIZED';
   const isFiscalConfigMissing = diagnostic.catalogSyncStatus === 'FISCAL_CONFIG_MISSING'
     || diagnostic.backendCode === 'FISCAL_CONFIG_MISSING';
+  const isMasterPullFailed = diagnostic.catalogSyncStatus === 'ERP_MASTER_PULL_FAILED'
+    || diagnostic.backendCode === 'SYNC_COLLECTION_PULL_FAILED';
+  const failedMasterCollection = diagnostic.collection || 'desconocida';
   const canIssueNonFiscalSales = diagnostic.nextAction === 'CONFIGURE_FISCAL_OR_USE_NON_FISCAL_POLICY';
   const shouldConfigureInErp = isFiscalConfigMissing && (
     diagnostic.nextAction === 'CONFIGURE_TERMINAL_FISCAL_SETTINGS'
@@ -585,6 +588,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <Field label="networkEngine" value={diagnostic.networkEngine || diagnostic.fetchDiagnostic?.networkEngine} />
             <Field label="authStatus" value={diagnostic.authStatus} />
             <Field label="backendCode" value={diagnostic.backendCode} />
+            <Field label="debugId" value={diagnostic.debugId} />
             <Field label="tokenPresent" value={deviceTokenPresent ? 'true' : 'false'} />
             <Field label="canTakeover" value={isDeviceNotAuthorized ? 'true' : 'N/A'} />
             <Field label="nextAction" value={diagnostic.nextAction} />
@@ -613,6 +617,23 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
               <p className="mt-2 text-xs font-semibold text-amber-800">
                 La data local no se borra y la terminal no vuelve a la pantalla de activación. La sincronización queda bloqueada hasta renovar la autorización.
               </p>
+            </div>
+          ) : null}
+
+          {isMasterPullFailed ? (
+            <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4">
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-red-600">Fallo de maestro ERP</p>
+              <p className="mt-2 text-sm font-bold leading-relaxed text-red-900">
+                El ERP falló al generar la colección {failedMasterCollection}. Revisa el backend ERP.
+              </p>
+              <p className="mt-2 text-xs font-semibold text-red-800">
+                La terminal sigue vinculada y la data local no se borra. La sincronización de ventas queda bloqueada hasta corregir el backend y presionar Reintentar.
+              </p>
+              {diagnostic.debugId ? (
+                <p className="mt-2 text-xs font-semibold text-red-800">
+                  debugId: {diagnostic.debugId}
+                </p>
+              ) : null}
             </div>
           ) : null}
 

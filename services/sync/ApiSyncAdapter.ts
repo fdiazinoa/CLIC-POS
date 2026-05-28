@@ -1351,6 +1351,95 @@ class ApiSyncAdapter {
         return this.markDiagnosticReported(error);
     }
 
+    private normalizeBackendDebugId(payload: any): string | null {
+        return pickFirstString(
+            payload?.debugId,
+            payload?.debug_id,
+            payload?.error?.debugId,
+            payload?.error?.debug_id,
+        );
+    }
+
+    private resolveFailedMasterCollection(requestCollection: string, payload: any): string {
+        return pickFirstString(
+            payload?.collection,
+            payload?.error?.collection,
+            requestCollection,
+        ) || requestCollection || 'desconocida';
+    }
+
+    private isMasterCollectionPullFailedResponse(status: number, payload: any, rawBody = ''): boolean {
+        if (status !== 500) return false;
+        const backendCode = this.normalizeBackendCode(payload);
+        const message = pickFirstString(payload?.message, payload?.error, payload?.detail, rawBody) || '';
+        return backendCode === 'SYNC_COLLECTION_PULL_FAILED'
+            || /sync_collection_pull_failed/i.test(message);
+    }
+
+    private throwIfKnownMasterPullFailure(input: {
+        operation: SyncDiagnosticOperation;
+        collection: string;
+        endpoint: string;
+        status: number;
+        payload: any;
+        responseBody: string;
+        requestHeaders: Record<string, string>;
+    }): void {
+        if (this.isFiscalConfigMissingResponse(input.status, input.payload, input.responseBody)) {
+            throw this.handleFiscalConfigMissing(input);
+        }
+        if (this.isMasterCollectionPullFailedResponse(input.status, input.payload, input.responseBody)) {
+            throw this.handleMasterCollectionPullFailed(input);
+        }
+    }
+
+    private handleMasterCollectionPullFailed(input: {
+        operation: SyncDiagnosticOperation;
+        collection: string;
+        endpoint: string;
+        status: number;
+        payload: any;
+        responseBody: string;
+        requestHeaders: Record<string, string>;
+    }): Error {
+        setCatalogDiagnosticStatus('ERP_MASTER_PULL_FAILED');
+        setSalesPushDiagnosticStatus('LOCKED_MASTER_SYNC_REQUIRED');
+
+        const backendCode = this.normalizeBackendCode(input.payload) || 'SYNC_COLLECTION_PULL_FAILED';
+        const failedCollection = this.resolveFailedMasterCollection(input.collection, input.payload);
+        const debugId = this.normalizeBackendDebugId(input.payload);
+        const baseMessage = `SYNC_COLLECTION_PULL_FAILED: El ERP falló al generar la colección ${failedCollection}. Revisa el backend ERP.`;
+        const error = new Error(debugId ? `${baseMessage} (debugId: ${debugId})` : baseMessage);
+
+        console.warn('[ERP_MASTER_PULL_FAILED]', {
+            collection: failedCollection,
+            endpoint: input.endpoint,
+            httpStatus: input.status,
+            backendCode,
+            debugId,
+            catalogSyncStatus: 'ERP_MASTER_PULL_FAILED',
+            salesPushStatus: 'LOCKED_MASTER_SYNC_REQUIRED',
+        });
+
+        reportSyncErrorDiagnostic({
+            operation: input.operation,
+            collection: failedCollection,
+            endpoint: input.endpoint,
+            httpStatus: input.status,
+            responseBody: input.responseBody,
+            error,
+            backendCode,
+            debugId,
+            requestAuth: this.buildRequestAuthDiagnostic(input.requestHeaders),
+            isMasterCollection: true,
+            isOperationCollection: false,
+            isCriticalMaster: ERP_CRITICAL_MASTER_COLLECTIONS.has(failedCollection),
+            userVisibleSeverity: 'critical',
+        });
+
+        return this.markDiagnosticReported(error);
+    }
+
     private async parseJsonResponseSafely(response: Response): Promise<{ data: any; text: string }> {
         const text = await response.text().catch(() => '');
         if (!text) return { data: null, text: '' };
@@ -2162,6 +2251,21 @@ class ApiSyncAdapter {
                         return [];
                     }
                     const responseBody = await response.text().catch(() => '');
+                    let payload: any = null;
+                    try {
+                        payload = responseBody ? JSON.parse(responseBody) : null;
+                    } catch {
+                        payload = null;
+                    }
+                    this.throwIfKnownMasterPullFailure({
+                        operation: 'PULL_MASTERS',
+                        collection,
+                        endpoint: url.toString(),
+                        status: response.status,
+                        payload,
+                        responseBody,
+                        requestHeaders: headers,
+                    });
                     const isCriticalMaster = ERP_CRITICAL_MASTER_COLLECTIONS.has(collection);
                     const error = new Error(
                         response.status === 404 && isCriticalMaster
@@ -2339,17 +2443,15 @@ class ApiSyncAdapter {
             } catch {
                 payload = null;
             }
-            if (this.isFiscalConfigMissingResponse(fullResponse.status, payload, responseBody)) {
-                throw this.handleFiscalConfigMissing({
-                    operation: 'PULL_MASTERS',
-                    collection,
-                    endpoint: fullEndpoint,
-                    status: fullResponse.status,
-                    payload,
-                    responseBody,
-                    requestHeaders: headers,
-                });
-            }
+            this.throwIfKnownMasterPullFailure({
+                operation: 'PULL_MASTERS',
+                collection,
+                endpoint: fullEndpoint,
+                status: fullResponse.status,
+                payload,
+                responseBody,
+                requestHeaders: headers,
+            });
             const error = new Error(`ERP no expone endpoint full de maestro crítico: ${collection}`);
             reportSyncErrorDiagnostic({
                 operation: 'PULL_MASTERS',
@@ -2487,17 +2589,15 @@ class ApiSyncAdapter {
                         } catch {
                             retryPayload = null;
                         }
-                        if (this.isFiscalConfigMissingResponse(retryResponse.status, retryPayload, responseBody)) {
-                            throw this.handleFiscalConfigMissing({
-                                operation: 'PULL_MASTERS',
-                                collection,
-                                endpoint: url.toString(),
-                                status: retryResponse.status,
-                                payload: retryPayload,
-                                responseBody,
-                                requestHeaders: retryHeaders,
-                            });
-                        }
+                        this.throwIfKnownMasterPullFailure({
+                            operation: 'PULL_MASTERS',
+                            collection,
+                            endpoint: url.toString(),
+                            status: retryResponse.status,
+                            payload: retryPayload,
+                            responseBody,
+                            requestHeaders: retryHeaders,
+                        });
                         if (retryResponse.status === 404 && ERP_CRITICAL_MASTER_COLLECTIONS.has(collection)) {
                             return this.pullFullFallbackForCriticalMaster(collection, retryTarget, retryHeaders, retryResponse.status);
                         }
@@ -2543,17 +2643,15 @@ class ApiSyncAdapter {
                     } catch {
                         payload = null;
                     }
-                    if (this.isFiscalConfigMissingResponse(response.status, payload, responseBody)) {
-                        throw this.handleFiscalConfigMissing({
-                            operation: 'PULL_MASTERS',
-                            collection,
-                            endpoint: url.toString(),
-                            status: response.status,
-                            payload,
-                            responseBody,
-                            requestHeaders: headers,
-                        });
-                    }
+                    this.throwIfKnownMasterPullFailure({
+                        operation: 'PULL_MASTERS',
+                        collection,
+                        endpoint: url.toString(),
+                        status: response.status,
+                        payload,
+                        responseBody,
+                        requestHeaders: headers,
+                    });
                     const error = new Error(
                         response.status === 404 && isCriticalMaster
                             ? `ERP no expone endpoint de maestro crítico: ${collection}`
@@ -2823,17 +2921,15 @@ class ApiSyncAdapter {
                     } catch {
                         payload = null;
                     }
-                    if (operation === 'PULL_MASTERS' && this.isFiscalConfigMissingResponse(response.status, payload, responseBody)) {
-                        throw this.handleFiscalConfigMissing({
-                            operation,
-                            collection,
-                            endpoint,
-                            status: response.status,
-                            payload,
-                            responseBody,
-                            requestHeaders: headers,
-                        });
-                    }
+                    this.throwIfKnownMasterPullFailure({
+                        operation,
+                        collection,
+                        endpoint,
+                        status: response.status,
+                        payload,
+                        responseBody,
+                        requestHeaders: headers,
+                    });
                     const error = new Error(
                         response.status === 404 && isCriticalMaster
                             ? `ERP no expone endpoint de maestro crítico: ${collection}`

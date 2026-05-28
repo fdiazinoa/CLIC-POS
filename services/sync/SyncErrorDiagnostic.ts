@@ -15,8 +15,8 @@ export type SyncDiagnosticOperation =
     | 'REGISTER_TERMINAL';
 
 export type TerminalBindingStatus = 'UNBOUND' | 'BINDING' | 'BOUND' | 'BOUND_AUTH_MISMATCH' | 'BINDING_ERROR' | 'TOKEN_INVALID';
-export type CatalogSyncStatus = 'IDLE' | 'SYNCING' | 'SYNCED' | 'ERROR' | 'AUTH_ERROR' | 'FISCAL_CONFIG_MISSING';
-export type SalesPushStatus = 'DISABLED' | 'LOCKED_UNTIL_ERP_READY' | 'LOCKED_AUTH_REQUIRED' | 'LOCKED_FISCAL_CONFIG_REQUIRED' | 'ENABLED';
+export type CatalogSyncStatus = 'IDLE' | 'SYNCING' | 'SYNCED' | 'ERROR' | 'AUTH_ERROR' | 'FISCAL_CONFIG_MISSING' | 'ERP_MASTER_PULL_FAILED';
+export type SalesPushStatus = 'DISABLED' | 'LOCKED_UNTIL_ERP_READY' | 'LOCKED_AUTH_REQUIRED' | 'LOCKED_FISCAL_CONFIG_REQUIRED' | 'LOCKED_MASTER_SYNC_REQUIRED' | 'ENABLED';
 
 export interface SyncRequestAuthDiagnostic {
     authorizationPresent: boolean;
@@ -111,6 +111,7 @@ export interface SyncErrorDiagnostic {
     requestAuth?: SyncRequestAuthDiagnostic | null;
     authStatus?: string | null;
     backendCode?: string | null;
+    debugId?: string | null;
     nextAction?: string | null;
     fetchDiagnostic?: SyncFetchDiagnostic | null;
     fetchStage?: string | null;
@@ -185,12 +186,12 @@ const resolveBindingStatus = (): TerminalBindingStatus => {
 
 const resolveCatalogStatus = (): CatalogSyncStatus => {
     const explicit = safeLocalStorageGet(CATALOG_SYNC_STATUS_KEY) as CatalogSyncStatus | null;
-    return explicit && ['IDLE', 'SYNCING', 'SYNCED', 'ERROR', 'AUTH_ERROR', 'FISCAL_CONFIG_MISSING'].includes(explicit) ? explicit : 'IDLE';
+    return explicit && ['IDLE', 'SYNCING', 'SYNCED', 'ERROR', 'AUTH_ERROR', 'FISCAL_CONFIG_MISSING', 'ERP_MASTER_PULL_FAILED'].includes(explicit) ? explicit : 'IDLE';
 };
 
 const resolveSalesPushStatus = (target: ResolvedSyncTarget): SalesPushStatus => {
     const explicit = safeLocalStorageGet(SALES_PUSH_STATUS_KEY) as SalesPushStatus | null;
-    if (explicit && ['DISABLED', 'LOCKED_UNTIL_ERP_READY', 'LOCKED_AUTH_REQUIRED', 'LOCKED_FISCAL_CONFIG_REQUIRED', 'ENABLED'].includes(explicit)) return explicit;
+    if (explicit && ['DISABLED', 'LOCKED_UNTIL_ERP_READY', 'LOCKED_AUTH_REQUIRED', 'LOCKED_FISCAL_CONFIG_REQUIRED', 'LOCKED_MASTER_SYNC_REQUIRED', 'ENABLED'].includes(explicit)) return explicit;
     if (target.canPushOperations) return 'ENABLED';
     if (target.kind === 'ERP_ACTIVE') return 'LOCKED_UNTIL_ERP_READY';
     return 'DISABLED';
@@ -235,6 +236,7 @@ export const buildSyncErrorDiagnostic = (input: {
     requestAuth?: SyncRequestAuthDiagnostic | null;
     authStatus?: string | null;
     backendCode?: string | null;
+    debugId?: string | null;
     nextAction?: string | null;
     fetchDiagnostic?: SyncFetchDiagnostic | null;
 }): SyncErrorDiagnostic => {
@@ -299,6 +301,7 @@ export const buildSyncErrorDiagnostic = (input: {
         requestAuth: input.requestAuth || null,
         authStatus: input.authStatus || safeLocalStorageGet(SYNC_AUTH_STATUS_KEY),
         backendCode: input.backendCode || null,
+        debugId: input.debugId || null,
         nextAction: input.nextAction || null,
         fetchDiagnostic: attachedFetchDiagnostic || null,
         fetchStage: attachedFetchDiagnostic?.fetchStage || null,
@@ -323,7 +326,7 @@ export const buildSyncErrorDiagnostic = (input: {
 };
 
 export const reportSyncErrorDiagnostic = (input: Parameters<typeof buildSyncErrorDiagnostic>[0]): SyncErrorDiagnostic => {
-    if (input.collection === 'products') {
+    if (input.collection === 'products' && input.backendCode !== 'SYNC_COLLECTION_PULL_FAILED') {
         setCatalogDiagnosticStatus('ERROR');
     }
 
