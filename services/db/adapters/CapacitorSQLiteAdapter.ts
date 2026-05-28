@@ -3,7 +3,7 @@ import type { DatabaseAdapter } from '../DatabaseAdapter';
 
 const DB_NAME = 'clic_pos_native';
 const DB_VERSION = 1;
-const DOCUMENT_READ_BATCH_SIZE = 40;
+const DOCUMENT_READ_BATCH_SIZE = 15;
 const DOCUMENT_SCHEMA_MIGRATION_KEY = 'documents_schema_v2_migrated';
 const DOCUMENT_UPSERT_SQL = `
     INSERT INTO documents (collection_name, doc_id, data, sort_order, updatedAt)
@@ -456,14 +456,23 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         }
 
         console.log('[CapacitorSQLiteAdapter] Migrating legacy collection blobs to document rows...');
-        const result = await db.query('SELECT key, value FROM collections');
-        const rows = Array.isArray(result?.values) ? result.values : [];
+        const keyResult = await db.query('SELECT key FROM collections ORDER BY key ASC');
+        const keyRows = Array.isArray(keyResult?.values) ? keyResult.values : [];
         let migratedRows = 0;
 
-        for (const row of rows) {
-            const collectionName = row && typeof row === 'object' ? String((row as Record<string, unknown>).key || '') : '';
+        for (const keyRow of keyRows) {
+            const collectionName = keyRow && typeof keyRow === 'object'
+                ? String((keyRow as Record<string, unknown>).key || '')
+                : '';
+            if (!collectionName) continue;
+
+            const result = await db.query(
+                'SELECT key, value FROM collections WHERE key = ? LIMIT 1',
+                [collectionName]
+            );
+            const row = Array.isArray(result?.values) ? result.values[0] : null;
             const rawValue = row && typeof row === 'object' ? (row as Record<string, unknown>).value : null;
-            if (!collectionName || typeof rawValue !== 'string' || !rawValue.trim()) continue;
+            if (typeof rawValue !== 'string' || !rawValue.trim()) continue;
 
             try {
                 const parsed = JSON.parse(rawValue);
