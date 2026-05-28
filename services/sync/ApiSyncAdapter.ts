@@ -1247,6 +1247,15 @@ class ApiSyncAdapter {
         );
     }
 
+    private normalizeBackendNextAction(payload: any): string | null {
+        return pickFirstString(
+            payload?.nextAction,
+            payload?.next_action,
+            payload?.error?.nextAction,
+            payload?.error?.next_action,
+        );
+    }
+
     private isDeviceTokenInvalidResponse(status: number, payload: any, rawBody = ''): boolean {
         if (status !== 403) return false;
         const backendCode = this.normalizeBackendCode(payload);
@@ -1303,7 +1312,11 @@ class ApiSyncAdapter {
         const canIssueNonFiscalSales = safeLocalStorageGet('canIssueNonFiscalSales') === 'true'
             || safeLocalStorageGet('clic_can_issue_non_fiscal_sales') === 'true';
         const backendCode = this.normalizeBackendCode(input.payload) || 'FISCAL_CONFIG_MISSING';
-        const baseMessage = 'FISCAL_CONFIG_MISSING: Falta configuración fiscal para esta terminal. Configura las series, rangos y consecutivos en el ERP/Cloud-Admin.';
+        const backendNextAction = this.normalizeBackendNextAction(input.payload);
+        const nextAction = canIssueNonFiscalSales
+            ? 'CONFIGURE_FISCAL_OR_USE_NON_FISCAL_POLICY'
+            : (backendNextAction || 'CONFIGURE_TERMINAL_FISCAL_SETTINGS');
+        const baseMessage = 'FISCAL_CONFIG_MISSING: Falta configuración fiscal para esta terminal. Configura las series, rangos y consecutivos en el ERP.';
         const error = new Error(canIssueNonFiscalSales
             ? `${baseMessage} Las ventas no fiscales pueden habilitarse según la política de esta terminal.`
             : baseMessage);
@@ -1316,9 +1329,7 @@ class ApiSyncAdapter {
             catalogSyncStatus: 'FISCAL_CONFIG_MISSING',
             salesPushStatus: 'LOCKED_FISCAL_CONFIG_REQUIRED',
             canIssueNonFiscalSales,
-            nextAction: canIssueNonFiscalSales
-                ? 'CONFIGURE_FISCAL_OR_USE_NON_FISCAL_POLICY'
-                : 'CONFIGURE_FISCAL_SERIES_RANGES_SEQUENCES',
+            nextAction,
         });
 
         reportSyncErrorDiagnostic({
@@ -1329,9 +1340,7 @@ class ApiSyncAdapter {
             responseBody: input.responseBody,
             error,
             backendCode,
-            nextAction: canIssueNonFiscalSales
-                ? 'CONFIGURE_FISCAL_OR_USE_NON_FISCAL_POLICY'
-                : 'CONFIGURE_FISCAL_SERIES_RANGES_SEQUENCES',
+            nextAction,
             requestAuth: this.buildRequestAuthDiagnostic(input.requestHeaders),
             isMasterCollection: true,
             isOperationCollection: false,
