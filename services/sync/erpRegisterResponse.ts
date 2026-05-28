@@ -178,7 +178,8 @@ export const resolveIncomingSyncProfileFromRegister = (
         merged.erpTerminalId,
         resolveRegisterErpTerminalId(response, fallbacks),
         fallbacks.erpTerminalId,
-        fallbacks.localTerminalId,
+        (profileCandidate as Partial<SyncProfile>).erpTerminalId,
+        asObject(profileCandidate).erp_terminal_id,
     );
     merged.localTerminalId = pickAuthString(
         merged.localTerminalId,

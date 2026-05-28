@@ -276,8 +276,22 @@ export function saveSyncProfileFromContract(
     const enrichedIncoming: Partial<SyncProfile> = {
         ...incoming,
         contractSource,
-        erpTerminalId: incoming.erpTerminalId || chainContext.erpTerminalId || undefined,
-        localTerminalId: incoming.localTerminalId || chainContext.localTerminalId || chainContext.terminalName || undefined,
+        erpTerminalId:
+            incoming.erpTerminalId
+            || chainContext.erpTerminalId
+            || existingProfile?.erpTerminalId
+            || undefined,
+        localTerminalId:
+            incoming.localTerminalId
+            || chainContext.localTerminalId
+            || chainContext.terminalName
+            || existingProfile?.localTerminalId
+            || undefined,
+        localTenantId:
+            incoming.localTenantId
+            || existingProfile?.localTenantId
+            || existingProfile?.erpTenantId
+            || undefined,
     };
 
     const incomingProfile = normalizeProfile(enrichedIncoming);
@@ -285,33 +299,31 @@ export function saveSyncProfileFromContract(
     const incomingPriority = getSyncProfileSourcePriority(incomingProfile.contractSource);
     const chainValidation = validateSyncProfileChainUpgrade(existingProfile, incomingProfile, chainContext);
     const mismatchDetected = hasProfileMismatch(existingProfile, incomingProfile);
-    const shouldPreserveExisting = Boolean(
-        existingProfile
-        && !chainValidation.allowed
-        && existingPriority > incomingPriority
-    );
-    const shouldReplaceWithErpRegister = Boolean(
-        existingProfile
-        && chainValidation.allowed
-        && incomingProfile.contractSource === 'ERP_REGISTER'
-        && incomingPriority >= getSyncProfileSourcePriority('ERP_REGISTER')
-    );
-    const savedProfile = shouldPreserveExisting && !shouldReplaceWithErpRegister
-        ? existingProfile!
-        : incomingProfile;
+    const isErpRegisterIncoming =
+        contractSource === 'ERP_REGISTER'
+        || incomingProfile.contractSource === 'ERP_REGISTER';
+    const shouldSaveIncoming = !existingProfile
+        || incomingPriority >= existingPriority
+        || isErpRegisterIncoming
+        || chainValidation.allowed;
+    const savedProfile = shouldSaveIncoming
+        ? incomingProfile
+        : existingProfile!;
 
-    const diagnostic: SyncProfilePersistenceDiagnostic = {
-        contractSource: savedProfile.contractSource || contractSource,
-        existingProfile,
-        incomingProfile,
-        savedProfile,
-        mismatchDetected: mismatchDetected || shouldPreserveExisting,
-        mismatchFixed: mismatchDetected && !shouldPreserveExisting && chainValidation.allowed,
-        profileSourcePriority: getSyncProfileSourcePriority(savedProfile.contractSource),
-        fixedAt: new Date().toISOString(),
-    };
+    if (!chainValidation.allowed) {
+        console.warn('[SYNC_PROFILE_CHAIN_ADVISORY]', {
+            existingProfile,
+            incomingProfile,
+            existingPriority,
+            incomingPriority,
+            chainValidation,
+            shouldSaveIncoming,
+        });
+    }
 
-    if (shouldPreserveExisting && !shouldReplaceWithErpRegister) {
+    if (shouldSaveIncoming) {
+        saveSyncProfile(incomingProfile);
+    } else {
         console.warn('[SYNC_PROFILE_LOWER_PRIORITY_IGNORED]', {
             existingSource: existingProfile?.contractSource,
             existingPriority,
@@ -319,32 +331,20 @@ export function saveSyncProfileFromContract(
             incomingPriority,
             chainValidation,
         });
-    } else if (!chainValidation.allowed) {
-        if (incomingPriority >= existingPriority) {
-            console.warn('[SYNC_PROFILE_CHAIN_OVERRIDDEN_BY_PRIORITY]', {
-                existingProfile,
-                incomingProfile,
-                existingPriority,
-                incomingPriority,
-                chainValidation,
-            });
-            saveSyncProfile(incomingProfile);
-        } else {
-            console.warn('[SYNC_PROFILE_CHAIN_VALIDATION_FAILED]', {
-                existingProfile,
-                incomingProfile,
-                chainValidation,
-            });
-            writeProfileMismatchDiagnostic(diagnostic);
-            throw new Error(
-                `Chain validation failed — ${chainValidation.reason || 'profile chain mismatch'}`
-            );
-        }
-    } else {
-        saveSyncProfile(incomingProfile);
     }
 
-    if (mismatchDetected) {
+    const diagnostic: SyncProfilePersistenceDiagnostic = {
+        contractSource: savedProfile.contractSource || contractSource,
+        existingProfile,
+        incomingProfile,
+        savedProfile,
+        mismatchDetected: mismatchDetected || !shouldSaveIncoming,
+        mismatchFixed: mismatchDetected && shouldSaveIncoming,
+        profileSourcePriority: getSyncProfileSourcePriority(savedProfile.contractSource),
+        fixedAt: new Date().toISOString(),
+    };
+
+    if (mismatchDetected && shouldSaveIncoming) {
         console.warn('[SYNC_PROFILE_MISMATCH_FIXED]', {
             contractSource,
             existingProfile,
