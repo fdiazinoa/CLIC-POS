@@ -67,7 +67,7 @@ resolve_next_version_code() {
     if [[ "${metadata_version}" =~ ^[0-9]+$ ]] && (( metadata_version > max_version )); then
       max_version="${metadata_version}"
     fi
-  done < <(find -L "${WORKSPACE_ROOT}/_worktrees/CLIC-POS" "${HOME}/CLIC-POS-Releases" -path '*/output-metadata*.json' -type f 2>/dev/null | sort -u)
+  done < <(find -L "${WORKSPACE_ROOT}/_worktrees/CLIC-POS" -path '*/android/app/build/outputs/apk/release/output-metadata*.json' -type f 2>/dev/null | sort -u)
 
   echo $((max_version + 1))
 }
@@ -96,31 +96,6 @@ resolve_apksigner() {
   [[ -x "${apksigner}" ]] || fail "No encontré apksigner ejecutable en ${apksigner}"
 
   echo "${apksigner}"
-}
-
-ensure_public_release_output_dir() {
-  local public_dir="$1"
-  local worktree_link="$2"
-
-  mkdir -p "${public_dir}"
-  mkdir -p "$(dirname "${worktree_link}")"
-
-  if [[ -L "${worktree_link}" ]]; then
-    local current_target
-    current_target="$(readlink "${worktree_link}")"
-    if [[ "${current_target}" != "${public_dir}" ]]; then
-      fail "Symlink inesperado en ${worktree_link} -> ${current_target}"
-    fi
-    return 0
-  fi
-
-  if [[ -d "${worktree_link}" ]]; then
-    info "Migrando APKs release a ${public_dir} (drag-and-drop Genymotion en macOS)"
-    rsync -a "${worktree_link}/" "${public_dir}/"
-    rm -rf "${worktree_link}"
-  fi
-
-  ln -sfn "${public_dir}" "${worktree_link}"
 }
 
 git -C "${REPO_ROOT}" fetch origin --quiet
@@ -213,18 +188,14 @@ require_file "${METADATA_SRC}"
 info "Verificando firma"
 "${APKSIGNER}" verify --print-certs "${APK_SRC}"
 
-PUBLIC_RELEASE_DIR="${HOME}/CLIC-POS-Releases"
-WORKTREE_RELEASE_LINK="${CANONICAL_BUILD_WORKTREE}/android/app/build/outputs/apk/release"
-ensure_public_release_output_dir "${PUBLIC_RELEASE_DIR}" "${WORKTREE_RELEASE_LINK}"
-
-DEST_DIR="${PUBLIC_RELEASE_DIR}"
+DEST_DIR="${CANONICAL_BUILD_WORKTREE}/android/app/build/outputs/apk/release"
 mkdir -p "${DEST_DIR}"
 
 APK_DEST="${DEST_DIR}/Clic-Pos-${VERSION_NAME}-release.apk"
 METADATA_DEST="${DEST_DIR}/output-metadata-${VERSION_NAME}.json"
 REPORT_DEST="${DEST_DIR}/release-report-${VERSION_NAME}.txt"
 
-cp -X "${APK_SRC}" "${APK_DEST}"
+cp "${APK_SRC}" "${APK_DEST}"
 cp "${METADATA_SRC}" "${METADATA_DEST}"
 
 cat > "${REPORT_DEST}" <<EOF
@@ -235,8 +206,6 @@ sourceBranch=${SOURCE_BRANCH}
 sourceCommit=${SOURCE_COMMIT}
 sourceCommitShort=${SOURCE_COMMIT_SHORT}
 canonicalBuildWorktree=${CANONICAL_BUILD_WORKTREE}
-releaseOutputDir=${PUBLIC_RELEASE_DIR}
-worktreeReleaseLink=${WORKTREE_RELEASE_LINK}
 artifact=${APK_DEST}
 metadata=${METADATA_DEST}
 builtAt=$(date '+%Y-%m-%d %H:%M:%S %Z')
@@ -244,9 +213,7 @@ EOF
 
 info "APK listo"
 echo "APK=${APK_DEST}"
-echo "WORKTREE_RELEASE_LINK=${WORKTREE_RELEASE_LINK}"
 echo "METADATA=${METADATA_DEST}"
 echo "REPORT=${REPORT_DEST}"
 echo "SOURCE_COMMIT=${SOURCE_COMMIT_SHORT}"
 echo "VERSION_NAME=${VERSION_NAME}"
-echo "DRAG_DROP=Arrastra desde Finder: ${WORKTREE_RELEASE_LINK} (symlink a ${PUBLIC_RELEASE_DIR})"
