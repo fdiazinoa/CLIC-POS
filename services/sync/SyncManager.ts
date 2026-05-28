@@ -4163,6 +4163,14 @@ class SyncManager {
             logSkippedNonMasterPull(collection, target.kind);
             return 0;
         }
+        if (target.kind !== 'POS_MASTER' && isErpOperationCollection(collection)) {
+            logSkippedNonMasterPull(collection, target.kind, 'OPERATION_PULL_REQUIRES_POS_MASTER');
+            return 0;
+        }
+        if (target.kind === 'NONE' && !target.canPullMasters) {
+            logSkippedNonMasterPull(collection, target.kind, 'SYNC_TARGET_NOT_CONFIGURED');
+            return 0;
+        }
         if (isErpMasterPullCollection(collection) && !target.canPullMasters) {
             console.warn(
                 `[SYNC_ROUTER] pullCatalog skipped collection=${collection} channel=${target.kind} dataMaster=${target.dataMaster}. POS local remains source of truth.`
@@ -4619,14 +4627,8 @@ class SyncManager {
             }
         }
 
-        // 2. Sync Operations (Master Only - PULL)
-        if (permissionService.isMasterTerminal() && target.kind !== 'POS_CLOUD_STAGING') {
-            if (target.kind === 'ERP_ACTIVE') {
-                for (const collection of operations) {
-                    logSkippedNonMasterPull(collection, target.kind, 'ERP_OPERATIONS_ARE_PUSH_ONLY');
-                }
-                return results;
-            }
+        // 2. Sync Operations (Master Only - PULL via local POS master)
+        if (permissionService.isMasterTerminal() && target.kind === 'POS_MASTER') {
             for (const collection of operations) {
                 try {
                     // Master pulls operations from Server to see what Slaves have sent

@@ -26,6 +26,7 @@ import {
 } from './SyncErrorDiagnostic';
 import { requestJson } from '../network/httpClient';
 import { clearStoredSyncToken, readTerminalCredentialsSync, saveTerminalCredentialsSync } from './TerminalCredentialStore';
+import { isLoopbackHost, isNativeAndroidRuntime } from '../../utils/erpBaseUrl';
 
 /**
  * API Sync Adapter
@@ -1658,6 +1659,42 @@ class ApiSyncAdapter {
         return localMasterTarget ? { ...localMasterTarget, kind: 'POS_MASTER' } : null;
     }
 
+    private canUseLocalMasterSyncFallback(): boolean {
+        const routedTarget = resolveSyncTarget();
+        if (routedTarget.kind !== 'POS_MASTER') {
+            return false;
+        }
+
+        if (!this.config?.masterUrl) {
+            return false;
+        }
+
+        try {
+            const hostname = new URL(this.config.masterUrl).hostname;
+            if (isNativeAndroidRuntime() && isLoopbackHost(hostname)) {
+                return false;
+            }
+        } catch {
+            return false;
+        }
+
+        return true;
+    }
+
+    private buildEmptyDeltaResult(sinceVersion?: number): {
+        items: any[];
+        serverTime: string;
+        isFullDownload: boolean;
+        latestVersion?: number;
+    } {
+        return {
+            items: [],
+            serverTime: new Date().toISOString(),
+            isFullDownload: false,
+            latestVersion: sinceVersion || 0,
+        };
+    }
+
     private async authenticateOperationalTarget(
         force = false,
         channel: CircuitBreakerChannel = 'background',
@@ -2321,6 +2358,16 @@ class ApiSyncAdapter {
             throw new Error('Sync configuration missing');
         }
 
+        if (!this.canUseLocalMasterSyncFallback()) {
+            const routedTarget = resolveSyncTarget();
+            logSkippedNonMasterPull(
+                collection,
+                'PULL_MASTERS',
+                `${routedTarget.kind}:LOCAL_MASTER_SYNC_UNAVAILABLE`,
+            );
+            return [];
+        }
+
         if (!this.authToken) {
             try {
                 await this.authenticate();
@@ -2707,6 +2754,16 @@ class ApiSyncAdapter {
             throw new Error('Sync configuration missing');
         }
 
+        if (!this.canUseLocalMasterSyncFallback()) {
+            const routedTarget = resolveSyncTarget();
+            logSkippedNonMasterPull(
+                collection,
+                'PULL_MASTERS',
+                `${routedTarget.kind}:LOCAL_MASTER_SYNC_UNAVAILABLE`,
+            );
+            return this.buildEmptyDeltaResult(sinceVersion);
+        }
+
         if (!this.authToken) {
             await this.authenticate();
         }
@@ -2990,6 +3047,10 @@ class ApiSyncAdapter {
         }
 
         if (!this.config) {
+            return null;
+        }
+
+        if (!this.canUseLocalMasterSyncFallback()) {
             return null;
         }
 

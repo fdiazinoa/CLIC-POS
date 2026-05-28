@@ -2,7 +2,7 @@ import {
     validateSyncProfileChainUpgrade,
     type SyncProfileChainValidationContext,
 } from './erpRegisterResponse';
-import { normalizeErpBaseUrl } from '../../utils/erpBaseUrl';
+import { normalizeErpBaseUrl, resolveErpBaseUrl } from '../../utils/erpBaseUrl';
 
 export type ContractedProduct = 'POS_ONLY' | 'POS_ERP';
 export type PosRuntime = 'LOCAL_SQLITE' | 'MASTER' | 'SLAVE';
@@ -267,6 +267,28 @@ export function saveSyncProfileFromContract(
     const enrichedIncoming: Partial<SyncProfile> = {
         ...incoming,
         contractSource,
+        erpBaseUrl:
+            incoming.erpBaseUrl
+            || incoming.cloudBaseUrl
+            || existingProfile?.erpBaseUrl
+            || existingProfile?.cloudBaseUrl
+            || undefined,
+        cloudBaseUrl:
+            incoming.cloudBaseUrl
+            || incoming.erpBaseUrl
+            || existingProfile?.cloudBaseUrl
+            || existingProfile?.erpBaseUrl
+            || undefined,
+        erpTenantId:
+            incoming.erpTenantId
+            || existingProfile?.erpTenantId
+            || existingProfile?.cloudTenantId
+            || undefined,
+        cloudTenantId:
+            incoming.cloudTenantId
+            || existingProfile?.cloudTenantId
+            || existingProfile?.erpTenantId
+            || undefined,
         erpTerminalId:
             incoming.erpTerminalId
             || chainContext.erpTerminalId
@@ -282,6 +304,10 @@ export function saveSyncProfileFromContract(
             incoming.localTenantId
             || existingProfile?.localTenantId
             || existingProfile?.erpTenantId
+            || undefined,
+        localStoreId:
+            incoming.localStoreId
+            || existingProfile?.localStoreId
             || undefined,
     };
 
@@ -448,6 +474,13 @@ function normalizeProfile(input: Partial<SyncProfile>): SyncProfile {
             ? 'POS_MASTER'
             : input.dataMaster || 'POS';
 
+    const resolvedErpBaseUrl = normalizeBaseUrl(input.erpBaseUrl || input.cloudBaseUrl)
+        || (contractedProduct === 'POS_ERP' ? normalizeErpBaseUrl(resolveErpBaseUrl()) || undefined : undefined);
+    const resolvedErpTerminalId = input.erpTerminalId
+        || (contractedProduct === 'POS_ERP'
+            ? firstValue(readStorage('clic_erp_sync_terminal_id'), readStorage('erp_terminal_id'))
+            : undefined);
+
     return {
         contractedProduct,
         posRuntime,
@@ -462,11 +495,11 @@ function normalizeProfile(input: Partial<SyncProfile>): SyncProfile {
         localTenantId: input.localTenantId,
         localStoreId: input.localStoreId,
         localTerminalId: input.localTerminalId,
-        cloudBaseUrl: normalizeBaseUrl(input.cloudBaseUrl || input.erpBaseUrl),
-        erpBaseUrl: normalizeBaseUrl(input.erpBaseUrl || input.cloudBaseUrl),
-        cloudTenantId: input.cloudTenantId,
-        erpTenantId: input.erpTenantId,
-        erpTerminalId: input.erpTerminalId,
+        cloudBaseUrl: resolvedErpBaseUrl,
+        erpBaseUrl: resolvedErpBaseUrl,
+        cloudTenantId: input.cloudTenantId || input.erpTenantId,
+        erpTenantId: input.erpTenantId || input.cloudTenantId,
+        erpTerminalId: resolvedErpTerminalId,
         masterUrl: normalizeBaseUrl(input.masterUrl),
         masterTerminalId: input.masterTerminalId,
         masterReady: Boolean(input.masterReady),

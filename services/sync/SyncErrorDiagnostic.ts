@@ -224,6 +224,32 @@ export const isStaleChainValidationMessage = (message: string | null | undefined
     return message.trim().toLowerCase().startsWith('chain validation failed');
 };
 
+export const isStaleLocalhostSyncMessage = (message: string | null | undefined): boolean => {
+    if (!message) return false;
+    const normalized = message.trim().toLowerCase();
+    return normalized.includes('localhost')
+        || normalized.includes('127.0.0.1')
+        || normalized.includes('::1');
+};
+
+const isRecoverableOperationCollectionDiagnostic = (
+    diagnostic: SyncErrorDiagnostic | null | undefined,
+): boolean => {
+    const collection = String(diagnostic?.collection || '').trim();
+    if (!collection) return false;
+
+    const operationCollections = new Set([
+        'inventoryLedger',
+        'zReports',
+        'cashMovements',
+        'transactions',
+        'wallet_transactions',
+        'loyalty_events',
+    ]);
+
+    return operationCollections.has(collection);
+};
+
 const hasActiveTerminalBinding = (): boolean => {
     const bindingStatus = safeLocalStorageGet(TERMINAL_BINDING_STATUS_KEY);
     if (bindingStatus === 'BOUND') return true;
@@ -237,9 +263,25 @@ const hasActiveTerminalBinding = (): boolean => {
 export const isRecoverableStaleSyncDiagnostic = (
     diagnostic: SyncErrorDiagnostic | null | undefined,
 ): boolean => {
-    if (!isStaleChainValidationMessage(diagnostic?.errorMessage)) return false;
-    if (hasActiveTerminalBinding()) return true;
-    return resolveCatalogStatus() === 'SYNCED';
+    if (isStaleChainValidationMessage(diagnostic?.errorMessage)) {
+        if (hasActiveTerminalBinding()) return true;
+        return resolveCatalogStatus() === 'SYNCED';
+    }
+
+    if (isStaleLocalhostSyncMessage(diagnostic?.errorMessage)) {
+        const syncProfile = loadSyncProfile();
+        const catalogSynced = resolveCatalogStatus() === 'SYNCED';
+        const bound = hasActiveTerminalBinding();
+        const erpContract = syncProfile.contractedProduct === 'POS_ERP';
+        const targetNotConfigured = diagnostic?.resolvedTargetKind === 'NONE';
+        const operationCollection = isRecoverableOperationCollectionDiagnostic(diagnostic);
+
+        if (bound && catalogSynced && (erpContract || operationCollection || targetNotConfigured)) {
+            return true;
+        }
+    }
+
+    return false;
 };
 
 export const clearStaleSyncErrorDiagnosticIfRecovered = (): boolean => {
@@ -418,6 +460,20 @@ export const reportSyncErrorDiagnostic = (input: Parameters<typeof buildSyncErro
         && (resolveCatalogStatus() === 'SYNCED' || hasActiveTerminalBinding())
     ) {
         console.warn('[SYNC_DIAGNOSTIC] Ignoring stale chain validation error report.');
+        clearSyncErrorDiagnostic();
+        return null;
+    }
+
+    if (
+        isStaleLocalhostSyncMessage(incomingErrorMessage)
+        && (resolveCatalogStatus() === 'SYNCED' || hasActiveTerminalBinding())
+        && (
+            loadSyncProfile().contractedProduct === 'POS_ERP'
+            || isRecoverableOperationCollectionDiagnostic({ collection: input.collection || null } as SyncErrorDiagnostic)
+            || resolveSyncTarget().kind === 'NONE'
+        )
+    ) {
+        console.warn('[SYNC_DIAGNOSTIC] Ignoring stale localhost sync error report.');
         clearSyncErrorDiagnostic();
         return null;
     }
