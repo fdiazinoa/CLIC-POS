@@ -192,11 +192,16 @@ DEST_DIR="${CANONICAL_BUILD_WORKTREE}/android/app/build/outputs/apk/release"
 mkdir -p "${DEST_DIR}"
 
 APK_DEST="${DEST_DIR}/Clic-Pos-${VERSION_NAME}-release.apk"
+DESKTOP_APK="${HOME}/Desktop/Clic-Pos-${VERSION_NAME}-release.apk"
 METADATA_DEST="${DEST_DIR}/output-metadata-${VERSION_NAME}.json"
 REPORT_DEST="${DEST_DIR}/release-report-${VERSION_NAME}.txt"
 
 cp "${APK_SRC}" "${APK_DEST}"
+cp "${APK_SRC}" "${DESKTOP_APK}"
 cp "${METADATA_SRC}" "${METADATA_DEST}"
+
+# macOS extended attributes (com.apple.provenance) break Genymotion drag-and-drop.
+xattr -cr "${APK_DEST}" "${DESKTOP_APK}" 2>/dev/null || true
 
 cat > "${REPORT_DEST}" <<EOF
 versionCode=${NEXT_VERSION_CODE}
@@ -213,6 +218,7 @@ EOF
 
 info "APK listo"
 echo "APK=${APK_DEST}"
+echo "DESKTOP_APK=${DESKTOP_APK}"
 echo "METADATA=${METADATA_DEST}"
 echo "REPORT=${REPORT_DEST}"
 echo "SOURCE_COMMIT=${SOURCE_COMMIT_SHORT}"
