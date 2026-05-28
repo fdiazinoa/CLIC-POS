@@ -156,6 +156,7 @@ import {
 import {
   SYNC_DIAGNOSTIC_EVENT,
   SYNC_DIAGNOSTIC_STORAGE_KEY,
+  clearStaleSyncErrorDiagnosticIfRecovered,
   clearSyncErrorDiagnostic,
   isRecoverableStaleSyncDiagnostic,
   reportSyncErrorDiagnostic,
@@ -659,6 +660,11 @@ const hydrateNativeCatalogFromDb = async (
       warehouses: Array.isArray(dbWarehouses) ? dbWarehouses.length : 0,
       productStocks: Array.isArray(dbProductStocks) ? dbProductStocks.length : 0,
     });
+
+    if (Array.isArray(dbProducts) && dbProducts.length > 0) {
+      setCatalogDiagnosticStatus('SYNCED');
+      clearStaleSyncErrorDiagnosticIfRecovered();
+    }
   } catch (error) {
     console.warn(`[BOOT] Native catalog hydration failed (${reason}):`, error);
   }
@@ -1015,7 +1021,12 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     const handleDiagnostic = (event: Event) => {
       const detail = (event as CustomEvent<SyncErrorDiagnostic | null>).detail;
-      setSyncDiagnostic(detail || null);
+      if (!detail || isRecoverableStaleSyncDiagnostic(detail)) {
+        clearSyncErrorDiagnostic();
+        setSyncDiagnostic(null);
+        return;
+      }
+      setSyncDiagnostic(detail);
     };
 
     window.addEventListener(SYNC_DIAGNOSTIC_EVENT, handleDiagnostic as EventListener);
@@ -4115,11 +4126,6 @@ const AppContent: React.FC = () => {
           }
           void syncManager.fullPull().catch((pullError) => {
             console.warn('⚠️ Background master sync failed after terminal pairing; continuing with local snapshot/config.', pullError);
-            reportSyncErrorDiagnostic({
-              operation: 'PULL_MASTERS',
-              collection: 'products',
-              error: pullError,
-            });
           });
         } catch (pullError) {
           console.warn('⚠️ Initial snapshot persistence failed after terminal pairing; continuing with local config.', pullError);
@@ -7877,6 +7883,7 @@ const AppContent: React.FC = () => {
         setProducts(freshProducts);
       }
       setCatalogDiagnosticStatus('SYNCED');
+      clearSyncErrorDiagnostic();
       setSyncDiagnostic(null);
     } catch (error) {
       setCatalogDiagnosticStatus('ERROR');
@@ -7902,7 +7909,10 @@ const AppContent: React.FC = () => {
         )}
         <SyncErrorDiagnosticModal
           diagnostic={syncDiagnostic}
-          onClose={() => setSyncDiagnostic(null)}
+          onClose={() => {
+            clearSyncErrorDiagnostic();
+            setSyncDiagnostic(null);
+          }}
           onRetryProducts={handleRetryProductSyncDiagnostic}
         />
         <div

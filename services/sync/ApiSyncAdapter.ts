@@ -21,7 +21,8 @@ import {
     setSalesPushDiagnosticStatus,
     setSyncAuthDiagnosticStatus,
     setTerminalBindingDiagnosticStatus,
-    type SyncDiagnosticOperation
+    type SyncDiagnosticOperation,
+    type SyncFetchDiagnostic,
 } from './SyncErrorDiagnostic';
 import { requestJson } from '../network/httpClient';
 import { clearStoredSyncToken, readTerminalCredentialsSync, saveTerminalCredentialsSync } from './TerminalCredentialStore';
@@ -1067,6 +1068,13 @@ class ApiSyncAdapter {
         if (!target.useLocalTarget && tenantId) {
             headers['X-Tenant-Id'] = tenantId;
             headers['X-POS-Tenant-Id'] = tenantId;
+        }
+
+        if (!target.useLocalTarget) {
+            const deviceToken = resolveSyncDeviceToken().token;
+            if (deviceToken) {
+                headers['X-Device-Token'] = deviceToken;
+            }
         }
 
         return headers;
@@ -2292,14 +2300,19 @@ class ApiSyncAdapter {
                 return data.items || [];
             } catch (error) {
                 console.error(`❌ ApiSyncAdapter: Error pulling ${collection} from ERP target:`, error);
-                reportSyncErrorDiagnostic({
-                    operation: 'PULL_MASTERS',
-                    collection,
-                    endpoint: url.toString(),
-                    httpStatus: error instanceof TypeError ? 'network error' : null,
-                    error,
-                    requestAuth: this.buildRequestAuthDiagnostic(this.buildOperationalHeaders(target, target.token)),
-                });
+                if (!this.wasDiagnosticReported(error)) {
+                    reportSyncErrorDiagnostic({
+                        operation: 'PULL_MASTERS',
+                        collection,
+                        endpoint: url.toString(),
+                        httpStatus: error instanceof TypeError ? 'network error' : null,
+                        error,
+                        requestAuth: this.buildRequestAuthDiagnostic(this.buildOperationalHeaders(target, target.token)),
+                        fetchDiagnostic: error && typeof error === 'object'
+                            ? ((error as any).__syncFetchDiagnostic as SyncFetchDiagnostic | undefined)
+                            : undefined,
+                    });
+                }
                 throw error;
             }
         }

@@ -4451,11 +4451,13 @@ class SyncManager {
             return items.length;
         } catch (error) {
             console.error(`❌ SyncManager: Error pulling ${collection}:`, error);
-            reportSyncErrorDiagnostic({
-                operation: 'PULL_MASTERS',
-                collection,
-                error,
-            });
+            if (!(error && typeof error === 'object' && (error as any).__syncDiagnosticReported)) {
+                reportSyncErrorDiagnostic({
+                    operation: 'PULL_MASTERS',
+                    collection,
+                    error,
+                });
+            }
             throw error;
         } finally {
             if (this.watchdogTimer) {

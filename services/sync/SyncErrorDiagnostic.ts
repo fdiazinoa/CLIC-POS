@@ -219,14 +219,12 @@ export const clearSyncErrorDiagnostic = (): void => {
     }
 };
 
-export const isRecoverableStaleSyncDiagnostic = (
-    diagnostic: SyncErrorDiagnostic | null | undefined,
-): boolean => {
-    if (!diagnostic?.errorMessage) return false;
+export const isStaleChainValidationMessage = (message: string | null | undefined): boolean => {
+    if (!message) return false;
+    return message.trim().toLowerCase().startsWith('chain validation failed');
+};
 
-    const message = diagnostic.errorMessage.trim().toLowerCase();
-    if (!message.startsWith('chain validation failed')) return false;
-
+const hasActiveTerminalBinding = (): boolean => {
     const bindingStatus = safeLocalStorageGet(TERMINAL_BINDING_STATUS_KEY);
     if (bindingStatus === 'BOUND') return true;
 
@@ -234,6 +232,61 @@ export const isRecoverableStaleSyncDiagnostic = (
         safeLocalStorageGet('clic_erp_sync_terminal_id')
         || safeLocalStorageGet('active_terminal_id')
     );
+};
+
+export const isRecoverableStaleSyncDiagnostic = (
+    diagnostic: SyncErrorDiagnostic | null | undefined,
+): boolean => {
+    if (!isStaleChainValidationMessage(diagnostic?.errorMessage)) return false;
+    if (hasActiveTerminalBinding()) return true;
+    return resolveCatalogStatus() === 'SYNCED';
+};
+
+export const clearStaleSyncErrorDiagnosticIfRecovered = (): boolean => {
+    try {
+        const stored = safeLocalStorageGet(SYNC_DIAGNOSTIC_STORAGE_KEY);
+        if (!stored) return false;
+        const parsed = JSON.parse(stored) as SyncErrorDiagnostic;
+        if (!isRecoverableStaleSyncDiagnostic(parsed)) return false;
+        clearSyncErrorDiagnostic();
+        return true;
+    } catch {
+        return false;
+    }
+};
+
+const resolveDiagnosticErrorMessage = (
+    input: Parameters<typeof buildSyncErrorDiagnostic>[0],
+    error: Error | null,
+    attachedFetchDiagnostic: SyncFetchDiagnostic | null | undefined,
+): string | null => {
+    const rawErrorMessage = error?.message || (typeof input.error === 'string' ? input.error : null);
+    const fetchErrorMessage = attachedFetchDiagnostic?.errorMessage || null;
+
+    if (isStaleChainValidationMessage(rawErrorMessage)) {
+        return isStaleChainValidationMessage(fetchErrorMessage) ? null : fetchErrorMessage;
+    }
+
+    return rawErrorMessage || fetchErrorMessage || null;
+};
+
+const shouldSuppressSyncErrorDiagnostic = (diagnostic: SyncErrorDiagnostic): boolean => {
+    if (isRecoverableStaleSyncDiagnostic(diagnostic)) return true;
+    if (diagnostic.userVisibleSeverity === 'info') return true;
+    return false;
+};
+
+const markInputErrorReported = (error: unknown): void => {
+    if (!error || typeof error !== 'object') return;
+    try {
+        Object.defineProperty(error, '__syncDiagnosticReported', {
+            value: true,
+            configurable: true,
+            enumerable: false,
+        });
+    } catch {
+        (error as { __syncDiagnosticReported?: boolean }).__syncDiagnosticReported = true;
+    }
 };
 
 export const setSalesPushDiagnosticStatus = (status: SalesPushStatus): void => {
@@ -346,7 +399,7 @@ export const buildSyncErrorDiagnostic = (input: {
         endpoint: sanitizeEndpoint(input.endpoint || attachedFetchDiagnostic?.endpoint),
         httpStatus: input.httpStatus ?? null,
         responseBody: truncateBody(input.responseBody),
-        errorMessage: error?.message || (typeof input.error === 'string' ? input.error : null),
+        errorMessage: resolveDiagnosticErrorMessage(input, error, attachedFetchDiagnostic),
         errorStack: error?.stack || null,
         timestamp: new Date().toISOString(),
         appVersion: safeLocalStorageGet('clic_pos_app_version') || safeLocalStorageGet('apk_version_name'),
@@ -356,12 +409,29 @@ export const buildSyncErrorDiagnostic = (input: {
     };
 };
 
-export const reportSyncErrorDiagnostic = (input: Parameters<typeof buildSyncErrorDiagnostic>[0]): SyncErrorDiagnostic => {
+export const reportSyncErrorDiagnostic = (input: Parameters<typeof buildSyncErrorDiagnostic>[0]): SyncErrorDiagnostic | null => {
+    const incomingErrorMessage = input.error instanceof Error
+        ? input.error.message
+        : (typeof input.error === 'string' ? input.error : null);
+    if (
+        isStaleChainValidationMessage(incomingErrorMessage)
+        && (resolveCatalogStatus() === 'SYNCED' || hasActiveTerminalBinding())
+    ) {
+        console.warn('[SYNC_DIAGNOSTIC] Ignoring stale chain validation error report.');
+        clearSyncErrorDiagnostic();
+        return null;
+    }
+
     if (input.collection === 'products' && input.backendCode !== 'SYNC_COLLECTION_PULL_FAILED') {
         setCatalogDiagnosticStatus('ERROR');
     }
 
     const diagnostic = buildSyncErrorDiagnostic(input);
+    if (shouldSuppressSyncErrorDiagnostic(diagnostic)) {
+        clearSyncErrorDiagnostic();
+        return null;
+    }
+
     safeLocalStorageSet(SYNC_DIAGNOSTIC_STORAGE_KEY, JSON.stringify(diagnostic, null, 2));
 
     try {
@@ -373,5 +443,6 @@ export const reportSyncErrorDiagnostic = (input: Parameters<typeof buildSyncErro
     }
 
     window.dispatchEvent(new CustomEvent<SyncErrorDiagnostic>(SYNC_DIAGNOSTIC_EVENT, { detail: diagnostic }));
+    markInputErrorReported(input.error);
     return diagnostic;
 };
