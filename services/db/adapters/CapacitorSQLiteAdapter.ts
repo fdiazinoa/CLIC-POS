@@ -4,6 +4,7 @@ import type { DatabaseAdapter } from '../DatabaseAdapter';
 const DB_NAME = 'clic_pos_native';
 const DB_VERSION = 1;
 const DOCUMENT_READ_BATCH_SIZE = 15;
+const MAX_DOCUMENT_JSON_BYTES = 4 * 1024 * 1024;
 const DOCUMENT_SCHEMA_MIGRATION_KEY = 'documents_schema_v2_migrated';
 const DOCUMENT_UPSERT_SQL = `
     INSERT INTO documents (collection_name, doc_id, data, sort_order, updatedAt)
@@ -289,6 +290,13 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             for (const row of rows) {
                 const rawValue = row && typeof row === 'object' ? (row as Record<string, unknown>).data : null;
                 if (typeof rawValue !== 'string' || !rawValue.trim()) continue;
+                if (rawValue.length > MAX_DOCUMENT_JSON_BYTES) {
+                    console.error(
+                        `[CapacitorSQLiteAdapter] Skipping oversized ${collectionName} document `
+                        + `(${rawValue.length} bytes) to avoid Android bridge OOM`
+                    );
+                    continue;
+                }
                 try {
                     docs.push(JSON.parse(rawValue));
                 } catch (error) {
@@ -473,6 +481,13 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             const row = Array.isArray(result?.values) ? result.values[0] : null;
             const rawValue = row && typeof row === 'object' ? (row as Record<string, unknown>).value : null;
             if (typeof rawValue !== 'string' || !rawValue.trim()) continue;
+            if (rawValue.length > MAX_DOCUMENT_JSON_BYTES) {
+                console.error(
+                    `[CapacitorSQLiteAdapter] Skipping oversized legacy blob ${collectionName} `
+                    + `(${rawValue.length} bytes) during migration`
+                );
+                continue;
+            }
 
             try {
                 const parsed = JSON.parse(rawValue);
