@@ -2,6 +2,7 @@ import {
     validateSyncProfileChainUpgrade,
     type SyncProfileChainValidationContext,
 } from './erpRegisterResponse';
+import { normalizeErpBaseUrl } from '../../utils/erpBaseUrl';
 
 export type ContractedProduct = 'POS_ONLY' | 'POS_ERP';
 export type PosRuntime = 'LOCAL_SQLITE' | 'MASTER' | 'SLAVE';
@@ -124,19 +125,8 @@ const firstValue = (...values: Array<string | null | undefined>): string | undef
     return undefined;
 };
 
-const normalizeBaseUrl = (value?: string | null): string | undefined => {
-    const raw = String(value || '').trim();
-    if (!raw) return undefined;
-    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `${window.location.protocol}//${raw}`;
-    try {
-        return new URL(withProtocol).toString()
-            .replace(/\/api\/sync\/?$/i, '')
-            .replace(/\/api\/?$/i, '')
-            .replace(/\/+$/, '');
-    } catch {
-        return undefined;
-    }
-};
+const normalizeBaseUrl = (value?: string | null): string | undefined =>
+    normalizeErpBaseUrl(value) || undefined;
 
 const normalizeSyncApiBase = (value?: string | null): string | undefined => {
     const base = normalizeBaseUrl(value);

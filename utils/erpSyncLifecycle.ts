@@ -1,4 +1,5 @@
 import { getStoredTenantIdentity } from './cloudMasterRegistry';
+import { normalizeErpSyncApiBase, resolveErpSyncApiBase } from './erpBaseUrl';
 import { extractErpRegisterAuth, resolveNormalizedRegisterDeviceToken } from '../services/sync/erpRegisterResponse';
 import { persistSyncDeviceToken } from '../services/sync/deviceToken';
 import { saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
@@ -267,34 +268,10 @@ const resolveAuthLevel = (value: unknown): AuthLevel | null => {
     return null;
 };
 
-const normalizeSyncApiBase = (value?: string | null): string => {
-    const raw = normalizeOptional(value || null);
-    if (!raw) return '';
+const normalizeSyncApiBase = (value?: string | null): string =>
+    normalizeErpSyncApiBase(value) || '';
 
-    const trimmed = raw.replace(/\/$/, '');
-    return trimmed.endsWith('/api/sync') ? trimmed : `${trimmed}/api/sync`;
-};
-
-const getSyncApiBase = () => {
-    const env = (import.meta as any).env || {};
-    const candidates = [
-        localStorage.getItem(SYNC_API_URL_STORAGE_KEY),
-        localStorage.getItem('CLIC_ERP_BASE_URL'),
-        localStorage.getItem('erp_base_url'),
-        env.VITE_SYNC_API_URL,
-        env.VITE_ERP_SYNC_API_URL,
-        env.VITE_ERP_BASE_URL,
-    ];
-
-    for (const candidate of candidates) {
-        const normalized = normalizeSyncApiBase(candidate);
-        if (normalized) {
-            return normalized;
-        }
-    }
-
-    return '';
-};
+const getSyncApiBase = () => resolveErpSyncApiBase() || '';
 
 const isConfigured = () => Boolean(getSyncApiBase());
 

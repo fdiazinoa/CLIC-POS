@@ -12,6 +12,7 @@ import { NetworkScanner } from './NetworkScanner';
 import { v4 as uuidv4 } from 'uuid';
 import { Capacitor } from '@capacitor/core';
 import { permissionService } from './PermissionService';
+import { isNativeAndroidRuntime, normalizeErpBaseUrl, normalizeErpSyncApiBase, resolveErpSyncApiBase } from '../../utils/erpBaseUrl';
 import { realtimeNotificationService } from './RealtimeNotificationService';
 import { productImageCacheService } from './ProductImageCacheService';
 import { masterDataImageCacheService, type ImageBackedCollection } from './MasterDataImageCacheService';
@@ -368,24 +369,13 @@ class SyncManager {
     private resolveConfigErpBaseUrl(value: unknown): string | null {
         const raw = typeof value === 'string' ? value.trim() : '';
         if (!raw) return null;
-
-        const withProtocol = /^https?:\/\//i.test(raw) ? raw : `${window.location.protocol}//${raw}`;
-
-        try {
-            const url = new URL(withProtocol);
-            return url
-                .toString()
-                .replace(/\/api\/sync\/?$/i, '')
-                .replace(/\/api\/?$/i, '')
-                .replace(/\/+$/, '');
-        } catch {
-            return null;
-        }
+        return normalizeErpBaseUrl(raw);
     }
 
     private resolveSyncApiBase(value: unknown): string | null {
-        const normalizedBase = this.resolveConfigErpBaseUrl(value);
-        return normalizedBase ? `${normalizedBase}/api/sync` : null;
+        const raw = typeof value === 'string' ? value.trim() : '';
+        if (!raw) return null;
+        return normalizeErpSyncApiBase(raw);
     }
 
     private rehydrateOperationalTargetFromConfig(config: BusinessConfig | null, terminalId: string | null) {
@@ -451,10 +441,14 @@ class SyncManager {
             }
         }
 
-        return null;
+        return resolveErpSyncApiBase();
     }
 
     private resolveLocalSyncApiBaseCandidates(): string[] {
+        if (isNativeAndroidRuntime()) {
+            return [];
+        }
+
         const candidates = [
             'http://127.0.0.1:3001/api/sync',
             'http://localhost:3001/api/sync',
@@ -465,6 +459,39 @@ class SyncManager {
         }
 
         return Array.from(new Set(candidates.map((value) => value.trim()).filter(Boolean)));
+    }
+
+    private buildTerminalConfigEndpointCandidates(context: { erpBaseUrl: string | null }): Array<{
+        baseUrl: string;
+        mode: string;
+        includeErpBaseUrl: boolean;
+    }> {
+        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
+        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
+
+        if (!useAbsoluteEndpoint) {
+            return [{
+                baseUrl: '/api/sync',
+                mode: 'relative-local-proxy',
+                includeErpBaseUrl: true,
+            }];
+        }
+
+        const erpCandidates = syncApiBase
+            ? [{
+                baseUrl: syncApiBase,
+                mode: 'absolute-sync-api',
+                includeErpBaseUrl: false,
+            }]
+            : [];
+
+        const loopbackCandidates = this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
+            baseUrl,
+            mode: 'local-loopback-proxy',
+            includeErpBaseUrl: true,
+        }));
+
+        return [...erpCandidates, ...loopbackCandidates];
     }
 
     /**
@@ -1198,28 +1225,7 @@ class SyncManager {
             return null;
         }
 
-        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
-        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
-        const endpointCandidates = useAbsoluteEndpoint
-            ? [
-                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
-                    baseUrl,
-                    mode: 'local-loopback-proxy',
-                    includeErpBaseUrl: true,
-                })),
-                ...(syncApiBase
-                    ? [{
-                        baseUrl: syncApiBase,
-                        mode: 'absolute-sync-api',
-                        includeErpBaseUrl: false,
-                    }]
-                    : []),
-            ]
-            : [{
-                baseUrl: '/api/sync',
-                mode: 'relative-local-proxy',
-                includeErpBaseUrl: true,
-            }];
+        const endpointCandidates = this.buildTerminalConfigEndpointCandidates(context);
 
         let lastError: unknown = null;
 
@@ -1297,28 +1303,7 @@ class SyncManager {
             return null;
         }
 
-        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
-        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
-        const endpointCandidates = useAbsoluteEndpoint
-            ? [
-                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
-                    baseUrl,
-                    mode: 'local-loopback-proxy',
-                    includeErpBaseUrl: true,
-                })),
-                ...(syncApiBase
-                    ? [{
-                        baseUrl: syncApiBase,
-                        mode: 'absolute-sync-api',
-                        includeErpBaseUrl: false,
-                    }]
-                    : []),
-            ]
-            : [{
-                baseUrl: '/api/sync',
-                mode: 'relative-local-proxy',
-                includeErpBaseUrl: true,
-            }];
+        const endpointCandidates = this.buildTerminalConfigEndpointCandidates(context);
 
         let lastError: unknown = null;
 
@@ -1417,28 +1402,7 @@ class SyncManager {
             return null;
         }
 
-        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
-        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
-        const endpointCandidates = useAbsoluteEndpoint
-            ? [
-                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
-                    baseUrl,
-                    mode: 'local-loopback-proxy',
-                    includeErpBaseUrl: true,
-                })),
-                ...(syncApiBase
-                    ? [{
-                        baseUrl: syncApiBase,
-                        mode: 'absolute-sync-api',
-                        includeErpBaseUrl: false,
-                    }]
-                    : []),
-            ]
-            : [{
-                baseUrl: '/api/sync',
-                mode: 'relative-local-proxy',
-                includeErpBaseUrl: true,
-            }];
+        const endpointCandidates = this.buildTerminalConfigEndpointCandidates(context);
 
         let lastError: unknown = null;
 
@@ -2284,28 +2248,9 @@ class SyncManager {
         const pendingSnapshot = snapshot
             ? null
             : this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId);
+        const endpointCandidates = this.buildTerminalConfigEndpointCandidates(context);
         const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
         const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
-        const endpointCandidates = useAbsoluteEndpoint
-            ? [
-                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
-                    baseUrl,
-                    mode: 'local-loopback-proxy',
-                    includeErpBaseUrl: true,
-                })),
-                ...(syncApiBase
-                    ? [{
-                        baseUrl: syncApiBase,
-                        mode: 'absolute-sync-api',
-                        includeErpBaseUrl: false,
-                    }]
-                    : []),
-            ]
-            : [{
-                baseUrl: '/api/sync',
-                mode: 'relative-local-proxy',
-                includeErpBaseUrl: true,
-            }];
         const canFetchRemote = Boolean(
             context.terminalId &&
             context.tenantId &&

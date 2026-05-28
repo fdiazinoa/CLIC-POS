@@ -188,6 +188,7 @@ import {
   resolveRegisterErpTerminalId,
 } from './services/sync/erpRegisterResponse';
 import { saveTerminalCredentialsSync } from './services/sync/TerminalCredentialStore';
+import { normalizeErpBaseUrl, resolveErpBaseUrl } from './utils/erpBaseUrl';
 import {
   canRetryFiscalTransaction,
   getEffectiveFiscalComplianceConfig,
@@ -234,41 +235,10 @@ const resolveSetupTenantId = (): string => {
   return candidates.map((value) => (value || '').trim()).find(Boolean) || 'default-tenant';
 };
 
-const normalizeSetupBaseUrl = (value?: string | null): string | null => {
-  const raw = String(value || '').trim();
-  if (!raw) return null;
+const normalizeSetupBaseUrl = (value?: string | null): string | null =>
+  normalizeErpBaseUrl(value);
 
-  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `${window.location.protocol}//${raw}`;
-
-  try {
-    const url = new URL(withProtocol);
-    return url
-      .toString()
-      .replace(/\/api\/sync\/?$/i, '')
-      .replace(/\/api\/?$/i, '')
-      .replace(/\/+$/, '');
-  } catch {
-    return null;
-  }
-};
-
-const resolveSetupErpBaseUrl = (): string | null => {
-  const env = (import.meta as any).env || {};
-  const candidates = [
-    localStorage.getItem('CLIC_ERP_BASE_URL'),
-    localStorage.getItem('erp_base_url'),
-    env.VITE_ERP_BASE_URL,
-    env.VITE_ERP_SYNC_API_URL,
-    env.VITE_SYNC_API_URL,
-  ];
-
-  for (const candidate of candidates) {
-    const normalized = normalizeSetupBaseUrl(candidate);
-    if (normalized) return normalized;
-  }
-
-  return null;
-};
+const resolveSetupErpBaseUrl = (): string | null => resolveErpBaseUrl();
 
 const persistSetupErpBaseUrls = (value?: string | null) => {
   const normalized = normalizeSetupBaseUrl(value);
