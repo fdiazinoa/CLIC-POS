@@ -320,13 +320,26 @@ export function saveSyncProfileFromContract(
             chainValidation,
         });
     } else if (!chainValidation.allowed) {
-        console.warn('[SYNC_PROFILE_CHAIN_VALIDATION_FAILED]', {
-            existingProfile,
-            incomingProfile,
-            chainValidation,
-        });
-        writeProfileMismatchDiagnostic(diagnostic);
-        throw new Error(`Chain validation failed: ${chainValidation.reason || 'profile chain mismatch'}`);
+        if (incomingPriority >= existingPriority) {
+            console.warn('[SYNC_PROFILE_CHAIN_OVERRIDDEN_BY_PRIORITY]', {
+                existingProfile,
+                incomingProfile,
+                existingPriority,
+                incomingPriority,
+                chainValidation,
+            });
+            saveSyncProfile(incomingProfile);
+        } else {
+            console.warn('[SYNC_PROFILE_CHAIN_VALIDATION_FAILED]', {
+                existingProfile,
+                incomingProfile,
+                chainValidation,
+            });
+            writeProfileMismatchDiagnostic(diagnostic);
+            throw new Error(
+                `Chain validation failed — ${chainValidation.reason || 'profile chain mismatch'}`
+            );
+        }
     } else {
         saveSyncProfile(incomingProfile);
     }

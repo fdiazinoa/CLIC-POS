@@ -173,6 +173,7 @@ import {
   type PosApkUpdateAvailable
 } from './services/version/posApkUpdateService';
 import {
+  loadSyncProfile,
   saveSyncProfileFromContract,
   type SyncPermissions,
   type SyncProfile,
@@ -3786,8 +3787,24 @@ const AppContent: React.FC = () => {
           ? 'SERVER_ERP'
           : 'SERVER_LOCAL';
       localStorage.setItem(TERMINAL_SETUP_MODE_KEY, nextSetupMode);
+      const existingSyncProfile = (() => {
+        try {
+          return loadSyncProfile();
+        } catch {
+          return null;
+        }
+      })();
       const resolvedTenantId =
-        setupResult?.tenantId || localStorage.getItem('active_tenant_id') || 'default-tenant';
+        setupResult?.tenantId
+        || setupResult?.syncProfile?.localTenantId
+        || setupResult?.syncProfile?.erpTenantId
+        || setupResult?.incomingProfile?.localTenantId
+        || setupResult?.profile?.localTenantId
+        || existingSyncProfile?.localTenantId
+        || existingSyncProfile?.erpTenantId
+        || localStorage.getItem('clic_tenant_id')
+        || localStorage.getItem('active_tenant_id')
+        || 'default-tenant';
       localStorage.setItem('active_tenant_id', resolvedTenantId);
       if (resolvedTenantId && resolvedTenantId !== 'default-tenant') {
         localStorage.setItem('clic_tenant_id', resolvedTenantId);

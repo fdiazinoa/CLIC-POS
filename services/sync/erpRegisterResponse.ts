@@ -320,6 +320,11 @@ export const validateSyncProfileChainUpgrade = (
             return { allowed: true };
         }
 
+        // ERP register always replaces lower-priority local/legacy profiles.
+        if (incomingPriority > existingPriority) {
+            return { allowed: true, reason: 'ERP_REGISTER priority override' };
+        }
+
         return {
             allowed: false,
             reason: 'ERP_REGISTER profile chain mismatch (tenant/erpTerminal/localTerminal)',
