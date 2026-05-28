@@ -215,6 +215,44 @@ export interface SyncProfileChainValidationContext {
     terminalName?: string | null;
 }
 
+const normalizeProfileId = (value?: string | null): string =>
+    String(value || '').trim().toLowerCase();
+
+const profileIdsMatch = (left?: string | null, right?: string | null): boolean => {
+    const a = normalizeProfileId(left);
+    const b = normalizeProfileId(right);
+    if (!a || !b) return true;
+    if (a === b) return true;
+
+    const compactA = a.replace(/[^a-z0-9]/g, '');
+    const compactB = b.replace(/[^a-z0-9]/g, '');
+    if (compactA && compactB && compactA === compactB) return true;
+
+    if (compactA.length >= 24 && compactB.length >= 24) {
+        const minLength = Math.min(compactA.length, compactB.length, 32);
+        return compactA.slice(0, minLength) === compactB.slice(0, minLength);
+    }
+
+    return false;
+};
+
+const collectProfileIdAliases = (...values: Array<string | null | undefined>): string[] =>
+    values
+        .map((value) => normalizeProfileId(value))
+        .filter(Boolean);
+
+const profileIdsMatchAny = (
+    candidates: string[],
+    ...aliases: Array<string | null | undefined>
+): boolean => {
+    const normalizedAliases = collectProfileIdAliases(...aliases);
+    if (normalizedAliases.length === 0) return true;
+    if (candidates.length === 0) return true;
+    return candidates.some((candidate) =>
+        normalizedAliases.some((alias) => profileIdsMatch(candidate, alias))
+    );
+};
+
 export const validateSyncProfileChainUpgrade = (
     existingProfile: SyncProfile | null,
     incomingProfile: SyncProfile,
@@ -231,23 +269,54 @@ export const validateSyncProfileChainUpgrade = (
             || context.erpTerminalId
             || undefined;
 
-        const tenantMatches = !existingProfile.localTenantId
-            || !incomingProfile.localTenantId
-            || existingProfile.localTenantId === incomingProfile.localTenantId;
+        const tenantMatches = profileIdsMatch(
+            existingProfile.localTenantId,
+            incomingProfile.localTenantId,
+        );
 
-        const erpTerminalMatches = !existingProfile.erpTerminalId
-            || !resolvedIncomingErpTerminalId
-            || existingProfile.erpTerminalId === resolvedIncomingErpTerminalId;
+        const existingTerminalAliases = collectProfileIdAliases(
+            existingProfile.erpTerminalId,
+            existingProfile.localTerminalId,
+        );
+        const incomingTerminalAliases = collectProfileIdAliases(
+            resolvedIncomingErpTerminalId,
+            incomingProfile.erpTerminalId,
+            incomingProfile.localTerminalId,
+            context.erpTerminalId,
+            context.localTerminalId,
+            context.terminalName,
+        );
 
-        const localTerminalMatches = !existingProfile.localTerminalId
-            || !incomingProfile.localTerminalId
-            || existingProfile.localTerminalId === incomingProfile.localTerminalId
-            || existingProfile.localTerminalId === context.terminalName
-            || incomingProfile.localTerminalId === context.terminalName
-            || incomingProfile.localTerminalId === context.localTerminalId
-            || existingProfile.localTerminalId === context.localTerminalId;
+        const erpTerminalMatches = profileIdsMatchAny(
+            existingTerminalAliases,
+            resolvedIncomingErpTerminalId,
+            incomingProfile.erpTerminalId,
+            incomingProfile.localTerminalId,
+            context.erpTerminalId,
+            context.localTerminalId,
+            context.terminalName,
+        );
 
-        if (tenantMatches && erpTerminalMatches && localTerminalMatches) {
+        const localTerminalMatches = profileIdsMatchAny(
+            collectProfileIdAliases(existingProfile.localTerminalId),
+            incomingProfile.localTerminalId,
+            incomingProfile.erpTerminalId,
+            context.localTerminalId,
+            context.terminalName,
+            context.erpTerminalId,
+        ) || profileIdsMatchAny(
+            incomingTerminalAliases,
+            existingProfile.localTerminalId,
+            existingProfile.erpTerminalId,
+            context.localTerminalId,
+            context.terminalName,
+        );
+
+        if (tenantMatches && erpTerminalMatches) {
+            return { allowed: true };
+        }
+
+        if (tenantMatches && localTerminalMatches) {
             return { allowed: true };
         }
 

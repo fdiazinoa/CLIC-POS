@@ -28,6 +28,8 @@ interface PairingResult {
   syncProfile?: Partial<SyncProfile>;
   syncPermissions?: SyncPermissions;
   contractSource?: SyncProfileSource;
+  incomingProfile?: Partial<SyncProfile>;
+  profile?: Partial<SyncProfile>;
   progress?: (update: { stepId?: 'claim' | 'config' | 'apply' | 'sync' | 'cache' | 'finish'; message?: string }) => void;
 }
 
@@ -390,6 +392,8 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                 syncProfile,
                 syncPermissions,
                 contractSource,
+                incomingProfile,
+                profile,
                 deviceToken,
                 terminalToken,
                 activationToken,
@@ -416,6 +420,8 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                   syncProfile,
                   syncPermissions,
                   contractSource,
+                  incomingProfile,
+                  profile,
                   deviceToken,
                   terminalToken,
                   activationToken,

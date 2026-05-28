@@ -300,6 +300,17 @@ export function saveSyncProfileFromContract(
         ? existingProfile!
         : incomingProfile;
 
+    const diagnostic: SyncProfilePersistenceDiagnostic = {
+        contractSource: savedProfile.contractSource || contractSource,
+        existingProfile,
+        incomingProfile,
+        savedProfile,
+        mismatchDetected: mismatchDetected || shouldPreserveExisting,
+        mismatchFixed: mismatchDetected && !shouldPreserveExisting && chainValidation.allowed,
+        profileSourcePriority: getSyncProfileSourcePriority(savedProfile.contractSource),
+        fixedAt: new Date().toISOString(),
+    };
+
     if (shouldPreserveExisting && !shouldReplaceWithErpRegister) {
         console.warn('[SYNC_PROFILE_LOWER_PRIORITY_IGNORED]', {
             existingSource: existingProfile?.contractSource,
@@ -314,21 +325,11 @@ export function saveSyncProfileFromContract(
             incomingProfile,
             chainValidation,
         });
+        writeProfileMismatchDiagnostic(diagnostic);
         throw new Error(`Chain validation failed: ${chainValidation.reason || 'profile chain mismatch'}`);
     } else {
         saveSyncProfile(incomingProfile);
     }
-
-    const diagnostic: SyncProfilePersistenceDiagnostic = {
-        contractSource: savedProfile.contractSource || contractSource,
-        existingProfile,
-        incomingProfile,
-        savedProfile,
-        mismatchDetected: mismatchDetected || shouldPreserveExisting,
-        mismatchFixed: mismatchDetected && !shouldPreserveExisting,
-        profileSourcePriority: getSyncProfileSourcePriority(savedProfile.contractSource),
-        fixedAt: new Date().toISOString(),
-    };
 
     if (mismatchDetected) {
         console.warn('[SYNC_PROFILE_MISMATCH_FIXED]', {

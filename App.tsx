@@ -3842,7 +3842,10 @@ const AppContent: React.FC = () => {
       syncProfilePersistence = saveSyncProfileFromContract(incomingSyncProfile, contractSource, {
         erpTerminalId: resolvedErpTerminalId,
         localTerminalId: terminalId,
-        terminalName: resolvedTerminalName,
+        terminalName:
+          setupResult?.terminalName
+          || incomingSyncProfile.localTerminalId
+          || resolvedTerminalName,
       });
       localStorage.setItem('clic_sync_mode', isSlave ? 'POS_SLAVE' : isErpDirectBinding ? 'POS_ERP' : 'POS_LOCAL');
       localStorage.setItem('clic_customer_erp_access', String(isErpDirectBinding));
