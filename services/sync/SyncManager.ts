@@ -43,7 +43,7 @@ import {
     productIdentityCandidates,
 } from '../../utils/productReferences';
 import { canonicalizeTariffEntries, resolveTariffId } from '../../utils/masterIdentity';
-import { ensureSyncDeviceToken } from './deviceToken';
+import { ensureSyncDeviceToken, getInvalidatedSyncDeviceTokenInfo, resolveSyncDeviceToken } from './deviceToken';
 import { normalizeRestaurantProductConfig } from '../../utils/restaurantProductConfig';
 import { syncPolicy } from './SyncProfile';
 import { reportSyncErrorDiagnostic, setCatalogDiagnosticStatus } from './SyncErrorDiagnostic';
@@ -809,6 +809,14 @@ class SyncManager {
     }
 
     private ensureDeviceToken() {
+        const syncMode = String(localStorage.getItem('clic_sync_mode') || '').trim().toUpperCase();
+        const invalidated = getInvalidatedSyncDeviceTokenInfo();
+        const existing = resolveSyncDeviceToken();
+        if (syncMode === 'POS_ERP' && (!existing.token || invalidated.invalidatedAt)) {
+            console.warn('[SyncManager] ERP terminal requires register token; skipping LOCAL_GENERATED device token');
+            return;
+        }
+
         const result = ensureSyncDeviceToken(() => `dev_${uuidv4()}`);
         if (result.created) {
             console.log('🔑 SyncManager: Generated new Device Token');

@@ -626,6 +626,43 @@ const TERMINAL_CONFIG_RESTART_NOTICE_KEY = 'clic_pos_terminal_config_restart_not
 const SETUP_FLOW_VERSION = '2';
 const buildRuntimeMasterUrl = () => buildMasterUrlFromHost(window.location.hostname);
 const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+
+const hydrateNativeCatalogFromDb = async (
+  setters: {
+    setProducts: (value: Product[]) => void;
+    setWarehouses: (value: Warehouse[]) => void;
+    setProductStocks: (value: ProductStock[]) => void;
+  },
+  reason: string,
+) => {
+  if (!isNativeAndroidRuntime()) return;
+
+  try {
+    const [dbProducts, dbWarehouses, dbProductStocks] = await Promise.all([
+      db.get('products') as Promise<Product[]>,
+      db.get('warehouses') as Promise<Warehouse[]>,
+      db.get('productStocks') as Promise<ProductStock[]>,
+    ]);
+
+    if (Array.isArray(dbProducts) && dbProducts.length > 0) {
+      setters.setProducts(dbProducts);
+    }
+    if (Array.isArray(dbWarehouses) && dbWarehouses.length > 0) {
+      setters.setWarehouses(dbWarehouses);
+    }
+    if (Array.isArray(dbProductStocks) && dbProductStocks.length > 0) {
+      setters.setProductStocks(dbProductStocks);
+    }
+
+    console.log(`[BOOT] Native catalog hydrated (${reason})`, {
+      products: Array.isArray(dbProducts) ? dbProducts.length : 0,
+      warehouses: Array.isArray(dbWarehouses) ? dbWarehouses.length : 0,
+      productStocks: Array.isArray(dbProductStocks) ? dbProductStocks.length : 0,
+    });
+  } catch (error) {
+    console.warn(`[BOOT] Native catalog hydration failed (${reason}):`, error);
+  }
+};
 const normalizeMasterHost = (value: string | null | undefined) =>
   (value || '')
     .trim()
@@ -2995,6 +3032,10 @@ const AppContent: React.FC = () => {
           // Delay hydration a bit to reduce contention with startup writes/sync handshakes.
           window.setTimeout(() => {
             void hydrateDeferredCollections();
+            void hydrateNativeCatalogFromDb(
+              { setProducts, setWarehouses, setProductStocks },
+              'post-boot',
+            );
           }, 2000);
 
           // 1.5 Sequence repair is intentionally deferred; running it here can block startup
@@ -3009,6 +3050,21 @@ const AppContent: React.FC = () => {
           const isErpSetupMode =
             setupMode === 'SERVER_ERP'
             || localStorage.getItem('clic_sync_mode') === 'POS_ERP';
+
+          if (
+            !pairedTerminal
+            && !isVisorMode
+            && isErpSetupMode
+            && (terminalBindingStatus === 'TOKEN_INVALID' || terminalBindingStatus === 'BOUND_AUTH_MISMATCH')
+          ) {
+            console.log('[BOOT] ERP auth invalid. Resuming terminal pairing...', { terminalBindingStatus });
+            localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_ERP');
+            localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
+            setCurrentView('TERMINAL_PAIRING');
+            setIsDataLoaded(true);
+            setIsSecurityLoaded(true);
+            return;
+          }
 
           if (!pairedTerminal && !isVisorMode && isErpSetupMode) {
             console.log('[BOOT] ERP terminal not paired on this device. Resuming terminal pairing...', {
@@ -3308,8 +3364,22 @@ const AppContent: React.FC = () => {
     // Poll for data every 5 seconds if we don't have any yet (for remote terminals)
     // Increased from 3s to give NetworkSyncService more time to complete
     const interval = setInterval(() => {
-      if (isDataLoaded && (users.length === 0 || products.length === 0 || internalSequences.length === 0)) {
+      if (
+        isDataLoaded
+        && (
+          users.length === 0
+          || products.length === 0
+          || warehouses.length === 0
+          || internalSequences.length === 0
+        )
+      ) {
         refreshDataAfterSync();
+        if (isNativeAndroidRuntime() && (products.length === 0 || warehouses.length === 0)) {
+          void hydrateNativeCatalogFromDb(
+            { setProducts, setWarehouses, setProductStocks },
+            'poll',
+          );
+        }
       }
     }, 5000); // Check every 5 seconds
 
@@ -3348,6 +3418,16 @@ const AppContent: React.FC = () => {
       if (pendingCatalogRefresh.products || pendingCatalogRefresh.productStocks) {
         const freshProducts = await db.get('products') as Product[];
         setProducts(Array.isArray(freshProducts) ? freshProducts : []);
+
+        const freshWarehouses = await db.get('warehouses') as Warehouse[];
+        if (Array.isArray(freshWarehouses) && freshWarehouses.length > 0) {
+          setWarehouses(freshWarehouses);
+        }
+
+        const freshStocks = await db.get('productStocks') as ProductStock[];
+        if (Array.isArray(freshStocks) && freshStocks.length > 0) {
+          setProductStocks(freshStocks);
+        }
 
         const matching = Array.isArray(freshProducts)
           ? (freshProducts as unknown as Record<string, unknown>[])
@@ -3420,7 +3500,9 @@ const AppContent: React.FC = () => {
         case 'cashMovements': setCashMovements(freshData as CashMovement[]); break;
         case 'zReports': setZReports(freshData as ZReport[]); break;
         case 'xReports': setXReports(Array.isArray(freshData) ? freshData as XReport[] : []); break;
-        case 'warehouses': setWarehouses(Array.isArray(freshData) ? freshData as Warehouse[] : []); break;
+        case 'warehouses':
+          setWarehouses(Array.isArray(freshData) ? freshData as Warehouse[] : []);
+          break;
       }
     };
 
@@ -4110,6 +4192,10 @@ const AppContent: React.FC = () => {
       if (Array.isArray(freshData.transactions)) setTransactions(freshData.transactions);
       if (Array.isArray(freshData.products)) setProducts(freshData.products);
       if (Array.isArray(freshData.warehouses)) setWarehouses(freshData.warehouses);
+      await hydrateNativeCatalogFromDb(
+        { setProducts, setWarehouses, setProductStocks },
+        'terminal-binding',
+      );
       if (Array.isArray(freshData.cashMovements)) setCashMovements(freshData.cashMovements);
       if (Array.isArray(freshData.zReports)) setZReports(freshData.zReports);
       if (Array.isArray(freshData.xReports)) setXReports(freshData.xReports);
