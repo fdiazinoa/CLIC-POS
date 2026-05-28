@@ -196,12 +196,9 @@ DESKTOP_APK="${HOME}/Desktop/Clic-Pos-${VERSION_NAME}-release.apk"
 METADATA_DEST="${DEST_DIR}/output-metadata-${VERSION_NAME}.json"
 REPORT_DEST="${DEST_DIR}/release-report-${VERSION_NAME}.txt"
 
-cp "${APK_SRC}" "${APK_DEST}"
-cp "${APK_SRC}" "${DESKTOP_APK}"
+cp -X "${APK_SRC}" "${APK_DEST}"
+cp -X "${APK_SRC}" "${DESKTOP_APK}"
 cp "${METADATA_SRC}" "${METADATA_DEST}"
-
-# macOS extended attributes (com.apple.provenance) break Genymotion drag-and-drop.
-xattr -cr "${APK_DEST}" "${DESKTOP_APK}" 2>/dev/null || true
 
 cat > "${REPORT_DEST}" <<EOF
 versionCode=${NEXT_VERSION_CODE}
