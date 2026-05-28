@@ -1,5 +1,10 @@
 import { BusinessConfig, Product, TerminalConfig } from '../../types';
 import { getDefaultRoleConfig, resolveDeviceRoleValue } from '../../utils/deviceRoleHelpers';
+import {
+  extractErpRegisterAuth,
+  resolveIncomingSyncProfileFromRegister,
+} from '../sync/erpRegisterResponse';
+import type { SyncProfile } from '../sync/SyncProfile';
 
 export interface RuntimeTerminalCard {
   id: string;
@@ -40,6 +45,11 @@ export interface RuntimeBindTerminalResponse {
   sync_auth_token?: string;
   tokenExpiresAt?: string;
   token_expires_at?: string;
+  syncProfile?: Partial<SyncProfile>;
+  sync_profile?: Partial<SyncProfile>;
+  incomingProfile?: Partial<SyncProfile>;
+  incoming_profile?: Partial<SyncProfile>;
+  profile?: Partial<SyncProfile>;
 }
 
 export interface RuntimeInitialConfigResponse {
@@ -787,6 +797,29 @@ export const bindTerminalFromErp = async (input: {
     throw new TerminalOccupiedError('La terminal ya está ocupada por otro equipo.', occupiedDeviceId);
   }
 
+  let registerPayload: Record<string, any> | null = null;
+  try {
+    registerPayload = asObject(await fetchErpJson(input.erpBaseUrl, '/api/sync/terminals/register', {
+      method: 'POST',
+      body: {
+        device_id: input.posDeviceId,
+        tenant_id: resolvedContext.tenantId,
+        company_ref: input.tenantSlug || null,
+        company_id: asString(targetTerminal.company_id) || resolvedContext.companyId,
+        store_id: asString(targetTerminal.store_id) || resolvedContext.storeId,
+        name: targetTerminalName,
+        metadata: {
+          source: 'CLIC_POS_SETUP',
+          terminal_id: targetTerminalId,
+          erp_terminal_id: targetErpTerminalId,
+          binding_mode: input.bindingMode,
+        },
+      },
+    }));
+  } catch (registerError) {
+    console.warn('⚠️ ERP /terminals/register failed; continuing with terminal-profile bind fallback:', registerError);
+  }
+
   const mergedMetadata = {
     ...currentMetadata,
     bound_device_id: input.posDeviceId,
@@ -845,7 +878,11 @@ export const bindTerminalFromErp = async (input: {
     posDeviceId: input.posDeviceId,
     bindingMode: input.bindingMode,
   });
-  const runtimeAuth = extractRuntimeAuthPayload(
+  const runtimeAuth = extractErpRegisterAuth(
+    registerPayload,
+    registerPayload?.auth,
+    registerPayload?.syncHeaders,
+    registerPayload?.sync_headers,
     persistedProfilePayload,
     persistedProfilePayload?.profile,
     selectedProfilePayload,
@@ -853,6 +890,18 @@ export const bindTerminalFromErp = async (input: {
     currentProfilePayload,
     currentProfilePayload?.profile,
     targetTerminal
+  );
+  const syncProfile = resolveIncomingSyncProfileFromRegister(
+    registerPayload,
+    {
+      erpTerminalId: targetErpTerminalId,
+      localTerminalId: targetTerminalId,
+      localTenantId: resolvedContext.tenantId || undefined,
+      localStoreId: asString(targetTerminal.store_id) || resolvedContext.storeId || undefined,
+      erpBaseUrl: input.erpBaseUrl,
+      cloudBaseUrl: input.erpBaseUrl,
+    },
+    'ERP_REGISTER',
   );
 
   return {
@@ -866,11 +915,24 @@ export const bindTerminalFromErp = async (input: {
     transferred: Boolean(occupiedDeviceId && occupiedDeviceId !== input.posDeviceId),
     previous_device_id: occupiedDeviceId && occupiedDeviceId !== input.posDeviceId ? occupiedDeviceId : null,
     config: boundConfig,
+    ...(registerPayload || {}),
+    syncProfile,
+    sync_profile: syncProfile,
+    incomingProfile: registerPayload?.incomingProfile || registerPayload?.incoming_profile || syncProfile,
+    incoming_profile: registerPayload?.incomingProfile || registerPayload?.incoming_profile || syncProfile,
+    profile: registerPayload?.profile || syncProfile,
     deviceToken: runtimeAuth.deviceToken,
+    device_token: runtimeAuth.deviceToken,
     terminalToken: runtimeAuth.terminalToken,
+    terminal_token: runtimeAuth.terminalToken,
     activationToken: runtimeAuth.activationToken,
+    activation_token: runtimeAuth.activationToken,
     syncToken: runtimeAuth.syncToken,
+    sync_token: runtimeAuth.syncToken,
+    syncAuthToken: runtimeAuth.syncToken,
+    sync_auth_token: runtimeAuth.syncToken,
     tokenExpiresAt: runtimeAuth.tokenExpiresAt,
+    token_expires_at: runtimeAuth.tokenExpiresAt,
   };
 };
 

@@ -1,3 +1,8 @@
+import {
+    validateSyncProfileChainUpgrade,
+    type SyncProfileChainValidationContext,
+} from './erpRegisterResponse';
+
 export type ContractedProduct = 'POS_ONLY' | 'POS_ERP';
 export type PosRuntime = 'LOCAL_SQLITE' | 'MASTER' | 'SLAVE';
 export type CloudChannel = 'NONE' | 'POS_CLOUD_STAGING' | 'ERP_ACTIVE' | 'POS_MASTER';
@@ -258,7 +263,8 @@ const hasProfileMismatch = (existingProfile: SyncProfile | null, incomingProfile
 
 export function saveSyncProfileFromContract(
     incoming: Partial<SyncProfile>,
-    contractSource: SyncProfileSource
+    contractSource: SyncProfileSource,
+    chainContext: SyncProfileChainValidationContext = {},
 ): SyncProfilePersistenceDiagnostic {
     let existingProfile: SyncProfile | null = null;
     try {
@@ -267,23 +273,48 @@ export function saveSyncProfileFromContract(
         existingProfile = null;
     }
 
-    const incomingProfile = normalizeProfile({
+    const enrichedIncoming: Partial<SyncProfile> = {
         ...incoming,
         contractSource,
-    });
+        erpTerminalId: incoming.erpTerminalId || chainContext.erpTerminalId || undefined,
+        localTerminalId: incoming.localTerminalId || chainContext.localTerminalId || chainContext.terminalName || undefined,
+    };
+
+    const incomingProfile = normalizeProfile(enrichedIncoming);
     const existingPriority = getSyncProfileSourcePriority(existingProfile?.contractSource);
     const incomingPriority = getSyncProfileSourcePriority(incomingProfile.contractSource);
+    const chainValidation = validateSyncProfileChainUpgrade(existingProfile, incomingProfile, chainContext);
     const mismatchDetected = hasProfileMismatch(existingProfile, incomingProfile);
-    const shouldPreserveExisting = Boolean(existingProfile && existingPriority > incomingPriority);
-    const savedProfile = shouldPreserveExisting ? existingProfile! : incomingProfile;
+    const shouldPreserveExisting = Boolean(
+        existingProfile
+        && !chainValidation.allowed
+        && existingPriority > incomingPriority
+    );
+    const shouldReplaceWithErpRegister = Boolean(
+        existingProfile
+        && chainValidation.allowed
+        && incomingProfile.contractSource === 'ERP_REGISTER'
+        && incomingPriority >= getSyncProfileSourcePriority('ERP_REGISTER')
+    );
+    const savedProfile = shouldPreserveExisting && !shouldReplaceWithErpRegister
+        ? existingProfile!
+        : incomingProfile;
 
-    if (shouldPreserveExisting) {
+    if (shouldPreserveExisting && !shouldReplaceWithErpRegister) {
         console.warn('[SYNC_PROFILE_LOWER_PRIORITY_IGNORED]', {
             existingSource: existingProfile?.contractSource,
             existingPriority,
             incomingSource: incomingProfile.contractSource,
             incomingPriority,
+            chainValidation,
         });
+    } else if (!chainValidation.allowed) {
+        console.warn('[SYNC_PROFILE_CHAIN_VALIDATION_FAILED]', {
+            existingProfile,
+            incomingProfile,
+            chainValidation,
+        });
+        throw new Error(`Chain validation failed: ${chainValidation.reason || 'profile chain mismatch'}`);
     } else {
         saveSyncProfile(incomingProfile);
     }

@@ -1,0 +1,273 @@
+import type { SyncProfile, SyncProfileSource } from './SyncProfile';
+
+const SYNC_PROFILE_SOURCE_PRIORITY: Record<SyncProfileSource, number> = {
+    ERP_REGISTER: 100,
+    BACKEND_REGISTER: 90,
+    CLOUD_ADMIN: 90,
+    SQLITE_SYNC_PROFILE: 70,
+    INITIAL_TERMINAL_CONFIG: 50,
+    LOCAL_SNAPSHOT: 50,
+    LEGACY_LOCAL_STORAGE: 10,
+};
+
+const getSyncProfileSourcePriority = (source?: SyncProfileSource | null): number =>
+    source ? SYNC_PROFILE_SOURCE_PRIORITY[source] ?? 0 : 0;
+
+export interface ErpRegisterAuthPayload {
+    deviceToken?: string;
+    terminalToken?: string;
+    activationToken?: string;
+    syncToken?: string;
+    tokenExpiresAt?: string;
+}
+
+const pickAuthString = (...values: unknown[]): string | undefined => {
+    for (const value of values) {
+        if (typeof value !== 'string') continue;
+        const trimmed = value.replace(/[\r\n\t]/g, '').trim();
+        if (!trimmed || ['undefined', 'null', 'nan', '[object object]'].includes(trimmed.toLowerCase())) continue;
+        return trimmed;
+    }
+    return undefined;
+};
+
+const asObject = (value: unknown): Record<string, any> =>
+    value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+
+const flattenRegisterRecords = (...sources: unknown[]): Record<string, any>[] => {
+    return sources
+        .map(asObject)
+        .filter((record) => Object.keys(record).length > 0)
+        .flatMap((record) => [
+            record,
+            asObject(record.auth),
+            asObject(record.syncAuth),
+            asObject(record.syncHeaders),
+            asObject(record.sync_headers),
+            asObject(record.profile),
+            asObject(record.syncProfile),
+            asObject(record.sync_profile),
+            asObject(record.incomingProfile),
+            asObject(record.incoming_profile),
+            asObject(record.terminal),
+            asObject(asObject(record.terminal).auth),
+            asObject(record.terminal_config),
+            asObject(asObject(record.terminal_config).auth),
+            asObject(asObject(record.terminal_config).metadata),
+            asObject(asObject(asObject(record.terminal_config).metadata).syncAuth),
+            asObject(record.metadata),
+            asObject(asObject(record.metadata).syncAuth),
+            asObject(record.session),
+        ])
+        .filter((record) => Object.keys(record).length > 0);
+};
+
+export const extractErpRegisterAuth = (...sources: unknown[]): ErpRegisterAuthPayload => {
+    const records = flattenRegisterRecords(...sources);
+    const syncHeaders = records.find((record) =>
+        record['X-Device-Token'] || record['x-device-token'] || record['X-Sync-Token'] || record['x-sync-token']
+    ) || asObject(records.find((record) => record['X-Device-Token'] || record['X-Sync-Token']));
+
+    const deviceToken = pickAuthString(
+        ...records.flatMap((record) => [
+            record.deviceToken,
+            record.device_token,
+            record.terminalToken,
+            record.terminal_token,
+            record.activationToken,
+            record.activation_token,
+            asObject(record.auth).deviceToken,
+            asObject(record.auth).device_token,
+            asObject(record.auth).terminalToken,
+            asObject(record.auth).terminal_token,
+            asObject(record.syncAuth).deviceToken,
+            asObject(record.syncAuth).device_token,
+            syncHeaders?.['X-Device-Token'],
+            syncHeaders?.['x-device-token'],
+        ])
+    );
+    const terminalToken = pickAuthString(
+        ...records.flatMap((record) => [
+            record.terminalToken,
+            record.terminal_token,
+            asObject(record.auth).terminalToken,
+            asObject(record.auth).terminal_token,
+            asObject(record.syncAuth).terminalToken,
+            asObject(record.syncAuth).terminal_token,
+        ])
+    );
+    const activationToken = pickAuthString(
+        ...records.flatMap((record) => [
+            record.activationToken,
+            record.activation_token,
+            asObject(record.auth).activationToken,
+            asObject(record.auth).activation_token,
+            asObject(record.syncAuth).activationToken,
+            asObject(record.syncAuth).activation_token,
+        ])
+    );
+    const syncToken = pickAuthString(
+        ...records.flatMap((record) => [
+            record.syncToken,
+            record.sync_token,
+            record.syncAuthToken,
+            record.sync_auth_token,
+            asObject(record.auth).syncToken,
+            asObject(record.auth).sync_token,
+            asObject(record.auth).syncAuthToken,
+            asObject(record.auth).sync_auth_token,
+            asObject(record.syncAuth).syncToken,
+            asObject(record.syncAuth).sync_token,
+            syncHeaders?.['X-Sync-Token'],
+            syncHeaders?.['x-sync-token'],
+        ])
+    );
+    const tokenExpiresAt = pickAuthString(
+        ...records.flatMap((record) => [
+            record.tokenExpiresAt,
+            record.token_expires_at,
+            record.expiresAt,
+            record.expires_at,
+            asObject(record.auth).tokenExpiresAt,
+            asObject(record.auth).token_expires_at,
+        ])
+    );
+
+    return { deviceToken, terminalToken, activationToken, syncToken, tokenExpiresAt };
+};
+
+export const resolveRegisterErpTerminalId = (...sources: unknown[]): string | undefined => {
+    const records = flattenRegisterRecords(...sources);
+    return pickAuthString(
+        ...records.flatMap((record) => [
+            record.erpTerminalId,
+            record.erp_terminal_id,
+            record.terminalId,
+            record.terminal_id,
+            asObject(record.terminal).id,
+            asObject(record.terminal).erpTerminalId,
+            asObject(record.terminal).erp_terminal_id,
+            asObject(record.profile).erpTerminalId,
+            asObject(record.syncProfile).erpTerminalId,
+            asObject(record.incomingProfile).erpTerminalId,
+        ])
+    );
+};
+
+export const resolveIncomingSyncProfileFromRegister = (
+    response: unknown,
+    fallbacks: Partial<SyncProfile> = {},
+    contractSource: SyncProfileSource = 'ERP_REGISTER',
+): Partial<SyncProfile> => {
+    const root = asObject(response);
+    const profileCandidate =
+        root.incomingProfile
+        || root.incoming_profile
+        || root.syncProfile
+        || root.sync_profile
+        || root.profile
+        || {};
+
+    const merged: Partial<SyncProfile> = {
+        ...fallbacks,
+        ...(profileCandidate as Partial<SyncProfile>),
+        contractSource: (profileCandidate as Partial<SyncProfile>).contractSource || contractSource,
+    };
+
+    merged.erpTerminalId = pickAuthString(
+        merged.erpTerminalId,
+        resolveRegisterErpTerminalId(response, fallbacks),
+        fallbacks.erpTerminalId,
+        fallbacks.localTerminalId,
+    );
+    merged.localTerminalId = pickAuthString(
+        merged.localTerminalId,
+        fallbacks.localTerminalId,
+        root.name,
+        asObject(root.terminal).name,
+    );
+    merged.localTenantId = pickAuthString(
+        merged.localTenantId,
+        fallbacks.localTenantId,
+        root.tenantId,
+        root.tenant_id,
+    );
+    merged.localStoreId = pickAuthString(
+        merged.localStoreId,
+        fallbacks.localStoreId,
+        root.storeId,
+        root.store_id,
+    );
+    merged.erpBaseUrl = pickAuthString(
+        merged.erpBaseUrl,
+        merged.cloudBaseUrl,
+        fallbacks.erpBaseUrl,
+        fallbacks.cloudBaseUrl,
+    );
+    merged.cloudBaseUrl = pickAuthString(merged.cloudBaseUrl, merged.erpBaseUrl);
+
+    return merged;
+};
+
+export interface SyncProfileChainValidationContext {
+    erpTerminalId?: string | null;
+    localTerminalId?: string | null;
+    terminalName?: string | null;
+}
+
+export const validateSyncProfileChainUpgrade = (
+    existingProfile: SyncProfile | null,
+    incomingProfile: SyncProfile,
+    context: SyncProfileChainValidationContext = {},
+): { allowed: boolean; reason?: string } => {
+    if (!existingProfile) return { allowed: true };
+
+    const incomingPriority = getSyncProfileSourcePriority(incomingProfile.contractSource);
+    const existingPriority = getSyncProfileSourcePriority(existingProfile.contractSource);
+
+    if (incomingProfile.contractSource === 'ERP_REGISTER' && incomingPriority >= 100) {
+        const resolvedIncomingErpTerminalId =
+            incomingProfile.erpTerminalId
+            || context.erpTerminalId
+            || undefined;
+
+        const tenantMatches = !existingProfile.localTenantId
+            || !incomingProfile.localTenantId
+            || existingProfile.localTenantId === incomingProfile.localTenantId;
+
+        const erpTerminalMatches = !existingProfile.erpTerminalId
+            || !resolvedIncomingErpTerminalId
+            || existingProfile.erpTerminalId === resolvedIncomingErpTerminalId;
+
+        const localTerminalMatches = !existingProfile.localTerminalId
+            || !incomingProfile.localTerminalId
+            || existingProfile.localTerminalId === incomingProfile.localTerminalId
+            || existingProfile.localTerminalId === context.terminalName
+            || incomingProfile.localTerminalId === context.terminalName
+            || incomingProfile.localTerminalId === context.localTerminalId
+            || existingProfile.localTerminalId === context.localTerminalId;
+
+        if (tenantMatches && erpTerminalMatches && localTerminalMatches) {
+            return { allowed: true };
+        }
+
+        return {
+            allowed: false,
+            reason: 'ERP_REGISTER profile chain mismatch (tenant/erpTerminal/localTerminal)',
+        };
+    }
+
+    if (incomingPriority >= existingPriority) {
+        return { allowed: true };
+    }
+
+    return {
+        allowed: false,
+        reason: `Incoming profile priority ${incomingPriority} is lower than existing ${existingPriority}`,
+    };
+};
+
+export const resolveNormalizedRegisterDeviceToken = (...sources: unknown[]): string | undefined => {
+    const auth = extractErpRegisterAuth(...sources);
+    return auth.deviceToken || auth.terminalToken || auth.activationToken;
+};

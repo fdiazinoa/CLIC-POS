@@ -180,6 +180,12 @@ import {
   type SyncProfileSource
 } from './services/sync/SyncProfile';
 import { persistSyncDeviceToken } from './services/sync/deviceToken';
+import {
+  extractErpRegisterAuth,
+  resolveIncomingSyncProfileFromRegister,
+  resolveNormalizedRegisterDeviceToken,
+  resolveRegisterErpTerminalId,
+} from './services/sync/erpRegisterResponse';
 import { saveTerminalCredentialsSync } from './services/sync/TerminalCredentialStore';
 import {
   canRetryFiscalTransaction,
@@ -369,7 +375,7 @@ const extractSetupAuthPayload = (...sources: unknown[]) => {
   return { deviceToken, terminalToken, activationToken, syncToken, tokenExpiresAt };
 };
 
-const logRegisterResponseAuth = (auth: ReturnType<typeof extractSetupAuthPayload>) => {
+const logRegisterResponseAuth = (auth: ReturnType<typeof extractErpRegisterAuth>) => {
   console.log('[REGISTER_RESPONSE_AUTH]', {
     deviceTokenPresent: Boolean(auth.deviceToken),
     terminalTokenPresent: Boolean(auth.terminalToken),
@@ -3610,6 +3616,8 @@ const AppContent: React.FC = () => {
       syncProfile?: Partial<SyncProfile>;
       syncPermissions?: SyncPermissions;
       contractSource?: SyncProfileSource;
+      incomingProfile?: Partial<SyncProfile>;
+      profile?: Partial<SyncProfile>;
       progress?: (update: { stepId?: 'claim' | 'config' | 'apply' | 'sync' | 'cache' | 'finish'; message?: string }) => void;
     },
     options?: { forceTakeover?: boolean }
@@ -3646,18 +3654,45 @@ const AppContent: React.FC = () => {
         stepId: 'apply',
         message: 'Guardando configuración de terminal y permisos locales...',
       });
-      const setupRegisterAuth = extractSetupAuthPayload(
+      const setupRegisterAuth = extractErpRegisterAuth(
         setupResult,
         (setupResult as any)?.initialConfigData,
         (setupResult as any)?.terminal_config,
         setupResult.boundConfig?.metadata,
-        setupResult.boundConfig?.metadata?.syncAuth
+        setupResult.boundConfig?.metadata?.syncAuth,
+        setupResult?.syncProfile,
+        setupResult?.incomingProfile,
+        setupResult?.profile,
       );
       logRegisterResponseAuth(setupRegisterAuth);
-      const normalizedDeviceToken =
-        setupRegisterAuth.deviceToken
-        || setupRegisterAuth.terminalToken
-        || setupRegisterAuth.activationToken;
+      const normalizedDeviceToken = resolveNormalizedRegisterDeviceToken(
+        setupResult,
+        (setupResult as any)?.initialConfigData,
+        setupRegisterAuth,
+      );
+      if (setupRegisterAuth.syncToken) {
+        localStorage.setItem('clic_erp_sync_token', setupRegisterAuth.syncToken);
+        localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
+        if (setupRegisterAuth.tokenExpiresAt) {
+          localStorage.setItem('clic_erp_sync_token_expires_at', setupRegisterAuth.tokenExpiresAt);
+        }
+      }
+      if (normalizedDeviceToken) {
+        persistSyncDeviceToken(normalizedDeviceToken, 'ERP_REGISTER', setupRegisterAuth.tokenExpiresAt);
+        saveTerminalCredentialsSync({
+          terminalId: setupResult?.erpTerminalId || terminalId,
+          deviceId,
+          deviceToken: normalizedDeviceToken,
+          deviceTokenSource: 'ERP_REGISTER',
+          deviceTokenUpdatedAt: new Date().toISOString(),
+          deviceTokenExpiresAt: setupRegisterAuth.tokenExpiresAt || null,
+          ...(setupRegisterAuth.syncToken ? {
+            syncToken: setupRegisterAuth.syncToken,
+            syncTokenUpdatedAt: new Date().toISOString(),
+            syncTokenExpiresAt: setupRegisterAuth.tokenExpiresAt || null,
+          } : {}),
+        });
+      }
       if (!normalizedDeviceToken) {
         const missingTokenError = new Error('DEVICE_TOKEN_MISSING_FROM_REGISTER: El ERP vinculó la terminal pero no devolvió deviceToken.');
         setTerminalBindingDiagnosticStatus('BOUND');
@@ -3681,32 +3716,8 @@ const AppContent: React.FC = () => {
           },
           userVisibleSeverity: 'critical',
         });
+        throw missingTokenError;
       }
-      if (normalizedDeviceToken) {
-        persistSyncDeviceToken(normalizedDeviceToken, 'ERP_REGISTER', setupRegisterAuth.tokenExpiresAt);
-      }
-      if (setupRegisterAuth.syncToken) {
-        localStorage.setItem('clic_erp_sync_token', setupRegisterAuth.syncToken);
-        localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
-        if (setupRegisterAuth.tokenExpiresAt) {
-          localStorage.setItem('clic_erp_sync_token_expires_at', setupRegisterAuth.tokenExpiresAt);
-        }
-      }
-      saveTerminalCredentialsSync({
-        terminalId: setupResult?.erpTerminalId || terminalId,
-        deviceId,
-        ...(normalizedDeviceToken ? {
-          deviceToken: normalizedDeviceToken,
-          deviceTokenSource: 'ERP_REGISTER',
-          deviceTokenUpdatedAt: new Date().toISOString(),
-          deviceTokenExpiresAt: setupRegisterAuth.tokenExpiresAt || null,
-        } : {}),
-        ...(setupRegisterAuth.syncToken ? {
-          syncToken: setupRegisterAuth.syncToken,
-          syncTokenUpdatedAt: new Date().toISOString(),
-          syncTokenExpiresAt: setupRegisterAuth.tokenExpiresAt || null,
-        } : {}),
-      });
       const authMetadata = normalizedDeviceToken || setupRegisterAuth.syncToken
         ? {
             ...(setupResult.boundConfig?.metadata?.syncAuth || {}),
@@ -3743,6 +3754,7 @@ const AppContent: React.FC = () => {
         || terminalId;
       const resolvedErpTerminalId =
         setupResult?.erpTerminalId
+        || resolveRegisterErpTerminalId(setupResult)
         || selectedTerminal?.config?.erpTerminalId
         || terminalId;
       const isSlave = selectedTerminal?.config?.isPrimaryNode === false;
@@ -3797,33 +3809,41 @@ const AppContent: React.FC = () => {
         resolvedSyncPermissions?.canPushOperations,
         resolvedSyncPermissions?.pushOperations
       ) ?? false;
-      const incomingSyncProfile: Partial<SyncProfile> = {
-        ...(setupResult?.syncProfile || {}),
-        syncPermissions: resolvedSyncPermissions,
-        contractedProduct: isErpDirectBinding ? 'POS_ERP' : 'POS_ONLY',
-        posRuntime: isSlave ? 'SLAVE' : 'MASTER',
-        cloudChannel: isSlave ? 'POS_MASTER' : isErpDirectBinding ? 'ERP_ACTIVE' : 'POS_CLOUD_STAGING',
-        dataMaster: isSlave ? 'POS_MASTER' : isErpDirectBinding ? 'ERP' : 'POS',
-        cloudSyncEnabled: !isSlave,
-        customerErpAccess: isErpDirectBinding,
-        erpUiEnabled: isErpDirectBinding,
-        localTenantId: resolvedTenantId,
-        localStoreId: setupResult?.storeId || setupResult?.syncProfile?.localStoreId,
-        localTerminalId: terminalId,
-        cloudBaseUrl: resolvedErpBaseUrl || setupResult?.syncProfile?.cloudBaseUrl,
-        erpBaseUrl: resolvedErpBaseUrl || setupResult?.syncProfile?.erpBaseUrl,
-        cloudTenantId: setupResult?.syncProfile?.cloudTenantId || localStorage.getItem('clic_cloud_tenant_id') || localStorage.getItem('active_tenant_id') || resolvedTenantId,
-        erpTenantId: setupResult?.syncProfile?.erpTenantId || resolvedTenantId,
-        erpTerminalId: resolvedErpTerminalId,
-        masterUrl: isSlave ? finalResolvedMasterUrl : undefined,
-        masterTerminalId: isSlave ? terminalId : undefined,
-        masterReady: Boolean(isSlave && finalResolvedMasterUrl),
-        cloudStagingReady: !isErpDirectBinding && !isSlave,
-        erpReadyForSales: resolvedErpReadyForSales,
-      };
       const contractSource: SyncProfileSource =
         setupResult?.contractSource || (isErpDirectBinding ? 'ERP_REGISTER' : 'CLOUD_ADMIN');
-      syncProfilePersistence = saveSyncProfileFromContract(incomingSyncProfile, contractSource);
+      const incomingSyncProfile: Partial<SyncProfile> = resolveIncomingSyncProfileFromRegister(
+        setupResult,
+        {
+          ...(setupResult?.syncProfile || {}),
+          syncPermissions: resolvedSyncPermissions,
+          contractedProduct: isErpDirectBinding ? 'POS_ERP' : 'POS_ONLY',
+          posRuntime: isSlave ? 'SLAVE' : 'MASTER',
+          cloudChannel: isSlave ? 'POS_MASTER' : isErpDirectBinding ? 'ERP_ACTIVE' : 'POS_CLOUD_STAGING',
+          dataMaster: isSlave ? 'POS_MASTER' : isErpDirectBinding ? 'ERP' : 'POS',
+          cloudSyncEnabled: !isSlave,
+          customerErpAccess: isErpDirectBinding,
+          erpUiEnabled: isErpDirectBinding,
+          localTenantId: resolvedTenantId,
+          localStoreId: setupResult?.storeId || setupResult?.syncProfile?.localStoreId,
+          localTerminalId: terminalId,
+          cloudBaseUrl: resolvedErpBaseUrl || setupResult?.syncProfile?.cloudBaseUrl,
+          erpBaseUrl: resolvedErpBaseUrl || setupResult?.syncProfile?.erpBaseUrl,
+          cloudTenantId: setupResult?.syncProfile?.cloudTenantId || localStorage.getItem('clic_cloud_tenant_id') || localStorage.getItem('active_tenant_id') || resolvedTenantId,
+          erpTenantId: setupResult?.syncProfile?.erpTenantId || resolvedTenantId,
+          erpTerminalId: resolvedErpTerminalId,
+          masterUrl: isSlave ? finalResolvedMasterUrl : undefined,
+          masterTerminalId: isSlave ? terminalId : undefined,
+          masterReady: Boolean(isSlave && finalResolvedMasterUrl),
+          cloudStagingReady: !isErpDirectBinding && !isSlave,
+          erpReadyForSales: resolvedErpReadyForSales,
+        },
+        contractSource,
+      );
+      syncProfilePersistence = saveSyncProfileFromContract(incomingSyncProfile, contractSource, {
+        erpTerminalId: resolvedErpTerminalId,
+        localTerminalId: terminalId,
+        terminalName: resolvedTerminalName,
+      });
       localStorage.setItem('clic_sync_mode', isSlave ? 'POS_SLAVE' : isErpDirectBinding ? 'POS_ERP' : 'POS_LOCAL');
       localStorage.setItem('clic_customer_erp_access', String(isErpDirectBinding));
       localStorage.setItem('clic_erp_ui_enabled', String(isErpDirectBinding));

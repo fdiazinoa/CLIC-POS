@@ -1,4 +1,7 @@
 import { getStoredTenantIdentity } from './cloudMasterRegistry';
+import { extractErpRegisterAuth, resolveNormalizedRegisterDeviceToken } from '../services/sync/erpRegisterResponse';
+import { persistSyncDeviceToken } from '../services/sync/deviceToken';
+import { saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
 import { extractTerminalConfigRequestedScopes } from './terminalConfigPushScopes';
 import { mergeTerminalConfigSnapshots } from './terminalConfigSnapshot';
 import { db } from './db';
@@ -57,6 +60,17 @@ type SyncRegisterResponse = {
     action?: string;
     activation?: SyncActivationState | null;
     terminal?: SyncTerminalRecord | null;
+    terminalId?: string | null;
+    erpTerminalId?: string | null;
+    deviceToken?: string | null;
+    device_token?: string | null;
+    syncToken?: string | null;
+    sync_token?: string | null;
+    auth?: Record<string, unknown> | null;
+    syncHeaders?: Record<string, unknown> | null;
+    profile?: Record<string, unknown> | null;
+    syncProfile?: Record<string, unknown> | null;
+    incomingProfile?: Record<string, unknown> | null;
 };
 
 type SyncHeartbeatResponse = {
@@ -1124,6 +1138,44 @@ export const registerErpSyncTerminal = async (params: EnsureLifecycleParams): Pr
         persistBinding(payload.terminal, identity, {
             localTerminalId: params.localTerminalId || storedBinding.localTerminalId || null,
             terminalName: params.terminalName || storedBinding.terminalName || null,
+        });
+    }
+
+    const registerAuth = extractErpRegisterAuth(payload);
+    const deviceToken = resolveNormalizedRegisterDeviceToken(payload, registerAuth);
+    const resolvedTerminalId =
+        payload?.terminal?.id
+        || payload?.erpTerminalId
+        || payload?.terminalId
+        || params.terminalId
+        || storedBinding.terminalId
+        || null;
+
+    if (deviceToken) {
+        persistSyncDeviceToken(deviceToken, 'ERP_REGISTER', registerAuth.tokenExpiresAt);
+    }
+    if (registerAuth.syncToken) {
+        localStorage.setItem('clic_erp_sync_token', registerAuth.syncToken);
+        localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
+        if (registerAuth.tokenExpiresAt) {
+            localStorage.setItem('clic_erp_sync_token_expires_at', registerAuth.tokenExpiresAt);
+        }
+    }
+    if (deviceToken || registerAuth.syncToken) {
+        saveTerminalCredentialsSync({
+            terminalId: resolvedTerminalId,
+            deviceId: params.deviceId,
+            ...(deviceToken ? {
+                deviceToken,
+                deviceTokenSource: 'ERP_REGISTER',
+                deviceTokenUpdatedAt: new Date().toISOString(),
+                deviceTokenExpiresAt: registerAuth.tokenExpiresAt || null,
+            } : {}),
+            ...(registerAuth.syncToken ? {
+                syncToken: registerAuth.syncToken,
+                syncTokenUpdatedAt: new Date().toISOString(),
+                syncTokenExpiresAt: registerAuth.tokenExpiresAt || null,
+            } : {}),
         });
     }
 

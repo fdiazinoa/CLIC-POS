@@ -20,6 +20,7 @@ import {
   listTerminalsFromErp,
 } from '../services/setup/erpTerminalSetup';
 import { persistSyncDeviceToken } from '../services/sync/deviceToken';
+import { extractErpRegisterAuth, resolveNormalizedRegisterDeviceToken } from '../services/sync/erpRegisterResponse';
 import { saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
 import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../services/sync/SyncProfile';
 
@@ -55,6 +56,9 @@ interface BindTerminalResponse {
   users?: UserType[];
   sync_profile?: Partial<SyncProfile>;
   syncProfile?: Partial<SyncProfile>;
+  incomingProfile?: Partial<SyncProfile>;
+  incoming_profile?: Partial<SyncProfile>;
+  profile?: Partial<SyncProfile>;
   sync_permissions?: SyncPermissions;
   syncPermissions?: SyncPermissions;
   contracted_product?: string;
@@ -149,6 +153,8 @@ interface BoundTerminalPayload {
   syncProfile?: Partial<SyncProfile>;
   syncPermissions?: SyncPermissions;
   contractSource?: SyncProfileSource;
+  incomingProfile?: Partial<SyncProfile>;
+  profile?: Partial<SyncProfile>;
   deviceToken?: string;
   terminalToken?: string;
   activationToken?: string;
@@ -316,7 +322,15 @@ const extractPolicyObject = (...sources: unknown[]): Partial<SyncProfile> => {
   for (const source of sources) {
     if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
     const record = source as Record<string, any>;
-    const nested = record.sync_profile || record.syncProfile || record.policy || record.sync_policy || record.syncPolicy;
+    const nested =
+      record.incomingProfile
+      || record.incoming_profile
+      || record.sync_profile
+      || record.syncProfile
+      || record.profile
+      || record.policy
+      || record.sync_policy
+      || record.syncPolicy;
     if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
       return nested as Partial<SyncProfile>;
     }
@@ -418,7 +432,7 @@ const extractRegisterAuthPayload = (...sources: unknown[]) => {
   return { deviceToken, terminalToken, activationToken, syncToken, tokenExpiresAt };
 };
 
-const logRegisterResponseAuth = (auth: ReturnType<typeof extractRegisterAuthPayload>) => {
+const logRegisterResponseAuth = (auth: ReturnType<typeof extractErpRegisterAuth>) => {
   console.log('[REGISTER_RESPONSE_AUTH]', {
     deviceTokenPresent: Boolean(auth.deviceToken),
     terminalTokenPresent: Boolean(auth.terminalToken),
@@ -1112,26 +1126,33 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             : undefined;
         const resolvedTerminalId = initialConfigData.terminal_id || data.terminal_id || terminal.id;
         const resolvedErpTerminalId = data.erp_terminal_id || terminal.erpTerminalId || undefined;
-        const syncProfile = buildTerminalSyncProfile({
-          bindingMode,
-          expectsErpDirect,
-          erpBaseUrl,
-          terminalId: resolvedTerminalId,
-          erpTerminalId: resolvedErpTerminalId,
-          tenantId: initialConfigData.tenant_id || data.tenant_id || tenantId,
-          storeId: data.store_id || undefined,
-          data,
-          initialConfigData,
-        });
+        const syncProfile = {
+          ...buildTerminalSyncProfile({
+            bindingMode,
+            expectsErpDirect,
+            erpBaseUrl,
+            terminalId: resolvedTerminalId,
+            erpTerminalId: resolvedErpTerminalId,
+            tenantId: initialConfigData.tenant_id || data.tenant_id || tenantId,
+            storeId: data.store_id || undefined,
+            data,
+            initialConfigData,
+          }),
+          ...(data.syncProfile || data.sync_profile || data.incomingProfile || data.incoming_profile || data.profile || {}),
+        };
         const syncPermissions =
           data.syncPermissions ||
           data.sync_permissions ||
           initialConfigData.syncPermissions ||
           initialConfigData.sync_permissions ||
           syncProfile.syncPermissions;
-        const registerAuth = extractRegisterAuthPayload(data, initialConfigData, initialConfigData.terminal_config);
+        const registerAuth = extractErpRegisterAuth(data, initialConfigData, initialConfigData.terminal_config);
         logRegisterResponseAuth(registerAuth);
-        const normalizedDeviceToken = registerAuth.deviceToken || registerAuth.terminalToken || registerAuth.activationToken;
+        const normalizedDeviceToken = resolveNormalizedRegisterDeviceToken(
+          data,
+          initialConfigData,
+          registerAuth,
+        );
         if (normalizedDeviceToken) {
           persistSyncDeviceToken(normalizedDeviceToken, 'ERP_REGISTER', registerAuth.tokenExpiresAt);
         }
@@ -1188,6 +1209,8 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           syncProfile,
           syncPermissions,
           contractSource: expectsErpDirect ? 'ERP_REGISTER' : 'CLOUD_ADMIN',
+          incomingProfile: data.incomingProfile || data.incoming_profile || data.profile || data.syncProfile,
+          profile: data.profile || data.syncProfile,
           deviceToken: normalizedDeviceToken,
           terminalToken: registerAuth.terminalToken,
           activationToken: registerAuth.activationToken,
