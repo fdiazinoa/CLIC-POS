@@ -163,6 +163,7 @@ import {
   setSalesPushDiagnosticStatus,
   setSyncAuthDiagnosticStatus,
   setTerminalBindingDiagnosticStatus,
+  TERMINAL_BINDING_STATUS_KEY,
   type SyncErrorDiagnostic
 } from './services/sync/SyncErrorDiagnostic';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
@@ -3004,12 +3005,30 @@ const AppContent: React.FC = () => {
           const pairedTerminal = terminals.find(
             (t: any) => t.config?.currentDeviceId === storedDeviceId
           );
+          const terminalBindingStatus = localStorage.getItem(TERMINAL_BINDING_STATUS_KEY);
+          const isErpSetupMode =
+            setupMode === 'SERVER_ERP'
+            || localStorage.getItem('clic_sync_mode') === 'POS_ERP';
+
+          if (!pairedTerminal && !isVisorMode && isErpSetupMode) {
+            console.log('[BOOT] ERP terminal not paired on this device. Resuming terminal pairing...', {
+              terminalBindingStatus,
+              setupMode,
+            });
+            localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_ERP');
+            localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
+            setCurrentView('TERMINAL_PAIRING');
+            setIsDataLoaded(true);
+            setIsSecurityLoaded(true);
+            return;
+          }
 
           const shouldRunInitialSetupWizard =
             !setupWizardCompleted &&
             !masterIp &&
             !pairedTerminal &&
-            !isVisorMode;
+            !isVisorMode &&
+            !isErpSetupMode;
 
           if (shouldRunInitialSetupWizard) {
             console.log('[BOOT] First installation detected. Launching setup wizard...');

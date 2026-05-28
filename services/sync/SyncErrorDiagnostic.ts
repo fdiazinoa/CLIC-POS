@@ -203,9 +203,6 @@ export const setTerminalBindingDiagnosticStatus = (status: TerminalBindingStatus
 
 export const setCatalogDiagnosticStatus = (status: CatalogSyncStatus): void => {
     safeLocalStorageSet(CATALOG_SYNC_STATUS_KEY, status);
-    if (status === 'SYNCED') {
-        clearSyncErrorDiagnostic();
-    }
 };
 
 export const clearSyncErrorDiagnostic = (): void => {
