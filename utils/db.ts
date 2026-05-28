@@ -12,6 +12,7 @@ import {
   DEFAULT_ROLES, DEFAULT_TERMINAL_CONFIG, DEFAULT_DOCUMENT_SERIES
 } from '../constants';
 import { dbAdapter } from '../services/db';
+import { Capacitor } from '@capacitor/core';
 import { permissionService } from '../services/sync/PermissionService';
 import { mergeDocumentSeriesCollection } from './documentSeriesIdentity';
 
@@ -617,8 +618,13 @@ export const db = {
         'erp_sales_documents'
       ].includes(key);
 
-    const isDeferredHeavyCollection = (key: string) =>
-      ['transactions', 'transactionHistory'].includes(key);
+    const isDeferredHeavyCollection = (key: string) => {
+      if (['transactions', 'transactionHistory'].includes(key)) return true;
+      if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+        return ['erp_sales_documents', 'zReports', 'crmOpportunities', 'activities'].includes(key);
+      }
+      return false;
+    };
 
     const shouldCheckSeedForCollection = (key: string, value: any) => {
       if (key === 'config') return true;

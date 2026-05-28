@@ -3,6 +3,7 @@ import type { DatabaseAdapter } from '../DatabaseAdapter';
 
 const DB_NAME = 'clic_pos_native';
 const DB_VERSION = 1;
+const DOCUMENT_READ_BATCH_SIZE = 40;
 const DOCUMENT_SCHEMA_MIGRATION_KEY = 'documents_schema_v2_migrated';
 const DOCUMENT_UPSERT_SQL = `
     INSERT INTO documents (collection_name, doc_id, data, sort_order, updatedAt)
@@ -274,21 +275,29 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     private async readStoredDocuments(collectionName: string): Promise<any[]> {
         const db = this.ensureDb();
-        const result = await db.query(
-            'SELECT data FROM documents WHERE collection_name = ? ORDER BY sort_order ASC, updatedAt ASC',
-            [collectionName]
-        );
-        const rows = Array.isArray(result?.values) ? result.values : [];
         const docs: any[] = [];
+        let offset = 0;
 
-        for (const row of rows) {
-            const rawValue = row && typeof row === 'object' ? (row as Record<string, unknown>).data : null;
-            if (typeof rawValue !== 'string' || !rawValue.trim()) continue;
-            try {
-                docs.push(JSON.parse(rawValue));
-            } catch (error) {
-                console.warn(`[CapacitorSQLiteAdapter] Failed to parse ${collectionName} row:`, error);
+        while (true) {
+            const result = await db.query(
+                'SELECT data FROM documents WHERE collection_name = ? ORDER BY sort_order ASC, updatedAt ASC LIMIT ? OFFSET ?',
+                [collectionName, DOCUMENT_READ_BATCH_SIZE, offset]
+            );
+            const rows = Array.isArray(result?.values) ? result.values : [];
+            if (rows.length === 0) break;
+
+            for (const row of rows) {
+                const rawValue = row && typeof row === 'object' ? (row as Record<string, unknown>).data : null;
+                if (typeof rawValue !== 'string' || !rawValue.trim()) continue;
+                try {
+                    docs.push(JSON.parse(rawValue));
+                } catch (error) {
+                    console.warn(`[CapacitorSQLiteAdapter] Failed to parse ${collectionName} row:`, error);
+                }
             }
+
+            offset += rows.length;
+            if (rows.length < DOCUMENT_READ_BATCH_SIZE) break;
         }
 
         return docs;
