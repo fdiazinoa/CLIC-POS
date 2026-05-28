@@ -156,6 +156,8 @@ import {
 import {
   SYNC_DIAGNOSTIC_EVENT,
   SYNC_DIAGNOSTIC_STORAGE_KEY,
+  clearSyncErrorDiagnostic,
+  isRecoverableStaleSyncDiagnostic,
   reportSyncErrorDiagnostic,
   setCatalogDiagnosticStatus,
   setSalesPushDiagnosticStatus,
@@ -952,7 +954,12 @@ const AppContent: React.FC = () => {
   const [syncDiagnostic, setSyncDiagnostic] = useState<SyncErrorDiagnostic | null>(() => {
     try {
       const stored = localStorage.getItem(SYNC_DIAGNOSTIC_STORAGE_KEY);
-      return stored ? JSON.parse(stored) as SyncErrorDiagnostic : null;
+      const parsed = stored ? JSON.parse(stored) as SyncErrorDiagnostic : null;
+      if (isRecoverableStaleSyncDiagnostic(parsed)) {
+        clearSyncErrorDiagnostic();
+        return null;
+      }
+      return parsed;
     } catch {
       return null;
     }
@@ -969,8 +976,8 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     const handleDiagnostic = (event: Event) => {
-      const detail = (event as CustomEvent<SyncErrorDiagnostic>).detail;
-      if (detail) setSyncDiagnostic(detail);
+      const detail = (event as CustomEvent<SyncErrorDiagnostic | null>).detail;
+      setSyncDiagnostic(detail || null);
     };
 
     window.addEventListener(SYNC_DIAGNOSTIC_EVENT, handleDiagnostic as EventListener);
@@ -3793,9 +3800,15 @@ const AppContent: React.FC = () => {
       const resolvedSyncPermissions = setupResult?.syncPermissions || setupResult?.syncProfile?.syncPermissions;
       const resolvedErpReadyForSales = coerceOptionalBoolean(
         setupResult?.syncProfile?.erpReadyForSales,
+        (setupResult as any)?.erpReadyForSales,
+        (setupResult as any)?.erp_ready_for_sales,
         resolvedSyncPermissions?.canPushOperations,
         resolvedSyncPermissions?.pushOperations
-      ) ?? false;
+      ) ?? (
+        isErpDirectBinding && Boolean(normalizedDeviceToken)
+          ? true
+          : false
+      );
       const contractSource: SyncProfileSource =
         setupResult?.contractSource || (isErpDirectBinding ? 'ERP_REGISTER' : 'CLOUD_ADMIN');
       const incomingSyncProfile: Partial<SyncProfile> = resolveIncomingSyncProfileFromRegister(
@@ -4114,6 +4127,9 @@ const AppContent: React.FC = () => {
       });
       setTerminalBindingDiagnosticStatus('BOUND');
       setCatalogDiagnosticStatus('SYNCED');
+      setSalesPushDiagnosticStatus(resolvedErpReadyForSales ? 'ENABLED' : 'LOCKED_UNTIL_ERP_READY');
+      clearSyncErrorDiagnostic();
+      setSyncDiagnostic(null);
       if (isErpDirectBinding) {
         console.log('[SYNC_ROUTER] POS_ERP binding complete: skipping POS_CLOUD_STAGING snapshot and PUSH_MASTERS.');
       } else {

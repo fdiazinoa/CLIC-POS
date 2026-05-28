@@ -203,6 +203,40 @@ export const setTerminalBindingDiagnosticStatus = (status: TerminalBindingStatus
 
 export const setCatalogDiagnosticStatus = (status: CatalogSyncStatus): void => {
     safeLocalStorageSet(CATALOG_SYNC_STATUS_KEY, status);
+    if (status === 'SYNCED') {
+        clearSyncErrorDiagnostic();
+    }
+};
+
+export const clearSyncErrorDiagnostic = (): void => {
+    try {
+        localStorage.removeItem(SYNC_DIAGNOSTIC_STORAGE_KEY);
+    } catch {
+        // Ignore storage failures in WebViews.
+    }
+
+    try {
+        window.dispatchEvent(new CustomEvent(SYNC_DIAGNOSTIC_EVENT, { detail: null }));
+    } catch {
+        // Ignore event dispatch failures in WebViews.
+    }
+};
+
+export const isRecoverableStaleSyncDiagnostic = (
+    diagnostic: SyncErrorDiagnostic | null | undefined,
+): boolean => {
+    if (!diagnostic?.errorMessage) return false;
+
+    const message = diagnostic.errorMessage.trim().toLowerCase();
+    if (!message.startsWith('chain validation failed')) return false;
+
+    const bindingStatus = safeLocalStorageGet(TERMINAL_BINDING_STATUS_KEY);
+    if (bindingStatus === 'BOUND') return true;
+
+    return Boolean(
+        safeLocalStorageGet('clic_erp_sync_terminal_id')
+        || safeLocalStorageGet('active_terminal_id')
+    );
 };
 
 export const setSalesPushDiagnosticStatus = (status: SalesPushStatus): void => {

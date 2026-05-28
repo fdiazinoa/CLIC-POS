@@ -133,6 +133,79 @@ const normalizeSyncApiBase = (value?: string | null): string | undefined => {
     return base ? `${base}/api/sync` : undefined;
 };
 
+const hasPersistedErpBinding = (): boolean => Boolean(
+    firstValue(
+        readStorage('clic_erp_sync_terminal_id'),
+        readStorage('erp_terminal_id'),
+        readStorage('active_terminal_id'),
+        readStorage('CLIC_POS_TERMINAL_ID'),
+    )
+);
+
+const hasPersistedSyncCredentials = (): boolean => Boolean(
+    firstValue(
+        readStorage('clic_sync_device_token'),
+        readStorage('clic_erp_sync_token'),
+        readStorage('clic_erp_device_token'),
+    )
+);
+
+const isTerminalBindingMarkedBound = (): boolean =>
+    readStorage('clic_terminal_binding_status') === 'BOUND' || hasPersistedErpBinding();
+
+const reconcilePosErpProfile = (profile: SyncProfile): SyncProfile => {
+    const rawMode = String(readStorage('clic_sync_mode') || '').trim().toUpperCase();
+    const explicitErpAccess = readBoolean(['clic_customer_erp_access', 'clic_erp_ui_enabled', 'CLIC_ERP_ACTIVE'], false);
+    const isPosErp = rawMode === 'POS_ERP' || explicitErpAccess || profile.contractedProduct === 'POS_ERP';
+    if (!isPosErp) return profile;
+
+    const erpTerminalId = firstValue(profile.erpTerminalId, readStorage('clic_erp_sync_terminal_id'), readStorage('erp_terminal_id'));
+    const bound = isTerminalBindingMarkedBound();
+    const hasCredentials = hasPersistedSyncCredentials();
+    const shouldPromoteContractSource =
+        getSyncProfileSourcePriority(profile.contractSource) < getSyncProfileSourcePriority('ERP_REGISTER')
+        && Boolean(erpTerminalId)
+        && bound;
+    const shouldEnableSales =
+        !profile.erpReadyForSales
+        && Boolean(erpTerminalId)
+        && hasCredentials
+        && bound;
+
+    if (
+        profile.contractedProduct === 'POS_ERP'
+        && profile.cloudChannel === 'ERP_ACTIVE'
+        && !shouldPromoteContractSource
+        && !shouldEnableSales
+    ) {
+        return profile;
+    }
+
+    const reconciled = normalizeProfile({
+        ...profile,
+        contractedProduct: 'POS_ERP',
+        cloudChannel: 'ERP_ACTIVE',
+        dataMaster: 'ERP',
+        customerErpAccess: true,
+        erpUiEnabled: true,
+        contractSource: shouldPromoteContractSource ? 'ERP_REGISTER' : profile.contractSource,
+        erpTerminalId,
+        erpReadyForSales: shouldEnableSales
+            ? true
+            : profile.erpReadyForSales ?? readBoolean(['clic_erp_ready_for_sales'], false),
+    });
+
+    if (
+        reconciled.contractSource !== profile.contractSource
+        || reconciled.erpReadyForSales !== profile.erpReadyForSales
+        || reconciled.contractedProduct !== profile.contractedProduct
+    ) {
+        saveSyncProfile(reconciled);
+    }
+
+    return reconciled;
+};
+
 export function loadSyncProfile(): SyncProfile {
     const persisted = readStorage(PROFILE_STORAGE_KEY);
     if (persisted) {
@@ -149,7 +222,10 @@ export function loadSyncProfile(): SyncProfile {
                         dataMaster: 'ERP',
                         customerErpAccess: true,
                         erpUiEnabled: true,
-                        contractSource: normalized.contractSource || 'LEGACY_LOCAL_STORAGE',
+                        contractSource: getSyncProfileSourcePriority(normalized.contractSource) >= getSyncProfileSourcePriority('ERP_REGISTER')
+                            ? normalized.contractSource
+                            : 'ERP_REGISTER',
+                        erpReadyForSales: normalized.erpReadyForSales ?? readBoolean(['clic_erp_ready_for_sales'], hasPersistedErpBinding()),
                     });
                     console.warn('[SYNC_PROFILE_MISMATCH_FIXED]', {
                         reason: 'LEGACY_PROFILE_CONFLICTS_WITH_POS_ERP_MODE',
@@ -168,9 +244,9 @@ export function loadSyncProfile(): SyncProfile {
                         profileSourcePriority: getSyncProfileSourcePriority(corrected.contractSource),
                         fixedAt: new Date().toISOString(),
                     });
-                    return corrected;
+                    return reconcilePosErpProfile(corrected);
                 }
-                return normalized;
+                return reconcilePosErpProfile(normalized);
             }
         } catch {
             console.warn('⚠️ SyncProfile: invalid persisted profile, trying last backend profile before legacy storage.');
@@ -185,10 +261,10 @@ export function loadSyncProfile(): SyncProfile {
             profileSourcePriority: lastSavedProfile.profileSourcePriority,
         });
         saveSyncProfile(lastSavedProfile);
-        return lastSavedProfile;
+        return reconcilePosErpProfile(lastSavedProfile);
     }
 
-    return inferLegacySyncProfile();
+    return reconcilePosErpProfile(inferLegacySyncProfile());
 }
 
 export function saveSyncProfile(profile: SyncProfile): void {
@@ -410,7 +486,9 @@ export function inferLegacySyncProfile(): SyncProfile {
         cloudSyncEnabled: cloudChannel !== 'NONE',
         customerErpAccess: isPosErp,
         erpUiEnabled: isPosErp,
-        contractSource: 'LEGACY_LOCAL_STORAGE',
+        contractSource: isPosErp && erpTerminalId && isTerminalBindingMarkedBound()
+            ? 'ERP_REGISTER'
+            : 'LEGACY_LOCAL_STORAGE',
         localTenantId: firstValue(readStorage('active_tenant_id'), readStorage('clic_tenant_id')),
         localStoreId: firstValue(readStorage('active_store_id'), readStorage('clic_store_id')),
         localTerminalId: firstValue(readStorage('active_terminal_id'), readStorage('CLIC_POS_TERMINAL_ID')),
@@ -420,7 +498,12 @@ export function inferLegacySyncProfile(): SyncProfile {
         erpTenantId: firstValue(readStorage('clic_erp_sync_tenant_id'), readStorage('erp_tenant_id')),
         erpTerminalId,
         cloudStagingReady: Boolean(!isPosErp && erpBaseUrl && erpTerminalId),
-        erpReadyForSales: isPosErp ? readBoolean(['clic_erp_ready_for_sales', 'erpReadyForSales'], false) : false,
+        erpReadyForSales: isPosErp
+            ? readBoolean(
+                ['clic_erp_ready_for_sales', 'erpReadyForSales'],
+                Boolean(erpTerminalId && hasPersistedSyncCredentials() && isTerminalBindingMarkedBound()),
+            )
+            : false,
     });
 }
 
