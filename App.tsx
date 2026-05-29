@@ -178,6 +178,7 @@ import {
 } from './services/version/posApkUpdateService';
 import {
   loadSyncProfile,
+  isPosOnlyCloudStagingTarget,
   resolveSyncTarget,
   saveSyncProfileFromContract,
   type SyncPermissions,
@@ -1207,6 +1208,11 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     const handleTerminalConfigSyncRequested = async (event: Event) => {
+      if (isPosOnlyCloudStagingTarget()) {
+        console.warn('[CLOUD STAGING] terminalConfigSyncRequested ignored; local catalog remains authoritative.');
+        return;
+      }
+
       try {
         const detail = (event as CustomEvent<TerminalConfigSyncRequestDetail>)?.detail || null;
         const refreshedConfig = await syncManager.refreshTerminalResolvedConfig(
@@ -1701,9 +1707,17 @@ const AppContent: React.FC = () => {
     let heartbeatTimeoutId: number | null = null;
 
     const syncLifecycle = async (options?: { forceManifestRefresh?: boolean }) => {
+      if (isPosOnlyCloudStagingTarget()) {
+        return;
+      }
+
       try {
         const operationalTerminalId = currentTerminal.config?.stationNumber || currentTerminal.id;
-        const erpTerminalId = currentTerminal.config?.erpTerminalId || operationalTerminalId;
+        const erpTerminalId =
+          currentTerminal.config?.erpTerminalId
+          || loadSyncProfile().erpTerminalId
+          || localStorage.getItem('clic_erp_sync_terminal_id')
+          || operationalTerminalId;
         const terminalName = currentTerminal.config?.terminalName || operationalTerminalId;
         const result = await ensureErpSyncLifecycle({
           deviceId,
@@ -1752,9 +1766,13 @@ const AppContent: React.FC = () => {
       }
     };
 
-    // Boot: publica una sola vez; el diff check del registry evita reescrituras redundantes.
+    // Boot: publica endpoint; lifecycle ERP/manifest solo en contratos ERP o legacy con pull.
     void publishEndpoint();
-    void syncLifecycle({ forceManifestRefresh: true });
+    if (!isPosOnlyCloudStagingTarget()) {
+      void syncLifecycle({ forceManifestRefresh: true });
+    } else {
+      console.log('[CLOUD STAGING] ERP lifecycle and manifest refresh disabled for POS_CLOUD_STAGING.');
+    }
 
     const scheduleNextHeartbeat = () => {
       if (disposed) return;
@@ -1766,7 +1784,9 @@ const AppContent: React.FC = () => {
         if (!disposed && navigator.onLine) {
           // Publish on heartbeat is diff-only: cloudMasterRegistry.ts compara fingerprint e IP antes de escribir.
           void publishEndpoint();
-          await syncLifecycle();
+          if (!isPosOnlyCloudStagingTarget()) {
+            await syncLifecycle();
+          }
         }
         scheduleNextHeartbeat();
       }, HEARTBEAT_INTERVAL_MS + getTimerJitterMs());
