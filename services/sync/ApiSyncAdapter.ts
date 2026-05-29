@@ -17,6 +17,7 @@ import {
     isPosOnlyCloudStagingTarget,
 } from './SyncProfile';
 import { isPosCloudStagingPushCollection } from './PosCloudStagingService';
+import { looksLikeUuidString } from '../../utils/documentSeriesIdentity';
 import {
     reportSyncErrorDiagnostic,
     setCatalogDiagnosticStatus,
@@ -1605,13 +1606,15 @@ class ApiSyncAdapter {
         if (target.useLocalTarget) return body;
 
         const deviceId = this.resolveCurrentDeviceId();
+        const tenantId = this.resolveCurrentTenantId();
 
         const normalizedBody: Record<string, unknown> = {
             ...body,
             terminalId: target.terminalId,
             terminal_id: target.terminalId,
+            ...(tenantId ? { tenantId, tenant_id: tenantId } : {}),
             ...(target.kind ? { sync_channel: target.kind } : {}),
-            ...(deviceId ? { device_id: deviceId } : {})
+            ...(deviceId ? { device_id: deviceId, deviceId } : {})
         };
 
         if (Array.isArray(body.items)) {
@@ -1630,6 +1633,60 @@ class ApiSyncAdapter {
         }
 
         return normalizedBody;
+    }
+
+    private buildCloudStagingMasterPushBody(
+        target: {
+            terminalId: string;
+            useLocalTarget: boolean;
+            kind: ResolvedSyncTarget['kind'];
+        },
+        collection: string,
+        items: any[],
+        mode: 'UPSERT' | 'FULL_REPLACE',
+        action: SyncChange['action']
+    ): Record<string, unknown> {
+        return this.buildOperationalPostBody(target, {
+            items,
+            mode,
+            action,
+            source: 'POS',
+            master_type: collection,
+            collection,
+        });
+    }
+
+    private async finishCloudStagingPushResponse(
+        response: Response,
+        collection: string,
+        itemCount: number,
+        phase: 'initial' | 'reauth' = 'initial'
+    ): Promise<void> {
+        const phaseLabel = phase === 'reauth' ? ' after re-auth' : '';
+
+        if (response.ok) {
+            console.log(`📤 ApiSyncAdapter: Staged ${itemCount} ${collection} item(s)${phaseLabel} to cloud.`);
+            return;
+        }
+
+        if (response.status === 404 || response.status === 405) {
+            console.warn(`[POS_CLOUD_STAGING] push skipped collection=${collection} (${response.status})${phaseLabel}.`);
+            return;
+        }
+
+        const detail = await response.text().catch(() => '');
+        const isServerSchemaError = /22P02|invalid input syntax for type uuid|cloud-staging-master-/i.test(detail);
+
+        if (response.status >= 500 || isServerSchemaError) {
+            console.warn(
+                `[POS_CLOUD_STAGING] push deferred collection=${collection} server=${response.status}${phaseLabel}${detail ? ` — ${detail.slice(0, 300)}` : ''}`
+            );
+            return;
+        }
+
+        throw new Error(
+            `Cloud staging push failed${phaseLabel}: ${response.status} ${response.statusText}${detail ? ` — ${detail.slice(0, 300)}` : ''}`
+        );
     }
 
     private resolveOperationalTarget(
@@ -2145,15 +2202,20 @@ class ApiSyncAdapter {
             }
 
             const target = await this.authenticateOperationalTarget(false, 'background', 'PUSH_MASTERS');
-            const buildBody = () => JSON.stringify({
-                items,
-                mode,
-                action,
-                source: 'POS',
-                sync_channel: routedTarget.kind,
-                master_type: collection,
-                collection
-            });
+            if (!looksLikeUuidString(target.terminalId)) {
+                console.warn(`[POS_CLOUD_STAGING] push skipped collection=${collection}: terminalId is not UUID (${target.terminalId})`);
+                return;
+            }
+
+            const tenantId = this.resolveCurrentTenantId();
+            if (tenantId && !looksLikeUuidString(tenantId)) {
+                console.warn(`[POS_CLOUD_STAGING] push skipped collection=${collection}: tenantId is not UUID (${tenantId})`);
+                return;
+            }
+
+            const buildBody = () => JSON.stringify(
+                this.buildCloudStagingMasterPushBody(target, collection, items, mode, action)
+            );
             const postCloudStaging = async (authTarget: {
                 baseUrl: string;
                 terminalId: string;
@@ -2182,27 +2244,11 @@ class ApiSyncAdapter {
                 this.erpAuthToken = null;
                 const retriedTarget = await this.authenticateOperationalTarget(true, 'background', 'PUSH_MASTERS');
                 const retryResponse = await postCloudStaging(retriedTarget);
-                if (!retryResponse.ok) {
-                    if (retryResponse.status === 404 || retryResponse.status === 405) {
-                        console.warn(`[POS_CLOUD_STAGING] push skipped collection=${collection} after re-auth (${retryResponse.status}).`);
-                        return;
-                    }
-                    throw new Error(`Cloud staging push failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
-                }
-                console.log(`📤 ApiSyncAdapter: Staged ${items.length} ${collection} item(s) after re-auth.`);
+                await this.finishCloudStagingPushResponse(retryResponse, collection, items.length, 'reauth');
                 return;
             }
 
-            if (!response.ok) {
-                if (response.status === 404 || response.status === 405) {
-                    console.warn(`[POS_CLOUD_STAGING] push skipped collection=${collection} (${response.status}).`);
-                    return;
-                }
-                const detail = await response.text().catch(() => '');
-                throw new Error(`Cloud staging push failed: ${response.status} ${response.statusText}${detail ? ` — ${detail.slice(0, 300)}` : ''}`);
-            }
-
-            console.log(`📤 ApiSyncAdapter: Staged ${items.length} ${collection} item(s) to cloud.`);
+            await this.finishCloudStagingPushResponse(response, collection, items.length);
             return;
         }
 
