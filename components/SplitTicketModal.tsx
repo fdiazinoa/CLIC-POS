@@ -41,7 +41,7 @@ const NumberTicker: React.FC<{ value: number; currency: string }> = ({ value, cu
       if (progress < 1) requestAnimationFrame(animate);
     };
     requestAnimationFrame(animate);
-  }, [displayValue, value]);
+  }, [value]);
 
   return <span className="tabular-nums tracking-tight">{currency}{displayValue.toFixed(2)}</span>;
 };
