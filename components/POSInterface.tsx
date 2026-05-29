@@ -7,7 +7,7 @@ import {
    UserPlus, PlusCircle, X, Percent, ArrowLeft, ChevronRight,
    Scale as ScaleIcon, PauseCircle, LogOut, Minus, Plus, Edit3,
    ArrowRightLeft, Globe, DollarSign, Split,
-   ChevronDown, Check, AlertCircle, Layers,
+   ChevronDown, ChevronLeft, Check, AlertCircle, Layers,
    ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle,
    MessageSquare, PlayCircle, Download, Lock, ArrowUpRight, Landmark,
    UserCheck, StickyNote, Inbox, Printer, QrCode, Box, Package, MapPin,
@@ -77,6 +77,12 @@ import { resolveCustomerImageSrc, resolveProductImageSrc } from '../utils/entity
 import { resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
 import SplitTicketModal from './SplitTicketModal';
+import {
+   buildSplitAccountLabel,
+   collectTableSplitTickets,
+   formatSplitAccountPosition,
+   getSplitAccountMeta
+} from '../utils/tableSplitTickets';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
 import { productIdentityCandidates, productReferenceCandidates, resolveOperationalProductId } from '../utils/productReferences';
 import { resolveKdsBaseUrl } from '../utils/kdsRouting';
@@ -895,6 +901,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       () => buildTableContextLabels(activeTable, rooms),
       [activeTable, rooms]
    );
+   const tableSplitTickets = useMemo(
+      () => collectTableSplitTickets(activeTable?.id, parkedTickets, activeTable?.currentOrderId),
+      [activeTable?.id, activeTable?.currentOrderId, parkedTickets]
+   );
+   const activeTableSplitPosition = useMemo(() => {
+      if (!activeTable?.currentOrderId || tableSplitTickets.length < 2) return 0;
+      const index = tableSplitTickets.findIndex(ticket => String(ticket.id) === String(activeTable.currentOrderId));
+      return index >= 0 ? index + 1 : 1;
+   }, [activeTable?.currentOrderId, tableSplitTickets]);
    const reserveNextOrderNumber = useCallback((): string | undefined => {
       const settings = normalizeOrderNumberSettings(activeTerminalConfig?.operational?.orderNumbers);
       if (!settings.enabled || !activeTerminal?.id) return undefined;
@@ -1567,6 +1582,50 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       return `Ticket #${(Array.isArray(parkedTickets) ? parkedTickets : []).length + 1}`;
    }, [activeTable, activeTableContext.compactLabel, selectedCustomer, parkedTickets]);
+
+   const renderTableSplitNavigator = () => {
+      if (!isRestaurantMode || !activeTable || tableSplitTickets.length < 2 || activeTableSplitPosition < 1) {
+         return null;
+      }
+
+      const currentTicket = tableSplitTickets[activeTableSplitPosition - 1];
+      const meta = currentTicket ? getSplitAccountMeta(currentTicket) : null;
+      const positionLabel = meta
+         ? formatSplitAccountPosition(meta.index, meta.total)
+         : formatSplitAccountPosition(activeTableSplitPosition, tableSplitTickets.length);
+
+      const goToOffset = (offset: number) => {
+         const target = tableSplitTickets[activeTableSplitPosition - 1 + offset];
+         if (target) handleSwitchTableSplitAccount(target);
+      };
+
+      return (
+         <div
+            className="flex items-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-1.5 py-1 text-orange-900 shadow-sm"
+            title="Cambiar cuenta dividida"
+         >
+            <button
+               type="button"
+               onClick={() => goToOffset(-1)}
+               disabled={activeTableSplitPosition <= 1}
+               className="flex h-6 w-6 items-center justify-center rounded-full text-orange-700 transition-colors hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-35"
+               aria-label="Cuenta anterior"
+            >
+               <ChevronLeft size={14} strokeWidth={3} />
+            </button>
+            <span className="min-w-[2.85rem] text-center text-[11px] font-black tracking-tight">{positionLabel}</span>
+            <button
+               type="button"
+               onClick={() => goToOffset(1)}
+               disabled={activeTableSplitPosition >= tableSplitTickets.length}
+               className="flex h-6 w-6 items-center justify-center rounded-full text-orange-700 transition-colors hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-35"
+               aria-label="Cuenta siguiente"
+            >
+               <ChevronRight size={14} strokeWidth={3} />
+            </button>
+         </div>
+      );
+   };
 
    const closeParkAliasModal = useCallback(() => {
       setShowParkAliasModal(false);
@@ -4144,6 +4203,70 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
+   const flushPendingTableTicketSync = useCallback(() => {
+      if (ticketAutoSyncTimeoutRef.current) {
+         window.clearTimeout(ticketAutoSyncTimeoutRef.current);
+         ticketAutoSyncTimeoutRef.current = null;
+      }
+      if (ticketAutoSyncFlushRef.current) {
+         ticketAutoSyncFlushRef.current();
+         ticketAutoSyncFlushRef.current = null;
+      }
+   }, []);
+
+   const handleSwitchTableSplitAccount = useCallback((targetTicket: ParkedTicket) => {
+      if (!activeTable) return;
+      if (String(activeTable.currentOrderId || '') === String(targetTicket.id)) return;
+
+      flushPendingTableTicketSync();
+
+      const currentOrderId = String(activeTable.currentOrderId || '').trim();
+      let nextParkedTickets = parkedTickets;
+      if (currentOrderId) {
+         const existing = parkedTickets.find(ticket => ticket.id === currentOrderId);
+         const syncedTicket: ParkedTicket = {
+            id: currentOrderId,
+            name: existing?.name || `Mesa: ${activeTableContext.compactLabel || activeTable.nombre || activeTable.name || currentOrderId}`,
+            alias: existing?.alias,
+            items: [...cart],
+            total: cartTotal,
+            customerId: selectedCustomer?.id,
+            customerName: selectedCustomer?.name,
+            timestamp: existing?.timestamp || new Date().toISOString(),
+            tableId: activeTable.id,
+            orderNumber: readCartOrderNumber(cart) || existing?.orderNumber,
+            tableDisplayLabel: activeTableContext.compactLabel || existing?.tableDisplayLabel,
+            tableRoomLabel: activeTableContext.roomLabel || existing?.tableRoomLabel,
+         };
+         nextParkedTickets = [...parkedTickets.filter(ticket => ticket.id !== currentOrderId), syncedTicket];
+         onUpdateParkedTickets(nextParkedTickets);
+      }
+
+      onUpdateCart(targetTicket.items || []);
+      if (targetTicket.customerId) {
+         const customer = customers.find(candidate => candidate.id === targetTicket.customerId);
+         onSelectCustomer(customer || null);
+      } else {
+         onSelectCustomer(null);
+      }
+      void Promise.resolve(onTableOrderSaved?.(activeTable, targetTicket));
+   }, [
+      activeTable,
+      activeTableContext.compactLabel,
+      activeTableContext.roomLabel,
+      cart,
+      cartTotal,
+      customers,
+      flushPendingTableTicketSync,
+      onSelectCustomer,
+      onTableOrderSaved,
+      onUpdateCart,
+      onUpdateParkedTickets,
+      parkedTickets,
+      selectedCustomer?.id,
+      selectedCustomer?.name
+   ]);
+
    const handleSplitConfirm = (remainingItems: CartItem[], newTicketItems: CartItem[], extraNewTickets: CartItem[][] = [], splitCount = 2) => {
       onUpdateCart(remainingItems);
 
@@ -4153,16 +4276,33 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const newTickets: ParkedTicket[] = splitGroups.map((items, index) => ({
          id: `split-${now}-${index + 2}`,
          tableId: activeTable?.id || 'manual',
-         name: `${baseName} - Cuenta ${index + 2}/${splitCount}`,
-         alias: `${baseName} - Cuenta ${index + 2}/${splitCount}`,
+         name: buildSplitAccountLabel(baseName, index + 2, splitCount),
+         alias: buildSplitAccountLabel(baseName, index + 2, splitCount),
          items,
          total: items.reduce((acc, item) => acc + (Number(item.price || 0) * Number(item.quantity || 0)), 0),
          timestamp: new Date().toISOString()
       }));
 
-      onUpdateParkedTickets([...parkedTickets, ...newTickets]);
+      const orderId = String(activeTable?.currentOrderId || '').trim();
+      const cuentaUnoLabel = buildSplitAccountLabel(baseName, 1, splitCount);
+      const ticketsWithCuentaUno = orderId
+         ? parkedTickets.map(ticket =>
+            ticket.id === orderId
+               ? {
+                  ...ticket,
+                  tableId: activeTable?.id ?? ticket.tableId,
+                  name: cuentaUnoLabel,
+                  alias: cuentaUnoLabel,
+                  items: remainingItems,
+                  total: remainingItems.reduce((acc, item) => acc + (Number(item.price || 0) * Number(item.quantity || 0)), 0)
+               }
+               : ticket
+         )
+         : parkedTickets;
+
+      onUpdateParkedTickets([...ticketsWithCuentaUno, ...newTickets]);
       setShowSplitModal(false);
-      setSuccessToast(`Cuenta dividida en ${splitCount}: cuentas guardadas en Tickets en Espera`);
+      setSuccessToast(`Cuenta dividida en ${splitCount}: use ${formatSplitAccountPosition(1, splitCount)} en el ticket para cambiar de cuenta`);
    };
 
    const proceedToCheckout = () => {
@@ -5238,11 +5378,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </button>
                      <h2 className="font-black text-gray-800 text-lg leading-tight">
                         {activeTable ? (
-                           <div className="flex flex-col">
+                           <div className="flex flex-col gap-1">
                               <span className="text-[10px] text-gray-400 -mb-1 font-bold uppercase">
                                  {activeTableContext.roomLabel || 'Mesa Activa'}
                               </span>
-                              <span>{activeTableContext.compactLabel || activeTable.nombre || activeTable.name}</span>
+                              <div className="flex flex-wrap items-center gap-2">
+                                 <span>{activeTableContext.compactLabel || activeTable.nombre || activeTable.name}</span>
+                                 {renderTableSplitNavigator()}
+                              </div>
                            </div>
                         ) : 'Ticket Actual'}
                      </h2>
@@ -5491,11 +5634,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                {activeTable && (
                   <div className="flex w-full items-center justify-between gap-3 animate-in fade-in slide-in-from-top-1 duration-200">
-                     <div className="flex min-w-0 items-center gap-2">
+                     <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <Layout size={18} className="shrink-0 text-blue-600" />
                         <span className="truncate text-xl font-black tracking-tight text-slate-900">
                            {activeTableContext.compactLabel || activeTable.nombre || activeTable.name}
                         </span>
+                        {renderTableSplitNavigator()}
                      </div>
 
                      <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 shadow-sm transition-all hover:shadow-md">

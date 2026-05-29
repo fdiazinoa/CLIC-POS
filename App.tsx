@@ -4556,12 +4556,20 @@ const AppContent: React.FC = () => {
         return;
       }
       const others = parkedTickets.filter(t => t.id !== orderId);
-      const kept =
-        remainingItems.length > 0
-          ? [{ ...source, items: remainingItems, total: sumItems(remainingItems) }]
-          : [];
       const tableLinked = tables.find(t => t.currentOrderId === orderId);
       const labelBase = tableLinked?.nombre || tableLinked?.name || source.name || 'Mesa';
+      const cuentaUnoLabel = `${labelBase} - Cuenta 1/${splitCount}`;
+      const kept =
+        remainingItems.length > 0
+          ? [{
+            ...source,
+            items: remainingItems,
+            total: sumItems(remainingItems),
+            name: cuentaUnoLabel,
+            alias: cuentaUnoLabel,
+            tableId: tableLinked?.id ?? source.tableId
+          }]
+          : [];
       const now = Date.now();
       const splitGroups = [newTicketItems, ...extraNewTickets].filter(items => items.length > 0);
       const newTickets: ParkedTicket[] = splitGroups.map((items, index) => ({
@@ -6865,6 +6873,8 @@ const AppContent: React.FC = () => {
                 db.save('tables', reconciled).catch(error => console.error('Failed to persist table occupancy:', error));
                 return reconciled;
               });
+
+              setActiveTable(prev => (prev?.id === table.id ? updatedTable : prev));
 
               try {
                 await fetch(`/api/tables/${encodeURIComponent(String(table.id))}`, {
