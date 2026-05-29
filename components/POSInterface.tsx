@@ -804,6 +804,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const lastTouchContextMenuAtRef = useRef(0);
    const lastProductTouchAtRef = useRef(0);
    const quickActionOpenedAtRef = useRef(0);
+   const productGridScrollRef = useRef<HTMLDivElement>(null);
+   const productGridLoadMoreRef = useRef<HTMLDivElement>(null);
+   const PRODUCT_GRID_INITIAL_COUNT = 60;
+   const PRODUCT_GRID_LOAD_MORE_COUNT = 40;
+   const [productGridVisibleCount, setProductGridVisibleCount] = useState(PRODUCT_GRID_INITIAL_COUNT);
    const [productPrices, setProductPrices] = useState<ProductPrice[]>(externalProductPrices);
 
    useEffect(() => {
@@ -2968,6 +2973,37 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return true;
          });
    }, [salesCatalogProductEntries, categoryFilter, deferredSearchTerm, canonicalizeCategory, effectiveAllowedCategorySet]);
+
+   useEffect(() => {
+      setProductGridVisibleCount(PRODUCT_GRID_INITIAL_COUNT);
+   }, [categoryFilter, deferredSearchTerm]);
+
+   const gridProductsToRender = useMemo(() => {
+      const isNarrowFilter = Boolean(deferredSearchTerm.trim()) || categoryFilter !== 'ALL';
+      if (isNarrowFilter && filteredProducts.length <= 150) {
+         return filteredProducts;
+      }
+      return filteredProducts.slice(0, productGridVisibleCount);
+   }, [filteredProducts, productGridVisibleCount, categoryFilter, deferredSearchTerm]);
+
+   useEffect(() => {
+      const root = productGridScrollRef.current;
+      const sentinel = productGridLoadMoreRef.current;
+      if (!root || !sentinel || productGridVisibleCount >= filteredProducts.length) return;
+
+      const observer = new IntersectionObserver(
+         (entries) => {
+            if (!entries.some((entry) => entry.isIntersecting)) return;
+            setProductGridVisibleCount((prev) =>
+               Math.min(filteredProducts.length, prev + PRODUCT_GRID_LOAD_MORE_COUNT)
+            );
+         },
+         { root, rootMargin: '240px', threshold: 0 }
+      );
+
+      observer.observe(sentinel);
+      return () => observer.disconnect();
+   }, [filteredProducts.length, productGridVisibleCount, categoryFilter, deferredSearchTerm]);
 
    const handleRetailSearchSubmit = useCallback((rawTerm?: string) => {
       const trimmed = (rawTerm ?? searchTerm ?? '').trim();
@@ -5139,11 +5175,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div>
 
             <div
+               ref={productGridScrollRef}
                className={`flex-1 min-h-0 overflow-y-auto bg-[#eef2f6] ${usesExpandedCatalog ? 'p-3 pl-4 pr-2' : isMobile ? 'p-4' : 'p-8'} custom-scrollbar scrollbar-thin dark:bg-slate-900`}
                style={bottomAwareScrollStyle}
             >
                <div className={gridClass}>
-                  {filteredProducts.map((product, idx) => (
+                  {gridProductsToRender.map((product, idx) => (
                      <ProductGridCard
                         key={product.id || `prod-${idx}`}
                         product={product}
@@ -5164,6 +5201,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         onProductContextMenu={handleProductCardContextMenu}
                      />
                   ))}
+                  {productGridVisibleCount < filteredProducts.length && (
+                     <div ref={productGridLoadMoreRef} className="col-span-full h-1 w-full" aria-hidden />
+                  )}
                </div>
             </div>
             {/* VIRTUAL KEYBOARD SLOT */}

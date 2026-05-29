@@ -697,11 +697,20 @@ class SyncManager {
 
         if (!this.isMaster) {
             this.attachImageSyncReconnectHandler();
-            this.syncProductImages({
-                forceManifestCheck: this.productImageHashes.size === 0 || this.lastProductImageManifestVersion === 0
-            }).catch((error) => {
-                console.warn('⚠️ Initial image sync failed:', error);
-            });
+            const runInitialImageSync = () => {
+                this.syncProductImages({
+                    forceManifestCheck: this.productImageHashes.size === 0 || this.lastProductImageManifestVersion === 0
+                }).catch((error) => {
+                    console.warn('⚠️ Initial image sync failed:', error);
+                });
+            };
+            const initialImageSyncDeferMs = this.getInitialImageSyncDeferMs();
+            if (initialImageSyncDeferMs > 0) {
+                console.log(`🖼️ Deferring initial image sync for ${initialImageSyncDeferMs / 1000}s (Android boot memory guard)`);
+                setTimeout(runInitialImageSync, initialImageSyncDeferMs);
+            } else {
+                runInitialImageSync();
+            }
         } else {
             this.detachImageSyncReconnectHandler();
         }
@@ -3836,6 +3845,16 @@ class SyncManager {
         if (!this.imageSyncOnlineHandler) return;
         window.removeEventListener('online', this.imageSyncOnlineHandler);
         this.imageSyncOnlineHandler = null;
+    }
+
+    /** Defer slave image pulls on Android boot to avoid stacking catalog hydration + image decode in WebView. */
+    private getInitialImageSyncDeferMs(): number {
+        if (!isNativeAndroidRuntime()) return 0;
+        const profile = syncPolicy.load();
+        if (profile.contractedProduct === 'POS_ONLY') {
+            return syncPolicy.targetKind() === 'NONE' ? 120_000 : 60_000;
+        }
+        return 30_000;
     }
 
     private startImageSync(intervalMs: number = this.IMAGE_SYNC_INTERVAL_MS) {

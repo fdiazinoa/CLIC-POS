@@ -3292,10 +3292,12 @@ const AppContent: React.FC = () => {
 
             // Master Re-hydration Step: This ensures state is always up to date with DB 
             // after any async drift fixes or sync initializations.
+            // On native Android, catalog collections are hydrated once via hydrateNativeCatalogFromDb.
             try {
+              const skipNativeCatalogRehydrate = isNativeAndroidRuntime();
               const [dbConfig, dbProducts, dbUsers, dbRoles, dbSequences] = await Promise.all([
                 db.get('config') as Promise<any>,
-                db.get('products') as Promise<Product[]>,
+                skipNativeCatalogRehydrate ? Promise.resolve(null) : db.get('products') as Promise<Product[]>,
                 db.get('users') as Promise<User[]>,
                 db.get('roles') as Promise<RoleDefinition[]>,
                 db.get('internalSequences') as Promise<any[]>
@@ -3315,7 +3317,7 @@ const AppContent: React.FC = () => {
                 setConfig(syncedConfig);
               }
 
-              if (Array.isArray(dbProducts) && dbProducts.length > 0) {
+              if (!skipNativeCatalogRehydrate && Array.isArray(dbProducts) && dbProducts.length > 0) {
                 setProducts(dbProducts);
               }
               if (Array.isArray(dbUsers)) setUsers(dbUsers);

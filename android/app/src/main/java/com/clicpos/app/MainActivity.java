@@ -44,6 +44,9 @@ public class MainActivity extends BridgeActivity {
         settings.setUseWideViewPort(true);
         settings.setLoadWithOverviewMode(true);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        settings.setGeolocationEnabled(false);
+        settings.setDatabaseEnabled(false);
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
 
         webView.addJavascriptInterface(new AndroidPrinterBridge(getApplicationContext()), "AndroidPrinter");
         AndroidPrinterBridge.injectContractShim(webView);
@@ -92,6 +95,7 @@ public class MainActivity extends BridgeActivity {
                     try {
                         if (webView != null) {
                             webView.stopLoading();
+                            webView.destroy();
                         }
                     } catch (Exception ignored) {
                         // The renderer is already gone; best effort only.
