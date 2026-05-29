@@ -518,3 +518,81 @@ export const reportSyncErrorDiagnostic = (input: Parameters<typeof buildSyncErro
     markInputErrorReported(input.error);
     return diagnostic;
 };
+
+export const TERMINAL_LICENSE_INSUFFICIENT_AUTH_STATUS = 'TERMINAL_LICENSE_INSUFFICIENT';
+
+export const TERMINAL_LICENSE_INSUFFICIENT_USER_MESSAGE =
+    'No tiene licencias suficientes para activar este terminal. Solicite al administrador que asigne o amplíe las licencias en Cloud-Admin.';
+
+export const TERMINAL_LICENSE_INSUFFICIENT_ERROR_MESSAGE =
+    `${TERMINAL_LICENSE_INSUFFICIENT_AUTH_STATUS}: ${TERMINAL_LICENSE_INSUFFICIENT_USER_MESSAGE}`;
+
+export const DEVICE_NOT_AUTHORIZED_REAUTH_USER_MESSAGE =
+    'Esta Caja está vinculada, pero este equipo no está autorizado en el ERP. Solicita reautorización desde Cloud-Admin o usa un código de vinculación.';
+
+export const DEVICE_NOT_AUTHORIZED_REAUTH_ERROR_MESSAGE =
+    `DEVICE_NOT_AUTHORIZED: ${DEVICE_NOT_AUTHORIZED_REAUTH_USER_MESSAGE}`;
+
+export const LICENSE_LIMIT_BACKEND_CODES = new Set([
+    'LICENSE_BLOCKED',
+    'LICENSE_EXCEEDED_INACTIVE',
+    'LICENSE_LIMIT',
+    'LICENSE_EXCEEDED',
+    'NO_LICENSES',
+    'TERMINAL_LICENSE_LIMIT',
+    'ACTIVATION_LICENSE_LIMIT',
+]);
+
+export const SYNC_AUTH_BLOCKED_STATUSES = new Set([
+    'DEVICE_NOT_AUTHORIZED',
+    TERMINAL_LICENSE_INSUFFICIENT_AUTH_STATUS,
+]);
+
+export const isLicenseLimitBackendCode = (code: string | null | undefined): boolean => {
+    const normalized = String(code || '').trim().toUpperCase();
+    return LICENSE_LIMIT_BACKEND_CODES.has(normalized);
+};
+
+export const isLicenseLimitActivationMessage = (message: string | null | undefined): boolean => {
+    const normalized = String(message || '').trim().toLowerCase();
+    if (!normalized) return false;
+
+    return /licencia/.test(normalized)
+        || /\blicense\b/.test(normalized)
+        || /cupo.*terminal/.test(normalized)
+        || /l[ií]mite.*terminal/.test(normalized)
+        || /sin licencias/.test(normalized)
+        || /licencias suficientes/.test(normalized);
+};
+
+export const isExplicitDeviceReauthMessage = (message: string | null | undefined): boolean => (
+    /este equipo ya no es la terminal autorizada/i.test(String(message || ''))
+);
+
+export const isSyncAuthLicenseInsufficient = (diagnostic: {
+    authStatus?: string | null;
+    backendCode?: string | null;
+    errorMessage?: string | null;
+} | null | undefined): boolean => {
+    if (!diagnostic) return false;
+    if (diagnostic.authStatus === TERMINAL_LICENSE_INSUFFICIENT_AUTH_STATUS) return true;
+    if (isLicenseLimitBackendCode(diagnostic.backendCode)) return true;
+    if (isLicenseLimitActivationMessage(diagnostic.errorMessage)) return true;
+    if (diagnostic.authStatus === 'DEVICE_NOT_AUTHORIZED' && !isExplicitDeviceReauthMessage(diagnostic.errorMessage)) {
+        return true;
+    }
+    return false;
+};
+
+export const isSyncAuthDeviceReauthRequired = (diagnostic: {
+    authStatus?: string | null;
+    backendCode?: string | null;
+    errorMessage?: string | null;
+    nextAction?: string | null;
+} | null | undefined): boolean => {
+    if (!diagnostic) return false;
+    if (isSyncAuthLicenseInsufficient(diagnostic)) return false;
+    return diagnostic.authStatus === 'DEVICE_NOT_AUTHORIZED'
+        || diagnostic.backendCode === 'DEVICE_NOT_AUTHORIZED'
+        || diagnostic.nextAction === 'REAUTHORIZE_TERMINAL';
+};

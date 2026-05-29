@@ -1,6 +1,12 @@
 import React, { useMemo, useState } from 'react';
 import { AlertTriangle, Clipboard, RefreshCw, Server, X } from 'lucide-react';
 import type { SyncErrorDiagnostic } from '../services/sync/SyncErrorDiagnostic';
+import {
+  DEVICE_NOT_AUTHORIZED_REAUTH_USER_MESSAGE,
+  isSyncAuthDeviceReauthRequired,
+  isSyncAuthLicenseInsufficient,
+  TERMINAL_LICENSE_INSUFFICIENT_USER_MESSAGE,
+} from '../services/sync/SyncErrorDiagnostic';
 import { requestJson } from '../services/network/httpClient';
 import { persistSyncDeviceToken, resolveSyncDeviceToken } from '../services/sync/deviceToken';
 import { clearStoredSyncToken, saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
@@ -31,7 +37,9 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
 
   if (!diagnostic) return null;
 
-  const isDeviceNotAuthorized = diagnostic.authStatus === 'DEVICE_NOT_AUTHORIZED' || diagnostic.backendCode === 'DEVICE_NOT_AUTHORIZED';
+  const isLicenseInsufficient = isSyncAuthLicenseInsufficient(diagnostic);
+  const isDeviceReauthRequired = isSyncAuthDeviceReauthRequired(diagnostic);
+  const isDeviceNotAuthorized = isLicenseInsufficient || isDeviceReauthRequired;
   const isFiscalConfigMissing = diagnostic.catalogSyncStatus === 'FISCAL_CONFIG_MISSING'
     || diagnostic.backendCode === 'FISCAL_CONFIG_MISSING';
   const isMasterPullFailed = diagnostic.catalogSyncStatus === 'ERP_MASTER_PULL_FAILED'
@@ -543,9 +551,13 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             </div>
             <div>
               <p className="text-[11px] font-black uppercase tracking-[0.38em] text-red-600">Diagnóstico de sincronización</p>
-              <h2 className="mt-2 text-3xl font-black tracking-tight text-slate-950">Falló la sincronización</h2>
+              <h2 className="mt-2 text-3xl font-black tracking-tight text-slate-950">
+                {isLicenseInsufficient ? 'Licencias insuficientes' : 'Falló la sincronización'}
+              </h2>
               <p className="mt-2 text-sm font-bold text-slate-500">
-                La terminal sigue vinculada. No se limpió el binding ni se reinició el perfil de sincronización.
+                {isLicenseInsufficient
+                  ? 'No se puede activar la sincronización en este terminal hasta que el administrador asigne licencias.'
+                  : 'La terminal sigue vinculada. No se limpió el binding ni se reinició el perfil de sincronización.'}
               </p>
             </div>
           </div>
@@ -590,7 +602,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <Field label="backendCode" value={diagnostic.backendCode} />
             <Field label="debugId" value={diagnostic.debugId} />
             <Field label="tokenPresent" value={deviceTokenPresent ? 'true' : 'false'} />
-            <Field label="canTakeover" value={isDeviceNotAuthorized ? 'true' : 'N/A'} />
+            <Field label="canTakeover" value={isDeviceReauthRequired ? 'true' : 'N/A'} />
             <Field label="nextAction" value={diagnostic.nextAction} />
             <Field label="fetchStage" value={diagnostic.fetchStage} />
             <Field label="requestSkippedReason" value={diagnostic.requestSkippedReason} />
@@ -608,11 +620,26 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             <p className="mt-2 break-all text-sm font-bold text-slate-800">{diagnostic.endpoint || 'N/A'}</p>
           </div>
 
-          {isDeviceNotAuthorized ? (
+          {isLicenseInsufficient ? (
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-600">Activación bloqueada por licencias</p>
+              <p className="mt-2 text-sm font-bold leading-relaxed text-amber-900">
+                {TERMINAL_LICENSE_INSUFFICIENT_USER_MESSAGE}
+              </p>
+              <p className="mt-2 text-xs font-semibold text-amber-800">
+                La data local no se borra y la terminal no vuelve a la pantalla de activación. La sincronización queda bloqueada hasta que haya licencias disponibles.
+              </p>
+              <p className="mt-2 text-xs font-semibold text-amber-800">
+                Si el administrador ya asignó una licencia a esta terminal, puede solicitar reautorización con un código de vinculación.
+              </p>
+            </div>
+          ) : null}
+
+          {isDeviceReauthRequired ? (
             <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
               <p className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-600">Reautorización requerida</p>
               <p className="mt-2 text-sm font-bold leading-relaxed text-amber-900">
-                Esta Caja está vinculada, pero este equipo no está autorizado en el ERP. Solicita reautorización desde Cloud-Admin o usa un código de vinculación.
+                {DEVICE_NOT_AUTHORIZED_REAUTH_USER_MESSAGE}
               </p>
               <p className="mt-2 text-xs font-semibold text-amber-800">
                 La data local no se borra y la terminal no vuelve a la pantalla de activación. La sincronización queda bloqueada hasta renovar la autorización.
@@ -741,7 +768,9 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white shadow-sm hover:bg-slate-800 disabled:opacity-60"
           >
             <RefreshCw size={18} className={isRetrying ? 'animate-spin' : ''} />
-            {isDeviceNotAuthorized ? 'Reintento bloqueado por autorización' : isRetrying ? 'Reintentando...' : 'Reintentar artículos'}
+            {isDeviceNotAuthorized
+              ? (isLicenseInsufficient ? 'Reintento bloqueado por licencias' : 'Reintento bloqueado por autorización')
+              : isRetrying ? 'Reintentando...' : 'Reintentar artículos'}
           </button>
           <button
             type="button"

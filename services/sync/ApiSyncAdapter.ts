@@ -20,11 +20,20 @@ import {
 import { isPosCloudStagingPushCollection } from './PosCloudStagingService';
 import { looksLikeUuidString } from '../../utils/documentSeriesIdentity';
 import {
+    DEVICE_NOT_AUTHORIZED_REAUTH_ERROR_MESSAGE,
+    DEVICE_NOT_AUTHORIZED_REAUTH_USER_MESSAGE,
+    isExplicitDeviceReauthMessage,
+    isLicenseLimitActivationMessage,
+    isLicenseLimitBackendCode,
     reportSyncErrorDiagnostic,
     setCatalogDiagnosticStatus,
     setSalesPushDiagnosticStatus,
     setSyncAuthDiagnosticStatus,
     setTerminalBindingDiagnosticStatus,
+    SYNC_AUTH_BLOCKED_STATUSES,
+    TERMINAL_LICENSE_INSUFFICIENT_AUTH_STATUS,
+    TERMINAL_LICENSE_INSUFFICIENT_ERROR_MESSAGE,
+    TERMINAL_LICENSE_INSUFFICIENT_USER_MESSAGE,
     type SyncDiagnosticOperation,
     type SyncFetchDiagnostic,
 } from './SyncErrorDiagnostic';
@@ -1348,7 +1357,48 @@ class ApiSyncAdapter {
         if (status !== 403) return false;
         const backendCode = this.normalizeBackendCode(payload);
         const message = pickFirstString(payload?.message, payload?.error, payload?.detail, rawBody) || '';
-        return backendCode === 'DEVICE_NOT_AUTHORIZED' || /este equipo ya no es la terminal autorizada/i.test(message);
+        return isLicenseLimitBackendCode(backendCode)
+            || isLicenseLimitActivationMessage(message)
+            || backendCode === 'DEVICE_NOT_AUTHORIZED'
+            || isExplicitDeviceReauthMessage(message);
+    }
+
+    private resolveTerminalActivationBlock(input: {
+        payload: any;
+        responseBody: string;
+    }): {
+        authStatus: string;
+        syncAuthStatus: string;
+        userMessage: string;
+        errorMessage: string;
+        nextAction: 'REAUTHORIZE_TERMINAL' | 'CONTACT_ADMIN_LICENSES';
+        logTag: string;
+    } {
+        const backendCode = this.normalizeBackendCode(input.payload);
+        const message = pickFirstString(input.payload?.message, input.payload?.error, input.payload?.detail, input.responseBody) || '';
+        const requiresExplicitReauth = isExplicitDeviceReauthMessage(message)
+            && !isLicenseLimitBackendCode(backendCode)
+            && !isLicenseLimitActivationMessage(message);
+
+        if (requiresExplicitReauth) {
+            return {
+                authStatus: 'DEVICE_NOT_AUTHORIZED',
+                syncAuthStatus: 'DEVICE_NOT_AUTHORIZED',
+                userMessage: DEVICE_NOT_AUTHORIZED_REAUTH_USER_MESSAGE,
+                errorMessage: DEVICE_NOT_AUTHORIZED_REAUTH_ERROR_MESSAGE,
+                nextAction: 'REAUTHORIZE_TERMINAL',
+                logTag: 'DEVICE_NOT_AUTHORIZED',
+            };
+        }
+
+        return {
+            authStatus: TERMINAL_LICENSE_INSUFFICIENT_AUTH_STATUS,
+            syncAuthStatus: TERMINAL_LICENSE_INSUFFICIENT_AUTH_STATUS,
+            userMessage: TERMINAL_LICENSE_INSUFFICIENT_USER_MESSAGE,
+            errorMessage: TERMINAL_LICENSE_INSUFFICIENT_ERROR_MESSAGE,
+            nextAction: 'CONTACT_ADMIN_LICENSES',
+            logTag: 'TERMINAL_LICENSE_INSUFFICIENT',
+        };
     }
 
     private isFiscalConfigMissingResponse(status: number, payload: any, rawBody = ''): boolean {
@@ -1606,11 +1656,16 @@ class ApiSyncAdapter {
         setTerminalBindingDiagnosticStatus('BOUND_AUTH_MISMATCH');
         setCatalogDiagnosticStatus('AUTH_ERROR');
         setSalesPushDiagnosticStatus('LOCKED_AUTH_REQUIRED');
-        setSyncAuthDiagnosticStatus('DEVICE_NOT_AUTHORIZED');
 
         const backendCode = this.normalizeBackendCode(input.payload) || 'DEVICE_NOT_AUTHORIZED';
-        const error = new Error('DEVICE_NOT_AUTHORIZED: Esta Caja está vinculada, pero este equipo no está autorizado en el ERP. Solicita reautorización desde Cloud-Admin o usa un código de vinculación.');
-        console.warn('[DEVICE_NOT_AUTHORIZED]', {
+        const activationBlock = this.resolveTerminalActivationBlock({
+            payload: input.payload,
+            responseBody: input.responseBody,
+        });
+        setSyncAuthDiagnosticStatus(activationBlock.syncAuthStatus);
+
+        const error = new Error(activationBlock.errorMessage);
+        console.warn(`[${activationBlock.logTag}]`, {
             endpoint: input.endpoint,
             terminalId: this.resolveOperationalTarget(input.operation)?.terminalId || null,
             deviceId: this.resolveCurrentDeviceId(),
@@ -1619,8 +1674,8 @@ class ApiSyncAdapter {
             tokenSource: input.tokenResolution.sourceKey,
             tokenUpdatedAt: input.tokenResolution.updatedAt || null,
             backendCode,
-            canTakeover: true,
-            nextAction: 'REAUTHORIZE_TERMINAL',
+            canTakeover: activationBlock.nextAction === 'REAUTHORIZE_TERMINAL',
+            nextAction: activationBlock.nextAction,
         });
 
         reportSyncErrorDiagnostic({
@@ -1629,9 +1684,9 @@ class ApiSyncAdapter {
             httpStatus: input.response.status,
             responseBody: input.responseBody,
             error,
-            authStatus: 'DEVICE_NOT_AUTHORIZED',
+            authStatus: activationBlock.authStatus,
             backendCode,
-            nextAction: 'REAUTHORIZE_TERMINAL',
+            nextAction: activationBlock.nextAction,
             requestAuth: {
                 ...this.buildRequestAuthDiagnostic(input.requestHeaders),
                 syncTokenPreview: previewSyncDeviceToken(input.tokenResolution.token),
@@ -1884,10 +1939,14 @@ class ApiSyncAdapter {
             throw new Error('Browser offline');
         }
 
-        if (!force && safeLocalStorageGet('clic_sync_auth_status') === 'DEVICE_NOT_AUTHORIZED') {
+        const blockedAuthStatus = safeLocalStorageGet('clic_sync_auth_status');
+        if (!force && blockedAuthStatus && SYNC_AUTH_BLOCKED_STATUSES.has(blockedAuthStatus)) {
             const deviceId = this.resolveCurrentDeviceId();
             const deviceTokenResolution = resolveSyncDeviceToken();
-            const error = new Error('DEVICE_NOT_AUTHORIZED: Esta Caja está vinculada, pero este equipo no está autorizado en el ERP. Solicita reautorización desde Cloud-Admin o usa un código de vinculación.');
+            const isLicenseBlocked = blockedAuthStatus === TERMINAL_LICENSE_INSUFFICIENT_AUTH_STATUS;
+            const error = new Error(isLicenseBlocked
+                ? TERMINAL_LICENSE_INSUFFICIENT_ERROR_MESSAGE
+                : DEVICE_NOT_AUTHORIZED_REAUTH_ERROR_MESSAGE);
             setTerminalBindingDiagnosticStatus('BOUND_AUTH_MISMATCH');
             setCatalogDiagnosticStatus('AUTH_ERROR');
             setSalesPushDiagnosticStatus('LOCKED_AUTH_REQUIRED');
@@ -1896,11 +1955,11 @@ class ApiSyncAdapter {
                 endpoint: `${target.baseUrl}/auth`,
                 httpStatus: null,
                 error,
-                authStatus: 'DEVICE_NOT_AUTHORIZED',
-                backendCode: 'DEVICE_NOT_AUTHORIZED',
-                nextAction: 'REAUTHORIZE_TERMINAL',
+                authStatus: blockedAuthStatus,
+                backendCode: blockedAuthStatus,
+                nextAction: isLicenseBlocked ? 'CONTACT_ADMIN_LICENSES' : 'REAUTHORIZE_TERMINAL',
                 blockedByLocalGuard: true,
-                guardReason: 'DEVICE_NOT_AUTHORIZED',
+                guardReason: blockedAuthStatus,
                 requestAuth: {
                     authorizationPresent: false,
                     syncTokenPresent: false,
