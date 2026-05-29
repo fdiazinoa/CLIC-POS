@@ -9,7 +9,7 @@ export interface PosCloudStagingSnapshotResult {
     completedAt: string;
 }
 
-const MASTER_COLLECTIONS = [
+export const POS_CLOUD_STAGING_PUSH_COLLECTIONS = [
     'products',
     'customers',
     'suppliers',
@@ -35,13 +35,19 @@ const MASTER_COLLECTIONS = [
     'productionAreas'
 ] as const;
 
+const POS_CLOUD_STAGING_PUSH_SET = new Set<string>(POS_CLOUD_STAGING_PUSH_COLLECTIONS);
+
+export function isPosCloudStagingPushCollection(collection: string): boolean {
+    return POS_CLOUD_STAGING_PUSH_SET.has(collection);
+}
+
 class PosCloudStagingService {
     async sendSnapshot(reason = 'MANUAL'): Promise<PosCloudStagingSnapshotResult> {
         const target = syncPolicy.resolve();
         if (target.kind !== 'POS_CLOUD_STAGING' || !target.canPushMasters) {
             return {
                 pushed: {},
-                skipped: [...MASTER_COLLECTIONS],
+                skipped: [...POS_CLOUD_STAGING_PUSH_COLLECTIONS],
                 targetKind: target.kind,
                 completedAt: new Date().toISOString(),
             };
@@ -54,7 +60,7 @@ class PosCloudStagingService {
             `[POS_CLOUD_STAGING] snapshot start reason=${reason} channel=${target.kind} dataMaster=${target.dataMaster} terminal=${target.terminalId || 'n/a'}`
         );
 
-        for (const collection of MASTER_COLLECTIONS) {
+        for (const collection of POS_CLOUD_STAGING_PUSH_COLLECTIONS) {
             try {
                 const data = await db.get(collection as any);
                 const items = Array.isArray(data) ? data : [];

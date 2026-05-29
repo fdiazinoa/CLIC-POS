@@ -16,6 +16,7 @@ import {
     ResolvedSyncTarget,
     isPosOnlyCloudStagingTarget,
 } from './SyncProfile';
+import { isPosCloudStagingPushCollection } from './PosCloudStagingService';
 import {
     reportSyncErrorDiagnostic,
     setCatalogDiagnosticStatus,
@@ -2138,6 +2139,11 @@ class ApiSyncAdapter {
             return;
         }
         if (routedTarget.kind === 'POS_CLOUD_STAGING' && routedTarget.canPushMasters) {
+            if (!isPosCloudStagingPushCollection(collection)) {
+                console.warn(`[POS_CLOUD_STAGING] push skipped unsupported collection=${collection}`);
+                return;
+            }
+
             const target = await this.authenticateOperationalTarget(false, 'background', 'PUSH_MASTERS');
             const buildBody = () => JSON.stringify({
                 items,
@@ -2162,16 +2168,12 @@ class ApiSyncAdapter {
                     body: buildBody()
                 }, 2, 500, 'background', 'PUSH_MASTERS');
 
-                if (primaryResponse.status !== 404 && primaryResponse.status !== 405) {
+                if (primaryResponse.status === 404 || primaryResponse.status === 405) {
+                    console.warn(`[POS_CLOUD_STAGING] ${primaryUrl} unavailable (${primaryResponse.status}); collection skipped.`);
                     return primaryResponse;
                 }
 
-                console.warn(`[POS_CLOUD_STAGING] ${primaryUrl} unavailable (${primaryResponse.status}); falling back to legacy collection push.`);
-                return this.fetchWithRetry(`${authTarget.baseUrl}/collections/${collection}/push`, {
-                    method: 'POST',
-                    headers: this.buildOperationalHeaders(authTarget, authTarget.token, true),
-                    body: buildBody()
-                }, 2, 500, 'background', 'PUSH_MASTERS');
+                return primaryResponse;
             };
 
             const response = await postCloudStaging(target);
@@ -2181,6 +2183,10 @@ class ApiSyncAdapter {
                 const retriedTarget = await this.authenticateOperationalTarget(true, 'background', 'PUSH_MASTERS');
                 const retryResponse = await postCloudStaging(retriedTarget);
                 if (!retryResponse.ok) {
+                    if (retryResponse.status === 404 || retryResponse.status === 405) {
+                        console.warn(`[POS_CLOUD_STAGING] push skipped collection=${collection} after re-auth (${retryResponse.status}).`);
+                        return;
+                    }
                     throw new Error(`Cloud staging push failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
                 }
                 console.log(`📤 ApiSyncAdapter: Staged ${items.length} ${collection} item(s) after re-auth.`);
@@ -2188,6 +2194,10 @@ class ApiSyncAdapter {
             }
 
             if (!response.ok) {
+                if (response.status === 404 || response.status === 405) {
+                    console.warn(`[POS_CLOUD_STAGING] push skipped collection=${collection} (${response.status}).`);
+                    return;
+                }
                 const detail = await response.text().catch(() => '');
                 throw new Error(`Cloud staging push failed: ${response.status} ${response.statusText}${detail ? ` — ${detail.slice(0, 300)}` : ''}`);
             }

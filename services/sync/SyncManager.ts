@@ -46,6 +46,7 @@ import { canonicalizeTariffEntries, resolveTariffId } from '../../utils/masterId
 import { ensureSyncDeviceToken, getInvalidatedSyncDeviceTokenInfo, resolveSyncDeviceToken } from './deviceToken';
 import { normalizeRestaurantProductConfig } from '../../utils/restaurantProductConfig';
 import { protectsLocalCatalogFromCloud, syncPolicy } from './SyncProfile';
+import { isPosCloudStagingPushCollection } from './PosCloudStagingService';
 import { reportSyncErrorDiagnostic, setCatalogDiagnosticStatus } from './SyncErrorDiagnostic';
 
 export type SyncableCollection =
@@ -4555,7 +4556,7 @@ class SyncManager {
 
         const results: SyncStatus[] = [];
         const target = syncPolicy.resolve();
-        const catalogs: SyncableCollection[] = target.kind === 'ERP_ACTIVE'
+        let catalogs: SyncableCollection[] = target.kind === 'ERP_ACTIVE'
             ? defaultCatalogs.filter(isErpMasterPullCollection)
             : defaultCatalogs;
         if (target.kind === 'ERP_ACTIVE') {
@@ -4564,6 +4565,13 @@ class SyncManager {
                     logSkippedNonMasterPull(collection, target.kind, 'REMOVED_FROM_ERP_ACTIVE_CATALOG_PULL');
                 }
             }
+        } else if (target.kind === 'POS_CLOUD_STAGING' && target.canPushMasters && target.dataMaster === 'POS') {
+            for (const collection of defaultCatalogs) {
+                if (!isPosCloudStagingPushCollection(collection)) {
+                    logSkippedNonMasterPull(collection, target.kind, 'POS_CLOUD_STAGING_PUSH_NOT_SUPPORTED');
+                }
+            }
+            catalogs = defaultCatalogs.filter(isPosCloudStagingPushCollection);
         }
 
         // 0. Pull singleton config first on slaves (document assignments/terminal behavior live there).
