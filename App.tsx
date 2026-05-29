@@ -178,6 +178,7 @@ import {
 } from './services/version/posApkUpdateService';
 import {
   loadSyncProfile,
+  resolveSyncTarget,
   saveSyncProfileFromContract,
   type SyncPermissions,
   type SyncProfile,
@@ -3604,7 +3605,7 @@ const AppContent: React.FC = () => {
           const hasTinyCatalog = localCount > 0 && localCount <= 5;
           const hasCategoryMismatch = matchedAllowedCategoriesCount === 0 || allowedCoverageRatio < 0.5;
 
-          if (hasTinyCatalog || hasCategoryMismatch) {
+          if ((hasTinyCatalog || hasCategoryMismatch) && resolveSyncTarget().canPullMasters) {
             console.warn(
               `⚠️ App: Runtime config drift detected on ${currentTerminal.id}. ` +
               `localProducts=${localCount}, allowed=${terminalAllowedCategories.length}, matched=${matchedAllowedCategoriesCount}. ` +
@@ -4238,7 +4239,11 @@ const AppContent: React.FC = () => {
       });
       setTerminalBindingDiagnosticStatus('BOUND');
       setCatalogDiagnosticStatus('SYNCED');
-      setSalesPushDiagnosticStatus(resolvedErpReadyForSales ? 'ENABLED' : 'LOCKED_UNTIL_ERP_READY');
+      setSalesPushDiagnosticStatus(
+        isErpDirectBinding
+          ? (resolvedErpReadyForSales ? 'ENABLED' : 'LOCKED_UNTIL_ERP_READY')
+          : (isSlave ? 'DISABLED' : 'ENABLED')
+      );
       clearSyncErrorDiagnostic();
       setSyncDiagnostic(null);
       if (isErpDirectBinding) {
@@ -7877,7 +7882,12 @@ const AppContent: React.FC = () => {
   const handleRetryProductSyncDiagnostic = async () => {
     setCatalogDiagnosticStatus('SYNCING');
     try {
-      await syncManager.pullCatalog('products', true);
+      const syncTarget = resolveSyncTarget();
+      if (syncTarget.kind === 'POS_CLOUD_STAGING' && syncTarget.canPushMasters) {
+        await syncManager.pushCatalog('products');
+      } else if (syncTarget.canPullMasters) {
+        await syncManager.pullCatalog('products', true);
+      }
       const freshProducts = await db.get('products') as Product[];
       if (Array.isArray(freshProducts)) {
         setProducts(freshProducts);

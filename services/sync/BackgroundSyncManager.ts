@@ -661,7 +661,7 @@ class BackgroundSyncManager {
                 data.forEach(item => {
                     const itemDate = this.resolveItemDate(item);
                     const isOld = !!itemDate && itemDate < cutoff;
-                    const isSynced = item.syncStatus === 'COMPLETED';
+                    const isSynced = item.syncStatus === 'COMPLETED' || item.syncStatus === 'SYNCED_CLOUD';
 
                     if (isSynced && isOld) {
                         toPruneIds.push(item.id);

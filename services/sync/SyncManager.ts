@@ -45,7 +45,7 @@ import {
 import { canonicalizeTariffEntries, resolveTariffId } from '../../utils/masterIdentity';
 import { ensureSyncDeviceToken, getInvalidatedSyncDeviceTokenInfo, resolveSyncDeviceToken } from './deviceToken';
 import { normalizeRestaurantProductConfig } from '../../utils/restaurantProductConfig';
-import { syncPolicy } from './SyncProfile';
+import { protectsLocalCatalogFromCloud, syncPolicy } from './SyncProfile';
 import { reportSyncErrorDiagnostic, setCatalogDiagnosticStatus } from './SyncErrorDiagnostic';
 
 export type SyncableCollection =
@@ -749,16 +749,12 @@ class SyncManager {
             this.purgeSyncedHistoricalData().catch(e => console.error('❌ SyncManager: Initial purge failed:', e));
         }
 
-        if (apiSyncAdapter.isUsingErpOperationalTarget()) {
+        if (apiSyncAdapter.isErpActiveOperationalTarget()) {
             try {
                 await this.syncTerminalMastersOnStartup(config);
             } catch (error) {
                 console.warn('⚠️ SyncManager: startup terminal manifest sync failed:', error);
             }
-        } else {
-            this.syncTerminalMastersOnStartup(config).catch((error) => {
-                console.warn('⚠️ SyncManager: startup terminal manifest sync failed:', error);
-            });
         }
 
         console.log('🔄 SyncManager initialized');
@@ -1516,6 +1512,14 @@ class SyncManager {
             return null;
         }
 
+        if (protectsLocalCatalogFromCloud()) {
+            if (options?.markStartupCompleted) {
+                this.markStartupManifestSyncCompleted(localTerminalId);
+            }
+            console.warn('[SYNC_ROUTER] POS_CLOUD_STAGING manifest sync skipped; local catalog remains authoritative.');
+            return null;
+        }
+
         if (options?.skipIfStartupCompleted && this.wasStartupManifestSyncCompleted(localTerminalId)) {
             return null;
         }
@@ -1576,7 +1580,7 @@ class SyncManager {
                     inventoryAppliedCount = await this.applyTerminalInventoryBlock(inventoryBalances);
                 }
 
-                if (apiSyncAdapter.isUsingErpOperationalTarget()) {
+                if (apiSyncAdapter.isErpActiveOperationalTarget()) {
                     const shouldForceDirectInventoryRefresh =
                         bootstrapInventoryOnStartup ||
                         Boolean(options?.bootstrapBlocks) ||
@@ -1658,7 +1662,7 @@ class SyncManager {
     }
 
     private async refreshOperationalInventorySnapshot(): Promise<number> {
-        if (!apiSyncAdapter.isUsingErpOperationalTarget()) {
+        if (!apiSyncAdapter.isErpActiveOperationalTarget()) {
             return 0;
         }
 
@@ -2235,6 +2239,8 @@ class SyncManager {
             return null;
         }
 
+        const protectLocalCatalog = protectsLocalCatalogFromCloud();
+
         const snapshotTerminalId = context.localTerminalId || context.terminalId;
         const cachedSnapshot = baseConfig.terminalSnapshots?.[snapshotTerminalId] || null;
         const currentCatalogCursor = this.readStoredCatalogCursor(snapshotTerminalId);
@@ -2427,25 +2433,33 @@ class SyncManager {
 
         try {
             const applyStartedAt = posCatalogDebugNow();
-            if (catalogDelta) {
-                await this.applyCatalogDelta(catalogDelta);
+            if (!protectLocalCatalog) {
+                if (catalogDelta) {
+                    await this.applyCatalogDelta(catalogDelta);
+                } else {
+                    await this.applySnapshotProducts(snapshot);
+                }
+                const structuredMasterData = await this.refreshTerminalStructuredMasterData(snapshot, catalogDelta, {
+                    terminalIds: [
+                        context.terminalId,
+                        snapshotTerminalId,
+                        context.localTerminalId,
+                        context.posDeviceId,
+                    ],
+                });
+                await posCatalogDebugLogDbRows('after refreshTerminalResolvedConfig product apply');
+                posCatalogDebugLog('refreshTerminalResolvedConfig: product apply success', {
+                    usedCatalogDelta: Boolean(catalogDelta),
+                    structuredMasterData,
+                    elapsedMs: posCatalogDebugElapsedMs(applyStartedAt),
+                });
             } else {
-                await this.applySnapshotProducts(snapshot);
+                posCatalogDebugLog('refreshTerminalResolvedConfig: catalog apply skipped for POS_CLOUD_STAGING', {
+                    usedCatalogDelta: Boolean(catalogDelta),
+                    requestedMasterScopes,
+                    requestedResolvedScopes,
+                });
             }
-            const structuredMasterData = await this.refreshTerminalStructuredMasterData(snapshot, catalogDelta, {
-                terminalIds: [
-                    context.terminalId,
-                    snapshotTerminalId,
-                    context.localTerminalId,
-                    context.posDeviceId,
-                ],
-            });
-            await posCatalogDebugLogDbRows('after refreshTerminalResolvedConfig product apply');
-            posCatalogDebugLog('refreshTerminalResolvedConfig: product apply success', {
-                usedCatalogDelta: Boolean(catalogDelta),
-                structuredMasterData,
-                elapsedMs: posCatalogDebugElapsedMs(applyStartedAt),
-            });
         } catch (error) {
             console.warn('⚠️ SyncManager: Could not apply snapshot products from terminal config push:', error);
             posCatalogDebugLog('refreshTerminalResolvedConfig: product apply failed', {
@@ -2506,7 +2520,7 @@ class SyncManager {
             this.persistCatalogCursor(snapshotTerminalId, nextCatalogCursor);
         }
 
-        if (requestedBlockScopes?.includes('inventory')) {
+        if (!protectLocalCatalog && requestedBlockScopes?.includes('inventory')) {
             const inventoryPayload = await this.fetchTerminalInventoryBlock(
                 context,
                 currentTerminalCursorMap.inventory || null,
@@ -2522,7 +2536,7 @@ class SyncManager {
             if (inventoryBalances.length > 0) {
                 inventoryAppliedCount = await this.applyTerminalInventoryBlock(inventoryBalances);
             }
-            if (apiSyncAdapter.isUsingErpOperationalTarget()) {
+            if (apiSyncAdapter.isErpActiveOperationalTarget()) {
                 const directRefreshCount = await this.refreshOperationalInventorySnapshot();
                 if (directRefreshCount > 0) {
                     inventoryAppliedCount = directRefreshCount;
@@ -2535,7 +2549,7 @@ class SyncManager {
             });
         }
 
-        if (requestedBlockScopes?.includes('product_prices')) {
+        if (!protectLocalCatalog && requestedBlockScopes?.includes('product_prices')) {
             const productPricesPayload = await this.fetchTerminalProductPricesBlock(
                 context,
                 currentTerminalCursorMap.product_prices || null,
@@ -2609,7 +2623,7 @@ class SyncManager {
                 .map((product) => [String(product.id).trim(), product]),
         );
         const localByIdentity = this.buildLocalProductIdentityLookup(localProducts);
-        const preserveOperationalInventory = apiSyncAdapter.isUsingErpOperationalTarget();
+        const preserveOperationalInventory = apiSyncAdapter.isErpActiveOperationalTarget();
         let updatedCount = 0;
         const duplicateIdsToRemove = new Set<string>();
         const traceRaw = rawItems.filter((item: unknown) => posCatalogDebugMatchesRaw(item));
@@ -4159,6 +4173,10 @@ class SyncManager {
     ): Promise<number> {
         if (this.isDisabled) return 0;
         const target = syncPolicy.resolve();
+        if (target.kind === 'POS_CLOUD_STAGING') {
+            logSkippedNonMasterPull(collection, target.kind, 'POS_CLOUD_STAGING_PULL_BLOCKED');
+            return 0;
+        }
         if (target.kind === 'ERP_ACTIVE' && !isErpMasterPullCollection(collection)) {
             logSkippedNonMasterPull(collection, target.kind);
             return 0;
@@ -4593,6 +4611,18 @@ class SyncManager {
                         localVersion,
                         remoteVersion: Array.isArray(localData) ? localData.length : null,
                         status: 'SYNCED_CLOUD'
+                    });
+                    continue;
+                } else if (target.kind === 'POS_CLOUD_STAGING' || !target.canPullMasters) {
+                    logSkippedNonMasterPull(collection, target.kind, 'LOCAL_MASTERS_PROTECTED');
+                    const localData = await db.get(collection as any);
+                    const localVersion = this.syncVersions.get(collection) || 0;
+                    results.push({
+                        collection,
+                        lastSyncedAt: null,
+                        localVersion,
+                        remoteVersion: Array.isArray(localData) ? localData.length : null,
+                        status: 'SYNCED',
                     });
                     continue;
                 } else {
@@ -5065,6 +5095,10 @@ class SyncManager {
 
     isUsingErpOperationalTarget(): boolean {
         return apiSyncAdapter.isUsingErpOperationalTarget();
+    }
+
+    isErpActiveOperationalTarget(): boolean {
+        return apiSyncAdapter.isErpActiveOperationalTarget();
     }
 
     /**

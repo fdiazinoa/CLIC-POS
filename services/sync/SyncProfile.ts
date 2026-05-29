@@ -513,6 +513,16 @@ function normalizeProfile(input: Partial<SyncProfile>): SyncProfile {
     };
 }
 
+export function isPosOnlyCloudStagingTarget(profile: SyncProfile = loadSyncProfile()): boolean {
+    const activeProfile = normalizeProfile(profile);
+    return activeProfile.contractedProduct === 'POS_ONLY'
+        && resolveSyncTarget(activeProfile).kind === 'POS_CLOUD_STAGING';
+}
+
+export function protectsLocalCatalogFromCloud(profile: SyncProfile = loadSyncProfile()): boolean {
+    return isPosOnlyCloudStagingTarget(profile);
+}
+
 export function resolveSyncTarget(profile: SyncProfile = loadSyncProfile()): ResolvedSyncTarget {
     const activeProfile = normalizeProfile(profile);
 

@@ -191,7 +191,23 @@ const resolveCatalogStatus = (): CatalogSyncStatus => {
 
 const resolveSalesPushStatus = (target: ResolvedSyncTarget): SalesPushStatus => {
     const explicit = safeLocalStorageGet(SALES_PUSH_STATUS_KEY) as SalesPushStatus | null;
-    if (explicit && ['DISABLED', 'LOCKED_UNTIL_ERP_READY', 'LOCKED_AUTH_REQUIRED', 'LOCKED_FISCAL_CONFIG_REQUIRED', 'LOCKED_MASTER_SYNC_REQUIRED', 'ENABLED'].includes(explicit)) return explicit;
+    if (explicit && ['DISABLED', 'LOCKED_UNTIL_ERP_READY', 'LOCKED_AUTH_REQUIRED', 'LOCKED_FISCAL_CONFIG_REQUIRED', 'LOCKED_MASTER_SYNC_REQUIRED', 'ENABLED'].includes(explicit)) {
+        if (
+            explicit === 'LOCKED_UNTIL_ERP_READY'
+            && target.kind === 'POS_CLOUD_STAGING'
+            && target.canPushOperations
+        ) {
+            return 'ENABLED';
+        }
+        if (
+            (explicit === 'LOCKED_FISCAL_CONFIG_REQUIRED' || explicit === 'LOCKED_MASTER_SYNC_REQUIRED')
+            && target.kind === 'POS_CLOUD_STAGING'
+            && target.canPushOperations
+        ) {
+            return 'ENABLED';
+        }
+        return explicit;
+    }
     if (target.canPushOperations) return 'ENABLED';
     if (target.kind === 'ERP_ACTIVE') return 'LOCKED_UNTIL_ERP_READY';
     return 'DISABLED';

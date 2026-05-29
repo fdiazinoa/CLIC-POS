@@ -13,7 +13,8 @@ import {
     getSyncProfileSourcePriority,
     loadSyncProfile,
     resolveSyncTarget,
-    ResolvedSyncTarget
+    ResolvedSyncTarget,
+    isPosOnlyCloudStagingTarget,
 } from './SyncProfile';
 import {
     reportSyncErrorDiagnostic,
@@ -960,6 +961,14 @@ class ApiSyncAdapter {
         return this.resolveOperationalTarget()?.useLocalTarget === false;
     }
 
+    isErpActiveOperationalTarget(): boolean {
+        return resolveSyncTarget().kind === 'ERP_ACTIVE';
+    }
+
+    isPosOnlyCloudStagingOperationalTarget(): boolean {
+        return isPosOnlyCloudStagingTarget();
+    }
+
     private resolveCurrentDeviceId(): string | null {
         return pickFirstString(
             safeLocalStorageGet('CLIC_POS_DEVICE_ID'),
@@ -1315,8 +1324,11 @@ class ApiSyncAdapter {
         responseBody: string;
         requestHeaders: Record<string, string>;
     }): Error {
-        setCatalogDiagnosticStatus('FISCAL_CONFIG_MISSING');
-        setSalesPushDiagnosticStatus('LOCKED_FISCAL_CONFIG_REQUIRED');
+        const isPosOnlyStaging = isPosOnlyCloudStagingTarget();
+        if (!isPosOnlyStaging) {
+            setCatalogDiagnosticStatus('FISCAL_CONFIG_MISSING');
+            setSalesPushDiagnosticStatus('LOCKED_FISCAL_CONFIG_REQUIRED');
+        }
 
         const canIssueNonFiscalSales = safeLocalStorageGet('canIssueNonFiscalSales') === 'true'
             || safeLocalStorageGet('clic_can_issue_non_fiscal_sales') === 'true';
@@ -1335,10 +1347,11 @@ class ApiSyncAdapter {
             endpoint: input.endpoint,
             httpStatus: input.status,
             backendCode,
-            catalogSyncStatus: 'FISCAL_CONFIG_MISSING',
-            salesPushStatus: 'LOCKED_FISCAL_CONFIG_REQUIRED',
+            catalogSyncStatus: isPosOnlyStaging ? 'unchanged' : 'FISCAL_CONFIG_MISSING',
+            salesPushStatus: isPosOnlyStaging ? 'unchanged' : 'LOCKED_FISCAL_CONFIG_REQUIRED',
             canIssueNonFiscalSales,
             nextAction,
+            posOnlyStagingIgnored: isPosOnlyStaging,
         });
 
         reportSyncErrorDiagnostic({
@@ -1352,9 +1365,10 @@ class ApiSyncAdapter {
             nextAction,
             requestAuth: this.buildRequestAuthDiagnostic(input.requestHeaders),
             isMasterCollection: true,
-            isOperationCollection: false,
-            isCriticalMaster: true,
-            userVisibleSeverity: 'critical',
+            isCriticalMaster: ERP_CRITICAL_MASTER_COLLECTIONS.has(input.collection),
+            userVisibleSeverity: isPosOnlyStaging ? 'warning' : 'critical',
+            blockedByLocalGuard: isPosOnlyStaging,
+            guardReason: isPosOnlyStaging ? 'POS_ONLY_FISCAL_PULL_IGNORED' : null,
         });
 
         return this.markDiagnosticReported(error);
@@ -1411,8 +1425,11 @@ class ApiSyncAdapter {
         responseBody: string;
         requestHeaders: Record<string, string>;
     }): Error {
-        setCatalogDiagnosticStatus('ERP_MASTER_PULL_FAILED');
-        setSalesPushDiagnosticStatus('LOCKED_MASTER_SYNC_REQUIRED');
+        const isPosOnlyStaging = isPosOnlyCloudStagingTarget();
+        if (!isPosOnlyStaging) {
+            setCatalogDiagnosticStatus('ERP_MASTER_PULL_FAILED');
+            setSalesPushDiagnosticStatus('LOCKED_MASTER_SYNC_REQUIRED');
+        }
 
         const backendCode = this.normalizeBackendCode(input.payload) || 'SYNC_COLLECTION_PULL_FAILED';
         const failedCollection = this.resolveFailedMasterCollection(input.collection, input.payload);
@@ -1426,8 +1443,9 @@ class ApiSyncAdapter {
             httpStatus: input.status,
             backendCode,
             debugId,
-            catalogSyncStatus: 'ERP_MASTER_PULL_FAILED',
-            salesPushStatus: 'LOCKED_MASTER_SYNC_REQUIRED',
+            catalogSyncStatus: isPosOnlyStaging ? 'unchanged' : 'ERP_MASTER_PULL_FAILED',
+            salesPushStatus: isPosOnlyStaging ? 'unchanged' : 'LOCKED_MASTER_SYNC_REQUIRED',
+            posOnlyStagingIgnored: isPosOnlyStaging,
         });
 
         reportSyncErrorDiagnostic({
@@ -1443,7 +1461,9 @@ class ApiSyncAdapter {
             isMasterCollection: true,
             isOperationCollection: false,
             isCriticalMaster: ERP_CRITICAL_MASTER_COLLECTIONS.has(failedCollection),
-            userVisibleSeverity: 'critical',
+            userVisibleSeverity: isPosOnlyStaging ? 'warning' : 'critical',
+            blockedByLocalGuard: isPosOnlyStaging,
+            guardReason: isPosOnlyStaging ? 'POS_ONLY_MASTER_PULL_IGNORED' : null,
         });
 
         return this.markDiagnosticReported(error);
@@ -2555,6 +2575,12 @@ class ApiSyncAdapter {
     }
 
     async pullDelta(collection: string, sinceVersion?: number): Promise<{ items: any[], serverTime: string, isFullDownload: boolean, latestVersion?: number, syncStatus?: 'SYNCED_WITH_FULL_FALLBACK' }> {
+        const routedTarget = resolveSyncTarget();
+        if (routedTarget.kind === 'POS_CLOUD_STAGING') {
+            logSkippedNonMasterPull(collection, 'PULL_MASTERS', 'POS_CLOUD_STAGING_PULL_BLOCKED');
+            return this.buildEmptyDeltaResult(sinceVersion);
+        }
+
         const operationalTarget = this.resolveOperationalTarget('PULL_MASTERS');
         if (operationalTarget && !operationalTarget.useLocalTarget) {
             if (!isErpMasterPullCollection(collection)) {
@@ -3909,7 +3935,11 @@ class ApiSyncAdapter {
 
     async pullOperationalStockBalances(productId?: string): Promise<any[]> {
         try {
-            if (!this.isUsingErpOperationalTarget()) {
+            if (isPosOnlyCloudStagingTarget()) {
+                return [];
+            }
+
+            if (!this.isErpActiveOperationalTarget()) {
                 const query = productId ? `?product_id=${encodeURIComponent(productId)}` : '';
                 const data = await this.getOperationalPayload<{ balances?: any[] }>(`/inventory/stock-balances${query}`);
                 return Array.isArray(data?.balances) ? data.balances : [];
@@ -3952,7 +3982,11 @@ class ApiSyncAdapter {
         const previous = this.lastOperationalStockBalanceMaps.get(cacheKey) || {};
 
         try {
-            if (!this.isUsingErpOperationalTarget()) {
+            if (isPosOnlyCloudStagingTarget()) {
+                return previous;
+            }
+
+            if (!this.isErpActiveOperationalTarget()) {
                 const balances = await this.pullOperationalStockBalances(productId);
                 const nextMap = this.buildOperationalStockBalanceMap(balances);
                 if (Object.keys(nextMap).length > 0) {
@@ -4023,7 +4057,11 @@ class ApiSyncAdapter {
      */
     async pullKardexOnDemand(productId: string): Promise<any[]> {
         try {
-            if (this.isUsingErpOperationalTarget()) {
+            if (isPosOnlyCloudStagingTarget()) {
+                return [];
+            }
+
+            if (this.isErpActiveOperationalTarget()) {
                 const data = await this.getOperationalPayload<{ items?: any[] }>(`/inventory/kardex/${encodeURIComponent(productId)}`);
                 return data.items || [];
             }
