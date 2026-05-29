@@ -2,6 +2,7 @@ import { RealtimeChannel } from '@supabase/supabase-js';
 import { syncManager } from './SyncManager';
 import { ensureSupabaseSessionRestored, supabase } from '../../utils/supabase';
 import { getStoredErpSyncBinding } from '../../utils/erpSyncLifecycle';
+import { dispatchDeviceRevoked, resolveLocalDeviceId } from '../../utils/deviceRevocation';
 
 const FORCE_SYNC_NOTICE_KEY = 'clic_pos_force_sync_notice';
 
@@ -72,6 +73,32 @@ class RealtimeNotificationService {
             } catch (error) {
                 console.error('❌ RealtimeNotificationService: Error during force_sync handling:', error);
             }
+        });
+
+        channel.on('broadcast', { event: 'device_revoked' }, ({ payload }) => {
+            const eventPayload = asObject(payload);
+            const localDeviceId = resolveLocalDeviceId();
+            const previousDeviceId = String(eventPayload.previous_device_id || '').trim();
+            const terminalIdFromEvent = String(eventPayload.terminal_id || '').trim();
+            const boundTerminalId = getStoredErpSyncBinding().terminalId || '';
+
+            const appliesToThisDevice =
+                Boolean(localDeviceId && previousDeviceId && localDeviceId === previousDeviceId)
+                || Boolean(boundTerminalId && terminalIdFromEvent && boundTerminalId === terminalIdFromEvent);
+
+            if (!appliesToThisDevice) {
+                return;
+            }
+
+            console.warn('📡 RealtimeNotificationService: device_revoked received for this POS.', payload);
+            dispatchDeviceRevoked({
+                reason: 'DEVICE_REVOKED',
+                message: 'Este equipo fue reemplazado por otro dispositivo. La operación queda bloqueada en esta tablet.',
+                terminalId: terminalIdFromEvent || null,
+                previousDeviceId: previousDeviceId || null,
+                newDeviceId: String(eventPayload.new_device_id || '').trim() || null,
+                payload,
+            });
         });
 
         channel.subscribe(async (status) => {

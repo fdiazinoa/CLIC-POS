@@ -3764,7 +3764,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ? Math.round(((saleTotal - saleTaxAmount) + Number.EPSILON) * 100) / 100
                   : saleTotal;
                const salePayments = payments.filter(p => !['WALLET', 'ADVANCE'].includes(p.method));
-               const saleSettlement = buildTransactionSettlementFields(salePayments, saleTotal, baseCurrency.code);
+               const salePayableTotal = saleTotal + (voluntaryTip || 0);
+               const saleSettlement = buildTransactionSettlementFields(salePayments, salePayableTotal, baseCurrency.code);
 
                // Prepare wallet operations
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
@@ -3788,7 +3789,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         documentType: 'TICKET' as const,
                         seriesId: assignedSequenceId,
                         items: saleItems,
-                        total: saleTotal + (voluntaryTip || 0),
+                        total: saleTotal,
                         payments: salePayments,
                         serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
                         voluntaryTipAmount: voluntaryTip,
@@ -3923,8 +3924,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const documentItems = !isRefundOnly
                   ? applyOrderContextToItems(rawDocumentItems, saleOrderNumber)
                   : rawDocumentItems;
-               const documentTotal = (isRefundOnly ? refundDocumentTotal : cartTotal) + (voluntaryTip || 0);
-               const transactionSettlement = buildTransactionSettlementFields(paymentsForTransaction, documentTotal, baseCurrency.code);
+               const documentTotal = isRefundOnly ? refundDocumentTotal : cartTotal;
+               const payableTotal = documentTotal + (voluntaryTip || 0);
+               const transactionSettlement = buildTransactionSettlementFields(paymentsForTransaction, payableTotal, baseCurrency.code);
 
                const txn = await withTimeout(transactionService.createTransaction({
                   documentType: hasReturns ? 'REFUND' : 'TICKET',

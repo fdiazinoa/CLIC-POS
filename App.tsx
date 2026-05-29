@@ -148,6 +148,7 @@ import {
 import {
   clearStoredErpSyncBinding,
   ensureErpSyncLifecycle,
+  ERP_FULL_BOOTSTRAP_REQUIRED_EVENT,
   getLifecycleActivationBlockMessage,
   getLifecycleBlockingMessageFromError,
   isLifecycleActivationBlocked,
@@ -167,7 +168,15 @@ import {
   TERMINAL_BINDING_STATUS_KEY,
   type SyncErrorDiagnostic
 } from './services/sync/SyncErrorDiagnostic';
+import {
+  DEVICE_REVOKED_EVENT,
+  DEVICE_SUPERSEDED_MESSAGE,
+  persistLocalDeviceId,
+  resolveLocalDeviceId,
+  type DeviceRevocationDetail
+} from './utils/deviceRevocation';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
+import type { RuntimeTerminalRecoveryState } from './services/setup/erpTerminalSetup';
 import { resolveCustomerImageSrc } from './utils/entityImage';
 import { posCatalogDebugElapsedMs, posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugNow, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
 import { buildTerminalConfigRefreshRequest, type TerminalConfigSyncRequestDetail } from './utils/terminalConfigPushScopes';
@@ -222,6 +231,11 @@ type ReceivableRepairSummary = {
   totalPendingAfter: number;
   transactionIds: string[];
   creditNoteIds: string[];
+};
+
+type RecoverySequencePromptState = RuntimeTerminalRecoveryState & {
+  terminalId: string;
+  terminalName?: string | null;
 };
 
 const LICENSE_REFRESH_BASE_MS = 60_000;
@@ -1011,6 +1025,8 @@ const AppContent: React.FC = () => {
     }
   });
   const posApkUpdateCheckStartedRef = useRef(false);
+  const [recoverySequencePrompt, setRecoverySequencePrompt] = useState<RecoverySequencePromptState | null>(null);
+  const [recoverySequenceInput, setRecoverySequenceInput] = useState('');
 
   // --- SECURITY BOOTSTRAP STATE ---
   const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
@@ -1248,6 +1264,51 @@ const AppContent: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    let fullBootstrapInFlight = false;
+
+    const handleErpFullBootstrapRequired = async () => {
+      if (fullBootstrapInFlight) return;
+      fullBootstrapInFlight = true;
+
+      try {
+        await syncManager.fullPull();
+
+        const refreshedConfigRaw = await db.get('config') as unknown;
+        if (refreshedConfigRaw && !Array.isArray(refreshedConfigRaw) && (refreshedConfigRaw as BusinessConfig).terminals) {
+          setConfig(refreshedConfigRaw as BusinessConfig);
+        }
+
+        const refreshedProducts = await db.get('products') as Product[];
+        if (Array.isArray(refreshedProducts)) {
+          setProducts(refreshedProducts);
+        }
+
+        const refreshedUsers = await db.get('users') as User[];
+        if (Array.isArray(refreshedUsers)) {
+          setUsers(refreshedUsers);
+        }
+
+        const refreshedRoles = await db.get('roles') as RoleDefinition[];
+        if (Array.isArray(refreshedRoles)) {
+          setRoles(refreshedRoles);
+        }
+
+        localStorage.removeItem('clic_erp_sync_full_bootstrap_required');
+        localStorage.removeItem('clic_erp_sync_full_bootstrap_reason');
+      } catch (error) {
+        console.warn('⚠️ Failed to apply ERP full bootstrap requested by auth:', error);
+      } finally {
+        fullBootstrapInFlight = false;
+      }
+    };
+
+    window.addEventListener(ERP_FULL_BOOTSTRAP_REQUIRED_EVENT, handleErpFullBootstrapRequired as EventListener);
+    return () => {
+      window.removeEventListener(ERP_FULL_BOOTSTRAP_REQUIRED_EVENT, handleErpFullBootstrapRequired as EventListener);
+    };
+  }, []);
+
   const dismissTerminalConfigRestartNotice = useCallback(() => {
     localStorage.removeItem(TERMINAL_CONFIG_RESTART_NOTICE_KEY);
     setTerminalConfigRestartNotice(null);
@@ -1311,6 +1372,16 @@ const AppContent: React.FC = () => {
       console.warn('Failed to clear Supabase session during lockdown', error);
     });
   }, []);
+
+  useEffect(() => {
+    const handleDeviceRevoked = (event: Event) => {
+      const detail = (event as CustomEvent<DeviceRevocationDetail>).detail;
+      triggerLockdown(detail?.message || DEVICE_SUPERSEDED_MESSAGE);
+    };
+
+    window.addEventListener(DEVICE_REVOKED_EVENT, handleDeviceRevoked as EventListener);
+    return () => window.removeEventListener(DEVICE_REVOKED_EVENT, handleDeviceRevoked as EventListener);
+  }, [triggerLockdown]);
 
   // --- REALTIME KILL SWITCH (FALLBACK: SMART POLLING) ---
   useEffect(() => {
@@ -2225,8 +2296,26 @@ const AppContent: React.FC = () => {
     });
 
     return (sourceTables || []).map(table => {
-      const linkedTicket = (table.currentOrderId ? byOrderId.get(String(table.currentOrderId)) : undefined)
-        || byTableId.get(String(table.id));
+      const tableId = String(table.id);
+      const orderTicket = table.currentOrderId ? byOrderId.get(String(table.currentOrderId)) : undefined;
+      const orderTicketTableId = orderTicket?.tableId !== undefined && orderTicket?.tableId !== null
+        ? String(orderTicket.tableId)
+        : '';
+      const joinedTableIds = Array.isArray((orderTicket as any)?.joinedTableIds)
+        ? (orderTicket as any).joinedTableIds.map((id: unknown) => String(id))
+        : [];
+      const canLinkByOrder = Boolean(
+        orderTicket &&
+        (
+          !orderTicketTableId ||
+          orderTicketTableId === tableId ||
+          joinedTableIds.includes(tableId) ||
+          String((table as any).joinedTableId || '') === orderTicketTableId ||
+          String((table as any).joinedSourceTableId || '') === tableId
+        )
+      );
+      const linkedTicket = (canLinkByOrder ? orderTicket : undefined)
+        || byTableId.get(tableId);
       if (!linkedTicket) {
         const hasStaleOccupancy =
           table.status === 'OCCUPIED' &&
@@ -2747,11 +2836,11 @@ const AppContent: React.FC = () => {
         }
 
         // 2. Gestión de Identidad de Dispositivo (early, used for safe config source selection)
-        let storedDeviceId = localStorage.getItem('pos_device_id');
+        let storedDeviceId = resolveLocalDeviceId();
         if (!storedDeviceId) {
           storedDeviceId = 'DEV-' + Math.random().toString(36).substring(2, 10).toUpperCase();
-          localStorage.setItem('pos_device_id', storedDeviceId);
         }
+        persistLocalDeviceId(storedDeviceId);
         setDeviceId(storedDeviceId);
 
         const persistedTenantId = (localStorage.getItem('clic_tenant_id') || '').trim();
@@ -3532,9 +3621,7 @@ const AppContent: React.FC = () => {
         case 'cashMovements': setCashMovements(freshData as CashMovement[]); break;
         case 'zReports': setZReports(freshData as ZReport[]); break;
         case 'xReports': setXReports(Array.isArray(freshData) ? freshData as XReport[] : []); break;
-        case 'warehouses':
-          setWarehouses(Array.isArray(freshData) ? freshData as Warehouse[] : []);
-          break;
+        case 'warehouses': setWarehouses(Array.isArray(freshData) ? freshData as Warehouse[] : []); break;
       }
     };
 
@@ -3730,6 +3817,7 @@ const AppContent: React.FC = () => {
       incomingProfile?: Partial<SyncProfile>;
       profile?: Partial<SyncProfile>;
       progress?: (update: { stepId?: 'claim' | 'config' | 'apply' | 'sync' | 'cache' | 'finish'; message?: string }) => void;
+      recoveryState?: RuntimeTerminalRecoveryState | null;
     },
     options?: { forceTakeover?: boolean }
   ) => {
@@ -4274,6 +4362,17 @@ const AppContent: React.FC = () => {
         });
       }
 
+      const recoveryState = setupResult?.recoveryState;
+      if (shouldTakeover && recoveryState) {
+        const cloudLastSequence = Number(recoveryState.last_global_sequence || 0);
+        setRecoverySequenceInput(String(Math.max(0, cloudLastSequence)));
+        setRecoverySequencePrompt({
+          ...recoveryState,
+          terminalId,
+          terminalName: resolvedTerminalName,
+        });
+      }
+
       setCurrentView('LOGIN');
     } catch (error) {
       console.error('❌ Failed to take terminal control:', error);
@@ -4373,6 +4472,28 @@ const AppContent: React.FC = () => {
       console.error('❌ Failed to complete setup wizard:', error);
       alert('No se pudo guardar la configuración inicial. Intenta nuevamente.');
     }
+  };
+
+  const handleConfirmRecoverySequence = async () => {
+    if (!recoverySequencePrompt) return;
+
+    const cloudLastSequence = Number(recoverySequencePrompt.last_global_sequence || 0);
+    const enteredSequence = Number(recoverySequenceInput);
+
+    if (!Number.isFinite(enteredSequence) || enteredSequence < 0 || !Number.isInteger(enteredSequence)) {
+      alert('Digite un número de secuencia válido.');
+      return;
+    }
+
+    if (enteredSequence < cloudLastSequence) {
+      alert(`El número ingresado debe ser mayor o igual al último número en la nube (${cloudLastSequence}).`);
+      return;
+    }
+
+    await dbAdapter.saveCollection('globalSequenceCounter', enteredSequence as any);
+    setRecoverySequencePrompt(null);
+    setRecoverySequenceInput('');
+    alert('Secuencia fiscal local alineada correctamente.');
   };
 
   const handleConfigUpdate = async (newConfig: BusinessConfig) => {
@@ -6536,8 +6657,10 @@ const AppContent: React.FC = () => {
                     }
                     const fromTx = (transactions || []).find(t => t.id === table.currentOrderId);
                     if (parked?.items?.length) {
+                      const joinedSourceName = String((selectedTable as any).joinedSourceTableName || '').trim();
                       selectedTable = {
                         ...table,
+                        ...(joinedSourceName ? { name: joinedSourceName, nombre: joinedSourceName } : {}),
                         status: 'OCCUPIED',
                         currentOrderId: parked.id,
                         currentOrderTotal: typeof parked.total === 'number'
@@ -6560,8 +6683,10 @@ const AppContent: React.FC = () => {
                       }
                     }
                     if (parked?.items?.length) {
+                      const joinedSourceName = String((selectedTable as any).joinedSourceTableName || '').trim();
                       selectedTable = {
                         ...table,
+                        ...(joinedSourceName ? { name: joinedSourceName, nombre: joinedSourceName } : {}),
                         status: 'OCCUPIED',
                         currentOrderId: parked.id,
                         currentOrderTotal: typeof parked.total === 'number'
@@ -6577,6 +6702,11 @@ const AppContent: React.FC = () => {
                   setCurrentView('POS');
                 }}
                 onRefreshTables={fetchTables}
+                onUpdateTables={async (nextTables) => {
+                  setTables(nextTables);
+                  await db.save('tables', nextTables);
+                }}
+                onUpdateParkedTickets={handleUpdateParkedTickets}
                 currencySymbol={config.currencySymbol}
                 currentUser={currentUser!}
                 isAdmin={currentUser?.role === 'ADMIN'}
@@ -7928,6 +8058,41 @@ const AppContent: React.FC = () => {
   return (
     <ErrorBoundary componentName="App Root">
       <>
+        {recoverySequencePrompt && (
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/70 p-6">
+            <div className="w-full max-w-xl rounded-3xl bg-white p-7 shadow-2xl">
+              <p className="text-xs font-black uppercase tracking-[0.22em] text-blue-600">Recuperación de terminal</p>
+              <h2 className="mt-2 text-2xl font-black text-slate-950">Alinear secuencia fiscal</h2>
+              <p className="mt-3 text-sm font-semibold leading-6 text-slate-600">
+                Nuestra última factura en la nube fue {recoverySequencePrompt.last_display_id || recoverySequencePrompt.last_ncf || `#${recoverySequencePrompt.last_global_sequence || 0}`}.
+                Revise el último recibo físico impreso e ingrese el último número usado en esta caja.
+              </p>
+              <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-bold text-slate-700">
+                <div>Terminal: {recoverySequencePrompt.terminalName || recoverySequencePrompt.terminalId}</div>
+                <div>Última secuencia cloud: {recoverySequencePrompt.last_global_sequence ?? 0}</div>
+                {recoverySequencePrompt.last_transaction_date && (
+                  <div>Última fecha cloud: {recoverySequencePrompt.last_transaction_date}</div>
+                )}
+              </div>
+              <label className="mt-5 block text-xs font-black uppercase tracking-[0.16em] text-slate-500">
+                Último número usado
+              </label>
+              <input
+                type="number"
+                min={recoverySequencePrompt.last_global_sequence ?? 0}
+                value={recoverySequenceInput}
+                onChange={(event) => setRecoverySequenceInput(event.target.value)}
+                className="mt-2 w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-4 text-2xl font-black text-slate-950 outline-none focus:border-blue-500"
+              />
+              <button
+                onClick={handleConfirmRecoverySequence}
+                className="mt-6 w-full rounded-2xl bg-blue-600 py-4 text-base font-black text-white shadow-xl shadow-blue-200 active:scale-[0.98]"
+              >
+                Confirmar y continuar
+              </button>
+            </div>
+          </div>
+        )}
         {renderReconnectionBanner()}
         {renderTerminalConfigRestartBanner()}
         {posApkUpdate && (

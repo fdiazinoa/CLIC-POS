@@ -18,6 +18,7 @@ import {
   fetchInitialConfigFromErp,
   isTerminalOccupiedError,
   listTerminalsFromErp,
+  type RuntimeTerminalRecoveryState,
 } from '../services/setup/erpTerminalSetup';
 import { persistSyncDeviceToken } from '../services/sync/deviceToken';
 import { extractErpRegisterAuth, resolveNormalizedRegisterDeviceToken } from '../services/sync/erpRegisterResponse';
@@ -52,6 +53,7 @@ interface BindTerminalResponse {
   store_id?: string | null;
   transferred?: boolean;
   previous_device_id?: string | null;
+  recovery_state?: RuntimeTerminalRecoveryState | null;
   config: BusinessConfig;
   users?: UserType[];
   sync_profile?: Partial<SyncProfile>;
@@ -142,6 +144,7 @@ interface BoundTerminalPayload {
   storeId?: string;
   forceTakeover?: boolean;
   previousDeviceId?: string | null;
+  recoveryState?: RuntimeTerminalRecoveryState | null;
   config: BusinessConfig;
   users?: UserType[];
   masterIp?: string;
@@ -849,6 +852,8 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
     try {
       let data: BindTerminalResponse | null = null;
+      let dataFromCloudDirect = false;
+      const shouldValidateTakeoverInCloud = Boolean(forceTransfer && erpBaseUrl && bindingMode === 'MASTER');
 
       if (expectsErpDirect && !erpBaseUrl) {
         throw new Error('No encontramos la URL base del ERP para completar la vinculación.');
@@ -861,7 +866,21 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         });
       }
 
-      if (useErpDirectMasterAndroid) {
+      if (shouldValidateTakeoverInCloud) {
+        data = await bindTerminalFromErp({
+          currentConfig,
+          posDeviceId: deviceId,
+          terminalId: terminal.id,
+          erpTerminalId: terminal.erpTerminalId,
+          bindingMode,
+          forceTransfer,
+          tenantId,
+          tenantSlug: resolveTenantSlug(),
+          tenantEmail: resolveTenantEmail(),
+          erpBaseUrl: erpBaseUrl!,
+        });
+        dataFromCloudDirect = true;
+      } else if (useErpDirectMasterAndroid) {
         try {
           const response = await fetch(`${buildAndroidEmbeddedSetupBase()}/bind-terminal`, {
             method: 'POST',
@@ -1051,7 +1070,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
               full_pull_on_pairing: applied.fullPullOnPairing ?? false,
             },
           };
-        } else if (usesErpDirect) {
+        } else if (usesErpDirect || dataFromCloudDirect) {
           const erpInitialConfigData = await fetchInitialConfigFromErp({
             erpBaseUrl: erpBaseUrl!,
             tenantId: data.tenant_id || tenantId,
@@ -1196,6 +1215,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           storeId: data.store_id || undefined,
           forceTakeover: forceTransfer || Boolean(data.transferred),
           previousDeviceId: data.previous_device_id || null,
+          recoveryState: data.recovery_state || null,
           config: initialConfigData.config || data.config,
           users: data.users,
           masterIp: resolvedMasterHost,
