@@ -15,7 +15,9 @@ interface TableOptionsModalProps {
   onPrintPrecheck: () => void;
   onSplitItems?: () => void;
   onSplitPayment?: () => void;
-  onMoveTable: (targetTableId: string) => void;
+  /** Restaurante: activa el flujo visual 2-tap del mapa (origen = mesa actual). */
+  onStartTransfer?: (mode: 'MOVE' | 'MERGE') => void;
+  onMoveTable?: (targetTableId: string) => void;
   onMergeTables?: (targetTableIds: string[]) => void;
   onFree?: () => void;
 }
@@ -45,6 +47,7 @@ const TableOptionsModal: React.FC<TableOptionsModalProps> = ({
   onPrintPrecheck,
   onSplitItems,
   onSplitPayment,
+  onStartTransfer,
   onMoveTable,
   onMergeTables,
   onFree
@@ -52,6 +55,7 @@ const TableOptionsModal: React.FC<TableOptionsModalProps> = ({
   const isOccupied = table.status === 'OCCUPIED';
   const availableTables = allTables.filter(t => t.id !== table.id && (!t.status || t.status === 'FREE') && t.shape !== 'OBSTACLE');
   const [showMoveView, setShowMoveView] = useState(false);
+  const useVisualTransfer = Boolean(onStartTransfer);
 
   // Sub-view for Move Table to keep modal clean
   if (showMoveView) {
@@ -80,7 +84,7 @@ const TableOptionsModal: React.FC<TableOptionsModalProps> = ({
                 <button
                   key={t.id}
                   onClick={() => {
-                    if (confirm(`¿Mover a ${getTableRoomLabel(t, rooms)}?`)) onMoveTable(t.id);
+                    if (confirm(`¿Mover a ${getTableRoomLabel(t, rooms)}?`)) onMoveTable?.(t.id);
                   }}
                   className="p-4 rounded-xl border border-gray-200 bg-white hover:border-blue-500 hover:bg-blue-50 hover:shadow-md transition-all text-center group flex flex-col items-center gap-1"
                 >
@@ -150,7 +154,18 @@ const TableOptionsModal: React.FC<TableOptionsModalProps> = ({
           <div className="h-px bg-gray-100 my-1 mx-4" />
 
           {/* Grupo 2: Gestión */}
-          <button onClick={() => setShowMoveView(true)} className="flex items-center gap-4 w-full p-3 rounded-xl hover:bg-gray-50 active:bg-gray-100 transition-all text-left group">
+          {(useVisualTransfer || onMoveTable) && (
+          <button
+            onClick={() => {
+              if (onStartTransfer) {
+                onStartTransfer('MOVE');
+                onClose();
+                return;
+              }
+              setShowMoveView(true);
+            }}
+            className="flex items-center gap-4 w-full p-3 rounded-xl hover:bg-gray-50 active:bg-gray-100 transition-all text-left group"
+          >
             <div className="p-2.5 bg-gray-100 text-gray-500 rounded-lg group-hover:bg-gray-200 group-hover:text-gray-700 transition-colors">
               <ArrowRightLeft size={20} />
             </div>
@@ -159,11 +174,17 @@ const TableOptionsModal: React.FC<TableOptionsModalProps> = ({
               <div className="text-xs text-gray-400 font-medium">Cambiar ubicación del pedido</div>
             </div>
           </button>
+          )}
 
-          {onMergeTables && (
+          {(useVisualTransfer || onMergeTables) && (
             <button onClick={() => {
+              if (onStartTransfer) {
+                onStartTransfer('MERGE');
+                onClose();
+                return;
+              }
               const target = prompt('Ingrese ID de mesa a unir (Desarrollo: ID interna)');
-              if (target) onMergeTables([target]);
+              if (target) onMergeTables?.([target]);
             }} className="flex items-center gap-4 w-full p-3 rounded-xl hover:bg-gray-50 active:bg-gray-100 transition-all text-left group">
               <div className="p-2.5 bg-gray-100 text-gray-500 rounded-lg group-hover:bg-gray-200 group-hover:text-gray-700 transition-colors">
                 <LinkIcon size={20} />

@@ -830,6 +830,29 @@ const TableMap: React.FC<TableMapProps> = ({
         return true;
     }, [completeTableTransfer, resolveTicketForTable, transferSelection]);
 
+    const startTransferFromModal = useCallback((table: Table, mode: TableTransferMode) => {
+        const sourceTable = enrichTableWithParkedTicket(getVisualTableState(table));
+        const sourceTicket = resolveTicketForTable(sourceTable);
+        if (!sourceTicket?.items?.length) {
+            alert('La mesa no tiene artículos para mover o unir.');
+            return;
+        }
+        if (mode === 'MOVE' && freeForTools.length === 0) {
+            alert('No hay mesas libres para recibir el pedido.');
+            return;
+        }
+        if (mode === 'MERGE' && occupiedForTools.length < 2) {
+            alert('Se necesitan al menos dos mesas ocupadas para unir.');
+            return;
+        }
+        setSelectedTable(null);
+        setTransferSelection({ mode, step: 'TARGET', sourceTableId: table.id });
+    }, [enrichTableWithParkedTicket, freeForTools.length, getVisualTableState, occupiedForTools.length, resolveTicketForTable]);
+
+    const openTableActionsModal = useCallback((table: Table) => {
+        setSelectedTable(enrichTableWithParkedTicket(getVisualTableState(table)));
+    }, [enrichTableWithParkedTicket, getVisualTableState]);
+
     const handleTableAction = useCallback(async (table: Table) => {
         const joinedTableName = String((table as any).joinedTableName || '').trim();
         if (isRestaurantMode && joinedTableName) {
@@ -1170,8 +1193,12 @@ const TableMap: React.FC<TableMapProps> = ({
                             </p>
                             <p className="mt-1 text-sm font-black text-white">
                                 {transferSelection.step === 'SOURCE'
-                                    ? 'Mesa a mover: toque la mesa origen'
-                                    : 'Mesa destino: toque la mesa que recibirá la cuenta'}
+                                    ? 'Mesa origen: toque la mesa con la cuenta'
+                                    : transferSelection.sourceTableId
+                                        ? (transferSelection.mode === 'MERGE'
+                                            ? 'Mesa destino: toque la mesa con la que unir'
+                                            : 'Mesa destino: toque la mesa libre que recibirá la cuenta')
+                                        : 'Mesa destino: toque la mesa que recibirá la cuenta'}
                             </p>
                             <button
                                 type="button"
@@ -1440,6 +1467,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                         currencySymbol={currencySymbol}
                                         reduceMotion={Boolean(reduceMotion)}
                                         onSelect={handleNodeSelect}
+                                        onRequestActions={isRestaurantMode ? () => openTableActionsModal(model.table) : undefined}
                                         onTooltipOpen={openTooltip}
                                         onTooltipMove={moveTooltip}
                                         onTooltipClose={closeTooltip}
@@ -1507,49 +1535,53 @@ const TableMap: React.FC<TableMapProps> = ({
                                 alert('Sin cuenta activa para dividir pago.');
                             }
                         }}
-                        onMoveTable={async (targetTableId) => {
-                            try {
-                                const res = await fetch('/api/mesas/mover', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ fromTableId: selectedTable.id, toTableId: targetTableId })
-                                });
-                                const data = await res.json();
-                                if (data.success) {
-                                    onRefreshTables?.();
-                                    alert('Mesa movida correctamente');
-                                    setSelectedTable(null);
-                                } else {
-                                    alert('Error moviendo mesa: ' + data.message);
+                        {...(isRestaurantMode ? {
+                            onStartTransfer: (mode) => startTransferFromModal(selectedTable, mode)
+                        } : {
+                            onMoveTable: async (targetTableId) => {
+                                try {
+                                    const res = await fetch('/api/mesas/mover', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ fromTableId: selectedTable.id, toTableId: targetTableId })
+                                    });
+                                    const data = await res.json();
+                                    if (data.success) {
+                                        onRefreshTables?.();
+                                        alert('Mesa movida correctamente');
+                                        setSelectedTable(null);
+                                    } else {
+                                        alert('Error moviendo mesa: ' + data.message);
+                                    }
+                                } catch (error) {
+                                    console.error(error);
+                                    alert('Error de conexion');
                                 }
-                            } catch (error) {
-                                console.error(error);
-                                alert('Error de conexion');
-                            }
-                        }}
-                        onMergeTables={async (targetTableIds) => {
-                            try {
-                                const res = await fetch('/api/mesas/unir', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({
-                                        mainTableId: selectedTable.id,
-                                        secondaryTableIds: targetTableIds
-                                    })
-                                });
-                                const data = await res.json().catch(() => ({}));
-                                if (res.ok && data.success !== false) {
-                                    onRefreshTables?.();
-                                    setSelectedTable(null);
-                                    alert(typeof data.message === 'string' ? data.message : 'Mesas unidas.');
-                                } else {
-                                    alert(data?.message || 'No se pudo unir las mesas.');
+                            },
+                            onMergeTables: async (targetTableIds) => {
+                                try {
+                                    const res = await fetch('/api/mesas/unir', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                            mainTableId: selectedTable.id,
+                                            secondaryTableIds: targetTableIds
+                                        })
+                                    });
+                                    const data = await res.json().catch(() => ({}));
+                                    if (res.ok && data.success !== false) {
+                                        onRefreshTables?.();
+                                        setSelectedTable(null);
+                                        alert(typeof data.message === 'string' ? data.message : 'Mesas unidas.');
+                                    } else {
+                                        alert(data?.message || 'No se pudo unir las mesas.');
+                                    }
+                                } catch (error) {
+                                    console.error(error);
+                                    alert('Error de conexión al unir mesas.');
                                 }
-                            } catch (error) {
-                                console.error(error);
-                                alert('Error de conexión al unir mesas.');
                             }
-                        }}
+                        })}
                         onFree={async () => {
                             try {
                                 const res = await fetch('/api/mesas/liberar', {
@@ -1725,6 +1757,7 @@ const SmartTableNode = React.memo(({
     currencySymbol,
     reduceMotion,
     onSelect,
+    onRequestActions,
     onTooltipOpen,
     onTooltipMove,
     onTooltipClose
@@ -1733,11 +1766,13 @@ const SmartTableNode = React.memo(({
     currencySymbol: string;
     reduceMotion: boolean;
     onSelect: (model: SmartTableModel) => void;
+    onRequestActions?: () => void;
     onTooltipOpen: (model: SmartTableModel, x: number, y: number) => void;
     onTooltipMove: (modelId: string, x: number, y: number) => void;
     onTooltipClose: (modelId: string) => void;
 }) => {
     const longPressTimeoutRef = useRef<number | null>(null);
+    const longPressActivatedRef = useRef(false);
 
     const clearLongPress = useCallback(() => {
         if (longPressTimeoutRef.current) {
@@ -1769,7 +1804,13 @@ const SmartTableNode = React.memo(({
             animate="visible"
             whileHover={reduceMotion ? undefined : { scale: 1.035, y: -2 }}
             transition={{ type: 'spring', stiffness: 300, damping: 25, mass: 0.6 }}
-            onClick={() => onSelect(model)}
+            onClick={() => {
+                if (longPressActivatedRef.current) {
+                    longPressActivatedRef.current = false;
+                    return;
+                }
+                onSelect(model);
+            }}
             onMouseEnter={(event) => onTooltipOpen(model, event.clientX, event.clientY)}
             onMouseMove={(event) => onTooltipMove(model.table.id, event.clientX, event.clientY)}
             onMouseLeave={() => {
@@ -1779,10 +1820,17 @@ const SmartTableNode = React.memo(({
             onPointerDown={(event) => {
                 if (event.pointerType === 'touch') {
                     clearLongPress();
+                    longPressActivatedRef.current = false;
                     const { clientX, clientY } = event;
+                    const delayMs = onRequestActions ? 550 : 320;
                     longPressTimeoutRef.current = window.setTimeout(() => {
-                        onTooltipOpen(model, clientX, clientY);
-                    }, 320);
+                        longPressActivatedRef.current = Boolean(onRequestActions);
+                        if (onRequestActions) {
+                            onRequestActions();
+                        } else {
+                            onTooltipOpen(model, clientX, clientY);
+                        }
+                    }, delayMs);
                 }
             }}
             onPointerUp={() => clearLongPress()}
