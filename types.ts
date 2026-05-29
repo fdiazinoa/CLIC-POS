@@ -97,7 +97,17 @@ export interface BookingSalesDocument {
 
 // --- SYNC CONFIGURATION TYPES ---
 export type SyncMode = 'MASTER' | 'SLAVE';
-export type SyncStatus = 'PENDING' | 'SYNCING' | 'COMPLETED' | 'ERROR';
+export type SyncStatus =
+  | 'PENDING'
+  | 'SYNCING'
+  | 'COMPLETED'
+  | 'ERROR'
+  | 'SYNCED_CLOUD'
+  | 'SYNCED_ACTIVE'
+  | 'SYNCED_MASTER'
+  | 'RETRY_WAIT'
+  | 'BLOCKED_FUNCTIONAL'
+  | 'FAILED_FINAL';
 export type CloudSyncStatus = 'PENDING' | 'SYNCED' | 'ERROR';
 
 export interface SyncConfig {

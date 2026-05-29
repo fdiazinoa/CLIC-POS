@@ -12,6 +12,7 @@ import {
   DEFAULT_ROLES, DEFAULT_TERMINAL_CONFIG, DEFAULT_DOCUMENT_SERIES
 } from '../constants';
 import { dbAdapter } from '../services/db';
+import { Capacitor } from '@capacitor/core';
 import { permissionService } from '../services/sync/PermissionService';
 import { mergeDocumentSeriesCollection } from './documentSeriesIdentity';
 
@@ -617,8 +618,24 @@ export const db = {
         'erp_sales_documents'
       ].includes(key);
 
-    const isDeferredHeavyCollection = (key: string) =>
-      ['transactions', 'transactionHistory'].includes(key);
+    const isNativeAndroidRuntime =
+      Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+
+    const ANDROID_BOOTSTRAP_COLLECTIONS = new Set([
+      'config',
+      'users',
+      'roles',
+      'internalSequences',
+      'paymentMethods',
+    ]);
+
+    const isDeferredHeavyCollection = (key: string) => {
+      if (['transactions', 'transactionHistory'].includes(key)) return true;
+      if (isNativeAndroidRuntime && !ANDROID_BOOTSTRAP_COLLECTIONS.has(key)) {
+        return true;
+      }
+      return false;
+    };
 
     const shouldCheckSeedForCollection = (key: string, value: any) => {
       if (key === 'config') return true;
@@ -803,9 +820,9 @@ export const db = {
       // Bounded waits prevent the whole init from hanging on one store.
       console.log('📦 Loading all collections...');
       const keys = Object.keys(SEED_DATA);
-      const results = await Promise.allSettled(keys.map(async key => {
+
+      const loadCollectionValue = async (key: string) => {
         if (isDeferredHeavyCollection(key)) {
-          // Non-blocking startup for heavy stores. They are loaded later by dedicated flows.
           console.warn(`⏭️ Skipping heavy collection during init: ${key}`);
           return getFallbackCollectionValue(key);
         }
@@ -827,7 +844,22 @@ export const db = {
           console.warn(`⚠️ Timeout/error loading ${key}. Using fallback.`, error);
           return getFallbackCollectionValue(key);
         }
-      }));
+      };
+
+      const results: Array<PromiseSettledResult<any>> = [];
+      if (isNativeAndroidRuntime) {
+        for (const key of keys) {
+          try {
+            const value = await loadCollectionValue(key);
+            results.push({ status: 'fulfilled', value });
+          } catch (reason) {
+            results.push({ status: 'rejected', reason });
+          }
+        }
+      } else {
+        const settled = await Promise.allSettled(keys.map((key) => loadCollectionValue(key)));
+        results.push(...settled);
+      }
       console.log('✅ All collections loaded (settled)');
 
       const data: any = {};

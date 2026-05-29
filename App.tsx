@@ -54,6 +54,7 @@ import { syncManager } from './services/sync/SyncManager';
 import { apiSyncAdapter } from './services/sync/ApiSyncAdapter';
 import { backgroundSyncManager } from './services/sync/BackgroundSyncManager';
 import { productImageCacheService } from './services/sync/ProductImageCacheService';
+import { posCloudStagingService } from './services/sync/PosCloudStagingService';
 import { calculateZReportStats } from './utils/analytics';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
 import { calculateTransactionTaxSummary } from './utils/taxSummary';
@@ -73,6 +74,7 @@ import SetupWizard from './components/SetupWizard';
 import ActivationScreen from './components/ActivationScreen';
 import TerminalModeSelector from './components/TerminalModeSelector';
 import TerminalBindingScreen from './components/TerminalBindingScreen';
+import SyncErrorDiagnosticModal from './components/SyncErrorDiagnosticModal';
 import CustomerVisor from './components/CustomerVisor';
 import PosApkUpdateBanner from './components/PosApkUpdateBanner';
 import { visorSync } from './utils/visorSync';
@@ -153,6 +155,20 @@ import {
   persistStoredErpSyncBinding
 } from './utils/erpSyncLifecycle';
 import {
+  SYNC_DIAGNOSTIC_EVENT,
+  SYNC_DIAGNOSTIC_STORAGE_KEY,
+  clearStaleSyncErrorDiagnosticIfRecovered,
+  clearSyncErrorDiagnostic,
+  isRecoverableStaleSyncDiagnostic,
+  reportSyncErrorDiagnostic,
+  setCatalogDiagnosticStatus,
+  setSalesPushDiagnosticStatus,
+  setSyncAuthDiagnosticStatus,
+  setTerminalBindingDiagnosticStatus,
+  TERMINAL_BINDING_STATUS_KEY,
+  type SyncErrorDiagnostic
+} from './services/sync/SyncErrorDiagnostic';
+import {
   DEVICE_REVOKED_EVENT,
   DEVICE_SUPERSEDED_MESSAGE,
   persistLocalDeviceId,
@@ -169,6 +185,25 @@ import {
   openPosApkDownloadUrl,
   type PosApkUpdateAvailable
 } from './services/version/posApkUpdateService';
+import {
+  loadSyncProfile,
+  isPosOnlyCloudStagingTarget,
+  resolveSyncTarget,
+  saveSyncProfileFromContract,
+  type SyncPermissions,
+  type SyncProfile,
+  type SyncProfilePersistenceDiagnostic,
+  type SyncProfileSource
+} from './services/sync/SyncProfile';
+import { persistSyncDeviceToken } from './services/sync/deviceToken';
+import {
+  extractErpRegisterAuth,
+  resolveIncomingSyncProfileFromRegister,
+  resolveNormalizedRegisterDeviceToken,
+  resolveRegisterErpTerminalId,
+} from './services/sync/erpRegisterResponse';
+import { saveTerminalCredentialsSync } from './services/sync/TerminalCredentialStore';
+import { normalizeErpBaseUrl, resolveErpBaseUrl } from './utils/erpBaseUrl';
 import {
   canRetryFiscalTransaction,
   getEffectiveFiscalComplianceConfig,
@@ -220,41 +255,10 @@ const resolveSetupTenantId = (): string => {
   return candidates.map((value) => (value || '').trim()).find(Boolean) || 'default-tenant';
 };
 
-const normalizeSetupBaseUrl = (value?: string | null): string | null => {
-  const raw = String(value || '').trim();
-  if (!raw) return null;
+const normalizeSetupBaseUrl = (value?: string | null): string | null =>
+  normalizeErpBaseUrl(value);
 
-  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `${window.location.protocol}//${raw}`;
-
-  try {
-    const url = new URL(withProtocol);
-    return url
-      .toString()
-      .replace(/\/api\/sync\/?$/i, '')
-      .replace(/\/api\/?$/i, '')
-      .replace(/\/+$/, '');
-  } catch {
-    return null;
-  }
-};
-
-const resolveSetupErpBaseUrl = (): string | null => {
-  const env = (import.meta as any).env || {};
-  const candidates = [
-    localStorage.getItem('CLIC_ERP_BASE_URL'),
-    localStorage.getItem('erp_base_url'),
-    env.VITE_ERP_BASE_URL,
-    env.VITE_ERP_SYNC_API_URL,
-    env.VITE_SYNC_API_URL,
-  ];
-
-  for (const candidate of candidates) {
-    const normalized = normalizeSetupBaseUrl(candidate);
-    if (normalized) return normalized;
-  }
-
-  return null;
-};
+const resolveSetupErpBaseUrl = (): string | null => resolveErpBaseUrl();
 
 const persistSetupErpBaseUrls = (value?: string | null) => {
   const normalized = normalizeSetupBaseUrl(value);
@@ -263,6 +267,182 @@ const persistSetupErpBaseUrls = (value?: string | null) => {
   localStorage.setItem('CLIC_ERP_BASE_URL', normalized);
   localStorage.setItem('erp_base_url', normalized);
   localStorage.setItem('CLIC_ERP_SYNC_URL', `${normalized}/api/sync`);
+};
+
+const pickSetupAuthString = (...values: unknown[]): string | undefined => {
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const normalized = value.replace(/[\r\n\t]/g, '').trim();
+    if (!normalized) continue;
+    if (['undefined', 'null', 'nan', '[object object]'].includes(normalized.toLowerCase())) continue;
+    return normalized;
+  }
+  return undefined;
+};
+
+const extractSetupAuthPayload = (...sources: unknown[]) => {
+  const records = sources
+    .filter((source): source is Record<string, any> => Boolean(source) && typeof source === 'object')
+    .flatMap((record) => [
+      record,
+      record.auth,
+      record.syncAuth,
+      record.terminal_config,
+      record.terminal_config?.auth,
+      record.terminal_config?.metadata,
+      record.terminal_config?.metadata?.syncAuth,
+      record.terminal,
+      record.terminal?.auth,
+      record.terminal?.config,
+      record.terminal?.config?.auth,
+      record.terminal?.config?.metadata,
+      record.terminal?.config?.metadata?.syncAuth,
+      record.config,
+      record.config?.auth,
+      record.config?.security,
+      record.config?.runtime,
+      record.metadata,
+      record.metadata?.auth,
+      record.metadata?.syncAuth,
+      record.session,
+    ])
+    .filter((source): source is Record<string, any> => Boolean(source) && typeof source === 'object');
+
+  const deviceToken = pickSetupAuthString(...records.flatMap((record) => [
+    record.deviceToken,
+    record.device_token,
+    record.terminalToken,
+    record.terminal_token,
+    record.activationToken,
+    record.activation_token,
+    record.auth?.deviceToken,
+    record.auth?.device_token,
+    record.auth?.terminalToken,
+    record.auth?.terminal_token,
+    record.auth?.activationToken,
+    record.auth?.activation_token,
+    record.syncAuth?.deviceToken,
+    record.syncAuth?.device_token,
+  ]));
+  const terminalToken = pickSetupAuthString(...records.flatMap((record) => [
+    record.terminalToken,
+    record.terminal_token,
+    record.auth?.terminalToken,
+    record.auth?.terminal_token,
+    record.syncAuth?.terminalToken,
+    record.syncAuth?.terminal_token,
+  ]));
+  const activationToken = pickSetupAuthString(...records.flatMap((record) => [
+    record.activationToken,
+    record.activation_token,
+    record.auth?.activationToken,
+    record.auth?.activation_token,
+    record.syncAuth?.activationToken,
+    record.syncAuth?.activation_token,
+  ]));
+  const syncToken = pickSetupAuthString(...records.flatMap((record) => [
+    record.syncToken,
+    record.sync_token,
+    record.syncAuthToken,
+    record.sync_auth_token,
+    record.auth?.syncToken,
+    record.auth?.sync_token,
+    record.auth?.syncAuthToken,
+    record.auth?.sync_auth_token,
+    record.syncAuth?.syncToken,
+    record.syncAuth?.sync_token,
+    record.syncAuth?.syncAuthToken,
+    record.syncAuth?.sync_auth_token,
+  ]));
+  const tokenExpiresAt = pickSetupAuthString(...records.flatMap((record) => [
+    record.tokenExpiresAt,
+    record.token_expires_at,
+    record.expiresAt,
+    record.expires_at,
+    record.syncAuth?.tokenExpiresAt,
+    record.syncAuth?.token_expires_at,
+  ]));
+
+  return { deviceToken, terminalToken, activationToken, syncToken, tokenExpiresAt };
+};
+
+const logRegisterResponseAuth = (auth: ReturnType<typeof extractErpRegisterAuth>) => {
+  console.log('[REGISTER_RESPONSE_AUTH]', {
+    deviceTokenPresent: Boolean(auth.deviceToken),
+    terminalTokenPresent: Boolean(auth.terminalToken),
+    activationTokenPresent: Boolean(auth.activationToken),
+    syncTokenPresent: Boolean(auth.syncToken),
+    tokenExpiresAt: auth.tokenExpiresAt || null,
+    responseKeys: Object.keys(auth).filter((key) => Boolean((auth as Record<string, unknown>)[key])),
+  });
+};
+
+const buildInitialTerminalConfigSnapshot = (config: BusinessConfig): BusinessConfig => {
+  const metadata = config.metadata && typeof config.metadata === 'object'
+    ? {
+        tenantId: config.metadata.tenantId,
+        tenantSlug: config.metadata.tenantSlug,
+        setupMode: config.metadata.setupMode,
+        syncMode: config.metadata.syncMode,
+        integrationMode: config.metadata.integrationMode,
+        cloudSync: config.metadata.cloudSync,
+        erpTenantId: config.metadata.erpTenantId,
+        erpBaseUrl: config.metadata.erpBaseUrl,
+        syncAuth: config.metadata.syncAuth,
+        deviceToken: config.metadata.deviceToken,
+        syncToken: config.metadata.syncToken,
+        tokenExpiresAt: config.metadata.tokenExpiresAt,
+      }
+    : undefined;
+
+  return {
+    vertical: config.vertical,
+    subVertical: config.subVertical,
+    currencySymbol: config.currencySymbol,
+    taxRate: config.taxRate,
+    taxes: Array.isArray(config.taxes) ? config.taxes : [],
+    themeColor: config.themeColor,
+    features: config.features || { stockTracking: false },
+    units: Array.isArray(config.units) ? config.units : [],
+    loyalty: config.loyalty,
+    companyInfo: config.companyInfo,
+    currencies: Array.isArray(config.currencies) ? config.currencies : [],
+    paymentMethods: Array.isArray(config.paymentMethods) ? config.paymentMethods : [],
+    integrations: Array.isArray(config.integrations) ? config.integrations : [],
+    terminals: Array.isArray(config.terminals) ? config.terminals : [],
+    tariffs: Array.isArray(config.tariffs) ? config.tariffs : [],
+    receiptConfig: config.receiptConfig,
+    labelTemplates: Array.isArray(config.labelTemplates) ? config.labelTemplates : [],
+    tipsConfig: config.tipsConfig,
+    emailConfig: config.emailConfig,
+    fiscalCompliance: config.fiscalCompliance,
+    availablePrinters: Array.isArray(config.availablePrinters) ? config.availablePrinters : [],
+    scales: Array.isArray(config.scales) ? config.scales : [],
+    scaleLabelConfig: config.scaleLabelConfig,
+    roles: Array.isArray(config.roles) ? config.roles : [],
+    inventoryScope: config.inventoryScope,
+    operational: config.operational,
+    ux: config.ux,
+    metadata,
+  };
+};
+
+const persistInitialTerminalConfig = (config: BusinessConfig) => {
+  const key = 'initial_terminal_config';
+  try {
+    localStorage.setItem(key, JSON.stringify(config));
+    return;
+  } catch (error) {
+    console.warn('⚠️ initial_terminal_config completo excede cuota; guardando snapshot liviano.', error);
+  }
+
+  try {
+    const snapshot = buildInitialTerminalConfigSnapshot(config);
+    localStorage.setItem(key, JSON.stringify(snapshot));
+  } catch (error) {
+    console.warn('⚠️ No se pudo guardar initial_terminal_config liviano; se preserva config en SQLite.', error);
+    localStorage.removeItem(key);
+  }
 };
 
 const resolveFriendlyTerminalName = (terminal: any): string => {
@@ -463,6 +643,48 @@ const TERMINAL_CONFIG_RESTART_NOTICE_KEY = 'clic_pos_terminal_config_restart_not
 const SETUP_FLOW_VERSION = '2';
 const buildRuntimeMasterUrl = () => buildMasterUrlFromHost(window.location.hostname);
 const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+
+const hydrateNativeCatalogFromDb = async (
+  setters: {
+    setProducts: (value: Product[]) => void;
+    setWarehouses: (value: Warehouse[]) => void;
+    setProductStocks: (value: ProductStock[]) => void;
+  },
+  reason: string,
+) => {
+  if (!isNativeAndroidRuntime()) return;
+
+  try {
+    const [dbProducts, dbWarehouses, dbProductStocks] = await Promise.all([
+      db.get('products') as Promise<Product[]>,
+      db.get('warehouses') as Promise<Warehouse[]>,
+      db.get('productStocks') as Promise<ProductStock[]>,
+    ]);
+
+    if (Array.isArray(dbProducts) && dbProducts.length > 0) {
+      setters.setProducts(dbProducts);
+    }
+    if (Array.isArray(dbWarehouses) && dbWarehouses.length > 0) {
+      setters.setWarehouses(dbWarehouses);
+    }
+    if (Array.isArray(dbProductStocks) && dbProductStocks.length > 0) {
+      setters.setProductStocks(dbProductStocks);
+    }
+
+    console.log(`[BOOT] Native catalog hydrated (${reason})`, {
+      products: Array.isArray(dbProducts) ? dbProducts.length : 0,
+      warehouses: Array.isArray(dbWarehouses) ? dbWarehouses.length : 0,
+      productStocks: Array.isArray(dbProductStocks) ? dbProductStocks.length : 0,
+    });
+
+    if (Array.isArray(dbProducts) && dbProducts.length > 0) {
+      setCatalogDiagnosticStatus('SYNCED');
+      clearStaleSyncErrorDiagnosticIfRecovered();
+    }
+  } catch (error) {
+    console.warn(`[BOOT] Native catalog hydration failed (${reason}):`, error);
+  }
+};
 const normalizeMasterHost = (value: string | null | undefined) =>
   (value || '')
     .trim()
@@ -512,6 +734,18 @@ const getTerminalSetupIntegrationMode = (setupMode: TerminalSetupMode | null): T
 
 const getTerminalBindingMode = (setupMode: TerminalSetupMode | null): 'MASTER' | 'SLAVE' => {
   return setupMode === 'CLIENT' ? 'SLAVE' : 'MASTER';
+};
+
+const coerceOptionalBoolean = (...values: unknown[]): boolean | undefined => {
+  for (const value of values) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (['true', '1', 'yes', 'si', 'sí', 'on'].includes(normalized)) return true;
+      if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+    }
+  }
+  return undefined;
 };
 
 const hasPendingTerminalSetup = (): boolean => localStorage.getItem(TERMINAL_SETUP_PENDING_KEY) === '1';
@@ -777,6 +1011,19 @@ const AppContent: React.FC = () => {
   const [reconnectionStatus, setReconnectionStatus] = useState<'idle' | 'searching' | 'connected' | 'failed'>('idle');
   const [terminalConfigRestartNotice, setTerminalConfigRestartNotice] = useState<TerminalConfigRestartNotice | null>(() => readTerminalConfigRestartNotice());
   const [posApkUpdate, setPosApkUpdate] = useState<PosApkUpdateAvailable | null>(null);
+  const [syncDiagnostic, setSyncDiagnostic] = useState<SyncErrorDiagnostic | null>(() => {
+    try {
+      const stored = localStorage.getItem(SYNC_DIAGNOSTIC_STORAGE_KEY);
+      const parsed = stored ? JSON.parse(stored) as SyncErrorDiagnostic : null;
+      if (isRecoverableStaleSyncDiagnostic(parsed)) {
+        clearSyncErrorDiagnostic();
+        return null;
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  });
   const posApkUpdateCheckStartedRef = useRef(false);
   const [recoverySequencePrompt, setRecoverySequencePrompt] = useState<RecoverySequencePromptState | null>(null);
   const [recoverySequenceInput, setRecoverySequenceInput] = useState('');
@@ -788,6 +1035,21 @@ const AppContent: React.FC = () => {
   const inactivityTimerRef = useRef<number | null>(null);
 
   // Security bootstrap logic moved to loadData
+
+  useEffect(() => {
+    const handleDiagnostic = (event: Event) => {
+      const detail = (event as CustomEvent<SyncErrorDiagnostic | null>).detail;
+      if (!detail || isRecoverableStaleSyncDiagnostic(detail)) {
+        clearSyncErrorDiagnostic();
+        setSyncDiagnostic(null);
+        return;
+      }
+      setSyncDiagnostic(detail);
+    };
+
+    window.addEventListener(SYNC_DIAGNOSTIC_EVENT, handleDiagnostic as EventListener);
+    return () => window.removeEventListener(SYNC_DIAGNOSTIC_EVENT, handleDiagnostic as EventListener);
+  }, []);
 
   useEffect(() => {
     if (!isDataLoaded || posApkUpdateCheckStartedRef.current) return;
@@ -962,6 +1224,11 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     const handleTerminalConfigSyncRequested = async (event: Event) => {
+      if (isPosOnlyCloudStagingTarget()) {
+        console.warn('[CLOUD STAGING] terminalConfigSyncRequested ignored; local catalog remains authoritative.');
+        return;
+      }
+
       try {
         const detail = (event as CustomEvent<TerminalConfigSyncRequestDetail>)?.detail || null;
         const refreshedConfig = await syncManager.refreshTerminalResolvedConfig(
@@ -1431,6 +1698,7 @@ const AppContent: React.FC = () => {
     clearStoredErpSyncBinding();
     localStorage.removeItem('active_terminal_id');
     localStorage.removeItem('initial_terminal_config');
+    localStorage.setItem('clic_sync_mode', 'POS_LOCAL');
     localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
     localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_LOCAL');
     localStorage.setItem(SETUP_FLOW_STAGE_KEY, 'VERTICAL_SELECTED');
@@ -1444,6 +1712,7 @@ const AppContent: React.FC = () => {
     clearStoredErpSyncBinding();
     localStorage.removeItem('active_terminal_id');
     localStorage.removeItem('initial_terminal_config');
+    localStorage.setItem('clic_sync_mode', mode === 'SERVER_ERP' ? 'POS_ERP' : mode === 'CLIENT' ? 'POS_SLAVE' : 'POS_LOCAL');
     localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
     localStorage.setItem(TERMINAL_SETUP_MODE_KEY, mode);
 
@@ -1509,9 +1778,17 @@ const AppContent: React.FC = () => {
     let heartbeatTimeoutId: number | null = null;
 
     const syncLifecycle = async (options?: { forceManifestRefresh?: boolean }) => {
+      if (isPosOnlyCloudStagingTarget()) {
+        return;
+      }
+
       try {
         const operationalTerminalId = currentTerminal.config?.stationNumber || currentTerminal.id;
-        const erpTerminalId = currentTerminal.config?.erpTerminalId || operationalTerminalId;
+        const erpTerminalId =
+          currentTerminal.config?.erpTerminalId
+          || loadSyncProfile().erpTerminalId
+          || localStorage.getItem('clic_erp_sync_terminal_id')
+          || operationalTerminalId;
         const terminalName = currentTerminal.config?.terminalName || operationalTerminalId;
         const result = await ensureErpSyncLifecycle({
           deviceId,
@@ -1560,9 +1837,13 @@ const AppContent: React.FC = () => {
       }
     };
 
-    // Boot: publica una sola vez; el diff check del registry evita reescrituras redundantes.
+    // Boot: publica endpoint; lifecycle ERP/manifest solo en contratos ERP o legacy con pull.
     void publishEndpoint();
-    void syncLifecycle({ forceManifestRefresh: true });
+    if (!isPosOnlyCloudStagingTarget()) {
+      void syncLifecycle({ forceManifestRefresh: true });
+    } else {
+      console.log('[CLOUD STAGING] ERP lifecycle and manifest refresh disabled for POS_CLOUD_STAGING.');
+    }
 
     const scheduleNextHeartbeat = () => {
       if (disposed) return;
@@ -1574,7 +1855,9 @@ const AppContent: React.FC = () => {
         if (!disposed && navigator.onLine) {
           // Publish on heartbeat is diff-only: cloudMasterRegistry.ts compara fingerprint e IP antes de escribir.
           void publishEndpoint();
-          await syncLifecycle();
+          if (!isPosOnlyCloudStagingTarget()) {
+            await syncLifecycle();
+          }
         }
         scheduleNextHeartbeat();
       }, HEARTBEAT_INTERVAL_MS + getTimerJitterMs());
@@ -2678,7 +2961,7 @@ const AppContent: React.FC = () => {
         }
 
         if (shouldPairAsClient) {
-          console.log('[BOOT] Client mode selected. Redirecting to terminal pairing...');
+          console.warn('[ACTIVATION_REDIRECT_REASON]', 'CLIENT_MODE_SELECTED', { currentView, deviceId, terminalSetupMode: getStoredTerminalSetupMode() });
           setCurrentView('TERMINAL_PAIRING');
           setIsDataLoaded(true);
           setIsSecurityLoaded(true);
@@ -2686,7 +2969,7 @@ const AppContent: React.FC = () => {
         }
 
         if (shouldPairAsServerErp) {
-          console.log('[BOOT] ERP direct mode selected. Redirecting to ERP terminal pairing...');
+          console.warn('[ACTIVATION_REDIRECT_REASON]', 'ERP_DIRECT_MODE_SELECTED', { currentView, deviceId, terminalSetupMode: getStoredTerminalSetupMode() });
           setCurrentView('TERMINAL_PAIRING');
           setIsDataLoaded(true);
           setIsSecurityLoaded(true);
@@ -2697,7 +2980,7 @@ const AppContent: React.FC = () => {
         // If no local pairing exists and we have no master IP, we are definitely unpaired.
         // We must bail OUT of the loading sequence to let the user pair.
         if (!localPairedTerminal && setupWizardCompleted) {
-          console.warn('[BOOT] Dispositivo no vinculado. Redirigiendo a selección de terminal para evitar autoasignaciones silenciosas...');
+          console.warn('[ACTIVATION_REDIRECT_REASON]', 'NO_LOCAL_PAIRED_TERMINAL_AFTER_SETUP', { currentView, deviceId, setupWizardCompleted });
           setIsDataLoaded(true); // Stop "Loading CLIC POS..."
           setIsSecurityLoaded(true); // Bypass "Loading Security..."
           setCurrentView('TERMINAL_PAIRING');
@@ -2870,6 +3153,10 @@ const AppContent: React.FC = () => {
           // Delay hydration a bit to reduce contention with startup writes/sync handshakes.
           window.setTimeout(() => {
             void hydrateDeferredCollections();
+            void hydrateNativeCatalogFromDb(
+              { setProducts, setWarehouses, setProductStocks },
+              'post-boot',
+            );
           }, 2000);
 
           // 1.5 Sequence repair is intentionally deferred; running it here can block startup
@@ -2880,12 +3167,45 @@ const AppContent: React.FC = () => {
           const pairedTerminal = terminals.find(
             (t: any) => t.config?.currentDeviceId === storedDeviceId
           );
+          const terminalBindingStatus = localStorage.getItem(TERMINAL_BINDING_STATUS_KEY);
+          const isErpSetupMode =
+            setupMode === 'SERVER_ERP'
+            || localStorage.getItem('clic_sync_mode') === 'POS_ERP';
+
+          if (
+            !pairedTerminal
+            && !isVisorMode
+            && isErpSetupMode
+            && (terminalBindingStatus === 'TOKEN_INVALID' || terminalBindingStatus === 'BOUND_AUTH_MISMATCH')
+          ) {
+            console.log('[BOOT] ERP auth invalid. Resuming terminal pairing...', { terminalBindingStatus });
+            localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_ERP');
+            localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
+            setCurrentView('TERMINAL_PAIRING');
+            setIsDataLoaded(true);
+            setIsSecurityLoaded(true);
+            return;
+          }
+
+          if (!pairedTerminal && !isVisorMode && isErpSetupMode) {
+            console.log('[BOOT] ERP terminal not paired on this device. Resuming terminal pairing...', {
+              terminalBindingStatus,
+              setupMode,
+            });
+            localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_ERP');
+            localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
+            setCurrentView('TERMINAL_PAIRING');
+            setIsDataLoaded(true);
+            setIsSecurityLoaded(true);
+            return;
+          }
 
           const shouldRunInitialSetupWizard =
             !setupWizardCompleted &&
             !masterIp &&
             !pairedTerminal &&
-            !isVisorMode;
+            !isVisorMode &&
+            !isErpSetupMode;
 
           if (shouldRunInitialSetupWizard) {
             console.log('[BOOT] First installation detected. Launching setup wizard...');
@@ -2896,6 +3216,7 @@ const AppContent: React.FC = () => {
           }
 
           if (!pairedTerminal && !isVisorMode && currentView !== 'VISOR') {
+            console.warn('[ACTIVATION_REDIRECT_REASON]', 'PAIRED_TERMINAL_NOT_FOUND', { currentView, deviceId, isVisorMode });
             setCurrentView('DEVICE_UNAUTHORIZED');
           }
 
@@ -3164,8 +3485,22 @@ const AppContent: React.FC = () => {
     // Poll for data every 5 seconds if we don't have any yet (for remote terminals)
     // Increased from 3s to give NetworkSyncService more time to complete
     const interval = setInterval(() => {
-      if (isDataLoaded && (users.length === 0 || products.length === 0 || internalSequences.length === 0)) {
+      if (
+        isDataLoaded
+        && (
+          users.length === 0
+          || products.length === 0
+          || warehouses.length === 0
+          || internalSequences.length === 0
+        )
+      ) {
         refreshDataAfterSync();
+        if (isNativeAndroidRuntime() && (products.length === 0 || warehouses.length === 0)) {
+          void hydrateNativeCatalogFromDb(
+            { setProducts, setWarehouses, setProductStocks },
+            'poll',
+          );
+        }
       }
     }, 5000); // Check every 5 seconds
 
@@ -3204,6 +3539,16 @@ const AppContent: React.FC = () => {
       if (pendingCatalogRefresh.products || pendingCatalogRefresh.productStocks) {
         const freshProducts = await db.get('products') as Product[];
         setProducts(Array.isArray(freshProducts) ? freshProducts : []);
+
+        const freshWarehouses = await db.get('warehouses') as Warehouse[];
+        if (Array.isArray(freshWarehouses) && freshWarehouses.length > 0) {
+          setWarehouses(freshWarehouses);
+        }
+
+        const freshStocks = await db.get('productStocks') as ProductStock[];
+        if (Array.isArray(freshStocks) && freshStocks.length > 0) {
+          setProductStocks(freshStocks);
+        }
 
         const matching = Array.isArray(freshProducts)
           ? (freshProducts as unknown as Record<string, unknown>[])
@@ -3367,7 +3712,7 @@ const AppContent: React.FC = () => {
           const hasTinyCatalog = localCount > 0 && localCount <= 5;
           const hasCategoryMismatch = matchedAllowedCategoriesCount === 0 || allowedCoverageRatio < 0.5;
 
-          if (hasTinyCatalog || hasCategoryMismatch) {
+          if ((hasTinyCatalog || hasCategoryMismatch) && resolveSyncTarget().canPullMasters) {
             console.warn(
               `⚠️ App: Runtime config drift detected on ${currentTerminal.id}. ` +
               `localProducts=${localCount}, allowed=${terminalAllowedCategories.length}, matched=${matchedAllowedCategoriesCount}. ` +
@@ -3450,16 +3795,38 @@ const AppContent: React.FC = () => {
       boundUsers?: User[];
       masterIp?: string;
       snapshotItems?: Product[];
+      deviceToken?: string;
+      device_token?: string;
+      terminalToken?: string;
+      terminal_token?: string;
+      activationToken?: string;
+      activation_token?: string;
+      syncToken?: string;
+      sync_token?: string;
+      syncAuthToken?: string;
+      sync_auth_token?: string;
+      tokenExpiresAt?: string;
+      token_expires_at?: string;
       snapshotMeta?: {
         fullPullOnPairing?: boolean;
         resolutionError?: unknown;
       };
+      syncProfile?: Partial<SyncProfile>;
+      syncPermissions?: SyncPermissions;
+      contractSource?: SyncProfileSource;
+      incomingProfile?: Partial<SyncProfile>;
+      profile?: Partial<SyncProfile>;
       progress?: (update: { stepId?: 'claim' | 'config' | 'apply' | 'sync' | 'cache' | 'finish'; message?: string }) => void;
       recoveryState?: RuntimeTerminalRecoveryState | null;
     },
     options?: { forceTakeover?: boolean }
   ) => {
     setRestoringHistory(true);
+    setTerminalBindingDiagnosticStatus('BINDING');
+    setCatalogDiagnosticStatus('IDLE');
+    let preserveTerminalBindingAfterRegister = false;
+    let syncProfilePersistence: SyncProfilePersistenceDiagnostic | null = null;
+    let isErpDirectBinding = false;
     const previousConfig = config;
     const previousUsers = users;
     const previousActiveTerminalId = localStorage.getItem('active_terminal_id');
@@ -3481,11 +3848,98 @@ const AppContent: React.FC = () => {
       if (!setupResult?.boundConfig) {
         throw new Error('La vinculación debe provenir del backend central de setup. No se recibió configuración enlazada.');
       }
+      preserveTerminalBindingAfterRegister = true;
       setupResult.progress?.({
         stepId: 'apply',
         message: 'Guardando configuración de terminal y permisos locales...',
       });
-      const updatedConfig = clearDuplicateDeviceAssignments(setupResult.boundConfig, deviceId, {
+      const setupRegisterAuth = extractErpRegisterAuth(
+        setupResult,
+        (setupResult as any)?.initialConfigData,
+        (setupResult as any)?.terminal_config,
+        setupResult.boundConfig?.metadata,
+        setupResult.boundConfig?.metadata?.syncAuth,
+        setupResult?.syncProfile,
+        setupResult?.incomingProfile,
+        setupResult?.profile,
+      );
+      logRegisterResponseAuth(setupRegisterAuth);
+      const normalizedDeviceToken = resolveNormalizedRegisterDeviceToken(
+        setupResult,
+        (setupResult as any)?.initialConfigData,
+        setupRegisterAuth,
+      );
+      if (setupRegisterAuth.syncToken) {
+        localStorage.setItem('clic_erp_sync_token', setupRegisterAuth.syncToken);
+        localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
+        if (setupRegisterAuth.tokenExpiresAt) {
+          localStorage.setItem('clic_erp_sync_token_expires_at', setupRegisterAuth.tokenExpiresAt);
+        }
+      }
+      if (normalizedDeviceToken) {
+        persistSyncDeviceToken(normalizedDeviceToken, 'ERP_REGISTER', setupRegisterAuth.tokenExpiresAt);
+        saveTerminalCredentialsSync({
+          terminalId: setupResult?.erpTerminalId || terminalId,
+          deviceId,
+          deviceToken: normalizedDeviceToken,
+          deviceTokenSource: 'ERP_REGISTER',
+          deviceTokenUpdatedAt: new Date().toISOString(),
+          deviceTokenExpiresAt: setupRegisterAuth.tokenExpiresAt || null,
+          ...(setupRegisterAuth.syncToken ? {
+            syncToken: setupRegisterAuth.syncToken,
+            syncTokenUpdatedAt: new Date().toISOString(),
+            syncTokenExpiresAt: setupRegisterAuth.tokenExpiresAt || null,
+          } : {}),
+        });
+      }
+      if (!normalizedDeviceToken) {
+        const missingTokenError = new Error('DEVICE_TOKEN_MISSING_FROM_REGISTER: El ERP vinculó la terminal pero no devolvió deviceToken.');
+        setTerminalBindingDiagnosticStatus('BOUND');
+        setCatalogDiagnosticStatus('AUTH_ERROR');
+        setSalesPushDiagnosticStatus('LOCKED_AUTH_REQUIRED');
+        setSyncAuthDiagnosticStatus('DEVICE_TOKEN_MISSING_FROM_REGISTER');
+        reportSyncErrorDiagnostic({
+          operation: 'REGISTER_TERMINAL',
+          endpoint: `${resolvedErpBaseUrl || 'ERP'}/api/sync/terminals/register`,
+          httpStatus: null,
+          error: missingTokenError,
+          authStatus: 'DEVICE_TOKEN_MISSING_FROM_REGISTER',
+          backendCode: 'DEVICE_TOKEN_MISSING_FROM_REGISTER',
+          nextAction: 'REPAIR_TERMINAL_CREDENTIALS',
+          requestAuth: {
+            authorizationPresent: false,
+            syncTokenPresent: Boolean(setupRegisterAuth.syncToken),
+            syncTokenPreview: null,
+            terminalIdHeaderPresent: Boolean(setupResult?.erpTerminalId || terminalId),
+            deviceIdHeaderPresent: Boolean(deviceId),
+          },
+          userVisibleSeverity: 'critical',
+        });
+        throw missingTokenError;
+      }
+      const authMetadata = normalizedDeviceToken || setupRegisterAuth.syncToken
+        ? {
+            ...(setupResult.boundConfig?.metadata?.syncAuth || {}),
+            deviceToken: normalizedDeviceToken,
+            terminalToken: setupRegisterAuth.terminalToken,
+            activationToken: setupRegisterAuth.activationToken,
+            syncToken: setupRegisterAuth.syncToken,
+            tokenExpiresAt: setupRegisterAuth.tokenExpiresAt,
+            tokenSource: 'ERP_REGISTER',
+            tokenUpdatedAt: new Date().toISOString(),
+          }
+        : setupResult.boundConfig?.metadata?.syncAuth;
+      const configWithAuthMetadata: BusinessConfig = {
+        ...setupResult.boundConfig,
+        metadata: {
+          ...(setupResult.boundConfig.metadata || {}),
+          ...(authMetadata ? { syncAuth: authMetadata } : {}),
+          ...(normalizedDeviceToken ? { deviceToken: normalizedDeviceToken } : {}),
+          ...(setupRegisterAuth.syncToken ? { syncToken: setupRegisterAuth.syncToken } : {}),
+          ...(setupRegisterAuth.tokenExpiresAt ? { tokenExpiresAt: setupRegisterAuth.tokenExpiresAt } : {}),
+        },
+      };
+      const updatedConfig = clearDuplicateDeviceAssignments(configWithAuthMetadata, deviceId, {
         activeTerminalId: terminalId,
         bindingTerminalId: setupResult?.erpTerminalId || terminalId,
         bindingLocalTerminalId: terminalId,
@@ -3499,6 +3953,7 @@ const AppContent: React.FC = () => {
         || terminalId;
       const resolvedErpTerminalId =
         setupResult?.erpTerminalId
+        || resolveRegisterErpTerminalId(setupResult)
         || selectedTerminal?.config?.erpTerminalId
         || terminalId;
       const isSlave = selectedTerminal?.config?.isPrimaryNode === false;
@@ -3530,12 +3985,94 @@ const AppContent: React.FC = () => {
           ? 'SERVER_ERP'
           : 'SERVER_LOCAL';
       localStorage.setItem(TERMINAL_SETUP_MODE_KEY, nextSetupMode);
+      const existingSyncProfile = (() => {
+        try {
+          return loadSyncProfile();
+        } catch {
+          return null;
+        }
+      })();
       const resolvedTenantId =
-        setupResult?.tenantId || localStorage.getItem('active_tenant_id') || 'default-tenant';
+        setupResult?.tenantId
+        || setupResult?.syncProfile?.localTenantId
+        || setupResult?.syncProfile?.erpTenantId
+        || setupResult?.incomingProfile?.localTenantId
+        || setupResult?.profile?.localTenantId
+        || existingSyncProfile?.localTenantId
+        || existingSyncProfile?.erpTenantId
+        || localStorage.getItem('clic_tenant_id')
+        || localStorage.getItem('active_tenant_id')
+        || 'default-tenant';
       localStorage.setItem('active_tenant_id', resolvedTenantId);
       if (resolvedTenantId && resolvedTenantId !== 'default-tenant') {
         localStorage.setItem('clic_tenant_id', resolvedTenantId);
       }
+
+      isErpDirectBinding =
+        !isSlave &&
+        (
+          nextSetupMode === 'SERVER_ERP' ||
+          setupResult?.syncProfile?.contractedProduct === 'POS_ERP' ||
+          setupResult?.syncProfile?.cloudChannel === 'ERP_ACTIVE' ||
+          setupResult?.syncProfile?.dataMaster === 'ERP' ||
+          setupResult?.syncProfile?.customerErpAccess === true ||
+          setupResult?.syncProfile?.erpUiEnabled === true
+        );
+      const resolvedSyncPermissions = setupResult?.syncPermissions || setupResult?.syncProfile?.syncPermissions;
+      const resolvedErpReadyForSales = coerceOptionalBoolean(
+        setupResult?.syncProfile?.erpReadyForSales,
+        (setupResult as any)?.erpReadyForSales,
+        (setupResult as any)?.erp_ready_for_sales,
+        resolvedSyncPermissions?.canPushOperations,
+        resolvedSyncPermissions?.pushOperations
+      ) ?? (
+        isErpDirectBinding && Boolean(normalizedDeviceToken)
+          ? true
+          : false
+      );
+      const contractSource: SyncProfileSource =
+        setupResult?.contractSource || (isErpDirectBinding ? 'ERP_REGISTER' : 'CLOUD_ADMIN');
+      const incomingSyncProfile: Partial<SyncProfile> = resolveIncomingSyncProfileFromRegister(
+        setupResult,
+        {
+          ...(setupResult?.syncProfile || {}),
+          syncPermissions: resolvedSyncPermissions,
+          contractedProduct: isErpDirectBinding ? 'POS_ERP' : 'POS_ONLY',
+          posRuntime: isSlave ? 'SLAVE' : 'MASTER',
+          cloudChannel: isSlave ? 'POS_MASTER' : isErpDirectBinding ? 'ERP_ACTIVE' : 'POS_CLOUD_STAGING',
+          dataMaster: isSlave ? 'POS_MASTER' : isErpDirectBinding ? 'ERP' : 'POS',
+          cloudSyncEnabled: !isSlave,
+          customerErpAccess: isErpDirectBinding,
+          erpUiEnabled: isErpDirectBinding,
+          localTenantId: resolvedTenantId,
+          localStoreId: setupResult?.storeId || setupResult?.syncProfile?.localStoreId,
+          localTerminalId: terminalId,
+          cloudBaseUrl: resolvedErpBaseUrl || setupResult?.syncProfile?.cloudBaseUrl,
+          erpBaseUrl: resolvedErpBaseUrl || setupResult?.syncProfile?.erpBaseUrl,
+          cloudTenantId: setupResult?.syncProfile?.cloudTenantId || localStorage.getItem('clic_cloud_tenant_id') || localStorage.getItem('active_tenant_id') || resolvedTenantId,
+          erpTenantId: setupResult?.syncProfile?.erpTenantId || resolvedTenantId,
+          erpTerminalId: resolvedErpTerminalId,
+          masterUrl: isSlave ? finalResolvedMasterUrl : undefined,
+          masterTerminalId: isSlave ? terminalId : undefined,
+          masterReady: Boolean(isSlave && finalResolvedMasterUrl),
+          cloudStagingReady: !isErpDirectBinding && !isSlave,
+          erpReadyForSales: resolvedErpReadyForSales,
+        },
+        contractSource,
+      );
+      syncProfilePersistence = saveSyncProfileFromContract(incomingSyncProfile, contractSource, {
+        erpTerminalId: resolvedErpTerminalId,
+        localTerminalId: terminalId,
+        terminalName:
+          setupResult?.terminalName
+          || incomingSyncProfile.localTerminalId
+          || resolvedTerminalName,
+      });
+      localStorage.setItem('clic_sync_mode', isSlave ? 'POS_SLAVE' : isErpDirectBinding ? 'POS_ERP' : 'POS_LOCAL');
+      localStorage.setItem('clic_customer_erp_access', String(isErpDirectBinding));
+      localStorage.setItem('clic_erp_ui_enabled', String(isErpDirectBinding));
+      localStorage.setItem('CLIC_ERP_ACTIVE', String(isErpDirectBinding));
+      localStorage.setItem('clic_erp_ready_for_sales', String(resolvedErpReadyForSales));
 
       if (Array.isArray(setupResult?.boundUsers)) {
         setupResult.progress?.({
@@ -3595,9 +4132,19 @@ const AppContent: React.FC = () => {
         isPrimary: !isSlave,
       });
 
-      const shouldRestoreRemoteData = !!finalResolvedMasterIp && (isSlave || shouldTakeover);
+      persistStoredErpSyncBinding({
+        tenantId: setupResult?.tenantId || localStorage.getItem('active_tenant_id') || null,
+        terminalId: resolvedErpTerminalId,
+        localTerminalId: terminalId,
+        terminalName: resolvedTerminalName,
+        companyId: setupResult?.companyId || null,
+        storeId: setupResult?.storeId || null,
+      });
+      setTerminalBindingDiagnosticStatus('BOUND');
 
-      // If we're taking over a previous server or pairing as slave, hydrate from the remote box first.
+      const shouldRestoreRemoteData = !!finalResolvedMasterIp && isSlave;
+
+      // Only slave terminals restore from a LAN master. ERP/master takeovers use the ERP snapshot instead.
       if (shouldRestoreRemoteData) {
         try {
           setupResult.progress?.({
@@ -3671,9 +4218,32 @@ const AppContent: React.FC = () => {
       if (shouldFullPullOnPairing) {
         setupResult.progress?.({
           stepId: 'sync',
-          message: 'Sincronizando maestros: productos, tarifas, clientes, usuarios y documentos...',
+          message: 'Preparando maestros locales recibidos...',
         });
-        await syncManager.fullPull();
+        try {
+          setCatalogDiagnosticStatus('SYNCING');
+          if (Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
+            setupResult.progress?.({
+              stepId: 'sync',
+              message: 'Guardando productos recibidos en el snapshot inicial...',
+            });
+            const normalizedSnapshotItems = await productImageCacheService.normalizeIncomingProducts(setupResult.snapshotItems);
+            await db.save('products', normalizedSnapshotItems);
+            void productImageCacheService.syncSnapshotItems(normalizedSnapshotItems).catch((error) => {
+              console.warn('⚠️ Snapshot product image sync failed after pairing fallback:', error);
+            });
+          }
+          void syncManager.fullPull().catch((pullError) => {
+            console.warn('⚠️ Background master sync failed after terminal pairing; continuing with local snapshot/config.', pullError);
+          });
+        } catch (pullError) {
+          console.warn('⚠️ Initial snapshot persistence failed after terminal pairing; continuing with local config.', pullError);
+          reportSyncErrorDiagnostic({
+            operation: 'PULL_MASTERS',
+            collection: 'products',
+            error: pullError,
+          });
+        }
       } else {
         if (Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
           setupResult.progress?.({
@@ -3709,7 +4279,27 @@ const AppContent: React.FC = () => {
       );
 
       const freshData = await db.init();
-      const hydratedConfig = resolvePersistedBusinessConfig(await db.get('config') as unknown) || postSyncConfig;
+      const hydratedConfigFromDb = resolvePersistedBusinessConfig(await db.get('config') as unknown) || postSyncConfig;
+      const preservedSyncAuth = hydratedConfigFromDb.metadata?.syncAuth || updatedConfig.metadata?.syncAuth;
+      const hydratedConfig: BusinessConfig = {
+        ...hydratedConfigFromDb,
+        metadata: {
+          ...(hydratedConfigFromDb.metadata || {}),
+          ...(preservedSyncAuth ? { syncAuth: preservedSyncAuth } : {}),
+          ...(hydratedConfigFromDb.metadata?.deviceToken || updatedConfig.metadata?.deviceToken
+            ? { deviceToken: hydratedConfigFromDb.metadata?.deviceToken || updatedConfig.metadata?.deviceToken }
+            : {}),
+          ...(hydratedConfigFromDb.metadata?.syncToken || updatedConfig.metadata?.syncToken
+            ? { syncToken: hydratedConfigFromDb.metadata?.syncToken || updatedConfig.metadata?.syncToken }
+            : {}),
+          ...(hydratedConfigFromDb.metadata?.tokenExpiresAt || updatedConfig.metadata?.tokenExpiresAt
+            ? { tokenExpiresAt: hydratedConfigFromDb.metadata?.tokenExpiresAt || updatedConfig.metadata?.tokenExpiresAt }
+            : {}),
+        },
+      };
+      if (preservedSyncAuth || updatedConfig.metadata?.deviceToken || updatedConfig.metadata?.syncToken) {
+        await db.save('config', hydratedConfig);
+      }
       setConfig(hydratedConfig);
       if (Array.isArray(freshData.users)) setUsers(freshData.users);
       if (Array.isArray(freshData.roles)) setRoles(freshData.roles);
@@ -3717,6 +4307,10 @@ const AppContent: React.FC = () => {
       if (Array.isArray(freshData.transactions)) setTransactions(freshData.transactions);
       if (Array.isArray(freshData.products)) setProducts(freshData.products);
       if (Array.isArray(freshData.warehouses)) setWarehouses(freshData.warehouses);
+      await hydrateNativeCatalogFromDb(
+        { setProducts, setWarehouses, setProductStocks },
+        'terminal-binding',
+      );
       if (Array.isArray(freshData.cashMovements)) setCashMovements(freshData.cashMovements);
       if (Array.isArray(freshData.zReports)) setZReports(freshData.zReports);
       if (Array.isArray(freshData.xReports)) setXReports(freshData.xReports);
@@ -3735,7 +4329,7 @@ const AppContent: React.FC = () => {
       localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
       localStorage.setItem('active_terminal_id', terminalId);
       localStorage.setItem('CLIC_POS_TERMINAL_ID', terminalId);
-      localStorage.setItem('initial_terminal_config', JSON.stringify(hydratedConfig));
+      persistInitialTerminalConfig(hydratedConfig);
       if (resolvedErpBaseUrl) {
         persistSetupErpBaseUrls(resolvedErpBaseUrl);
       }
@@ -3751,6 +4345,22 @@ const AppContent: React.FC = () => {
         companyId: setupResult?.companyId || null,
         storeId: setupResult?.storeId || null,
       });
+      setTerminalBindingDiagnosticStatus('BOUND');
+      setCatalogDiagnosticStatus('SYNCED');
+      setSalesPushDiagnosticStatus(
+        isErpDirectBinding
+          ? (resolvedErpReadyForSales ? 'ENABLED' : 'LOCKED_UNTIL_ERP_READY')
+          : (isSlave ? 'DISABLED' : 'ENABLED')
+      );
+      clearSyncErrorDiagnostic();
+      setSyncDiagnostic(null);
+      if (isErpDirectBinding) {
+        console.log('[SYNC_ROUTER] POS_ERP binding complete: skipping POS_CLOUD_STAGING snapshot and PUSH_MASTERS.');
+      } else {
+        void posCloudStagingService.sendSnapshot('TERMINAL_BINDING_COMPLETE').catch((error) => {
+          console.warn('⚠️ POS cloud staging snapshot failed after terminal binding:', error);
+        });
+      }
 
       const recoveryState = setupResult?.recoveryState;
       if (shouldTakeover && recoveryState) {
@@ -3766,28 +4376,44 @@ const AppContent: React.FC = () => {
       setCurrentView('LOGIN');
     } catch (error) {
       console.error('❌ Failed to take terminal control:', error);
-      clearStoredErpSyncBinding();
-      localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
-      if (previousActiveTerminalId) {
-        localStorage.setItem('active_terminal_id', previousActiveTerminalId);
+      if (preserveTerminalBindingAfterRegister) {
+        setTerminalBindingDiagnosticStatus('BOUND');
+        setCatalogDiagnosticStatus('ERROR');
+        reportSyncErrorDiagnostic({
+          operation: 'REGISTER_TERMINAL',
+          collection: 'products',
+          error,
+          contractSource: syncProfilePersistence?.contractSource,
+          existingProfile: syncProfilePersistence?.existingProfile,
+          incomingProfile: syncProfilePersistence?.incomingProfile,
+          mismatchDetected: syncProfilePersistence?.mismatchDetected,
+          mismatchFixed: syncProfilePersistence?.mismatchFixed,
+        });
       } else {
-        localStorage.removeItem('active_terminal_id');
+        setTerminalBindingDiagnosticStatus('BINDING_ERROR');
+        clearStoredErpSyncBinding();
+        localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
+        if (previousActiveTerminalId) {
+          localStorage.setItem('active_terminal_id', previousActiveTerminalId);
+        } else {
+          localStorage.removeItem('active_terminal_id');
+        }
+        if (previousTerminalStorageId) {
+          localStorage.setItem('CLIC_POS_TERMINAL_ID', previousTerminalStorageId);
+        } else {
+          localStorage.removeItem('CLIC_POS_TERMINAL_ID');
+        }
+        if (previousInitialTerminalConfig) {
+          localStorage.setItem('initial_terminal_config', previousInitialTerminalConfig);
+        } else {
+          localStorage.removeItem('initial_terminal_config');
+        }
+        setConfig(previousConfig);
+        await db.save('config', previousConfig);
+        setUsers(previousUsers);
+        await db.save('users', previousUsers);
       }
-      if (previousTerminalStorageId) {
-        localStorage.setItem('CLIC_POS_TERMINAL_ID', previousTerminalStorageId);
-      } else {
-        localStorage.removeItem('CLIC_POS_TERMINAL_ID');
-      }
-      if (previousInitialTerminalConfig) {
-        localStorage.setItem('initial_terminal_config', previousInitialTerminalConfig);
-      } else {
-        localStorage.removeItem('initial_terminal_config');
-      }
-      setConfig(previousConfig);
-      await db.save('config', previousConfig);
-      setUsers(previousUsers);
-      await db.save('users', previousUsers);
-      alert('No se pudo tomar control de la terminal. Revisa conexión y vuelve a intentar.');
+      throw error instanceof Error ? error : new Error('No se pudo tomar control de la terminal. Revisa conexión y vuelve a intentar.');
     } finally {
       setRestoringHistory(false);
     }
@@ -3822,13 +4448,16 @@ const AppContent: React.FC = () => {
       const setupMode = getStoredTerminalSetupMode();
       if (setupMode === 'SERVER_LOCAL') {
         const binding = await activateLocalPrimaryTerminal(nextConfig, effectiveDeviceId);
-        if (binding) {
-          localStorage.setItem('active_terminal_id', binding.terminalId);
-          localStorage.setItem('CLIC_POS_TERMINAL_ID', binding.terminalId);
-          localStorage.setItem('initial_terminal_config', JSON.stringify(binding.nextConfig || nextConfig));
-          setCurrentView('LOGIN');
-          return;
-        }
+	        if (binding) {
+	          localStorage.setItem('active_terminal_id', binding.terminalId);
+	          localStorage.setItem('CLIC_POS_TERMINAL_ID', binding.terminalId);
+	          persistInitialTerminalConfig(binding.nextConfig || nextConfig);
+	          void posCloudStagingService.sendSnapshot('SETUP_WIZARD_COMPLETE').catch((error) => {
+	            console.warn('⚠️ POS cloud staging snapshot failed after setup wizard:', error);
+	          });
+	          setCurrentView('LOGIN');
+	          return;
+	        }
       }
 
       setConfig(nextConfig);
@@ -5934,6 +6563,13 @@ const AppContent: React.FC = () => {
           // If we are in LOGIN state but have no terminal config, 
           // we must have failed to load key data. 
           // Redirect to Pairing to attempt recovery/re-pair.
+          console.warn('[ACTIVATION_REDIRECT_REASON]', 'LOGIN_WITHOUT_CURRENT_TERMINAL', {
+            currentView,
+            deviceId,
+            activeTerminalId,
+            hasInitialTerminalConfig: Boolean(storedInitialConfig),
+            lastSyncDiagnostic: localStorage.getItem(SYNC_DIAGNOSTIC_STORAGE_KEY) || null,
+          });
           setCurrentView('TERMINAL_PAIRING');
           return null;
         }
@@ -6161,6 +6797,7 @@ const AppContent: React.FC = () => {
 
       case 'POS':
         if (!getCurrentTerminal()) {
+          console.warn('[ACTIVATION_REDIRECT_REASON]', 'POS_WITHOUT_CURRENT_TERMINAL', { currentView, deviceId });
           setCurrentView('DEVICE_UNAUTHORIZED');
           return null;
         }
@@ -7392,6 +8029,31 @@ const AppContent: React.FC = () => {
     if (!posApkUpdate) return;
     void openPosApkDownloadUrl(posApkUpdate.release);
   };
+  const handleRetryProductSyncDiagnostic = async () => {
+    setCatalogDiagnosticStatus('SYNCING');
+    try {
+      const syncTarget = resolveSyncTarget();
+      if (syncTarget.kind === 'POS_CLOUD_STAGING' && syncTarget.canPushMasters) {
+        await syncManager.pushCatalog('products');
+      } else if (syncTarget.canPullMasters) {
+        await syncManager.pullCatalog('products', true);
+      }
+      const freshProducts = await db.get('products') as Product[];
+      if (Array.isArray(freshProducts)) {
+        setProducts(freshProducts);
+      }
+      setCatalogDiagnosticStatus('SYNCED');
+      clearSyncErrorDiagnostic();
+      setSyncDiagnostic(null);
+    } catch (error) {
+      setCatalogDiagnosticStatus('ERROR');
+      reportSyncErrorDiagnostic({
+        operation: 'PULL_MASTERS',
+        collection: 'products',
+        error,
+      });
+    }
+  };
 
   return (
     <ErrorBoundary componentName="App Root">
@@ -7440,6 +8102,14 @@ const AppContent: React.FC = () => {
             onDismiss={() => setPosApkUpdate(null)}
           />
         )}
+        <SyncErrorDiagnosticModal
+          diagnostic={syncDiagnostic}
+          onClose={() => {
+            clearSyncErrorDiagnostic();
+            setSyncDiagnostic(null);
+          }}
+          onRetryProducts={handleRetryProductSyncDiagnostic}
+        />
         <div
           className={`fixed inset-0 w-full h-full bg-gray-50 flex flex-col font-sans select-none text-gray-900 ${allowsViewportScroll ? '' : 'overflow-hidden'}`}
           style={{

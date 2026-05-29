@@ -20,6 +20,10 @@ import {
   listTerminalsFromErp,
   type RuntimeTerminalRecoveryState,
 } from '../services/setup/erpTerminalSetup';
+import { persistSyncDeviceToken } from '../services/sync/deviceToken';
+import { extractErpRegisterAuth, resolveNormalizedRegisterDeviceToken } from '../services/sync/erpRegisterResponse';
+import { saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
+import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../services/sync/SyncProfile';
 
 interface TerminalCard {
   id: string;
@@ -52,6 +56,37 @@ interface BindTerminalResponse {
   recovery_state?: RuntimeTerminalRecoveryState | null;
   config: BusinessConfig;
   users?: UserType[];
+  sync_profile?: Partial<SyncProfile>;
+  syncProfile?: Partial<SyncProfile>;
+  incomingProfile?: Partial<SyncProfile>;
+  incoming_profile?: Partial<SyncProfile>;
+  profile?: Partial<SyncProfile>;
+  sync_permissions?: SyncPermissions;
+  syncPermissions?: SyncPermissions;
+  contracted_product?: string;
+  contractedProduct?: string;
+  cloud_channel?: string;
+  cloudChannel?: string;
+  data_master?: string;
+  dataMaster?: string;
+  customer_erp_access?: boolean;
+  customerErpAccess?: boolean;
+  erp_ui_enabled?: boolean;
+  erpUiEnabled?: boolean;
+  erp_ready_for_sales?: boolean;
+  erpReadyForSales?: boolean;
+  deviceToken?: string;
+  device_token?: string;
+  terminalToken?: string;
+  terminal_token?: string;
+  activationToken?: string;
+  activation_token?: string;
+  syncToken?: string;
+  sync_token?: string;
+  syncAuthToken?: string;
+  sync_auth_token?: string;
+  tokenExpiresAt?: string;
+  token_expires_at?: string;
 }
 
 interface InitialConfigResponse {
@@ -62,6 +97,34 @@ interface InitialConfigResponse {
   config?: BusinessConfig;
   items?: Product[];
   terminal_config?: Record<string, any>;
+  sync_profile?: Partial<SyncProfile>;
+  syncProfile?: Partial<SyncProfile>;
+  sync_permissions?: SyncPermissions;
+  syncPermissions?: SyncPermissions;
+  contracted_product?: string;
+  contractedProduct?: string;
+  cloud_channel?: string;
+  cloudChannel?: string;
+  data_master?: string;
+  dataMaster?: string;
+  customer_erp_access?: boolean;
+  customerErpAccess?: boolean;
+  erp_ui_enabled?: boolean;
+  erpUiEnabled?: boolean;
+  erp_ready_for_sales?: boolean;
+  erpReadyForSales?: boolean;
+  deviceToken?: string;
+  device_token?: string;
+  terminalToken?: string;
+  terminal_token?: string;
+  activationToken?: string;
+  activation_token?: string;
+  syncToken?: string;
+  sync_token?: string;
+  syncAuthToken?: string;
+  sync_auth_token?: string;
+  tokenExpiresAt?: string;
+  token_expires_at?: string;
   snapshot_meta?: {
     used_resolved?: boolean;
     used_fallback_config?: boolean;
@@ -90,6 +153,16 @@ interface BoundTerminalPayload {
     fullPullOnPairing?: boolean;
     resolutionError?: unknown;
   };
+  syncProfile?: Partial<SyncProfile>;
+  syncPermissions?: SyncPermissions;
+  contractSource?: SyncProfileSource;
+  incomingProfile?: Partial<SyncProfile>;
+  profile?: Partial<SyncProfile>;
+  deviceToken?: string;
+  terminalToken?: string;
+  activationToken?: string;
+  syncToken?: string;
+  tokenExpiresAt?: string;
   progress?: (update: TerminalBindingProgressUpdate) => void;
 }
 
@@ -225,6 +298,226 @@ const resolveTenantDisplayName = (tenantId?: string | null): string => {
   if (email) return email;
 
   return (tenantId || '').trim() || 'Tenant no identificado';
+};
+
+const pickBoolean = (...values: unknown[]): boolean | undefined => {
+  for (const value of values) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (['true', '1', 'yes', 'si', 'sí', 'on'].includes(normalized)) return true;
+      if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+    }
+  }
+  return undefined;
+};
+
+const pickString = (...values: unknown[]): string | undefined => {
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
+};
+
+const extractPolicyObject = (...sources: unknown[]): Partial<SyncProfile> => {
+  for (const source of sources) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
+    const record = source as Record<string, any>;
+    const nested =
+      record.incomingProfile
+      || record.incoming_profile
+      || record.sync_profile
+      || record.syncProfile
+      || record.profile
+      || record.policy
+      || record.sync_policy
+      || record.syncPolicy;
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      return nested as Partial<SyncProfile>;
+    }
+  }
+  return {};
+};
+
+const pickAuthString = (...values: unknown[]): string | undefined => {
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.replace(/[\r\n\t]/g, '').trim();
+    if (!trimmed || ['undefined', 'null', 'nan', '[object object]'].includes(trimmed.toLowerCase())) continue;
+    return trimmed;
+  }
+  return undefined;
+};
+
+const extractRegisterAuthPayload = (...sources: unknown[]) => {
+  const records = sources
+    .filter((source): source is Record<string, any> => Boolean(source && typeof source === 'object' && !Array.isArray(source)))
+    .flatMap((record) => [
+      record,
+      record.auth,
+      record.syncAuth,
+      record.terminal_config,
+      record.terminal_config?.auth,
+      record.terminal_config?.metadata,
+      record.terminal_config?.metadata?.syncAuth,
+      record.terminal,
+      record.terminal?.auth,
+      record.terminal?.config,
+      record.terminal?.config?.auth,
+      record.terminal?.config?.metadata,
+      record.terminal?.config?.metadata?.syncAuth,
+      record.config,
+      record.config?.auth,
+      record.config?.security,
+      record.config?.runtime,
+      record.metadata,
+      record.metadata?.auth,
+      record.metadata?.syncAuth,
+      record.session,
+    ])
+    .filter((source): source is Record<string, any> => Boolean(source && typeof source === 'object' && !Array.isArray(source)));
+
+  const deviceToken = pickAuthString(...records.flatMap((record) => [
+    record.deviceToken,
+    record.device_token,
+    record.terminalToken,
+    record.terminal_token,
+    record.activationToken,
+    record.activation_token,
+    record.auth?.deviceToken,
+    record.auth?.device_token,
+    record.auth?.terminalToken,
+    record.auth?.terminal_token,
+    record.auth?.activationToken,
+    record.auth?.activation_token,
+    record.syncAuth?.deviceToken,
+    record.syncAuth?.device_token,
+  ]));
+  const terminalToken = pickAuthString(...records.flatMap((record) => [
+    record.terminalToken,
+    record.terminal_token,
+    record.auth?.terminalToken,
+    record.auth?.terminal_token,
+    record.syncAuth?.terminalToken,
+    record.syncAuth?.terminal_token,
+  ]));
+  const activationToken = pickAuthString(...records.flatMap((record) => [
+    record.activationToken,
+    record.activation_token,
+    record.auth?.activationToken,
+    record.auth?.activation_token,
+    record.syncAuth?.activationToken,
+    record.syncAuth?.activation_token,
+  ]));
+  const syncToken = pickAuthString(...records.flatMap((record) => [
+    record.syncToken,
+    record.sync_token,
+    record.syncAuthToken,
+    record.sync_auth_token,
+    record.auth?.syncToken,
+    record.auth?.sync_token,
+    record.auth?.syncAuthToken,
+    record.auth?.sync_auth_token,
+    record.syncAuth?.syncToken,
+    record.syncAuth?.sync_token,
+    record.syncAuth?.syncAuthToken,
+    record.syncAuth?.sync_auth_token,
+  ]));
+  const tokenExpiresAt = pickAuthString(...records.flatMap((record) => [
+    record.tokenExpiresAt,
+    record.token_expires_at,
+    record.expiresAt,
+    record.expires_at,
+  ]));
+
+  return { deviceToken, terminalToken, activationToken, syncToken, tokenExpiresAt };
+};
+
+const logRegisterResponseAuth = (auth: ReturnType<typeof extractErpRegisterAuth>) => {
+  console.log('[REGISTER_RESPONSE_AUTH]', {
+    deviceTokenPresent: Boolean(auth.deviceToken),
+    terminalTokenPresent: Boolean(auth.terminalToken),
+    activationTokenPresent: Boolean(auth.activationToken),
+    syncTokenPresent: Boolean(auth.syncToken),
+    tokenExpiresAt: auth.tokenExpiresAt || null,
+    responseKeys: Object.keys(auth).filter((key) => Boolean((auth as Record<string, unknown>)[key])),
+  });
+};
+
+const buildTerminalSyncProfile = (params: {
+  bindingMode: 'MASTER' | 'SLAVE';
+  expectsErpDirect: boolean;
+  erpBaseUrl?: string | null;
+  terminalId: string;
+  erpTerminalId?: string | null;
+  tenantId?: string | null;
+  storeId?: string | null;
+  data?: BindTerminalResponse | null;
+  initialConfigData?: InitialConfigResponse | null;
+}): Partial<SyncProfile> => {
+  const terminalConfig = params.initialConfigData?.terminal_config || {};
+  const candidate = extractPolicyObject(params.data, params.initialConfigData, terminalConfig);
+  const syncPermissions =
+    params.data?.syncPermissions ||
+    params.data?.sync_permissions ||
+    params.initialConfigData?.syncPermissions ||
+    params.initialConfigData?.sync_permissions ||
+    (candidate.syncPermissions as SyncPermissions | undefined);
+
+  const isSlave = params.bindingMode === 'SLAVE';
+  const isErpDirect = params.expectsErpDirect && !isSlave;
+  const erpReadyForSales = pickBoolean(
+    params.data?.erpReadyForSales,
+    params.data?.erp_ready_for_sales,
+    params.initialConfigData?.erpReadyForSales,
+    params.initialConfigData?.erp_ready_for_sales,
+    terminalConfig.erpReadyForSales,
+    terminalConfig.erp_ready_for_sales,
+    (candidate as any).erpReadyForSales,
+    syncPermissions?.canPushOperations
+  );
+
+  return {
+    ...candidate,
+    syncPermissions,
+    contractedProduct: isErpDirect ? 'POS_ERP' : 'POS_ONLY',
+    posRuntime: isSlave ? 'SLAVE' : 'MASTER',
+    cloudChannel: isSlave ? 'POS_MASTER' : isErpDirect ? 'ERP_ACTIVE' : 'POS_CLOUD_STAGING',
+    dataMaster: isSlave ? 'POS_MASTER' : isErpDirect ? 'ERP' : 'POS',
+    cloudSyncEnabled: !isSlave,
+    customerErpAccess: isErpDirect ? true : pickBoolean(
+      params.data?.customerErpAccess,
+      params.data?.customer_erp_access,
+      params.initialConfigData?.customerErpAccess,
+      params.initialConfigData?.customer_erp_access,
+      terminalConfig.customerErpAccess,
+      terminalConfig.customer_erp_access,
+      (candidate as any).customerErpAccess,
+      false
+    ) || false,
+    erpUiEnabled: isErpDirect ? true : pickBoolean(
+      params.data?.erpUiEnabled,
+      params.data?.erp_ui_enabled,
+      params.initialConfigData?.erpUiEnabled,
+      params.initialConfigData?.erp_ui_enabled,
+      terminalConfig.erpUiEnabled,
+      terminalConfig.erp_ui_enabled,
+      (candidate as any).erpUiEnabled,
+      false
+    ) || false,
+    cloudBaseUrl: pickString((candidate as any).cloudBaseUrl, params.erpBaseUrl),
+    erpBaseUrl: pickString((candidate as any).erpBaseUrl, params.erpBaseUrl),
+    cloudTenantId: pickString((candidate as any).cloudTenantId, params.tenantId),
+    erpTenantId: pickString((candidate as any).erpTenantId, params.tenantId),
+    localTenantId: pickString((candidate as any).localTenantId, params.tenantId),
+    localStoreId: pickString((candidate as any).localStoreId, params.storeId),
+    localTerminalId: pickString((candidate as any).localTerminalId, params.terminalId),
+    erpTerminalId: pickString((candidate as any).erpTerminalId, params.erpTerminalId, params.terminalId),
+    cloudStagingReady: !isErpDirect && !isSlave,
+    erpReadyForSales: Boolean(erpReadyForSales),
+  };
 };
 
 const DEFAULT_PUBLIC_ERP_BASE_URL = 'https://clic-erp.vercel.app';
@@ -850,6 +1143,60 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           bindingMode === 'SLAVE'
             ? normalizeMasterHost(masterIpInput) || masterIpInput.trim() || undefined
             : undefined;
+        const resolvedTerminalId = initialConfigData.terminal_id || data.terminal_id || terminal.id;
+        const resolvedErpTerminalId = data.erp_terminal_id || terminal.erpTerminalId || undefined;
+        const syncProfile = {
+          ...buildTerminalSyncProfile({
+            bindingMode,
+            expectsErpDirect,
+            erpBaseUrl,
+            terminalId: resolvedTerminalId,
+            erpTerminalId: resolvedErpTerminalId,
+            tenantId: initialConfigData.tenant_id || data.tenant_id || tenantId,
+            storeId: data.store_id || undefined,
+            data,
+            initialConfigData,
+          }),
+          ...(data.syncProfile || data.sync_profile || data.incomingProfile || data.incoming_profile || data.profile || {}),
+        };
+        const syncPermissions =
+          data.syncPermissions ||
+          data.sync_permissions ||
+          initialConfigData.syncPermissions ||
+          initialConfigData.sync_permissions ||
+          syncProfile.syncPermissions;
+        const registerAuth = extractErpRegisterAuth(data, initialConfigData, initialConfigData.terminal_config);
+        logRegisterResponseAuth(registerAuth);
+        const normalizedDeviceToken = resolveNormalizedRegisterDeviceToken(
+          data,
+          initialConfigData,
+          registerAuth,
+        );
+        if (normalizedDeviceToken) {
+          persistSyncDeviceToken(normalizedDeviceToken, 'ERP_REGISTER', registerAuth.tokenExpiresAt);
+        }
+        if (registerAuth.syncToken) {
+          localStorage.setItem('clic_erp_sync_token', registerAuth.syncToken);
+          localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
+          if (registerAuth.tokenExpiresAt) {
+            localStorage.setItem('clic_erp_sync_token_expires_at', registerAuth.tokenExpiresAt);
+          }
+        }
+        saveTerminalCredentialsSync({
+          terminalId: resolvedErpTerminalId || resolvedTerminalId,
+          deviceId,
+          ...(normalizedDeviceToken ? {
+            deviceToken: normalizedDeviceToken,
+            deviceTokenSource: 'ERP_REGISTER',
+            deviceTokenUpdatedAt: new Date().toISOString(),
+            deviceTokenExpiresAt: registerAuth.tokenExpiresAt || null,
+          } : {}),
+          ...(registerAuth.syncToken ? {
+            syncToken: registerAuth.syncToken,
+            syncTokenUpdatedAt: new Date().toISOString(),
+            syncTokenExpiresAt: registerAuth.tokenExpiresAt || null,
+          } : {}),
+        });
 
         if (showProgress) {
           updateBindingProgress({
@@ -859,8 +1206,8 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         }
 
         await onBound({
-          terminalId: initialConfigData.terminal_id || data.terminal_id || terminal.id,
-          erpTerminalId: data.erp_terminal_id || terminal.erpTerminalId || undefined,
+          terminalId: resolvedTerminalId,
+          erpTerminalId: resolvedErpTerminalId,
           erpBaseUrl: erpBaseUrl || undefined,
           terminalName: data.terminal_name || terminal.name || data.terminal_id || terminal.id,
           tenantId: initialConfigData.tenant_id || data.tenant_id || tenantId,
@@ -879,6 +1226,16 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             fullPullOnPairing: initialConfigData.snapshot_meta?.full_pull_on_pairing,
             resolutionError: initialConfigData.snapshot_meta?.resolution_error,
           },
+          syncProfile,
+          syncPermissions,
+          contractSource: expectsErpDirect ? 'ERP_REGISTER' : 'CLOUD_ADMIN',
+          incomingProfile: data.incomingProfile || data.incoming_profile || data.profile || data.syncProfile,
+          profile: data.profile || data.syncProfile,
+          deviceToken: normalizedDeviceToken,
+          terminalToken: registerAuth.terminalToken,
+          activationToken: registerAuth.activationToken,
+          syncToken: registerAuth.syncToken,
+          tokenExpiresAt: registerAuth.tokenExpiresAt,
           progress: showProgress ? updateBindingProgress : undefined,
         });
         completed = true;

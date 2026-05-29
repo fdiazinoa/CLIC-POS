@@ -1,5 +1,10 @@
 import { BusinessConfig, Product, TerminalConfig } from '../../types';
 import { getDefaultRoleConfig, resolveDeviceRoleValue } from '../../utils/deviceRoleHelpers';
+import {
+  extractErpRegisterAuth,
+  resolveIncomingSyncProfileFromRegister,
+} from '../sync/erpRegisterResponse';
+import type { SyncProfile } from '../sync/SyncProfile';
 import { supabase } from '../../utils/supabase';
 
 export interface RuntimeTerminalCard {
@@ -30,6 +35,23 @@ export interface RuntimeBindTerminalResponse {
   previous_device_id?: string | null;
   recovery_state?: RuntimeTerminalRecoveryState | null;
   config: BusinessConfig;
+  deviceToken?: string;
+  device_token?: string;
+  terminalToken?: string;
+  terminal_token?: string;
+  activationToken?: string;
+  activation_token?: string;
+  syncToken?: string;
+  sync_token?: string;
+  syncAuthToken?: string;
+  sync_auth_token?: string;
+  tokenExpiresAt?: string;
+  token_expires_at?: string;
+  syncProfile?: Partial<SyncProfile>;
+  sync_profile?: Partial<SyncProfile>;
+  incomingProfile?: Partial<SyncProfile>;
+  incoming_profile?: Partial<SyncProfile>;
+  profile?: Partial<SyncProfile>;
 }
 
 export interface RuntimeTerminalRecoveryState {
@@ -49,6 +71,18 @@ export interface RuntimeInitialConfigResponse {
   terminal_config?: Record<string, any>;
   snapshot_meta?: Record<string, any>;
   items?: Product[];
+  deviceToken?: string;
+  device_token?: string;
+  terminalToken?: string;
+  terminal_token?: string;
+  activationToken?: string;
+  activation_token?: string;
+  syncToken?: string;
+  sync_token?: string;
+  syncAuthToken?: string;
+  sync_auth_token?: string;
+  tokenExpiresAt?: string;
+  token_expires_at?: string;
 }
 
 type BindingMode = 'MASTER' | 'SLAVE';
@@ -79,6 +113,111 @@ const asObject = (value: unknown): Record<string, any> => {
 };
 
 const asString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+
+const pickAuthString = (...values: unknown[]): string | undefined => {
+  for (const value of values) {
+    const normalized = asString(value).replace(/[\r\n\t]/g, '').trim();
+    if (!normalized) continue;
+    if (['undefined', 'null', 'nan', '[object object]'].includes(normalized.toLowerCase())) continue;
+    return normalized;
+  }
+  return undefined;
+};
+
+const extractRuntimeAuthPayload = (...sources: unknown[]) => {
+  const records = sources
+    .map(asObject)
+    .filter((record) => Object.keys(record).length > 0)
+    .flatMap((record) => [
+      record,
+      asObject(record.auth),
+      asObject(record.syncAuth),
+      asObject(record.terminal_config),
+      asObject(asObject(record.terminal_config).auth),
+      asObject(asObject(record.terminal_config).metadata),
+      asObject(asObject(asObject(record.terminal_config).metadata).syncAuth),
+      asObject(record.terminal),
+      asObject(asObject(record.terminal).auth),
+      asObject(asObject(record.terminal).config),
+      asObject(asObject(asObject(record.terminal).config).auth),
+      asObject(record.config),
+      asObject(asObject(record.config).auth),
+      asObject(record.security),
+      asObject(record.metadata),
+      asObject(asObject(record.metadata).syncAuth),
+      asObject(record.runtime),
+      asObject(record.session),
+    ])
+    .filter((record) => Object.keys(record).length > 0);
+  const deviceToken = pickAuthString(...records.flatMap((record) => [
+    record.deviceToken,
+    record.device_token,
+    record.terminalToken,
+    record.terminal_token,
+    record.activationToken,
+    record.activation_token,
+    asObject(record.auth).deviceToken,
+    asObject(record.auth).device_token,
+    asObject(record.auth).terminalToken,
+    asObject(record.auth).terminal_token,
+    asObject(record.auth).activationToken,
+    asObject(record.auth).activation_token,
+    asObject(record.syncAuth).deviceToken,
+    asObject(record.syncAuth).device_token,
+    asObject(record.security).deviceToken,
+    asObject(record.security).device_token,
+    asObject(record.metadata).deviceToken,
+    asObject(record.metadata).device_token,
+  ]));
+  const terminalToken = pickAuthString(...records.flatMap((record) => [
+    record.terminalToken,
+    record.terminal_token,
+    asObject(record.auth).terminalToken,
+    asObject(record.auth).terminal_token,
+    asObject(record.syncAuth).terminalToken,
+    asObject(record.syncAuth).terminal_token,
+    asObject(record.security).terminalToken,
+    asObject(record.security).terminal_token,
+  ]));
+  const activationToken = pickAuthString(...records.flatMap((record) => [
+    record.activationToken,
+    record.activation_token,
+    asObject(record.auth).activationToken,
+    asObject(record.auth).activation_token,
+    asObject(record.syncAuth).activationToken,
+    asObject(record.syncAuth).activation_token,
+    asObject(record.security).activationToken,
+    asObject(record.security).activation_token,
+  ]));
+  const syncToken = pickAuthString(...records.flatMap((record) => [
+    record.syncToken,
+    record.sync_token,
+    record.syncAuthToken,
+    record.sync_auth_token,
+    asObject(record.auth).syncToken,
+    asObject(record.auth).sync_token,
+    asObject(record.auth).syncAuthToken,
+    asObject(record.auth).sync_auth_token,
+    asObject(record.syncAuth).syncToken,
+    asObject(record.syncAuth).sync_token,
+    asObject(record.syncAuth).syncAuthToken,
+    asObject(record.syncAuth).sync_auth_token,
+    asObject(record.security).syncToken,
+    asObject(record.security).sync_token,
+    asObject(record.runtime).syncAuthToken,
+    asObject(record.runtime).sync_auth_token,
+  ]));
+  const tokenExpiresAt = pickAuthString(...records.flatMap((record) => [
+    record.tokenExpiresAt,
+    record.token_expires_at,
+    record.expiresAt,
+    record.expires_at,
+    asObject(record.security).tokenExpiresAt,
+    asObject(record.security).token_expires_at,
+  ]));
+
+  return { deviceToken, terminalToken, activationToken, syncToken, tokenExpiresAt };
+};
 
 const cloneDeep = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
@@ -753,6 +892,29 @@ export const bindTerminalFromErp = async (input: {
     });
   }
 
+  let registerPayload: Record<string, any> | null = null;
+  try {
+    registerPayload = asObject(await fetchErpJson(input.erpBaseUrl, '/api/sync/terminals/register', {
+      method: 'POST',
+      body: {
+        device_id: input.posDeviceId,
+        tenant_id: resolvedContext.tenantId,
+        company_ref: input.tenantSlug || null,
+        company_id: asString(targetTerminal.company_id) || resolvedContext.companyId,
+        store_id: asString(targetTerminal.store_id) || resolvedContext.storeId,
+        name: targetTerminalName,
+        metadata: {
+          source: 'CLIC_POS_SETUP',
+          terminal_id: targetTerminalId,
+          erp_terminal_id: targetErpTerminalId,
+          binding_mode: input.bindingMode,
+        },
+      },
+    }));
+  } catch (registerError) {
+    console.warn('⚠️ ERP /terminals/register failed; continuing with terminal-profile bind fallback:', registerError);
+  }
+
   const mergedMetadata = {
     ...currentMetadata,
     bound_device_id: input.posDeviceId,
@@ -825,6 +987,31 @@ export const bindTerminalFromErp = async (input: {
     posDeviceId: input.posDeviceId,
     bindingMode: input.bindingMode,
   });
+  const runtimeAuth = extractErpRegisterAuth(
+    registerPayload,
+    registerPayload?.auth,
+    registerPayload?.syncHeaders,
+    registerPayload?.sync_headers,
+    persistedProfilePayload,
+    persistedProfilePayload?.profile,
+    selectedProfilePayload,
+    selectedProfilePayload?.profile,
+    currentProfilePayload,
+    currentProfilePayload?.profile,
+    targetTerminal
+  );
+  const syncProfile = resolveIncomingSyncProfileFromRegister(
+    registerPayload,
+    {
+      erpTerminalId: targetErpTerminalId,
+      localTerminalId: targetTerminalId,
+      localTenantId: resolvedContext.tenantId || undefined,
+      localStoreId: asString(targetTerminal.store_id) || resolvedContext.storeId || undefined,
+      erpBaseUrl: input.erpBaseUrl,
+      cloudBaseUrl: input.erpBaseUrl,
+    },
+    'ERP_REGISTER',
+  );
 
   return {
     success: true,
@@ -840,6 +1027,24 @@ export const bindTerminalFromErp = async (input: {
       || (occupiedDeviceId && occupiedDeviceId !== input.posDeviceId ? occupiedDeviceId : null),
     recovery_state: recoveryState,
     config: boundConfig,
+    ...(registerPayload || {}),
+    syncProfile,
+    sync_profile: syncProfile,
+    incomingProfile: registerPayload?.incomingProfile || registerPayload?.incoming_profile || syncProfile,
+    incoming_profile: registerPayload?.incomingProfile || registerPayload?.incoming_profile || syncProfile,
+    profile: registerPayload?.profile || syncProfile,
+    deviceToken: runtimeAuth.deviceToken,
+    device_token: runtimeAuth.deviceToken,
+    terminalToken: runtimeAuth.terminalToken,
+    terminal_token: runtimeAuth.terminalToken,
+    activationToken: runtimeAuth.activationToken,
+    activation_token: runtimeAuth.activationToken,
+    syncToken: runtimeAuth.syncToken,
+    sync_token: runtimeAuth.syncToken,
+    syncAuthToken: runtimeAuth.syncToken,
+    sync_auth_token: runtimeAuth.syncToken,
+    tokenExpiresAt: runtimeAuth.tokenExpiresAt,
+    token_expires_at: runtimeAuth.tokenExpiresAt,
   };
 };
 
@@ -863,6 +1068,7 @@ export const fetchInitialConfigFromErp = async (input: {
   );
 
   const terminalConfig = asObject(payload?.terminal_config);
+  const runtimeAuth = extractRuntimeAuthPayload(payload, terminalConfig);
 
   return {
     success: asString(payload?.status).toLowerCase() === 'success',
@@ -873,6 +1079,11 @@ export const fetchInitialConfigFromErp = async (input: {
     items: Array.isArray(payload?.items)
       ? payload.items
       : (Array.isArray(terminalConfig?.masters?.items) ? terminalConfig.masters.items : []),
+    deviceToken: runtimeAuth.deviceToken,
+    terminalToken: runtimeAuth.terminalToken,
+    activationToken: runtimeAuth.activationToken,
+    syncToken: runtimeAuth.syncToken,
+    tokenExpiresAt: runtimeAuth.tokenExpiresAt,
   };
 };
 
