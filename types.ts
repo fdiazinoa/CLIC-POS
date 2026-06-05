@@ -1545,6 +1545,9 @@ export interface CartItem extends Product {
   kdsReturnedAt?: string;
   kdsOriginalPrice?: number;
   voidedByKdsReturn?: boolean;
+  consignmentId?: string;
+  consignmentDocumentNo?: string;
+  consignmentLineId?: string;
 }
 
 export interface Transaction {
@@ -1684,6 +1687,13 @@ export interface Transaction {
   erpConfirmationStatus?: 'PENDING' | 'SYNCED' | 'ERROR';
   erpConfirmationError?: string;
   erpConfirmedAt?: string;
+  consignmentId?: string;
+  consignmentDocumentNo?: string;
+  consignmentLineId?: string;
+  consignmentSyncStatus?: 'PENDING' | 'SYNCED' | 'ERROR';
+  consignmentSyncError?: string;
+  consignmentSyncedAt?: string;
+  consignmentSyncResponse?: any;
 }
 
 export interface FiscalDocumentCorrectionSnapshot {

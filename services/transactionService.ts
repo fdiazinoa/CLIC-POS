@@ -350,7 +350,14 @@ class TransactionService {
             skipErpSaleSync: data.skipErpSaleSync,
             erpConfirmationStatus: data.erpConfirmationStatus,
             erpConfirmationError: data.erpConfirmationError,
-            erpConfirmedAt: data.erpConfirmedAt
+            erpConfirmedAt: data.erpConfirmedAt,
+            consignmentId: data.consignmentId,
+            consignmentDocumentNo: data.consignmentDocumentNo,
+            consignmentLineId: data.consignmentLineId,
+            consignmentSyncStatus: data.consignmentSyncStatus,
+            consignmentSyncError: data.consignmentSyncError,
+            consignmentSyncedAt: data.consignmentSyncedAt,
+            consignmentSyncResponse: data.consignmentSyncResponse
         };
 
         const normalizedTransaction = normalizeTransactionForSync(transaction);
