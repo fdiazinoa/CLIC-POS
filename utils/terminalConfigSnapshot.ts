@@ -24,6 +24,7 @@ import {
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG, INITIAL_TARIFFS, INITIAL_TAXES } from '../constants';
 import {
   canonicalizeDocumentSeries,
+  isFiscalDocumentSeries,
   mergeDocumentSeriesCollection,
   resolveDocumentAssignmentId,
   resolveDocumentSeriesDisplayPrefix,
@@ -871,7 +872,7 @@ export const applyTerminalConfigSnapshot = (
     .filter(Boolean) as TaxDefinition[];
   const documentSeries = asArray(resolvedDocuments.document_series)
     .map((item, index) => normalizeDocumentSeries(item, index))
-    .filter(Boolean) as DocumentSeries[];
+    .filter((series): series is DocumentSeries => Boolean(series) && !isFiscalDocumentSeries(series));
   const fiscalRanges = asArray(resolvedDocuments.fiscal_ranges)
     .map((item, index) => normalizeFiscalRange(item, index))
     .filter(Boolean) as FiscalRangeDGII[];
@@ -1018,7 +1019,8 @@ export const applyTerminalConfigSnapshot = (
         deviceRoleDefaults.authLevel;
 
   const effectiveDocumentSeries = mergeDocumentSeriesCollection(
-    documentSeries.length > 0 ? documentSeries : terminalTemplate.documentSeries || DEFAULT_DOCUMENT_SERIES
+    (documentSeries.length > 0 ? documentSeries : terminalTemplate.documentSeries || DEFAULT_DOCUMENT_SERIES)
+      .filter((series) => !isFiscalDocumentSeries(series))
   );
   const effectiveFiscalRanges = fiscalRanges.length > 0 ? fiscalRanges : terminalTemplate.fiscal.fiscalRanges || [];
   const effectiveFiscalAllocations = hasIncomingFiscalAllocations

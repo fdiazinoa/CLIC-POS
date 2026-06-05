@@ -196,7 +196,6 @@ const ERP_CRITICAL_MASTER_COLLECTIONS = new Set([
     'warehouses',
     'paymentMethods',
     'documentSeries',
-    'internalSequences',
     'fiscalRanges',
     'fiscalSequences',
     'terminalFiscalConfig',
