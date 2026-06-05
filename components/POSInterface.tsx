@@ -1212,6 +1212,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       operationalVertical === 'RESTAURANT' ||
       operationalVertical === 'RESTAURANTE' ||
       config.vertical === 'RESTAURANT';
+   const canReceiveConsignments = Boolean(
+      activeTerminalConfig?.operational?.recibir_consignaciones ??
+      activeTerminalConfig?.operational?.receiveConsignments
+   );
    const showTableMapButton = Boolean(activeTerminalConfig?.operational?.usa_mesas);
    const hideTableExtras = isRestaurantMode && !!activeTable;
    const restaurantActionGridClass = !isRestaurantMode
@@ -5352,17 +5356,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <button onClick={() => setIsScannerOpen(true)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
                   </div>
 
-                  <button
-                     type="button"
-                     onClick={() => {
-                        setShowConsignmentModal(true);
-                        setConsignmentError(null);
-                     }}
-                     className="order-4 md:order-none inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-cyan-100 bg-cyan-50 text-cyan-700 shadow-sm transition-all hover:border-cyan-200 hover:bg-cyan-100"
-                     title="Buscar consignaciones ERP"
-                  >
-                     <Package size={19} />
-                  </button>
+                  {canReceiveConsignments && (
+                     <button
+                        type="button"
+                        onClick={() => {
+                           setShowConsignmentModal(true);
+                           setConsignmentError(null);
+                        }}
+                        className="order-4 md:order-none inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-cyan-100 bg-cyan-50 text-cyan-700 shadow-sm transition-all hover:border-cyan-200 hover:bg-cyan-100"
+                        title="Buscar consignaciones ERP"
+                     >
+                        <Package size={19} />
+                     </button>
+                  )}
 
 
                   <SupervisorAuthModal
@@ -6571,13 +6577,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <QrCode size={18} />
                            <span className="text-[9px] font-bold uppercase">Cupón</span>
                         </button>
-                        <button onClick={() => {
-                           setShowConsignmentModal(true);
-                           setConsignmentError(null);
-                        }} className="flex flex-col items-center gap-1 text-gray-400 hover:text-cyan-700">
-                           <Package size={18} />
-                           <span className="text-[9px] font-bold uppercase">Cons.</span>
-                        </button>
+                        {canReceiveConsignments && (
+                           <button onClick={() => {
+                              setShowConsignmentModal(true);
+                              setConsignmentError(null);
+                           }} className="flex flex-col items-center gap-1 text-gray-400 hover:text-cyan-700">
+                              <Package size={18} />
+                              <span className="text-[9px] font-bold uppercase">Cons.</span>
+                           </button>
+                        )}
                         {!hideTableExtras && (
                            <>
                               <button onClick={openParkAliasModal} className="flex flex-col items-center gap-1 text-gray-400 hover:text-blue-500">

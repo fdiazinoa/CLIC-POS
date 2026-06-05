@@ -137,6 +137,8 @@ export const DEFAULT_TERMINAL_CONFIG = {
     bloqueo_meseros: false,
     pedir_comensales: true,
     usa_modulos_cocina: false,
+    recibir_consignaciones: false,
+    receiveConsignments: false,
     defaultTaxIds: [],
     reservationPolicy: {
       validityDays: 7,

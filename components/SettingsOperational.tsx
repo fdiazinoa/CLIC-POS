@@ -3,7 +3,7 @@ import React from 'react';
 import {
     Building2, LayoutGrid, ShieldCheck,
     Monitor, Utensils, ShoppingBag,
-    Lock, Users, Info, Sparkles, CalendarDays, Percent, Landmark, Hash
+    Lock, Users, Info, Sparkles, CalendarDays, Percent, Landmark, Hash, Package
 } from 'lucide-react';
 
 interface SettingsOperationalProps {
@@ -54,6 +54,8 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
         pantalla_inicio: 'VENTA_DIRECTA',
         bloqueo_meseros: false,
         pedir_comensales: true,
+        recibir_consignaciones: false,
+        receiveConsignments: false,
         reservationPolicy: {
             validityDays: 7,
             printCopies: 1,
@@ -383,6 +385,18 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                         checked={operational.showGlobalSales}
                         onChange={(v: boolean) => handleToggle('showGlobalSales', v)}
                         icon={Monitor}
+                        disabled={isReadOnly}
+                    />
+
+                    <Toggle
+                        label="Recibir consignaciones"
+                        description="Activa el botón de consignaciones ERP en la pantalla de ventas para buscar y agregar consignaciones al ticket."
+                        checked={Boolean(operational.recibir_consignaciones ?? operational.receiveConsignments)}
+                        onChange={(v: boolean) => {
+                            onUpdate('operational', 'recibir_consignaciones', v);
+                            onUpdate('operational', 'receiveConsignments', v);
+                        }}
+                        icon={Package}
                         disabled={isReadOnly}
                     />
 
