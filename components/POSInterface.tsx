@@ -5459,7 +5459,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   className="flex-none border-t border-gray-200 bg-white px-4 py-3 shadow-[0_-8px_24px_rgba(15,23,42,0.06)]"
                >
                   <div className="grid grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)] gap-4">
-                     <div className="grid grid-cols-[64px_repeat(4,minmax(0,1fr))] gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
+                     <div className="grid grid-cols-[64px_repeat(5,minmax(0,1fr))] gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
                         <div className="flex items-center justify-center rounded-lg bg-white text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">
                            Venta
                         </div>
@@ -5494,6 +5494,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         >
                            <Save size={16} />
                            <span>Guardar</span>
+                        </button>
+                        <button
+                           type="button"
+                           onClick={onLogout}
+                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-red-100 bg-red-50 px-3 text-xs font-black uppercase tracking-wide text-red-700 transition-all hover:bg-red-100 active:scale-95"
+                        >
+                           <LogOut size={16} />
+                           <span>Salir</span>
                         </button>
                      </div>
 
@@ -6464,7 +6472,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
 
-                               <div className={`grid ${restaurantActionGridClass} items-center gap-3 pt-5 px-1`}>
+                               <div className={`grid ${isRestaurantMode ? 'grid-cols-1' : restaurantActionGridClass} items-center gap-3 pt-5 px-1`}>
                                  {!isRestaurantMode ? (
                                     <>
                                        <button
@@ -6497,38 +6505,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     </>
                                  ) : (
                                     <>
-                                       {showTableMapButton && (
-                                          <button
-                                             onClick={() => { void handleBackToMap(); }}
-                                             className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase border-2 border-slate-200 bg-slate-50 text-slate-700 hover:bg-white hover:border-slate-300 shadow-sm hover:shadow-md transition-all active:scale-95"
-                                          >
-                                             <Layout size={24} />
-                                             <span>Mesas</span>
-                                          </button>
-                                       )}
-                                       <button
-                                          onClick={handleDispatchCommand}
-                                          className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase border-2 border-orange-200 bg-orange-50 text-orange-600 hover:bg-orange-100 hover:border-orange-300 shadow-sm hover:shadow-md transition-all active:scale-95"
-                                       >
-                                          <ChefHat size={24} />
-                                          <span>Cocina</span>
-                                       </button>
-                                       {!hideTableExtras && (
-                                          <button
-                                             onClick={() => setShowSplitModal(true)}
-                                             className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase border-2 border-purple-200 bg-purple-50 text-purple-600 hover:bg-purple-100 hover:border-purple-300 shadow-sm hover:shadow-md transition-all active:scale-95"
-                                          >
-                                             <Split size={24} />
-                                             <span>Dividir</span>
-                                          </button>
-                                       )}
-                                       <button
-                                          onClick={handlePrintPrecuenta}
-                                          className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase border-2 border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:border-blue-300 shadow-sm hover:shadow-md transition-all active:scale-95"
-                                       >
-                                          <Printer size={24} />
-                                          <span>Precuenta</span>
-                                       </button>
                                        <button
                                           onClick={() => {
                                              if (cart.length > 0) {
