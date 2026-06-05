@@ -5447,8 +5447,76 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
             )}
 
-            {/* --- Novedad: ActionGrid (Rediseño Adaptativo) REEMPLAZADO POR TABS EN PANEL DERECHO --- */}
-            {/* (Removido para usar Option 2: Tabs) */}
+            {!isMobile && isRestaurantMode && (
+               <div
+                  ref={desktopActionGridRef}
+                  className="flex-none border-t border-gray-200 bg-white px-4 py-3 shadow-[0_-8px_24px_rgba(15,23,42,0.06)]"
+               >
+                  <div className="grid grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)] gap-4">
+                     <div className="grid grid-cols-[64px_repeat(4,minmax(0,1fr))] gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
+                        <div className="flex items-center justify-center rounded-lg bg-white text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">
+                           Venta
+                        </div>
+                        <button
+                           type="button"
+                           onClick={() => handleGridAction('DISCOUNT')}
+                           className={`flex h-12 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-black uppercase tracking-wide transition-all active:scale-95 ${globalDiscount.value > 0 ? 'border-red-200 bg-red-50 text-red-600' : 'border-red-100 bg-red-50 text-red-500 hover:bg-red-100'}`}
+                        >
+                           <Percent size={16} />
+                           <span>Desc %</span>
+                        </button>
+                        <button
+                           type="button"
+                           onClick={() => handleGridAction('COUPON')}
+                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-cyan-100 bg-cyan-50 px-3 text-xs font-black uppercase tracking-wide text-cyan-700 transition-all hover:bg-cyan-100 active:scale-95"
+                        >
+                           <Tag size={16} />
+                           <span>Cupones</span>
+                        </button>
+                        <button
+                           type="button"
+                           onClick={() => handleGridAction('loyalty_card')}
+                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 text-xs font-black uppercase tracking-wide text-blue-700 transition-all hover:bg-blue-100 active:scale-95"
+                        >
+                           <CreditCard size={16} />
+                           <span>Tarjeta</span>
+                        </button>
+                        <button
+                           type="button"
+                           onClick={() => handleGridAction('SAVE')}
+                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-black uppercase tracking-wide text-slate-700 transition-all hover:bg-slate-100 active:scale-95"
+                        >
+                           <Save size={16} />
+                           <span>Guardar</span>
+                        </button>
+                     </div>
+
+                     <div className="grid grid-cols-[64px_repeat(2,minmax(0,1fr))] gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
+                        <div className="flex items-center justify-center rounded-lg bg-white text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">
+                           Cuenta
+                        </div>
+                        <button
+                           type="button"
+                           onClick={handlePrintPrecuenta}
+                           disabled={cart.length === 0}
+                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 text-xs font-black uppercase tracking-wide text-blue-700 transition-all hover:bg-blue-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                           <Printer size={16} />
+                           <span>Sub-total</span>
+                        </button>
+                        <button
+                           type="button"
+                           onClick={handleDispatchCommand}
+                           disabled={cart.length === 0}
+                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-orange-100 bg-orange-50 px-3 text-xs font-black uppercase tracking-wide text-orange-600 transition-all hover:bg-orange-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                           <ChefHat size={16} />
+                           <span>Cocina</span>
+                        </button>
+                     </div>
+                  </div>
+               </div>
+            )}
          </div >
 
          {/* RIGHT SIDEBAR: CURRENT TICKET */}
