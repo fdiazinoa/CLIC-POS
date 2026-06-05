@@ -88,6 +88,11 @@ import {
    type UberEatsPendingOrder,
    type UberEatsPosDraft,
 } from '../services/uberEatsPosService';
+import {
+   consignmentSyncService,
+   type ErpConsignment,
+   type ErpConsignmentLine,
+} from '../services/sync/ConsignmentSyncService';
 
 // ... existing imports
 
@@ -184,6 +189,55 @@ const postJsonWithTimeout = async (url: string, payload: unknown, timeoutMs = 50
       return data;
    } finally {
       window.clearTimeout(timeoutId);
+   }
+};
+
+const getConsignmentDocumentNo = (consignment: ErpConsignment): string =>
+   String(consignment.documentNo || consignment.document_no || consignment.number || consignment.id || '').trim();
+
+const getConsignmentCustomerName = (consignment: ErpConsignment): string =>
+   String(consignment.customerName || consignment.customer_name || '').trim();
+
+const getConsignmentLines = (consignment: ErpConsignment): ErpConsignmentLine[] => {
+   const lines = Array.isArray(consignment.lines) ? consignment.lines : consignment.items;
+   return Array.isArray(lines) ? lines : [];
+};
+
+const getConsignmentLineProductName = (line: ErpConsignmentLine): string =>
+   String(line.name || line.description || line.sku || line.productId || line.product_id || line.id || 'Artículo').trim();
+
+const getConsignmentLineQuantity = (line: ErpConsignmentLine): number => {
+   const value = Number(line.availableQuantity ?? line.available_quantity ?? line.quantity ?? line.qty ?? 1);
+   return Number.isFinite(value) && value > 0 ? value : 1;
+};
+
+const getConsignmentLinePrice = (line: ErpConsignmentLine, fallbackPrice: number): number => {
+   const value = Number(line.unitPrice ?? line.unit_price ?? line.price ?? fallbackPrice);
+   return Number.isFinite(value) && value >= 0 ? value : fallbackPrice;
+};
+
+const getConsignmentTicketFields = (items: CartItem[]): Pick<Transaction, 'consignmentId' | 'consignmentDocumentNo' | 'consignmentLineId'> => {
+   const item = items.find(line => line.consignmentId && line.consignmentLineId);
+   return {
+      consignmentId: item?.consignmentId,
+      consignmentDocumentNo: item?.consignmentDocumentNo,
+      consignmentLineId: item?.consignmentLineId,
+   };
+};
+
+const readConsignmentSyncKeys = (): Set<string> => {
+   try {
+      return new Set(JSON.parse(localStorage.getItem('clic_consignment_sync_keys_v1') || '[]'));
+   } catch {
+      return new Set();
+   }
+};
+
+const saveConsignmentSyncKeys = (keys: Set<string>): void => {
+   try {
+      localStorage.setItem('clic_consignment_sync_keys_v1', JSON.stringify(Array.from(keys).slice(-500)));
+   } catch {
+      // Local idempotency cache is best-effort; ERP still receives idempotencyKey.
    }
 };
 
@@ -377,6 +431,9 @@ const productSalesIdentityKey = (product: Product): string => {
 
    return `id:${String(product.id || '').trim().toLowerCase()}`;
 };
+
+const productLineIdentityKey = (product: Product, price: number): string =>
+   `${productSalesIdentityKey(product)}::${Number(price || 0).toFixed(6)}`;
 
 const isSeedCatalogProduct = (product: Product): boolean => {
    const id = String(product.id || '').trim().toLowerCase();
@@ -1425,6 +1482,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showCouponModal, setShowCouponModal] = useState(false);
    const [couponCode, setCouponCode] = useState('');
    const [redeemedCoupon, setRedeemedCoupon] = useState<RedeemedCouponRef | null>(null);
+   const [showConsignmentModal, setShowConsignmentModal] = useState(false);
+   const [consignmentSearchTerm, setConsignmentSearchTerm] = useState('');
+   const [consignmentResults, setConsignmentResults] = useState<ErpConsignment[]>([]);
+   const [selectedConsignment, setSelectedConsignment] = useState<ErpConsignment | null>(null);
+   const [isSearchingConsignments, setIsSearchingConsignments] = useState(false);
+   const [isLoadingConsignment, setIsLoadingConsignment] = useState(false);
+   const [consignmentError, setConsignmentError] = useState<string | null>(null);
 
    const [syncState, setSyncState] = useState<SyncState>(backgroundSyncManager.getState());
 
@@ -2357,7 +2421,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
 
-   const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig']) => {
+   const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig'], consignmentPatch?: Pick<CartItem, 'consignmentId' | 'consignmentDocumentNo' | 'consignmentLineId'>) => {
       if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
       if (quantity > 0 && !ensureSalesWithOpenZPermission()) return;
       if (!canAddItemToCart(product, quantity)) return;
@@ -2371,6 +2435,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       const finalPrice = priceOverride ?? selectedVariant?.price ?? getProductPrice(product);
+      const lineIdentityKey = productLineIdentityKey(product, finalPrice);
+      const consignmentIdentityKey = consignmentPatch?.consignmentLineId || '';
       const modifiersString = buildModifierSignature(modifiers);
       const variantSku = selectedVariant?.sku;
       const effectiveTaxIds = resolveEffectiveTaxIds(product.appliedTaxIds, activeTerminalConfig);
@@ -2390,7 +2456,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const existing = (cart || []).find(i => {
          const iMods = buildModifierSignature(i.modifiers);
          const existingTaxSignature = resolveEffectiveTaxIds(i.appliedTaxIds, activeTerminalConfig).slice().sort().join('|');
-         return i.id === product.id && (i.variantSku || '') === (variantSku || '') && iMods === modifiersString && i.price === finalPrice && existingTaxSignature === taxSignature;
+         const existingIdentityKey = String((i as any).cartIdentityKey || productLineIdentityKey(i, i.price));
+         const existingConsignmentKey = i.consignmentLineId || '';
+         return existingIdentityKey === lineIdentityKey && existingConsignmentKey === consignmentIdentityKey && (i.variantSku || '') === (variantSku || '') && iMods === modifiersString && i.price === finalPrice && existingTaxSignature === taxSignature;
       });
 
       let targetCartId: string;
@@ -2404,6 +2472,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                appliedTaxIds: effectiveTaxIds,
                createdAt: existing.createdAt || new Date().toISOString(),
                production_area_id: resolveProductionAreaId(existing) || productionAreaId || undefined,
+               ...consignmentPatch,
             };
             return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
          });
@@ -2428,7 +2497,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             appliedTaxIds: effectiveTaxIds,
             production_area_id: productionAreaId || undefined,
             originalPrice: getProductPrice(product),
-            trackingData
+            trackingData,
+            ...consignmentPatch,
          };
          onUpdateCart(prev => [newItem, ...prev]);
       }
@@ -2465,6 +2535,97 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       else if (hasRestaurantConfig) setProductForModifiers(product);
       else addToCart(product, isReturnMode ? -1 : 1);
    }, [isMobile, defaultSalesWarehouseId, ensureSalesWithOpenZPermission, canAddItemToCart, addToCart, isReturnMode]);
+
+   const handleSearchConsignments = useCallback(async () => {
+      setIsSearchingConsignments(true);
+      setConsignmentError(null);
+      try {
+         const results = await consignmentSyncService.searchConsignments(consignmentSearchTerm);
+         setConsignmentResults(results);
+         if (results.length === 0) {
+            setConsignmentError('No se encontraron consignaciones disponibles.');
+         }
+      } catch (error) {
+         const message = error instanceof Error ? error.message : 'No se pudo consultar consignaciones.';
+         setConsignmentError(message);
+      } finally {
+         setIsSearchingConsignments(false);
+      }
+   }, [consignmentSearchTerm]);
+
+   const handleOpenConsignment = useCallback(async (consignment: ErpConsignment) => {
+      setIsLoadingConsignment(true);
+      setConsignmentError(null);
+      try {
+         const detail = await consignmentSyncService.getConsignment(String(consignment.id));
+         setSelectedConsignment(detail);
+      } catch (error) {
+         const message = error instanceof Error ? error.message : 'No se pudo cargar la consignación.';
+         setConsignmentError(message);
+      } finally {
+         setIsLoadingConsignment(false);
+      }
+   }, []);
+
+   const handleAddConsignmentLine = useCallback((consignment: ErpConsignment, line: ErpConsignmentLine) => {
+      const product = consignmentSyncService.findMatchingProduct(line, products);
+      if (!product) {
+         setConsignmentError(`No hay producto local vinculado para ${getConsignmentLineProductName(line)}.`);
+         return;
+      }
+
+      const quantity = getConsignmentLineQuantity(line);
+      const price = getConsignmentLinePrice(line, getProductPrice(product));
+      addToCart(
+         product,
+         quantity,
+         price,
+         undefined,
+         undefined,
+         undefined,
+         undefined,
+         `Consignación ${getConsignmentDocumentNo(consignment)}`,
+         undefined,
+         consignmentSyncService.buildCartItemPatch(consignment, line)
+      );
+      setSuccessToast(`Consignación ${getConsignmentDocumentNo(consignment)} agregada al ticket.`);
+      setTimeout(() => setSuccessToast(null), 2500);
+   }, [addToCart, getProductPrice, products]);
+
+   const handleAddAllConsignmentLines = useCallback((consignment: ErpConsignment) => {
+      const lines = getConsignmentLines(consignment);
+      let added = 0;
+      let skipped = 0;
+      lines.forEach((line) => {
+         const product = consignmentSyncService.findMatchingProduct(line, products);
+         if (!product) {
+            skipped += 1;
+            return;
+         }
+         addToCart(
+            product,
+            getConsignmentLineQuantity(line),
+            getConsignmentLinePrice(line, getProductPrice(product)),
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            `Consignación ${getConsignmentDocumentNo(consignment)}`,
+            undefined,
+            consignmentSyncService.buildCartItemPatch(consignment, line)
+         );
+         added += 1;
+      });
+
+      if (added > 0) {
+         setSuccessToast(`${added} línea(s) de consignación agregada(s).`);
+         setTimeout(() => setSuccessToast(null), 2500);
+         setShowConsignmentModal(false);
+      }
+      if (skipped > 0) {
+         setConsignmentError(`${skipped} línea(s) no tienen producto local vinculado.`);
+      }
+   }, [addToCart, getProductPrice, products]);
 
    const handleProductClickRef = useRef(handleProductClick);
    const quickActionDataRef = useRef(quickActionData);
@@ -3573,6 +3734,89 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setSuccessToast(`${freshItems.length} artículo(s) nuevo(s) borrado(s).${keptMessage}`);
    };
 
+   const syncConsignmentSettlement = useCallback(async (transaction: Transaction): Promise<Transaction> => {
+      const consignmentItems = (transaction.items || []).filter(item => item.consignmentId && item.consignmentLineId);
+      if (consignmentItems.length === 0) return transaction;
+
+      const alreadySyncedKeys = readConsignmentSyncKeys();
+      const grouped = new Map<string, CartItem[]>();
+      consignmentItems.forEach(item => {
+         const consignmentId = String(item.consignmentId || '').trim();
+         if (!consignmentId) return;
+         grouped.set(consignmentId, [...(grouped.get(consignmentId) || []), item]);
+      });
+
+      const responses: unknown[] = [];
+      try {
+         for (const [consignmentId, items] of grouped.entries()) {
+            const payload = {
+               transaction: {
+                  id: transaction.id,
+                  displayId: transaction.displayId,
+                  date: transaction.date,
+                  terminalId: transaction.terminalId,
+                  userId: transaction.userId,
+                  userName: transaction.userName,
+               },
+               lines: items
+                  .map(item => {
+                     const idempotencyKey = `${consignmentId}:${item.consignmentLineId}:${transaction.id}`;
+                     if (alreadySyncedKeys.has(idempotencyKey)) return null;
+                     return {
+                        consignmentLineId: String(item.consignmentLineId),
+                        productId: item.id,
+                        quantity: Math.abs(Number(item.quantity || 0)),
+                        unitPrice: Number(item.price || 0),
+                        total: Math.abs(Number(item.quantity || 0)) * Number(item.price || 0),
+                        localCartId: item.cartId,
+                        idempotencyKey,
+                     };
+                  })
+                  .filter(Boolean) as Array<{
+                     consignmentLineId: string;
+                     productId: string;
+                     quantity: number;
+                     unitPrice: number;
+                     total: number;
+                     localCartId?: string;
+                     idempotencyKey: string;
+                  }>,
+            };
+
+            if (payload.lines.length === 0) continue;
+
+            const response = transaction.documentType === 'REFUND'
+               ? await consignmentSyncService.returnConsignment(consignmentId, payload)
+               : await consignmentSyncService.liquidateConsignment(consignmentId, payload);
+            responses.push(response);
+            payload.lines.forEach(line => alreadySyncedKeys.add(line.idempotencyKey));
+            saveConsignmentSyncKeys(alreadySyncedKeys);
+         }
+
+         const updated: Transaction = {
+            ...transaction,
+            consignmentSyncStatus: 'SYNCED',
+            consignmentSyncedAt: new Date().toISOString(),
+            consignmentSyncError: undefined,
+            consignmentSyncResponse: responses,
+         };
+         await db.saveDocument('transactions', updated);
+         await db.saveDocument('transactionHistory', { ...updated, syncStatus: updated.syncStatus || 'PENDING' } as any).catch(() => undefined);
+         return updated;
+      } catch (error) {
+         const updated: Transaction = {
+            ...transaction,
+            consignmentSyncStatus: 'ERROR',
+            consignmentSyncError: error instanceof Error ? error.message : 'No se pudo sincronizar la consignación.',
+         };
+         await db.saveDocument('transactions', updated).catch(() => undefined);
+         await db.saveDocument('transactionHistory', { ...updated, syncStatus: updated.syncStatus || 'PENDING' } as any).catch(() => undefined);
+         setErrorToast('Ticket guardado, pero la liquidación de consignación quedó pendiente.');
+         setTimeout(() => setErrorToast(null), 4000);
+         return updated;
+      }
+   }, []);
+
 
    const handlePaymentConfirm = async (payments: PaymentEntry[], voluntaryTip?: number): Promise<Transaction | null> => {
          const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> => {
@@ -3791,6 +4035,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         items: saleItems,
                         total: saleTotal,
                         payments: salePayments,
+                        ...getConsignmentTicketFields(saleItems),
+                        consignmentSyncStatus: saleItems.some(item => item.consignmentId) ? 'PENDING' : undefined,
                         serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
                         voluntaryTipAmount: voluntaryTip,
                         ...saleSettlement,
@@ -3850,6 +4096,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   );
 
                   if (result.sale) {
+                     result.sale = await syncConsignmentSettlement(result.sale);
                      await persistStandaloneSaleHistory({
                         ...result.sale,
                         syncStatus: 'PENDING'
@@ -3895,6 +4142,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                const data = await withTimeout(response.json(), 4000, 'TIMEOUT_SPLIT_PARSE');
                if (data.success) {
+                  if (data.result?.sale) {
+                     data.result.sale = await syncConsignmentSettlement(data.result.sale);
+                  }
                   onUpdateCart([]);
                   if (redeemedCoupon) setGlobalDiscount({ type: 'PERCENT', value: 0 });
                   setRedeemedCoupon(null);
@@ -3924,6 +4174,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const documentItems = !isRefundOnly
                   ? applyOrderContextToItems(rawDocumentItems, saleOrderNumber)
                   : rawDocumentItems;
+               const documentConsignmentFields = getConsignmentTicketFields(documentItems);
                const documentTotal = isRefundOnly ? refundDocumentTotal : cartTotal;
                const payableTotal = documentTotal + (voluntaryTip || 0);
                const transactionSettlement = buildTransactionSettlementFields(paymentsForTransaction, payableTotal, baseCurrency.code);
@@ -3937,6 +4188,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   items: documentItems,
                   total: documentTotal,
                   payments: paymentsForTransaction,
+                  ...documentConsignmentFields,
+                  consignmentSyncStatus: documentConsignmentFields.consignmentId ? 'PENDING' : undefined,
                   ...transactionSettlement,
                   userId: currentUser.id,
                   userName: currentUser.name,
@@ -3999,11 +4252,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ...txn,
                   seriesId: txn.seriesId || (isRefundOnly ? refundSeriesId : assignedSequenceId)
                };
+               const settledFinalTxn = await syncConsignmentSettlement(finalTxn);
 
                if (isRefundOnly) {
                   await persistStandaloneRefundTransaction(
                      {
-                        ...finalTxn,
+                        ...settledFinalTxn,
                         items: normalizedRefundItems,
                         total: refundDocumentTotal,
                         status: 'REFUNDED',
@@ -4021,7 +4275,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      }
                   );
                } else {
-                  onTransactionComplete(finalTxn);
+                  onTransactionComplete(settledFinalTxn);
                }
 
                if (activeRecoveredReservation && !uberRecoveredOrder) {
@@ -5098,6 +5352,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <button onClick={() => setIsScannerOpen(true)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
                   </div>
 
+                  <button
+                     type="button"
+                     onClick={() => {
+                        setShowConsignmentModal(true);
+                        setConsignmentError(null);
+                     }}
+                     className="order-4 md:order-none inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-cyan-100 bg-cyan-50 text-cyan-700 shadow-sm transition-all hover:border-cyan-200 hover:bg-cyan-100"
+                     title="Buscar consignaciones ERP"
+                  >
+                     <Package size={19} />
+                  </button>
+
 
                   <SupervisorAuthModal
                      isOpen={showSupervisorAuth}
@@ -5652,6 +5918,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
                                           </div>
                                           <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">{lineTaxSummary}</span>
+                                          {item.consignmentDocumentNo && (
+                                             <span className="mt-1 inline-flex w-fit rounded-full bg-cyan-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-cyan-700">
+                                                Cons. {item.consignmentDocumentNo}
+                                             </span>
+                                          )}
                                           {isDispatchedToKds && (
                                              <span className={`mt-1 inline-flex w-fit rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${isReturnedToKds ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
                                                 {isReturnedToKds ? 'KDS devuelto' : 'KDS enviado'}
@@ -5793,6 +6064,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              <div className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">
                                                 {lineTaxSummary}
                                              </div>
+                                             {item.consignmentDocumentNo && (
+                                                <span className="mt-1 inline-flex w-fit rounded-full bg-cyan-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-cyan-700">
+                                                   Cons. {item.consignmentDocumentNo}
+                                                </span>
+                                             )}
                                              {isDispatchedToKds && (
                                                 <span className={`mt-1 inline-flex w-fit rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${isReturnedToKds ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
                                                    {isReturnedToKds ? 'KDS devuelto' : 'KDS enviado'}
@@ -6227,6 +6503,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <QrCode size={18} />
                            <span className="text-[9px] font-bold uppercase">Cupón</span>
                         </button>
+                        <button onClick={() => {
+                           setShowConsignmentModal(true);
+                           setConsignmentError(null);
+                        }} className="flex flex-col items-center gap-1 text-gray-400 hover:text-cyan-700">
+                           <Package size={18} />
+                           <span className="text-[9px] font-bold uppercase">Cons.</span>
+                        </button>
                         {!hideTableExtras && (
                            <>
                               <button onClick={openParkAliasModal} className="flex flex-col items-center gap-1 text-gray-400 hover:text-blue-500">
@@ -6330,6 +6613,156 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          <SupervisorModal {...supervisorModalProps} users={users} />
+
+         {
+            showConsignmentModal && (
+               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                  <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl animate-in zoom-in-95 duration-200">
+                     <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+                        <div className="flex items-center gap-3">
+                           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-50 text-cyan-700">
+                              <Package size={20} />
+                           </div>
+                           <div>
+                              <h3 className="text-lg font-black text-gray-800">Consignaciones ERP</h3>
+                              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-gray-400">Búsqueda on-demand</p>
+                           </div>
+                        </div>
+                        <button onClick={() => setShowConsignmentModal(false)} className="p-2 hover:bg-gray-100 rounded-full text-gray-400">
+                           <X size={20} />
+                        </button>
+                     </div>
+
+                     <div className="border-b border-gray-100 p-4">
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                           <div className="relative flex-1">
+                              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                              <input
+                                 value={consignmentSearchTerm}
+                                 onChange={(e) => setConsignmentSearchTerm(e.target.value)}
+                                 onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                       e.preventDefault();
+                                       handleSearchConsignments();
+                                    }
+                                 }}
+                                 placeholder="Documento, cliente, producto..."
+                                 className="w-full rounded-xl bg-gray-100 py-3 pl-10 pr-3 text-sm font-bold outline-none transition-all focus:bg-white focus:ring-2 focus:ring-cyan-500"
+                              />
+                           </div>
+                           <button
+                              type="button"
+                              onClick={handleSearchConsignments}
+                              disabled={isSearchingConsignments}
+                              className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-700 px-5 py-3 text-sm font-black text-white shadow-sm transition-all hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60"
+                           >
+                              {isSearchingConsignments ? <RefreshCw size={16} className="animate-spin" /> : <Search size={16} />}
+                              Buscar
+                           </button>
+                        </div>
+                        {consignmentError && (
+                           <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
+                              {consignmentError}
+                           </div>
+                        )}
+                     </div>
+
+                     <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[280px_minmax(0,1fr)]">
+                        <div className="min-h-0 overflow-y-auto border-r border-gray-100 bg-gray-50 p-3">
+                           {consignmentResults.length === 0 ? (
+                              <div className="flex h-full min-h-[180px] items-center justify-center text-center text-xs font-bold uppercase tracking-widest text-gray-400">
+                                 Busca una consignación
+                              </div>
+                           ) : (
+                              <div className="space-y-2">
+                                 {consignmentResults.map((consignment) => {
+                                    const isSelected = selectedConsignment?.id === consignment.id;
+                                    return (
+                                       <button
+                                          key={String(consignment.id)}
+                                          type="button"
+                                          onClick={() => handleOpenConsignment(consignment)}
+                                          className={`w-full rounded-xl border p-3 text-left transition-all ${isSelected ? 'border-cyan-200 bg-white shadow-sm ring-2 ring-cyan-50' : 'border-gray-100 bg-white hover:border-cyan-100'}`}
+                                       >
+                                          <p className="truncate text-sm font-black text-gray-800">{getConsignmentDocumentNo(consignment) || consignment.id}</p>
+                                          <p className="mt-1 truncate text-[11px] font-bold text-gray-500">{getConsignmentCustomerName(consignment) || 'Cliente no especificado'}</p>
+                                          {consignment.status && (
+                                             <span className="mt-2 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-gray-500">
+                                                {consignment.status}
+                                             </span>
+                                          )}
+                                       </button>
+                                    );
+                                 })}
+                              </div>
+                           )}
+                        </div>
+
+                        <div className="min-h-0 overflow-y-auto p-4">
+                           {isLoadingConsignment ? (
+                              <div className="flex h-full min-h-[240px] items-center justify-center gap-2 text-sm font-black text-cyan-700">
+                                 <RefreshCw size={18} className="animate-spin" />
+                                 Cargando consignación
+                              </div>
+                           ) : selectedConsignment ? (
+                              <div className="space-y-4">
+                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                    <div>
+                                       <p className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-600">Documento</p>
+                                       <h4 className="text-xl font-black text-gray-900">{getConsignmentDocumentNo(selectedConsignment)}</h4>
+                                       <p className="text-sm font-bold text-gray-500">{getConsignmentCustomerName(selectedConsignment) || 'Cliente no especificado'}</p>
+                                    </div>
+                                    <button
+                                       type="button"
+                                       onClick={() => handleAddAllConsignmentLines(selectedConsignment)}
+                                       className="inline-flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-3 text-sm font-black text-white transition-all hover:bg-gray-800"
+                                    >
+                                       <PlusCircle size={17} />
+                                       Agregar todo
+                                    </button>
+                                 </div>
+
+                                 <div className="overflow-hidden rounded-xl border border-gray-100">
+                                    {getConsignmentLines(selectedConsignment).map((line) => {
+                                       const product = consignmentSyncService.findMatchingProduct(line, products);
+                                       const quantity = getConsignmentLineQuantity(line);
+                                       const price = getConsignmentLinePrice(line, product ? getProductPrice(product) : 0);
+                                       return (
+                                          <div key={String(line.id)} className="flex flex-col gap-3 border-b border-gray-100 p-3 last:border-b-0 sm:flex-row sm:items-center sm:justify-between">
+                                             <div className="min-w-0">
+                                                <p className="truncate text-sm font-black text-gray-800">{getConsignmentLineProductName(line)}</p>
+                                                <p className="text-[11px] font-bold text-gray-500">
+                                                   {quantity} x {baseCurrency.symbol}{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                </p>
+                                                <p className={`mt-1 text-[10px] font-black uppercase tracking-wide ${product ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                                   {product ? `Vinculado: ${product.name}` : 'Sin producto local vinculado'}
+                                                </p>
+                                             </div>
+                                             <button
+                                                type="button"
+                                                onClick={() => handleAddConsignmentLine(selectedConsignment, line)}
+                                                disabled={!product}
+                                                className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-100 bg-cyan-50 px-4 py-2.5 text-xs font-black uppercase tracking-wide text-cyan-700 transition-all hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                             >
+                                                <Plus size={14} />
+                                                Agregar
+                                             </button>
+                                          </div>
+                                       );
+                                    })}
+                                 </div>
+                              </div>
+                           ) : (
+                              <div className="flex h-full min-h-[240px] items-center justify-center text-center text-xs font-bold uppercase tracking-widest text-gray-400">
+                                 Selecciona una consignación
+                              </div>
+                           )}
+                        </div>
+                     </div>
+                  </div>
+               </div>
+            )
+         }
 
          {
             showCouponModal && (
