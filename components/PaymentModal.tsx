@@ -1165,8 +1165,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
             <div className="bg-white w-full max-w-6xl h-[100dvh] lg:h-[85vh] lg:rounded-[2.5rem] shadow-2xl flex flex-col lg:flex-row overflow-hidden">
 
             {/* SUMMARY SECTION (Collapsible/Header on mobile, Sidebar on desktop) */}
-            <div className="flex lg:w-[35%] w-full bg-gray-50 border-b lg:border-b-0 lg:border-r border-gray-200 flex-col p-4 md:p-6 lg:p-8 shrink-0">
-               <div className="flex justify-between items-center mb-4 lg:mb-8">
+            <div className="flex lg:w-[35%] w-full bg-gray-50 border-b lg:border-b-0 lg:border-r border-gray-200 flex-col p-4 md:p-5 lg:p-8 shrink-0 min-h-0">
+               <div className="flex justify-between items-center mb-3 lg:mb-8">
                   <button onClick={onClose} className="p-2 -ml-2 text-gray-400 hover:bg-gray-200 rounded-full transition-colors"><X size={24} /></button>
                   <div className="flex md:hidden gap-1">
                      {currencies.filter(c => c.isEnabled).map(c => (
@@ -1181,11 +1181,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   </div>
                </div>
 
-               <div className="mb-4 md:mb-8 flex flex-col md:block items-center md:items-start text-center md:text-left">
+               <div className="mb-3 md:mb-5 lg:mb-8 flex flex-col md:block items-center md:items-start text-center md:text-left">
                   <p className={`font-medium uppercase text-[10px] md:text-xs tracking-widest mb-1 ${isRefund ? 'text-rose-500' : 'text-gray-500'}`}>
                      {isRefund ? 'Monto a Devolver' : 'Total a Cobrar'}
                   </p>
-                  <h1 className={`text-3xl md:text-5xl font-black leading-none ${isRefund ? 'text-rose-600' : 'text-gray-900'}`}>
+                  <h1 className={`text-3xl md:text-4xl lg:text-5xl font-black leading-none ${isRefund ? 'text-rose-600' : 'text-gray-900'}`}>
                      {currencySymbol}{effectiveTotalToPay.toFixed(2)}
                   </h1>
                   {voluntaryTip > 0 && (
@@ -1196,8 +1196,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                </div>
 
                {isRestaurantMode && !isRefund && (
-                  <div className="mb-6 p-4 rounded-2xl bg-sky-50 border border-sky-100">
-                     <div className="flex justify-between items-center mb-3">
+                  <div className="mb-3 md:mb-4 lg:mb-6 p-3 lg:p-4 rounded-2xl bg-sky-50 border border-sky-100">
+                     <div className="flex justify-between items-center mb-2 lg:mb-3">
                         <span className="text-[10px] font-black uppercase text-sky-600 tracking-wider">Propina Voluntaria Extra</span>
                         <div className="flex items-center gap-1">
                            <span className="text-xs font-bold text-sky-400">{currencySymbol}</span>
@@ -1210,7 +1210,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                            />
                         </div>
                      </div>
-                     <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                     <div className="flex gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
                         {[100, 200, 500, 1000].map(amt => (
                            <button 
                              key={amt}
@@ -1230,7 +1230,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   </div>
                )}
 
-                  <div className="hidden lg:flex mt-6 gap-2">
+                  <div className="hidden lg:flex mt-2 lg:mt-4 gap-2">
                      {currencies.filter(c => c.isEnabled).map(c => (
                         <button
                            key={c.code}
@@ -1243,7 +1243,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   </div>
 
                {/* Payments List (Compact on mobile) */}
-               <div className="flex-1 overflow-y-auto space-y-2 md:space-y-3 no-scrollbar max-h-[22vh] lg:max-h-full">
+               <div className="flex-1 min-h-[96px] overflow-y-auto space-y-2 md:space-y-3 no-scrollbar max-h-[30vh] lg:max-h-full">
                   {payments.map(p => {
                      const EntryIcon = getEntryIcon(p);
                      const previewLine = paymentPreviewById.get(p.id);
@@ -1299,7 +1299,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   })}
                </div>
 
-               <div className="p-3 md:p-4 bg-white border-t border-gray-200 rounded-xl md:rounded-2xl mt-4 shadow-inner shrink-0">
+               <div className="p-3 md:p-4 bg-white border-t border-gray-200 rounded-xl md:rounded-2xl mt-3 lg:mt-4 shadow-inner shrink-0">
                   {finalizeError && (
                      <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-600">
                         {finalizeError}

@@ -320,11 +320,16 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 values: [collectionName],
             },
             ...this.toDocumentRows(collectionName, docs).map((row, index) => ({
-                statement: `
-                    INSERT INTO documents (collection_name, doc_id, data, sort_order, updatedAt)
-                    VALUES (?, ?, ?, ?, ?)
-                `,
-                values: [collectionName, row.docId, row.data, index, now],
+                statement: DOCUMENT_UPSERT_SQL,
+                values: [
+                    collectionName,
+                    row.docId,
+                    row.data,
+                    collectionName,
+                    row.docId,
+                    collectionName,
+                    now,
+                ],
             })),
         ];
 
@@ -352,7 +357,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     private toDocumentRows(collectionName: string, docs: any[]): Array<{ docId: string; data: string }> {
-        return (Array.isArray(docs) ? docs : [])
+        const rowsById = new Map<string, { docId: string; data: string }>();
+        (Array.isArray(docs) ? docs : [])
             .map((doc, index) => {
                 const docId = this.resolveDocumentId(collectionName, doc, index);
                 if (!docId) return null;
@@ -364,7 +370,9 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                     data: JSON.stringify(payload),
                 };
             })
-            .filter((row): row is { docId: string; data: string } => Boolean(row));
+            .filter((row): row is { docId: string; data: string } => Boolean(row))
+            .forEach((row) => rowsById.set(row.docId, row));
+        return Array.from(rowsById.values());
     }
 
     private async executeSetOrRun(statements: Array<{ statement: string; values: any[] }>): Promise<void> {

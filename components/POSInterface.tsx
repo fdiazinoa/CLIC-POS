@@ -5505,10 +5505,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </button>
                      </div>
 
-                     <div className="grid grid-cols-[64px_repeat(2,minmax(0,1fr))] gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
+                     <div className="grid grid-cols-[64px_repeat(3,minmax(0,1fr))] gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
                         <div className="flex items-center justify-center rounded-lg bg-white text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">
                            Cuenta
                         </div>
+                        <button
+                           type="button"
+                           onClick={() => { void handleBackToMap(); }}
+                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-black uppercase tracking-wide text-slate-700 transition-all hover:bg-slate-100 active:scale-95"
+                        >
+                           <Layout size={16} />
+                           <span>Mesas</span>
+                        </button>
                         <button
                            type="button"
                            onClick={handlePrintPrecuenta}
