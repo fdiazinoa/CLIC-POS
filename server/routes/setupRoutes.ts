@@ -935,21 +935,46 @@ router.post('/bind-terminal', async (req, res) => {
 
     let takeoverPayload: any = null;
     if (occupiedDeviceId && occupiedDeviceId !== posDeviceId && forceTransfer) {
-      takeoverPayload = await fetchErpJson(
-        req,
-        erpBaseUrl,
-        `/api/settings/terminals/${encodeURIComponent(targetErpTerminalId)}/takeover`,
-        {
-          method: 'POST',
-          tenantId: resolvedErpTenantId,
-          body: {
-            terminal_id: targetErpTerminalId,
-            device_id: posDeviceId,
-            device_name: targetTerminalName,
-            source: 'CLIC_POS_SELF_SERVICE_RECOVERY',
-          },
-        }
-      );
+      const syncTakeoverBody = {
+        terminalId: targetErpTerminalId,
+        terminal_id: targetErpTerminalId,
+        deviceId: posDeviceId,
+        device_id: posDeviceId,
+        device_name: targetTerminalName,
+        takeover: true,
+        rotateDeviceToken: true,
+        source: 'CLIC_POS_SELF_SERVICE_RECOVERY',
+      };
+
+      try {
+        takeoverPayload = await fetchErpJson(
+          req,
+          erpBaseUrl,
+          `/api/sync/terminals/${encodeURIComponent(targetErpTerminalId)}/takeover`,
+          {
+            method: 'POST',
+            tenantId: resolvedErpTenantId,
+            body: syncTakeoverBody,
+          }
+        );
+      } catch (syncTakeoverError) {
+        console.warn('⚠️ ERP sync takeover failed; trying settings takeover fallback:', syncTakeoverError);
+        takeoverPayload = await fetchErpJson(
+          req,
+          erpBaseUrl,
+          `/api/settings/terminals/${encodeURIComponent(targetErpTerminalId)}/takeover`,
+          {
+            method: 'POST',
+            tenantId: resolvedErpTenantId,
+            body: {
+              terminal_id: targetErpTerminalId,
+              device_id: posDeviceId,
+              device_name: targetTerminalName,
+              source: 'CLIC_POS_SELF_SERVICE_RECOVERY',
+            },
+          }
+        );
+      }
     }
 
     const mergedMetadata = {

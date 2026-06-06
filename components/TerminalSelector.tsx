@@ -638,7 +638,7 @@ const describeTerminalBindFailure = (
 
   if (ctx.forceTransfer && isNetwork) {
     if (ctx.erpDirectAndroid) {
-      return 'No se pudo completar el traspaso: el proxy local (/api/setup) no respondió y la llamada directa al ERP falló. Revisa la URL del ERP y la conectividad.';
+      return 'No se pudo completar el traspaso por un error de red con el ERP. Revisa la URL del ERP, la conectividad y que el endpoint de takeover esté disponible.';
     }
     return 'No se pudo completar el traspaso por un error de red. Revisa la conexión con el ERP o el servidor local del POS.';
   }
@@ -904,26 +904,6 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
       if (useErpDirectMasterAndroid) {
         try {
-          const response = await fetch(`${buildAndroidEmbeddedSetupBase()}/bind-terminal`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(bindTerminalRequestBody),
-          });
-
-          if (response.status === 409) {
-            setPendingTerminal(terminal);
-            setShowTransferModal(true);
-            return;
-          }
-
-          if (response.ok) {
-            data = (await response.json()) as BindTerminalResponse;
-          }
-        } catch (proxyBindErr) {
-          console.warn('proxy bind-terminal failed, falling back to ERP direct', proxyBindErr);
-        }
-
-        if (!data) {
           data = await bindTerminalFromErp({
             currentConfig,
             posDeviceId: deviceId,
@@ -936,6 +916,37 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             tenantEmail: resolveTenantEmail(),
             erpBaseUrl: erpBaseUrl!,
           });
+        } catch (erpBindErr) {
+          if (isTerminalOccupiedError(erpBindErr)) {
+            throw erpBindErr;
+          }
+          console.warn('ERP direct bind failed, trying setup proxy fallback', erpBindErr);
+        }
+
+        if (!data) {
+          try {
+            const response = await fetch(`${buildAndroidEmbeddedSetupBase()}/bind-terminal`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(bindTerminalRequestBody),
+            });
+
+            if (response.status === 409) {
+              setPendingTerminal(terminal);
+              setShowTransferModal(true);
+              return;
+            }
+
+            if (response.ok) {
+              data = (await response.json()) as BindTerminalResponse;
+            }
+          } catch (proxyBindErr) {
+            console.warn('setup proxy bind-terminal failed after ERP direct attempt', proxyBindErr);
+          }
+        }
+
+        if (!data) {
+          throw new Error('No se pudo vincular la terminal contra el ERP.');
         }
       } else if (usesErpDirect) {
         if (forceTransfer) {

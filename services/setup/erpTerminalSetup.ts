@@ -5,6 +5,7 @@ import {
   resolveIncomingSyncProfileFromRegister,
 } from '../sync/erpRegisterResponse';
 import type { SyncProfile } from '../sync/SyncProfile';
+import { requestJson } from '../network/httpClient';
 import { supabase } from '../../utils/supabase';
 
 export interface RuntimeTerminalCard {
@@ -221,19 +222,6 @@ const extractRuntimeAuthPayload = (...sources: unknown[]) => {
 
 const cloneDeep = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
-const withTimeout = async <T>(promise: Promise<T>, label: string): Promise<T> => {
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${REQUEST_TIMEOUT_MS}ms`)), REQUEST_TIMEOUT_MS);
-  });
-
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
-  }
-};
-
 const stripTrailingSlashes = (value: string): string => value.replace(/\/+$/, '');
 
 const buildDeviceHeaders = (deviceId?: string | null): Record<string, string> => {
@@ -246,6 +234,15 @@ const buildDeviceHeaders = (deviceId?: string | null): Record<string, string> =>
     : {};
 };
 
+const tryParseJson = (text: string): any => {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+};
+
 const fetchErpJson = async (
   baseUrl: string,
   path: string,
@@ -255,33 +252,28 @@ const fetchErpJson = async (
     headers?: Record<string, string>;
   }
 ) => {
-  const response = await withTimeout(
-    fetch(`${stripTrailingSlashes(baseUrl)}${path}`, {
-      method: options?.method || 'GET',
-      headers: {
-        Accept: 'application/json',
-        ...(options?.body ? { 'Content-Type': 'application/json' } : {}),
-        ...(options?.headers || {}),
-      },
-      body: options?.body ? JSON.stringify(options.body) : undefined,
-    }),
-    `ERP request ${path}`
-  );
+  const url = `${stripTrailingSlashes(baseUrl)}${path}`;
+  const response = await requestJson({
+    url,
+    method: options?.method || 'GET',
+    headers: {
+      Accept: 'application/json',
+      ...(options?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options?.headers || {}),
+    },
+    body: options?.body,
+    timeoutMs: REQUEST_TIMEOUT_MS,
+    diagnosticContext: { operation: `ERP ${path}` },
+  });
 
-  const text = await response.text();
-  let payload: any = null;
-
-  try {
-    payload = text ? JSON.parse(text) : null;
-  } catch {
-    payload = text;
-  }
+  const payload = response.data ?? (response.text ? tryParseJson(response.text) : null);
 
   if (!response.ok) {
     const message =
       asString(asObject(payload).message) ||
       asString(asObject(payload).error) ||
-      `${response.status} ${response.statusText}`.trim();
+      response.text ||
+      `${response.status}`.trim();
     throw new Error(`ERP ${path}: ${message}`);
   }
 
@@ -300,23 +292,51 @@ const takeoverTerminalInErp = async (input: {
   posDeviceId: string;
   terminalName?: string | null;
 }) => {
-  return fetchErpJson(
-    input.erpBaseUrl,
-    `/api/settings/terminals/${encodeURIComponent(input.erpTerminalId)}/takeover`,
-    {
-      method: 'POST',
-      headers: {
-        ...(await getSupabaseAuthHeaders()),
-        ...buildDeviceHeaders(input.posDeviceId),
-      },
-      body: {
-        terminal_id: input.erpTerminalId,
-        device_id: input.posDeviceId,
-        device_name: input.terminalName || null,
-        source: 'CLIC_POS_SELF_SERVICE_RECOVERY',
-      },
-    }
-  );
+  const deviceHeaders = buildDeviceHeaders(input.posDeviceId);
+  const syncTakeoverBody = {
+    terminalId: input.erpTerminalId,
+    terminal_id: input.erpTerminalId,
+    deviceId: input.posDeviceId,
+    device_id: input.posDeviceId,
+    device_name: input.terminalName || null,
+    takeover: true,
+    rotateDeviceToken: true,
+    source: 'CLIC_POS_SELF_SERVICE_RECOVERY',
+  };
+
+  try {
+    return await fetchErpJson(
+      input.erpBaseUrl,
+      `/api/sync/terminals/${encodeURIComponent(input.erpTerminalId)}/takeover`,
+      {
+        method: 'POST',
+        headers: {
+          ...deviceHeaders,
+          'X-Terminal-Id': input.erpTerminalId,
+        },
+        body: syncTakeoverBody,
+      }
+    );
+  } catch (syncTakeoverError) {
+    console.warn('⚠️ ERP sync takeover failed; trying settings takeover fallback:', syncTakeoverError);
+    return fetchErpJson(
+      input.erpBaseUrl,
+      `/api/settings/terminals/${encodeURIComponent(input.erpTerminalId)}/takeover`,
+      {
+        method: 'POST',
+        headers: {
+          ...(await getSupabaseAuthHeaders()),
+          ...deviceHeaders,
+        },
+        body: {
+          terminal_id: input.erpTerminalId,
+          device_id: input.posDeviceId,
+          device_name: input.terminalName || null,
+          source: 'CLIC_POS_SELF_SERVICE_RECOVERY',
+        },
+      }
+    );
+  }
 };
 
 export const fetchTerminalRecoveryStateFromErp = async (input: {
