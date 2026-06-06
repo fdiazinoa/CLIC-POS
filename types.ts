@@ -704,6 +704,8 @@ export interface TerminalConfig {
     bloqueo_meseros: boolean;
     pedir_comensales: boolean;
     usa_modulos_cocina: boolean;
+    recibir_consignaciones?: boolean;
+    receiveConsignments?: boolean;
     defaultTaxIds?: string[];
     reservationPolicy?: {
       validityDays: number;
@@ -1142,6 +1144,8 @@ export interface BusinessConfig {
     bloqueo_meseros: boolean;
     pedir_comensales: boolean;
     usa_modulos_cocina: boolean;
+    recibir_consignaciones?: boolean;
+    receiveConsignments?: boolean;
     reservationPolicy?: {
       validityDays: number;
       printCopies: number;

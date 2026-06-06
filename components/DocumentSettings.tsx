@@ -28,6 +28,7 @@ import {
    getFiscalComplianceConfig,
    SUPPORTED_FISCAL_CODES
 } from '../utils/fiscal/fiscalHelpers';
+import { isFiscalDocumentSeries } from '../utils/documentSeriesIdentity';
 
 interface DocumentSettingsProps {
    onClose: () => void;
@@ -135,6 +136,7 @@ const normalizeSequenceCollection = (rows: any[]): DocumentSeries[] => {
    for (const row of Array.isArray(rows) ? rows : []) {
       const normalized = normalizeSequence(row);
       if (!normalized) continue;
+      if (isFiscalDocumentSeries(normalized)) continue;
       const existing = map.get(normalized.id);
       if (!existing) {
          map.set(normalized.id, normalized);

@@ -196,7 +196,6 @@ const ERP_CRITICAL_MASTER_COLLECTIONS = new Set([
     'warehouses',
     'paymentMethods',
     'documentSeries',
-    'internalSequences',
     'fiscalRanges',
     'fiscalSequences',
     'terminalFiscalConfig',
@@ -532,6 +531,32 @@ class ApiSyncAdapter {
         return error.name === 'AbortError' || error.message === 'Failed to fetch';
     }
 
+    private isRecoverableMetadataTimeout(error: unknown): boolean {
+        const message = error instanceof Error
+            ? error.message
+            : typeof error === 'string'
+                ? error
+                : '';
+        const normalized = message.toLowerCase();
+        return normalized.includes('timeout')
+            || normalized.includes('timed out')
+            || normalized.includes('aborterror');
+    }
+
+    private resolveRequestTimeoutMs(url: string, operation: OperationalSyncOperation = 'PULL_MASTERS'): number {
+        const normalizedUrl = url.toLowerCase();
+        if (operation === 'PULL_MASTERS') {
+            if (normalizedUrl.includes('/metadata')) return 45000;
+            if (normalizedUrl.includes('/delta')) return 45000;
+            if (normalizedUrl.includes('/full')) return 90000;
+            return 45000;
+        }
+        if (operation === 'PULL_CONFIG') return 45000;
+        if (operation === 'PUSH_OPERATIONS') return 20000;
+        if (operation === 'PUSH_MASTERS') return 30000;
+        return 15000;
+    }
+
     private getCircuitBreaker(channel: CircuitBreakerChannel): SyncCircuitBreaker {
         return channel === 'sales' ? this.salesCircuitBreaker : this.backgroundCircuitBreaker;
     }
@@ -610,7 +635,7 @@ class ApiSyncAdapter {
                 method,
                 headers,
                 body: options.body,
-                timeoutMs: 5000,
+                timeoutMs: this.resolveRequestTimeoutMs(url, operation),
                 diagnosticContext: fetchContext,
             });
             const response = new Response(nativeResponse.text, {
@@ -3204,6 +3229,15 @@ class ApiSyncAdapter {
                     fullSyncVersion: metadata.fullSyncVersion
                 };
             } catch (error) {
+                if (this.isRecoverableMetadataTimeout(error)) {
+                    console.warn('[SYNC_METADATA_TIMEOUT_SUPPRESSED]', {
+                        collection,
+                        operation,
+                        endpoint,
+                        reason: error instanceof Error ? error.message : String(error || 'timeout'),
+                    });
+                    return null;
+                }
                 console.error(`❌ ApiSyncAdapter: Error getting ERP metadata for ${collection}:`, error);
                 if (!this.wasDiagnosticReported(error)) {
                     reportSyncErrorDiagnostic({
