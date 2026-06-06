@@ -5,7 +5,7 @@ import {
   resolveIncomingSyncProfileFromRegister,
 } from '../sync/erpRegisterResponse';
 import type { SyncProfile } from '../sync/SyncProfile';
-import { requestJson } from '../network/httpClient';
+import { getNetworkEngine, requestJson } from '../network/httpClient';
 import { supabase } from '../../utils/supabase';
 
 export interface RuntimeTerminalCard {
@@ -224,6 +224,31 @@ const cloneDeep = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
 const stripTrailingSlashes = (value: string): string => value.replace(/\/+$/, '');
 
+const withTimeout = async <T>(promise: Promise<T>, label: string): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${REQUEST_TIMEOUT_MS}ms`)), REQUEST_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+};
+
+const isNetworkTransportError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('failed to fetch')
+    || lower.includes('networkerror')
+    || lower.includes('load failed')
+    || lower.includes('network request failed')
+    || (error instanceof Error && error.name === 'TypeError')
+  );
+};
+
 const buildDeviceHeaders = (deviceId?: string | null): Record<string, string> => {
   const resolvedDeviceId = asString(deviceId);
   return resolvedDeviceId
@@ -243,8 +268,22 @@ const tryParseJson = (text: string): any => {
   }
 };
 
-const fetchErpJson = async (
-  baseUrl: string,
+const parseErpResponsePayload = (payload: unknown, text: string) => {
+  if (payload !== null && payload !== undefined) return payload;
+  return text ? tryParseJson(text) : null;
+};
+
+const throwErpHttpError = (path: string, status: number, statusText: string, payload: unknown, text: string): never => {
+  const message =
+    asString(asObject(payload).message) ||
+    asString(asObject(payload).error) ||
+    text ||
+    `${status} ${statusText}`.trim();
+  throw new Error(`ERP ${path}: ${message}`);
+};
+
+const fetchErpJsonViaFetch = async (
+  url: string,
   path: string,
   options?: {
     method?: 'GET' | 'POST';
@@ -252,7 +291,38 @@ const fetchErpJson = async (
     headers?: Record<string, string>;
   }
 ) => {
-  const url = `${stripTrailingSlashes(baseUrl)}${path}`;
+  const response = await withTimeout(
+    fetch(url, {
+      method: options?.method || 'GET',
+      headers: {
+        Accept: 'application/json',
+        ...(options?.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(options?.headers || {}),
+      },
+      body: options?.body ? JSON.stringify(options.body) : undefined,
+    }),
+    `ERP request ${path}`
+  );
+
+  const text = await response.text();
+  const payload = parseErpResponsePayload(tryParseJson(text), text);
+
+  if (!response.ok) {
+    throwErpHttpError(path, response.status, response.statusText, payload, text);
+  }
+
+  return payload;
+};
+
+const fetchErpJsonViaRequestJson = async (
+  url: string,
+  path: string,
+  options?: {
+    method?: 'GET' | 'POST';
+    body?: Record<string, any>;
+    headers?: Record<string, string>;
+  }
+) => {
   const response = await requestJson({
     url,
     method: options?.method || 'GET',
@@ -266,18 +336,48 @@ const fetchErpJson = async (
     diagnosticContext: { operation: `ERP ${path}` },
   });
 
-  const payload = response.data ?? (response.text ? tryParseJson(response.text) : null);
+  const payload = parseErpResponsePayload(response.data, response.text);
 
   if (!response.ok) {
-    const message =
-      asString(asObject(payload).message) ||
-      asString(asObject(payload).error) ||
-      response.text ||
-      `${response.status}`.trim();
-    throw new Error(`ERP ${path}: ${message}`);
+    throwErpHttpError(path, response.status, '', payload, response.text);
   }
 
   return payload;
+};
+
+const fetchErpJson = async (
+  baseUrl: string,
+  path: string,
+  options?: {
+    method?: 'GET' | 'POST';
+    body?: Record<string, any>;
+    headers?: Record<string, string>;
+  }
+) => {
+  const url = `${stripTrailingSlashes(baseUrl)}${path}`;
+  const method = options?.method || 'GET';
+
+  // Setup listing/bootstrap uses GET heavily and still works through fetch on Android WebView.
+  // Reserve native HTTP for mutating setup calls that fail cross-origin in the APK.
+  if (method === 'GET') {
+    try {
+      return await fetchErpJsonViaFetch(url, path, options);
+    } catch (error) {
+      if (getNetworkEngine() !== 'capacitor-http' || !isNetworkTransportError(error)) {
+        throw error;
+      }
+      return fetchErpJsonViaRequestJson(url, path, options);
+    }
+  }
+
+  try {
+    return await fetchErpJsonViaRequestJson(url, path, options);
+  } catch (error) {
+    if (!isNetworkTransportError(error)) {
+      throw error;
+    }
+    return fetchErpJsonViaFetch(url, path, options);
+  }
 };
 
 const getSupabaseAuthHeaders = async (): Promise<Record<string, string>> => {

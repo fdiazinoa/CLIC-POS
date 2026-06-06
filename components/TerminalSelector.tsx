@@ -605,7 +605,7 @@ const describeTerminalListFailure = (
       return `Error al cargar terminales desde el ERP. ${raw}`;
     }
     if (isNetwork) {
-      return 'No hubo respuesta del proxy local (/api/setup) ni del ERP. Revisa la URL del ERP y la conectividad.';
+      return 'No se pudo consultar las terminales del ERP. Revisa la URL del ERP y la conectividad del dispositivo.';
     }
     return `No se pudieron cargar las terminales. ${raw}`;
   }
@@ -797,36 +797,38 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
       if (erpBaseUrl) params.set('erp_base_url', erpBaseUrl);
 
       if (useErpDirectMasterAndroid) {
-        const proxyBase = buildAndroidEmbeddedSetupBase();
         try {
+          const erpData = await listTerminalsFromErp({
+            currentConfig,
+            posDeviceId: deviceId,
+            tenantId: resolvedTenantId,
+            tenantSlug: resolvedTenantSlug,
+            tenantEmail: resolvedTenantEmail,
+            erpBaseUrl: erpBaseUrl!,
+          });
+
+          persistListMeta({
+            tenant_id: erpData.tenant_id,
+            erp_base_url: erpData.erp_base_url || erpBaseUrl!,
+            terminals: erpData.terminals as TerminalCard[],
+            source: 'ERP',
+          });
+        } catch (erpListErr) {
+          console.warn('ERP direct /terminals failed, trying setup proxy fallback', erpListErr);
+          const proxyBase = buildAndroidEmbeddedSetupBase();
           const response = await fetch(`${proxyBase}/terminals?${params.toString()}`);
-          if (response.ok) {
-            const proxyData = (await response.json()) as TerminalSelectorResponse;
-            const list = Array.isArray(proxyData.terminals) ? proxyData.terminals : [];
-            if (list.length > 0) {
-              persistListMeta(proxyData);
-              return;
-            }
+          if (!response.ok) {
+            throw erpListErr;
           }
-        } catch (proxyErr) {
-          console.warn('setup proxy /terminals failed, falling back to ERP direct', proxyErr);
+
+          const proxyData = (await response.json()) as TerminalSelectorResponse;
+          const list = Array.isArray(proxyData.terminals) ? proxyData.terminals : [];
+          if (list.length === 0) {
+            throw erpListErr;
+          }
+
+          persistListMeta(proxyData);
         }
-
-        const erpData = await listTerminalsFromErp({
-          currentConfig,
-          posDeviceId: deviceId,
-          tenantId: resolvedTenantId,
-          tenantSlug: resolvedTenantSlug,
-          tenantEmail: resolvedTenantEmail,
-          erpBaseUrl: erpBaseUrl!,
-        });
-
-        persistListMeta({
-          tenant_id: erpData.tenant_id,
-          erp_base_url: erpData.erp_base_url || erpBaseUrl!,
-          terminals: erpData.terminals as TerminalCard[],
-          source: 'ERP',
-        });
       } else if (usesErpDirect) {
         const data = await listTerminalsFromErp({
           currentConfig,
