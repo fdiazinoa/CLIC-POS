@@ -624,6 +624,32 @@ const describeTerminalListFailure = (
   return raw || 'No pudimos cargar las terminales.';
 };
 
+const describeTerminalBindFailure = (
+  err: unknown,
+  ctx: { bindingMode: 'MASTER' | 'SLAVE'; erpDirectAndroid: boolean; forceTransfer: boolean }
+): string => {
+  const raw = err instanceof Error ? err.message : String(err);
+  const lower = raw.toLowerCase();
+  const isNetwork =
+    lower.includes('failed to fetch') ||
+    lower.includes('networkerror') ||
+    lower.includes('load failed') ||
+    (err instanceof Error && err.name === 'TypeError');
+
+  if (ctx.forceTransfer && isNetwork) {
+    if (ctx.erpDirectAndroid) {
+      return 'No se pudo completar el traspaso: el proxy local (/api/setup) no respondió y la llamada directa al ERP falló. Revisa la URL del ERP y la conectividad.';
+    }
+    return 'No se pudo completar el traspaso por un error de red. Revisa la conexión con el ERP o el servidor local del POS.';
+  }
+
+  if (isNetwork) {
+    return 'Error de red al vincular la terminal. Revisa la conexión.';
+  }
+
+  return raw || 'No se pudo completar la vinculación.';
+};
+
 export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   currentConfig,
   deviceId,
@@ -852,8 +878,6 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
     try {
       let data: BindTerminalResponse | null = null;
-      let dataFromCloudDirect = false;
-      const shouldValidateTakeoverInCloud = Boolean(forceTransfer && erpBaseUrl && bindingMode === 'MASTER');
 
       if (expectsErpDirect && !erpBaseUrl) {
         throw new Error('No encontramos la URL base del ERP para completar la vinculación.');
@@ -866,36 +890,24 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         });
       }
 
-      if (shouldValidateTakeoverInCloud) {
-        data = await bindTerminalFromErp({
-          currentConfig,
-          posDeviceId: deviceId,
-          terminalId: terminal.id,
-          erpTerminalId: terminal.erpTerminalId,
-          bindingMode,
-          forceTransfer,
-          tenantId,
-          tenantSlug: resolveTenantSlug(),
-          tenantEmail: resolveTenantEmail(),
-          erpBaseUrl: erpBaseUrl!,
-        });
-        dataFromCloudDirect = true;
-      } else if (useErpDirectMasterAndroid) {
+      const bindTerminalRequestBody = {
+        tenant_id: tenantId,
+        tenant_slug: resolveTenantSlug(),
+        tenant_email: resolveTenantEmail(),
+        erp_base_url: erpBaseUrl,
+        terminal_id: terminal.id,
+        erp_terminal_id: terminal.erpTerminalId,
+        pos_device_id: deviceId,
+        binding_mode: bindingMode,
+        force_transfer: forceTransfer,
+      };
+
+      if (useErpDirectMasterAndroid) {
         try {
           const response = await fetch(`${buildAndroidEmbeddedSetupBase()}/bind-terminal`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              tenant_id: tenantId,
-              tenant_slug: resolveTenantSlug(),
-              tenant_email: resolveTenantEmail(),
-              erp_base_url: erpBaseUrl,
-              terminal_id: terminal.id,
-              erp_terminal_id: terminal.erpTerminalId,
-              pos_device_id: deviceId,
-              binding_mode: bindingMode,
-              force_transfer: forceTransfer,
-            }),
+            body: JSON.stringify(bindTerminalRequestBody),
           });
 
           if (response.status === 409) {
@@ -926,33 +938,47 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           });
         }
       } else if (usesErpDirect) {
-        data = await bindTerminalFromErp({
-          currentConfig,
-          posDeviceId: deviceId,
-          terminalId: terminal.id,
-          erpTerminalId: terminal.erpTerminalId,
-          bindingMode,
-          forceTransfer,
-          tenantId,
-          tenantSlug: resolveTenantSlug(),
-          tenantEmail: resolveTenantEmail(),
-          erpBaseUrl: erpBaseUrl!,
-        });
+        if (forceTransfer) {
+          try {
+            const response = await fetch(`${apiBase}/bind-terminal`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(bindTerminalRequestBody),
+            });
+
+            if (response.status === 409) {
+              setPendingTerminal(terminal);
+              setShowTransferModal(true);
+              return;
+            }
+
+            if (response.ok) {
+              data = (await response.json()) as BindTerminalResponse;
+            }
+          } catch (proxyBindErr) {
+            console.warn('setup bind-terminal proxy failed, falling back to ERP direct', proxyBindErr);
+          }
+        }
+
+        if (!data) {
+          data = await bindTerminalFromErp({
+            currentConfig,
+            posDeviceId: deviceId,
+            terminalId: terminal.id,
+            erpTerminalId: terminal.erpTerminalId,
+            bindingMode,
+            forceTransfer,
+            tenantId,
+            tenantSlug: resolveTenantSlug(),
+            tenantEmail: resolveTenantEmail(),
+            erpBaseUrl: erpBaseUrl!,
+          });
+        }
       } else {
         const response = await fetch(`${apiBase}/bind-terminal`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            tenant_id: tenantId,
-            tenant_slug: resolveTenantSlug(),
-            tenant_email: resolveTenantEmail(),
-            erp_base_url: erpBaseUrl,
-            terminal_id: terminal.id,
-            erp_terminal_id: terminal.erpTerminalId,
-            pos_device_id: deviceId,
-            binding_mode: bindingMode,
-            force_transfer: forceTransfer,
-          }),
+          body: JSON.stringify(bindTerminalRequestBody),
         });
 
         if (response.status === 409) {
@@ -1070,7 +1096,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
               full_pull_on_pairing: applied.fullPullOnPairing ?? false,
             },
           };
-        } else if (usesErpDirect || dataFromCloudDirect) {
+        } else if (usesErpDirect) {
           const erpInitialConfigData = await fetchInitialConfigFromErp({
             erpBaseUrl: erpBaseUrl!,
             tenantId: data.tenant_id || tenantId,
@@ -1256,7 +1282,11 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           return;
         }
         console.error('Failed to bind terminal during setup:', err);
-        const message = err instanceof Error ? err.message : 'No se pudo completar la vinculación.';
+        const message = describeTerminalBindFailure(err, {
+          bindingMode,
+          erpDirectAndroid: useErpDirectMasterAndroid,
+          forceTransfer,
+        });
         setError(message);
         if (showProgress) {
           setPendingTerminal(terminal);
