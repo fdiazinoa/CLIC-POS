@@ -4,6 +4,32 @@ Registro de builds **release firmados** validados. El código fuente de referenc
 
 ---
 
+## 1.0.764 (versionCode 764) — 2026-06-06
+
+| Campo | Valor |
+|--------|--------|
+| **APK** | `Clic-Pos-1.0.764-release.apk` |
+| **Metadata** | `output-metadata-1.0.764.json` |
+| **versionCode** | 764 |
+| **versionName** | 1.0.764 |
+| **Rama de build** | `feature/pos-consignments-on-demand` |
+| **Commit build** | `a36703858eed4683cb46d004dd6f6dcf8c77b44e` |
+| **Worktree usada** | `/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite` |
+| **SHA-256** | `7db38f7ac46012ab62ec7496341f4b87a5ab6380f93c3b3c7e4b91907e7c3d62` |
+| **Firma release** | Válida (`CN=CLIC POS, OU=Mobile...`) |
+| **Nota funcional** | `fix(setup): use sync takeover and CapacitorHttp on Android APK` |
+
+### Verificación ejecutada
+
+- `npx tsc -b` — OK
+- `npm run build` — OK
+- `npx cap sync android` — OK
+- `./gradlew clean assembleRelease` — OK
+- `apksigner verify --print-certs` — OK
+- Build timestamp: `2026-06-06 09:06:20 AST`
+
+---
+
 ## 1.0.763 (versionCode 763) — 2026-06-06
 
 | Campo | Valor |
