@@ -527,6 +527,11 @@ class ApiSyncAdapter {
 
     isRecoverableConnectionError(error: unknown): boolean {
         if (this.isCircuitBreakerOpenError(error)) return true;
+        if (!error) return false;
+        const errorMessage = typeof error === 'string' ? error : error instanceof Error ? error.message : '';
+        const normalizedMessage = errorMessage.toLowerCase();
+        if (normalizedMessage.includes('failed to fetch')) return true;
+        if (normalizedMessage.includes('network error')) return true;
         if (!(error instanceof Error)) return false;
         return error.name === 'AbortError' || error.message === 'Failed to fetch';
     }
@@ -674,8 +679,8 @@ class ApiSyncAdapter {
 
             return response;
         } catch (error: any) {
-            const isConnectionError = error.name === 'TypeError' && error.message === 'Failed to fetch';
-            const isTimeout = error.name === 'AbortError';
+            const isConnectionError = this.isRecoverableConnectionError(error);
+            const isTimeout = error?.name === 'AbortError';
             const httpClientDiagnostic = error?.__httpClientDiagnostic;
             const networkEngine = httpClientDiagnostic?.networkEngine || 'fetch';
             const fetchStage = httpClientDiagnostic?.fetchStage
@@ -685,7 +690,9 @@ class ApiSyncAdapter {
             const fetchDiagnostic = {
                 ...fetchContext,
                 ...(httpClientDiagnostic || {}),
+                operation,
                 networkEngine,
+                requestTimeoutMs: this.resolveRequestTimeoutMs(url, operation),
                 fetchStage,
                 errorName: error?.name || null,
                 errorMessage: error?.message || String(error || ''),
@@ -702,6 +709,12 @@ class ApiSyncAdapter {
                 ],
             };
             this.attachFetchDiagnostic(error, fetchDiagnostic);
+            if (isConnectionError && operation === 'PULL_CONFIG') {
+                console.warn('[FETCH_FAILED_CONFIG]', fetchDiagnostic);
+            }
+            if (isTimeout) {
+                console.warn('[FETCH_TIMEOUT]', fetchDiagnostic);
+            }
             console.error('[FETCH_FAILED]', fetchDiagnostic);
 
             // Increment failure count on network errors
