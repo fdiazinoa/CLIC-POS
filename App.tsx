@@ -112,7 +112,7 @@ import { nativePrintBridge } from './services/printer/NativePrintBridge';
 import { persistStandaloneRefundTransaction } from './services/localRefundPersistence';
 import { checkLicenseStatus, clearTenantIdentity, resolveTenantId } from './utils/licenseGuard';
 import { getStoredTenantIdentity, publishMasterEndpointToCloud, resolveMasterEndpointFromCloud } from './utils/cloudMasterRegistry';
-import { clearStoredErpSyncBinding, ensureErpSyncLifecycle, processErpSyncOutbox } from './utils/erpSyncLifecycle';
+import { bootstrapErpSyncLifecycle, clearStoredErpSyncBinding, ensureErpSyncLifecycle, processErpSyncOutbox } from './utils/erpSyncLifecycle';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
 
 type ReceivableRepairSummary = {
@@ -408,6 +408,50 @@ const AppContent: React.FC = () => {
     });
   }, []);
 
+  const verifyErpDeviceStillAuthorized = React.useCallback(async (currentDeviceId: string): Promise<boolean> => {
+    const normalizedDeviceId = (currentDeviceId || localStorage.getItem('pos_device_id') || '').trim();
+    if (!normalizedDeviceId) return false;
+
+    try {
+      const bootstrap = await bootstrapErpSyncLifecycle(normalizedDeviceId);
+      const terminal = bootstrap?.terminal as Record<string, unknown> | undefined;
+      if (!terminal) return false;
+
+      const authorizedDevice = String(
+        terminal.authorized_device_id
+        || terminal.current_device_id
+        || terminal.device_id
+        || ''
+      ).trim();
+      const authStatus = String(terminal.auth_status || terminal.status || '').trim().toUpperCase();
+      const revoked = terminal.is_revoked === true || terminal.revoked === true;
+      const requiresReauth = terminal.requires_pos_reauth === true || terminal.requires_reauth === true;
+
+      return (
+        authorizedDevice === normalizedDeviceId
+        && !revoked
+        && !requiresReauth
+        && (!authStatus || authStatus === 'AUTHORIZED' || authStatus === 'ONLINE' || authStatus === 'BOUND')
+      );
+    } catch (error) {
+      console.warn('[LOCKDOWN] ERP authorization recovery check skipped:', error);
+      return false;
+    }
+  }, []);
+
+  const triggerLockdownAfterAuthorizationCheck = React.useCallback(async (message: string, currentDeviceId: string) => {
+    if (await verifyErpDeviceStillAuthorized(currentDeviceId)) {
+      console.warn('[LOCKDOWN] Ignored stale block because ERP bootstrap still authorizes this device.', {
+        deviceId: currentDeviceId,
+      });
+      lockdownHandledRef.current = false;
+      setLicenseError(null);
+      return;
+    }
+
+    triggerLockdown(message);
+  }, [triggerLockdown, verifyErpDeviceStillAuthorized]);
+
   // --- REALTIME KILL SWITCH (FALLBACK: SMART POLLING) ---
   useEffect(() => {
     if (!isDataLoaded) return;
@@ -421,7 +465,7 @@ const AppContent: React.FC = () => {
       try {
         const res = await checkLicenseStatus(persistedTenantId, deviceId);
         if (!res.isValid) {
-          triggerLockdown(res.reason || fallbackMessage);
+          await triggerLockdownAfterAuthorizationCheck(res.reason || fallbackMessage, deviceId);
         }
       } catch {
         // Offline tolerance: avoid false positives on transient connectivity issues.
@@ -435,7 +479,7 @@ const AppContent: React.FC = () => {
     }, 30000);
 
     return () => window.clearInterval(intervalId);
-  }, [isDataLoaded, deviceId, triggerLockdown]);
+  }, [isDataLoaded, deviceId, triggerLockdownAfterAuthorizationCheck]);
 
   // --- TENANT ID SELF-CORRECTION ---
   useEffect(() => {
@@ -456,14 +500,14 @@ const AppContent: React.FC = () => {
 
         return checkLicenseStatus(resolvedTenantId, deviceId).then(res => {
           if (!res.isValid) {
-            triggerLockdown(res.reason || 'Servicio Suspendido');
+            return triggerLockdownAfterAuthorizationCheck(res.reason || 'Servicio Suspendido', deviceId);
           }
         });
       })
       .catch(error => {
         console.warn('Tenant self-correction skipped:', error);
       });
-  }, [isDataLoaded, deviceId, triggerLockdown]);
+  }, [isDataLoaded, deviceId, triggerLockdownAfterAuthorizationCheck]);
 
   // --- AUTO-RETRY ON BOOT ERROR ---
   useEffect(() => {
@@ -1194,7 +1238,7 @@ const AppContent: React.FC = () => {
         // --- LICENSE / KILL-SWITCH VALIDATION ---
         const license = await checkLicenseStatus(persistedTenantId, storedDeviceId);
         if (!license.isValid) {
-          triggerLockdown(license.reason || 'Servicio Suspendido.');
+          await triggerLockdownAfterAuthorizationCheck(license.reason || 'Servicio Suspendido.', storedDeviceId);
           return;
         }
 
@@ -3332,7 +3376,7 @@ const AppContent: React.FC = () => {
                   try {
                     const license = await checkLicenseStatus(activatedTenantId, resolvedDeviceId);
                     if (!license.isValid) {
-                      triggerLockdown(license.reason || 'Servicio Suspendido.');
+                      await triggerLockdownAfterAuthorizationCheck(license.reason || 'Servicio Suspendido.', resolvedDeviceId);
                       return;
                     }
                   } catch (error) {
