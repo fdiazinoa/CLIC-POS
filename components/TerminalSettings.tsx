@@ -77,6 +77,14 @@ const DOCUMENT_ROLES = [
    { id: 'PAYMENT_OUT', label: 'Pago Realizado', description: 'Pago a proveedor', icon: CreditCard, category: 'Cuentas' }
 ];
 
+const DEVICE_ROLE_OPTIONS = [
+   { role: DeviceRole.STANDARD_POS, label: 'POS estándar', description: 'Caja de venta completa.', icon: Monitor },
+   { role: DeviceRole.KITCHEN_DISPLAY, label: 'Pantalla cocina', description: 'KDS para órdenes y preparación.', icon: Tv },
+   { role: DeviceRole.SELF_CHECKOUT, label: 'SelfCheckout', description: 'Kiosco de autoservicio.', icon: ShoppingBag },
+   { role: DeviceRole.PRICE_CHECKER, label: 'Verificador precio', description: 'Consulta de precios por código.', icon: ScanBarcode },
+   { role: DeviceRole.HANDHELD_INVENTORY, label: 'Inventario móvil', description: 'Conteo, recepción y etiquetas.', icon: Smartphone },
+];
+
 type TerminalTab = 'IDENTITY' | 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'DOCUMENTS' | 'OFFLINE' | 'INVENTORY' | 'LAN_BINDING' | 'CATALOG' | 'DEVICE_ROLE';
 
 const NCF_LABELS: Record<NCFType, string> = {
@@ -172,6 +180,25 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
          }
          return t;
       }));
+   };
+
+   const handleUpdateDeviceRole = (role: DeviceRole) => {
+      if (!activeTerminal || isReadOnly) return;
+      const currentRoleConfig = activeTerminal.config.deviceRole;
+      const defaultRoleConfig = getDefaultRoleConfig(role);
+      const nextRoleConfig = {
+         ...defaultRoleConfig,
+         apiToken: currentRoleConfig?.apiToken || defaultRoleConfig.apiToken,
+         uiSettings: {
+            ...defaultRoleConfig.uiSettings,
+            escapeHatch: {
+               ...defaultRoleConfig.uiSettings.escapeHatch,
+               adminPin: currentRoleConfig?.uiSettings?.escapeHatch?.adminPin || defaultRoleConfig.uiSettings.escapeHatch?.adminPin,
+            }
+         }
+      };
+
+      handleUpdateActiveConfig('', 'deviceRole', nextRoleConfig);
    };
 
    const handleToggleMasterNode = (enabled: boolean) => {
@@ -376,7 +403,81 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               <h3 className="text-2xl font-black text-slate-800 flex items-center gap-3"><Zap className="text-yellow-500" /> Operativa</h3>
                               <Toggle label="Terminal Principal" description="Actúa como servidor local." checked={activeTerminal.config.isPrimaryNode} onChange={handleToggleMasterNode} icon={Crown} disabled={activeTerminal.config.governedByMaster} />
                               {!activeTerminal.config.isPrimaryNode && <Toggle label="Gobernado por Maestra" checked={activeTerminal.config.governedByMaster} onChange={(v: boolean) => handleUpdateActiveConfig('', 'governedByMaster', v)} icon={ShieldCheck} />}
+                              <div className="p-6 bg-slate-50 rounded-[2rem] border border-slate-100 space-y-4">
+                                 <div className="flex items-start gap-4">
+                                    <div className="p-3 rounded-2xl bg-white text-blue-600 shadow-sm">
+                                       <Monitor size={20} />
+                                    </div>
+                                    <div>
+                                       <h4 className="text-sm font-black text-slate-800 uppercase tracking-[0.18em]">Tipo de terminal</h4>
+                                       <p className="text-xs font-medium text-slate-500 mt-1">
+                                          Define qué experiencia abre esta estación local al iniciar el POS.
+                                       </p>
+                                    </div>
+                                 </div>
+                                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                                    {DEVICE_ROLE_OPTIONS.map(option => {
+                                       const selected = (activeTerminal.config.deviceRole?.role || DeviceRole.STANDARD_POS) === option.role;
+                                       return (
+                                          <button
+                                             type="button"
+                                             key={option.role}
+                                             onClick={() => handleUpdateDeviceRole(option.role)}
+                                             disabled={isReadOnly}
+                                             className={`p-4 rounded-2xl border-2 text-left transition-all ${selected ? 'bg-blue-50 border-blue-500 text-blue-900 shadow-sm' : 'bg-white border-slate-100 text-slate-600 hover:border-slate-300'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                          >
+                                             <div className="flex items-center gap-3">
+                                                <div className={`p-2 rounded-xl ${selected ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                                   <option.icon size={18} />
+                                                </div>
+                                                <div>
+                                                   <p className="text-sm font-black">{option.label}</p>
+                                                   <p className="text-[11px] font-bold opacity-70">{option.description}</p>
+                                                </div>
+                                             </div>
+                                          </button>
+                                       );
+                                    })}
+                                 </div>
+                              </div>
                               <SettingsOperational config={activeTerminal.config} onUpdate={handleUpdateActiveConfig} isReadOnly={isReadOnly} />
+                              <div className="p-6 bg-slate-50 rounded-[2rem] border border-slate-100 space-y-4">
+                                 <div className="flex items-start gap-4">
+                                    <div className="p-3 rounded-2xl bg-white text-slate-700 shadow-sm">
+                                       <Truck size={20} />
+                                    </div>
+                                    <div>
+                                       <h4 className="text-sm font-black text-slate-800 uppercase tracking-[0.18em]">Delivery y Marketplaces</h4>
+                                       <p className="text-xs font-medium text-slate-500 mt-1">
+                                          Configura esta caja para recibir alertas automáticas de Uber Eats y abrir el modal de pedidos solo si está dedicada a delivery.
+                                       </p>
+                                    </div>
+                                 </div>
+                                 <Toggle
+                                    label="Caja asignada a Delivery"
+                                    description="Marca esta terminal como la caja operativa para pedidos de delivery y marketplaces."
+                                    checked={Boolean(activeTerminal.config.operational?.deliveryAlerts?.isDeliveryTerminal)}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('operational.deliveryAlerts', 'isDeliveryTerminal', v)}
+                                    icon={Package}
+                                    disabled={isReadOnly}
+                                 />
+                                 <Toggle
+                                    label="Toast al llegar pedido Uber Eats"
+                                    description="Muestra una alerta visual corta cuando entra una orden nueva marcada como PUSHED_TO_POS."
+                                    checked={activeTerminal.config.operational?.deliveryAlerts?.showUberEatsToast !== false}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('operational.deliveryAlerts', 'showUberEatsToast', v)}
+                                    icon={ShoppingBag}
+                                    disabled={isReadOnly}
+                                 />
+                                 <Toggle
+                                    label="Abrir modal automático de pedidos"
+                                    description="Al detectar una orden nueva, abre automáticamente la ventana de Reservas y Pedidos. Recomendado solo para la caja de delivery."
+                                    checked={Boolean(activeTerminal.config.operational?.deliveryAlerts?.autoOpenUberEatsModal)}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('operational.deliveryAlerts', 'autoOpenUberEatsModal', v)}
+                                    icon={Monitor}
+                                    disabled={isReadOnly || !activeTerminal.config.operational?.deliveryAlerts?.isDeliveryTerminal}
+                                 />
+                              </div>
                            </div>
                         )}
 

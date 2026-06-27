@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { ChevronRight, Lock, Server, Smartphone, Wifi } from 'lucide-react';
-import { BusinessConfig, User as UserType } from '../types';
+import { BusinessConfig, Product, User as UserType } from '../types';
 import TerminalSelector from './TerminalSelector';
 import { buildMasterUrlCandidates, buildMasterUrlFromHost, normalizeMasterHost } from '../utils/cloudMasterRegistry';
+import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../services/sync/SyncProfile';
+import type { RuntimeTerminalRecoveryState } from '../services/setup/erpTerminalSetup';
 
 interface PairingResult {
   tenantId?: string;
@@ -14,10 +16,23 @@ interface PairingResult {
   boundConfig?: BusinessConfig;
   boundUsers?: UserType[];
   masterIp?: string;
+  snapshotItems?: Product[];
+  deviceToken?: string;
+  terminalToken?: string;
+  activationToken?: string;
+  syncToken?: string;
+  tokenExpiresAt?: string;
   snapshotMeta?: {
     fullPullOnPairing?: boolean;
     resolutionError?: unknown;
   };
+  syncProfile?: Partial<SyncProfile>;
+  syncPermissions?: SyncPermissions;
+  contractSource?: SyncProfileSource;
+  incomingProfile?: Partial<SyncProfile>;
+  profile?: Partial<SyncProfile>;
+  progress?: (update: { stepId?: 'claim' | 'config' | 'apply' | 'sync' | 'cache' | 'finish'; message?: string }) => void;
+  recoveryState?: RuntimeTerminalRecoveryState | null;
 }
 
 interface PairingOptions {
@@ -374,7 +389,20 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                 config: boundConfig,
                 users,
                 masterIp: resolvedMasterIp,
-                snapshotMeta
+                snapshotItems,
+                snapshotMeta,
+                syncProfile,
+                syncPermissions,
+                contractSource,
+                incomingProfile,
+                profile,
+                deviceToken,
+                terminalToken,
+                activationToken,
+                syncToken,
+                tokenExpiresAt,
+                progress,
+                recoveryState
               }) => {
                 await onConfigUpdate?.(boundConfig);
                 if (Array.isArray(users)) {
@@ -390,7 +418,20 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                   boundConfig,
                   boundUsers: users,
                   masterIp: resolvedMasterIp,
+                  snapshotItems,
                   snapshotMeta,
+                  syncProfile,
+                  syncPermissions,
+                  contractSource,
+                  incomingProfile,
+                  profile,
+                  deviceToken,
+                  terminalToken,
+                  activationToken,
+                  syncToken,
+                  tokenExpiresAt,
+                  progress,
+                  recoveryState,
                 }, { forceTakeover: Boolean(forceTakeover) });
               }}
             />

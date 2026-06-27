@@ -31,6 +31,13 @@ import {
 } from '../types';
 
 import { getInventorySnapshotAtDate, getLeadTimePerformance, getABCRanking, getHRPerformance } from './AnalyticsLogic';
+import {
+  checkForPosApkUpdate,
+  openPosApkDownloadUrl,
+  openPosApkPortalUrl,
+  resolvePosApkLatestUrl,
+  resolvePosApkPortalUrl,
+} from '../services/version/posApkUpdateService';
 
 const AgendaManager = React.lazy(() => import('./AgendaManager'));
 const SpacesManager = React.lazy(() => import('./SpacesManager'));
@@ -110,6 +117,7 @@ interface SettingsProps {
     creditNoteIds: string[];
   }>;
   onAdjustStock: (adjustments: { productId: string; quantity: number }[]) => void;
+  onOpenFinance?: () => void;
   onOpenZReport: () => void;
   onOpenSupplyChain: () => void;
   onOpenFranchise: () => void;
@@ -156,7 +164,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
   const [fiscalPurchaseOrders, setFiscalPurchaseOrders] = useState<PurchaseOrder[]>(props.purchaseOrders || []);
   const [fiscalReceptions, setFiscalReceptions] = useState<Reception[]>(props.receptions || []);
   const [fiscalSuppliers, setFiscalSuppliers] = useState<Supplier[]>(props.suppliers || []);
-  const usesPageScroll = currentView === 'HOME' || currentView === 'TERMINALS' || currentView === 'TAXES';
+  const [isCheckingApkUpdate, setIsCheckingApkUpdate] = useState(false);
+  const usesPageScroll = currentView === 'HOME' || currentView === 'TERMINALS' || currentView === 'TAXES' || currentView === 'PRODUCTION_AREAS';
 
   useEffect(() => {
     const previousBodyOverflow = document.body.style.overflow;
@@ -251,6 +260,50 @@ const Settings: React.FC<SettingsProps> = (props) => {
       alert('No se pudo completar la reparación de CxC. Revise consola e intente nuevamente.');
     } finally {
       setIsRepairingReceivables(false);
+    }
+  };
+
+  const handleManualApkUpdateCheck = async () => {
+    if (isCheckingApkUpdate) return;
+    setIsCheckingApkUpdate(true);
+    try {
+      const result = await checkForPosApkUpdate({
+        config: props.config,
+        timeoutMs: 5000,
+        force: true,
+      });
+
+      if (result?.hasUpdate) {
+        const confirmed = window.confirm(
+          `Nueva versión disponible.\n\n` +
+          `Versión actual: ${result.local.versionName || result.local.versionCode || 'desconocida'}\n` +
+          `Versión disponible: ${result.release.version_name}\n\n` +
+          `${result.release.changelog || 'Sin notas de cambios.'}\n\n` +
+          `¿Desea descargar el APK ahora?`
+        );
+        if (confirmed) {
+          await openPosApkDownloadUrl(result.release);
+        }
+        return;
+      }
+
+      const currentVersion = result?.local.versionName || result?.local.versionCode || 'instalada';
+      alert(`El POS está actualizado. Versión actual: ${currentVersion}.`);
+    } catch (error: any) {
+      console.info('[posApkUpdate] Consulta manual fallida:', error);
+      const endpointUrl = resolvePosApkLatestUrl(props.config);
+      const portalUrl = resolvePosApkPortalUrl(props.config);
+      const shouldOpenPortal = window.confirm(
+        `No se pudo consultar la actualización del APK.\n\n` +
+        `El POS sigue operando normal. Esto suele pasar cuando el endpoint de Cloud-Admin todavía no está publicado, no tiene CORS habilitado o no hay conexión.\n\n` +
+        `Endpoint consultado:\n${endpointUrl}\n\n` +
+        `¿Desea abrir la pantalla de APK POS para descarga manual?\n${portalUrl}`
+      );
+      if (shouldOpenPortal) {
+        await openPosApkPortalUrl(props.config);
+      }
+    } finally {
+      setIsCheckingApkUpdate(false);
     }
   };
 
@@ -839,6 +892,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   <SettingsCard icon={PlugZap} label="Integraciones" description="AZUL, CardNet y adquirentes" color="bg-sky-600" onClick={() => setCurrentView('INTEGRATIONS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ArrowRightLeft} label="Divisas y Cambio" description="Multi-moneda y Tasas" color="bg-teal-500" onClick={() => setCurrentView('EXCHANGE')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Percent} label="Impuestos" description="ITBIS, Exentos y Cargos" color="bg-emerald-500" onClick={() => setCurrentView('TAXES')} locked={!hasPermission('SETTINGS_TAXES')} />
+                  <SettingsCard icon={ListChecks} label="Cierre X" description="Arqueo parcial sin limpiar ventas" color="bg-blue-700" onClick={props.onOpenFinance || props.onOpenZReport} locked={!hasPermission('POS_CLOSE_X')} />
                   <SettingsCard icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" onClick={props.onOpenZReport} locked={!hasPermission('POS_CLOSE_Z')} />
                   <SettingsCard icon={FileText} label="Documentos" description="Series, NCF, Prefijos" color="bg-blue-400" onClick={() => setCurrentView('DOCUMENTS')} locked={!hasPermission('SETTINGS_TAXES')} />
                 </div>
@@ -888,6 +942,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     locked={!hasPermission('SETTINGS_ACCESS') || isRepairingReceivables}
                   />
                   <SettingsCard icon={RefreshCw} label="Sincronización" description="Estado de Red y Réplicas" color="bg-indigo-600" onClick={() => setCurrentView('SYNC')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={Cloud} label={isCheckingApkUpdate ? "Buscando APK..." : "Actualizar APK"} description="Buscar y descargar release POS" color="bg-sky-700" onClick={handleManualApkUpdateCheck} locked={!hasPermission('SETTINGS_ACCESS') || isCheckingApkUpdate} />
                   <SettingsCard icon={ShieldAlert} label="Seguridad y Datos" description="Backups y Modo Kiosco" color="bg-red-600" onClick={() => setCurrentView('SECURITY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={History} label="Traza de Auditoría" description="Logs de Operaciones" color="bg-orange-500" onClick={() => setCurrentView('LOGS')} locked={!hasPermission('AUDIT_LOG_VIEW')} />
                   <SettingsCard icon={BarChart3} label="Informes y Analítica" description="BI, Snapshots y KPIs" color="bg-blue-700" onClick={() => setCurrentView('REPORTS')} locked={!hasPermission('REPORTS_VIEW_SALES')} />

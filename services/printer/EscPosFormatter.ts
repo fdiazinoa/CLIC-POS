@@ -1,4 +1,4 @@
-import { BusinessConfig, Reservation, Transaction, ZReport } from '../../types';
+import { BusinessConfig, CartItem, Reservation, Table, Transaction, ZReport } from '../../types';
 import { findTaxByIdentifier } from '../../utils/taxIdentity';
 import { buildPaymentSettlementSummary } from '../../utils/paymentSettlement';
 import { resolveTerminalSellerName } from '../../utils/terminalSnapshotSellers';
@@ -9,6 +9,14 @@ export interface EscPosLabelRecord {
   sku?: string;
   price?: number;
   copies: number;
+}
+
+export interface EscPosKitchenOrderData {
+  items: CartItem[];
+  table?: Table;
+  orderNumber?: string;
+  customerName?: string;
+  areaTitle?: string;
 }
 
 const ESC = 0x1b;
@@ -159,6 +167,41 @@ const pushTextLines = (chunks: Uint8Array[], lines: string[]) => {
 const pushPair = (chunks: Uint8Array[], left: string, right: string, width: number) => {
   pushTextLines(chunks, linePair(left, right, width));
 };
+
+const pushBlank = (chunks: Uint8Array[], count = 1) => {
+  for (let index = 0; index < count; index += 1) {
+    chunks.push(text(''));
+  }
+};
+
+const resolveItemCreatedAt = (item: Partial<CartItem>): Date => {
+  const raw = String(
+    item.createdAt
+    || (item as any).created_at
+    || (item as any).addedAt
+    || (item as any).added_at
+    || (item as any).timestamp
+    || ''
+  ).trim();
+  const parsed = raw ? new Date(raw) : new Date();
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+};
+
+const sortCartItemsByEntryTime = (items: CartItem[]): CartItem[] => (
+  [...items].sort((left, right) => resolveItemCreatedAt(left).getTime() - resolveItemCreatedAt(right).getTime())
+);
+
+const padClock = (value: number): string => String(value).padStart(2, '0');
+
+const formatClock = (date: Date): string => `${padClock(date.getHours())}:${padClock(date.getMinutes())}`;
+
+const formatDate = (date: Date): string => (
+  `${padClock(date.getDate())}/${padClock(date.getMonth() + 1)}/${date.getFullYear()}`
+);
+
+const formatKitchenEntryTime = (item: CartItem): string => (
+  formatClock(resolveItemCreatedAt(item))
+);
 
 const pushQrCode = (chunks: Uint8Array[], payload: string) => {
   const normalizedPayload = toAscii(payload);
@@ -351,6 +394,15 @@ export const buildEscPosTicketPayload = (
 
   pushPair(chunks, `Ticket: ${transaction.displayId || transaction.id}`, new Date(transaction.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), width);
   pushTextLines(chunks, splitLines(new Date(transaction.date).toLocaleDateString(), width));
+  const shouldPrintOrderNumber = Boolean(config.receiptConfig?.showOrderNumber && transaction.orderNumber);
+  const shouldPrintQr = Boolean(config.receiptConfig?.showQr && qrPayload);
+
+  if (shouldPrintOrderNumber && !shouldPrintQr) {
+    pushTextLines(chunks, splitLines(`No. Orden: ${transaction.orderNumber}`, width));
+  }
+  if (transaction.tableDisplayLabel) {
+    pushTextLines(chunks, splitLines(`Mesa/Sala: ${transaction.tableDisplayLabel}`, width));
+  }
 
   const snapshot = transaction.customerSnapshot;
   const customerName = (snapshot?.name || transaction.customerName || 'Cliente Mostrador').trim() || 'Cliente Mostrador';
@@ -483,7 +535,7 @@ export const buildEscPosTicketPayload = (
     .map(line => line.trim())
     .filter(Boolean);
 
-  if (config.receiptConfig?.showQr && qrPayload) {
+  if (shouldPrintQr) {
     chunks.push(align(0));
     if (transaction.ncfType) {
       pushTextLines(chunks, splitLines(comprobanteTypeLabels[transaction.ncfType] || transaction.ncfType, width));
@@ -493,8 +545,18 @@ export const buildEscPosTicketPayload = (
     }
     chunks.push(divider(width));
     chunks.push(align(1));
-    pushTextLines(chunks, splitLines('ESCANEA ESTE TICKET PARA DEVOLUCIONES Y CUPONES', width));
     pushQrCode(chunks, qrPayload);
+    chunks.push(align(1));
+    if (shouldPrintOrderNumber) {
+      pushBlank(chunks);
+      chunks.push(bold(true));
+      chunks.push(size(0x11));
+      pushTextLines(chunks, splitLines(`NO. ORDEN ${transaction.orderNumber}`, width));
+      chunks.push(size(0x00));
+      chunks.push(bold(false));
+    }
+    pushBlank(chunks);
+    pushTextLines(chunks, splitLines('ESCANEA ESTE TICKET PARA DEVOLUCIONES Y CUPONES', width));
     chunks.push(align(0));
   }
 
@@ -504,6 +566,77 @@ export const buildEscPosTicketPayload = (
   finalizeReceipt(chunks, {
     openCashDrawer: shouldOpenDrawerForTransaction(transaction, config)
   });
+
+  return toBase64(concat(chunks));
+};
+
+export const buildEscPosComandaPayload = (data: EscPosKitchenOrderData): string | null => {
+  const kitchenItems = sortCartItemsByEntryTime((data.items || []).filter(item => Number(item.quantity || 0) > 0));
+  if (kitchenItems.length === 0) return null;
+
+  const width = RECEIPT_LINE_WIDTH;
+  const chunks: Uint8Array[] = [];
+  const now = new Date();
+  const tableLabel = (data.table as any)?.tableDisplayLabel || (data.table as any)?.displayLabel || data.table?.name || data.table?.nombre;
+
+  chunks.push(initPrinter());
+  chunks.push(align(1));
+  chunks.push(bold(true));
+  chunks.push(size(0x11));
+  pushTextLines(chunks, splitLines('COMANDA - COCINA', width));
+  chunks.push(size(0x00));
+  if (data.areaTitle) {
+    pushTextLines(chunks, splitLines(String(data.areaTitle).toUpperCase(), width));
+  }
+  chunks.push(bold(false));
+  chunks.push(divider(width));
+
+  if (data.orderNumber) {
+    chunks.push(bold(true));
+    chunks.push(size(0x10));
+    pushTextLines(chunks, splitLines(`ORDEN: #${data.orderNumber}`, width));
+    chunks.push(size(0x00));
+    chunks.push(bold(false));
+  }
+  if (tableLabel) {
+    chunks.push(bold(true));
+    pushTextLines(chunks, splitLines(`MESA: ${tableLabel}`, width));
+    chunks.push(bold(false));
+  }
+  pushTextLines(chunks, splitLines(`Impreso: ${formatDate(now)} ${formatClock(now)}`, width));
+  if (data.customerName) {
+    pushTextLines(chunks, splitLines(`Cliente: ${data.customerName}`, width));
+  }
+
+  chunks.push(divider(width));
+  chunks.push(align(0));
+
+  kitchenItems.forEach((item, index) => {
+    if (index > 0) chunks.push(divider(width));
+    chunks.push(bold(true));
+    chunks.push(size(0x10));
+    pushTextLines(chunks, splitLines(`${Number(item.quantity || 0).toFixed(item.quantity % 1 === 0 ? 0 : 3)} x ${item.name || 'Articulo'}`, width));
+    chunks.push(size(0x00));
+    chunks.push(bold(false));
+    pushTextLines(chunks, splitLines(`Digitado: ${formatKitchenEntryTime(item)}`, width));
+
+    if (item.modifiers && item.modifiers.length > 0) {
+      item.modifiers.forEach(modifier => {
+        pushTextLines(chunks, splitLines(`  * ${modifier}`, width));
+      });
+    }
+    if (item.note) {
+      chunks.push(bold(true));
+      pushTextLines(chunks, splitLines(`NOTA: ${item.note}`, width));
+      chunks.push(bold(false));
+    }
+  });
+
+  chunks.push(divider(width));
+  chunks.push(align(1));
+  pushTextLines(chunks, splitLines('Impreso en POS', width));
+  chunks.push(align(0));
+  finalizeReceipt(chunks);
 
   return toBase64(concat(chunks));
 };
@@ -602,6 +735,8 @@ export const buildEscPosZReportPayload = (
 
   const width = RECEIPT_LINE_WIDTH;
   const chunks: Uint8Array[] = [];
+  const isXReport = (report as any).reportType === 'X';
+  const reportTitle = isXReport ? 'CIERRE X (ARQUEO)' : 'REPORTE DE CIERRE (Z)';
   const currencySymbol = resolveCurrencySymbol(config, report.baseCurrency);
   const totalCollected = Object.values(report.totalsByMethod || {}).reduce((sum, value) => sum + Number(value || 0), 0);
 
@@ -610,7 +745,7 @@ export const buildEscPosZReportPayload = (
   chunks.push(bold(true));
   pushTextLines(chunks, splitLines(config?.companyInfo?.name || 'CLIC POS', width));
   chunks.push(size(0x11));
-  pushTextLines(chunks, splitLines('REPORTE DE CIERRE (Z)', width));
+  pushTextLines(chunks, splitLines(reportTitle, width));
   chunks.push(size(0x00));
   pushTextLines(chunks, splitLines(report.sequenceNumber || report.id, width));
   chunks.push(bold(false));

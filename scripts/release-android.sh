@@ -67,7 +67,7 @@ resolve_next_version_code() {
     if [[ "${metadata_version}" =~ ^[0-9]+$ ]] && (( metadata_version > max_version )); then
       max_version="${metadata_version}"
     fi
-  done < <(find "${WORKSPACE_ROOT}/_worktrees/CLIC-POS" -path '*/android/app/build/outputs/apk/release/output-metadata*.json' -type f 2>/dev/null | sort)
+  done < <(find -L "${WORKSPACE_ROOT}/_worktrees/CLIC-POS" -path '*/android/app/build/outputs/apk/release/output-metadata*.json' -type f 2>/dev/null | sort -u)
 
   echo $((max_version + 1))
 }

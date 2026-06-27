@@ -1,6 +1,6 @@
 import { Transaction, BusinessConfig, Reservation, CartItem, Table } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
-import { buildEscPosReservationPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload } from '../services/printer/EscPosFormatter';
+import { buildEscPosComandaPayload, buildEscPosReservationPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload } from '../services/printer/EscPosFormatter';
 import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRuntime';
 import { dbAdapter } from '../services/db';
 import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, formatTaxLineLabel } from './fiscalBreakdown';
@@ -288,6 +288,14 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                     margin: 10px auto;
                 }
                 #qrcode img { margin: 0 auto; }
+                .order-number-qr {
+                    text-align: center;
+                    font-size: 24px;
+                    line-height: 1.05;
+                    font-weight: 900;
+                    margin: 14px 0;
+                    letter-spacing: 0;
+                }
             </style>
         </head>
         <body>
@@ -309,6 +317,8 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                     <div class="meta-row" style="font-weight: bold;">Ticket: ${transaction.displayId || transaction.id}</div>
                     <div class="meta-row">${dateStr} ${timeStr}</div>
                 </div>
+                ${receiptConfig?.showOrderNumber && transaction.orderNumber && !receiptConfig?.showQr ? `<div class="meta-row" style="font-weight: bold; margin-top: 3px;">No. Orden: ${transaction.orderNumber}</div>` : ''}
+                ${transaction.tableDisplayLabel ? `<div class="meta-row" style="font-weight: bold;">Mesa/Sala: ${transaction.tableDisplayLabel}</div>` : ''}
             </div>
 
             <div class="divider"></div>
@@ -525,7 +535,8 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 </div>
                 <div class="divider"></div>
                 <div id="qrcode"></div>
-                <div style="font-weight: bold; font-size: 9px; margin-top: 5px;">ESCANEA ESTE TICKET PARA DEVOLUCIONES Y CUPONES</div>
+                ${receiptConfig?.showOrderNumber && transaction.orderNumber ? `<div class="order-number-qr">NO. ORDEN<br/>${transaction.orderNumber}</div>` : ''}
+                <div style="font-weight: bold; font-size: 9px; margin-top: 12px;">ESCANEA ESTE TICKET PARA DEVOLUCIONES Y CUPONES</div>
                 ` : ''}
             </div>
             
@@ -856,6 +867,8 @@ export const printPrecuenta = async (
         table?: Table | null;
         customerName?: string;
         terminalId?: string;
+        orderNumber?: string;
+        tableDisplayLabel?: string;
     }
 ): Promise<boolean> => {
     const { companyInfo, currencySymbol } = config;
@@ -918,7 +931,8 @@ export const printPrecuenta = async (
             <div class="divider"></div>
 
             <div class="meta-row">
-                ${params.table ? `<div><strong>Mesa:</strong> ${params.table.name || params.table.nombre}</div>` : ''}
+                ${params.table ? `<div><strong>Mesa:</strong> ${params.tableDisplayLabel || params.table.name || params.table.nombre}</div>` : ''}
+                ${params.orderNumber ? `<div><strong>No. Orden:</strong> ${params.orderNumber}</div>` : ''}
                 ${params.customerName ? `<div><strong>Cliente:</strong> ${params.customerName}</div>` : ''}
                 <div><strong>Fecha:</strong> ${dateStr} ${timeStr}</div>
             </div>
@@ -985,16 +999,15 @@ export const printPrecuenta = async (
     const silentHtml = receiptHtml.replace(/<script>[\s\S]*?window\.onload[\s\S]*?<\/script>/, '');
     let printedSilently = false;
 
-    if (!shouldSuppressBrowserPrintFallback()) {
-        printedSilently = await PrintRouterService.routeAndPrintHtml({
-            config,
-            html: silentHtml,
-            role: 'TICKET',
-            jobType: 'TICKET',
-            referenceId: `PRECUENTA-${Date.now()}`,
-            copies: 1,
-        });
-    }
+    printedSilently = await PrintRouterService.routeAndPrintHtml({
+        config,
+        html: silentHtml,
+        role: 'TICKET',
+        terminalId: params.terminalId,
+        jobType: 'PRECUENTA',
+        referenceId: `PRECUENTA-${Date.now()}`,
+        copies: 1,
+    });
 
     if (printedSilently) return true;
 
@@ -1022,11 +1035,24 @@ export const printComanda = async (
         customerName?: string;
         areaTitle?: string;
         productionAreaId?: string;
+        printerId?: string;
     }
 ): Promise<boolean> => {
-    const { items, table, orderNumber, customerName, areaTitle, productionAreaId } = data;
-    const dateStr = new Date().toLocaleDateString();
-    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const { items, table, orderNumber, customerName, areaTitle, productionAreaId, printerId } = data;
+    const tableLabel = (table as any)?.tableDisplayLabel || (table as any)?.displayLabel || table?.name || table?.nombre;
+    const padClock = (value: number) => String(value).padStart(2, '0');
+    const formatClock = (date: Date) => `${padClock(date.getHours())}:${padClock(date.getMinutes())}`;
+    const formatDate = (date: Date) => `${padClock(date.getDate())}/${padClock(date.getMonth() + 1)}/${date.getFullYear()}`;
+    const printedAt = new Date();
+    const dateStr = formatDate(printedAt);
+    const timeStr = formatClock(printedAt);
+    const resolveEntryTime = (item: CartItem) => {
+        const parsed = new Date(String(item.createdAt || (item as any).created_at || (item as any).addedAt || ''));
+        return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+    };
+    const kitchenItems = [...items]
+        .filter(item => Number(item.quantity || 0) > 0)
+        .sort((left, right) => resolveEntryTime(left).getTime() - resolveEntryTime(right).getTime());
 
     const receiptHtml = `
         <!DOCTYPE html>
@@ -1049,25 +1075,28 @@ export const printComanda = async (
                 .font-bold { font-weight: 700; }
                 .font-black { font-weight: 900; }
                 .divider { border-top: 2px solid #000; margin: 8px 0; }
-                .doc-title { font-size: 22px; font-weight: 900; text-transform: uppercase; margin-bottom: 5px; border: 3px solid #000; padding: 5px; }
+                .doc-title { font-size: 24px; font-weight: 900; text-transform: uppercase; margin-bottom: 5px; border: 3px solid #000; padding: 7px 5px; }
+                .area-title { font-size: 16px; font-weight: 900; text-transform: uppercase; margin-bottom: 8px; }
                 .meta-row { font-size: 14px; margin-bottom: 5px; }
                 .items-table { width: 100%; border-collapse: collapse; margin-top: 5px; }
-                .items-table td { padding: 6px 0; vertical-align: top; border-bottom: 1px solid #eee; }
-                .qty-cell { font-size: 24px; font-weight: 900; width: 40px; text-align: center; border: 2px solid #000; }
+                .items-table td { padding: 10px 0; vertical-align: top; border-bottom: 2px dashed #000; }
+                .qty-cell { font-size: 26px; font-weight: 900; width: 46px; text-align: center; border: 2px solid #000; }
                 .item-name { font-size: 18px; font-weight: 900; display: block; margin-left: 10px; }
-                .item-meta { font-size: 14px; display: block; margin-left: 10px; font-style: italic; background: #f0f0f0; padding: 2px; }
+                .item-time { font-size: 12px; display: block; margin: 3px 0 3px 10px; font-weight: 700; }
+                .item-meta { font-size: 13px; display: block; margin-left: 10px; background: #f0f0f0; padding: 3px; }
                 .footer { margin-top: 20px; font-size: 12px; }
             </style>
         </head>
         <body>
             <div class="text-center">
-                <div class="doc-title">${areaTitle || 'COCINA'}</div>
+                <div class="doc-title">COMANDA - COCINA</div>
+                ${areaTitle ? `<div class="area-title">${areaTitle}</div>` : ''}
             </div>
 
             <div class="meta-row text-center">
-                ${table ? `<div style="font-size: 24px; font-weight: 900;">MESA: ${table.name || table.nombre}</div>` : ''}
-                ${orderNumber ? `<div>ORDEN: #${orderNumber}</div>` : ''}
-                <div>${dateStr} ${timeStr}</div>
+                ${table ? `<div style="font-size: 24px; font-weight: 900;">MESA: ${tableLabel}</div>` : ''}
+                ${orderNumber ? `<div style="font-size: 20px; font-weight: 900;">ORDEN: #${orderNumber}</div>` : ''}
+                <div>Impreso: ${dateStr} ${timeStr}</div>
                 ${customerName ? `<div>Cliente: ${customerName}</div>` : ''}
             </div>
 
@@ -1075,12 +1104,13 @@ export const printComanda = async (
 
             <table class="items-table">
                 <tbody>
-                    ${items.filter(i => i.quantity > 0).map(item => `
+                    ${kitchenItems.map(item => `
                         <tr>
                             <td class="qty-cell">${item.quantity}</td>
                             <td>
                                 <span class="item-name">${item.name}</span>
-                                ${item.modifiers && item.modifiers.length > 0 ? `<span class="item-meta">*** ${item.modifiers.join(', ')}</span>` : ''}
+                                <span class="item-time">Digitado: ${formatClock(resolveEntryTime(item))}</span>
+                                ${item.modifiers && item.modifiers.length > 0 ? item.modifiers.map(modifier => `<span class="item-meta">* ${modifier}</span>`).join('') : ''}
                                 ${item.note ? `<span class="item-meta">NOTA: ${item.note}</span>` : ''}
                             </td>
                         </tr>
@@ -1105,9 +1135,27 @@ export const printComanda = async (
 
     const silentHtml = receiptHtml.replace(/<script>[\s\S]*?window\.onload[\s\S]*?<\/script>/, '');
     let printedSilently = false;
+    const escPosBase64 = buildEscPosComandaPayload({
+        items: kitchenItems,
+        table,
+        orderNumber,
+        customerName,
+        areaTitle,
+    });
 
-    // Use KITCHEN role for routing, or specific productionAreaId if we had a mapping
-    if (!shouldSuppressBrowserPrintFallback()) {
+    if (escPosBase64) {
+        printedSilently = await PrintRouterService.routeAndPrintEscPos({
+            config,
+            escPosBase64,
+            role: 'KITCHEN',
+            jobType: 'TICKET',
+            referenceId: `COMANDA-${Date.now()}`,
+            copies: 1,
+            preferredPrinterId: printerId || productionAreaId
+        });
+    }
+
+    if (!printedSilently) {
         printedSilently = await PrintRouterService.routeAndPrintHtml({
             config,
             html: silentHtml,
@@ -1115,7 +1163,7 @@ export const printComanda = async (
             jobType: 'TICKET',
             referenceId: `COMANDA-${Date.now()}`,
             copies: 1,
-            preferredPrinterId: productionAreaId // Use this if it maps to a printer
+            preferredPrinterId: printerId || productionAreaId
         });
     }
 

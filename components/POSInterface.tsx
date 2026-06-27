@@ -11,7 +11,7 @@ import {
    ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle,
    MessageSquare, PlayCircle, Download, Lock, ArrowUpRight, Landmark,
    UserCheck, StickyNote, Inbox, Printer, QrCode, Box, Package, MapPin,
-   Cloud, RefreshCw, CloudOff, Layout, ChefHat, Building2, ClipboardCheck
+   Cloud, RefreshCw, CloudOff, Layout, ChefHat, Building2, ClipboardCheck, Undo2
 
 
 } from 'lucide-react';
@@ -22,7 +22,7 @@ import {
    PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, RedeemedCouponRef, ProductVariant
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
-import { getFiscalComplianceConfig, getDefaultFiscalProvider, getFiscalReserveAlert, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
+import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, mapElectronicFiscalCodeToLegacy, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
 import { calculateTransactionTaxSummary } from '../utils/taxSummary';
 import UnifiedPaymentModal from './PaymentModal';
 import {
@@ -60,6 +60,7 @@ import ProductTableSupermarket from './ProductTableSupermarket';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { printComanda, printPrecuenta } from '../utils/printer';
 import ModifierModal from './ModifierModal';
+import { productHasRestaurantConfiguration, resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
 import { visorSync } from '../utils/visorSync';
 import { maybeAutoLaunchCustomerDisplay } from '../utils/customerDisplay';
 import ProductQuickActions from './ProductQuickActions';
@@ -87,6 +88,11 @@ import {
    type UberEatsPendingOrder,
    type UberEatsPosDraft,
 } from '../services/uberEatsPosService';
+import {
+   consignmentSyncService,
+   type ErpConsignment,
+   type ErpConsignmentLine,
+} from '../services/sync/ConsignmentSyncService';
 
 // ... existing imports
 
@@ -105,7 +111,8 @@ export interface POSInterfaceProps {
    selectedCustomer: Customer | null;
    onSelectCustomer: (customer: Customer | null) => void;
    parkedTickets: ParkedTicket[];
-   onUpdateParkedTickets: (tickets: ParkedTicket[]) => void;
+   onUpdateParkedTickets: (tickets: ParkedTicket[]) => void | Promise<void>;
+   onTableOrderSaved?: (table: Table, ticket: ParkedTicket) => void | Promise<void>;
    onLogout: () => void;
    onOpenSettings: (initialView?: string, initialData?: any) => void;
    onOpenCustomers: () => void;
@@ -136,7 +143,17 @@ type ProductionAreaConfig = {
    target_terminal_id?: string;
    kds_host?: string;
    kds_port?: string | number;
+   kds_warning_minutes?: number | string;
+   kds_critical_minutes?: number | string;
+   printer_id?: string;
+   printerId?: string;
    printer_ip?: string;
+};
+
+type KdsDispatchMeta = {
+   areaId: string;
+   orderId: string;
+   itemIds: string[];
 };
 
 const buildModifierSignature = (modifiers?: unknown[]): string => {
@@ -175,7 +192,179 @@ const postJsonWithTimeout = async (url: string, payload: unknown, timeoutMs = 50
    }
 };
 
-const buildKdsDispatchItems = (items: CartItem[]) => items.map((item, index) => ({
+const getConsignmentDocumentNo = (consignment: ErpConsignment): string =>
+   String(consignment.documentNo || consignment.document_no || consignment.number || consignment.id || '').trim();
+
+const getConsignmentCustomerName = (consignment: ErpConsignment): string =>
+   String(consignment.customerName || consignment.customer_name || '').trim();
+
+const getConsignmentLines = (consignment: ErpConsignment): ErpConsignmentLine[] => {
+   const lines = Array.isArray(consignment.lines) ? consignment.lines : consignment.items;
+   return Array.isArray(lines) ? lines : [];
+};
+
+const getConsignmentLineProductName = (line: ErpConsignmentLine): string =>
+   String(line.name || line.description || line.sku || line.productId || line.product_id || line.id || 'Artículo').trim();
+
+const getConsignmentLineQuantity = (line: ErpConsignmentLine): number => {
+   const value = Number(line.availableQuantity ?? line.available_quantity ?? line.quantity ?? line.qty ?? 1);
+   return Number.isFinite(value) && value > 0 ? value : 1;
+};
+
+const getConsignmentLinePrice = (line: ErpConsignmentLine, fallbackPrice: number): number => {
+   const value = Number(line.unitPrice ?? line.unit_price ?? line.price ?? fallbackPrice);
+   return Number.isFinite(value) && value >= 0 ? value : fallbackPrice;
+};
+
+const getConsignmentTicketFields = (items: CartItem[]): Pick<Transaction, 'consignmentId' | 'consignmentDocumentNo' | 'consignmentLineId'> => {
+   const item = items.find(line => line.consignmentId && line.consignmentLineId);
+   return {
+      consignmentId: item?.consignmentId,
+      consignmentDocumentNo: item?.consignmentDocumentNo,
+      consignmentLineId: item?.consignmentLineId,
+   };
+};
+
+const readConsignmentSyncKeys = (): Set<string> => {
+   try {
+      return new Set(JSON.parse(localStorage.getItem('clic_consignment_sync_keys_v1') || '[]'));
+   } catch {
+      return new Set();
+   }
+};
+
+const saveConsignmentSyncKeys = (keys: Set<string>): void => {
+   try {
+      localStorage.setItem('clic_consignment_sync_keys_v1', JSON.stringify(Array.from(keys).slice(-500)));
+   } catch {
+      // Local idempotency cache is best-effort; ERP still receives idempotencyKey.
+   }
+};
+
+const resolveProductionAreaId = (item: any): string => {
+   const restaurantConfig = resolveRestaurantProductConfig(item);
+   const direct =
+      item?.production_area_id
+      || item?.productionAreaId
+      || item?.productionAreaID
+      || item?.productionArea
+      || item?.restaurantConfig?.production_area_id
+      || restaurantConfig.production_area_id
+      || item?.metadata?.production_area_id
+      || item?.metadata?.productionAreaId;
+   return String(direct || '').trim();
+};
+
+const normalizeKdsIdentity = (value: unknown): string => String(value ?? '').trim().toLowerCase();
+
+const collectKdsProductKeys = (item: any): string[] => {
+   const keys = [
+      item?.id,
+      item?.productId,
+      item?.product_id,
+      item?.producto_id,
+      item?.sourceProductId,
+      item?.erpProductId,
+      item?.operationalProductId,
+      item?.sku,
+      item?.code,
+      item?.barcode,
+      item?.variantSku,
+      item?.metadata?.productId,
+      item?.metadata?.sourceProductId,
+      item?.metadata?.erpProductId,
+   ];
+
+   return Array.from(new Set(keys.map(normalizeKdsIdentity).filter(Boolean)));
+};
+
+const collectProductionAreaAssignedProductKeys = (area: ProductionAreaConfig): string[] => {
+   const source = area as any;
+   const rawLists = [
+      source.productIds,
+      source.product_ids,
+      source.assignedProductIds,
+      source.assigned_product_ids,
+      source.products,
+      source.items,
+   ].filter(Boolean);
+   const keys: string[] = [];
+
+   rawLists.forEach((rawList) => {
+      const list = Array.isArray(rawList) ? rawList : [rawList];
+      list.forEach((entry) => {
+         if (entry && typeof entry === 'object') {
+            keys.push(...collectKdsProductKeys(entry));
+            return;
+         }
+         const normalized = normalizeKdsIdentity(entry);
+         if (normalized) keys.push(normalized);
+      });
+   });
+
+   return Array.from(new Set(keys));
+};
+
+const buildProductionAreaResolver = (productionAreas: ProductionAreaConfig[], products: Product[]) => {
+   const areaById = new Map(productionAreas.map(area => [String(area.id), area]));
+   const productKeyToAreaId = new Map<string, string>();
+
+   const assignKeysToArea = (keys: string[], areaId?: string) => {
+      const normalizedAreaId = String(areaId || '').trim();
+      if (!normalizedAreaId || !areaById.has(normalizedAreaId)) return;
+      keys.forEach((key) => {
+         if (!key || productKeyToAreaId.has(key)) return;
+         productKeyToAreaId.set(key, normalizedAreaId);
+      });
+   };
+
+   products.forEach((product) => {
+      assignKeysToArea(collectKdsProductKeys(product), resolveProductionAreaId(product));
+   });
+
+   productionAreas.forEach((area) => {
+      assignKeysToArea(collectProductionAreaAssignedProductKeys(area), area.id);
+   });
+
+   return (item: any): string => {
+      const directAreaId = resolveProductionAreaId(item);
+      if (directAreaId && areaById.has(directAreaId)) return directAreaId;
+
+      const mappedAreaId = collectKdsProductKeys(item)
+         .map((key) => productKeyToAreaId.get(key))
+         .find((areaId): areaId is string => Boolean(areaId && areaById.has(areaId)));
+      return mappedAreaId || directAreaId;
+   };
+};
+
+const getCartDispatchKey = (item: CartItem): string => item.cartId || `${item.id}:${item.name}`;
+
+const buildKdsItemIds = (orderId: string, areaId: string, item: CartItem, index: number): string[] => {
+   const rawId = item.cartId || `${item.id}-${index}`;
+   const nativeItemId = String(rawId).startsWith(orderId) ? String(rawId) : `${orderId}_${rawId}_${index}`;
+   const serverItemId = `${orderId}_${areaId}_${rawId}_${index}`;
+   return Array.from(new Set([serverItemId, nativeItemId]));
+};
+
+const isKdsReturnedCartItem = (item?: Partial<CartItem> | null): boolean => {
+   const status = String((item as any)?.kdsStatus || '').trim().toUpperCase();
+   return status === 'DEVUELTO' || Boolean((item as any)?.kdsReturnedAt);
+};
+
+const isKitchenDispatchedCartItem = (item?: Partial<CartItem> | null): boolean => {
+   const status = String((item as any)?.kdsStatus || '').trim().toUpperCase();
+   return Boolean(
+      (item as any)?.dispatched ||
+      (item as any)?.kdsOrderId ||
+      (item as any)?.kdsAreaId ||
+      ((item as any)?.kdsItemIds && (item as any).kdsItemIds.length > 0) ||
+      status === 'ENVIADO' ||
+      status === 'DEVUELTO' ||
+      status === 'RETURN_PENDING'
+   );
+};
+
+const buildKdsDispatchItems = (items: CartItem[], areaId?: string) => items.map((item, index) => ({
    id: item.cartId || `${item.id}-${index}`,
    producto_id: item.id,
    productId: item.id,
@@ -187,9 +376,16 @@ const buildKdsDispatchItems = (items: CartItem[]) => items.map((item, index) => 
    modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
    modificadores: Array.isArray(item.modifiers) ? item.modifiers : [],
    note: item.note || '',
-   production_area_id: (item as any).production_area_id || '',
+   production_area_id: areaId || resolveProductionAreaId(item),
+   estado_cocina: 'PENDIENTE',
    variantInfo: item.variantInfo || '',
 }));
+
+const normalizeKdsMinutes = (value: unknown, fallback: number): number => {
+   const parsed = Number(value);
+   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+   return Math.max(1, Math.floor(parsed));
+};
 
 const queuePendingKdsDispatch = async (payload: Record<string, unknown>) => {
    try {
@@ -236,6 +432,9 @@ const productSalesIdentityKey = (product: Product): string => {
    return `id:${String(product.id || '').trim().toLowerCase()}`;
 };
 
+const productLineIdentityKey = (product: Product, price: number): string =>
+   `${productSalesIdentityKey(product)}::${Number(price || 0).toFixed(6)}`;
+
 const isSeedCatalogProduct = (product: Product): boolean => {
    const id = String(product.id || '').trim().toLowerCase();
    return /^prod-\d+$/.test(id) || /^p\d+$/.test(id) || /^f\d+$/.test(id);
@@ -243,18 +442,59 @@ const isSeedCatalogProduct = (product: Product): boolean => {
 
 const productBusinessKeys = (product: Product): string[] => {
    const keys = new Set<string>();
-   const barcode = typeof product.barcode === 'string' ? product.barcode.trim().toLowerCase() : '';
+   const addKey = (prefix: string, value: unknown) => {
+      const normalized = normalizeSearchToken(value);
+      if (normalized) keys.add(`${prefix}:${normalized}`);
+   };
+
+   addKey('barcode', product.barcode);
+   addKey('barcode', (product as any).barcode_2);
+   addKey('barcode', (product as any).barcode2);
+   addKey('barcode', (product as any).barcode_3);
+   addKey('barcode', (product as any).barcode3);
+
+   if (Array.isArray((product as any).barcodes)) {
+      for (const barcodeEntry of (product as any).barcodes) {
+         if (barcodeEntry && typeof barcodeEntry === 'object' && !Array.isArray(barcodeEntry)) {
+            addKey('barcode', (barcodeEntry as any).barcode);
+            addKey('barcode', (barcodeEntry as any).code);
+            addKey('barcode', (barcodeEntry as any).value);
+         } else {
+            addKey('barcode', barcodeEntry);
+         }
+      }
+   }
+
    const sku = typeof (product as any).sku === 'string' ? (product as any).sku.trim().toLowerCase() : '';
    const code = typeof (product as any).code === 'string' ? (product as any).code.trim().toLowerCase() : '';
    const itemCode = typeof (product as any).item_code === 'string' ? (product as any).item_code.trim().toLowerCase() : '';
    const name = typeof product.name === 'string' ? product.name.trim().toLowerCase() : '';
    const category = typeof product.category === 'string' ? product.category.trim().toLowerCase() : '';
 
-   if (barcode) keys.add(`barcode:${barcode}`);
    if (sku) keys.add(`sku:${sku}`);
    if (code) keys.add(`code:${code}`);
    if (itemCode) keys.add(`item_code:${itemCode}`);
    if (name) keys.add(`namecat:${name}::${category}`);
+
+   return Array.from(keys);
+};
+
+const productSalesIdentityKeys = (product: Product): string[] => {
+   const keys = new Set<string>();
+   const addKey = (prefix: string, value: unknown) => {
+      const normalized = normalizeSearchToken(value);
+      if (normalized) keys.add(`${prefix}:${normalized}`);
+   };
+
+   productBusinessKeys(product).forEach((key) => keys.add(key));
+   productReferenceCandidates(product).forEach((value) => addKey('reference', value));
+   productIdentityCandidates(product).forEach((value) => addKey('identity', value));
+   addKey('operational', resolveOperationalProductId(product));
+   addKey('id', product.id);
+
+   if (keys.size === 0) {
+      keys.add(productSalesIdentityKey(product));
+   }
 
    return Array.from(keys);
 };
@@ -282,10 +522,67 @@ const buildCartDigest = (items: CartItem[] = []): string =>
             item.cartId || item.id || '',
             Number(item.quantity || 0),
             Number(item.price || 0),
-            (item.modifiers || []).join('|')
+            (item.modifiers || []).join('|'),
+            item.orderNumber || '',
+            item.tableDisplayLabel || ''
          ].join(':')
       )
       .join('||');
+
+const extractFirstNumberToken = (value?: unknown): string => {
+   const match = String(value || '').match(/\d+/);
+   return match ? match[0] : '';
+};
+
+const buildTableContextLabels = (table?: Partial<Table> | null, rooms: Room[] = []) => {
+   const tableName = String(table?.nombre || table?.name || '').trim();
+   if (!tableName) {
+      return {
+         tableLabel: '',
+         roomLabel: '',
+         compactLabel: ''
+      };
+   }
+
+   const room = table?.roomId
+      ? rooms.find(candidate => String(candidate.id) === String(table.roomId))
+      : undefined;
+   const roomLabel = String(room?.nombre || room?.name || '').trim();
+   const roomNumber = extractFirstNumberToken(roomLabel);
+   const tableNumber = extractFirstNumberToken(tableName);
+   const compactLabel = roomNumber && tableNumber
+      ? `${roomNumber}-${tableNumber}`
+      : roomLabel
+         ? `${roomLabel} - ${tableName}`
+         : tableName;
+
+   return {
+      tableLabel: tableName,
+      roomLabel,
+      compactLabel
+   };
+};
+
+const readCartOrderNumber = (items: CartItem[] = []): string | undefined =>
+   items
+      .map(item => String(item.orderNumber || '').trim())
+      .find(Boolean);
+
+const normalizeOrderNumberSettings = (settings: any) => {
+   const nextNumber = Math.max(1, Math.floor(Number(settings?.nextNumber || 1)));
+   const padding = Math.max(0, Math.min(10, Math.floor(Number(settings?.padding ?? 3))));
+   return {
+      enabled: Boolean(settings?.enabled),
+      nextNumber,
+      prefix: String(settings?.prefix || '').trim(),
+      padding,
+   };
+};
+
+const formatOrderNumber = (settings: ReturnType<typeof normalizeOrderNumberSettings>): string => {
+   const numeric = String(settings.nextNumber).padStart(settings.padding, '0');
+   return `${settings.prefix}${numeric}`;
+};
 
 interface ProductGridCardProps {
    product: Product;
@@ -368,10 +665,10 @@ const ProductGridCard = React.memo(({
             warehouseSaleBlocked
                ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
                : 'cursor-pointer hover:border-purple-300 hover:-translate-y-1 active:scale-95'
-         } ${(usesSupermarketLayout && showProductImages) ? 'rounded-[1.75rem] p-4 shadow-[0_10px_26px_rgba(15,23,42,0.08)] min-h-[256px] grid grid-rows-[56%_44%]' : (usesExpandedCatalog && showProductImages) ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[228px] grid grid-rows-[52%_48%]' : usesExpandedCatalog ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] min-h-[204px] flex flex-col h-full' : isCompactMobileCard ? `rounded-[2rem] p-3.5 min-h-[246px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}` : `rounded-[2rem] p-3 min-h-[228px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
+         } ${(usesSupermarketLayout && showProductImages) ? 'rounded-[1.75rem] p-3.5 shadow-[0_10px_26px_rgba(15,23,42,0.08)] min-h-[230px] grid grid-rows-[60%_40%]' : (usesExpandedCatalog && showProductImages) ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[214px] grid grid-rows-[56%_44%]' : usesExpandedCatalog ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] min-h-[190px] flex flex-col h-full' : isCompactMobileCard ? `rounded-[2rem] p-3.5 min-h-[230px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}` : `rounded-[2rem] p-3 min-h-[214px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
       >
          {showProductImages && (
-            <div className={`${usesSupermarketLayout ? 'h-full rounded-[1.4rem] mb-0 p-3' : usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-36 rounded-[1.5rem] mb-3 p-2.5' : 'h-28 md:h-32 rounded-[1.5rem] mb-3'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
+            <div className={`${usesSupermarketLayout ? 'h-full rounded-[1.35rem] mb-0 p-2.5' : usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-[8.5rem] rounded-[1.5rem] mb-2.5 p-2.5' : 'h-28 md:h-32 rounded-[1.5rem] mb-2.5'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
                {imageSrc ? <img src={imageSrc} className={`w-full h-full ${usesSupermarketLayout || usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={usesSupermarketLayout ? 56 : 48} strokeWidth={1} /></div>}
 
                {isWeighted && (
@@ -410,13 +707,13 @@ const ProductGridCard = React.memo(({
                </div>
             </div>
          )}
-         <div className={`flex flex-col ${usesExpandedCatalog ? 'min-h-0 h-full pt-1 justify-between' : 'flex-1 justify-between gap-3'}`}>
-            <div className={usesSupermarketLayout ? 'space-y-1.5' : usesExpandedCatalog ? 'space-y-1' : 'space-y-1.5'}>
+         <div className={`flex flex-col ${usesExpandedCatalog ? 'min-h-0 h-full pt-0.5 justify-between' : usesSupermarketLayout ? 'flex-1 gap-0.5' : 'flex-1 justify-between gap-2'}`}>
+            <div className={usesSupermarketLayout ? 'space-y-1' : usesExpandedCatalog ? 'space-y-0.5' : 'space-y-1'}>
                <span className={`block font-bold text-purple-500 uppercase opacity-60 line-clamp-1 ${usesSupermarketLayout ? 'text-[11px]' : usesExpandedCatalog ? 'text-[10px]' : isCompactMobileCard ? 'text-[10px]' : 'text-[8px]'}`}>{product.category}</span>
-               <h3 className={`font-bold text-gray-800 dark:text-white leading-tight line-clamp-2 ${usesSupermarketLayout ? 'text-[1.22rem] min-h-[3rem]' : usesExpandedCatalog ? 'text-[1.05rem] min-h-[2.3rem]' : isCompactMobileCard ? 'text-[1.05rem] min-h-[2.8rem]' : 'text-sm min-h-[2.5rem]'}`}>{product.name}</h3>
+               <h3 className={`font-bold text-gray-800 dark:text-white leading-tight line-clamp-2 ${usesSupermarketLayout ? 'text-[1.08rem] min-h-[1.7rem]' : usesExpandedCatalog ? 'text-[0.98rem] min-h-[1.8rem]' : isCompactMobileCard ? 'text-[1rem] min-h-[2.25rem]' : 'text-sm min-h-[2.1rem]'}`}>{product.name}</h3>
             </div>
-            <div className={`${usesSupermarketLayout ? 'mt-2 pt-2 border-t border-gray-100 dark:border-slate-700' : usesExpandedCatalog ? 'mt-1 pt-1 border-t border-gray-100 dark:border-slate-700' : 'mt-auto pt-2 border-t border-gray-50 dark:border-slate-700'}`}>
-               <span className={`font-black text-gray-900 dark:text-white leading-none ${usesSupermarketLayout ? 'text-[2rem]' : usesExpandedCatalog ? 'text-[1.75rem]' : isCompactMobileCard ? 'text-[1.95rem]' : 'text-lg'}`}>{baseCurrencySymbol}{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            <div className={`${usesSupermarketLayout ? 'mt-0 pt-0' : usesExpandedCatalog ? 'mt-0.5 pt-0.5 border-t border-gray-100 dark:border-slate-700' : 'mt-auto pt-1.5 border-t border-gray-50 dark:border-slate-700'}`}>
+               <span className={`font-black text-gray-900 dark:text-white leading-none ${usesSupermarketLayout ? 'text-[1.78rem]' : usesExpandedCatalog ? 'text-[1.5rem]' : isCompactMobileCard ? 'text-[1.75rem]' : 'text-lg'}`}>{baseCurrencySymbol}{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
             </div>
          </div>
          {warehouseSaleBlocked && (
@@ -537,6 +834,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onOpenInventoryTracking,
    onOpenAudit,
    onOpenTableMap,
+   onTableOrderSaved,
    onOpenAgenda,
    onTransactionComplete,
    onAddCustomer,
@@ -556,6 +854,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const mobileCartButtonRef = useRef<HTMLButtonElement>(null);
    const desktopActionGridRef = useRef<HTMLDivElement>(null);
    const ticketAutoSyncTimeoutRef = useRef<number | null>(null);
+   const ticketAutoSyncFlushRef = useRef<(() => void) | null>(null);
+   const activeTableHydrationRef = useRef<{ key: string; missingTicket: boolean } | null>(null);
    const quickActionTouchTimerRef = useRef<number | null>(null);
    const quickActionTouchStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
    const lastTouchContextMenuAtRef = useRef(0);
@@ -599,6 +899,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [customers, selectedCustomer]);
    const [quickActionData, setQuickActionData] = useState<{ product: Product; x: number; y: number } | null>(null);
    const [successToast, setSuccessToast] = useState<string | null>(null);
+   const [incomingUberToast, setIncomingUberToast] = useState<{ count: number; displayIds: string[] } | null>(null);
+   const knownUberOrderIdsRef = useRef<Set<string>>(new Set());
+   const uberOrdersMonitorPrimedRef = useRef(false);
 
    // --- SAFETY GATE STATE ---
    const [showSafetyGate, setShowSafetyGate] = useState(false);
@@ -620,16 +923,83 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    }, [successToast]);
 
+   useEffect(() => {
+      if (!incomingUberToast) return;
+      const timer = window.setTimeout(() => setIncomingUberToast(null), 6500);
+      return () => window.clearTimeout(timer);
+   }, [incomingUberToast]);
+
    useEffect(() => () => {
       if (ticketAutoSyncTimeoutRef.current) {
          window.clearTimeout(ticketAutoSyncTimeoutRef.current);
          ticketAutoSyncTimeoutRef.current = null;
+      }
+      if (ticketAutoSyncFlushRef.current) {
+         ticketAutoSyncFlushRef.current();
+         ticketAutoSyncFlushRef.current = null;
       }
    }, []);
 
    const activeTerminal = (config.terminals || []).find(t => t.id === activeTerminalId) || (config.terminals || [])[0];
    const activeTerminalConfig = activeTerminal?.config;
    const terminalId = activeTerminal?.id || 'T1';
+   const activeTableContext = useMemo(
+      () => buildTableContextLabels(activeTable, rooms),
+      [activeTable, rooms]
+   );
+   const reserveNextOrderNumber = useCallback((): string | undefined => {
+      const settings = normalizeOrderNumberSettings(activeTerminalConfig?.operational?.orderNumbers);
+      if (!settings.enabled || !activeTerminal?.id) return undefined;
+
+      const orderNumber = formatOrderNumber(settings);
+      const nextConfig: BusinessConfig = {
+         ...config,
+         terminals: (config.terminals || []).map((terminal) => {
+            if (terminal.id !== activeTerminal.id) return terminal;
+
+            const terminalConfig = terminal.config;
+            const operational = terminalConfig.operational;
+            const currentSettings = normalizeOrderNumberSettings(operational.orderNumbers || settings);
+
+            return {
+               ...terminal,
+               config: {
+                  ...terminalConfig,
+                  operational: {
+                     ...operational,
+                     orderNumbers: {
+                        ...(operational.orderNumbers || {}),
+                        enabled: true,
+                        prefix: settings.prefix,
+                        padding: settings.padding,
+                        nextNumber: Math.max(currentSettings.nextNumber, settings.nextNumber) + 1,
+                     },
+                  },
+               },
+            };
+         }),
+      };
+
+      onUpdateConfig(nextConfig);
+      return orderNumber;
+   }, [activeTerminal?.id, activeTerminalConfig, config, onUpdateConfig]);
+
+   const applyOrderContextToItems = useCallback((items: CartItem[], orderNumber?: string): CartItem[] => {
+      const tableDisplayLabel = activeTableContext.compactLabel || undefined;
+      const tableRoomLabel = activeTableContext.roomLabel || undefined;
+
+      return items.map(item => ({
+         ...item,
+         ...(orderNumber ? { orderNumber: item.orderNumber || orderNumber } : {}),
+         ...(tableDisplayLabel ? { tableDisplayLabel } : {}),
+         ...(tableRoomLabel ? { tableRoomLabel } : {}),
+      }));
+   }, [activeTableContext.compactLabel, activeTableContext.roomLabel]);
+   const terminalDeliveryAlerts = activeTerminalConfig?.operational?.deliveryAlerts;
+   const shouldShowUberToastAlerts = terminalDeliveryAlerts?.showUberEatsToast !== false;
+   const shouldAutoOpenUberModal = Boolean(
+      terminalDeliveryAlerts?.isDeliveryTerminal && terminalDeliveryAlerts?.autoOpenUberEatsModal
+   );
    const productById = useMemo(() => {
       const index = new Map<string, Product>();
       for (const product of products || []) {
@@ -842,7 +1212,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       operationalVertical === 'RESTAURANT' ||
       operationalVertical === 'RESTAURANTE' ||
       config.vertical === 'RESTAURANT';
+   const canReceiveConsignments = Boolean(
+      activeTerminalConfig?.operational?.recibir_consignaciones ??
+      activeTerminalConfig?.operational?.receiveConsignments
+   );
+   const showTableMapButton = Boolean(activeTerminalConfig?.operational?.usa_mesas);
    const hideTableExtras = isRestaurantMode && !!activeTable;
+   const restaurantActionGridClass = !isRestaurantMode
+      ? 'grid-cols-[112px_minmax(0,1fr)]'
+      : showTableMapButton
+         ? (hideTableExtras ? 'grid-cols-4' : 'grid-cols-5')
+         : (hideTableExtras ? 'grid-cols-3' : 'grid-cols-4');
    const reservationPolicy = activeTerminalConfig?.operational?.reservationPolicy || {
       validityDays: 7,
       printCopies: 1,
@@ -868,34 +1248,62 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // --- SMART TABLE HYDRATION ---
    // Automatically load order when entering via Table Map
    useEffect(() => {
-      if (activeTable) {
-         if (activeTable.currentOrderId) {
-            console.log(`🤖 Smart Access: Hydrating table ${activeTable.nombre} (Order ${activeTable.currentOrderId})`);
-            const ticket = parkedTickets.find(t => t.id === activeTable.currentOrderId);
-            if (ticket) {
-               // 1. Load Cart
-               onUpdateCart(ticket.items || []);
-               // 2. Load Customer
-               if (ticket.customerId) {
-                  const customer = customers.find(c => c.id === ticket.customerId);
-                  if (customer) onSelectCustomer(customer);
-               } else {
-                  onSelectCustomer(null);
-               }
-               console.log(`✅ Loaded ${ticket.items.length} items from active table.`);
-            } else {
-               // Nunca dejar el carrito de la mesa anterior: si el ticket aún no está en memoria, vaciar hasta que llegue el sync.
-               console.warn(`⚠️ Ticket ${activeTable.currentOrderId} not found in parked tickets. Clearing cart to avoid inheriting another table.`);
-               onUpdateCart([]);
-               onSelectCustomer(null);
-            }
-         } else {
-            // Mesa sin orden activa: siempre carrito y cliente limpios (evita heredar la mesa previa).
+      if (!activeTable) {
+         activeTableHydrationRef.current = null;
+         return;
+      }
+
+      const orderId = String(activeTable.currentOrderId || '').trim();
+      const tableKey = `${activeTable.id || 'table'}:${orderId || 'empty'}`;
+      const previousHydration = activeTableHydrationRef.current;
+      const isNewTableContext = previousHydration?.key !== tableKey;
+
+      if (!orderId) {
+         if (isNewTableContext) {
             onUpdateCart([]);
             onSelectCustomer(null);
          }
+         activeTableHydrationRef.current = { key: tableKey, missingTicket: false };
+         return;
       }
-   }, [activeTable, parkedTickets]); // Re-run if table changes or tickets sync
+
+      const ticket = parkedTickets.find(t => t.id === orderId);
+      const shouldHydrate =
+         isNewTableContext ||
+         (previousHydration?.missingTicket && cart.length === 0);
+
+      if (!ticket) {
+         if (isNewTableContext) {
+            console.warn(`Ticket ${orderId} no encontrado para la mesa activa. Se limpia el carrito para evitar heredar otra mesa.`);
+            onUpdateCart([]);
+            onSelectCustomer(null);
+         }
+         activeTableHydrationRef.current = { key: tableKey, missingTicket: true };
+         return;
+      }
+
+      if (shouldHydrate) {
+         const ticketItems = ticket.items || [];
+         if (buildCartDigest(ticketItems) !== buildCartDigest(cart)) {
+            onUpdateCart(ticketItems);
+         }
+         if (ticket.customerId) {
+            const customer = customers.find(c => c.id === ticket.customerId);
+            if (customer) onSelectCustomer(customer);
+         } else {
+            onSelectCustomer(null);
+         }
+      }
+
+      activeTableHydrationRef.current = { key: tableKey, missingTicket: false };
+   }, [
+      activeTable?.id,
+      activeTable?.currentOrderId,
+      parkedTickets,
+      customers,
+      onUpdateCart,
+      onSelectCustomer
+   ]);
 
    const isMobile = useIsMobile();
    const tariffSelectorRef = useRef<HTMLDivElement>(null);
@@ -912,6 +1320,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
 
    const canChangeTariff = hasPermission('POS_CHANGE_TARIFF');
+   const canSellWithOpenZ = hasPermission('POS_ALLOW_SALES_WITH_OPEN_Z');
 
    const usesSupermarketLayout = useMemo(
       () => Boolean(!isMobile && isRetailMode),
@@ -1052,12 +1461,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [isReturnMode, setIsReturnMode] = useState(false);
    const [errorToast, setErrorToast] = useState<string | null>(null);
 
+   const ensureSalesWithOpenZPermission = useCallback((): boolean => {
+      if (canSellWithOpenZ) return true;
+      setErrorToast('Tu rol no permite vender con cierre Z abierto. Activa el permiso en Equipo y Roles.');
+      window.setTimeout(() => setErrorToast(null), 3500);
+      return false;
+   }, [canSellWithOpenZ]);
+
    const activeTariff = useMemo(() => (config.tariffs || []).find(t => t.id === activeTariffId), [config.tariffs, activeTariffId]);
 
    const [searchTerm, setSearchTerm] = useState('');
    const deferredSearchTerm = useDeferredValue(searchTerm);
    const [categoryFilter, setCategoryFilter] = useState('ALL');
-   const deferredCategoryFilter = useDeferredValue(categoryFilter);
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
 
    const [showDiscountModal, setShowDiscountModal] = useState(false);
@@ -1071,6 +1486,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showCouponModal, setShowCouponModal] = useState(false);
    const [couponCode, setCouponCode] = useState('');
    const [redeemedCoupon, setRedeemedCoupon] = useState<RedeemedCouponRef | null>(null);
+   const [showConsignmentModal, setShowConsignmentModal] = useState(false);
+   const [consignmentSearchTerm, setConsignmentSearchTerm] = useState('');
+   const [consignmentResults, setConsignmentResults] = useState<ErpConsignment[]>([]);
+   const [selectedConsignment, setSelectedConsignment] = useState<ErpConsignment | null>(null);
+   const [isSearchingConsignments, setIsSearchingConsignments] = useState(false);
+   const [isLoadingConsignment, setIsLoadingConsignment] = useState(false);
+   const [consignmentError, setConsignmentError] = useState<string | null>(null);
 
    const [syncState, setSyncState] = useState<SyncState>(backgroundSyncManager.getState());
 
@@ -1199,7 +1621,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const buildParkedTicketName = useCallback(() => {
       if (activeTable) {
-         return `Mesa: ${activeTable.nombre || activeTable.name}`;
+         return `Mesa: ${activeTableContext.compactLabel || activeTable.nombre || activeTable.name}`;
       }
 
       if (selectedCustomer?.name) {
@@ -1207,7 +1629,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       return `Ticket #${(Array.isArray(parkedTickets) ? parkedTickets : []).length + 1}`;
-   }, [activeTable, selectedCustomer, parkedTickets]);
+   }, [activeTable, activeTableContext.compactLabel, selectedCustomer, parkedTickets]);
 
    const closeParkAliasModal = useCallback(() => {
       setShowParkAliasModal(false);
@@ -1340,6 +1762,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, []);
 
    const openRecoverReservationModal = useCallback(() => {
+      setIncomingUberToast(null);
       setReservationSearchTerm('');
       setReservationCustomerFilterId(null);
       setShowRecoverReservationModal(true);
@@ -1366,20 +1789,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return true;
    }, [activeRecoveredReservation, showShortErrorToast]);
 
-   const loadUberPendingOrders = useCallback(async () => {
-      setIsLoadingUberPendingOrders(true);
-      setUberPendingOrdersError(null);
+   const loadUberPendingOrders = useCallback(async (
+      options?: { silent?: boolean }
+   ): Promise<UberEatsPendingOrder[] | null> => {
+      const silent = options?.silent === true;
+      if (!silent) {
+         setIsLoadingUberPendingOrders(true);
+         setUberPendingOrdersError(null);
+      }
 
       try {
          const context = resolveUberEatsPosContext(config, activeTerminalId);
          const orders = await fetchUberEatsPendingOrders(context, 25);
          setUberPendingOrders(orders);
+         return orders;
       } catch (error: any) {
          console.warn('⚠️ POSInterface: No se pudieron cargar órdenes Uber Eats pendientes:', error);
-         setUberPendingOrders([]);
-         setUberPendingOrdersError(error?.message || 'No se pudieron cargar los pedidos Uber Eats.');
+         if (!silent) {
+            setUberPendingOrders([]);
+            setUberPendingOrdersError(error?.message || 'No se pudieron cargar los pedidos Uber Eats.');
+         }
+         return null;
       } finally {
-         setIsLoadingUberPendingOrders(false);
+         if (!silent) {
+            setIsLoadingUberPendingOrders(false);
+         }
       }
    }, [activeTerminalId, config]);
 
@@ -1607,6 +2041,69 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!showRecoverReservationModal) return;
       loadUberPendingOrders().catch(console.error);
    }, [showRecoverReservationModal, loadUberPendingOrders]);
+
+   useEffect(() => {
+      knownUberOrderIdsRef.current = new Set();
+      uberOrdersMonitorPrimedRef.current = false;
+      setIncomingUberToast(null);
+   }, [activeTerminalId]);
+
+   useEffect(() => {
+      let cancelled = false;
+      let intervalId: number | null = null;
+
+      const pollUberPendingOrders = async () => {
+         const orders = await loadUberPendingOrders({ silent: true });
+         if (cancelled || !orders) return;
+
+         const currentIds = new Set(orders.map((order) => order.uberOrderId).filter(Boolean));
+         if (!uberOrdersMonitorPrimedRef.current) {
+            knownUberOrderIdsRef.current = currentIds;
+            uberOrdersMonitorPrimedRef.current = true;
+            return;
+         }
+
+         const newOrders = orders.filter((order) => !knownUberOrderIdsRef.current.has(order.uberOrderId));
+         knownUberOrderIdsRef.current = currentIds;
+
+         if (newOrders.length === 0) return;
+
+         if (shouldShowUberToastAlerts) {
+            setIncomingUberToast({
+               count: newOrders.length,
+               displayIds: newOrders.map((order) => order.displayId || order.uberOrderId).filter(Boolean).slice(0, 3),
+            });
+         }
+
+         if (shouldAutoOpenUberModal && !showRecoverReservationModal) {
+            openRecoverReservationModal();
+         }
+      };
+
+      try {
+         resolveUberEatsPosContext(config, activeTerminalId);
+      } catch {
+         return;
+      }
+
+      void pollUberPendingOrders();
+      intervalId = window.setInterval(() => {
+         void pollUberPendingOrders();
+      }, 30000);
+
+      return () => {
+         cancelled = true;
+         if (intervalId) window.clearInterval(intervalId);
+      };
+   }, [
+      activeTerminalId,
+      config,
+      loadUberPendingOrders,
+      openRecoverReservationModal,
+      shouldAutoOpenUberModal,
+      shouldShowUberToastAlerts,
+      showRecoverReservationModal,
+   ]);
 
    const activeReservationByScanCode = useMemo(() => {
       const index = new Map<string, Reservation>();
@@ -1928,8 +2425,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
 
-   const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string) => {
+   const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig'], consignmentPatch?: Pick<CartItem, 'consignmentId' | 'consignmentDocumentNo' | 'consignmentLineId'>) => {
       if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
+      if (quantity > 0 && !ensureSalesWithOpenZPermission()) return;
       if (!canAddItemToCart(product, quantity)) return;
 
       // TRACEABILITY INTERCEPTION
@@ -1941,25 +2439,45 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       const finalPrice = priceOverride ?? selectedVariant?.price ?? getProductPrice(product);
+      const lineIdentityKey = productLineIdentityKey(product, finalPrice);
+      const consignmentIdentityKey = consignmentPatch?.consignmentLineId || '';
       const modifiersString = buildModifierSignature(modifiers);
       const variantSku = selectedVariant?.sku;
       const effectiveTaxIds = resolveEffectiveTaxIds(product.appliedTaxIds, activeTerminalConfig);
       const taxSignature = effectiveTaxIds.slice().sort().join('|');
+      const productRestaurantConfig = resolveRestaurantProductConfig(product);
+      const productionAreaId = resolveProductionAreaId(product);
+      const lineRestaurantConfig = restaurantConfig
+         ? {
+            ...restaurantConfig,
+            product_type: restaurantConfig.product_type || productRestaurantConfig.product_type,
+            production_area_id: restaurantConfig.production_area_id || productionAreaId || undefined,
+         }
+         : undefined;
 
       // We look for existing item in the stable 'cart' prop/state instead of inside the setter
       // to avoid using setter for logic that triggers side effects.
       const existing = (cart || []).find(i => {
          const iMods = buildModifierSignature(i.modifiers);
          const existingTaxSignature = resolveEffectiveTaxIds(i.appliedTaxIds, activeTerminalConfig).slice().sort().join('|');
-         return i.id === product.id && (i.variantSku || '') === (variantSku || '') && iMods === modifiersString && i.price === finalPrice && existingTaxSignature === taxSignature;
+         const existingIdentityKey = String((i as any).cartIdentityKey || productLineIdentityKey(i, i.price));
+         const existingConsignmentKey = i.consignmentLineId || '';
+         return existingIdentityKey === lineIdentityKey && existingConsignmentKey === consignmentIdentityKey && (i.variantSku || '') === (variantSku || '') && iMods === modifiersString && i.price === finalPrice && existingTaxSignature === taxSignature;
       });
 
       let targetCartId: string;
 
-      if (existing && !usesSerial) {
+      if (existing && !usesSerial && !existing.dispatched) {
          targetCartId = existing.cartId!;
          onUpdateCart(prev => {
-            const updatedItem = { ...existing, quantity: existing.quantity + quantity, appliedTaxIds: effectiveTaxIds };
+            const updatedItem = {
+               ...existing,
+               quantity: existing.quantity + quantity,
+               appliedTaxIds: effectiveTaxIds,
+               createdAt: existing.createdAt || new Date().toISOString(),
+               production_area_id: resolveProductionAreaId(existing) || productionAreaId || undefined,
+               ...consignmentPatch,
+            };
             return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
          });
       } else {
@@ -1968,21 +2486,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const newItem = {
             ...product,
             cartId: newCartId,
+            createdAt: new Date().toISOString(),
             quantity,
             price: finalPrice,
             modifiers,
+            note,
+            restaurantConfig: lineRestaurantConfig,
+            selected_modifiers: lineRestaurantConfig?.selected_modifiers,
+            selected_fraction_parts: lineRestaurantConfig?.selected_fraction_parts || lineRestaurantConfig?.fractions,
+            selected_combo_items: lineRestaurantConfig?.selected_combo_items,
+            product_type: productRestaurantConfig.product_type || product.product_type,
             variantSku,
             variantInfo,
             appliedTaxIds: effectiveTaxIds,
+            production_area_id: productionAreaId || undefined,
             originalPrice: getProductPrice(product),
-            trackingData
+            trackingData,
+            ...consignmentPatch,
          };
          onUpdateCart(prev => [newItem, ...prev]);
       }
 
       // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
       setLastAddedCartId(targetCartId);
-   }, [blockRecoveredUberOrderMutation, canAddItemToCart, getProductPrice, onUpdateCart, cart, activeTerminalConfig]); // Added cart to dependencies
+   }, [blockRecoveredUberOrderMutation, canAddItemToCart, ensureSalesWithOpenZPermission, getProductPrice, onUpdateCart, cart, activeTerminalConfig]); // Added cart to dependencies
 
    const handleProductClick = useCallback((product: Product) => {
       // MOBILE INTERCEPTION
@@ -1995,16 +2522,114 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const productName = product.name || '';
       const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
       const hasVariants = (product.variants || []).length > 0 || (product.attributes || []).length > 0;
-      const hasModifiers = (product.availableModifiers || []).length > 0;
-      const requiresConfigurationBeforeAdd = isWeighted || hasVariants || hasModifiers;
+      const hasRestaurantConfig = productHasRestaurantConfiguration(product) || Boolean(
+         (product.availableModifiers || []).length > 0
+         || (product.modifier_groups || product.modifierGroups || []).length > 0
+         || (product.combo_groups || product.comboGroups || []).length > 0
+         || (product.fraction_rule || product.fractionRule)
+         || (product.note_presets || product.notePresets || []).length > 0
+      );
+      const requiresConfigurationBeforeAdd = isWeighted || hasVariants || hasRestaurantConfig;
 
+      if (!isReturnMode && !ensureSalesWithOpenZPermission()) return;
       if (requiresConfigurationBeforeAdd && !canAddItemToCart(product)) return;
 
       if (isWeighted) setProductForScale(product);
       else if (hasVariants) setSelectedProductForVariants(product);
-      else if (hasModifiers) setProductForModifiers(product);
+      else if (hasRestaurantConfig) setProductForModifiers(product);
       else addToCart(product, isReturnMode ? -1 : 1);
-   }, [isMobile, defaultSalesWarehouseId, canAddItemToCart, addToCart, isReturnMode]);
+   }, [isMobile, defaultSalesWarehouseId, ensureSalesWithOpenZPermission, canAddItemToCart, addToCart, isReturnMode]);
+
+   const handleSearchConsignments = useCallback(async () => {
+      setIsSearchingConsignments(true);
+      setConsignmentError(null);
+      try {
+         const results = await consignmentSyncService.searchConsignments(consignmentSearchTerm);
+         setConsignmentResults(results);
+         if (results.length === 0) {
+            setConsignmentError('No se encontraron consignaciones disponibles.');
+         }
+      } catch (error) {
+         const message = error instanceof Error ? error.message : 'No se pudo consultar consignaciones.';
+         setConsignmentError(message);
+      } finally {
+         setIsSearchingConsignments(false);
+      }
+   }, [consignmentSearchTerm]);
+
+   const handleOpenConsignment = useCallback(async (consignment: ErpConsignment) => {
+      setIsLoadingConsignment(true);
+      setConsignmentError(null);
+      try {
+         const detail = await consignmentSyncService.getConsignment(String(consignment.id));
+         setSelectedConsignment(detail);
+      } catch (error) {
+         const message = error instanceof Error ? error.message : 'No se pudo cargar la consignación.';
+         setConsignmentError(message);
+      } finally {
+         setIsLoadingConsignment(false);
+      }
+   }, []);
+
+   const handleAddConsignmentLine = useCallback((consignment: ErpConsignment, line: ErpConsignmentLine) => {
+      const product = consignmentSyncService.findMatchingProduct(line, products);
+      if (!product) {
+         setConsignmentError(`No hay producto local vinculado para ${getConsignmentLineProductName(line)}.`);
+         return;
+      }
+
+      const quantity = getConsignmentLineQuantity(line);
+      const price = getConsignmentLinePrice(line, getProductPrice(product));
+      addToCart(
+         product,
+         quantity,
+         price,
+         undefined,
+         undefined,
+         undefined,
+         undefined,
+         `Consignación ${getConsignmentDocumentNo(consignment)}`,
+         undefined,
+         consignmentSyncService.buildCartItemPatch(consignment, line)
+      );
+      setSuccessToast(`Consignación ${getConsignmentDocumentNo(consignment)} agregada al ticket.`);
+      setTimeout(() => setSuccessToast(null), 2500);
+   }, [addToCart, getProductPrice, products]);
+
+   const handleAddAllConsignmentLines = useCallback((consignment: ErpConsignment) => {
+      const lines = getConsignmentLines(consignment);
+      let added = 0;
+      let skipped = 0;
+      lines.forEach((line) => {
+         const product = consignmentSyncService.findMatchingProduct(line, products);
+         if (!product) {
+            skipped += 1;
+            return;
+         }
+         addToCart(
+            product,
+            getConsignmentLineQuantity(line),
+            getConsignmentLinePrice(line, getProductPrice(product)),
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            `Consignación ${getConsignmentDocumentNo(consignment)}`,
+            undefined,
+            consignmentSyncService.buildCartItemPatch(consignment, line)
+         );
+         added += 1;
+      });
+
+      if (added > 0) {
+         setSuccessToast(`${added} línea(s) de consignación agregada(s).`);
+         setTimeout(() => setSuccessToast(null), 2500);
+         setShowConsignmentModal(false);
+      }
+      if (skipped > 0) {
+         setConsignmentError(`${skipped} línea(s) no tienen producto local vinculado.`);
+      }
+   }, [addToCart, getProductPrice, products]);
 
    const handleProductClickRef = useRef(handleProductClick);
    const quickActionDataRef = useRef(quickActionData);
@@ -2261,7 +2886,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return () => window.removeEventListener('barcodeScanned', handleCentralBarcodeScan as EventListener);
    }, [isAnyModalOpen, processBarcode]);
 
-   const fiscalCompliance = useMemo(() => getFiscalComplianceConfig(config), [config.fiscalCompliance]);
+   const fiscalCompliance = useMemo(
+      () => getEffectiveFiscalComplianceConfig(config, activeTerminalConfig),
+      [config, activeTerminalConfig]
+   );
    const fiscalCartGrossTotal = useMemo(
       () => (cart || []).reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0),
       [cart]
@@ -2271,9 +2899,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return threshold > 0 && fiscalCartGrossTotal > threshold ? 'OVER_THRESHOLD' : 'BASE';
    }, [activeTerminalConfig?.operational?.fiscalThreshold, fiscalCartGrossTotal]);
    const requiredSaleFiscalType = useMemo<FiscalDocumentCode>(() => {
+      const customerFiscalType = selectedCustomer?.defaultNcfType;
       const baseLegacyType: NCFType = fiscalThresholdBucket === 'OVER_THRESHOLD'
          ? 'B01'
-         : (selectedCustomer?.defaultNcfType || (selectedCustomer?.requiresFiscalInvoice ? 'B01' : 'B02'));
+         : (
+            customerFiscalType?.startsWith('E')
+               ? mapElectronicFiscalCodeToLegacy(customerFiscalType as any) as NCFType
+               : (customerFiscalType || (selectedCustomer?.requiresFiscalInvoice ? 'B01' : 'B02')) as NCFType
+         );
       return resolveSaleFiscalCode(fiscalCompliance.mode, baseLegacyType);
    }, [
       fiscalCompliance.mode,
@@ -2316,7 +2949,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          let fiscalRemaining = 0;
          let fiscalTotal = 0;
 
-         if (localBuffer && Number(localBuffer.currentNumber) <= Number(localBuffer.endNumber)) {
+         const allocationNextNumber = activeAllocation
+            ? Math.max(
+               Number(activeAllocation.reservedStart || 0),
+               Number(activeAllocation.nextNumber || activeAllocation.reservedStart || 0)
+            )
+            : 0;
+         const localBufferCurrent = Number(localBuffer?.currentNumber || 0);
+         const localBufferIsAligned =
+            Boolean(localBuffer) &&
+            (
+               !activeAllocation ||
+               (
+                  localBufferCurrent >= allocationNextNumber &&
+                  Number(localBuffer?.endNumber || 0) <= Number(activeAllocation.reservedEnd || 0)
+               )
+            );
+
+         if (localBufferIsAligned && localBuffer && Number(localBuffer.currentNumber) <= Number(localBuffer.endNumber)) {
             const current = Number(localBuffer.currentNumber);
             const blockStart = Number(activeAllocation?.reservedStart || localBuffer.startNumber || current);
             const blockEnd = Number(activeAllocation?.reservedEnd || localBuffer.endNumber || current);
@@ -2400,20 +3050,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [products]);
 
    const dedupedSalesCatalogProducts = useMemo(() => {
-      const rankedByIdentity = new Map<string, { product: Product; score: number }>();
+      type RankedProductEntry = { product: Product; score: number; keys: Set<string> };
+      const rankedByIdentity = new Map<string, RankedProductEntry>();
 
       for (const product of salesCatalogProducts) {
          if (!product || typeof product !== 'object' || Array.isArray(product)) continue;
 
-         const key = productSalesIdentityKey(product);
+         const keys = productSalesIdentityKeys(product);
          const score = scoreProductForSales(product, warehouses);
-         const existing = rankedByIdentity.get(key);
-         if (!existing || score > existing.score) {
-            rankedByIdentity.set(key, { product, score });
+         const matchedEntries = Array.from(
+            new Set(keys.map((key) => rankedByIdentity.get(key)).filter(Boolean) as RankedProductEntry[])
+         );
+         const bestExisting = matchedEntries
+            .sort((left, right) => right.score - left.score)[0];
+         const incomingEntry: RankedProductEntry = { product, score, keys: new Set(keys) };
+         const winner = !bestExisting || score > bestExisting.score ? incomingEntry : bestExisting;
+         const mergedKeys = new Set<string>(keys);
+
+         for (const entry of matchedEntries) {
+            entry.keys.forEach((key) => mergedKeys.add(key));
+         }
+
+         winner.keys = mergedKeys;
+         for (const key of mergedKeys) {
+            rankedByIdentity.set(key, winner);
          }
       }
 
-      return Array.from(rankedByIdentity.values(), (entry) => entry.product);
+      const uniqueEntries = Array.from(new Set(rankedByIdentity.values()));
+      return uniqueEntries.map((entry) => entry.product);
    }, [salesCatalogProducts, warehouses]);
 
    const salesCatalogProductEntries = useMemo<SalesCatalogProductEntry[]>(() => {
@@ -2444,9 +3109,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [canonicalizeCategory, dedupedSalesCatalogProducts, displayCategory, productHasActiveTariff, warehouses]);
 
    const filteredProducts = useMemo(() => {
-      const normalizedCategoryFilter = deferredCategoryFilter === 'ALL'
+      const normalizedCategoryFilter = categoryFilter === 'ALL'
          ? 'ALL'
-         : canonicalizeCategory(deferredCategoryFilter);
+         : canonicalizeCategory(categoryFilter);
       const normalizedSearch = deferredSearchTerm.trim().toLowerCase();
 
       const filtered = salesCatalogProductEntries.filter((entry) => {
@@ -2467,7 +3132,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             seenIds.add(p.id);
             return true;
          });
-   }, [salesCatalogProductEntries, deferredCategoryFilter, deferredSearchTerm, canonicalizeCategory, effectiveAllowedCategorySet]);
+   }, [salesCatalogProductEntries, categoryFilter, deferredSearchTerm, canonicalizeCategory, effectiveAllowedCategorySet]);
 
    const handleRetailSearchSubmit = useCallback((rawTerm?: string) => {
       const trimmed = (rawTerm ?? searchTerm ?? '').trim();
@@ -2501,10 +3166,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       retailSearchInputRef.current?.focus();
    }, [searchTerm, findProductByAnyCode, addToCart, isReturnMode, filteredProducts, handleProductClick]);
 
-   const categories = useMemo(() => {
-      const allowedDisplayCategories = Array.from(
-         new Set(Array.from(effectiveAllowedCategorySet).map((category) => displayCategory(category)).filter(Boolean))
-      );
+   const categoryOptions = useMemo(() => {
+      const allowedCategoryOptions = Array.from(effectiveAllowedCategorySet)
+         .map((category) => ({
+            id: canonicalizeCategory(category),
+            label: displayCategory(category),
+         }))
+         .filter((category) => category.id && category.label);
       const availableProducts = salesCatalogProductEntries.filter((entry) => {
          if (!entry.isSellable || !entry.hasActiveTariff || !entry.hasErpWarehouse) return false;
          if (effectiveAllowedCategorySet.size > 0) {
@@ -2521,25 +3189,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          availableCategoryMap.set(normalizedCategory, rawCategory);
       }
 
-      const productCategories = Array.from(availableCategoryMap.values())
-         .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+      const productCategories = Array.from(availableCategoryMap.entries())
+         .map(([id, label]) => ({ id, label }))
+         .sort((a, b) => a.label.localeCompare(b.label, 'es', { sensitivity: 'base' }));
 
-      const scopedCategories = allowedDisplayCategories.length > 0
-         ? allowedDisplayCategories
-         : productCategories;
+      const scopedCategories = productCategories.length > 0
+         ? productCategories
+         : allowedCategoryOptions;
 
-      const cats = ['ALL', ...scopedCategories];
-      return cats;
-   }, [displayCategory, effectiveAllowedCategorySet, salesCatalogProductEntries]);
+      const dedupedCategoryOptions = new Map<string, { id: string; label: string }>();
+      for (const category of scopedCategories) {
+         if (!category.id || dedupedCategoryOptions.has(category.id)) continue;
+         dedupedCategoryOptions.set(category.id, category);
+      }
+
+      return [{ id: 'ALL', label: 'Todas' }, ...Array.from(dedupedCategoryOptions.values())];
+   }, [canonicalizeCategory, displayCategory, effectiveAllowedCategorySet, salesCatalogProductEntries]);
+
+   const categoryOptionIds = useMemo(() => categoryOptions.map((option) => option.id), [categoryOptions]);
 
    useEffect(() => {
-      if (categoryFilter !== 'ALL' && !categories.includes(categoryFilter)) {
+      const selectedCategoryKey = categoryFilter === 'ALL' ? 'ALL' : canonicalizeCategory(categoryFilter);
+      if (selectedCategoryKey !== 'ALL' && !categoryOptionIds.includes(selectedCategoryKey)) {
          setCategoryFilter('ALL');
       }
-   }, [categories, categoryFilter]);
-
-
-
+   }, [canonicalizeCategory, categoryFilter, categoryOptionIds]);
 
    // --- PROMOTION ENGINE INTEGRATION ---
    const processedCart = useMemo(() => {
@@ -2571,6 +3245,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       () => processedCart.reduce((sum, item) => sum + Math.abs(Number(item.quantity || 0)), 0),
       [processedCart]
    );
+   const hasClearableFreshItems = useMemo(
+      () => cart.some(item => !isKitchenDispatchedCartItem(item)),
+      [cart]
+   );
 
    const isTaxIncluded = activeTariff?.taxIncluded || false;
    const grossLineTotal = useMemo(
@@ -2593,21 +3271,41 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       });
    }, [processedCart, config, discountAmount, isTaxIncluded, activeTerminalConfig]);
 
-   const cartTax = taxBreakdown.reduce((sum, t) => sum + t.amount, 0);
+   const displayTaxBreakdown = useMemo(() => {
+      const grouped = new Map<string, { id: string; name: string; rate: number; amount: number }>();
+      taxBreakdown.forEach((tax) => {
+         const rateKey = String(Math.round((Number(tax.rate || 0) <= 1 ? Number(tax.rate || 0) * 100 : Number(tax.rate || 0)) * 1000) / 1000);
+         const existing = grouped.get(rateKey);
+         const normalizedName = (tax.name || '').toLowerCase();
+         const displayName = normalizedName.includes('itbis') ? tax.name : existing?.name || tax.name;
+         grouped.set(rateKey, {
+            id: existing?.id || `tax-rate-${rateKey}`,
+            name: displayName,
+            rate: tax.rate,
+            amount: (existing?.amount || 0) + tax.amount,
+         });
+      });
+      return Array.from(grouped.values()).map((tax) => ({
+         ...tax,
+         amount: Math.round((tax.amount + Number.EPSILON) * 100) / 100,
+      }));
+   }, [taxBreakdown]);
+
+   const cartTax = displayTaxBreakdown.reduce((sum, t) => sum + t.amount, 0);
    const primaryTaxLabel = useMemo(() => {
-      if (taxBreakdown.length === 1) {
-         return formatTaxLineLabel(taxBreakdown[0]);
+      if (displayTaxBreakdown.length === 1) {
+         return formatTaxLineLabel(displayTaxBreakdown[0]);
       }
       return null;
-   }, [taxBreakdown]);
+   }, [displayTaxBreakdown]);
    const combinedTaxBreakdown = useMemo(() => {
-      if (taxBreakdown.length <= 1) return [];
-      return taxBreakdown.map((tax) => ({
+      if (displayTaxBreakdown.length <= 1) return [];
+      return displayTaxBreakdown.map((tax) => ({
          id: tax.id,
          label: formatTaxLineLabel(tax),
          amount: tax.amount,
       }));
-   }, [taxBreakdown]);
+   }, [displayTaxBreakdown]);
 
    const tipsConfig = config.tipsConfig;
    const serviceCharge = tipsConfig?.serviceCharge;
@@ -2712,13 +3410,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const syncedTicket: ParkedTicket = {
          id: orderId,
-         name: existing?.name || `Mesa: ${activeTable.nombre || activeTable.name || orderId}`,
+         name: existing?.name || `Mesa: ${activeTableContext.compactLabel || activeTable.nombre || activeTable.name || orderId}`,
          alias: existing?.alias,
          items: [...cart],
          total: cartTotal,
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
-         timestamp: existing?.timestamp || new Date().toISOString()
+         timestamp: existing?.timestamp || new Date().toISOString(),
+         tableId: activeTable.id,
+         orderNumber: readCartOrderNumber(cart) || existing?.orderNumber,
+         tableDisplayLabel: activeTableContext.compactLabel || existing?.tableDisplayLabel,
+         tableRoomLabel: activeTableContext.roomLabel || existing?.tableRoomLabel,
       };
 
       const nextTickets = [...parkedTickets.filter(ticket => ticket.id !== orderId), syncedTicket];
@@ -2727,19 +3429,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          window.clearTimeout(ticketAutoSyncTimeoutRef.current);
       }
 
-      ticketAutoSyncTimeoutRef.current = window.setTimeout(() => {
+      const flushTicketSync = () => {
          onUpdateParkedTickets(nextTickets);
+         void Promise.resolve(onTableOrderSaved?.(activeTable, syncedTicket));
+         ticketAutoSyncFlushRef.current = null;
          ticketAutoSyncTimeoutRef.current = null;
-      }, 120);
+      };
+
+      ticketAutoSyncFlushRef.current = flushTicketSync;
+      ticketAutoSyncTimeoutRef.current = window.setTimeout(flushTicketSync, 120);
 
       return () => {
          if (ticketAutoSyncTimeoutRef.current) {
             window.clearTimeout(ticketAutoSyncTimeoutRef.current);
             ticketAutoSyncTimeoutRef.current = null;
          }
+         if (ticketAutoSyncFlushRef.current === flushTicketSync) {
+            flushTicketSync();
+         }
       };
    }, [
+      activeTable?.id,
       activeTable?.currentOrderId,
+      activeTableContext.compactLabel,
+      activeTableContext.roomLabel,
       activeTable?.nombre,
       activeTable?.name,
       cart,
@@ -2747,7 +3460,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       parkedTickets,
       selectedCustomer?.id,
       selectedCustomer?.name,
-      onUpdateParkedTickets
+      onUpdateParkedTickets,
+      onTableOrderSaved
    ]);
 
    const handleCreateReservation = async () => {
@@ -2894,18 +3608,40 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       let newCart: CartItem[] = [];
 
       if (cartIdToDelete || updatedItem === null) {
+         const targetCartId = cartIdToDelete || editingItem?.cartId;
+         const originalItem = (cart || []).find(i => i.cartId === targetCartId);
+         if (isKitchenDispatchedCartItem(originalItem)) {
+            alert(isKdsReturnedCartItem(originalItem)
+               ? 'Este artículo ya fue devuelto en cocina y queda bloqueado para auditoría.'
+               : 'Este artículo ya fue enviado al KDS. Usa Devolver para marcarlo en cocina; no se puede borrar directamente.'
+            );
+            return;
+         }
+
          // Void Line Check
          const authorized = await requestApproval({
             permission: 'POS_VOID_ITEM',
             actionDescription: 'Eliminar artículo del carrito',
-            context: { itemId: cartIdToDelete || editingItem?.cartId }
+            context: { itemId: targetCartId }
          });
          if (!authorized) return;
 
-         newCart = cart.filter(i => i.cartId !== (cartIdToDelete || editingItem?.cartId));
+         newCart = cart.filter(i => i.cartId !== targetCartId);
       } else {
          // Update Check (Price Override / Discount)
          const originalItem = (cart || []).find(i => i.cartId === updatedItem.cartId);
+
+         if (isKitchenDispatchedCartItem(originalItem)) {
+            const originalQty = Number(originalItem.quantity || 0);
+            const nextQty = Number(updatedItem.quantity || 0);
+            if (Math.abs(nextQty - originalQty) > 0.0001) {
+               alert(isKdsReturnedCartItem(originalItem)
+                  ? 'Este artículo ya fue devuelto en cocina y queda bloqueado para auditoría.'
+                  : 'Este artículo ya fue enviado al KDS. Para cancelar la preparación usa Devolver; para agregar más cantidad, agrega una línea nueva.'
+               );
+               return;
+            }
+         }
 
          // Stock Check (Quantity Increase)
          if (originalItem && updatedItem.quantity > originalItem.quantity) {
@@ -2941,6 +3677,150 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
+   const handleClearFreshCartItems = async () => {
+      if (blockRecoveredUberOrderMutation('limpiar los artículos nuevos del ticket')) return;
+      if (cart.length === 0) return;
+
+      const freshItems = cart.filter(item => !isKitchenDispatchedCartItem(item));
+      const dispatchedItems = cart.filter(item => isKitchenDispatchedCartItem(item));
+
+      if (freshItems.length === 0) {
+         alert('No hay artículos nuevos para borrar. Los artículos enviados a cocina deben devolverse.');
+         return;
+      }
+
+      const confirmMessage = dispatchedItems.length > 0
+         ? `Se borrarán ${freshItems.length} artículo(s) nuevo(s). ${dispatchedItems.length} artículo(s) ya enviados a cocina se mantendrán en el ticket.`
+         : `Se borrarán todos los artículos nuevos del ticket (${freshItems.length}).`;
+
+      if (!window.confirm(`${confirmMessage}\n\n¿Continuar?`)) return;
+
+      const authorized = await requestApproval({
+         permission: 'POS_VOID_ITEM',
+         actionDescription: 'Limpiar artículos nuevos del ticket',
+         context: {
+            ticketId: activeTable?.currentOrderId,
+            reason: `Limpiar ${freshItems.length} artículo(s) nuevo(s); mantener ${dispatchedItems.length} enviado(s) a cocina`,
+         }
+      });
+      if (!authorized) return;
+
+      onUpdateCart(dispatchedItems);
+      setActiveCartItemId(null);
+      setEditingItem(null);
+
+      if (activeTable) {
+         const ticketId = activeTable.currentOrderId;
+         if (dispatchedItems.length === 0) {
+            await releaseActiveEmptyTable({ silent: true, force: true });
+         } else if (ticketId) {
+            const total = dispatchedItems.reduce((sum, i) => sum + (Number(i.price || 0) * Number(i.quantity || 0)), 0);
+            const updatedTickets = (Array.isArray(parkedTickets) ? parkedTickets : []).map(p =>
+               p.id === ticketId ? { ...p, items: dispatchedItems, total } : p
+            );
+            await Promise.resolve(onUpdateParkedTickets(updatedTickets));
+
+            try {
+               fetch(`http://localhost:8001/api/ordenes/${ticketId}`, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ items: dispatchedItems, total, status: 'OCCUPIED' })
+               });
+            } catch (e) {
+               console.error('Auto-sync clear failed:', e);
+            }
+         }
+      }
+
+      const keptMessage = dispatchedItems.length > 0
+         ? ` ${dispatchedItems.length} enviado(s) a cocina se mantienen.`
+         : '';
+      setSuccessToast(`${freshItems.length} artículo(s) nuevo(s) borrado(s).${keptMessage}`);
+   };
+
+   const syncConsignmentSettlement = useCallback(async (transaction: Transaction): Promise<Transaction> => {
+      const consignmentItems = (transaction.items || []).filter(item => item.consignmentId && item.consignmentLineId);
+      if (consignmentItems.length === 0) return transaction;
+
+      const alreadySyncedKeys = readConsignmentSyncKeys();
+      const grouped = new Map<string, CartItem[]>();
+      consignmentItems.forEach(item => {
+         const consignmentId = String(item.consignmentId || '').trim();
+         if (!consignmentId) return;
+         grouped.set(consignmentId, [...(grouped.get(consignmentId) || []), item]);
+      });
+
+      const responses: unknown[] = [];
+      try {
+         for (const [consignmentId, items] of grouped.entries()) {
+            const payload = {
+               transaction: {
+                  id: transaction.id,
+                  displayId: transaction.displayId,
+                  date: transaction.date,
+                  terminalId: transaction.terminalId,
+                  userId: transaction.userId,
+                  userName: transaction.userName,
+               },
+               lines: items
+                  .map(item => {
+                     const idempotencyKey = `${consignmentId}:${item.consignmentLineId}:${transaction.id}`;
+                     if (alreadySyncedKeys.has(idempotencyKey)) return null;
+                     return {
+                        consignmentLineId: String(item.consignmentLineId),
+                        productId: item.id,
+                        quantity: Math.abs(Number(item.quantity || 0)),
+                        unitPrice: Number(item.price || 0),
+                        total: Math.abs(Number(item.quantity || 0)) * Number(item.price || 0),
+                        localCartId: item.cartId,
+                        idempotencyKey,
+                     };
+                  })
+                  .filter(Boolean) as Array<{
+                     consignmentLineId: string;
+                     productId: string;
+                     quantity: number;
+                     unitPrice: number;
+                     total: number;
+                     localCartId?: string;
+                     idempotencyKey: string;
+                  }>,
+            };
+
+            if (payload.lines.length === 0) continue;
+
+            const response = transaction.documentType === 'REFUND'
+               ? await consignmentSyncService.returnConsignment(consignmentId, payload)
+               : await consignmentSyncService.liquidateConsignment(consignmentId, payload);
+            responses.push(response);
+            payload.lines.forEach(line => alreadySyncedKeys.add(line.idempotencyKey));
+            saveConsignmentSyncKeys(alreadySyncedKeys);
+         }
+
+         const updated: Transaction = {
+            ...transaction,
+            consignmentSyncStatus: 'SYNCED',
+            consignmentSyncedAt: new Date().toISOString(),
+            consignmentSyncError: undefined,
+            consignmentSyncResponse: responses,
+         };
+         await db.saveDocument('transactions', updated);
+         await db.saveDocument('transactionHistory', { ...updated, syncStatus: updated.syncStatus || 'PENDING' } as any).catch(() => undefined);
+         return updated;
+      } catch (error) {
+         const updated: Transaction = {
+            ...transaction,
+            consignmentSyncStatus: 'ERROR',
+            consignmentSyncError: error instanceof Error ? error.message : 'No se pudo sincronizar la consignación.',
+         };
+         await db.saveDocument('transactions', updated).catch(() => undefined);
+         await db.saveDocument('transactionHistory', { ...updated, syncStatus: updated.syncStatus || 'PENDING' } as any).catch(() => undefined);
+         setErrorToast('Ticket guardado, pero la liquidación de consignación quedó pendiente.');
+         setTimeout(() => setErrorToast(null), 4000);
+         return updated;
+      }
+   }, []);
+
 
    const handlePaymentConfirm = async (payments: PaymentEntry[], voluntaryTip?: number): Promise<Transaction | null> => {
          const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> => {
@@ -2959,7 +3839,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       try {
          const terminalId = activeTerminalId || 't1';
-         const fiscalCompliance = getFiscalComplianceConfig(config);
+         const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, activeTerminalConfig);
          const uberRecoveredOrder = isUberRecoveredReservation(activeRecoveredReservation) ? activeRecoveredReservation : null;
          const customerForCheckout = uberRecoveredOrder ? null : effectiveSelectedCustomer;
          const couponAssignedTo = redeemedCoupon?.assignedTo?.trim();
@@ -2979,6 +3859,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             : {};
          const hasReturns = processedCart.some(i => i.quantity < 0);
          const hasSales = processedCart.some(i => i.quantity > 0);
+         if (hasSales && !ensureSalesWithOpenZPermission()) return null;
          const productsById = new Map(products.map(product => [product.id, product] as const));
          const isRefundOnly = hasReturns && !hasSales;
          const refundSeriesId = activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND';
@@ -2990,7 +3871,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          normalizedRefundItems.forEach(item => sellableConditions.set(item.cartId, 'SELLABLE'));
 
          // --- FISCAL COMPLIANCE CHECK (DGII RNC VALIDATION) ---
-         if (!isRefundOnly && fiscalStatus && (fiscalStatus.type === 'B01' || fiscalStatus.type === 'E31') && customerForCheckout) {
+         const isCreditFiscalDocument = !isRefundOnly && fiscalStatus && (fiscalStatus.type === 'B01' || fiscalStatus.type === 'E31');
+         if (isCreditFiscalDocument) {
+            const buyerTaxDigits = String(customerForCheckout?.taxId || '').replace(/\D/g, '');
+            const hasValidBuyerTaxId = buyerTaxDigits.length === 9 || buyerTaxDigits.length === 11;
+            if (!customerForCheckout || !hasValidBuyerTaxId) {
+               alert(
+                  `⛔ COMPROBANTE BLOQUEADO\n\n` +
+                  `Para emitir Crédito Fiscal (${fiscalStatus.type}) debe seleccionar un cliente con RNC/Cédula válido.\n\n` +
+                  `Acción requerida: complete el RNC/Cédula del cliente o cambie el tipo de comprobante a Consumo (${fiscalStatus.type === 'E31' ? 'E32' : 'B02'}).`
+               );
+               return null;
+            }
+
             if (customerForCheckout.fiscalStatus && customerForCheckout.fiscalStatus !== 'ACTIVO') {
                alert(
                   `⛔ COMPROBANTE BLOQUEADO\n\n` +
@@ -3119,7 +4012,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ? Math.round(((saleTotal - saleTaxAmount) + Number.EPSILON) * 100) / 100
                   : saleTotal;
                const salePayments = payments.filter(p => !['WALLET', 'ADVANCE'].includes(p.method));
-               const saleSettlement = buildTransactionSettlementFields(salePayments, saleTotal, baseCurrency.code);
+               const salePayableTotal = saleTotal + (voluntaryTip || 0);
+               const saleSettlement = buildTransactionSettlementFields(salePayments, salePayableTotal, baseCurrency.code);
 
                // Prepare wallet operations
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
@@ -3143,8 +4037,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         documentType: 'TICKET' as const,
                         seriesId: assignedSequenceId,
                         items: saleItems,
-                        total: saleTotal + (voluntaryTip || 0),
+                        total: saleTotal,
                         payments: salePayments,
+                        ...getConsignmentTicketFields(saleItems),
+                        consignmentSyncStatus: saleItems.some(item => item.consignmentId) ? 'PENDING' : undefined,
                         serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
                         voluntaryTipAmount: voluntaryTip,
                         ...saleSettlement,
@@ -3160,7 +4056,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         legacyNcf: fiscalStatus.type.startsWith('E') ? undefined : finalNcf,
                         electronicNcf: fiscalStatus.type.startsWith('E') ? finalNcf : undefined,
                         fiscalMode: fiscalCompliance.mode,
-                        fiscalProvider: fiscalStatus.type.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
+                        fiscalProvider: fiscalStatus.type.startsWith('E') ? getDefaultFiscalProvider(config, activeTerminalConfig) : 'NONE',
                         taxAmount: saleTaxAmount,
                         netAmount: saleNetAmount,
                         pendingBalance: creditAmount || undefined,
@@ -3204,6 +4100,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   );
 
                   if (result.sale) {
+                     result.sale = await syncConsignmentSettlement(result.sale);
                      await persistStandaloneSaleHistory({
                         ...result.sale,
                         syncStatus: 'PENDING'
@@ -3249,6 +4146,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                const data = await withTimeout(response.json(), 4000, 'TIMEOUT_SPLIT_PARSE');
                if (data.success) {
+                  if (data.result?.sale) {
+                     data.result.sale = await syncConsignmentSettlement(data.result.sale);
+                  }
                   onUpdateCart([]);
                   if (redeemedCoupon) setGlobalDiscount({ type: 'PERCENT', value: 0 });
                   setRedeemedCoupon(null);
@@ -3271,9 +4171,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
                const refundDocumentTotal = normalizedRefundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-               const documentItems = isRefundOnly ? normalizedRefundItems : processedCart;
-               const documentTotal = (isRefundOnly ? refundDocumentTotal : cartTotal) + (voluntaryTip || 0);
-               const transactionSettlement = buildTransactionSettlementFields(paymentsForTransaction, documentTotal, baseCurrency.code);
+               const rawDocumentItems = isRefundOnly ? normalizedRefundItems : processedCart;
+               const saleOrderNumber = !isRefundOnly
+                  ? (readCartOrderNumber(processedCart) || reserveNextOrderNumber())
+                  : undefined;
+               const documentItems = !isRefundOnly
+                  ? applyOrderContextToItems(rawDocumentItems, saleOrderNumber)
+                  : rawDocumentItems;
+               const documentConsignmentFields = getConsignmentTicketFields(documentItems);
+               const documentTotal = isRefundOnly ? refundDocumentTotal : cartTotal;
+               const payableTotal = documentTotal + (voluntaryTip || 0);
+               const transactionSettlement = buildTransactionSettlementFields(paymentsForTransaction, payableTotal, baseCurrency.code);
 
                const txn = await withTimeout(transactionService.createTransaction({
                   documentType: hasReturns ? 'REFUND' : 'TICKET',
@@ -3284,6 +4192,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   items: documentItems,
                   total: documentTotal,
                   payments: paymentsForTransaction,
+                  ...documentConsignmentFields,
+                  consignmentSyncStatus: documentConsignmentFields.consignmentId ? 'PENDING' : undefined,
                   ...transactionSettlement,
                   userId: currentUser.id,
                   userName: currentUser.name,
@@ -3291,6 +4201,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   status: !isRefundOnly && creditAmount > 0 ? 'PENDING' : 'COMPLETED',
                   customerId: customerForCheckout?.id,
                   customerName: customerForCheckout?.name || activeRecoveredReservation?.customerName,
+                  orderNumber: saleOrderNumber,
+                  tableDisplayLabel: activeTableContext.compactLabel || undefined,
+                  tableRoomLabel: activeTableContext.roomLabel || undefined,
                   pendingBalance: creditAmount > 0 ? creditAmount : undefined,
                   dueDate: creditAmount > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined, // Default 30 days
                   ncf: finalNcf,
@@ -3298,7 +4211,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   legacyNcf: finalNcfType?.startsWith('E') ? undefined : finalNcf,
                   electronicNcf: finalNcfType?.startsWith('E') ? finalNcf : undefined,
                   fiscalMode: fiscalCompliance.mode,
-                  fiscalProvider: finalNcfType?.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
+                  fiscalProvider: finalNcfType?.startsWith('E') ? getDefaultFiscalProvider(config, activeTerminalConfig) : 'NONE',
                   taxAmount: taxAmount,
                   netAmount: netAmount,
                   discountAmount: discountAmount,
@@ -3343,11 +4256,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ...txn,
                   seriesId: txn.seriesId || (isRefundOnly ? refundSeriesId : assignedSequenceId)
                };
+               const settledFinalTxn = await syncConsignmentSettlement(finalTxn);
 
                if (isRefundOnly) {
                   await persistStandaloneRefundTransaction(
                      {
-                        ...finalTxn,
+                        ...settledFinalTxn,
                         items: normalizedRefundItems,
                         total: refundDocumentTotal,
                         status: 'REFUNDED',
@@ -3365,7 +4279,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      }
                   );
                } else {
-                  onTransactionComplete(finalTxn);
+                  onTransactionComplete(settledFinalTxn);
                }
 
                if (activeRecoveredReservation && !uberRecoveredOrder) {
@@ -3452,25 +4366,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
-   const handleSplitConfirm = (remainingItems: CartItem[], newTicketItems: CartItem[]) => {
+   const handleSplitConfirm = (remainingItems: CartItem[], newTicketItems: CartItem[], extraNewTickets: CartItem[][] = [], splitCount = 2) => {
       onUpdateCart(remainingItems);
-      
-      const newTicket: ParkedTicket = {
-         id: `split-${Date.now()}`,
+
+      const baseName = activeTable?.name || activeTable?.nombre || 'Mesa';
+      const now = Date.now();
+      const splitGroups = [newTicketItems, ...extraNewTickets].filter(items => items.length > 0);
+      const newTickets: ParkedTicket[] = splitGroups.map((items, index) => ({
+         id: `split-${now}-${index + 2}`,
          tableId: activeTable?.id || 'manual',
-         name: `${activeTable?.name || activeTable?.nombre || 'Mesa'} - Parte 2`,
-         alias: `${activeTable?.name || activeTable?.nombre || 'Mesa'} - Parte 2`,
-         items: newTicketItems,
-         total: newTicketItems.reduce((acc, item) => acc + (item.price * item.quantity), 0),
+         name: `${baseName} - Cuenta ${index + 2}/${splitCount}`,
+         alias: `${baseName} - Cuenta ${index + 2}/${splitCount}`,
+         items,
+         total: items.reduce((acc, item) => acc + (Number(item.price || 0) * Number(item.quantity || 0)), 0),
          timestamp: new Date().toISOString()
-      };
-      
-      onUpdateParkedTickets([...parkedTickets, newTicket]);
+      }));
+
+      onUpdateParkedTickets([...parkedTickets, ...newTickets]);
       setShowSplitModal(false);
-      setSuccessToast("Cuenta dividida: Parte movida a Tickets en Espera");
+      setSuccessToast(`Cuenta dividida en ${splitCount}: cuentas guardadas en Tickets en Espera`);
    };
 
    const proceedToCheckout = () => {
+      const hasSaleLines = cart.some(item => Number(item.quantity || 0) > 0);
+      if (hasSaleLines && !ensureSalesWithOpenZPermission()) return;
+
       const threshold = activeTerminalConfig?.operational?.fiscalThreshold || 0;
       if (threshold > 0 && cartTotal > threshold && !selectedCustomer) {
          alert(`ATENCIÓN: El monto de la venta (${baseCurrency.symbol}${cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) excede el umbral fiscal permitido para facturas de consumo (${baseCurrency.symbol}${threshold.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}).\n\nEs obligatorio identificar al cliente y emitir una Factura de Crédito Fiscal (B01).`);
@@ -3498,16 +4418,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       const orderId = activeTable?.currentOrderId || `P-${Date.now()}`;
+      const orderNumber = readCartOrderNumber(cart) || reserveNextOrderNumber();
+      const displayOrderRef = orderNumber || activeTableContext.compactLabel || orderId;
 
       try {
          const configuredAreas = await db.get('productionAreas' as any).catch(() => []) as any;
          const productionAreas: ProductionAreaConfig[] = Array.isArray(configuredAreas) ? configuredAreas : [];
          const areaById = new Map(productionAreas.map(area => [String(area.id), area]));
+         const configuredProducts = await db.get('products' as any).catch(() => []) as any;
+         const productionProducts: Product[] = Array.isArray(configuredProducts) ? configuredProducts : [];
+         const resolveAreaForDispatch = buildProductionAreaResolver(productionAreas, productionProducts);
 
          // 1. Group only routed items by production area for separate tickets/KDS screens.
          const areas: Record<string, { area: ProductionAreaConfig, title: string, items: CartItem[] }> = {};
+         const dispatchMetaByCartId = new Map<string, KdsDispatchMeta>();
          newItems.forEach(item => {
-            const areaId = String(item.production_area_id || '').trim();
+            const areaId = resolveAreaForDispatch(item);
             if (!areaId) return;
 
             const configuredArea = areaById.get(areaId);
@@ -3540,6 +4466,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          let sentKdsCount = 0;
          let queuedKdsCount = 0;
          const dispatchedCartIds = new Set<string>();
+         const activeTableRoom = activeTable?.roomId ? rooms?.find(room => room.id === activeTable.roomId) : undefined;
+         const kdsTablePayload = activeTable ? {
+            id: activeTable.id,
+            name: activeTable.name || activeTable.nombre,
+            displayLabel: activeTableContext.compactLabel || null,
+            roomId: activeTable.roomId || null,
+            roomName: activeTableRoom?.name || activeTableRoom?.nombre || null,
+            guests: activeTable.guests || activeTable.capacity || null,
+         } : null;
 
          // 2. Print and/or send to KDS per configured area.
          for (const [areaId, areaData] of Object.entries(areas)) {
@@ -3550,34 +4485,46 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (shouldPrint) {
                const printed = await printComanda(config, {
                   items: areaData.items,
-                  table: activeTable || undefined,
-                  orderNumber: orderId,
+                  table: activeTable
+                     ? ({ ...activeTable, tableDisplayLabel: activeTableContext.compactLabel } as any)
+                     : undefined,
+                  orderNumber,
                   customerName: selectedCustomer?.name,
                   areaTitle: areaData.title,
-                  productionAreaId: areaId
+                  productionAreaId: areaId,
+                  printerId: areaData.area.printer_id || areaData.area.printerId
                });
                if (printed) printedCount += 1;
             }
 
             if (shouldSendKds) {
                const kdsBaseUrl = resolveKdsBaseUrl(areaData.area, config);
-               const kdsItems = buildKdsDispatchItems(areaData.items);
+               const kdsItems = buildKdsDispatchItems(areaData.items, areaId);
                const areaTotal = areaData.items.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
+               const warningMinutes = normalizeKdsMinutes(areaData.area.kds_warning_minutes, 10);
+               const criticalMinutes = Math.max(
+                  warningMinutes + 1,
+                  normalizeKdsMinutes(areaData.area.kds_critical_minutes, 20)
+               );
                const kdsPayload = {
                   orderId,
-                  displayId: orderId,
+                  displayId: displayOrderRef,
+                  orderNumber,
                   date: new Date().toISOString(),
                   terminalId: activeTerminalId,
                   userName: currentUser.name,
                   customerName: selectedCustomer?.name || 'Cliente General',
-                  table: activeTable ? {
-                     id: activeTable.id,
-                     name: activeTable.name || activeTable.nombre,
-                  } : null,
+                  table: kdsTablePayload,
                   area: {
                      id: areaId,
                      name: areaData.title,
                      targetTerminalId: areaData.area.target_terminal_id || null,
+                     warningMinutes,
+                     criticalMinutes,
+                  },
+                  kdsTiming: {
+                     warningMinutes,
+                     criticalMinutes,
                   },
                   items: kdsItems,
                   total: areaTotal,
@@ -3597,10 +4544,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         items: kdsItems,
                         total: areaTotal,
                         status: 'OCCUPIED',
-                        displayId: orderId,
+                        displayId: displayOrderRef,
+                        orderNumber,
                         terminalId: activeTerminalId,
                         userName: currentUser.name,
                         customerName: selectedCustomer?.name || 'Cliente General',
+                        table: kdsTablePayload,
+                        area: kdsPayload.area,
+                        kdsTiming: kdsPayload.kdsTiming,
                      });
                      const endpoint = `${kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(orderId)}`;
                      await postJsonWithTimeout(endpoint, kdsPayload);
@@ -3619,21 +4570,43 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
             }
 
-            areaData.items.forEach(item => {
-               dispatchedCartIds.add(item.cartId || `${item.id}:${item.name}`);
+            areaData.items.forEach((item, index) => {
+               const key = getCartDispatchKey(item);
+               dispatchedCartIds.add(key);
+               dispatchMetaByCartId.set(key, {
+                  areaId,
+                  orderId,
+                  itemIds: buildKdsItemIds(orderId, areaId, item, index),
+               });
             });
          }
 
          // 3. Mark items as dispatched in state
          const updatedCart = cart.map(item => {
-            const key = item.cartId || `${item.id}:${item.name}`;
-            return dispatchedCartIds.has(key) ? { ...item, dispatched: true } : item;
+            const key = getCartDispatchKey(item);
+            const dispatchMeta = dispatchMetaByCartId.get(key);
+            return dispatchedCartIds.has(key) ? {
+               ...item,
+               ...(dispatchMeta?.orderId ? { orderNumber: orderNumber || item.orderNumber } : {}),
+               ...(activeTableContext.compactLabel ? { tableDisplayLabel: activeTableContext.compactLabel } : {}),
+               ...(activeTableContext.roomLabel ? { tableRoomLabel: activeTableContext.roomLabel } : {}),
+               dispatched: true,
+               kdsStatus: 'ENVIADO',
+               kdsOrderId: dispatchMeta?.orderId,
+               kdsAreaId: dispatchMeta?.areaId,
+               kdsItemIds: dispatchMeta?.itemIds,
+               production_area_id: dispatchMeta?.areaId || resolveProductionAreaId(item) || undefined,
+               restaurantConfig: {
+                  ...(item.restaurantConfig || {}),
+                  production_area_id: dispatchMeta?.areaId || item.restaurantConfig?.production_area_id || undefined,
+               },
+            } : item;
          });
          onUpdateCart(updatedCart);
 
          // 4. Save state to DB (Parking)
          if (activeTable) {
-            await handleParkCurrentTicket();
+            await handleParkCurrentTicket(undefined, updatedCart);
          }
 
          const parts = [
@@ -3649,13 +4622,121 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
+   const handleReturnDispatchedCartItem = async (item: CartItem) => {
+      if (blockRecoveredUberOrderMutation('devolver el artículo enviado a cocina')) return;
+      if (!item.dispatched) {
+         await updateCartItem(null, item.cartId);
+         return;
+      }
+      if (isKdsReturnedCartItem(item)) {
+         alert('Este artículo ya fue marcado como devuelto en cocina.');
+         return;
+      }
+
+      const authorized = await requestApproval({
+         permission: 'POS_VOID_ITEM',
+         actionDescription: 'Devolver artículo enviado al KDS',
+         context: {
+            itemId: item.cartId,
+            ticketId: item.kdsOrderId || activeTable?.currentOrderId,
+            reason: 'Devolución de artículo enviado al KDS'
+         }
+      });
+      if (!authorized) return;
+
+      const confirmed = window.confirm(`¿Marcar "${item.name}" como devuelto en cocina? El plato no debe prepararse y la línea quedará en el ticket como auditoría.`);
+      if (!confirmed) return;
+
+      try {
+         const configuredAreas = await db.get('productionAreas' as any).catch(() => []) as any;
+         const productionAreas: ProductionAreaConfig[] = Array.isArray(configuredAreas) ? configuredAreas : [];
+         const configuredProducts = await db.get('products' as any).catch(() => []) as any;
+         const productionProducts: Product[] = Array.isArray(configuredProducts) ? configuredProducts : [];
+         const areaById = new Map(productionAreas.map(area => [String(area.id), area]));
+         const resolveAreaForDispatch = buildProductionAreaResolver(productionAreas, productionProducts);
+         const areaId = String(item.kdsAreaId || resolveAreaForDispatch(item) || '').trim();
+         const area = areaById.get(areaId);
+         const orderId = String(item.kdsOrderId || activeTable?.currentOrderId || '').trim();
+
+         if (!orderId || !area) {
+            alert('No se pudo ubicar la orden o el centro de producción para devolver este artículo en cocina.');
+            return;
+         }
+
+         const kdsBaseUrl = resolveKdsBaseUrl(area, config);
+         if (!kdsBaseUrl) {
+            alert('El centro de producción no tiene ruta KDS disponible. Configura la IP/terminal antes de devolver en cocina.');
+            return;
+         }
+
+         await postJsonWithTimeout(`${kdsBaseUrl}/api/cocina/cambiar-estado`, {
+            orden_id: orderId,
+            item_id: item.kdsItemIds?.[0],
+            item_ids: item.kdsItemIds || [],
+            cart_id: item.cartId,
+            producto_id: item.id,
+            nuevo_estado: 'DEVUELTO',
+         });
+
+         const returnedAt = new Date().toISOString();
+         const newCart = cart.map((cartItem) => {
+            if (cartItem.cartId !== item.cartId) return cartItem;
+            return {
+               ...cartItem,
+               price: 0,
+               kdsOriginalPrice: cartItem.kdsOriginalPrice ?? cartItem.price,
+               kdsStatus: 'DEVUELTO',
+               kdsReturnedAt: returnedAt,
+               voidedByKdsReturn: true,
+               returnReason: 'Devuelto en cocina',
+            };
+         });
+         onUpdateCart(newCart);
+
+         if (activeTable && onUpdateParkedTickets) {
+            const ticketId = activeTable.currentOrderId;
+            const total = newCart.reduce((sum, cartItem) => sum + (Number(cartItem.price || 0) * Number(cartItem.quantity || 0)), 0);
+            onUpdateParkedTickets(parkedTickets.map(ticket => ticket.id === ticketId ? { ...ticket, items: newCart, total } : ticket));
+         }
+
+         setSuccessToast(`Artículo devuelto en cocina: ${item.name}`);
+      } catch (error: any) {
+         console.error('[KDS] No se pudo marcar artículo como devuelto:', error);
+         alert(`No se pudo marcar el artículo como devuelto en cocina: ${error?.message || 'error desconocido'}`);
+      }
+   };
+
    const handlePrintPrecuenta = async () => {
       if (cart.length === 0) return;
       setSuccessToast('Generando Precuenta...');
-      // In a more complete implementation, this would call printer.ts with a dummy transaction
-      setTimeout(() => {
-         setSuccessToast('Precuenta enviada a impresora');
-      }, 1000);
+      try {
+         const printed = await printPrecuenta(config, {
+            items: processedCart.filter(item => Number(item.quantity || 0) > 0),
+            subtotal: cartSubtotal,
+            discountTotal: discountAmount,
+            taxTotal: cartTax,
+            finalTotal: cartTotal,
+            table: activeTable,
+            customerName: effectiveSelectedCustomer?.name,
+            terminalId,
+            orderNumber: readCartOrderNumber(cart),
+            tableDisplayLabel: activeTableContext.compactLabel || activeTableContext.tableLabel,
+         });
+
+         if (printed) {
+            setSuccessToast('Precuenta enviada a impresora');
+            return;
+         }
+
+         setSuccessToast(null);
+         setErrorToast('No se pudo imprimir la precuenta. Verifica la impresora de ticket.');
+         window.setTimeout(() => setErrorToast(null), 3000);
+      } catch (error) {
+         console.error('Error imprimiendo precuenta:', error);
+         setSuccessToast(null);
+         setErrorToast('No se pudo imprimir la precuenta.');
+         window.setTimeout(() => setErrorToast(null), 3000);
+      }
    };
 
    const openReservationModal = () => {
@@ -3683,72 +4764,90 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setShowReservationModal(true);
    };
 
-   const releaseActiveEmptyTable = async (): Promise<boolean> => {
-      if (!activeTable || cart.length > 0) return false;
+   const releaseActiveEmptyTable = async (options: { silent?: boolean; force?: boolean } = {}): Promise<boolean> => {
+      if (!activeTable || (!options.force && cart.length > 0)) return false;
 
-      try {
-         const releaseRes = await fetch('/api/mesas/liberar', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tableId: activeTable.id })
-         });
-         const releaseData = await releaseRes.json().catch(() => null);
+      const tableToRelease = activeTable;
 
-         if (!releaseRes.ok || (releaseData && releaseData.success === false)) {
-            throw new Error(releaseData?.message || `HTTP ${releaseRes.status}`);
-         }
-
-         if (activeTable.currentOrderId) {
-            const remaining = parkedTickets.filter(p => p.id !== activeTable.currentOrderId);
-            onUpdateParkedTickets(remaining);
-         }
-
-         onUpdateCart([]);
-         onSelectCustomer(null);
-         setActiveRecoveredReservation(null);
-         if (onClearActiveTable) onClearActiveTable();
-         setSuccessToast('Mesa liberada (sin productos)');
-         return true;
-      } catch (error) {
-         console.error('Failed to auto-release empty table:', error);
-         return false;
+      if (tableToRelease.currentOrderId) {
+         const remaining = parkedTickets.filter(p => p.id !== tableToRelease.currentOrderId);
+         await Promise.resolve(onUpdateParkedTickets(remaining));
       }
+
+      onUpdateCart([]);
+      onSelectCustomer(null);
+      setActiveRecoveredReservation(null);
+      if (onClearActiveTable) onClearActiveTable();
+      if (!options.silent) {
+         setSuccessToast('Mesa liberada (sin productos)');
+      }
+
+      void (async () => {
+         const controller = new AbortController();
+         const timeoutId = window.setTimeout(() => controller.abort(), 2500);
+         try {
+            const releaseRes = await fetch('/api/mesas/liberar', {
+               method: 'POST',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({ tableId: tableToRelease.id }),
+               signal: controller.signal
+            });
+            const releaseData = await releaseRes.json().catch(() => null);
+
+            if (!releaseRes.ok || (releaseData && releaseData.success === false)) {
+               throw new Error(releaseData?.message || `HTTP ${releaseRes.status}`);
+            }
+         } catch (error) {
+            console.warn('No se pudo confirmar la liberacion de mesa en servidor:', error);
+         } finally {
+            window.clearTimeout(timeoutId);
+         }
+      })();
+
+      return true;
    };
 
-   const handleParkCurrentTicket = async (aliasInput?: string) => {
+   const handleParkCurrentTicket = async (aliasInput?: string, cartOverride?: CartItem[]) => {
       if (blockRecoveredUberOrderMutation('guardarlo como ticket en espera')) return;
-      if (cart.length === 0) return;
+      const ticketItems = cartOverride || cart;
+      if (ticketItems.length === 0) return;
       const parkedTicketId = activeTable?.currentOrderId || `P-${Date.now()}`;
       const existingParked = (Array.isArray(parkedTickets) ? parkedTickets : []).find((ticket) => ticket.id === parkedTicketId);
       const normalizedAlias = aliasInput === undefined
          ? existingParked?.alias
          : (aliasInput.trim() || undefined);
+      const ticketTotal = ticketItems.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
       const newParked: ParkedTicket = {
          id: parkedTicketId,
          name: buildParkedTicketName(),
          alias: normalizedAlias,
-         items: [...cart],
-         total: cartTotal,
+         items: [...ticketItems],
+         total: ticketTotal,
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
-         timestamp: existingParked?.timestamp || new Date().toISOString()
+         timestamp: existingParked?.timestamp || new Date().toISOString(),
+         tableId: activeTable?.id || existingParked?.tableId,
+         orderNumber: readCartOrderNumber(ticketItems) || existingParked?.orderNumber,
+         tableDisplayLabel: activeTableContext.compactLabel || existingParked?.tableDisplayLabel,
+         tableRoomLabel: activeTableContext.roomLabel || existingParked?.tableRoomLabel,
       };
 
       // Remove existing if updating same ID
       const updatedTickets = [...(Array.isArray(parkedTickets) ? parkedTickets : []).filter(p => p.id !== newParked.id), newParked];
-      onUpdateParkedTickets(updatedTickets);
+      await Promise.resolve(onUpdateParkedTickets(updatedTickets));
       closeParkAliasModal();
 
       if (activeTable) {
+         await Promise.resolve(onTableOrderSaved?.(activeTable, newParked));
          try {
-            const total = cart.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+            const total = ticketItems.reduce((sum, i) => sum + (i.price * i.quantity), 0);
 
             // Sync with KDS backend
             await fetch(`http://localhost:8001/api/ordenes/${newParked.id}`, {
                method: 'PUT',
                headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({
-                  items: cart,
+                  items: ticketItems,
                   total: total,
                   status: 'OCCUPIED'
                })
@@ -3771,6 +4870,56 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setActiveRecoveredReservation(null);
       setErrorToast(activeTable ? "Mesa Guardada" : "Ticket Guardado");
       setTimeout(() => setErrorToast(null), 2000);
+   };
+
+   const saveActiveTableOrderForMap = async () => {
+      if (!activeTable || cart.length === 0) return;
+
+      const parkedTicketId = activeTable.currentOrderId || `ORD-${Date.now()}`;
+      const existingParked = (Array.isArray(parkedTickets) ? parkedTickets : []).find((ticket) => ticket.id === parkedTicketId);
+      const tableName = activeTable.nombre || activeTable.name || 'Mesa';
+      const tableOrder: ParkedTicket = {
+         id: parkedTicketId,
+         name: existingParked?.name || `Mesa: ${activeTableContext.compactLabel || tableName}`,
+         alias: existingParked?.alias,
+         items: [...cart],
+         total: cartTotal,
+         customerId: selectedCustomer?.id,
+         customerName: selectedCustomer?.name,
+         timestamp: existingParked?.timestamp || new Date().toISOString(),
+         tableId: activeTable.id,
+         orderNumber: readCartOrderNumber(cart) || existingParked?.orderNumber,
+         tableDisplayLabel: activeTableContext.compactLabel || existingParked?.tableDisplayLabel,
+         tableRoomLabel: activeTableContext.roomLabel || existingParked?.tableRoomLabel,
+      };
+
+      const updatedTickets = [
+         ...(Array.isArray(parkedTickets) ? parkedTickets : []).filter(ticket => ticket.id !== tableOrder.id),
+         tableOrder
+      ];
+      await Promise.resolve(onUpdateParkedTickets(updatedTickets));
+      await Promise.resolve(onTableOrderSaved?.(activeTable, tableOrder));
+
+      onUpdateCart([]);
+      onSelectCustomer(null);
+      setActiveRecoveredReservation(null);
+      if (onClearActiveTable) onClearActiveTable();
+
+      void (async () => {
+         try {
+            await fetch(`http://localhost:8001/api/ordenes/${tableOrder.id}`, {
+               method: 'PUT',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({
+                  items: tableOrder.items,
+                  total: tableOrder.total,
+                  status: 'OCCUPIED'
+               })
+            });
+         } catch (error) {
+            console.warn('No se pudo sincronizar la mesa con cocina al volver al mapa:', error);
+         }
+      })();
    };
 
    const handleSendAndExit = async () => {
@@ -3798,15 +4947,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const handleBackToMap = async () => {
-      if (blockRecoveredUberOrderMutation('enviarlo a espera')) return;
+      if (blockRecoveredUberOrderMutation('volver al mapa de mesas')) return;
 
-      const releasedEmptyTable = await releaseActiveEmptyTable();
+      setShowParkedList(false);
+      closeParkAliasModal();
 
-      // Ensure we park if there's something to park and no auto-release happened
-      if (!releasedEmptyTable && cart.length > 0) {
-         await handleParkCurrentTicket();
+      if (activeTable) {
+         if (cart.length === 0) {
+            await releaseActiveEmptyTable({ silent: true });
+         } else {
+            await saveActiveTableOrderForMap();
+         }
       }
-      // Always navigate, even if empty (handleParkCurrentTicket might skip nav if empty/no-table)
+
       if (onOpenTableMap) onOpenTableMap();
    };
 
@@ -3860,7 +5013,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       );
       const refundTotal = refundSummary.total;
 
-      const fiscalCompliance = getFiscalComplianceConfig(config);
+      const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, activeTerminalConfig);
       const creditNoteFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
       const creditNoteNcf = await db.getNextNCF(creditNoteFiscalType, terminalId, 50);
 
@@ -3881,7 +5034,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          originalTransactionId: originalTransaction.id,
          electronicNcf: creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
          fiscalMode: fiscalCompliance.mode,
-         fiscalProvider: creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
+         fiscalProvider: creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config, activeTerminalConfig) : 'NONE',
          taxAmount: refundSummary.taxAmount,
          netAmount: refundSummary.netAmount,
          affectedNCF: originalTransaction.ncf,
@@ -3965,6 +5118,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          case 'DRAWER': handleOpenDrawer(); break;
          case 'SAVE': openParkAliasModal(); break;
          case 'TABLES':
+            if (!showTableMapButton) break;
             if ((config.vertical === 'RESTAURANT' || config.vertical === 'RETAIL') && cart.length > 0) {
                handleSendAndExit();
             } else {
@@ -4035,7 +5189,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                   onUpdateConfig(newConfig);
                   setActiveTariffId(mobileConfig.tariffId);
-                  setCategoryFilter(mobileConfig.categoryId);
+                  setCategoryFilter(mobileConfig.categoryId === 'ALL' ? 'ALL' : canonicalizeCategory(mobileConfig.categoryId));
                }
 
                // Proceed to add product
@@ -4132,7 +5286,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
 
 
-               <div className="w-full md:flex-1 flex flex-wrap items-center gap-2 md:gap-4 md:min-w-0">
+               <div className="w-full md:flex-1 flex flex-wrap md:flex-nowrap items-center gap-2 md:gap-4 md:min-w-0">
                   <div className="relative shrink-0 ml-auto md:ml-0 order-1" ref={tariffSelectorRef}>
                      <button
                         type="button"
@@ -4140,7 +5294,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            if (!canChangeTariff) return;
                            setShowTariffSelector(!showTariffSelector);
                         }}
-                        className={`flex items-center justify-between gap-2 md:gap-3 min-w-[134px] sm:min-w-[156px] px-3 md:px-5 py-2.5 md:py-3 rounded-2xl border-2 transition-all ${showTariffSelector ? 'border-purple-500 bg-purple-50' : 'bg-purple-50/80 border-purple-100 md:bg-gray-100 md:border-transparent'} ${canChangeTariff ? 'hover:border-purple-300' : 'opacity-75 cursor-not-allowed'}`}
+                        className={`flex items-center justify-between gap-2 md:gap-3 min-w-[134px] sm:min-w-[156px] px-3 md:px-5 py-2.5 md:py-3 rounded-2xl border-2 transition-all ${showTariffSelector ? 'border-purple-500 bg-purple-50' : 'bg-purple-50/80 border-purple-100'} ${canChangeTariff ? 'hover:border-purple-300' : 'opacity-75 cursor-not-allowed'}`}
                         disabled={!canChangeTariff}
                         title={canChangeTariff ? 'Cambiar tarifa activa' : 'Tu rol no tiene permiso para cambiar la tarifa'}
                      >
@@ -4188,7 +5342,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      )}
                   </div>
 
-                  <div className="relative order-3 md:order-none w-full md:flex-1 group min-w-0 md:min-w-[300px]">
+                  <div className="relative order-3 md:order-none w-full md:flex-1 group min-w-0 md:min-w-[220px]">
                      <Search className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                      <input
                         ref={searchInputRef}
@@ -4201,6 +5355,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      />
                      <button onClick={() => setIsScannerOpen(true)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
                   </div>
+
+                  {canReceiveConsignments && (
+                     <button
+                        type="button"
+                        onClick={() => {
+                           setShowConsignmentModal(true);
+                           setConsignmentError(null);
+                        }}
+                        className="order-4 md:order-none inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-cyan-100 bg-cyan-50 text-cyan-700 shadow-sm transition-all hover:border-cyan-200 hover:bg-cyan-100"
+                        title="Buscar consignaciones ERP"
+                     >
+                        <Package size={19} />
+                     </button>
+                  )}
 
 
                   <SupervisorAuthModal
@@ -4224,18 +5392,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* --- CATEGORY SELECTOR BAR --- */}
             <div className={categoryContainerClass}>
-               {categories.map((cat, idx) => (
+               {categoryOptions.map((categoryOption, idx) => {
+                  const selectedCategoryKey = categoryFilter === 'ALL' ? 'ALL' : canonicalizeCategory(categoryFilter);
+                  const isActiveCategory = selectedCategoryKey === categoryOption.id;
+                  return (
                   <button
-                     key={cat || `cat-${idx}`}
-                     onClick={() => setCategoryFilter(cat)}
-                     className={`px-6 py-2.5 rounded-full text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap shadow-sm border ${categoryFilter === cat
+                     key={categoryOption.id || `cat-${idx}`}
+                     onClick={() => setCategoryFilter(categoryOption.id)}
+                     className={`px-6 py-2.5 rounded-full text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap shadow-sm border ${isActiveCategory
                         ? 'bg-blue-600 border-blue-500 text-white shadow-blue-200 scale-105'
                         : 'bg-white border-gray-200 text-gray-400 hover:border-blue-300 hover:text-blue-600'
                         }`}
                   >
-                     {cat === 'ALL' ? 'Todas' : cat}
+                     {categoryOption.label}
                   </button>
-               ))}
+                  );
+               })}
             </div>
 
             <div
@@ -4281,8 +5453,92 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
             )}
 
-            {/* --- Novedad: ActionGrid (Rediseño Adaptativo) REEMPLAZADO POR TABS EN PANEL DERECHO --- */}
-            {/* (Removido para usar Option 2: Tabs) */}
+            {!isMobile && isRestaurantMode && (
+               <div
+                  ref={desktopActionGridRef}
+                  className="flex-none border-t border-gray-200 bg-white px-4 py-3 shadow-[0_-8px_24px_rgba(15,23,42,0.06)]"
+               >
+                  <div className="grid grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)] gap-4">
+                     <div className="grid grid-cols-[64px_repeat(5,minmax(0,1fr))] gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
+                        <div className="flex items-center justify-center rounded-lg bg-white text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">
+                           Venta
+                        </div>
+                        <button
+                           type="button"
+                           onClick={() => handleGridAction('DISCOUNT')}
+                           className={`flex h-12 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-black uppercase tracking-wide transition-all active:scale-95 ${globalDiscount.value > 0 ? 'border-red-200 bg-red-50 text-red-600' : 'border-red-100 bg-red-50 text-red-500 hover:bg-red-100'}`}
+                        >
+                           <Percent size={16} />
+                           <span>Desc %</span>
+                        </button>
+                        <button
+                           type="button"
+                           onClick={() => handleGridAction('COUPON')}
+                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-cyan-100 bg-cyan-50 px-3 text-xs font-black uppercase tracking-wide text-cyan-700 transition-all hover:bg-cyan-100 active:scale-95"
+                        >
+                           <Tag size={16} />
+                           <span>Cupones</span>
+                        </button>
+                        <button
+                           type="button"
+                           onClick={() => handleGridAction('loyalty_card')}
+                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 text-xs font-black uppercase tracking-wide text-blue-700 transition-all hover:bg-blue-100 active:scale-95"
+                        >
+                           <CreditCard size={16} />
+                           <span>Tarjeta</span>
+                        </button>
+                        <button
+                           type="button"
+                           onClick={() => handleGridAction('SAVE')}
+                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-black uppercase tracking-wide text-slate-700 transition-all hover:bg-slate-100 active:scale-95"
+                        >
+                           <Save size={16} />
+                           <span>Guardar</span>
+                        </button>
+                        <button
+                           type="button"
+                           onClick={onLogout}
+                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-red-100 bg-red-50 px-3 text-xs font-black uppercase tracking-wide text-red-700 transition-all hover:bg-red-100 active:scale-95"
+                        >
+                           <LogOut size={16} />
+                           <span>Salir</span>
+                        </button>
+                     </div>
+
+                     <div className="grid grid-cols-[64px_repeat(3,minmax(0,1fr))] gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
+                        <div className="flex items-center justify-center rounded-lg bg-white text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">
+                           Cuenta
+                        </div>
+                        <button
+                           type="button"
+                           onClick={() => { void handleBackToMap(); }}
+                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-black uppercase tracking-wide text-slate-700 transition-all hover:bg-slate-100 active:scale-95"
+                        >
+                           <Layout size={16} />
+                           <span>Mesas</span>
+                        </button>
+                        <button
+                           type="button"
+                           onClick={handlePrintPrecuenta}
+                           disabled={cart.length === 0}
+                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 text-xs font-black uppercase tracking-wide text-blue-700 transition-all hover:bg-blue-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                           <Printer size={16} />
+                           <span>Sub-total</span>
+                        </button>
+                        <button
+                           type="button"
+                           onClick={handleDispatchCommand}
+                           disabled={cart.length === 0}
+                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-orange-100 bg-orange-50 px-3 text-xs font-black uppercase tracking-wide text-orange-600 transition-all hover:bg-orange-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                           <ChefHat size={16} />
+                           <span>Cocina</span>
+                        </button>
+                     </div>
+                  </div>
+               </div>
+            )}
          </div >
 
          {/* RIGHT SIDEBAR: CURRENT TICKET */}
@@ -4299,16 +5555,25 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <h2 className="font-black text-gray-800 text-lg leading-tight">
                         {activeTable ? (
                            <div className="flex flex-col">
-                              {(() => {
-                                 const room = rooms?.find(r => r.id === activeTable.roomId);
-                                 return room ? <span className="text-[10px] text-gray-400 -mb-1 font-bold uppercase">{room.name || room.nombre}</span> : null;
-                              })()}
-                              <span>Mesa {activeTable.nombre || activeTable.name}</span>
+                              <span className="text-[10px] text-gray-400 -mb-1 font-bold uppercase">
+                                 {activeTableContext.roomLabel || 'Mesa Activa'}
+                              </span>
+                              <span>{activeTableContext.compactLabel || activeTable.nombre || activeTable.name}</span>
                            </div>
                         ) : 'Ticket Actual'}
                      </h2>
                   </div>
                   <div className="flex gap-1">
+                     {cart.length > 0 && (
+                        <button
+                           onClick={handleClearFreshCartItems}
+                           disabled={!hasClearableFreshItems}
+                           className="p-2 text-gray-400 hover:text-red-600 disabled:opacity-40 disabled:hover:text-gray-400"
+                           title={hasClearableFreshItems ? 'Borrar artículos nuevos' : 'No hay artículos nuevos para borrar'}
+                        >
+                           <Trash2 size={20} />
+                        </button>
+                     )}
                      <button onClick={openParkAliasModal} className="p-2 text-gray-400 hover:text-blue-600" title="Guardar Ticket">
                         <Save size={20} />
                      </button>
@@ -4322,6 +5587,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <button className="p-2 text-gray-400 hover:text-gray-600"><MoreVertical size={20} /></button>
                         <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-xl border border-gray-100 hidden group-hover:block z-50">
                            <button onClick={onOpenHistory} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><History size={16} /> Historial</button>
+                           <button onClick={onOpenFinance} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><ClipboardCheck size={16} /> Cierre X</button>
                            <button onClick={onOpenZReport || onOpenFinance} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><Lock size={16} /> Cierre Z</button>
                            <button onClick={() => onOpenSettings()} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><Settings size={16} /> Ajustes</button>
                            <button onClick={onLogout} className="w-full px-4 py-3 text-left text-sm font-bold text-red-600 hover:bg-red-50 flex items-center gap-2 border-t border-gray-50"><LogOut size={16} /> Salir</button>
@@ -4366,51 +5632,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div >
 
             {/* DESKTOP: marca + mesa/comensales bajo el logo; retail: busqueda al centro; botones carrito/acciones alineados a la derecha (como APK 1.0.300) */}
-            <div className={`hidden md:flex px-5 pt-3 pb-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-4 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
+            <div className={`hidden md:flex px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
                <div className="flex w-full items-center justify-between gap-4">
-                  <div className="flex min-w-0 shrink-0 flex-col gap-2 self-start pt-1">
+                  <div className="flex min-w-0 shrink-0 items-center justify-start">
                      {renderTicketBrand(false)}
-                     {activeTable && (
-                        <div className="flex max-w-[min(100%,20rem)] flex-col items-start animate-in fade-in slide-in-from-top-2 duration-300">
-                           <span className="mb-1 text-[10px] font-black uppercase leading-none tracking-widest text-slate-400">Mesa Activa</span>
-                           <div className="flex items-center gap-2">
-                              <Layout size={18} className="text-blue-600" />
-                              <span className="text-2xl font-black tracking-tighter text-slate-900">
-                                 {activeTable.nombre || activeTable.name}
-                              </span>
-                           </div>
-
-                           <div className="mt-2 flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 shadow-sm transition-all hover:shadow-md">
-                              <button
-                                 onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
-                                 className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
-                                 title="Reducir comensales"
-                              >
-                                 <Minus size={10} strokeWidth={3} />
-                              </button>
-
-                              <div className="flex items-center gap-1 px-1">
-                                 <Users size={12} className="text-blue-500" />
-                                 <span className="min-w-[1rem] text-center text-xs font-black text-slate-700">{activeTable.guests || 1}</span>
-                              </div>
-
-                              <button
-                                 onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
-                                 className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-500"
-                                 title="Aumentar comensales"
-                              >
-                                 <Plus size={10} strokeWidth={3} />
-                              </button>
-                           </div>
-
-                           {shouldApplyServiceCharge && (
-                              <div className="mt-2.5 flex items-center gap-1 rounded-lg border border-blue-100/50 bg-blue-50 px-2 py-1 text-[9px] font-black uppercase tracking-tighter text-blue-600 animate-in fade-in slide-in-from-top-1">
-                                 <Percent size={10} className="text-blue-500" />
-                                 <span>Propina Sugerida {serviceCharge?.percentage}% Activa</span>
-                              </div>
-                           )}
-                        </div>
-                     )}
                   </div>
 
                   {/* RETAIL MODE SEARCH BAR */}
@@ -4510,19 +5735,40 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
-                  <div className="ml-auto flex max-w-[180px] shrink-0 items-center justify-end gap-2">
+                  <div className="ml-auto flex max-w-[240px] shrink-0 items-center justify-end gap-2">
+                     {cart.length > 0 && (
+                        <button
+                           onClick={handleClearFreshCartItems}
+                           disabled={!hasClearableFreshItems}
+                           aria-label="Borrar artículos nuevos del ticket"
+                           title={hasClearableFreshItems ? 'Borrar artículos nuevos' : 'No hay artículos nuevos para borrar'}
+                           className={`group flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
+                              hasClearableFreshItems
+                                 ? 'border-rose-200 bg-white text-rose-500 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700'
+                                 : 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-300'
+                           }`}
+                        >
+                           <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition-all ${
+                              hasClearableFreshItems
+                                 ? 'border-rose-100 bg-rose-50 text-rose-500 group-hover:border-rose-200 group-hover:bg-white group-hover:text-rose-700'
+                                 : 'border-slate-100 bg-white text-slate-300'
+                           }`}>
+                              <Trash2 size={18} strokeWidth={2.3} />
+                           </span>
+                        </button>
+                     )}
                      <button
                         onClick={() => setRightSidebarTab('CART')}
                         aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${cartQuantity} artículos` : ''}`}
                         title={`Carrito${cartQuantity > 0 ? ` (${cartQuantity})` : ''}`}
-                        className={`group relative flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
+                        className={`group relative flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
                            rightSidebarTab === 'CART'
                               ? 'border-red-200 bg-gradient-to-br from-red-50 via-rose-50 to-red-100 text-red-700 shadow-[0_14px_30px_rgba(248,113,113,0.18)]'
                               : 'border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:bg-red-50/70 hover:text-red-600'
                         }`}
                      >
                         <span
-                           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
+                           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition-all ${
                               rightSidebarTab === 'CART'
                                  ? 'border-red-200/80 bg-white/90 text-red-600 shadow-sm'
                                  : 'border-red-100 bg-red-50 text-red-500 group-hover:border-red-200 group-hover:bg-white group-hover:text-red-600'
@@ -4540,14 +5786,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         onClick={() => setRightSidebarTab('ACTIONS')}
                         aria-label="Abrir acciones rápidas"
                         title="Acciones"
-                        className={`group flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
+                        className={`group flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
                            rightSidebarTab === 'ACTIONS'
                               ? 'border-blue-200 bg-gradient-to-br from-blue-50 via-sky-50 to-blue-100 text-blue-700 shadow-[0_14px_30px_rgba(59,130,246,0.18)]'
                               : 'border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:bg-blue-50/70 hover:text-blue-600'
                         }`}
                      >
                         <span
-                           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
+                           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition-all ${
                               rightSidebarTab === 'ACTIONS'
                                  ? 'border-blue-200/80 bg-white/90 text-blue-600 shadow-sm'
                                  : 'border-blue-100 bg-blue-50 text-blue-500 group-hover:border-blue-200 group-hover:bg-white group-hover:text-blue-600'
@@ -4558,6 +5804,47 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </button>
                   </div>
                </div>
+
+               {activeTable && (
+                  <div className="flex w-full items-center justify-between gap-3 animate-in fade-in slide-in-from-top-1 duration-200">
+                     <div className="flex min-w-0 items-center gap-2">
+                        <Layout size={18} className="shrink-0 text-blue-600" />
+                        <span className="truncate text-xl font-black tracking-tight text-slate-900">
+                           {activeTableContext.compactLabel || activeTable.nombre || activeTable.name}
+                        </span>
+                     </div>
+
+                     <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 shadow-sm transition-all hover:shadow-md">
+                        <button
+                           onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
+                           className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                           title="Reducir comensales"
+                        >
+                           <Minus size={10} strokeWidth={3} />
+                        </button>
+
+                        <div className="flex items-center gap-1 px-1">
+                           <Users size={12} className="text-blue-500" />
+                           <span className="min-w-[1rem] text-center text-xs font-black text-slate-700">{activeTable.guests || 1}</span>
+                        </div>
+
+                        <button
+                           onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
+                           className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-500"
+                           title="Aumentar comensales"
+                        >
+                           <Plus size={10} strokeWidth={3} />
+                        </button>
+                     </div>
+                  </div>
+               )}
+
+               {activeTable && shouldApplyServiceCharge && (
+                  <div className="flex items-center gap-1 rounded-lg border border-blue-100/50 bg-blue-50 px-2 py-1 text-[9px] font-black uppercase tracking-tighter text-blue-600 animate-in fade-in slide-in-from-top-1">
+                     <Percent size={10} className="text-blue-500" />
+                     <span>Propina Sugerida {serviceCharge?.percentage}% Activa</span>
+                  </div>
+               )}
 
                {
                   selectedCustomer ? (
@@ -4696,6 +5983,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         const lineNet = item.price * item.quantity;
                         const lineTaxSummary = getCartItemTaxSummary(item);
                         const isActiveCartItem = activeCartItemId === item.cartId;
+                        const isReturnedToKds = isKdsReturnedCartItem(item);
+                        const isDispatchedToKds = Boolean(item.dispatched);
 
                         // MOBILE CARD DESIGN
                         if (isMobile) {
@@ -4719,6 +6008,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
                                           </div>
                                           <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">{lineTaxSummary}</span>
+                                          {item.consignmentDocumentNo && (
+                                             <span className="mt-1 inline-flex w-fit rounded-full bg-cyan-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-cyan-700">
+                                                Cons. {item.consignmentDocumentNo}
+                                             </span>
+                                          )}
+                                          {isDispatchedToKds && (
+                                             <span className={`mt-1 inline-flex w-fit rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${isReturnedToKds ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
+                                                {isReturnedToKds ? 'KDS devuelto' : 'KDS enviado'}
+                                             </span>
+                                          )}
                                        </div>
                                        {item.salespersonId && (
                                           <div className="mt-1 flex items-center gap-1 text-[9px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded-md w-fit">
@@ -4741,9 +6040,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 <button
                                                    onClick={(e) => {
                                                       e.stopPropagation();
+                                                      if (isDispatchedToKds) {
+                                                         alert('Este artículo ya fue enviado al KDS. Usa Devolver para cancelar la preparación.');
+                                                         return;
+                                                      }
                                                       updateCartItem({ ...item, quantity: item.quantity - 1 });
                                                    }}
-                                                   className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-all hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+                                                   disabled={isDispatchedToKds}
+                                                   className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-all hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
                                                 >
                                                    <Minus size={13} strokeWidth={3} />
                                                 </button>
@@ -4751,9 +6055,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 <button
                                                    onClick={(e) => {
                                                       e.stopPropagation();
+                                                      if (isDispatchedToKds) {
+                                                         alert('Para agregar más cantidad a un artículo ya enviado al KDS, agrega una línea nueva desde el catálogo.');
+                                                         return;
+                                                      }
                                                       updateCartItem({ ...item, quantity: item.quantity + 1 });
                                                    }}
-                                                   className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-all hover:bg-blue-700"
+                                                   disabled={isDispatchedToKds}
+                                                   className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
                                                 >
                                                    <Plus size={13} strokeWidth={3} />
                                                 </button>
@@ -4771,16 +6080,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              >
                                                 <Edit3 size={13} strokeWidth={2.4} />
                                              </button>
-                                             <button
-                                                onClick={(e) => {
-                                                   e.stopPropagation();
-                                                   updateCartItem(null, item.cartId);
-                                                }}
-                                                className="inline-flex items-center justify-center rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-red-700 shadow-sm transition-all hover:bg-red-100"
-                                                title="Eliminar artículo"
-                                             >
-                                                <Trash2 size={13} strokeWidth={2.4} />
-                                             </button>
+                                             {isDispatchedToKds ? (
+                                                <button
+                                                   onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      handleReturnDispatchedCartItem(item);
+                                                   }}
+                                                   disabled={isReturnedToKds}
+                                                   className="inline-flex items-center justify-center rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-700 shadow-sm transition-all hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                   title={isReturnedToKds ? 'Artículo ya devuelto en KDS' : 'Devolver en KDS'}
+                                                >
+                                                   <Undo2 size={13} strokeWidth={2.4} />
+                                                </button>
+                                             ) : (
+                                                <button
+                                                   onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      updateCartItem(null, item.cartId);
+                                                   }}
+                                                   className="inline-flex items-center justify-center rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-red-700 shadow-sm transition-all hover:bg-red-100"
+                                                   title="Eliminar artículo"
+                                                >
+                                                   <Trash2 size={13} strokeWidth={2.4} />
+                                                </button>
+                                             )}
                                           </div>
                                        </>
                                     )}
@@ -4831,6 +6154,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              <div className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">
                                                 {lineTaxSummary}
                                              </div>
+                                             {item.consignmentDocumentNo && (
+                                                <span className="mt-1 inline-flex w-fit rounded-full bg-cyan-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-cyan-700">
+                                                   Cons. {item.consignmentDocumentNo}
+                                                </span>
+                                             )}
+                                             {isDispatchedToKds && (
+                                                <span className={`mt-1 inline-flex w-fit rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${isReturnedToKds ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
+                                                   {isReturnedToKds ? 'KDS devuelto' : 'KDS enviado'}
+                                                </span>
+                                             )}
                                           </div>
                                           {/* Salesperson Badge */}
                                           {item.salespersonId && (
@@ -4850,9 +6183,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              <button
                                                 onClick={(e) => {
                                                    e.stopPropagation();
+                                                   if (isDispatchedToKds) {
+                                                      alert('Este artículo ya fue enviado al KDS. Usa Devolver para cancelar la preparación.');
+                                                      return;
+                                                   }
                                                    updateCartItem({ ...item, quantity: item.quantity - 1 }, item.cartId);
                                                 }}
-                                                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+                                                disabled={isDispatchedToKds}
+                                                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
                                                 title="Restar cantidad"
                                              >
                                                 <Minus size={13} strokeWidth={3} />
@@ -4860,9 +6198,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              <button
                                                 onClick={(e) => {
                                                    e.stopPropagation();
+                                                   if (isDispatchedToKds) {
+                                                      alert('Para agregar más cantidad a un artículo ya enviado al KDS, agrega una línea nueva desde el catálogo.');
+                                                      return;
+                                                   }
                                                    updateCartItem({ ...item, quantity: item.quantity + 1 }, item.cartId);
                                                 }}
-                                                className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-colors hover:bg-blue-700"
+                                                disabled={isDispatchedToKds}
+                                                className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
                                                 title="Sumar cantidad"
                                              >
                                                 <Plus size={13} strokeWidth={3} />
@@ -4877,16 +6220,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              >
                                                 <Edit3 size={12} />
                                              </button>
-                                             <button
-                                                onClick={(e) => {
-                                                   e.stopPropagation();
-                                                   updateCartItem(null, item.cartId);
-                                                }}
-                                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 shadow-sm transition-colors hover:bg-red-100"
-                                                title="Eliminar artículo"
-                                             >
-                                                <Trash2 size={12} />
-                                             </button>
+                                             {isDispatchedToKds ? (
+                                                <button
+                                                   onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      handleReturnDispatchedCartItem(item);
+                                                   }}
+                                                   disabled={isReturnedToKds}
+                                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 text-amber-700 shadow-sm transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                   title={isReturnedToKds ? 'Artículo ya devuelto en KDS' : 'Devolver en KDS'}
+                                                >
+                                                   <Undo2 size={12} />
+                                                </button>
+                                             ) : (
+                                                <button
+                                                   onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      updateCartItem(null, item.cartId);
+                                                   }}
+                                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 shadow-sm transition-colors hover:bg-red-100"
+                                                   title="Eliminar artículo"
+                                                >
+                                                   <Trash2 size={12} />
+                                                </button>
+                                             )}
                                           </div>
                                        )}
                                     </div>
@@ -5123,7 +6480,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
 
-                               <div className={`grid ${isRestaurantMode ? 'grid-cols-5' : 'grid-cols-[112px_minmax(0,1fr)]'} items-center gap-2 pt-5 px-2`}>
+                               <div className={`grid ${isRestaurantMode ? 'grid-cols-1' : restaurantActionGridClass} items-center gap-3 pt-5 px-1`}>
                                  {!isRestaurantMode ? (
                                     <>
                                        <button
@@ -5157,36 +6514,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  ) : (
                                     <>
                                        <button
-                                          onClick={() => onOpenTableMap && onOpenTableMap()}
-                                          className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase border-2 border-slate-100 bg-white text-slate-600 hover:bg-slate-50 transition-all active:scale-95"
-                                       >
-                                          <Layout size={20} />
-                                          <span>Mesas</span>
-                                       </button>
-                                       <button
-                                          onClick={handleDispatchCommand}
-                                          className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase border-2 border-orange-100 bg-orange-50 text-orange-600 hover:bg-orange-100 transition-all active:scale-95"
-                                       >
-                                          <ChefHat size={20} />
-                                          <span>Cocina</span>
-                                       </button>
-                                       {!hideTableExtras && (
-                                          <button
-                                             onClick={() => setShowSplitModal(true)}
-                                             className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase border-2 border-purple-100 bg-purple-50 text-purple-600 hover:bg-purple-100 transition-all active:scale-95"
-                                          >
-                                             <Split size={20} />
-                                             <span>Dividir</span>
-                                          </button>
-                                       )}
-                                       <button
-                                          onClick={handlePrintPrecuenta}
-                                          className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase border-2 border-blue-100 bg-blue-50 text-blue-600 hover:bg-blue-100 transition-all active:scale-95"
-                                       >
-                                          <Printer size={20} />
-                                          <span>Precuenta</span>
-                                       </button>
-                                       <button
                                           onClick={() => {
                                              if (cart.length > 0) {
                                                 if (!canProceedWithOperationalSession()) return;
@@ -5194,9 +6521,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              }
                                           }}
                                           disabled={cart.length === 0}
-                                          className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase bg-slate-900 text-white hover:bg-black transition-all active:scale-95 disabled:opacity-50"
+                                          className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase bg-slate-900 text-white hover:bg-black shadow-sm hover:shadow-md transition-all active:scale-95 disabled:bg-slate-200 disabled:text-slate-500 disabled:opacity-100 disabled:cursor-not-allowed"
                                        >
-                                          <ArrowRight size={20} />
+                                          <ArrowRight size={24} />
                                           <span>Cobrar</span>
                                        </button>
                                     </>
@@ -5234,6 +6561,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <QrCode size={18} />
                            <span className="text-[9px] font-bold uppercase">Cupón</span>
                         </button>
+                        {canReceiveConsignments && (
+                           <button onClick={() => {
+                              setShowConsignmentModal(true);
+                              setConsignmentError(null);
+                           }} className="flex flex-col items-center gap-1 text-gray-400 hover:text-cyan-700">
+                              <Package size={18} />
+                              <span className="text-[9px] font-bold uppercase">Cons.</span>
+                           </button>
+                        )}
                         {!hideTableExtras && (
                            <>
                               <button onClick={openParkAliasModal} className="flex flex-col items-center gap-1 text-gray-400 hover:text-blue-500">
@@ -5318,7 +6654,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          )}
          {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
-         {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} salesUsers={salesUsers} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
+         {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} salesUsers={salesUsers} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={!isKdsReturnedCartItem(editingItem)} canVoidItem={!editingItem.dispatched} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, selectedVariant, variantInfo) => { addToCart(p, 1, pr, m, undefined, selectedVariant, variantInfo); setSelectedProductForVariants(null); }} />}
          {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(w) => { addToCart(productForScale, w); setProductForScale(null); }} />}
          {
@@ -5337,6 +6673,156 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          <SupervisorModal {...supervisorModalProps} users={users} />
+
+         {
+            showConsignmentModal && (
+               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                  <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl animate-in zoom-in-95 duration-200">
+                     <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+                        <div className="flex items-center gap-3">
+                           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-50 text-cyan-700">
+                              <Package size={20} />
+                           </div>
+                           <div>
+                              <h3 className="text-lg font-black text-gray-800">Consignaciones ERP</h3>
+                              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-gray-400">Búsqueda on-demand</p>
+                           </div>
+                        </div>
+                        <button onClick={() => setShowConsignmentModal(false)} className="p-2 hover:bg-gray-100 rounded-full text-gray-400">
+                           <X size={20} />
+                        </button>
+                     </div>
+
+                     <div className="border-b border-gray-100 p-4">
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                           <div className="relative flex-1">
+                              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                              <input
+                                 value={consignmentSearchTerm}
+                                 onChange={(e) => setConsignmentSearchTerm(e.target.value)}
+                                 onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                       e.preventDefault();
+                                       handleSearchConsignments();
+                                    }
+                                 }}
+                                 placeholder="Documento, cliente, producto..."
+                                 className="w-full rounded-xl bg-gray-100 py-3 pl-10 pr-3 text-sm font-bold outline-none transition-all focus:bg-white focus:ring-2 focus:ring-cyan-500"
+                              />
+                           </div>
+                           <button
+                              type="button"
+                              onClick={handleSearchConsignments}
+                              disabled={isSearchingConsignments}
+                              className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-700 px-5 py-3 text-sm font-black text-white shadow-sm transition-all hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60"
+                           >
+                              {isSearchingConsignments ? <RefreshCw size={16} className="animate-spin" /> : <Search size={16} />}
+                              Buscar
+                           </button>
+                        </div>
+                        {consignmentError && (
+                           <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
+                              {consignmentError}
+                           </div>
+                        )}
+                     </div>
+
+                     <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[280px_minmax(0,1fr)]">
+                        <div className="min-h-0 overflow-y-auto border-r border-gray-100 bg-gray-50 p-3">
+                           {consignmentResults.length === 0 ? (
+                              <div className="flex h-full min-h-[180px] items-center justify-center text-center text-xs font-bold uppercase tracking-widest text-gray-400">
+                                 Busca una consignación
+                              </div>
+                           ) : (
+                              <div className="space-y-2">
+                                 {consignmentResults.map((consignment) => {
+                                    const isSelected = selectedConsignment?.id === consignment.id;
+                                    return (
+                                       <button
+                                          key={String(consignment.id)}
+                                          type="button"
+                                          onClick={() => handleOpenConsignment(consignment)}
+                                          className={`w-full rounded-xl border p-3 text-left transition-all ${isSelected ? 'border-cyan-200 bg-white shadow-sm ring-2 ring-cyan-50' : 'border-gray-100 bg-white hover:border-cyan-100'}`}
+                                       >
+                                          <p className="truncate text-sm font-black text-gray-800">{getConsignmentDocumentNo(consignment) || consignment.id}</p>
+                                          <p className="mt-1 truncate text-[11px] font-bold text-gray-500">{getConsignmentCustomerName(consignment) || 'Cliente no especificado'}</p>
+                                          {consignment.status && (
+                                             <span className="mt-2 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-gray-500">
+                                                {consignment.status}
+                                             </span>
+                                          )}
+                                       </button>
+                                    );
+                                 })}
+                              </div>
+                           )}
+                        </div>
+
+                        <div className="min-h-0 overflow-y-auto p-4">
+                           {isLoadingConsignment ? (
+                              <div className="flex h-full min-h-[240px] items-center justify-center gap-2 text-sm font-black text-cyan-700">
+                                 <RefreshCw size={18} className="animate-spin" />
+                                 Cargando consignación
+                              </div>
+                           ) : selectedConsignment ? (
+                              <div className="space-y-4">
+                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                    <div>
+                                       <p className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-600">Documento</p>
+                                       <h4 className="text-xl font-black text-gray-900">{getConsignmentDocumentNo(selectedConsignment)}</h4>
+                                       <p className="text-sm font-bold text-gray-500">{getConsignmentCustomerName(selectedConsignment) || 'Cliente no especificado'}</p>
+                                    </div>
+                                    <button
+                                       type="button"
+                                       onClick={() => handleAddAllConsignmentLines(selectedConsignment)}
+                                       className="inline-flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-3 text-sm font-black text-white transition-all hover:bg-gray-800"
+                                    >
+                                       <PlusCircle size={17} />
+                                       Agregar todo
+                                    </button>
+                                 </div>
+
+                                 <div className="overflow-hidden rounded-xl border border-gray-100">
+                                    {getConsignmentLines(selectedConsignment).map((line) => {
+                                       const product = consignmentSyncService.findMatchingProduct(line, products);
+                                       const quantity = getConsignmentLineQuantity(line);
+                                       const price = getConsignmentLinePrice(line, product ? getProductPrice(product) : 0);
+                                       return (
+                                          <div key={String(line.id)} className="flex flex-col gap-3 border-b border-gray-100 p-3 last:border-b-0 sm:flex-row sm:items-center sm:justify-between">
+                                             <div className="min-w-0">
+                                                <p className="truncate text-sm font-black text-gray-800">{getConsignmentLineProductName(line)}</p>
+                                                <p className="text-[11px] font-bold text-gray-500">
+                                                   {quantity} x {baseCurrency.symbol}{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                </p>
+                                                <p className={`mt-1 text-[10px] font-black uppercase tracking-wide ${product ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                                   {product ? `Vinculado: ${product.name}` : 'Sin producto local vinculado'}
+                                                </p>
+                                             </div>
+                                             <button
+                                                type="button"
+                                                onClick={() => handleAddConsignmentLine(selectedConsignment, line)}
+                                                disabled={!product}
+                                                className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-100 bg-cyan-50 px-4 py-2.5 text-xs font-black uppercase tracking-wide text-cyan-700 transition-all hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                             >
+                                                <Plus size={14} />
+                                                Agregar
+                                             </button>
+                                          </div>
+                                       );
+                                    })}
+                                 </div>
+                              </div>
+                           ) : (
+                              <div className="flex h-full min-h-[240px] items-center justify-center text-center text-xs font-bold uppercase tracking-widest text-gray-400">
+                                 Selecciona una consignación
+                              </div>
+                           )}
+                        </div>
+                     </div>
+                  </div>
+               </div>
+            )
+         }
 
          {
             showCouponModal && (
@@ -5801,8 +7287,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                currencySymbol={baseCurrency.symbol}
                themeColor="blue"
                onClose={() => setProductForModifiers(null)}
-               onConfirm={(selectedModifierNames, finalPrice) => {
-                  addToCart(productForModifiers, isReturnMode ? -1 : 1, finalPrice, selectedModifierNames);
+               onConfirm={(selectedModifierNames, finalPrice, note, restaurantConfig) => {
+                  addToCart(productForModifiers, isReturnMode ? -1 : 1, finalPrice, selectedModifierNames, undefined, undefined, undefined, note, restaurantConfig as CartItem['restaurantConfig']);
                   setProductForModifiers(null);
                }}
             />
@@ -5916,6 +7402,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   currentUser={currentUser}
                   roles={roles}
                />
+            )
+         }
+
+         {
+            incomingUberToast && (
+               <div className="fixed top-6 right-6 z-[210] animate-in slide-in-from-top-4">
+                  <button
+                     onClick={openRecoverReservationModal}
+                     className="max-w-sm rounded-[1.6rem] border border-black bg-white px-5 py-4 text-left shadow-2xl transition-all hover:-translate-y-0.5 hover:shadow-black/20"
+                  >
+                     <div className="flex items-start gap-3">
+                        <div className="rounded-2xl bg-black p-2 text-white">
+                           <ShoppingBag size={18} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                           <p className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">Uber Eats</p>
+                           <p className="mt-1 text-sm font-black text-slate-900">
+                              {incomingUberToast.count === 1 ? 'Nuevo pedido listo para POS' : `${incomingUberToast.count} pedidos nuevos listos para POS`}
+                           </p>
+                           <p className="mt-1 text-xs font-semibold text-slate-500">
+                              {incomingUberToast.displayIds.join(' • ')}
+                           </p>
+                           <p className="mt-2 text-[11px] font-black uppercase tracking-[0.18em] text-blue-600">
+                              Tocar para abrir pedidos
+                           </p>
+                        </div>
+                     </div>
+                  </button>
+               </div>
             )
          }
 

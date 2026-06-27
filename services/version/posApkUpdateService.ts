@@ -6,6 +6,7 @@ export type PosApkLocalVersion = {
   versionCode: number | null;
   platform: string | null;
   packageName?: string | null;
+  buildInfo?: Record<string, unknown>;
 };
 
 export type PosApkRelease = {
@@ -32,7 +33,7 @@ export type PosApkUpdateResult =
       local: PosApkLocalVersion;
       release?: PosApkRelease | null;
       endpointUrl: string;
-      reason: 'NO_RELEASE' | 'LOCAL_VERSION_UNKNOWN' | 'NOT_NEWER';
+      reason: 'NO_RELEASE' | 'INVALID_REMOTE_VERSION' | 'LOCAL_VERSION_UNKNOWN' | 'NOT_NEWER';
     };
 
 type LatestReleaseResponse = {
@@ -44,17 +45,22 @@ type CheckOptions = {
   config?: BusinessConfig | null;
   endpointUrl?: string;
   timeoutMs?: number;
+  localVersion?: PosApkLocalVersion;
   force?: boolean;
 };
 
 const DEFAULT_POS_APK_LATEST_URL = 'https://cloud-admin-gamma.vercel.app/api/pos-apk/latest';
+const DEFAULT_POS_APK_PORTAL_URL = 'https://cloud-admin-gamma.vercel.app/apk-pos';
 const POS_APK_LATEST_URL_STORAGE_KEY = 'clic_pos_apk_latest_url';
+const POS_APK_PORTAL_URL_STORAGE_KEY = 'clic_pos_apk_portal_url';
 const POS_APK_LOCAL_VERSION_CODE_OVERRIDE_KEY = 'clic_pos_apk_local_version_code_override';
 const POS_APK_LOCAL_VERSION_NAME_OVERRIDE_KEY = 'clic_pos_apk_local_version_name_override';
 
 let hasCheckedForUpdateThisBoot = false;
 
-const normalizeString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+const normalizeString = (value: unknown): string => (
+  typeof value === 'string' ? value.trim() : ''
+);
 
 const toFinitePositiveNumber = (value: unknown): number | null => {
   const parsed = Number(value);
@@ -68,13 +74,13 @@ const parseBridgeResult = (raw: unknown): Record<string, unknown> | null => {
 
   try {
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+    return parsed && typeof parsed === 'object' ? parsed : null;
   } catch {
     return null;
   }
 };
 
-const getEnv = () => ((import.meta as ImportMeta).env || {}) as Record<string, string | undefined>;
+const getEnv = () => ((import.meta as any).env || {}) as Record<string, string | undefined>;
 
 const getLocalStorageValue = (key: string): string => {
   try {
@@ -98,6 +104,7 @@ export const resolvePosApkLatestUrl = (config?: BusinessConfig | null): string =
   const env = getEnv();
   const metadata = (config?.metadata || {}) as Record<string, unknown>;
   const configuredBaseUrl = resolveCloudAdminBaseUrl(config);
+
   const explicitUrl = normalizeString(
     metadata.posApkLatestUrl
     || metadata.pos_apk_latest_url
@@ -109,6 +116,26 @@ export const resolvePosApkLatestUrl = (config?: BusinessConfig | null): string =
   if (explicitUrl) return explicitUrl;
   if (configuredBaseUrl) return `${configuredBaseUrl}/api/pos-apk/latest`;
   return DEFAULT_POS_APK_LATEST_URL;
+};
+
+export const resolvePosApkPortalUrl = (config?: BusinessConfig | null): string => {
+  const env = getEnv();
+  const metadata = (config?.metadata || {}) as Record<string, unknown>;
+  const configuredBaseUrl = resolveCloudAdminBaseUrl(config);
+
+  const explicitUrl = normalizeString(
+    metadata.posApkPortalUrl
+    || metadata.pos_apk_portal_url
+    || metadata.posApkManualUrl
+    || metadata.pos_apk_manual_url
+    || getLocalStorageValue(POS_APK_PORTAL_URL_STORAGE_KEY)
+    || env.VITE_POS_APK_PORTAL_URL
+    || env.VITE_CLOUD_ADMIN_POS_APK_PORTAL_URL
+  );
+
+  if (explicitUrl) return explicitUrl;
+  if (configuredBaseUrl) return `${configuredBaseUrl}/apk-pos`;
+  return DEFAULT_POS_APK_PORTAL_URL;
 };
 
 const fetchWithTimeout = async (url: string, timeoutMs: number): Promise<Response> => {
@@ -141,15 +168,13 @@ const normalizeLocalVersion = (raw: Record<string, unknown> | null): PosApkLocal
     versionCode,
     platform: normalizeString(raw?.platform) || (Capacitor.isNativePlatform() ? Capacitor.getPlatform() : 'web'),
     packageName: normalizeString(raw?.packageName) || null,
+    buildInfo: raw || undefined,
   };
 };
 
 export const readInstalledPosApkVersion = async (): Promise<PosApkLocalVersion> => {
   try {
-    const runtimeWindow = window as unknown as {
-      ClicPOSNativePrinter?: { getDeviceInfo?: () => unknown | Promise<unknown> };
-      AndroidPrinter?: { getDeviceInfo?: () => unknown };
-    };
+    const runtimeWindow = window as any;
     let rawDeviceInfo: unknown = null;
 
     if (typeof runtimeWindow.ClicPOSNativePrinter?.getDeviceInfo === 'function') {
@@ -160,7 +185,7 @@ export const readInstalledPosApkVersion = async (): Promise<PosApkLocalVersion> 
 
     return normalizeLocalVersion(parseBridgeResult(rawDeviceInfo));
   } catch (error) {
-    console.info('[posApkUpdate] No se pudo leer version instalada del APK:', error);
+    console.info('[posApkUpdate] No se pudo leer versión instalada del APK:', error);
     return normalizeLocalVersion(null);
   }
 };
@@ -198,30 +223,90 @@ export const checkForPosApkUpdate = async (options: CheckOptions = {}): Promise<
   if (!options.force) hasCheckedForUpdateThisBoot = true;
 
   const endpointUrl = options.endpointUrl || resolvePosApkLatestUrl(options.config);
-  const local = await readInstalledPosApkVersion();
-  const response = await fetchWithTimeout(endpointUrl, options.timeoutMs || 3500);
+  const local = options.localVersion || await readInstalledPosApkVersion();
+  const timeoutMs = options.timeoutMs || 3500;
+
+  const response = await fetchWithTimeout(endpointUrl, timeoutMs);
   if (!response.ok) {
     throw new Error(`Cloud-Admin APK latest endpoint responded ${response.status}`);
   }
 
   const payload = await response.json().catch(() => null) as LatestReleaseResponse | null;
   const release = normalizeRemoteRelease(payload);
-  if (!release) return { hasUpdate: false, local, endpointUrl, release: null, reason: 'NO_RELEASE' };
-  if (!local.versionCode) return { hasUpdate: false, local, endpointUrl, release, reason: 'LOCAL_VERSION_UNKNOWN' };
+  if (!release) {
+    return { hasUpdate: false, local, endpointUrl, release: null, reason: 'NO_RELEASE' };
+  }
+
+  if (!toFinitePositiveNumber(release.version_code)) {
+    return { hasUpdate: false, local, endpointUrl, release, reason: 'INVALID_REMOTE_VERSION' };
+  }
+
+  if (!local.versionCode) {
+    return { hasUpdate: false, local, endpointUrl, release, reason: 'LOCAL_VERSION_UNKNOWN' };
+  }
+
   if (!isRemotePosApkNewer(local.versionCode, release.version_code)) {
     return { hasUpdate: false, local, endpointUrl, release, reason: 'NOT_NEWER' };
   }
 
-  return { hasUpdate: true, local, release, endpointUrl };
+  return {
+    hasUpdate: true,
+    local,
+    release,
+    endpointUrl,
+  };
 };
 
 export const openPosApkDownloadUrl = async (release: PosApkRelease): Promise<void> => {
   const url = normalizeString(release.direct_download_url || release.apk_url);
   if (!url) return;
 
-  const target = Capacitor.isNativePlatform() ? '_system' : '_blank';
-  const opened = window.open(url, target, 'noopener,noreferrer');
-  if (!opened && !Capacitor.isNativePlatform()) {
-    window.location.assign(url);
+  try {
+    const runtimeWindow = window as any;
+    const browserPlugin = runtimeWindow.Capacitor?.Plugins?.Browser;
+    if (browserPlugin && typeof browserPlugin.open === 'function') {
+      await browserPlugin.open({ url });
+      return;
+    }
+
+    const target = Capacitor.isNativePlatform() ? '_system' : '_blank';
+    const opened = window.open(url, target, 'noopener,noreferrer');
+    if (!opened && !Capacitor.isNativePlatform()) {
+      window.location.assign(url);
+    }
+  } catch (error) {
+    console.warn('[posApkUpdate] No se pudo abrir URL de descarga:', error);
+    window.open(url, '_blank', 'noopener,noreferrer');
   }
+};
+
+export const openExternalUrl = async (url: string): Promise<void> => {
+  const normalizedUrl = normalizeString(url);
+  if (!normalizedUrl) return;
+
+  try {
+    const runtimeWindow = window as any;
+    const browserPlugin = runtimeWindow.Capacitor?.Plugins?.Browser;
+    if (browserPlugin && typeof browserPlugin.open === 'function') {
+      await browserPlugin.open({ url: normalizedUrl });
+      return;
+    }
+
+    const target = Capacitor.isNativePlatform() ? '_system' : '_blank';
+    const opened = window.open(normalizedUrl, target, 'noopener,noreferrer');
+    if (!opened && !Capacitor.isNativePlatform()) {
+      window.location.assign(normalizedUrl);
+    }
+  } catch (error) {
+    console.warn('[posApkUpdate] No se pudo abrir URL externa:', error);
+    window.open(normalizedUrl, '_blank', 'noopener,noreferrer');
+  }
+};
+
+export const openPosApkPortalUrl = async (config?: BusinessConfig | null): Promise<void> => {
+  await openExternalUrl(resolvePosApkPortalUrl(config));
+};
+
+export const resetPosApkUpdateCheckForTests = () => {
+  hasCheckedForUpdateThisBoot = false;
 };

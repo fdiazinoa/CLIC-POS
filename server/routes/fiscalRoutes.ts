@@ -18,7 +18,7 @@ import {
 
 const router = express.Router();
 
-const SUPPORTED_PROVIDER_IDS: FiscalProviderId[] = ['POLARIS'];
+const SUPPORTED_PROVIDER_IDS: FiscalProviderId[] = ['POLARIS', 'DIGIFACT'];
 const SUPPORTED_DOCUMENT_CODES: ElectronicDocumentCode[] = ['E31', 'E32', 'E34'];
 
 const normalizeProviderId = (value: unknown): FiscalProviderId => {
@@ -29,8 +29,11 @@ const normalizeProviderId = (value: unknown): FiscalProviderId => {
     return normalized;
 };
 
-const normalizeEnvironment = (value: unknown): number => {
-    const parsed = Number(value ?? process.env.POLARIS_ENVIRONMENT ?? 0);
+const normalizeEnvironment = (value: unknown, providerId?: FiscalProviderId): number => {
+    const fallback = providerId === 'DIGIFACT'
+        ? process.env.DIGIFACT_ENVIRONMENT
+        : process.env.POLARIS_ENVIRONMENT;
+    const parsed = Number(value ?? fallback ?? 0);
     return Number.isFinite(parsed) ? parsed : 0;
 };
 
@@ -69,7 +72,7 @@ const validateTransaction = (transaction: unknown): FiscalTransactionInput => {
 router.post('/providers/test', async (req, res) => {
     try {
         const providerId = normalizeProviderId(req.body?.providerId);
-        const environment = normalizeEnvironment(req.body?.environment);
+        const environment = normalizeEnvironment(req.body?.environment, providerId);
         const companyInfo = req.body?.companyInfo ? validateCompanyInfo(req.body?.companyInfo) : undefined;
         const options = (req.body?.options || {}) as FiscalIssueOptions;
         const authToken = String(req.body?.authToken || '').trim() || undefined;
@@ -78,7 +81,13 @@ router.post('/providers/test', async (req, res) => {
             environment,
             companyInfo,
             credentialKey: options?.credentialKey,
-            authToken
+            authToken,
+            options: {
+                apiBaseUrl: options?.apiBaseUrl,
+                testUrl: options?.testUrl,
+                issueUrl: options?.issueUrl,
+                statusUrl: options?.statusUrl
+            }
         } satisfies FiscalProviderTestRequest);
         res.json(result);
     } catch (error: any) {
@@ -216,7 +225,7 @@ router.delete('/credentials/supabase', async (req, res) => {
 router.post('/documents/issue', async (req, res) => {
     try {
         const providerId = normalizeProviderId(req.body?.providerId);
-        const environment = normalizeEnvironment(req.body?.environment);
+        const environment = normalizeEnvironment(req.body?.environment, providerId);
         const documentCode = normalizeDocumentCode(req.body?.documentCode);
         const companyInfo = validateCompanyInfo(req.body?.companyInfo);
         const transaction = validateTransaction(req.body?.transaction);
@@ -248,7 +257,7 @@ router.post('/documents/issue', async (req, res) => {
 router.get('/documents/status', async (req, res) => {
     try {
         const providerId = normalizeProviderId(req.query.providerId);
-        const environment = normalizeEnvironment(req.query.environment);
+        const environment = normalizeEnvironment(req.query.environment, providerId);
         const providerTransactionId = String(req.query.providerTransactionId || '').trim();
         const credentialKey = String(req.query.credentialKey || '').trim() || undefined;
         const companyRnc = String(req.query.companyRnc || '').trim() || undefined;

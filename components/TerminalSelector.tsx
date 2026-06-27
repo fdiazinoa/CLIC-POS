@@ -18,7 +18,12 @@ import {
   fetchInitialConfigFromErp,
   isTerminalOccupiedError,
   listTerminalsFromErp,
+  type RuntimeTerminalRecoveryState,
 } from '../services/setup/erpTerminalSetup';
+import { persistSyncDeviceToken } from '../services/sync/deviceToken';
+import { extractErpRegisterAuth, resolveNormalizedRegisterDeviceToken } from '../services/sync/erpRegisterResponse';
+import { saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
+import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../services/sync/SyncProfile';
 
 interface TerminalCard {
   id: string;
@@ -48,8 +53,40 @@ interface BindTerminalResponse {
   store_id?: string | null;
   transferred?: boolean;
   previous_device_id?: string | null;
+  recovery_state?: RuntimeTerminalRecoveryState | null;
   config: BusinessConfig;
   users?: UserType[];
+  sync_profile?: Partial<SyncProfile>;
+  syncProfile?: Partial<SyncProfile>;
+  incomingProfile?: Partial<SyncProfile>;
+  incoming_profile?: Partial<SyncProfile>;
+  profile?: Partial<SyncProfile>;
+  sync_permissions?: SyncPermissions;
+  syncPermissions?: SyncPermissions;
+  contracted_product?: string;
+  contractedProduct?: string;
+  cloud_channel?: string;
+  cloudChannel?: string;
+  data_master?: string;
+  dataMaster?: string;
+  customer_erp_access?: boolean;
+  customerErpAccess?: boolean;
+  erp_ui_enabled?: boolean;
+  erpUiEnabled?: boolean;
+  erp_ready_for_sales?: boolean;
+  erpReadyForSales?: boolean;
+  deviceToken?: string;
+  device_token?: string;
+  terminalToken?: string;
+  terminal_token?: string;
+  activationToken?: string;
+  activation_token?: string;
+  syncToken?: string;
+  sync_token?: string;
+  syncAuthToken?: string;
+  sync_auth_token?: string;
+  tokenExpiresAt?: string;
+  token_expires_at?: string;
 }
 
 interface InitialConfigResponse {
@@ -60,6 +97,34 @@ interface InitialConfigResponse {
   config?: BusinessConfig;
   items?: Product[];
   terminal_config?: Record<string, any>;
+  sync_profile?: Partial<SyncProfile>;
+  syncProfile?: Partial<SyncProfile>;
+  sync_permissions?: SyncPermissions;
+  syncPermissions?: SyncPermissions;
+  contracted_product?: string;
+  contractedProduct?: string;
+  cloud_channel?: string;
+  cloudChannel?: string;
+  data_master?: string;
+  dataMaster?: string;
+  customer_erp_access?: boolean;
+  customerErpAccess?: boolean;
+  erp_ui_enabled?: boolean;
+  erpUiEnabled?: boolean;
+  erp_ready_for_sales?: boolean;
+  erpReadyForSales?: boolean;
+  deviceToken?: string;
+  device_token?: string;
+  terminalToken?: string;
+  terminal_token?: string;
+  activationToken?: string;
+  activation_token?: string;
+  syncToken?: string;
+  sync_token?: string;
+  syncAuthToken?: string;
+  sync_auth_token?: string;
+  tokenExpiresAt?: string;
+  token_expires_at?: string;
   snapshot_meta?: {
     used_resolved?: boolean;
     used_fallback_config?: boolean;
@@ -79,6 +144,7 @@ interface BoundTerminalPayload {
   storeId?: string;
   forceTakeover?: boolean;
   previousDeviceId?: string | null;
+  recoveryState?: RuntimeTerminalRecoveryState | null;
   config: BusinessConfig;
   users?: UserType[];
   masterIp?: string;
@@ -87,6 +153,17 @@ interface BoundTerminalPayload {
     fullPullOnPairing?: boolean;
     resolutionError?: unknown;
   };
+  syncProfile?: Partial<SyncProfile>;
+  syncPermissions?: SyncPermissions;
+  contractSource?: SyncProfileSource;
+  incomingProfile?: Partial<SyncProfile>;
+  profile?: Partial<SyncProfile>;
+  deviceToken?: string;
+  terminalToken?: string;
+  activationToken?: string;
+  syncToken?: string;
+  tokenExpiresAt?: string;
+  progress?: (update: TerminalBindingProgressUpdate) => void;
 }
 
 interface TerminalSelectorProps {
@@ -102,6 +179,71 @@ interface TerminalSelectorProps {
   onBack: () => void;
   onMasterIpChange?: (nextIp: string) => void;
 }
+
+interface TerminalBindingProgressUpdate {
+  stepId?: TerminalBindingProgressStepId;
+  message?: string;
+}
+
+type TerminalBindingProgressStepId = 'claim' | 'config' | 'apply' | 'sync' | 'cache' | 'finish';
+
+type TerminalBindingProgressStatus = 'pending' | 'active' | 'done' | 'error';
+
+interface TerminalBindingProgressStep {
+  id: TerminalBindingProgressStepId;
+  label: string;
+  detail: string;
+  status: TerminalBindingProgressStatus;
+}
+
+interface TerminalBindingProgressState {
+  isOpen: boolean;
+  terminal?: TerminalCard;
+  terminalName: string;
+  activeStepId: TerminalBindingProgressStepId;
+  message: string;
+  error: string | null;
+  steps: TerminalBindingProgressStep[];
+}
+
+const TERMINAL_BINDING_PROGRESS_TEMPLATE: Array<Omit<TerminalBindingProgressStep, 'status'>> = [
+  { id: 'claim', label: 'Reasignar terminal', detail: 'Validando dispositivo y tomando control' },
+  { id: 'config', label: 'Descargar configuración', detail: 'Leyendo snapshot del ERP o master' },
+  { id: 'apply', label: 'Aplicar configuración', detail: 'Guardando identidad y permisos locales' },
+  { id: 'sync', label: 'Sincronizar maestros', detail: 'Productos, tarifas, clientes, usuarios y series' },
+  { id: 'cache', label: 'Actualizar datos locales', detail: 'Rehidratando SQLite y caches del POS' },
+  { id: 'finish', label: 'Finalizar', detail: 'Preparando entrada al POS' },
+];
+
+const createProgressSteps = (
+  activeStepId: TerminalBindingProgressStepId,
+  errorStepId?: TerminalBindingProgressStepId
+): TerminalBindingProgressStep[] => {
+  const activeIndex = TERMINAL_BINDING_PROGRESS_TEMPLATE.findIndex((step) => step.id === activeStepId);
+  const errorIndex = errorStepId
+    ? TERMINAL_BINDING_PROGRESS_TEMPLATE.findIndex((step) => step.id === errorStepId)
+    : -1;
+
+  return TERMINAL_BINDING_PROGRESS_TEMPLATE.map((step, index) => ({
+    ...step,
+    status: errorIndex === index
+      ? 'error'
+      : index < activeIndex
+        ? 'done'
+        : index === activeIndex
+          ? 'active'
+          : 'pending',
+  }));
+};
+
+const createInitialProgressState = (): TerminalBindingProgressState => ({
+  isOpen: false,
+  terminalName: '',
+  activeStepId: 'claim',
+  message: '',
+  error: null,
+  steps: createProgressSteps('claim'),
+});
 
 const normalizeBaseUrl = (value?: string | null): string | null => {
   const raw = (value || '').trim();
@@ -156,6 +298,226 @@ const resolveTenantDisplayName = (tenantId?: string | null): string => {
   if (email) return email;
 
   return (tenantId || '').trim() || 'Tenant no identificado';
+};
+
+const pickBoolean = (...values: unknown[]): boolean | undefined => {
+  for (const value of values) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (['true', '1', 'yes', 'si', 'sí', 'on'].includes(normalized)) return true;
+      if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+    }
+  }
+  return undefined;
+};
+
+const pickString = (...values: unknown[]): string | undefined => {
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
+};
+
+const extractPolicyObject = (...sources: unknown[]): Partial<SyncProfile> => {
+  for (const source of sources) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
+    const record = source as Record<string, any>;
+    const nested =
+      record.incomingProfile
+      || record.incoming_profile
+      || record.sync_profile
+      || record.syncProfile
+      || record.profile
+      || record.policy
+      || record.sync_policy
+      || record.syncPolicy;
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      return nested as Partial<SyncProfile>;
+    }
+  }
+  return {};
+};
+
+const pickAuthString = (...values: unknown[]): string | undefined => {
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.replace(/[\r\n\t]/g, '').trim();
+    if (!trimmed || ['undefined', 'null', 'nan', '[object object]'].includes(trimmed.toLowerCase())) continue;
+    return trimmed;
+  }
+  return undefined;
+};
+
+const extractRegisterAuthPayload = (...sources: unknown[]) => {
+  const records = sources
+    .filter((source): source is Record<string, any> => Boolean(source && typeof source === 'object' && !Array.isArray(source)))
+    .flatMap((record) => [
+      record,
+      record.auth,
+      record.syncAuth,
+      record.terminal_config,
+      record.terminal_config?.auth,
+      record.terminal_config?.metadata,
+      record.terminal_config?.metadata?.syncAuth,
+      record.terminal,
+      record.terminal?.auth,
+      record.terminal?.config,
+      record.terminal?.config?.auth,
+      record.terminal?.config?.metadata,
+      record.terminal?.config?.metadata?.syncAuth,
+      record.config,
+      record.config?.auth,
+      record.config?.security,
+      record.config?.runtime,
+      record.metadata,
+      record.metadata?.auth,
+      record.metadata?.syncAuth,
+      record.session,
+    ])
+    .filter((source): source is Record<string, any> => Boolean(source && typeof source === 'object' && !Array.isArray(source)));
+
+  const deviceToken = pickAuthString(...records.flatMap((record) => [
+    record.deviceToken,
+    record.device_token,
+    record.terminalToken,
+    record.terminal_token,
+    record.activationToken,
+    record.activation_token,
+    record.auth?.deviceToken,
+    record.auth?.device_token,
+    record.auth?.terminalToken,
+    record.auth?.terminal_token,
+    record.auth?.activationToken,
+    record.auth?.activation_token,
+    record.syncAuth?.deviceToken,
+    record.syncAuth?.device_token,
+  ]));
+  const terminalToken = pickAuthString(...records.flatMap((record) => [
+    record.terminalToken,
+    record.terminal_token,
+    record.auth?.terminalToken,
+    record.auth?.terminal_token,
+    record.syncAuth?.terminalToken,
+    record.syncAuth?.terminal_token,
+  ]));
+  const activationToken = pickAuthString(...records.flatMap((record) => [
+    record.activationToken,
+    record.activation_token,
+    record.auth?.activationToken,
+    record.auth?.activation_token,
+    record.syncAuth?.activationToken,
+    record.syncAuth?.activation_token,
+  ]));
+  const syncToken = pickAuthString(...records.flatMap((record) => [
+    record.syncToken,
+    record.sync_token,
+    record.syncAuthToken,
+    record.sync_auth_token,
+    record.auth?.syncToken,
+    record.auth?.sync_token,
+    record.auth?.syncAuthToken,
+    record.auth?.sync_auth_token,
+    record.syncAuth?.syncToken,
+    record.syncAuth?.sync_token,
+    record.syncAuth?.syncAuthToken,
+    record.syncAuth?.sync_auth_token,
+  ]));
+  const tokenExpiresAt = pickAuthString(...records.flatMap((record) => [
+    record.tokenExpiresAt,
+    record.token_expires_at,
+    record.expiresAt,
+    record.expires_at,
+  ]));
+
+  return { deviceToken, terminalToken, activationToken, syncToken, tokenExpiresAt };
+};
+
+const logRegisterResponseAuth = (auth: ReturnType<typeof extractErpRegisterAuth>) => {
+  console.log('[REGISTER_RESPONSE_AUTH]', {
+    deviceTokenPresent: Boolean(auth.deviceToken),
+    terminalTokenPresent: Boolean(auth.terminalToken),
+    activationTokenPresent: Boolean(auth.activationToken),
+    syncTokenPresent: Boolean(auth.syncToken),
+    tokenExpiresAt: auth.tokenExpiresAt || null,
+    responseKeys: Object.keys(auth).filter((key) => Boolean((auth as Record<string, unknown>)[key])),
+  });
+};
+
+const buildTerminalSyncProfile = (params: {
+  bindingMode: 'MASTER' | 'SLAVE';
+  expectsErpDirect: boolean;
+  erpBaseUrl?: string | null;
+  terminalId: string;
+  erpTerminalId?: string | null;
+  tenantId?: string | null;
+  storeId?: string | null;
+  data?: BindTerminalResponse | null;
+  initialConfigData?: InitialConfigResponse | null;
+}): Partial<SyncProfile> => {
+  const terminalConfig = params.initialConfigData?.terminal_config || {};
+  const candidate = extractPolicyObject(params.data, params.initialConfigData, terminalConfig);
+  const syncPermissions =
+    params.data?.syncPermissions ||
+    params.data?.sync_permissions ||
+    params.initialConfigData?.syncPermissions ||
+    params.initialConfigData?.sync_permissions ||
+    (candidate.syncPermissions as SyncPermissions | undefined);
+
+  const isSlave = params.bindingMode === 'SLAVE';
+  const isErpDirect = params.expectsErpDirect && !isSlave;
+  const erpReadyForSales = pickBoolean(
+    params.data?.erpReadyForSales,
+    params.data?.erp_ready_for_sales,
+    params.initialConfigData?.erpReadyForSales,
+    params.initialConfigData?.erp_ready_for_sales,
+    terminalConfig.erpReadyForSales,
+    terminalConfig.erp_ready_for_sales,
+    (candidate as any).erpReadyForSales,
+    syncPermissions?.canPushOperations
+  );
+
+  return {
+    ...candidate,
+    syncPermissions,
+    contractedProduct: isErpDirect ? 'POS_ERP' : 'POS_ONLY',
+    posRuntime: isSlave ? 'SLAVE' : 'MASTER',
+    cloudChannel: isSlave ? 'POS_MASTER' : isErpDirect ? 'ERP_ACTIVE' : 'POS_CLOUD_STAGING',
+    dataMaster: isSlave ? 'POS_MASTER' : isErpDirect ? 'ERP' : 'POS',
+    cloudSyncEnabled: !isSlave,
+    customerErpAccess: isErpDirect ? true : pickBoolean(
+      params.data?.customerErpAccess,
+      params.data?.customer_erp_access,
+      params.initialConfigData?.customerErpAccess,
+      params.initialConfigData?.customer_erp_access,
+      terminalConfig.customerErpAccess,
+      terminalConfig.customer_erp_access,
+      (candidate as any).customerErpAccess,
+      false
+    ) || false,
+    erpUiEnabled: isErpDirect ? true : pickBoolean(
+      params.data?.erpUiEnabled,
+      params.data?.erp_ui_enabled,
+      params.initialConfigData?.erpUiEnabled,
+      params.initialConfigData?.erp_ui_enabled,
+      terminalConfig.erpUiEnabled,
+      terminalConfig.erp_ui_enabled,
+      (candidate as any).erpUiEnabled,
+      false
+    ) || false,
+    cloudBaseUrl: pickString((candidate as any).cloudBaseUrl, params.erpBaseUrl),
+    erpBaseUrl: pickString((candidate as any).erpBaseUrl, params.erpBaseUrl),
+    cloudTenantId: pickString((candidate as any).cloudTenantId, params.tenantId),
+    erpTenantId: pickString((candidate as any).erpTenantId, params.tenantId),
+    localTenantId: pickString((candidate as any).localTenantId, params.tenantId),
+    localStoreId: pickString((candidate as any).localStoreId, params.storeId),
+    localTerminalId: pickString((candidate as any).localTerminalId, params.terminalId),
+    erpTerminalId: pickString((candidate as any).erpTerminalId, params.erpTerminalId, params.terminalId),
+    cloudStagingReady: !isErpDirect && !isSlave,
+    erpReadyForSales: Boolean(erpReadyForSales),
+  };
 };
 
 const DEFAULT_PUBLIC_ERP_BASE_URL = 'https://clic-erp.vercel.app';
@@ -262,6 +624,32 @@ const describeTerminalListFailure = (
   return raw || 'No pudimos cargar las terminales.';
 };
 
+const describeTerminalBindFailure = (
+  err: unknown,
+  ctx: { bindingMode: 'MASTER' | 'SLAVE'; erpDirectAndroid: boolean; forceTransfer: boolean }
+): string => {
+  const raw = err instanceof Error ? err.message : String(err);
+  const lower = raw.toLowerCase();
+  const isNetwork =
+    lower.includes('failed to fetch') ||
+    lower.includes('networkerror') ||
+    lower.includes('load failed') ||
+    (err instanceof Error && err.name === 'TypeError');
+
+  if (ctx.forceTransfer && isNetwork) {
+    if (ctx.erpDirectAndroid) {
+      return 'No se pudo completar el traspaso: el proxy local (/api/setup) no respondió y la llamada directa al ERP falló. Revisa la URL del ERP y la conectividad.';
+    }
+    return 'No se pudo completar el traspaso por un error de red. Revisa la conexión con el ERP o el servidor local del POS.';
+  }
+
+  if (isNetwork) {
+    return 'Error de red al vincular la terminal. Revisa la conexión.';
+  }
+
+  return raw || 'No se pudo completar la vinculación.';
+};
+
 export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   currentConfig,
   deviceId,
@@ -282,6 +670,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   const [isBinding, setIsBinding] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [pendingTerminal, setPendingTerminal] = useState<TerminalCard | null>(null);
+  const [bindingProgress, setBindingProgress] = useState<TerminalBindingProgressState>(() => createInitialProgressState());
   const [masterIpInput, setMasterIpInput] = useState(masterIp);
   const [erpBaseUrl, setErpBaseUrl] = useState<string | null>(() => normalizeBaseUrl(initialErpBaseUrl) || resolveErpBaseUrl());
   const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -321,6 +710,48 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
     }
     return getSetupApiBase(masterIpInput);
   }, [bindingMode, isNativeAndroid, masterIpInput]);
+
+  const startBindingProgress = useCallback((terminal: TerminalCard, message: string) => {
+    setBindingProgress({
+      isOpen: true,
+      terminal,
+      terminalName: terminal.name,
+      activeStepId: 'claim',
+      message,
+      error: null,
+      steps: createProgressSteps('claim'),
+    });
+  }, []);
+
+  const updateBindingProgress = useCallback((update: TerminalBindingProgressUpdate) => {
+    setBindingProgress((current) => {
+      if (!current.isOpen) return current;
+      const nextStepId = update.stepId || current.activeStepId;
+      return {
+        ...current,
+        activeStepId: nextStepId,
+        message: update.message || current.message,
+        error: null,
+        steps: createProgressSteps(nextStepId),
+      };
+    });
+  }, []);
+
+  const failBindingProgress = useCallback((message: string) => {
+    setBindingProgress((current) => {
+      if (!current.isOpen) return current;
+      return {
+        ...current,
+        message: 'No se pudo completar el traspaso.',
+        error: message,
+        steps: createProgressSteps(current.activeStepId, current.activeStepId),
+      };
+    });
+  }, []);
+
+  const closeBindingProgress = useCallback(() => {
+    setBindingProgress(createInitialProgressState());
+  }, []);
 
   const fetchTerminals = useCallback(async () => {
     if (shouldBlockAlreadyBound) {
@@ -435,11 +866,14 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
   const bindTerminal = useCallback(
     async (terminal: TerminalCard, forceTransfer: boolean) => {
+      let completed = false;
+      const showProgress = forceTransfer;
       setIsBinding(true);
       setError(null);
       if (forceTransfer) {
         setShowTransferModal(false);
         setPendingTerminal(null);
+        startBindingProgress(terminal, `Reasignando ${terminal.name} a este equipo...`);
       }
 
     try {
@@ -449,22 +883,31 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         throw new Error('No encontramos la URL base del ERP para completar la vinculación.');
       }
 
+      if (showProgress) {
+        updateBindingProgress({
+          stepId: 'claim',
+          message: 'Validando la terminal ocupada y solicitando el traspaso...',
+        });
+      }
+
+      const bindTerminalRequestBody = {
+        tenant_id: tenantId,
+        tenant_slug: resolveTenantSlug(),
+        tenant_email: resolveTenantEmail(),
+        erp_base_url: erpBaseUrl,
+        terminal_id: terminal.id,
+        erp_terminal_id: terminal.erpTerminalId,
+        pos_device_id: deviceId,
+        binding_mode: bindingMode,
+        force_transfer: forceTransfer,
+      };
+
       if (useErpDirectMasterAndroid) {
         try {
           const response = await fetch(`${buildAndroidEmbeddedSetupBase()}/bind-terminal`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              tenant_id: tenantId,
-              tenant_slug: resolveTenantSlug(),
-              tenant_email: resolveTenantEmail(),
-              erp_base_url: erpBaseUrl,
-              terminal_id: terminal.id,
-              erp_terminal_id: terminal.erpTerminalId,
-              pos_device_id: deviceId,
-              binding_mode: bindingMode,
-              force_transfer: forceTransfer,
-            }),
+            body: JSON.stringify(bindTerminalRequestBody),
           });
 
           if (response.status === 409) {
@@ -495,33 +938,47 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           });
         }
       } else if (usesErpDirect) {
-        data = await bindTerminalFromErp({
-          currentConfig,
-          posDeviceId: deviceId,
-          terminalId: terminal.id,
-          erpTerminalId: terminal.erpTerminalId,
-          bindingMode,
-          forceTransfer,
-          tenantId,
-          tenantSlug: resolveTenantSlug(),
-          tenantEmail: resolveTenantEmail(),
-          erpBaseUrl: erpBaseUrl!,
-        });
+        if (forceTransfer) {
+          try {
+            const response = await fetch(`${apiBase}/bind-terminal`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(bindTerminalRequestBody),
+            });
+
+            if (response.status === 409) {
+              setPendingTerminal(terminal);
+              setShowTransferModal(true);
+              return;
+            }
+
+            if (response.ok) {
+              data = (await response.json()) as BindTerminalResponse;
+            }
+          } catch (proxyBindErr) {
+            console.warn('setup bind-terminal proxy failed, falling back to ERP direct', proxyBindErr);
+          }
+        }
+
+        if (!data) {
+          data = await bindTerminalFromErp({
+            currentConfig,
+            posDeviceId: deviceId,
+            terminalId: terminal.id,
+            erpTerminalId: terminal.erpTerminalId,
+            bindingMode,
+            forceTransfer,
+            tenantId,
+            tenantSlug: resolveTenantSlug(),
+            tenantEmail: resolveTenantEmail(),
+            erpBaseUrl: erpBaseUrl!,
+          });
+        }
       } else {
         const response = await fetch(`${apiBase}/bind-terminal`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            tenant_id: tenantId,
-            tenant_slug: resolveTenantSlug(),
-            tenant_email: resolveTenantEmail(),
-            erp_base_url: erpBaseUrl,
-            terminal_id: terminal.id,
-            erp_terminal_id: terminal.erpTerminalId,
-            pos_device_id: deviceId,
-            binding_mode: bindingMode,
-            force_transfer: forceTransfer,
-          }),
+          body: JSON.stringify(bindTerminalRequestBody),
         });
 
         if (response.status === 409) {
@@ -540,6 +997,13 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
         if (!data) {
           throw new Error('No se pudo vincular la terminal.');
+        }
+
+        if (showProgress) {
+          updateBindingProgress({
+            stepId: 'config',
+            message: 'Terminal reasignada. Descargando configuración inicial y maestros...',
+          });
         }
 
         const initialConfigParams = new URLSearchParams({
@@ -600,6 +1064,13 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             throw new Error('El ERP no devolvió terminal_config en la configuración inicial.');
           }
 
+          if (showProgress) {
+            updateBindingProgress({
+              stepId: 'apply',
+              message: 'Aplicando configuración resuelta para esta terminal...',
+            });
+          }
+
           const applied = applyTerminalConfigSnapshot(
             erpInitialConfigData.config || data.config || currentConfig,
             {
@@ -636,6 +1107,13 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           const snapshot = extractTerminalConfigSnapshot(erpInitialConfigData);
           if (!snapshot) {
             throw new Error('El ERP no devolvió terminal_config en la configuración inicial.');
+          }
+
+          if (showProgress) {
+            updateBindingProgress({
+              stepId: 'apply',
+              message: 'Aplicando configuración resuelta para esta terminal...',
+            });
           }
 
           const applied = applyTerminalConfigSnapshot(
@@ -691,10 +1169,71 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           bindingMode === 'SLAVE'
             ? normalizeMasterHost(masterIpInput) || masterIpInput.trim() || undefined
             : undefined;
+        const resolvedTerminalId = initialConfigData.terminal_id || data.terminal_id || terminal.id;
+        const resolvedErpTerminalId = data.erp_terminal_id || terminal.erpTerminalId || undefined;
+        const syncProfile = {
+          ...buildTerminalSyncProfile({
+            bindingMode,
+            expectsErpDirect,
+            erpBaseUrl,
+            terminalId: resolvedTerminalId,
+            erpTerminalId: resolvedErpTerminalId,
+            tenantId: initialConfigData.tenant_id || data.tenant_id || tenantId,
+            storeId: data.store_id || undefined,
+            data,
+            initialConfigData,
+          }),
+          ...(data.syncProfile || data.sync_profile || data.incomingProfile || data.incoming_profile || data.profile || {}),
+        };
+        const syncPermissions =
+          data.syncPermissions ||
+          data.sync_permissions ||
+          initialConfigData.syncPermissions ||
+          initialConfigData.sync_permissions ||
+          syncProfile.syncPermissions;
+        const registerAuth = extractErpRegisterAuth(data, initialConfigData, initialConfigData.terminal_config);
+        logRegisterResponseAuth(registerAuth);
+        const normalizedDeviceToken = resolveNormalizedRegisterDeviceToken(
+          data,
+          initialConfigData,
+          registerAuth,
+        );
+        if (normalizedDeviceToken) {
+          persistSyncDeviceToken(normalizedDeviceToken, 'ERP_REGISTER', registerAuth.tokenExpiresAt);
+        }
+        if (registerAuth.syncToken) {
+          localStorage.setItem('clic_erp_sync_token', registerAuth.syncToken);
+          localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
+          if (registerAuth.tokenExpiresAt) {
+            localStorage.setItem('clic_erp_sync_token_expires_at', registerAuth.tokenExpiresAt);
+          }
+        }
+        saveTerminalCredentialsSync({
+          terminalId: resolvedErpTerminalId || resolvedTerminalId,
+          deviceId,
+          ...(normalizedDeviceToken ? {
+            deviceToken: normalizedDeviceToken,
+            deviceTokenSource: 'ERP_REGISTER',
+            deviceTokenUpdatedAt: new Date().toISOString(),
+            deviceTokenExpiresAt: registerAuth.tokenExpiresAt || null,
+          } : {}),
+          ...(registerAuth.syncToken ? {
+            syncToken: registerAuth.syncToken,
+            syncTokenUpdatedAt: new Date().toISOString(),
+            syncTokenExpiresAt: registerAuth.tokenExpiresAt || null,
+          } : {}),
+        });
+
+        if (showProgress) {
+          updateBindingProgress({
+            stepId: 'sync',
+            message: 'Sincronizando maestros y preparando datos locales del POS...',
+          });
+        }
 
         await onBound({
-          terminalId: initialConfigData.terminal_id || data.terminal_id || terminal.id,
-          erpTerminalId: data.erp_terminal_id || terminal.erpTerminalId || undefined,
+          terminalId: resolvedTerminalId,
+          erpTerminalId: resolvedErpTerminalId,
           erpBaseUrl: erpBaseUrl || undefined,
           terminalName: data.terminal_name || terminal.name || data.terminal_id || terminal.id,
           tenantId: initialConfigData.tenant_id || data.tenant_id || tenantId,
@@ -702,6 +1241,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           storeId: data.store_id || undefined,
           forceTakeover: forceTransfer || Boolean(data.transferred),
           previousDeviceId: data.previous_device_id || null,
+          recoveryState: data.recovery_state || null,
           config: initialConfigData.config || data.config,
           users: data.users,
           masterIp: resolvedMasterHost,
@@ -712,7 +1252,25 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             fullPullOnPairing: initialConfigData.snapshot_meta?.full_pull_on_pairing,
             resolutionError: initialConfigData.snapshot_meta?.resolution_error,
           },
+          syncProfile,
+          syncPermissions,
+          contractSource: expectsErpDirect ? 'ERP_REGISTER' : 'CLOUD_ADMIN',
+          incomingProfile: data.incomingProfile || data.incoming_profile || data.profile || data.syncProfile,
+          profile: data.profile || data.syncProfile,
+          deviceToken: normalizedDeviceToken,
+          terminalToken: registerAuth.terminalToken,
+          activationToken: registerAuth.activationToken,
+          syncToken: registerAuth.syncToken,
+          tokenExpiresAt: registerAuth.tokenExpiresAt,
+          progress: showProgress ? updateBindingProgress : undefined,
         });
+        completed = true;
+        if (showProgress) {
+          updateBindingProgress({
+            stepId: 'finish',
+            message: 'Terminal transferida correctamente. Abriendo el POS...',
+          });
+        }
       } catch (err) {
         if (isTerminalOccupiedError(err)) {
           setPendingTerminal({
@@ -724,14 +1282,25 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           return;
         }
         console.error('Failed to bind terminal during setup:', err);
-        setError(err instanceof Error ? err.message : 'No se pudo completar la vinculación.');
+        const message = describeTerminalBindFailure(err, {
+          bindingMode,
+          erpDirectAndroid: useErpDirectMasterAndroid,
+          forceTransfer,
+        });
+        setError(message);
+        if (showProgress) {
+          setPendingTerminal(terminal);
+          failBindingProgress(message);
+        }
       } finally {
         setIsBinding(false);
-        setShowTransferModal(false);
-        setPendingTerminal(null);
+        if (!showProgress || completed) {
+          setShowTransferModal(false);
+          setPendingTerminal(null);
+        }
       }
     },
-    [apiBase, bindingMode, currentConfig, deviceId, erpBaseUrl, expectsErpDirect, masterIpInput, onBound, tenantId, useErpDirectMasterAndroid, usesErpDirect]
+    [apiBase, bindingMode, currentConfig, deviceId, erpBaseUrl, expectsErpDirect, failBindingProgress, masterIpInput, onBound, startBindingProgress, tenantId, updateBindingProgress, useErpDirectMasterAndroid, usesErpDirect]
   );
 
   const handleCardClick = useCallback(
@@ -982,6 +1551,136 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {bindingProgress.isOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-slate-950/55 p-3 sm:p-4 backdrop-blur-sm">
+          <div className="my-auto w-full max-w-[34rem] overflow-hidden rounded-[1.5rem] border border-white/70 bg-white shadow-[0_32px_96px_rgba(15,23,42,0.28)] sm:rounded-[2rem]">
+            <div className="px-5 py-5 sm:px-7 sm:py-7">
+              <div className="flex items-start gap-4">
+                <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.25rem] shadow-inner ${
+                  bindingProgress.error ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'
+                }`}>
+                  {bindingProgress.error ? (
+                    <AlertTriangle size={24} />
+                  ) : (
+                    <RefreshCw size={24} className="animate-spin" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className={`text-[11px] font-black uppercase tracking-[0.3em] ${
+                    bindingProgress.error ? 'text-red-500' : 'text-blue-500'
+                  }`}>
+                    {bindingProgress.error ? 'Traspaso detenido' : 'Transferencia en progreso'}
+                  </p>
+                  <h4 className="mt-2 text-xl font-black tracking-tight text-slate-900">
+                    {bindingProgress.terminalName || 'Terminal'}
+                  </h4>
+                  <p className="mt-2 text-sm font-semibold leading-relaxed text-slate-500">
+                    {bindingProgress.message || 'Preparando el equipo...'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-6 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className={`h-2 rounded-full transition-all duration-500 ${
+                    bindingProgress.error ? 'bg-red-500' : 'bg-blue-600'
+                  }`}
+                  style={{
+                    width: `${Math.max(
+                      12,
+                      ((TERMINAL_BINDING_PROGRESS_TEMPLATE.findIndex((step) => step.id === bindingProgress.activeStepId) + 1)
+                        / TERMINAL_BINDING_PROGRESS_TEMPLATE.length) * 100
+                    )}%`,
+                  }}
+                />
+              </div>
+
+              <div className="mt-6 space-y-3">
+                {bindingProgress.steps.map((step) => (
+                  <div
+                    key={step.id}
+                    className={`flex items-start gap-3 rounded-2xl border px-4 py-3 ${
+                      step.status === 'error'
+                        ? 'border-red-100 bg-red-50'
+                        : step.status === 'active'
+                          ? 'border-blue-100 bg-blue-50'
+                          : step.status === 'done'
+                            ? 'border-emerald-100 bg-emerald-50'
+                            : 'border-slate-100 bg-slate-50'
+                    }`}
+                  >
+                    <div className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
+                      step.status === 'error'
+                        ? 'bg-red-100 text-red-600'
+                        : step.status === 'active'
+                          ? 'bg-blue-100 text-blue-600'
+                          : step.status === 'done'
+                            ? 'bg-emerald-100 text-emerald-600'
+                            : 'bg-white text-slate-300'
+                    }`}>
+                      {step.status === 'done' ? (
+                        <CheckCircle2 size={15} />
+                      ) : step.status === 'active' ? (
+                        <RefreshCw size={14} className="animate-spin" />
+                      ) : step.status === 'error' ? (
+                        <AlertTriangle size={14} />
+                      ) : (
+                        <span className="h-2 w-2 rounded-full bg-current" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <p className={`text-sm font-black ${
+                        step.status === 'error'
+                          ? 'text-red-700'
+                          : step.status === 'active'
+                            ? 'text-blue-800'
+                            : step.status === 'done'
+                              ? 'text-emerald-800'
+                              : 'text-slate-500'
+                      }`}>
+                        {step.label}
+                      </p>
+                      <p className="mt-0.5 text-xs font-semibold leading-relaxed text-slate-500">{step.detail}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {bindingProgress.error && (
+                <div className="mt-5 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold leading-relaxed text-red-700">
+                  {bindingProgress.error}
+                </div>
+              )}
+            </div>
+
+            {bindingProgress.error && (
+              <div className="border-t border-slate-100 px-5 py-4 sm:px-7">
+                <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={closeBindingProgress}
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 sm:w-auto"
+                  >
+                    Cerrar
+                  </button>
+                  {bindingProgress.terminal && (
+                    <button
+                      type="button"
+                      onClick={() => void bindTerminal(bindingProgress.terminal!, true)}
+                      disabled={isBinding}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                    >
+                      {isBinding ? <RefreshCw size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                      Reintentar
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

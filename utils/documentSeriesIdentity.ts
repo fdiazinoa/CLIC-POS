@@ -52,7 +52,37 @@ const normalizeDocumentTypeKey = (value?: string | null): string =>
 const normalizePrefixKey = (value?: string | null): string =>
   normalizeString(value).replace(/[^A-Z0-9]+/g, '');
 
+const FISCAL_SERIES_PREFIXES = [
+  'B01',
+  'B02',
+  'B04',
+  'B14',
+  'B15',
+  'E31',
+  'E32',
+  'E34',
+  'E44',
+  'E45',
+];
+
+export const isFiscalDocumentSeries = (series: Partial<DocumentSeries> | null | undefined): boolean => {
+  if (!series) return false;
+  const prefix = normalizePrefixKey(series.prefix);
+  const id = normalizePrefixKey(series.id);
+  const name = normalizePrefixKey(series.name);
+  const documentType = normalizeDocumentTypeKey(series.documentType);
+
+  return FISCAL_SERIES_PREFIXES.some((fiscalPrefix) =>
+    prefix === fiscalPrefix ||
+    id === fiscalPrefix ||
+    name === fiscalPrefix ||
+    documentType === fiscalPrefix ||
+    prefix.startsWith(`${fiscalPrefix}0`)
+  );
+};
+
 const FORBIDDEN_TICKET_PREFIXES = [
+  ...FISCAL_SERIES_PREFIXES,
   'INV',
   'TR',
   'REC',
@@ -136,6 +166,7 @@ export const mergeDocumentSeriesCollection = (rows: DocumentSeries[] = []): Docu
   for (const row of rows) {
     if (!row) continue;
     const normalized = canonicalizeDocumentSeries(row);
+    if (isFiscalDocumentSeries(normalized)) continue;
     const semanticKey = getDocumentSeriesSemanticKey(normalized);
     const mapKey = semanticKey || normalizeDocumentTypeKey(normalized.id);
     if (!mapKey) continue;

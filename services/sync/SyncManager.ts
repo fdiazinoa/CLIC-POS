@@ -12,6 +12,7 @@ import { NetworkScanner } from './NetworkScanner';
 import { v4 as uuidv4 } from 'uuid';
 import { Capacitor } from '@capacitor/core';
 import { permissionService } from './PermissionService';
+import { isNativeAndroidRuntime, normalizeErpBaseUrl, normalizeErpSyncApiBase, resolveErpSyncApiBase } from '../../utils/erpBaseUrl';
 import { realtimeNotificationService } from './RealtimeNotificationService';
 import { productImageCacheService } from './ProductImageCacheService';
 import { masterDataImageCacheService, type ImageBackedCollection } from './MasterDataImageCacheService';
@@ -42,9 +43,175 @@ import {
     productIdentityCandidates,
 } from '../../utils/productReferences';
 import { canonicalizeTariffEntries, resolveTariffId } from '../../utils/masterIdentity';
-import { ensureSyncDeviceToken } from './deviceToken';
+import { ensureSyncDeviceToken, getInvalidatedSyncDeviceTokenInfo, resolveSyncDeviceToken } from './deviceToken';
+import { normalizeRestaurantProductConfig } from '../../utils/restaurantProductConfig';
+import { protectsLocalCatalogFromCloud, syncPolicy } from './SyncProfile';
+import { isPosCloudStagingPushCollection } from './PosCloudStagingService';
+import { reportSyncErrorDiagnostic, setCatalogDiagnosticStatus } from './SyncErrorDiagnostic';
+import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked } from '../../utils/deviceRevocation';
 
-export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'productPrices' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities' | 'crmOpportunities' | 'erp_sales_documents';
+export type SyncableCollection =
+    | 'products' | 'items' | 'taxes' | 'customers' | 'suppliers' | 'warehouses'
+    | 'paymentMethods' | 'priceLists' | 'productPrices' | 'categories' | 'collections'
+    | 'serviceTypes' | 'rooms' | 'tables' | 'productionAreas'
+    | 'documentSeries' | 'documentTypes' | 'fiscalRanges' | 'fiscalReceiptTypes'
+    | 'fiscalReceipts' | 'fiscalSequences' | 'internalSequences' | 'terminalFiscalConfig'
+    | 'promotions' | 'campaigns' | 'coupons' | 'discountRules' | 'promotionRules'
+    | 'promotionConditions' | 'promotionBenefits'
+    | 'pointsPrograms' | 'loyaltyPrograms' | 'pointsRules' | 'earningRules'
+    | 'redemptionRules' | 'customerPointBalances' | 'loyaltyTiers'
+    | 'users' | 'roles' | 'productStocks' | 'supplierProductPrices'
+    | 'inventoryLedger' | 'transactions' | 'payments' | 'cashClosures' | 'cashOpenings'
+    | 'zReports' | 'cashMovements' | 'cashDrawerEvents' | 'inventoryMovements'
+    | 'transfers' | 'receptions' | 'returns' | 'creditNotes'
+    | 'promotionRedemptions' | 'couponRedemptions'
+    | 'loyaltyPointMovements' | 'loyaltyPointAccruals' | 'loyaltyPointRedemptions'
+    | 'pointAdjustments' | 'issuedFiscalDocuments' | 'fiscalDocumentUsages'
+    | 'purchaseOrders' | 'activities' | 'crmOpportunities' | 'erp_sales_documents';
+
+const MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
+    'products',
+    'items',
+    'taxes',
+    'customers',
+    'suppliers',
+    'warehouses',
+    'paymentMethods',
+    'priceLists',
+    'productStocks',
+    'productPrices',
+    'supplierProductPrices',
+    'categories',
+    'collections',
+    'serviceTypes',
+    'rooms',
+    'tables',
+    'productionAreas',
+    'documentSeries',
+    'documentTypes',
+    'fiscalRanges',
+    'fiscalReceiptTypes',
+    'fiscalReceipts',
+    'fiscalSequences',
+    'internalSequences',
+    'terminalFiscalConfig',
+    'promotions',
+    'campaigns',
+    'coupons',
+    'discountRules',
+    'promotionRules',
+    'promotionConditions',
+    'promotionBenefits',
+    'pointsPrograms',
+    'loyaltyPrograms',
+    'pointsRules',
+    'earningRules',
+    'redemptionRules',
+    'customerPointBalances',
+    'loyaltyTiers',
+    'users',
+    'roles',
+]);
+
+const CRITICAL_MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
+    'products',
+    'taxes',
+    'warehouses',
+    'paymentMethods',
+    'documentSeries',
+    'fiscalRanges',
+    'fiscalSequences',
+    'internalSequences',
+    'terminalFiscalConfig',
+]);
+
+const FISCAL_MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
+    'documentSeries',
+    'documentTypes',
+    'fiscalRanges',
+    'fiscalReceiptTypes',
+    'fiscalReceipts',
+    'fiscalSequences',
+    'internalSequences',
+    'terminalFiscalConfig',
+]);
+
+const PROMOTION_MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
+    'promotions',
+    'campaigns',
+    'coupons',
+    'discountRules',
+    'promotionRules',
+    'promotionConditions',
+    'promotionBenefits',
+]);
+
+const LOYALTY_MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
+    'pointsPrograms',
+    'loyaltyPrograms',
+    'pointsRules',
+    'earningRules',
+    'redemptionRules',
+    'customerPointBalances',
+    'loyaltyTiers',
+]);
+
+const OPERATION_COLLECTIONS_FOR_ERP_PUSH = new Set<SyncableCollection>([
+    'transactions',
+    'payments',
+    'cashClosures',
+    'cashOpenings',
+    'zReports',
+    'cashMovements',
+    'cashDrawerEvents',
+    'inventoryLedger',
+    'inventoryMovements',
+    'transfers',
+    'receptions',
+    'returns',
+    'creditNotes',
+    'promotionRedemptions',
+    'couponRedemptions',
+    'loyaltyPointMovements',
+    'loyaltyPointAccruals',
+    'loyaltyPointRedemptions',
+    'pointAdjustments',
+    'issuedFiscalDocuments',
+    'fiscalDocumentUsages',
+    'purchaseOrders',
+    'activities',
+    'crmOpportunities',
+    'erp_sales_documents',
+]);
+
+const isErpMasterPullCollection = (collection: SyncableCollection): boolean =>
+    MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection);
+
+const isErpOperationCollection = (collection: SyncableCollection): boolean =>
+    OPERATION_COLLECTIONS_FOR_ERP_PUSH.has(collection);
+
+const isErpCriticalMasterCollection = (collection: SyncableCollection): boolean =>
+    CRITICAL_MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection);
+
+const logSkippedNonMasterPull = (
+    collection: SyncableCollection,
+    targetKind: string,
+    reason = isErpOperationCollection(collection) ? 'OPERATION_COLLECTION' : 'NOT_A_MASTER_ERP_COLLECTION'
+): void => {
+    console.warn('[SYNC_COLLECTION_SKIPPED_NOT_A_MASTER]', {
+        collection,
+        operation: 'PULL_MASTERS',
+        targetKind,
+        isMasterCollection: isErpMasterPullCollection(collection),
+        isOperationCollection: isErpOperationCollection(collection),
+        isCriticalMaster: isErpCriticalMasterCollection(collection),
+        isFiscalMaster: FISCAL_MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection),
+        isPromotionMaster: PROMOTION_MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection),
+        isLoyaltyMaster: LOYALTY_MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection),
+        skippedReason: reason,
+        userVisibleSeverity: 'warning',
+    });
+};
 
 interface SyncStatus {
     collection: string;
@@ -52,7 +219,7 @@ interface SyncStatus {
     localVersion: number;
     remoteVersion: number | null;
     lastSyncTimestamp?: string | null;
-    status: 'SYNCED' | 'PENDING' | 'ERROR';
+    status: 'SYNCED' | 'SYNCED_CLOUD' | 'PENDING' | 'ERROR';
     error?: string;
 }
 
@@ -204,24 +371,13 @@ class SyncManager {
     private resolveConfigErpBaseUrl(value: unknown): string | null {
         const raw = typeof value === 'string' ? value.trim() : '';
         if (!raw) return null;
-
-        const withProtocol = /^https?:\/\//i.test(raw) ? raw : `${window.location.protocol}//${raw}`;
-
-        try {
-            const url = new URL(withProtocol);
-            return url
-                .toString()
-                .replace(/\/api\/sync\/?$/i, '')
-                .replace(/\/api\/?$/i, '')
-                .replace(/\/+$/, '');
-        } catch {
-            return null;
-        }
+        return normalizeErpBaseUrl(raw);
     }
 
     private resolveSyncApiBase(value: unknown): string | null {
-        const normalizedBase = this.resolveConfigErpBaseUrl(value);
-        return normalizedBase ? `${normalizedBase}/api/sync` : null;
+        const raw = typeof value === 'string' ? value.trim() : '';
+        if (!raw) return null;
+        return normalizeErpSyncApiBase(raw);
     }
 
     private rehydrateOperationalTargetFromConfig(config: BusinessConfig | null, terminalId: string | null) {
@@ -287,10 +443,14 @@ class SyncManager {
             }
         }
 
-        return null;
+        return resolveErpSyncApiBase();
     }
 
     private resolveLocalSyncApiBaseCandidates(): string[] {
+        if (isNativeAndroidRuntime()) {
+            return [];
+        }
+
         const candidates = [
             'http://127.0.0.1:3001/api/sync',
             'http://localhost:3001/api/sync',
@@ -301,6 +461,39 @@ class SyncManager {
         }
 
         return Array.from(new Set(candidates.map((value) => value.trim()).filter(Boolean)));
+    }
+
+    private buildTerminalConfigEndpointCandidates(context: { erpBaseUrl: string | null }): Array<{
+        baseUrl: string;
+        mode: string;
+        includeErpBaseUrl: boolean;
+    }> {
+        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
+        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
+
+        if (!useAbsoluteEndpoint) {
+            return [{
+                baseUrl: '/api/sync',
+                mode: 'relative-local-proxy',
+                includeErpBaseUrl: true,
+            }];
+        }
+
+        const erpCandidates = syncApiBase
+            ? [{
+                baseUrl: syncApiBase,
+                mode: 'absolute-sync-api',
+                includeErpBaseUrl: false,
+            }]
+            : [];
+
+        const loopbackCandidates = this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
+            baseUrl,
+            mode: 'local-loopback-proxy',
+            includeErpBaseUrl: true,
+        }));
+
+        return [...erpCandidates, ...loopbackCandidates];
     }
 
     /**
@@ -558,16 +751,12 @@ class SyncManager {
             this.purgeSyncedHistoricalData().catch(e => console.error('❌ SyncManager: Initial purge failed:', e));
         }
 
-        if (apiSyncAdapter.isUsingErpOperationalTarget()) {
+        if (apiSyncAdapter.isErpActiveOperationalTarget()) {
             try {
                 await this.syncTerminalMastersOnStartup(config);
             } catch (error) {
                 console.warn('⚠️ SyncManager: startup terminal manifest sync failed:', error);
             }
-        } else {
-            this.syncTerminalMastersOnStartup(config).catch((error) => {
-                console.warn('⚠️ SyncManager: startup terminal manifest sync failed:', error);
-            });
         }
 
         console.log('🔄 SyncManager initialized');
@@ -618,6 +807,14 @@ class SyncManager {
     }
 
     private ensureDeviceToken() {
+        const syncMode = String(localStorage.getItem('clic_sync_mode') || '').trim().toUpperCase();
+        const invalidated = getInvalidatedSyncDeviceTokenInfo();
+        const existing = resolveSyncDeviceToken();
+        if (syncMode === 'POS_ERP' && (!existing.token || invalidated.invalidatedAt)) {
+            console.warn('[SyncManager] ERP terminal requires register token; skipping LOCAL_GENERATED device token');
+            return;
+        }
+
         const result = ensureSyncDeviceToken(() => `dev_${uuidv4()}`);
         if (result.created) {
             console.log('🔑 SyncManager: Generated new Device Token');
@@ -727,6 +924,56 @@ class SyncManager {
 
     private getStartupManifestSessionKey(localTerminalId: string): string {
         return `clic_pos_terminal_startup_manifest_synced:${localTerminalId}`;
+    }
+
+    private buildPosDeviceHeaders(deviceId: string | null | undefined): Record<string, string> {
+        const resolvedDeviceId = typeof deviceId === 'string' ? deviceId.trim() : '';
+        return resolvedDeviceId
+            ? {
+                'X-Device-Id': resolvedDeviceId,
+                'X-POS-Device-Id': resolvedDeviceId,
+            }
+            : {};
+    }
+
+    private async buildTerminalEndpointError(
+        response: Response,
+        fallbackMessage: string,
+        context?: { terminalId?: string | null; posDeviceId?: string | null }
+    ): Promise<Error> {
+        let payload: Record<string, any> | null = null;
+        let detail = '';
+
+        try {
+            const clonedPayload = await response.clone().json();
+            payload = clonedPayload && typeof clonedPayload === 'object' && !Array.isArray(clonedPayload)
+                ? clonedPayload
+                : null;
+        } catch {
+            // Fall back to text below.
+        }
+
+        if (payload) {
+            const code = String(payload.code || '').trim().toUpperCase();
+            if (response.status === 403 && code === 'DEVICE_SUPERSEDED') {
+                dispatchDeviceRevoked({
+                    reason: 'DEVICE_SUPERSEDED',
+                    message: String(payload.message || '').trim() || DEVICE_SUPERSEDED_MESSAGE,
+                    terminalId: context?.terminalId || payload.terminal_id || null,
+                    previousDeviceId: context?.posDeviceId || null,
+                    newDeviceId: payload.canonical_device_id || payload.new_device_id || null,
+                    payload,
+                });
+            }
+
+            detail = String(payload.message || payload.error || '').trim();
+        }
+
+        if (!detail) {
+            detail = await response.text().catch(() => '');
+        }
+
+        return new Error(detail || fallbackMessage);
     }
 
     private readStoredCatalogCursor(localTerminalId: string | null): string | null {
@@ -1034,28 +1281,7 @@ class SyncManager {
             return null;
         }
 
-        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
-        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
-        const endpointCandidates = useAbsoluteEndpoint
-            ? [
-                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
-                    baseUrl,
-                    mode: 'local-loopback-proxy',
-                    includeErpBaseUrl: true,
-                })),
-                ...(syncApiBase
-                    ? [{
-                        baseUrl: syncApiBase,
-                        mode: 'absolute-sync-api',
-                        includeErpBaseUrl: false,
-                    }]
-                    : []),
-            ]
-            : [{
-                baseUrl: '/api/sync',
-                mode: 'relative-local-proxy',
-                includeErpBaseUrl: true,
-            }];
+        const endpointCandidates = this.buildTerminalConfigEndpointCandidates(context);
 
         let lastError: unknown = null;
 
@@ -1063,8 +1289,10 @@ class SyncManager {
             const startedAt = posCatalogDebugNow();
             const params = new URLSearchParams();
             params.set('tenant_id', context.tenantId);
+            params.set('terminal_id', context.terminalId);
             if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
             if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+            if (context.posDeviceId) params.set('device_id', context.posDeviceId);
             if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
             if (cursorMap.terminal) params.set('terminal_cursor', cursorMap.terminal);
             if (cursorMap.items) params.set('items_cursor', cursorMap.items);
@@ -1086,12 +1314,16 @@ class SyncManager {
                 const response = await fetch(endpoint, {
                     headers: {
                         Accept: 'application/json',
+                        ...this.buildPosDeviceHeaders(context.posDeviceId),
                     },
                 });
 
                 if (!response.ok) {
-                    const detail = await response.text().catch(() => '');
-                    throw new Error(detail || `No se pudo consultar el manifest de maestros (${response.status}).`);
+                    throw await this.buildTerminalEndpointError(
+                        response,
+                        `No se pudo consultar el manifest de maestros (${response.status}).`,
+                        { terminalId: context.terminalId, posDeviceId: context.posDeviceId },
+                    );
                 }
 
                 const payload = await response.json();
@@ -1133,28 +1365,7 @@ class SyncManager {
             return null;
         }
 
-        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
-        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
-        const endpointCandidates = useAbsoluteEndpoint
-            ? [
-                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
-                    baseUrl,
-                    mode: 'local-loopback-proxy',
-                    includeErpBaseUrl: true,
-                })),
-                ...(syncApiBase
-                    ? [{
-                        baseUrl: syncApiBase,
-                        mode: 'absolute-sync-api',
-                        includeErpBaseUrl: false,
-                    }]
-                    : []),
-            ]
-            : [{
-                baseUrl: '/api/sync',
-                mode: 'relative-local-proxy',
-                includeErpBaseUrl: true,
-            }];
+        const endpointCandidates = this.buildTerminalConfigEndpointCandidates(context);
 
         let lastError: unknown = null;
 
@@ -1162,8 +1373,10 @@ class SyncManager {
             const startedAt = posCatalogDebugNow();
             const params = new URLSearchParams();
             params.set('tenant_id', context.tenantId);
+            params.set('terminal_id', context.terminalId);
             if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
             if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+            if (context.posDeviceId) params.set('device_id', context.posDeviceId);
             if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
             if (cursor) params.set('inventory_cursor', cursor);
 
@@ -1179,12 +1392,16 @@ class SyncManager {
                 const response = await fetch(endpoint, {
                     headers: {
                         Accept: 'application/json',
+                        ...this.buildPosDeviceHeaders(context.posDeviceId),
                     },
                 });
 
                 if (!response.ok) {
-                    const detail = await response.text().catch(() => '');
-                    throw new Error(detail || `No se pudo consultar el bloque inventory (${response.status}).`);
+                    throw await this.buildTerminalEndpointError(
+                        response,
+                        `No se pudo consultar el bloque inventory (${response.status}).`,
+                        { terminalId: context.terminalId, posDeviceId: context.posDeviceId },
+                    );
                 }
 
                 const payload = await response.json();
@@ -1253,28 +1470,7 @@ class SyncManager {
             return null;
         }
 
-        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
-        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
-        const endpointCandidates = useAbsoluteEndpoint
-            ? [
-                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
-                    baseUrl,
-                    mode: 'local-loopback-proxy',
-                    includeErpBaseUrl: true,
-                })),
-                ...(syncApiBase
-                    ? [{
-                        baseUrl: syncApiBase,
-                        mode: 'absolute-sync-api',
-                        includeErpBaseUrl: false,
-                    }]
-                    : []),
-            ]
-            : [{
-                baseUrl: '/api/sync',
-                mode: 'relative-local-proxy',
-                includeErpBaseUrl: true,
-            }];
+        const endpointCandidates = this.buildTerminalConfigEndpointCandidates(context);
 
         let lastError: unknown = null;
 
@@ -1282,8 +1478,10 @@ class SyncManager {
             const startedAt = posCatalogDebugNow();
             const params = new URLSearchParams();
             params.set('tenant_id', context.tenantId);
+            params.set('terminal_id', context.terminalId);
             if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
             if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+            if (context.posDeviceId) params.set('device_id', context.posDeviceId);
             if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
             if (cursor) params.set('product_prices_cursor', cursor);
 
@@ -1299,12 +1497,16 @@ class SyncManager {
                 const response = await fetch(endpoint, {
                     headers: {
                         Accept: 'application/json',
+                        ...this.buildPosDeviceHeaders(context.posDeviceId),
                     },
                 });
 
                 if (!response.ok) {
-                    const detail = await response.text().catch(() => '');
-                    throw new Error(detail || `No se pudo consultar el bloque product_prices (${response.status}).`);
+                    throw await this.buildTerminalEndpointError(
+                        response,
+                        `No se pudo consultar el bloque product_prices (${response.status}).`,
+                        { terminalId: context.terminalId, posDeviceId: context.posDeviceId },
+                    );
                 }
 
                 const payload = await response.json();
@@ -1380,6 +1582,14 @@ class SyncManager {
             return null;
         }
 
+        if (protectsLocalCatalogFromCloud()) {
+            if (options?.markStartupCompleted) {
+                this.markStartupManifestSyncCompleted(localTerminalId);
+            }
+            console.warn('[SYNC_ROUTER] POS_CLOUD_STAGING manifest sync skipped; local catalog remains authoritative.');
+            return null;
+        }
+
         if (options?.skipIfStartupCompleted && this.wasStartupManifestSyncCompleted(localTerminalId)) {
             return null;
         }
@@ -1440,7 +1650,7 @@ class SyncManager {
                     inventoryAppliedCount = await this.applyTerminalInventoryBlock(inventoryBalances);
                 }
 
-                if (apiSyncAdapter.isUsingErpOperationalTarget()) {
+                if (apiSyncAdapter.isErpActiveOperationalTarget()) {
                     const shouldForceDirectInventoryRefresh =
                         bootstrapInventoryOnStartup ||
                         Boolean(options?.bootstrapBlocks) ||
@@ -1522,7 +1732,7 @@ class SyncManager {
     }
 
     private async refreshOperationalInventorySnapshot(): Promise<number> {
-        if (!apiSyncAdapter.isUsingErpOperationalTarget()) {
+        if (!apiSyncAdapter.isErpActiveOperationalTarget()) {
             return 0;
         }
 
@@ -2099,6 +2309,8 @@ class SyncManager {
             return null;
         }
 
+        const protectLocalCatalog = protectsLocalCatalogFromCloud();
+
         const snapshotTerminalId = context.localTerminalId || context.terminalId;
         const cachedSnapshot = baseConfig.terminalSnapshots?.[snapshotTerminalId] || null;
         const currentCatalogCursor = this.readStoredCatalogCursor(snapshotTerminalId);
@@ -2120,28 +2332,9 @@ class SyncManager {
         const pendingSnapshot = snapshot
             ? null
             : this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId);
+        const endpointCandidates = this.buildTerminalConfigEndpointCandidates(context);
         const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
         const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
-        const endpointCandidates = useAbsoluteEndpoint
-            ? [
-                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
-                    baseUrl,
-                    mode: 'local-loopback-proxy',
-                    includeErpBaseUrl: true,
-                })),
-                ...(syncApiBase
-                    ? [{
-                        baseUrl: syncApiBase,
-                        mode: 'absolute-sync-api',
-                        includeErpBaseUrl: false,
-                    }]
-                    : []),
-            ]
-            : [{
-                baseUrl: '/api/sync',
-                mode: 'relative-local-proxy',
-                includeErpBaseUrl: true,
-            }];
         const canFetchRemote = Boolean(
             context.terminalId &&
             context.tenantId &&
@@ -2191,8 +2384,10 @@ class SyncManager {
                 const fetchAttemptStartedAt = posCatalogDebugNow();
                 const params = new URLSearchParams();
                 if (context.tenantId) params.set('tenant_id', context.tenantId);
+                if (context.terminalId) params.set('terminal_id', context.terminalId);
                 if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
                 if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+                if (context.posDeviceId) params.set('device_id', context.posDeviceId);
                 if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
                 if (!options?.forceFullCatalog && currentCatalogCursor) params.set('catalog_cursor', currentCatalogCursor);
                 if (requestedMasterScopes) {
@@ -2218,11 +2413,15 @@ class SyncManager {
                     const response = await fetch(endpoint, {
                         headers: {
                             Accept: 'application/json',
+                            ...this.buildPosDeviceHeaders(context.posDeviceId),
                         },
                     });
                     if (!response.ok) {
-                        const detail = await response.text().catch(() => '');
-                        throw new Error(detail || `No se pudo refrescar la configuración de terminal (${response.status}).`);
+                        throw await this.buildTerminalEndpointError(
+                            response,
+                            `No se pudo refrescar la configuración de terminal (${response.status}).`,
+                            { terminalId: context.terminalId, posDeviceId: context.posDeviceId },
+                        );
                     }
 
                     const responseContentType = response.headers.get('content-type') || null;
@@ -2310,25 +2509,33 @@ class SyncManager {
 
         try {
             const applyStartedAt = posCatalogDebugNow();
-            if (catalogDelta) {
-                await this.applyCatalogDelta(catalogDelta);
+            if (!protectLocalCatalog) {
+                if (catalogDelta) {
+                    await this.applyCatalogDelta(catalogDelta);
+                } else {
+                    await this.applySnapshotProducts(snapshot);
+                }
+                const structuredMasterData = await this.refreshTerminalStructuredMasterData(snapshot, catalogDelta, {
+                    terminalIds: [
+                        context.terminalId,
+                        snapshotTerminalId,
+                        context.localTerminalId,
+                        context.posDeviceId,
+                    ],
+                });
+                await posCatalogDebugLogDbRows('after refreshTerminalResolvedConfig product apply');
+                posCatalogDebugLog('refreshTerminalResolvedConfig: product apply success', {
+                    usedCatalogDelta: Boolean(catalogDelta),
+                    structuredMasterData,
+                    elapsedMs: posCatalogDebugElapsedMs(applyStartedAt),
+                });
             } else {
-                await this.applySnapshotProducts(snapshot);
+                posCatalogDebugLog('refreshTerminalResolvedConfig: catalog apply skipped for POS_CLOUD_STAGING', {
+                    usedCatalogDelta: Boolean(catalogDelta),
+                    requestedMasterScopes,
+                    requestedResolvedScopes,
+                });
             }
-            const structuredMasterData = await this.refreshTerminalStructuredMasterData(snapshot, catalogDelta, {
-                terminalIds: [
-                    context.terminalId,
-                    snapshotTerminalId,
-                    context.localTerminalId,
-                    context.posDeviceId,
-                ],
-            });
-            await posCatalogDebugLogDbRows('after refreshTerminalResolvedConfig product apply');
-            posCatalogDebugLog('refreshTerminalResolvedConfig: product apply success', {
-                usedCatalogDelta: Boolean(catalogDelta),
-                structuredMasterData,
-                elapsedMs: posCatalogDebugElapsedMs(applyStartedAt),
-            });
         } catch (error) {
             console.warn('⚠️ SyncManager: Could not apply snapshot products from terminal config push:', error);
             posCatalogDebugLog('refreshTerminalResolvedConfig: product apply failed', {
@@ -2389,7 +2596,7 @@ class SyncManager {
             this.persistCatalogCursor(snapshotTerminalId, nextCatalogCursor);
         }
 
-        if (requestedBlockScopes?.includes('inventory')) {
+        if (!protectLocalCatalog && requestedBlockScopes?.includes('inventory')) {
             const inventoryPayload = await this.fetchTerminalInventoryBlock(
                 context,
                 currentTerminalCursorMap.inventory || null,
@@ -2405,7 +2612,7 @@ class SyncManager {
             if (inventoryBalances.length > 0) {
                 inventoryAppliedCount = await this.applyTerminalInventoryBlock(inventoryBalances);
             }
-            if (apiSyncAdapter.isUsingErpOperationalTarget()) {
+            if (apiSyncAdapter.isErpActiveOperationalTarget()) {
                 const directRefreshCount = await this.refreshOperationalInventorySnapshot();
                 if (directRefreshCount > 0) {
                     inventoryAppliedCount = directRefreshCount;
@@ -2418,7 +2625,7 @@ class SyncManager {
             });
         }
 
-        if (requestedBlockScopes?.includes('product_prices')) {
+        if (!protectLocalCatalog && requestedBlockScopes?.includes('product_prices')) {
             const productPricesPayload = await this.fetchTerminalProductPricesBlock(
                 context,
                 currentTerminalCursorMap.product_prices || null,
@@ -2492,7 +2699,7 @@ class SyncManager {
                 .map((product) => [String(product.id).trim(), product]),
         );
         const localByIdentity = this.buildLocalProductIdentityLookup(localProducts);
-        const preserveOperationalInventory = apiSyncAdapter.isUsingErpOperationalTarget();
+        const preserveOperationalInventory = apiSyncAdapter.isErpActiveOperationalTarget();
         let updatedCount = 0;
         const duplicateIdsToRemove = new Set<string>();
         const traceRaw = rawItems.filter((item: unknown) => posCatalogDebugMatchesRaw(item));
@@ -2506,7 +2713,7 @@ class SyncManager {
         for (const [index, normalizedItem] of normalizedItems.entries()) {
             if (!normalizedItem?.id) continue;
             const rawItem = rawItems[index] as Record<string, unknown> | undefined;
-            let item = normalizedItem;
+            let item = normalizeRestaurantProductConfig(normalizedItem as any) as any;
             const incomingRemoteId =
                 typeof rawItem?.id === 'string'
                     ? rawItem.id.trim()
@@ -2536,7 +2743,7 @@ class SyncManager {
                 }
                 item = {
                     ...canonicalLocalProduct,
-                    ...normalizedItem,
+                    ...normalizeRestaurantProductConfig(normalizedItem as any),
                     id: canonicalLocalProduct.id,
                     sourceItemId:
                         typeof (canonicalLocalProduct as any)?.sourceItemId === 'string' && (canonicalLocalProduct as any).sourceItemId.trim()
@@ -2601,16 +2808,17 @@ class SyncManager {
                 };
             }
 
+            item = normalizeRestaurantProductConfig(item as any) as Product;
             await db.saveDocument('products', item);
             if (!preserveOperationalInventory) {
                 await this.syncSnapshotProductStocks(item as Product, runtimeWarehouses, existingStocksByProductWarehouse);
             }
             if (posCatalogDebugMatchesRaw(rawItem || item)) {
                 posCatalogDebugLog('applySnapshotProducts: saved product', {
-                    saved: posCatalogDebugSummarizeItem(item as Record<string, unknown>),
+                    saved: posCatalogDebugSummarizeItem(item as unknown as Record<string, unknown>),
                 });
             }
-            for (const candidate of productIdentityCandidates(item as Record<string, unknown>)) {
+            for (const candidate of productIdentityCandidates(item as unknown as Record<string, unknown>)) {
                 localByIdentity.set(candidate, item as Product);
             }
             localProductsById.set(String(item.id).trim(), item as Product);
@@ -3811,7 +4019,7 @@ class SyncManager {
                 continue;
             }
 
-            const localData = await db.get(collection);
+            const localData = await db.get(collection as any);
             const localCount = Array.isArray(localData) ? localData.length : 0;
             const isEmpty = localCount === 0;
 
@@ -3855,7 +4063,7 @@ class SyncManager {
                     const serverItems = await apiSyncAdapter.pull(collection);
                     if (serverItems && serverItems.length > localCount) {
                         console.log(`📥 Master Init: Restoring ${serverItems.length} items from Server for ${collection}`);
-                        await db.save(collection, serverItems);
+                        await db.save(collection as any, serverItems);
 
                         // Update version
                         const metadata = await apiSyncAdapter.getMetadata(collection);
@@ -3878,7 +4086,23 @@ class SyncManager {
      * For API mode, we track versions locally
      */
     private async loadSyncVersions() {
-        const collections: (SyncableCollection | 'config')[] = ['products', 'customers', 'suppliers', 'users', 'roles', 'internalSequences', 'fiscalRanges', 'config'];
+        const collections: (SyncableCollection | 'config')[] = [
+            'products',
+            'taxes',
+            'customers',
+            'suppliers',
+            'warehouses',
+            'paymentMethods',
+            'productPrices',
+            'users',
+            'roles',
+            'documentSeries',
+            'fiscalRanges',
+            'fiscalSequences',
+            'internalSequences',
+            'terminalFiscalConfig',
+            'config',
+        ];
 
         for (const collection of collections) {
             // Load timestamp from localStorage
@@ -3925,7 +4149,7 @@ class SyncManager {
         }
 
         try {
-            const data = await db.get(collection);
+            const data = await db.get(collection as any);
             const items = Array.isArray(data) ? data : [];
 
             // Push to server API
@@ -4024,6 +4248,29 @@ class SyncManager {
         }
     ): Promise<number> {
         if (this.isDisabled) return 0;
+        const target = syncPolicy.resolve();
+        if (target.kind === 'POS_CLOUD_STAGING') {
+            logSkippedNonMasterPull(collection, target.kind, 'POS_CLOUD_STAGING_PULL_BLOCKED');
+            return 0;
+        }
+        if (target.kind === 'ERP_ACTIVE' && !isErpMasterPullCollection(collection)) {
+            logSkippedNonMasterPull(collection, target.kind);
+            return 0;
+        }
+        if (target.kind !== 'POS_MASTER' && isErpOperationCollection(collection)) {
+            logSkippedNonMasterPull(collection, target.kind, 'OPERATION_PULL_REQUIRES_POS_MASTER');
+            return 0;
+        }
+        if (target.kind === 'NONE' && !target.canPullMasters) {
+            logSkippedNonMasterPull(collection, target.kind, 'SYNC_TARGET_NOT_CONFIGURED');
+            return 0;
+        }
+        if (isErpMasterPullCollection(collection) && !target.canPullMasters) {
+            console.warn(
+                `[SYNC_ROUTER] pullCatalog skipped collection=${collection} channel=${target.kind} dataMaster=${target.dataMaster}. POS local remains source of truth.`
+            );
+            return 0;
+        }
 
         // Throttling...
         // Throttling...
@@ -4040,6 +4287,9 @@ class SyncManager {
 
         // Start critical section
         try {
+            if (collection === 'products') {
+                setCatalogDiagnosticStatus('SYNCING');
+            }
             this.isInternalSyncing = true;
             this.isInternalPulling = true; // LOCK LOCAL PUSH TRIGGERS
             this.lastSyncTime = now;
@@ -4071,7 +4321,7 @@ class SyncManager {
             console.log(`📦 SyncManager: Received ${items.length} items for ${collection} (${isFullDownload ? 'Full' : 'Delta'})`);
 
             if (items.length === 0 && !isFullDownload) {
-                const localData = await db.get(collection);
+                const localData = await db.get(collection as any);
                 const localCount = Array.isArray(localData) ? localData.length : 0;
                 const metadata = await getMetadataOnce();
                 const remoteCount = metadata?.itemCount || 0;
@@ -4111,7 +4361,7 @@ class SyncManager {
                             ? await this.mergeTransactionsFullSnapshot(cleanItems)
                             : cleanItems;
 
-                        await db.save(collection, safeItems);
+                        await db.save(collection as any, safeItems);
 
                         if (typeof remoteVersion === 'number') {
                             this.syncVersions.set(collection, remoteVersion);
@@ -4173,7 +4423,7 @@ class SyncManager {
                 });
 
                 if (collection === 'products') {
-                    cleanItems = await this.enrichPulledProducts(cleanItems);
+                    cleanItems = (await this.enrichPulledProducts(cleanItems)).map((item: any) => normalizeRestaurantProductConfig(item));
                 } else if (this.isImageBackedCollection(collection)) {
                     cleanItems = await masterDataImageCacheService.normalizeIncomingItems(collection, cleanItems as any[]);
                 }
@@ -4181,7 +4431,16 @@ class SyncManager {
                 const safeItems = collection === 'transactions'
                     ? await this.mergeTransactionsFullSnapshot(cleanItems)
                     : cleanItems;
-                await db.save(collection, safeItems);
+
+                if (collection === 'products' && safeItems.length === 0) {
+                    const localProducts = await db.get('products');
+                    const localCount = Array.isArray(localProducts) ? localProducts.length : 0;
+                    if (localCount > 0) {
+                        console.warn('REMOTE_CATALOG_EMPTY_GUARD: ERP returned zero products; keeping local catalog intact.');
+                        return 0;
+                    }
+                }
+                await db.save(collection as any, safeItems);
 
                 if (collection === 'products') {
                     await productImageCacheService.syncSnapshotItems(safeItems as Product[]);
@@ -4198,14 +4457,14 @@ class SyncManager {
                     const { _op, ...cleanItem } = item;
                     if (op === 'DELETE' || item.deletedAt || item.isActive === false) {
                         console.log(`🗑️ SyncManager: Deleting item ${item.id} from ${collection}`);
-                        await db.deleteDocument(collection, item.id);
+                        await db.deleteDocument(collection as any, item.id);
                     } else {
                         // Add repair logic for internalSequences
                         let finalItem = collection === 'internalSequences' ? this.repairSequenceData(cleanItem) : cleanItem;
 
                         if (collection === 'products') {
                             const enriched = await this.enrichPulledProducts([finalItem]);
-                            finalItem = enriched[0];
+                            finalItem = normalizeRestaurantProductConfig(enriched[0]);
                         } else if (this.isImageBackedCollection(collection)) {
                             finalItem = await masterDataImageCacheService.normalizeIncomingItem(collection, finalItem as any);
                         }
@@ -4215,7 +4474,7 @@ class SyncManager {
                             if (!finalItem.cloudSyncStatus) finalItem.cloudSyncStatus = 'PENDING';
                         }
 
-                        await db.saveDocument(collection, finalItem);
+                        await db.saveDocument(collection as any, finalItem);
                         if (collection === 'products') {
                             updatedProductsForImageSync.push(finalItem as Product);
                         } else if (this.isImageBackedCollection(collection)) {
@@ -4280,6 +4539,7 @@ class SyncManager {
                 } catch (error) {
                     console.warn('⚠️ Image sync side-channel failed after products pull:', error);
                 }
+                setCatalogDiagnosticStatus('SYNCED');
             }
 
             console.log(`✅ SyncManager: Pulled ${items.length} items for ${collection}. New version: ${newVersion ?? 'unknown'}`);
@@ -4293,6 +4553,13 @@ class SyncManager {
             return items.length;
         } catch (error) {
             console.error(`❌ SyncManager: Error pulling ${collection}:`, error);
+            if (!(error && typeof error === 'object' && (error as any).__syncDiagnosticReported)) {
+                reportSyncErrorDiagnostic({
+                    operation: 'PULL_MASTERS',
+                    collection,
+                    error,
+                });
+            }
             throw error;
         } finally {
             if (this.watchdogTimer) {
@@ -4313,15 +4580,45 @@ class SyncManager {
         // Catalogs: Master PUSHES, Slaves PULL
         // Added inventoryLedger and transactions so slaves can see history from other terminals
         const isMaster = permissionService.isMasterTerminal();
-        const catalogs: SyncableCollection[] = [
+        const defaultCatalogs: SyncableCollection[] = [
             'products',
+            'taxes',
             'customers',
             'suppliers',
+            'warehouses',
+            'paymentMethods',
+            'priceLists',
+            'productPrices',
+            'categories',
+            'collections',
+            'serviceTypes',
+            'rooms',
+            'tables',
+            'productionAreas',
             'users',
             'roles',
+            'documentSeries',
+            'documentTypes',
             'internalSequences',
             'fiscalRanges',
-            'paymentMethods',
+            'fiscalReceiptTypes',
+            'fiscalReceipts',
+            'fiscalSequences',
+            'terminalFiscalConfig',
+            'promotions',
+            'campaigns',
+            'coupons',
+            'discountRules',
+            'promotionRules',
+            'promotionConditions',
+            'promotionBenefits',
+            'pointsPrograms',
+            'loyaltyPrograms',
+            'pointsRules',
+            'earningRules',
+            'redemptionRules',
+            'customerPointBalances',
+            'loyaltyTiers',
             'productStocks',
             ...(isMaster || permissionService.shouldShowGlobalSales() ? ['inventoryLedger' as SyncableCollection] : []),
             ...(permissionService.shouldShowGlobalSales() ? ['transactions' as SyncableCollection] : []),
@@ -4333,6 +4630,24 @@ class SyncManager {
         const operations: SyncableCollection[] = ['inventoryLedger', 'zReports'];
 
         const results: SyncStatus[] = [];
+        const target = syncPolicy.resolve();
+        let catalogs: SyncableCollection[] = target.kind === 'ERP_ACTIVE'
+            ? defaultCatalogs.filter(isErpMasterPullCollection)
+            : defaultCatalogs;
+        if (target.kind === 'ERP_ACTIVE') {
+            for (const collection of defaultCatalogs) {
+                if (!isErpMasterPullCollection(collection)) {
+                    logSkippedNonMasterPull(collection, target.kind, 'REMOVED_FROM_ERP_ACTIVE_CATALOG_PULL');
+                }
+            }
+        } else if (target.kind === 'POS_CLOUD_STAGING' && target.canPushMasters && target.dataMaster === 'POS') {
+            for (const collection of defaultCatalogs) {
+                if (!isPosCloudStagingPushCollection(collection)) {
+                    logSkippedNonMasterPull(collection, target.kind, 'POS_CLOUD_STAGING_PUSH_NOT_SUPPORTED');
+                }
+            }
+            catalogs = defaultCatalogs.filter(isPosCloudStagingPushCollection);
+        }
 
         // 0. Pull singleton config first on slaves (document assignments/terminal behavior live there).
         if (!permissionService.isMasterTerminal()) {
@@ -4349,6 +4664,11 @@ class SyncManager {
                     status: 'SYNCED'
                 });
             } catch (error: any) {
+                reportSyncErrorDiagnostic({
+                    operation: 'PULL_CONFIG',
+                    collection: 'config',
+                    error,
+                });
                 results.push({
                     collection: 'config',
                     lastSyncedAt: null,
@@ -4363,9 +4683,35 @@ class SyncManager {
         // 1. Sync Catalogs
         for (const collection of catalogs) {
             try {
-                // Always PULL to get updates from Server/Other Terminals
-                // (Master pushes changes via broadcastChange immediately)
-                await this.pullCatalog(collection);
+                if (target.canPushMasters && target.dataMaster === 'POS') {
+                    await this.pushCatalog(collection);
+                    const localData = await db.get(collection as any);
+                    const localVersion = this.syncVersions.get(collection) || 0;
+
+                    results.push({
+                        collection,
+                        lastSyncedAt: new Date().toISOString(),
+                        localVersion,
+                        remoteVersion: Array.isArray(localData) ? localData.length : null,
+                        status: 'SYNCED_CLOUD'
+                    });
+                    continue;
+                } else if (target.kind === 'POS_CLOUD_STAGING' || !target.canPullMasters) {
+                    logSkippedNonMasterPull(collection, target.kind, 'LOCAL_MASTERS_PROTECTED');
+                    const localData = await db.get(collection as any);
+                    const localVersion = this.syncVersions.get(collection) || 0;
+                    results.push({
+                        collection,
+                        lastSyncedAt: null,
+                        localVersion,
+                        remoteVersion: Array.isArray(localData) ? localData.length : null,
+                        status: 'SYNCED',
+                    });
+                    continue;
+                } else {
+                    // Pull only when the channel allows remote masters (ERP_ACTIVE or POS_MASTER).
+                    await this.pullCatalog(collection);
+                }
 
                 const metadata = await apiSyncAdapter.getMetadata(collection);
                 const localVersion = this.syncVersions.get(collection) || 0;
@@ -4378,6 +4724,11 @@ class SyncManager {
                     status: 'SYNCED'
                 });
             } catch (error: any) {
+                reportSyncErrorDiagnostic({
+                    operation: target.canPushMasters && target.dataMaster === 'POS' ? 'PUSH_MASTERS' : 'PULL_MASTERS',
+                    collection,
+                    error,
+                });
                 results.push({
                     collection,
                     lastSyncedAt: null,
@@ -4389,8 +4740,8 @@ class SyncManager {
             }
         }
 
-        // 2. Sync Operations (Master Only - PULL)
-        if (permissionService.isMasterTerminal()) {
+        // 2. Sync Operations (Master Only - PULL via local POS master)
+        if (permissionService.isMasterTerminal() && target.kind === 'POS_MASTER') {
             for (const collection of operations) {
                 try {
                     // Master pulls operations from Server to see what Slaves have sent
@@ -4407,6 +4758,11 @@ class SyncManager {
                         status: 'SYNCED'
                     });
                 } catch (error: any) {
+                    reportSyncErrorDiagnostic({
+                        operation: 'PULL_MASTERS',
+                        collection,
+                        error,
+                    });
                     results.push({
                         collection,
                         lastSyncedAt: null,
@@ -4479,19 +4835,54 @@ class SyncManager {
      * Check for catalog updates without pulling
      */
     async checkForUpdates(): Promise<string[]> {
-        const collections: SyncableCollection[] = [
+        const target = syncPolicy.resolve();
+        const defaultCollections: SyncableCollection[] = [
             'products',
+            'taxes',
             'customers',
             'suppliers',
+            'warehouses',
+            'paymentMethods',
+            'priceLists',
+            'productPrices',
+            'categories',
+            'collections',
+            'serviceTypes',
+            'rooms',
+            'tables',
+            'productionAreas',
             'users',
             'roles',
+            'documentSeries',
+            'documentTypes',
             'internalSequences',
             'fiscalRanges',
+            'fiscalReceiptTypes',
+            'fiscalReceipts',
+            'fiscalSequences',
+            'terminalFiscalConfig',
+            'promotions',
+            'campaigns',
+            'coupons',
+            'discountRules',
+            'promotionRules',
+            'promotionConditions',
+            'promotionBenefits',
+            'pointsPrograms',
+            'loyaltyPrograms',
+            'pointsRules',
+            'earningRules',
+            'redemptionRules',
+            'customerPointBalances',
+            'loyaltyTiers',
             'productStocks',
             'transfers',
             'receptions',
             ...(permissionService.shouldShowGlobalSales() ? ['transactions' as SyncableCollection] : [])
         ];
+        const collections = target.kind === 'ERP_ACTIVE'
+            ? defaultCollections.filter(isErpMasterPullCollection)
+            : defaultCollections;
         const updatesAvailable: string[] = [];
 
         for (const collection of collections) {
@@ -4503,7 +4894,7 @@ class SyncManager {
 
             // CRITICAL: Also check if local collection is empty. 
             // This handles the case where remote version is 0 but server has data (Slave first pull).
-            const localData = await db.get(collection);
+            const localData = await db.get(collection as any);
             const localCount = Array.isArray(localData) ? localData.length : 0;
             const isEmpty = localCount === 0;
             const hasCountDrift = remoteCount > localCount;
@@ -4555,27 +4946,55 @@ class SyncManager {
      */
     async forcePullAll(): Promise<void> {
         console.log('🔄 Forcing full pull of all catalogs...');
+        const target = syncPolicy.resolve();
+        if (!target.canPullMasters) {
+            console.warn(
+                `[SYNC_ROUTER] forcePullAll skipped channel=${target.kind} dataMaster=${target.dataMaster}. This terminal must not download ERP masters.`
+            );
+            window.dispatchEvent(new CustomEvent('syncStart', { detail: { modules: [] } }));
+            window.dispatchEvent(new CustomEvent('syncProgress', {
+                detail: { id: 'sync-profile', status: 'SUCCESS', message: 'Canal POS: maestros locales protegidos', count: 0 }
+            }));
+            return;
+        }
 
-        // Define modules to sync
-        const modules = [
+        // Define modules to sync. ERP_ACTIVE must pull only masters/config, never POS operations.
+        const baseModules = [
             { id: 'config', label: 'Configuración Global (Tarifas)' },
             { id: 'products', label: 'Catálogo de Productos' },
+            { id: 'taxes', label: 'Impuestos' },
             { id: 'customers', label: 'Base de Clientes' },
             { id: 'suppliers', label: 'Proveedores' },
+            { id: 'warehouses', label: 'Almacenes' },
+            { id: 'paymentMethods', label: 'Métodos de Pago' },
+            { id: 'productPrices', label: 'Precios de Productos' },
+            { id: 'priceLists', label: 'Tarifas' },
             { id: 'users', label: 'Operadores de Sistema' },
             { id: 'roles', label: 'Roles y Permisos' },
+            { id: 'documentSeries', label: 'Series Documentales' },
             { id: 'internalSequences', label: 'Secuencias de Documentos' },
             { id: 'fiscalRanges', label: 'Rangos Fiscales DGII' },
+            { id: 'fiscalSequences', label: 'Secuencias Fiscales' },
+            { id: 'terminalFiscalConfig', label: 'Configuración Fiscal de Terminal' },
+            { id: 'promotions', label: 'Promociones' },
+            { id: 'campaigns', label: 'Campañas' },
+            { id: 'coupons', label: 'Cupones' },
+            { id: 'pointsPrograms', label: 'Programas de Puntos' },
+            { id: 'loyaltyPrograms', label: 'Programas de Fidelidad' },
+            { id: 'pointsRules', label: 'Reglas de Puntos' },
         ];
+        const modules = target.kind === 'ERP_ACTIVE'
+            ? baseModules.filter(module => module.id === 'config' || isErpMasterPullCollection(module.id as SyncableCollection))
+            : [...baseModules];
 
-        if (permissionService.isMasterTerminal()) {
+        if (permissionService.isMasterTerminal() && target.kind !== 'ERP_ACTIVE') {
             modules.push(
                 { id: 'transactions', label: 'Historial de Ventas' },
                 { id: 'zReports', label: 'Cierres de Caja (Z)' },
                 { id: 'inventoryLedger', label: 'Movimientos de Inventario' },
                 { id: 'cashMovements', label: 'Movimientos de Efectivo' }
             );
-        } else if (permissionService.shouldShowGlobalSales()) {
+        } else if (permissionService.shouldShowGlobalSales() && target.kind !== 'ERP_ACTIVE') {
             modules.push(
                 { id: 'transactions', label: 'Historial de Ventas Globales' }
             );
@@ -4715,7 +5134,7 @@ class SyncManager {
             const hasNew = metadata ? await apiSyncAdapter.hasNewData(collection, localVersion) : false;
 
             // Get local item count
-            const localData = await db.get(collection);
+            const localData = await db.get(collection as any);
             const itemCount = Array.isArray(localData) ? localData.length : 0;
 
             statuses.push({
@@ -4759,6 +5178,10 @@ class SyncManager {
 
     isUsingErpOperationalTarget(): boolean {
         return apiSyncAdapter.isUsingErpOperationalTarget();
+    }
+
+    isErpActiveOperationalTarget(): boolean {
+        return apiSyncAdapter.isErpActiveOperationalTarget();
     }
 
     /**

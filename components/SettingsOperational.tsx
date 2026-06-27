@@ -3,7 +3,7 @@ import React from 'react';
 import {
     Building2, LayoutGrid, ShieldCheck,
     Monitor, Utensils, ShoppingBag,
-    Lock, Users, Info, Sparkles, CalendarDays, Percent, Landmark
+    Lock, Users, Info, Sparkles, CalendarDays, Percent, Landmark, Hash, Package
 } from 'lucide-react';
 
 interface SettingsOperationalProps {
@@ -54,13 +54,21 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
         pantalla_inicio: 'VENTA_DIRECTA',
         bloqueo_meseros: false,
         pedir_comensales: true,
+        recibir_consignaciones: false,
+        receiveConsignments: false,
         reservationPolicy: {
             validityDays: 7,
             printCopies: 1,
             requireAdvance: false,
             minimumAdvancePercent: 20
         },
-        expandTicket: false
+        expandTicket: false,
+        orderNumbers: {
+            enabled: false,
+            nextNumber: 1,
+            prefix: '',
+            padding: 3
+        }
     };
 
     const reservationPolicy = operational.reservationPolicy || {
@@ -68,6 +76,12 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
         printCopies: 1,
         requireAdvance: false,
         minimumAdvancePercent: 20
+    };
+    const orderNumbers = {
+        enabled: Boolean(operational.orderNumbers?.enabled),
+        nextNumber: Math.max(1, Math.floor(Number(operational.orderNumbers?.nextNumber || 1))),
+        prefix: String(operational.orderNumbers?.prefix || ''),
+        padding: Math.max(0, Math.min(10, Math.floor(Number(operational.orderNumbers?.padding ?? 3))))
     };
 
     const handleToggle = (key: string, val: boolean) => {
@@ -80,6 +94,13 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
             [key]: value
         };
         onUpdate('operational', 'reservationPolicy', nextPolicy);
+    };
+
+    const handleOrderNumbersChange = (patch: Partial<typeof orderNumbers>) => {
+        onUpdate('operational', 'orderNumbers', {
+            ...orderNumbers,
+            ...patch
+        });
     };
 
     return (
@@ -223,6 +244,77 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                 </div>
             </div>
 
+            {/* Section: Order Numbers */}
+            <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-6">
+                <div className="flex items-center gap-3 mb-2">
+                    <div className="w-10 h-10 bg-cyan-100 text-cyan-600 rounded-2xl flex items-center justify-center">
+                        <Hash size={20} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-black text-gray-800">No. de Orden</h3>
+                        <p className="text-xs text-gray-400 font-bold uppercase tracking-widest">FastFood, KDS e Impresión</p>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <Toggle
+                        label="Manejar No. Orden"
+                        description="Genera un consecutivo humano para llamar órdenes y mostrarlo en cocina y facturas."
+                        checked={orderNumbers.enabled}
+                        onChange={(v: boolean) => handleOrderNumbersChange({ enabled: v })}
+                        icon={Hash}
+                        disabled={isReadOnly}
+                    />
+
+                    {orderNumbers.enabled && (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-5 rounded-2xl border border-gray-100 bg-slate-50 animate-in slide-in-from-top-2 duration-300">
+                            <div>
+                                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-3">
+                                    Próximo No.
+                                </label>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    disabled={isReadOnly}
+                                    value={orderNumbers.nextNumber}
+                                    onChange={(e) => handleOrderNumbersChange({ nextNumber: Math.max(1, Math.floor(Number(e.target.value || 1))) })}
+                                    className="w-full p-3 rounded-xl border border-slate-200 bg-white text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-cyan-100"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-3">
+                                    Prefijo
+                                </label>
+                                <input
+                                    type="text"
+                                    disabled={isReadOnly}
+                                    value={orderNumbers.prefix}
+                                    onChange={(e) => handleOrderNumbersChange({ prefix: e.target.value.toUpperCase().slice(0, 8) })}
+                                    className="w-full p-3 rounded-xl border border-slate-200 bg-white text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-cyan-100"
+                                    placeholder="Ej: A-"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-3">
+                                    Dígitos
+                                </label>
+                                <input
+                                    type="number"
+                                    min={0}
+                                    max={10}
+                                    disabled={isReadOnly}
+                                    value={orderNumbers.padding}
+                                    onChange={(e) => handleOrderNumbersChange({ padding: Math.max(0, Math.min(10, Math.floor(Number(e.target.value || 0)))) })}
+                                    className="w-full p-3 rounded-xl border border-slate-200 bg-white text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-cyan-100"
+                                />
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+
             {/* Section: UX & Visual Experience */}
             <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-6 animate-in slide-in-from-bottom-8 duration-700">
                 <div className="flex items-center gap-3 mb-2">
@@ -293,6 +385,18 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                         checked={operational.showGlobalSales}
                         onChange={(v: boolean) => handleToggle('showGlobalSales', v)}
                         icon={Monitor}
+                        disabled={isReadOnly}
+                    />
+
+                    <Toggle
+                        label="Recibir consignaciones"
+                        description="Activa el botón de consignaciones ERP en la pantalla de ventas para buscar y agregar consignaciones al ticket."
+                        checked={Boolean(operational.recibir_consignaciones ?? operational.receiveConsignments)}
+                        onChange={(v: boolean) => {
+                            onUpdate('operational', 'recibir_consignaciones', v);
+                            onUpdate('operational', 'receiveConsignments', v);
+                        }}
+                        icon={Package}
                         disabled={isReadOnly}
                     />
 

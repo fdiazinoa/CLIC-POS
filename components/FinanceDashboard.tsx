@@ -1,14 +1,15 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
    ArrowLeft, Wallet, ArrowUpRight, ArrowDownLeft, Plus, Minus,
    TrendingUp, TrendingDown, DollarSign, CreditCard, Smartphone,
-   Banknote, X, FileText, Lock
+   Banknote, X, FileText, Lock, ClipboardCheck
 } from 'lucide-react';
-import { Transaction, CashMovement, BusinessConfig, User, RoleDefinition } from '../types';
+import { Transaction, CashMovement, BusinessConfig, User, RoleDefinition, XReport } from '../types';
 
 interface FinanceDashboardProps {
    transactions: Transaction[];
    cashMovements: CashMovement[];
+   xReports?: XReport[];
    config: BusinessConfig;
    currentUser: User | null;
    roles: RoleDefinition[];
@@ -16,6 +17,7 @@ interface FinanceDashboardProps {
    allowPartialXReport?: boolean;
    onClose: () => void;
    onRegisterMovement: (type: 'IN' | 'OUT', amount: number, reason: string) => void;
+   onCloseXReport?: (cashCounted: number, notes?: string) => Promise<void> | void;
    onOpenZReport: () => void;
 }
 
@@ -100,18 +102,106 @@ const PettyCashModal: React.FC<{
    );
 };
 
+const XCloseModal: React.FC<{
+   currency: string;
+   expectedCash: number;
+   onClose: () => void;
+   onConfirm: (cashCounted: number, notes?: string) => void | Promise<void>;
+}> = ({ currency, expectedCash, onClose, onConfirm }) => {
+   const [amount, setAmount] = useState('');
+   const [isProcessing, setIsProcessing] = useState(false);
+
+   const handleNumPad = (key: string) => {
+      if (key === 'BACK') setAmount(prev => prev.slice(0, -1));
+      else if (key === '.') { if (!amount.includes('.')) setAmount(prev => prev + key); }
+      else setAmount(prev => prev + key);
+   };
+
+   const parsedAmount = parseFloat(amount);
+   const isValid = Number.isFinite(parsedAmount) && parsedAmount >= 0;
+
+   const handleConfirm = async () => {
+      if (!isValid) return;
+      setIsProcessing(true);
+      try {
+         await onConfirm(parsedAmount, 'Cierre X / arqueo parcial');
+         onClose();
+      } finally {
+         setIsProcessing(false);
+      }
+   };
+
+   return (
+      <div className="fixed inset-0 z-[110] flex items-end justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+         <div className="bg-white w-full max-w-md rounded-t-[2.5rem] p-6 shadow-2xl animate-in slide-in-from-bottom-full duration-300">
+            <div className="mb-6 flex items-center justify-between">
+               <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Arqueo parcial</p>
+                  <h2 className="text-2xl font-black text-gray-900">Cierre X</h2>
+                  <p className="mt-1 text-xs font-bold text-gray-500">No limpia ventas ni movimientos.</p>
+               </div>
+               <button onClick={onClose} className="p-2 bg-gray-100 rounded-full hover:bg-gray-200"><X size={20} /></button>
+            </div>
+
+            <div className="mb-5 rounded-2xl border border-blue-100 bg-blue-50 p-4">
+               <p className="text-[10px] font-black uppercase tracking-widest text-blue-500">Efectivo teórico</p>
+               <p className="mt-1 text-3xl font-black text-blue-900">{currency}{expectedCash.toFixed(2)}</p>
+            </div>
+
+            <div className="mb-6 text-center">
+               <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-gray-400">Efectivo contado</p>
+               <div className="flex items-center justify-center text-5xl font-black text-gray-800">
+                  <span className="mr-1 mt-2 text-2xl text-gray-400">{currency}</span>
+                  {amount || '0.00'}
+               </div>
+               <button
+                  type="button"
+                  onClick={() => setAmount(expectedCash.toFixed(2))}
+                  className="mt-3 rounded-full bg-gray-100 px-4 py-2 text-xs font-black uppercase text-gray-500 hover:bg-gray-200"
+               >
+                  Usar teórico
+               </button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3 mb-6">
+               {[1, 2, 3, 4, 5, 6, 7, 8, 9, '.', 0].map(n => (
+                  <button key={n} onClick={() => handleNumPad(n.toString())} className="py-4 bg-gray-50 rounded-xl text-xl font-bold text-gray-700 active:bg-gray-200 transition-colors">
+                     {n}
+                  </button>
+               ))}
+               <button onClick={() => handleNumPad('BACK')} className="py-4 bg-gray-50 rounded-xl text-gray-500 flex items-center justify-center active:bg-gray-200">
+                  <ArrowLeft size={24} />
+               </button>
+            </div>
+
+            <button
+               onClick={handleConfirm}
+               disabled={!isValid || isProcessing}
+               className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 py-4 text-lg font-bold text-white shadow-lg shadow-blue-100 transition-all active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:shadow-none"
+            >
+               <ClipboardCheck size={22} />
+               {isProcessing ? 'Generando...' : 'Generar Cierre X'}
+            </button>
+         </div>
+      </div>
+   );
+};
+
 const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
    transactions,
    cashMovements,
+   xReports = [],
    config,
    currentUser,
    roles,
    allowPartialXReport = true,
    onClose,
    onRegisterMovement,
+   onCloseXReport,
    onOpenZReport
 }) => {
    const [activeModal, setActiveModal] = useState<'IN' | 'OUT' | null>(null);
+   const [showXCloseModal, setShowXCloseModal] = useState(false);
 
    // Permission checker
    const hasPermission = (permission: string): boolean => {
@@ -138,6 +228,13 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
 
    const expectedCashInDrawer = cashSalesTotal + cashIn - cashOut;
    const totalSales = (Object.values(totalsByMethod) as number[]).reduce((acc: number, val: number) => acc + val, 0);
+   const recentXReports = useMemo(
+      () => [...(xReports || [])].sort((a, b) => new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime()).slice(0, 3),
+      [xReports]
+   );
+   const hasCashierActivity = openTransactions.length > 0 || cashMovements.length > 0;
+   const canViewXReport = hasPermission('POS_VIEW_X_REPORT') || hasPermission('POS_CLOSE_X');
+   const canCloseXReport = hasPermission('POS_CLOSE_X') && allowPartialXReport && hasCashierActivity && Boolean(onCloseXReport);
 
    return (
       <div className="h-screen w-full bg-gray-50 flex flex-col overflow-hidden">
@@ -229,9 +326,56 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
 
             {/* RIGHT: X-REPORT (MONITOR) & Z-REPORT LINK */}
             <div className="w-full md:w-1/2 flex flex-col gap-6">
+               {canViewXReport && (
+                  <div className="bg-white p-5 rounded-3xl shadow-sm border border-blue-100">
+                     <div className="flex items-start gap-4">
+                        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-100">
+                           <ClipboardCheck size={24} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                           <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Arqueo parcial</p>
+                           <h3 className="mt-1 text-xl font-black text-gray-900">Cierre X</h3>
+                           <p className="mt-1 text-xs font-bold text-gray-500">Cuenta la caja sin limpiar ventas ni movimientos.</p>
+                        </div>
+                     </div>
+
+                     <button
+                        onClick={() => setShowXCloseModal(true)}
+                        disabled={!canCloseXReport}
+                        className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-4 text-sm font-black uppercase tracking-wide text-white shadow-lg shadow-blue-100 transition-all active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500 disabled:shadow-none"
+                     >
+                        <ClipboardCheck size={18} />
+                        Hacer Cierre X
+                     </button>
+
+                     {!canCloseXReport && (
+                        <p className="mt-2 text-center text-[10px] font-bold uppercase tracking-wide text-gray-400">
+                           {!allowPartialXReport
+                              ? 'Cierre X desactivado en esta terminal'
+                              : hasCashierActivity
+                                 ? 'Requiere permiso de cierre X'
+                                 : 'Sin movimientos para este cajero'}
+                        </p>
+                     )}
+
+                     {recentXReports.length > 0 && (
+                        <div className="mt-4 rounded-2xl bg-gray-50 p-3">
+                           <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-gray-400">Últimos X</p>
+                           <div className="space-y-2">
+                              {recentXReports.map(report => (
+                                 <div key={report.id} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 text-xs shadow-sm">
+                                    <span className="font-black text-gray-800">{report.sequenceNumber}</span>
+                                    <span className="font-bold text-gray-400">{new Date(report.closedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                 </div>
+                              ))}
+                           </div>
+                        </div>
+                     )}
+                  </div>
+               )}
 
                {/* Control X: permiso + política ERP/POS (allowPartialXReport) */}
-               {hasPermission('POS_VIEW_X_REPORT') && allowPartialXReport && (
+               {canViewXReport && (
                   <div className="bg-gray-900 text-white p-6 rounded-3xl shadow-xl relative overflow-hidden">
                      {/* Background Pattern */}
                      <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
@@ -278,6 +422,7 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
                            <span className="font-bold">{config.currencySymbol}{(totalsByMethod['QR'] || 0).toFixed(2)}</span>
                         </div>
                      </div>
+
                   </div>
                )}
 
@@ -315,6 +460,17 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
                onConfirm={(amount, reason) => {
                   onRegisterMovement(activeModal, amount, reason);
                   setActiveModal(null);
+               }}
+            />
+         )}
+
+         {showXCloseModal && (
+            <XCloseModal
+               currency={config.currencySymbol}
+               expectedCash={expectedCashInDrawer}
+               onClose={() => setShowXCloseModal(false)}
+               onConfirm={async (cashCounted, notes) => {
+                  await onCloseXReport?.(cashCounted, notes);
                }}
             />
          )}
