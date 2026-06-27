@@ -70,8 +70,14 @@ import ActivationScreen from './components/ActivationScreen';
 import TerminalModeSelector from './components/TerminalModeSelector';
 import TerminalBindingScreen from './components/TerminalBindingScreen';
 import CustomerVisor from './components/CustomerVisor';
+import PosApkUpdateBanner from './components/PosApkUpdateBanner';
 import { visorSync } from './utils/visorSync';
 import { markPosInteractionActivity, setPosSaleActivity } from './utils/posSaleActivity';
+import {
+  checkForPosApkUpdate,
+  openPosApkDownloadUrl,
+  type PosApkUpdateAvailable,
+} from './services/version/posApkUpdateService';
 
 // Layout imports
 import StandardPOSLayout from './components/layouts/StandardPOSLayout';
@@ -713,6 +719,7 @@ const AppContent: React.FC = () => {
   const [scanTargetTicketId, setScanTargetTicketId] = useState<string | null>(null); // NEW: Auto-select ticket from scan
   const [restoringHistory, setRestoringHistory] = useState(false);
   const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any));
+  const [posApkUpdate, setPosApkUpdate] = useState<PosApkUpdateAvailable | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLandscape, setIsLandscape] = useState(window.innerWidth > window.innerHeight);
 
@@ -730,6 +737,7 @@ const AppContent: React.FC = () => {
   const initLoadStartedRef = useRef(false);
   const forceSyncHandledRef = useRef(false);
   const lockdownHandledRef = useRef(false);
+  const posApkUpdateCheckStartedRef = useRef(false);
   const [reconnectionStatus, setReconnectionStatus] = useState<'idle' | 'searching' | 'connected' | 'failed'>('idle');
   const [terminalConfigRestartNotice, setTerminalConfigRestartNotice] = useState<TerminalConfigRestartNotice | null>(() => readTerminalConfigRestartNotice());
 
@@ -740,6 +748,41 @@ const AppContent: React.FC = () => {
   const inactivityTimerRef = useRef<number | null>(null);
 
   // Security bootstrap logic moved to loadData
+
+  useEffect(() => {
+    if (posApkUpdateCheckStartedRef.current) return;
+    posApkUpdateCheckStartedRef.current = true;
+
+    let disposed = false;
+
+    void checkForPosApkUpdate({ config, timeoutMs: 3500 })
+      .then((result) => {
+        if (disposed || !result?.hasUpdate) return;
+        setPosApkUpdate(result);
+      })
+      .catch((error) => {
+        console.info('[posApkUpdate] Validacion omitida sin bloquear operacion:', error);
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [config]);
+
+  const handleDownloadPosApkUpdate = useCallback(() => {
+    if (!posApkUpdate) return;
+    void openPosApkDownloadUrl(posApkUpdate.release);
+  }, [posApkUpdate]);
+
+  const renderPosApkUpdateBanner = () => (
+    posApkUpdate ? (
+      <PosApkUpdateBanner
+        update={posApkUpdate}
+        onDownload={handleDownloadPosApkUpdate}
+        onDismiss={() => setPosApkUpdate(null)}
+      />
+    ) : null
+  );
 
   useEffect(() => {
     if (!isNativeAndroidRuntime()) {
@@ -4789,6 +4832,7 @@ const AppContent: React.FC = () => {
   if (licenseError) {
     return (
       <div className="h-screen w-screen bg-red-50 flex flex-col items-center justify-center p-6 text-center">
+        {renderPosApkUpdateBanner()}
         <div className="bg-white p-10 rounded-3xl shadow-2xl border border-red-100 max-w-lg z-50">
           <div className="w-24 h-24 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6">
             <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -4817,6 +4861,7 @@ const AppContent: React.FC = () => {
     if (initialConnError && !restoringHistory) {
       return (
         <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-900 text-white p-8 text-center">
+          {renderPosApkUpdateBanner()}
           <div className="bg-red-500/20 p-4 rounded-full mb-4">
             <Layout size={48} className="text-red-500" />
           </div>
@@ -4833,6 +4878,7 @@ const AppContent: React.FC = () => {
     }
     return (
       <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-900 text-white">
+        {renderPosApkUpdateBanner()}
         <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
         <p className="font-bold tracking-widest uppercase text-xs">
           {restoringHistory ? 'Restaurando Historial desde Maestra...' : 'Cargando CLIC POS OS...'}
@@ -6527,6 +6573,7 @@ const AppContent: React.FC = () => {
     if (initialConnError) {
       return (
         <div className="h-screen w-screen flex flex-col items-center justify-center bg-red-50 text-red-900 p-8">
+          {renderPosApkUpdateBanner()}
           <div className="text-6xl mb-4">⚠️</div>
           <h1 className="text-2xl font-bold mb-2">Error de Inicialización</h1>
           <p className="text-lg bg-white p-4 rounded shadow border border-red-200">{initialConnError}</p>
@@ -6541,6 +6588,7 @@ const AppContent: React.FC = () => {
     }
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-slate-50 text-slate-900">
+        {renderPosApkUpdateBanner()}
         <div className="flex flex-col items-center gap-4">
           <div className="w-12 h-12 border-4 border-slate-900 border-t-transparent rounded-full animate-spin"></div>
           <p className="font-bold animate-pulse">Cargando CLIC POS...</p>
@@ -6554,6 +6602,7 @@ const AppContent: React.FC = () => {
     if (bootstrapError) {
       return (
         <div className="h-screen w-screen flex flex-col items-center justify-center bg-red-50 text-red-900 p-8">
+          {renderPosApkUpdateBanner()}
           <div className="text-6xl mb-4">🔐</div>
           <h1 className="text-2xl font-bold mb-2">Error de Seguridad</h1>
           <p className="text-lg bg-white p-4 rounded shadow border border-red-200">{bootstrapError}</p>
@@ -6568,6 +6617,7 @@ const AppContent: React.FC = () => {
     }
     return (
       <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 text-slate-900">
+        {renderPosApkUpdateBanner()}
         <div className="w-16 h-16 border-4 border-slate-900 border-t-transparent rounded-full animate-spin mb-4"></div>
         <h2 className="text-xl font-bold animate-pulse">Cargando Seguridad...</h2>
         <p className="text-gray-500 mt-2">Sincronizando usuarios y permisos</p>
@@ -6582,6 +6632,7 @@ const AppContent: React.FC = () => {
       <>
         {renderReconnectionBanner()}
         {renderTerminalConfigRestartBanner()}
+        {renderPosApkUpdateBanner()}
         <div
           className={`fixed inset-0 w-full h-full bg-gray-50 flex flex-col font-sans select-none text-gray-900 ${allowsViewportScroll ? '' : 'overflow-hidden'}`}
           style={{
