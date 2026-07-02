@@ -122,6 +122,15 @@ const normalizeActivationErrorMessage = (error: unknown): string => {
     return message;
 };
 
+const requiresPasswordChange = (user: any): boolean => {
+    const metadata = user?.user_metadata || {};
+    return metadata.is_new_user === true
+        || metadata.must_change_password === true
+        || metadata.force_password_change === true
+        || metadata.password_change_required === true
+        || metadata.temporary_password === true;
+};
+
 const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplete }) => {
     const [step, setStep] = useState<ActivationStep>('LOGIN');
     const [email, setEmail] = useState('');
@@ -322,7 +331,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
 
             if (authError) throw authError;
 
-            const isNewUser = data.user?.user_metadata?.is_new_user !== false;
+            const isNewUser = requiresPasswordChange(data.user);
 
             if (isNewUser) {
                 setStep('CHANGE_PASSWORD');
@@ -353,7 +362,13 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
         try {
             const { data, error: updateError } = await supabase.auth.updateUser({
                 password: newPassword,
-                data: { is_new_user: false }
+                data: {
+                    is_new_user: false,
+                    must_change_password: false,
+                    force_password_change: false,
+                    password_change_required: false,
+                    temporary_password: false,
+                }
             });
 
             if (updateError) throw updateError;

@@ -217,6 +217,8 @@ router.post('/provision-tenant', async (req, res) => {
                 captured_by_distributor_id: capturedByDistributorId,
                 serviced_by_distributor_id: servicedByDistributorId,
                 is_new_user: true,
+                must_change_password: true,
+                temporary_password: true,
             },
         });
 
@@ -246,6 +248,7 @@ router.post('/provision-tenant', async (req, res) => {
         }
 
         const { error: metadataError } = await supabaseAdmin.auth.admin.updateUserById(authUserId, {
+            password: tempPassword,
             user_metadata: {
                 name,
                 full_name: name,
@@ -258,6 +261,8 @@ router.post('/provision-tenant', async (req, res) => {
                 captured_by_distributor_id: capturedByDistributorId,
                 serviced_by_distributor_id: servicedByDistributorId,
                 is_new_user: true,
+                must_change_password: true,
+                temporary_password: true,
                 tenant_id: tenantId,
             },
         });
