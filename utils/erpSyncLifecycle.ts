@@ -200,6 +200,16 @@ let outboxProcessingPromise: Promise<{ processed: number; applied: number; faile
 
 const normalizeOptional = (value?: string | null) => (typeof value === 'string' ? value.trim() : '');
 const normalizeEntityCode = (value?: string | null) => normalizeOptional(value || null);
+const looksLikeUuid = (value?: string | null) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalizeOptional(value || null));
+const resolveCustomerCode = (customer: Customer) => {
+    const explicitCode = normalizeEntityCode(customer.customerCode || null);
+    if (explicitCode) return explicitCode;
+
+    const internalId = normalizeEntityCode(customer.id || null);
+    if (!internalId || looksLikeUuid(internalId) || internalId.startsWith('temp_')) return '';
+    return internalId;
+};
 const uniqueStrings = (values: unknown) => Array.from(
     new Set(
         (Array.isArray(values) ? values : [])
@@ -489,8 +499,8 @@ const buildBootstrapMasters = async (requiredEntities?: string[] | null) => {
             : [],
         customers: shouldIncludeEntity(normalizedEntities, 'CUSTOMER')
             ? safeCustomers.map((customer) => ({
-                code: normalizeEntityCode(customer.id),
-                customer_code: normalizeEntityCode(customer.id),
+                code: resolveCustomerCode(customer),
+                customer_code: resolveCustomerCode(customer),
                 name: customer.name,
                 tax_id: normalizeEntityCode(customer.taxId || null) || null,
                 email: normalizeEntityCode(customer.email || null) || null,

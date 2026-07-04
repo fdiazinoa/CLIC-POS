@@ -258,6 +258,7 @@ const Step4Processing: React.FC<Step4ProcessingProps> = ({
 
                     const newCustomer: Customer = {
                         id: crypto.randomUUID(),
+                        customerCode: String(getValue(row, 'customerCode') || '').trim() || undefined,
                         name: String(name),
                         taxId: getValue(row, 'taxId'),
                         email: getValue(row, 'email'),
