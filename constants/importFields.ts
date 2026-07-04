@@ -17,7 +17,6 @@ export const SYSTEM_FIELDS = {
         { id: 'stock', label: 'Stock Inicial', required: false },
     ],
     CUSTOMER: [
-        { id: 'customerCode', label: 'ID Cliente (no UUID)', required: false },
         { id: 'name', label: 'Nombre Completo', required: true },
         { id: 'taxId', label: 'RNC / Cédula', required: false },
         { id: 'email', label: 'Email', required: false },
@@ -59,7 +58,6 @@ export const DEMO_DATA = {
         stock: 50
     },
     CUSTOMER: {
-        customerCode: 'CLI-001',
         name: 'Juan Pérez',
         taxId: '001-0000000-1',
         email: 'juan.perez@email.com',

@@ -125,15 +125,6 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       customers.find(c => c.id === selectedCustomerId),
       [customers, selectedCustomerId]);
 
-   const getCustomerImportId = useCallback((customer: Customer) => {
-      const explicitCode = String(customer.customerCode || '').trim();
-      if (explicitCode) return explicitCode;
-
-      const internalId = String(customer.id || '').trim();
-      const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(internalId);
-      return looksLikeUuid || internalId.startsWith('temp_') ? '' : internalId;
-   }, []);
-
    const allocationsByTransactionId = useMemo(() => {
       const map = new globalThis.Map<string, number>();
       const selectedId = selectedCustomer?.id;
@@ -281,7 +272,6 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
          email: '',
          taxId: '',
          address: '',
-         customerCode: '',
          notes: '',
          loyaltyPoints: 0,
          creditLimit: 0,
@@ -973,9 +963,6 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                               <h4 className={`font-bold text-sm truncate ${selectedCustomerId === customer.id ? 'text-blue-700' : 'text-gray-800'}`}>{customer.name}</h4>
                               <div className="flex items-center gap-2">
                                  <p className="text-xs text-gray-400 truncate">{customer.phone || 'Sin contacto'}</p>
-                                 <span className="text-[9px] font-mono font-black text-slate-500 bg-slate-100 px-1 rounded">
-                                    ID {getCustomerImportId(customer) || 'SIN ID'}
-                                 </span>
                                  <span className="text-[9px] font-black text-blue-500 bg-blue-50 px-1 rounded">{customer.defaultNcfType || 'B02'}</span>
                               </div>
                            </div>
@@ -1061,16 +1048,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                            </div>
 
                            {/* FISCAL PREVIEW SECTION (Destacada en la ficha) */}
-                           <div className="mt-8 p-4 bg-blue-50/50 rounded-2xl border border-blue-100 grid grid-cols-1 md:grid-cols-3 gap-4">
-                              <div className="flex items-center gap-3">
-                                 <div className="p-2 bg-white text-blue-600 rounded-xl border border-blue-200">
-                                    <FileText size={20} />
-                                 </div>
-                                 <div>
-                                    <p className="text-[10px] font-black text-blue-400 uppercase tracking-widest leading-none mb-1">ID Cliente</p>
-                                    <p className="text-sm font-mono font-bold text-blue-900">{getCustomerImportId(selectedCustomer) || 'Sin ID operativo'}</p>
-                                 </div>
-                              </div>
+                           <div className="mt-8 p-4 bg-blue-50/50 rounded-2xl border border-blue-100 grid grid-cols-1 md:grid-cols-2 gap-4">
                               <div className="flex items-center gap-3">
                                  <div className="p-2 bg-blue-600 text-white rounded-xl shadow-md">
                                     <Landmark size={20} />
@@ -1080,7 +1058,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                     <p className="text-sm font-black text-blue-900">{selectedCustomer.defaultNcfType || 'Consumo (B02)'}</p>
                                  </div>
                               </div>
-                              <div className="flex items-center gap-3 md:border-l border-blue-100 md:pl-6">
+                              <div className="flex items-center gap-3 border-l md:border-l border-blue-100 md:pl-6">
                                  <div className="p-2 bg-white text-blue-600 rounded-xl border border-blue-200">
                                     <FileText size={20} />
                                  </div>
@@ -1444,16 +1422,6 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                  <div>
                                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre Completo *</label>
                                     <input required type="text" value={formData.name || ''} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
-                                 </div>
-                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">ID Cliente para Importaciones</label>
-                                    <input
-                                       type="text"
-                                       value={formData.customerCode || ''}
-                                       onChange={e => setFormData({ ...formData, customerCode: e.target.value })}
-                                       placeholder="CLI-001"
-                                       className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-mono font-bold"
-                                    />
                                  </div>
                                  <div className="grid grid-cols-2 gap-4">
                                     <div>
