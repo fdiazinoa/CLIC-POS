@@ -2,6 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from '../utils/supabase';
 import { resolveTenantRecord } from '../utils/licenseGuard';
 import {
+    clearPersistedActivationIdentity,
+    resolveActivationTenantIdentity,
+} from '../services/setup/activationTenantIdentity';
+import {
     Rocket,
     Lock,
     Mail,
@@ -414,16 +418,13 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
             || user.email?.split('@')[0]
             || 'Tenant'
         );
-        const metadataTenantId = String(
-            userMetadata.tenant_id
-            || user?.app_metadata?.tenant_id
-            || ''
-        ).trim();
-        const metadataSlug = String(
-            userMetadata.slug
-            || user?.app_metadata?.slug
-            || ''
-        ).trim();
+        const identity = resolveActivationTenantIdentity(user, fallbackEmail);
+        const metadataTenantId = identity.erpTenantId || '';
+        const metadataSlug = identity.slug || '';
+        const tenantDisplayName = identity.tenantName || resolveTenantDisplayName();
+
+        // A new authenticated identity must not inherit a tenant or terminal from a previous session.
+        clearPersistedActivationIdentity(localStorage);
 
         // Backward-compatible path:
         // Some clouds already embed tenant_id in auth metadata but don't expose resolve_tenant_license RPC.
@@ -431,14 +432,21 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
             const tenantData = {
                 id: user.id,
                 email: user.email,
-                name: resolveTenantDisplayName(),
+                name: tenantDisplayName,
                 tenantId: metadataTenantId,
                 slug: metadataSlug || localStorage.getItem('clic_tenant_slug') || null,
             };
 
             localStorage.setItem('clic_tenant_id', tenantData.tenantId);
             localStorage.setItem('active_tenant_id', tenantData.tenantId);
-            localStorage.setItem('clic_tenant_email', tenantData.email);
+            localStorage.setItem('clic_erp_tenant_id', tenantData.tenantId);
+            localStorage.setItem('clic_tenant_email', identity.email || tenantData.email);
+            if (identity.tenantName) {
+                localStorage.setItem('clic_tenant_name', identity.tenantName);
+            }
+            if (identity.cloudAdminTenantId) {
+                localStorage.setItem('clic_cloud_tenant_id', identity.cloudAdminTenantId);
+            }
             localStorage.removeItem('clic_tenant_unverified');
             if (tenantData.slug) {
                 localStorage.setItem('clic_tenant_slug', tenantData.slug);
@@ -469,7 +477,14 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
 
         localStorage.setItem('clic_tenant_id', tenantData.tenantId);
         localStorage.setItem('active_tenant_id', tenantData.tenantId);
-        localStorage.setItem('clic_tenant_email', tenantData.email);
+        localStorage.setItem('clic_erp_tenant_id', tenantData.tenantId);
+        localStorage.setItem('clic_tenant_email', identity.email || tenantData.email);
+        if (identity.tenantName) {
+            localStorage.setItem('clic_tenant_name', identity.tenantName);
+        }
+        if (identity.cloudAdminTenantId) {
+            localStorage.setItem('clic_cloud_tenant_id', identity.cloudAdminTenantId);
+        }
         if (!resolvedTenant?.id) {
             localStorage.setItem('clic_tenant_unverified', '1');
             console.warn('Activation completed with unverified tenant mapping. Using auth user id as fallback tenant key.');

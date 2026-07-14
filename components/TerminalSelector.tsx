@@ -48,6 +48,7 @@ interface DeviceAuthorizationIssue {
 
 interface TerminalSelectorResponse {
   tenant_id: string;
+  tenant_name?: string | null;
   erp_base_url?: string | null;
   source?: string | null;
   terminals: TerminalCard[];
@@ -370,6 +371,9 @@ const resolveAppVersion = (): string | null => (
 );
 
 const resolveTenantDisplayName = (tenantId?: string | null): string => {
+  const name = (localStorage.getItem('clic_tenant_name') || '').trim();
+  if (name) return name;
+
   const slug = resolveTenantSlug();
   if (slug) return slug;
 
@@ -857,6 +861,12 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
     setError(null);
 
     const persistListMeta = (data: TerminalSelectorResponse) => {
+      const expectedErpTenantId = (localStorage.getItem('clic_erp_tenant_id') || '').trim();
+      const receivedTenantId = String(data.tenant_id || '').trim();
+      if (expectedErpTenantId && receivedTenantId && expectedErpTenantId !== receivedTenantId) {
+        throw new Error('El ERP devolvió un tenant distinto al de la sesión autenticada. Se rechazó la lista de terminales.');
+      }
+
       const rawTerminals = Array.isArray(data.terminals) ? data.terminals : [];
       const visibleRawTerminals = rawTerminals.filter((terminal: any) => {
         const config = terminal?.config && typeof terminal.config === 'object' ? terminal.config : {};
@@ -889,6 +899,9 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
       setTerminals(deduped.terminals);
       if (deduped.duplicatesRemoved > 0) {
         setError(`El ERP/Cloud-Admin devolvió ${deduped.duplicatesRemoved} terminal duplicada(s). El POS ocultó las fantasma y usará una sola caja operativa.`);
+      }
+      if (data.tenant_name) {
+        localStorage.setItem('clic_tenant_name', data.tenant_name);
       }
       setTenantId(data.tenant_id || '');
       const resolvedBase = normalizeBaseUrl(data.erp_base_url || erpBaseUrl) || erpBaseUrl;
