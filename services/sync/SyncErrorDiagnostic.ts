@@ -248,14 +248,18 @@ export const isStaleLocalhostSyncMessage = (message: string | null | undefined):
         || normalized.includes('::1');
 };
 
-const isRecoverableNetworkConnectivityMessage = (message: string | null | undefined): boolean => {
+export const isRecoverableNetworkConnectivityMessage = (message: string | null | undefined): boolean => {
     if (!message) return false;
     const normalized = message.trim().toLowerCase();
     return normalized.includes('unable to resolve host')
         || normalized.includes('no address associated with hostname')
+        || /failed to connect to\s+\S+(?:\/[0-9a-f.:]+)?:\d+/i.test(message)
         || normalized.includes('failed to fetch')
         || normalized.includes('network request failed')
         || normalized.includes('networkerror')
+        || normalized.includes('connect timed out')
+        || normalized.includes('connection timed out')
+        || normalized.includes('network is unreachable')
         || normalized.includes('err_internet_disconnected')
         || normalized.includes('err_name_not_resolved')
         || normalized.includes('browser offline')

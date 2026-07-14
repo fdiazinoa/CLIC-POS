@@ -162,6 +162,8 @@ import {
   SYNC_DIAGNOSTIC_STORAGE_KEY,
   clearStaleSyncErrorDiagnosticIfRecovered,
   clearSyncErrorDiagnostic,
+  CATALOG_SYNC_STATUS_KEY,
+  isRecoverableNetworkConnectivityMessage,
   isRecoverableStaleSyncDiagnostic,
   reportSyncErrorDiagnostic,
   setCatalogDiagnosticStatus,
@@ -5168,6 +5170,7 @@ const AppContent: React.FC = () => {
     const previousActiveTerminalId = localStorage.getItem('active_terminal_id');
     const previousTerminalStorageId = localStorage.getItem('CLIC_POS_TERMINAL_ID');
     const previousInitialTerminalConfig = localStorage.getItem('initial_terminal_config');
+    const previousCatalogDiagnosticStatus = localStorage.getItem(CATALOG_SYNC_STATUS_KEY);
     try {
       const setupResult = typeof pairingContext === 'object' && pairingContext !== null ? pairingContext : undefined;
       const resolvedMasterIp = typeof pairingContext === 'string' ? pairingContext : setupResult?.masterIp;
@@ -5779,6 +5782,26 @@ const AppContent: React.FC = () => {
       setCurrentView('LOGIN');
     } catch (error) {
       console.error('❌ Failed to take terminal control:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error || '');
+      const canResumeExistingTerminalOffline = Boolean(
+        preserveTerminalBindingAfterRegister
+        && previousActiveTerminalId
+        && isDataLoaded
+        && isRecoverableNetworkConnectivityMessage(errorMessage)
+      );
+
+      if (canResumeExistingTerminalOffline) {
+        console.warn('[TERMINAL_RESUME_OFFLINE] ERP unavailable after network change; keeping the existing local binding.');
+        setTerminalBindingDiagnosticStatus('BOUND');
+        setCatalogDiagnosticStatus(
+          previousCatalogDiagnosticStatus === 'SYNCED' ? 'SYNCED' : 'IDLE'
+        );
+        clearSyncErrorDiagnostic();
+        setSyncDiagnostic(null);
+        setCurrentView('LOGIN');
+        return;
+      }
+
       if (preserveTerminalBindingAfterRegister) {
         setTerminalBindingDiagnosticStatus('BOUND');
         setCatalogDiagnosticStatus('ERROR');
