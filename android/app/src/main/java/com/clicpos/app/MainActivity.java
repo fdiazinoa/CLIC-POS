@@ -6,6 +6,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.WindowManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -51,6 +52,7 @@ public class MainActivity extends BridgeActivity {
                 new AndroidCustomerDisplayBridge(this),
                 "AndroidCustomerDisplay"
         );
+        webView.addJavascriptInterface(new AndroidAppBridge(), "ClicPOSAppBridge");
         AndroidCustomerDisplayBridge.injectContractShim(webView);
         webView.setInitialScale(0);
         webView.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
@@ -102,6 +104,24 @@ public class MainActivity extends BridgeActivity {
                 return true;
             }
         });
+    }
+
+    private class AndroidAppBridge {
+        @JavascriptInterface
+        public void exitApp() {
+            runOnUiThread(() -> {
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        finishAndRemoveTask();
+                    } else {
+                        finish();
+                    }
+                } catch (Exception error) {
+                    Log.e(TAG, "Failed to exit app from androidBridge", error);
+                    finish();
+                }
+            });
+        }
     }
 
     private void ensureBluetoothPermissions() {

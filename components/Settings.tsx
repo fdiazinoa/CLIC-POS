@@ -117,7 +117,7 @@ interface SettingsProps {
     creditNoteIds: string[];
   }>;
   onAdjustStock: (adjustments: { productId: string; quantity: number }[]) => void;
-  onOpenFinance?: () => void;
+  onOpenFinance?: (initialCashMovementType?: 'IN' | 'OUT' | 'X_REPORT') => void;
   onOpenZReport: () => void;
   onOpenSupplyChain: () => void;
   onOpenFranchise: () => void;
@@ -165,7 +165,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
   const [fiscalReceptions, setFiscalReceptions] = useState<Reception[]>(props.receptions || []);
   const [fiscalSuppliers, setFiscalSuppliers] = useState<Supplier[]>(props.suppliers || []);
   const [isCheckingApkUpdate, setIsCheckingApkUpdate] = useState(false);
-  const usesPageScroll = currentView === 'HOME' || currentView === 'TERMINALS' || currentView === 'TAXES' || currentView === 'PRODUCTION_AREAS';
+  const usesPageScroll = currentView === 'HOME' || currentView === 'TERMINALS' || currentView === 'TAXES' || currentView === 'PRODUCTION_AREAS' || currentView === 'LAYOUT';
 
   useEffect(() => {
     const previousBodyOverflow = document.body.style.overflow;
@@ -638,12 +638,36 @@ const Settings: React.FC<SettingsProps> = (props) => {
           } else if (selectedCategory === 'HR') {
             reportData = getHRPerformance(attendanceLogs);
           } else if (selectedCategory === 'FISCAL') {
+            const resolveTerminalForReport = (terminalId?: string) => {
+              const normalized = String(terminalId || '').trim().toLowerCase();
+              return (props.config.terminals || []).find((terminal: any) => [
+                terminal?.id,
+                (terminal as any)?.name,
+                terminal?.config?.terminalName,
+                terminal?.config?.stationNumber,
+                terminal?.config?.erpTerminalId,
+                terminal?.config?.erpBinding?.terminalId,
+                terminal?.config?.erpBinding?.terminalName,
+                terminal?.config?.terminalId,
+                terminal?.config?.localTerminalId,
+              ].map(value => String(value || '').trim().toLowerCase()).includes(normalized));
+            };
+            const resolveTerminalNameForReport = (terminalId?: string) => {
+              const terminal = resolveTerminalForReport(terminalId);
+              return terminal?.config?.terminalName || terminal?.config?.erpBinding?.terminalName || (terminal as any)?.name || terminal?.config?.stationNumber || terminalId || '-';
+            };
+            const resolveEstablishmentForReport = (terminalId?: string) => {
+              const terminal = resolveTerminalForReport(terminalId);
+              return (terminal?.config as any)?.branchName || (terminal?.config as any)?.establishmentName || (props.config as any).branchName || (props.config as any).companyName || 'Principal';
+            };
             reportData = [...fiscalTransactions, ...fiscalTransactionHistory].map(tx => ({
               id: tx.id,
               ncf: tx.ncf || 'Sin NCF',
               ticketNo: tx.displayId || tx.id,
               ncfType: tx.ncfType || '-',
               terminalId: tx.terminalId || '-',
+              terminalName: resolveTerminalNameForReport(tx.terminalId),
+              establishment: resolveEstablishmentForReport(tx.terminalId),
               status: tx.status || '-',
               total: tx.total,
               date: tx.date
@@ -892,7 +916,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   <SettingsCard icon={PlugZap} label="Integraciones" description="AZUL, CardNet y adquirentes" color="bg-sky-600" onClick={() => setCurrentView('INTEGRATIONS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ArrowRightLeft} label="Divisas y Cambio" description="Multi-moneda y Tasas" color="bg-teal-500" onClick={() => setCurrentView('EXCHANGE')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Percent} label="Impuestos" description="ITBIS, Exentos y Cargos" color="bg-emerald-500" onClick={() => setCurrentView('TAXES')} locked={!hasPermission('SETTINGS_TAXES')} />
-                  <SettingsCard icon={ListChecks} label="Cierre X" description="Arqueo parcial sin limpiar ventas" color="bg-blue-700" onClick={props.onOpenFinance || props.onOpenZReport} locked={!hasPermission('POS_CLOSE_X')} />
+                  <SettingsCard icon={ListChecks} label="Cierre X" description="Arqueo parcial sin limpiar ventas" color="bg-blue-700" onClick={() => props.onOpenFinance ? props.onOpenFinance('X_REPORT') : props.onOpenZReport()} locked={!hasPermission('POS_CLOSE_X')} />
                   <SettingsCard icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" onClick={props.onOpenZReport} locked={!hasPermission('POS_CLOSE_Z')} />
                   <SettingsCard icon={FileText} label="Documentos" description="Series, NCF, Prefijos" color="bg-blue-400" onClick={() => setCurrentView('DOCUMENTS')} locked={!hasPermission('SETTINGS_TAXES')} />
                 </div>

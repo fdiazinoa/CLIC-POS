@@ -1242,6 +1242,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    const [filterCashier, setFilterCashier] = useState('');
    const [filterCustomer, setFilterCustomer] = useState('');
    const [filterNcfType, setFilterNcfType] = useState('');
+   const [filterPaymentMethod, setFilterPaymentMethod] = useState('');
 
    // Return Mode State
    const [returnModeId, setReturnModeId] = useState<string | null>(null);
@@ -1262,6 +1263,105 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    const [refundTx, setRefundTx] = useState<Transaction | null>(null);
    const [refundRequestMode, setRefundRequestMode] = useState<RefundRequestMode>('STANDARD');
    const [gatewayProgress, setGatewayProgress] = useState<GatewayProgressOverlayState | null>(null);
+
+   const normalizeTerminalKey = (value?: unknown) => String(value || '').trim().toLowerCase();
+
+   const resolveTerminalLabel = (terminal: any, fallback?: string) => {
+      const candidates = [
+         terminal?.config?.terminalName,
+         terminal?.config?.erpBinding?.terminalName,
+         terminal?.name,
+         terminal?.config?.stationNumber,
+         fallback,
+         terminal?.id,
+      ].map(value => String(value || '').trim()).filter(Boolean);
+      return candidates[0] || 'Terminal';
+   };
+
+   const resolveTerminalAliases = (terminal: any) => [
+      terminal?.id,
+      terminal?.name,
+      terminal?.config?.terminalName,
+      terminal?.config?.stationNumber,
+      terminal?.config?.erpTerminalId,
+      terminal?.config?.erpBinding?.terminalId,
+      terminal?.config?.erpBinding?.terminalName,
+      (terminal?.config as any)?.terminalId,
+      (terminal?.config as any)?.localTerminalId,
+   ].map(value => String(value || '').trim()).filter(Boolean);
+
+   const terminalFilterOptions = useMemo(() => {
+      const options = new Map<string, { value: string; label: string; aliases: string[] }>();
+
+      (config.terminals || []).forEach((terminal: any) => {
+         const aliases = resolveTerminalAliases(terminal);
+         const value = String(terminal?.id || aliases[0] || '').trim();
+         if (!value) return;
+         options.set(value, {
+            value,
+            label: resolveTerminalLabel(terminal, value),
+            aliases: Array.from(new Set([value, ...aliases])),
+         });
+      });
+
+      [...transactions, ...historyTransactions].forEach((tx) => {
+         const value = String(tx?.terminalId || '').trim();
+         if (!value) return;
+         const matching = Array.from(options.values()).find(option =>
+            option.aliases.some(alias => normalizeTerminalKey(alias) === normalizeTerminalKey(value))
+         );
+         if (matching) {
+            matching.aliases = Array.from(new Set([...matching.aliases, value]));
+            return;
+         }
+         options.set(value, { value, label: value, aliases: [value] });
+      });
+
+      return Array.from(options.values()).sort((a, b) => a.label.localeCompare(b.label));
+   }, [config.terminals, transactions, historyTransactions]);
+
+   const terminalAliasesByValue = useMemo(() => {
+      const map = new Map<string, Set<string>>();
+      terminalFilterOptions.forEach(option => {
+         map.set(option.value, new Set(option.aliases.map(normalizeTerminalKey).filter(Boolean)));
+      });
+      return map;
+   }, [terminalFilterOptions]);
+
+   const paymentMethodOptions = useMemo(() => {
+      const defaults = [
+         { value: 'CASH', label: 'Efectivo' },
+         { value: 'CARD', label: 'Tarjeta' },
+         { value: 'TRANSFER', label: 'Transferencia' },
+         { value: 'CREDIT', label: 'Crédito' },
+         { value: 'STORE_CREDIT', label: 'Crédito a favor' },
+      ];
+      const byValue = new Map<string, { value: string; label: string }>();
+      const aliases: Record<string, string> = {
+         EFECTIVO: 'CASH',
+         CASH: 'CASH',
+         TARJETA: 'CARD',
+         CARD: 'CARD',
+         CREDIT_CARD: 'CARD',
+         TRANSFERENCIA: 'TRANSFER',
+         TRANSFER: 'TRANSFER',
+         CREDITO: 'CREDIT',
+         CRÉDITO: 'CREDIT',
+         CREDIT: 'CREDIT',
+      };
+      const addOption = (rawValue: unknown, rawLabel?: unknown) => {
+         const normalized = String(rawValue || '').trim().toUpperCase();
+         if (!normalized) return;
+         const value = aliases[normalized] || normalized;
+         if (byValue.has(value)) return;
+         byValue.set(value, { value, label: String(rawLabel || rawValue || value).trim() });
+      };
+      defaults.forEach(option => addOption(option.value, option.label));
+      (config.paymentMethods || []).forEach((method: any) => {
+         addOption(method.id || method.type || method.name || method.label, method.label || method.name || method.type || method.id);
+      });
+      return Array.from(byValue.values());
+   }, [config.paymentMethods]);
 
    const persistIntegrationAuditEvent = async (
       integration: PaymentIntegrationDefinition,
@@ -1633,7 +1733,8 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       }
 
       if (filterTerminal) {
-         data = data.filter(t => t.terminalId === filterTerminal);
+         const aliases = terminalAliasesByValue.get(filterTerminal) || new Set([normalizeTerminalKey(filterTerminal)]);
+         data = data.filter(t => aliases.has(normalizeTerminalKey(t.terminalId)));
       }
 
       if (filterCashier) {
@@ -1653,11 +1754,36 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       }
 
       if (filterNcfType && filterNcfType !== 'ALL') {
-         data = data.filter(t => t.ncf?.startsWith(filterNcfType));
+         data = data.filter(t => t.ncf?.startsWith(filterNcfType) || String(t.ncfType || '').toUpperCase() === filterNcfType);
+      }
+
+      if (filterPaymentMethod && filterPaymentMethod !== 'ALL') {
+         const expectedMethod = filterPaymentMethod.toUpperCase();
+         const paymentAliases: Record<string, string> = {
+            EFECTIVO: 'CASH',
+            TARJETA: 'CARD',
+            CREDIT_CARD: 'CARD',
+            TRANSFERENCIA: 'TRANSFER',
+            CREDITO: 'CREDIT',
+            CRÉDITO: 'CREDIT',
+         };
+         data = data.filter(t => (t.payments || []).some((payment: any) => {
+            const candidates = [
+               payment?.method,
+               payment?.methodId,
+               payment?.methodLabel,
+               payment?.type,
+               payment?.gatewayProvider
+            ].map(value => {
+               const normalized = String(value || '').trim().toUpperCase();
+               return paymentAliases[normalized] || normalized;
+            }).filter(Boolean);
+            return candidates.includes(expectedMethod);
+         }));
       }
 
       return data;
-   }, [transactions, historyTransactions, searchTerm, filterDateStart, filterDateEnd, filterTerminal, filterCashier, filterCustomer, filterNcfType]);
+   }, [transactions, historyTransactions, searchTerm, filterDateStart, filterDateEnd, filterTerminal, filterCashier, filterCustomer, filterNcfType, filterPaymentMethod, terminalAliasesByValue]);
 
    // --- KPI CALCULATIONS ---
    const kpis = useMemo(() => {
@@ -2193,7 +2319,9 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                         className="px-2 py-1.5 bg-gray-50 border border-gray-100 rounded-lg text-[11px] font-bold text-gray-600 outline-none hover:bg-white transition-colors"
                      >
                         <option value="">Terminal</option>
-                        {(config.terminals || []).map(t => <option key={t.id} value={t.id}>{t.id}</option>)}
+                        {terminalFilterOptions.map(option => (
+                           <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
                      </select>
                      <button
                         onClick={() => setShowFilters(!showFilters)}
@@ -2224,9 +2352,22 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                         <option value="ALL">Cualquiera</option>
                         <option value="B01">Crédito Fiscal</option>
                         <option value="B02">Consumo Final</option>
+                        <option value="B14">Regímenes Especiales</option>
+                        <option value="B15">Gubernamental</option>
                      </select>
                   </div>
-                  <button onClick={() => { setSearchTerm(''); setFilterDateStart(''); setFilterDateEnd(''); setFilterTerminal(''); setFilterCashier(''); setFilterNcfType(''); }} className="text-[10px] font-bold text-red-500 ml-auto hover:underline uppercase">Reset</button>
+                  <div className="flex items-center gap-2">
+                     <span className="text-[10px] font-bold text-gray-400 uppercase">Pago:</span>
+                     <select value={filterPaymentMethod} onChange={e => setFilterPaymentMethod(e.target.value)} className="px-2 py-1 bg-white border border-gray-200 rounded text-[11px] font-bold">
+                        <option value="ALL">Todos</option>
+                        {paymentMethodOptions.map((method) => (
+                           <option key={method.value} value={method.value}>
+                              {method.label}
+                           </option>
+                        ))}
+                     </select>
+                  </div>
+                  <button onClick={() => { setSearchTerm(''); setFilterDateStart(''); setFilterDateEnd(''); setFilterTerminal(''); setFilterCashier(''); setFilterNcfType(''); setFilterPaymentMethod(''); }} className="text-[10px] font-bold text-red-500 ml-auto hover:underline uppercase">Reset</button>
                </div>
             )}
          </header>

@@ -253,7 +253,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
 
     const signInWithDirectSupabase = async () => {
         if (!hasSupabaseConfig) {
-            throw new Error('La configuración de Supabase no está disponible en este build. Regenera el APK o el entorno con VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY.');
+            throw new Error('Este APK no incluye credenciales Supabase. Use "Elegir tipo de POS" para seleccionar POS_ONLY, POS + ERP o POS Cliente.');
         }
 
         const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
@@ -304,6 +304,10 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
 
     const handleInitialLogin = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!hasSupabaseConfig) {
+            continueToTerminalModeSelection();
+            return;
+        }
         setLoading(true);
         setError(null);
 
@@ -322,7 +326,14 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
 
             if (authError) throw authError;
 
-            const isNewUser = data.user?.user_metadata?.is_new_user !== false;
+            const userMetadata = data.user?.user_metadata || {};
+            const isNewUser = [
+                userMetadata.is_new_user,
+                userMetadata.must_change_password,
+                userMetadata.force_password_change,
+                userMetadata.password_change_required,
+                userMetadata.temporary_password,
+            ].some(flag => flag === true);
 
             if (isNewUser) {
                 setStep('CHANGE_PASSWORD');
@@ -334,6 +345,18 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
         } finally {
             setLoading(false);
         }
+    };
+
+    const continueToTerminalModeSelection = () => {
+        setError(null);
+        onActivationComplete({
+            id: 'local-pos-activation',
+            email: '',
+            name: 'Activación local / ERP',
+            tenantId: '',
+            slug: null,
+            activationMode: 'LOCAL_OR_ERP',
+        });
     };
 
     const handlePasswordChange = async (e: React.FormEvent) => {
@@ -353,7 +376,13 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
         try {
             const { data, error: updateError } = await supabase.auth.updateUser({
                 password: newPassword,
-                data: { is_new_user: false }
+                data: {
+                    is_new_user: false,
+                    must_change_password: false,
+                    force_password_change: false,
+                    password_change_required: false,
+                    temporary_password: false,
+                }
             });
 
             if (updateError) throw updateError;
@@ -374,13 +403,24 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
 
     const completeActivation = async (user: any, fallbackEmail?: string) => {
         const fallbackTenantId = String(user?.id || '').trim();
+        const userMetadata = user?.user_metadata || {};
+        const resolveTenantDisplayName = () => (
+            userMetadata.company_name
+            || userMetadata.business_name
+            || userMetadata.tenant_name
+            || userMetadata.organization_name
+            || userMetadata.name
+            || userMetadata.full_name
+            || user.email?.split('@')[0]
+            || 'Tenant'
+        );
         const metadataTenantId = String(
-            user?.user_metadata?.tenant_id
+            userMetadata.tenant_id
             || user?.app_metadata?.tenant_id
             || ''
         ).trim();
         const metadataSlug = String(
-            user?.user_metadata?.slug
+            userMetadata.slug
             || user?.app_metadata?.slug
             || ''
         ).trim();
@@ -391,7 +431,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
             const tenantData = {
                 id: user.id,
                 email: user.email,
-                name: user.user_metadata?.full_name || user.email.split('@')[0],
+                name: resolveTenantDisplayName(),
                 tenantId: metadataTenantId,
                 slug: metadataSlug || localStorage.getItem('clic_tenant_slug') || null,
             };
@@ -417,12 +457,12 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
         if (!resolvedTenant?.id && !fallbackTenantId) {
             throw new Error(`No se pudo resolver la licencia para ${fallbackEmail || user?.email || 'este usuario'}. Solicite reprovisionar el tenant en Cloud Admin.`);
         }
-        const resolvedSlug = user?.user_metadata?.slug || resolvedTenant?.slug || localStorage.getItem('clic_tenant_slug');
+        const resolvedSlug = userMetadata.slug || resolvedTenant?.slug || localStorage.getItem('clic_tenant_slug');
 
         const tenantData = {
             id: user.id,
             email: user.email,
-            name: user.user_metadata?.full_name || user.email.split('@')[0],
+            name: resolveTenantDisplayName(),
             tenantId: resolvedTenant?.id || fallbackTenantId,
             slug: resolvedSlug || null,
         };
@@ -471,7 +511,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
                                         <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-blue-500 transition-colors" size={20} />
                                         <input
                                             type="email"
-                                            required
+                                            required={hasSupabaseConfig}
                                             value={email}
                                             onChange={(e) => setEmail(e.target.value)}
                                             className="w-full bg-slate-800/50 border border-slate-700 focus:border-blue-500/50 focus:ring-4 focus:ring-blue-500/10 rounded-2xl py-4 pl-12 pr-4 text-white outline-none transition-all placeholder:text-slate-600"
@@ -486,7 +526,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
                                         <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-blue-500 transition-colors" size={20} />
                                         <input
                                             type="password"
-                                            required
+                                            required={hasSupabaseConfig}
                                             value={password}
                                             onChange={(e) => setPassword(e.target.value)}
                                             className="w-full bg-slate-800/50 border border-slate-700 focus:border-blue-500/50 focus:ring-4 focus:ring-blue-500/10 rounded-2xl py-4 pl-12 pr-4 text-white outline-none transition-all placeholder:text-slate-600"
@@ -519,7 +559,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
                                         <Loader2 className="animate-spin" size={20} />
                                     ) : (
                                         <>
-                                            Continuar <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" />
+                                            {hasSupabaseConfig ? 'Continuar' : 'Elegir tipo de POS'} <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" />
                                         </>
                                     )}
                                 </button>
@@ -531,6 +571,16 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
                                 >
                                     <Building2 size={18} /> {canProvisionInline ? 'Crear Empresa y Activar' : 'Abrir Cloud Admin'}
                                 </button>
+
+                                {!hasSupabaseConfig && (
+                                    <button
+                                        type="button"
+                                        onClick={continueToTerminalModeSelection}
+                                        className="w-full border border-emerald-500/40 hover:border-emerald-400 text-emerald-200 hover:text-white bg-emerald-500/10 hover:bg-emerald-500/20 font-bold py-3 rounded-2xl transition-colors flex items-center justify-center gap-2"
+                                    >
+                                        <ShieldCheck size={18} /> Elegir tipo de POS
+                                    </button>
+                                )}
                             </form>
                         </div>
                     )}

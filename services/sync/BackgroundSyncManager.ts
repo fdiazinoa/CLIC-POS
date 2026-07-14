@@ -547,6 +547,44 @@ class BackgroundSyncManager {
         await this.sync();
     }
 
+    async requeueBlockedOperationalDocuments(collectionOverride?: string[]): Promise<number> {
+        const collections = collectionOverride || ['inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'wallet_transactions', 'loyalty_events'];
+        let changed = 0;
+
+        for (const colName of collections) {
+            try {
+                const data = await db.get(colName as any) as any[];
+                if (!Array.isArray(data) || data.length === 0) continue;
+
+                let collectionChanged = false;
+                for (const item of data) {
+                    if (!this.shouldSyncItem(colName, item)) continue;
+                    if (item?.syncStatus !== 'BLOCKED_FUNCTIONAL' && item?.syncStatus !== 'ERROR') continue;
+
+                    item.syncStatus = 'PENDING';
+                    item.syncError = undefined;
+                    item.syncBlockedReason = undefined;
+                    item.syncBlockedAt = undefined;
+                    item.syncRetryAfter = undefined;
+                    item.syncStartedAt = undefined;
+                    item._forceSyncReplay = colName === 'transactions' ? true : item._forceSyncReplay;
+                    collectionChanged = true;
+                    changed++;
+                }
+
+                if (collectionChanged) {
+                    await db.save(colName as any, data);
+                    console.warn(`♻️ BackgroundSyncManager: Re-queued blocked operational documents in ${colName}`);
+                }
+            } catch (error) {
+                console.warn(`⚠️ BackgroundSyncManager: Failed requeueing blocked documents in ${colName}:`, error);
+            }
+        }
+
+        await this.updatePendingCount();
+        return changed;
+    }
+
     /**
      * Convert stale SYNCING records to ERROR so they are retried automatically.
      * This handles abrupt browser/tab shutdowns during sync.

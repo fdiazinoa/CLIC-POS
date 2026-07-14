@@ -55,6 +55,8 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
         bloqueo_meseros: false,
         pedir_comensales: true,
         recibir_consignaciones: false,
+        receive_consignments: false,
+        descargar_consignaciones: false,
         receiveConsignments: false,
         reservationPolicy: {
             validityDays: 7,
@@ -101,6 +103,36 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
             ...orderNumbers,
             ...patch
         });
+    };
+
+    const toBoolean = (value: unknown): boolean | undefined => {
+        if (typeof value === 'boolean') return value;
+        if (typeof value === 'number') return value === 1;
+        if (typeof value === 'string') {
+            const normalized = value.trim().toLowerCase();
+            if (['1', 'true', 'yes', 'si', 'sí', 'on'].includes(normalized)) return true;
+            if (['0', 'false', 'no', 'off', ''].includes(normalized)) return false;
+        }
+        return undefined;
+    };
+
+    const consignmentSetting = (operational as Record<string, unknown> | undefined);
+    const getConsignmentSetting = (): boolean => Boolean(
+        toBoolean(consignmentSetting?.recibir_consignaciones) ??
+        toBoolean(consignmentSetting?.receiveConsignments) ??
+        toBoolean(consignmentSetting?.receive_consignments) ??
+        toBoolean(consignmentSetting?.descargar_consignaciones) ??
+        toBoolean(consignmentSetting?.downloadConsignments) ??
+        toBoolean(consignmentSetting?.descargarConsignacion) ??
+        toBoolean(consignmentSetting?.enableConsignments) ?? false
+    );
+    const handleConsignmentUpdate = (v: boolean) => {
+        onUpdate('operational', 'recibir_consignaciones', v);
+        onUpdate('operational', 'receiveConsignments', v);
+        onUpdate('operational', 'receive_consignments', v);
+        onUpdate('operational', 'descargar_consignaciones', v);
+        onUpdate('operational', 'descargarConsignaciones', v);
+        onUpdate('operational', 'downloadConsignments', v);
     };
 
     return (
@@ -389,13 +421,10 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                     />
 
                     <Toggle
-                        label="Recibir consignaciones"
-                        description="Activa el botón de consignaciones ERP en la pantalla de ventas para buscar y agregar consignaciones al ticket."
-                        checked={Boolean(operational.recibir_consignaciones ?? operational.receiveConsignments)}
-                        onChange={(v: boolean) => {
-                            onUpdate('operational', 'recibir_consignaciones', v);
-                            onUpdate('operational', 'receiveConsignments', v);
-                        }}
+                        label="Descargar consignaciones"
+                        description="Activa el botón de descarga de consignaciones ERP en la pantalla de ventas para buscar y agregar líneas al ticket."
+                        checked={getConsignmentSetting()}
+                        onChange={handleConsignmentUpdate}
                         icon={Package}
                         disabled={isReadOnly}
                     />

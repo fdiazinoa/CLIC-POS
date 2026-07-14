@@ -41,7 +41,14 @@ const resolveTerminalPrinter = (
         if (preferred) return preferred;
     }
 
-    const terminal = (config.terminals || []).find(t => t.id === terminalId);
+    const terminal = (config.terminals || []).find(t => {
+        const terminalConfig = (t.config || {}) as Record<string, any>;
+        return t.id === terminalId ||
+            terminalConfig.erpTerminalId === terminalId ||
+            terminalConfig.terminalId === terminalId ||
+            terminalConfig.localTerminalId === terminalId;
+    }
+    ) || (config.terminals || []).find(t => t.config?.currentDeviceId);
     const assignments = terminal?.config?.hardware?.printerAssignments || {};
 
     const assignedPrinterId =
@@ -75,7 +82,18 @@ export const PrintRouterService = {
         preferredPrinterId,
     }: RouteAndPrintParams): Promise<boolean> => {
         const printer = resolveTerminalPrinter(config, role, terminalId, preferredPrinterId);
-        if (!printer) return false;
+        if (!printer) {
+            if (nativePrintBridge.isAvailable()) {
+                return nativePrintBridge.printHtml({
+                    html,
+                    role,
+                    jobType,
+                    referenceId,
+                    copies,
+                });
+            }
+            return false;
+        }
 
         if (nativePrintBridge.isAvailable()) {
             const nativePrinted = await nativePrintBridge.printHtml({
@@ -120,7 +138,18 @@ export const PrintRouterService = {
         preferredPrinterId,
     }: RouteAndPrintEscPosParams): Promise<boolean> => {
         const printer = resolveTerminalPrinter(config, role, terminalId, preferredPrinterId);
-        if (!printer) return false;
+        if (!printer) {
+            if (nativePrintBridge.isAvailable()) {
+                return nativePrintBridge.printEscPos({
+                    dataBase64: escPosBase64,
+                    role,
+                    jobType,
+                    referenceId,
+                    copies,
+                });
+            }
+            return false;
+        }
 
         if (nativePrintBridge.isAvailable()) {
             const nativePrinted = await nativePrintBridge.printEscPos({

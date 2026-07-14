@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { Tariff, Product, PricingStrategyType, RoundingRule, BusinessConfig } from '../types';
 import { db } from '../utils/db';
+import { tariffMatchesIdentifier } from '../utils/masterIdentity';
 
 interface TariffFormProps {
    initialData?: Tariff | null;
@@ -64,8 +65,21 @@ const TariffForm: React.FC<TariffFormProps> = ({
 
    // --- HELPERS ---
    const filteredProducts = useMemo(() => {
+      const needle = itemsSearch.trim().toLowerCase();
       return products.filter(p => {
-         const matchSearch = (p.name || '').toLowerCase().includes(itemsSearch.toLowerCase()) || p.barcode?.includes(itemsSearch);
+         const searchable = [
+            p.name,
+            p.barcode,
+            (p as any).sku,
+            (p as any).code,
+            (p as any).item_code,
+            (p as any).description,
+            (p as any).descripcion,
+            (p as any).reference,
+            (p as any).referencia,
+            (p as any).external_reference,
+         ].map((value) => String(value || '').trim().toLowerCase()).join(' ');
+         const matchSearch = !needle || searchable.includes(needle);
          const matchCat = itemsCategory === 'ALL' || p.category === itemsCategory;
          return matchSearch && matchCat;
       });
@@ -90,6 +104,15 @@ const TariffForm: React.FC<TariffFormProps> = ({
    const getCalculatedPrice = (product: Product): number => {
       // If specific override exists
       if (formData.items[product.id]) return formData.items[product.id].price;
+
+      const productTariff = (product.tariffs || []).find((tariff) =>
+         tariffMatchesIdentifier(tariff, formData.id) ||
+         tariffMatchesIdentifier(tariff, (formData as any).code) ||
+         tariffMatchesIdentifier(tariff, formData.name)
+      );
+      if (Number.isFinite(Number(productTariff?.price))) {
+         return Number(productTariff!.price);
+      }
 
       // Else calculate
       let rawPrice = product.price;
@@ -166,12 +189,47 @@ const TariffForm: React.FC<TariffFormProps> = ({
          }
       }));
 
-      // If this is the general tariff, also update the base product price to keep them in sync
-      if (formData.id === 'trf-gen' && onUpdateProducts) {
-         const updatedProduct = { ...products.find(p => p.id === productId)!, price, updatedAt: new Date().toISOString() };
+      if (onUpdateProducts) {
+         const product = products.find(p => p.id === productId);
+         if (!product) return;
+         const isDefaultTariff = formData.id === 'trf-gen' || /general|pvp/i.test(`${formData.name || ''} ${(formData as any).code || ''}`);
+         const currentTariffs = Array.isArray(product.tariffs) ? product.tariffs : [];
+         const existingIndex = currentTariffs.findIndex((tariff) =>
+            tariffMatchesIdentifier(tariff, formData.id) ||
+            tariffMatchesIdentifier(tariff, (formData as any).code) ||
+            tariffMatchesIdentifier(tariff, formData.name)
+         );
+         const nextTariffEntry = {
+            ...(existingIndex >= 0 ? currentTariffs[existingIndex] : {}),
+            tariffId: formData.id,
+            name: formData.name,
+            price,
+            costBase: product.cost,
+            margin: product.cost ? ((price - product.cost) / product.cost) * 100 : 0,
+         };
+         const nextTariffs = existingIndex >= 0
+            ? currentTariffs.map((entry, index) => index === existingIndex ? nextTariffEntry : entry)
+            : [...currentTariffs, nextTariffEntry];
+         const updatedProduct = {
+            ...product,
+            price: isDefaultTariff ? price : product.price,
+            tariffs: nextTariffs,
+            updatedAt: new Date().toISOString()
+         };
 
          // Persist single product change
          db.saveDocument('products', updatedProduct).catch(console.error);
+         db.saveDocument('productPrices' as any, {
+            id: `${productId}_${formData.id}`,
+            productId,
+            tariffId: formData.id,
+            tariffCode: String((formData as any).code || '').trim() || undefined,
+            tariffName: formData.name,
+            price,
+            currency: formData.currency,
+            updatedAt: updatedProduct.updatedAt,
+         }).catch(console.error);
+         window.dispatchEvent(new CustomEvent('productPricesUpdated'));
 
          const updatedProducts = products.map(p =>
             p.id === productId ? updatedProduct : p
@@ -213,10 +271,21 @@ const TariffForm: React.FC<TariffFormProps> = ({
    };
 
    const filteredAddProducts = useMemo(() => {
+      const needle = addModalSearch.trim().toLowerCase();
       return products.filter(p =>
          !formData.items[p.id] && // Only show items NOT already manually in list
-         ((p.name || '').toLowerCase().includes(addModalSearch.toLowerCase()) ||
-            p.barcode?.includes(addModalSearch))
+         (!needle || [
+            p.name,
+            p.barcode,
+            (p as any).sku,
+            (p as any).code,
+            (p as any).item_code,
+            (p as any).description,
+            (p as any).descripcion,
+            (p as any).reference,
+            (p as any).referencia,
+            (p as any).external_reference,
+         ].map((value) => String(value || '').trim().toLowerCase()).join(' ').includes(needle))
       );
    }, [products, addModalSearch, formData.items]);
 

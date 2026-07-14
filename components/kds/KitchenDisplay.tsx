@@ -99,6 +99,28 @@ const resolveKdsPort = (): string => {
     }
 };
 
+const resolveKitchenTerminalIdentity = () => {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        const name = params.get('terminalName')
+            || window.localStorage.getItem('CLIC_POS_TERMINAL_NAME')
+            || window.localStorage.getItem('terminalName')
+            || window.localStorage.getItem('kdsTerminalName')
+            || '';
+        const id = params.get('terminalId')
+            || window.localStorage.getItem('CLIC_POS_TERMINAL_ID')
+            || window.localStorage.getItem('terminalId')
+            || window.localStorage.getItem('kdsTerminalId')
+            || '';
+        return {
+            name: name.trim() || 'Terminal cocina',
+            id: id.trim()
+        };
+    } catch {
+        return { name: 'Terminal cocina', id: '' };
+    }
+};
+
 const resolveKdsNetworkInfo = async (): Promise<KDSNetworkInfo> => {
     const port = resolveKdsPort();
     const runtimeWindow = window as any;
@@ -157,6 +179,7 @@ const KitchenDisplay: React.FC = () => {
         serverRunning: false
     });
     const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+    const terminalIdentity = useMemo(() => resolveKitchenTerminalIdentity(), []);
     const audioContextRef = useRef<AudioContext | null>(null);
     const knownOrderSignaturesRef = useRef<Set<string>>(new Set());
     const didPrimeOrdersRef = useRef(false);
@@ -337,7 +360,9 @@ const KitchenDisplay: React.FC = () => {
                     <span className="text-3xl leading-none">👨‍🍳</span>
                     <div className="min-w-0">
                         <div className="text-xl font-black tracking-tight leading-none">Display de Cocina</div>
-                        <div className="text-xs text-gray-400 font-semibold mt-1">Órdenes en tiempo real</div>
+                        <div className="text-xs text-gray-400 font-semibold mt-1">
+                            {terminalIdentity.name}{terminalIdentity.id ? ` · ${terminalIdentity.id}` : ''} · Órdenes en tiempo real
+                        </div>
                     </div>
                 </div>
 
@@ -519,17 +544,45 @@ const TicketCard: React.FC<{
     const tableLabel = resolveTableLabel(order);
     const visibleOrderNumber = resolveVisibleOrderNumber(order);
     const headerTitle = tableLabel || (visibleOrderNumber ? `Orden ${visibleOrderNumber}` : 'Venta directa');
-    const severityColors = {
-        normal: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400',
-        warning: 'border-amber-500/30 bg-amber-500/10 text-amber-400',
-        critical: 'border-red-500 bg-red-500/10 text-white animate-pulse-slow'
+    const severityStyles = {
+        normal: {
+            card: 'border-emerald-500/30 bg-gray-900 text-gray-100',
+            header: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400',
+            body: 'bg-gray-900',
+            itemName: 'text-gray-200',
+            qty: 'text-blue-500',
+            modifier: 'text-red-300',
+            footer: 'bg-gray-800/50',
+            button: 'bg-gray-100 text-gray-900 hover:bg-white'
+        },
+        warning: {
+            card: 'border-amber-500 bg-amber-300 text-amber-950 shadow-amber-500/30',
+            header: 'bg-amber-500 text-amber-950 border-b border-amber-600/40',
+            body: 'bg-amber-300',
+            itemName: 'text-amber-950',
+            qty: 'text-amber-950',
+            modifier: 'text-red-800',
+            footer: 'bg-amber-400/60 border-t border-amber-600/30',
+            button: 'bg-amber-950 text-amber-50 hover:bg-amber-900'
+        },
+        critical: {
+            card: 'border-red-700 bg-red-600 text-white shadow-red-500/40 animate-pulse-slow',
+            header: 'bg-red-800 text-white border-b border-red-950/30',
+            body: 'bg-red-600',
+            itemName: 'text-white',
+            qty: 'text-white',
+            modifier: 'text-red-50',
+            footer: 'bg-red-800/70 border-t border-red-950/30',
+            button: 'bg-white text-red-700 hover:bg-red-50'
+        }
     };
+    const activeSeverityStyles = severityStyles[severity];
 
     return (
-        <div className={`w-80 h-full flex flex-col bg-gray-900 rounded-[2rem] border-2 shadow-2xl transition-all duration-500 ${severityColors[severity].split(' ')[0]}`}>
+        <div className={`w-80 h-full flex flex-col rounded-[2rem] border-2 shadow-2xl transition-all duration-500 ${activeSeverityStyles.card}`}>
 
             {/* Card Header */}
-            <div className={`p-4 rounded-t-[1.8rem] flex flex-col gap-2 ${severityColors[severity]}`}>
+            <div className={`p-4 rounded-t-[1.8rem] flex flex-col gap-2 ${activeSeverityStyles.header}`}>
                 <div className="flex items-center justify-between">
                     <span className="text-2xl font-black tracking-tighter truncate pr-3"># {headerTitle}</span>
                     <div
@@ -546,7 +599,7 @@ const TicketCard: React.FC<{
             </div>
 
             {/* Items List */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className={`flex-1 overflow-y-auto p-4 space-y-4 ${activeSeverityStyles.body}`}>
                 {order.items.map((item) => {
                     const isReturned = item.estado_cocina === 'DEVUELTO';
                     const isReady = item.estado_cocina === 'LISTO';
@@ -560,10 +613,10 @@ const TicketCard: React.FC<{
                             className={`transition-all ${isReturned ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'} ${isReady || isReturned ? 'grayscale line-through' : ''}`}
                         >
                             <div className="flex items-start gap-3">
-                                <span className={`text-2xl font-black leading-tight ${isReturned ? 'text-red-400' : 'text-blue-500'}`}>{item.cantidad}x</span>
+                                <span className={`text-2xl font-black leading-tight ${isReturned ? 'text-red-200' : activeSeverityStyles.qty}`}>{item.cantidad}x</span>
                                 <div className="flex-1">
                                     <div className="flex items-start justify-between gap-2">
-                                        <p className="text-xl font-bold leading-tight text-gray-200">{item.nombre}</p>
+                                        <p className={`text-xl font-bold leading-tight ${activeSeverityStyles.itemName}`}>{item.nombre}</p>
                                         {isReturned && (
                                             <span className="rounded-full bg-red-500/20 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-red-200">
                                                 Devuelto
@@ -573,7 +626,7 @@ const TicketCard: React.FC<{
                                     {item.modificadores && item.modificadores.length > 0 && (
                                         <ul className="mt-1 space-y-0.5">
                                             {item.modificadores.map((mod, i) => (
-                                                <li key={i} className="text-red-300 text-sm font-bold uppercase flex items-center gap-1">
+                                                <li key={i} className={`${activeSeverityStyles.modifier} text-sm font-bold uppercase flex items-center gap-1`}>
                                                     <span className="text-xs">↳</span> {mod}
                                                 </li>
                                             ))}
@@ -587,10 +640,10 @@ const TicketCard: React.FC<{
             </div>
 
             {/* Card Footer */}
-            <div className="p-4 bg-gray-800/50 rounded-b-[1.8rem]">
+            <div className={`p-4 rounded-b-[1.8rem] ${activeSeverityStyles.footer}`}>
                 <button
                     onClick={() => onStatusChange(order.id, 'LISTO', 'order')}
-                    className="w-full py-4 bg-gray-100 text-gray-900 rounded-2xl font-black text-lg hover:bg-white active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-xl"
+                    className={`w-full py-4 rounded-2xl font-black text-lg active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-xl ${activeSeverityStyles.button}`}
                 >
                     <CheckCircle2 size={24} /> MARCHAR / LISTO
                 </button>

@@ -22,7 +22,6 @@ const INVENTORY_CLOSE_LOCK_MESSAGE = 'Acción denegada: El inventario a esta fec
 const getFiscalSequencePadding = (_type: FiscalDocumentCode): number => 8;
 // Fiscal allocations already belong to one terminal; reserving local batches creates visible NCF gaps if buffers are reset by sync.
 const FISCAL_ISSUE_BATCH_SIZE = 1;
-const SETUP_WIZARD_COMPLETED_STORAGE_KEY = 'clic_pos_setup_wizard_completed';
 const ALLOW_FULL_DEMO_SEED_STORAGE_KEY = 'clic_pos_allow_demo_seed';
 const FIRST_RUN_BOOTSTRAP_COLLECTIONS = new Set(['config', 'users', 'roles']);
 
@@ -200,6 +199,9 @@ const SEED_DATA = {
   offline_print_queue: [] as any[],
   rooms: [] as any[],
   tables: [] as any[],
+  categories: [] as any[],
+  productCategories: [] as any[],
+  productGroups: [] as any[],
   collections: [] as any[],
   paymentMethods: [] as PaymentMethodDefinition[],
   serviceTypes: [] as any[],
@@ -227,6 +229,26 @@ const matchesDocumentSeries = (left: DocumentSeries, right: DocumentSeries): boo
   return Boolean(leftPrefix && rightPrefix && leftPrefix === rightPrefix && leftType && rightType && leftType === rightType);
 };
 
+const isDemoOrDefaultDocumentSeries = (series: Partial<DocumentSeries> | null | undefined): boolean => {
+  if (!series) return false;
+  const id = normalizeSequenceKey(series.id);
+  const name = normalizeSequenceKey(series.name);
+  const prefix = normalizeSequenceKey(series.prefix);
+  const documentType = normalizeSequenceKey(series.documentType as string);
+  const source = normalizeSequenceKey((series as any).source);
+  if (source === 'ERP_TERMINAL_CONFIG') return false;
+  if (name.includes('DEMO')) return true;
+  return DEFAULT_DOCUMENT_SERIES.some((defaultSeries) => {
+    const defaultId = normalizeSequenceKey(defaultSeries.id);
+    const defaultPrefix = normalizeSequenceKey(defaultSeries.prefix);
+    const defaultType = normalizeSequenceKey(defaultSeries.documentType);
+    return Boolean(
+      (id && id === defaultId) ||
+      (prefix && prefix === defaultPrefix && documentType && documentType === defaultType)
+    );
+  });
+};
+
 const matchesFiscalRange = (left: FiscalRangeDGII, right: FiscalRangeDGII): boolean => {
   const leftId = normalizeSequenceKey(left.id);
   const rightId = normalizeSequenceKey(right.id);
@@ -245,11 +267,61 @@ const mergeDocumentSeriesState = (
   existingSeries: DocumentSeries[],
   incomingSeries: DocumentSeries[]
 ): DocumentSeries[] => {
+  const normalizeSeriesPadding = (value: unknown): number => {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 6;
+  };
   const normalizedIncoming = (incomingSeries || []).map((incoming) => ({
     ...incoming,
     nextNumber: Math.max(1, Number(incoming?.nextNumber) || 1),
-    padding: Math.max(1, Number(incoming?.padding) || 6),
+    padding: normalizeSeriesPadding(incoming?.padding),
   }));
+  const hasAuthoritativeErpSeries = normalizedIncoming.some((incoming) =>
+    String((incoming as any)?.source || '').toUpperCase() === 'ERP_TERMINAL_CONFIG'
+  );
+
+  if (hasAuthoritativeErpSeries) {
+    const existing = existingSeries || [];
+    const authoritativeSeries = normalizedIncoming.map((incoming) => {
+      const incomingId = normalizeSequenceKey(incoming.id);
+      const incomingCode = normalizeSequenceKey((incoming as any).code);
+      const incomingType = normalizeSequenceKey((incoming as any).documentType);
+      const incomingPrefix = normalizeSequenceKey(incoming.prefix);
+      const localMatch = existing.find((candidate) => {
+        const candidateId = normalizeSequenceKey(candidate.id);
+        const candidateCode = normalizeSequenceKey((candidate as any).code);
+        const candidateType = normalizeSequenceKey((candidate as any).documentType);
+        const candidatePrefix = normalizeSequenceKey(candidate.prefix);
+        if (incomingId && candidateId && incomingId === candidateId) return true;
+        if (incomingCode && candidateCode && incomingCode === candidateCode) return true;
+        return Boolean(
+          incomingType &&
+          candidateType &&
+          incomingPrefix &&
+          candidatePrefix &&
+          incomingType === candidateType &&
+          incomingPrefix === candidatePrefix
+        );
+      });
+      return {
+        ...incoming,
+        nextNumber: Math.max(
+          Math.max(1, Number(incoming.nextNumber) || 1),
+          Math.max(1, Number(localMatch?.nextNumber) || 1)
+        ),
+      };
+    });
+
+    console.info('POS_DOCUMENT_SERIES_NORMALIZED', {
+      count: authoritativeSeries.length,
+      source: 'ERP_TERMINAL_CONFIG',
+      mode: 'AUTHORITATIVE_REPLACE_DEFAULTS',
+      codes: authoritativeSeries.map((series: any) => series.code || series.prefix || series.id),
+      purgedDefaults: existing.filter(isDemoOrDefaultDocumentSeries).length,
+    });
+
+    return mergeDocumentSeriesCollection(authoritativeSeries);
+  }
 
   return mergeDocumentSeriesCollection([...(existingSeries || []), ...normalizedIncoming]);
 };
@@ -604,6 +676,9 @@ export const db = {
         'customers',
         'warehouses',
         'products',
+        'categories',
+        'productCategories',
+        'productGroups',
         'cashMovements',
         'internalSequences',
         'zReports',
@@ -647,10 +722,7 @@ export const db = {
 
     const shouldSeedFullDemoData = () => {
       try {
-        return (
-          window.localStorage.getItem(SETUP_WIZARD_COMPLETED_STORAGE_KEY) === '1' ||
-          window.localStorage.getItem(ALLOW_FULL_DEMO_SEED_STORAGE_KEY) === '1'
-        );
+        return window.localStorage.getItem(ALLOW_FULL_DEMO_SEED_STORAGE_KEY) === '1';
       } catch (error) {
         return false;
       }
@@ -1508,6 +1580,9 @@ export const db = {
       const existingSeries = await dbAdapter.getCollection<DocumentSeries>('internalSequences') || [];
       const mergedSeries = mergeDocumentSeriesState(existingSeries, documentSeries);
       await dbAdapter.saveCollection('internalSequences', mergedSeries);
+      if (documentSeries.some((series: any) => String(series?.source || '').toUpperCase() === 'ERP_TERMINAL_CONFIG')) {
+        await dbAdapter.saveCollection('documentSeries', mergedSeries);
+      }
     }
 
     if (fiscalRanges && fiscalRanges.length > 0) {

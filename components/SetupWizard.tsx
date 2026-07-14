@@ -42,6 +42,8 @@ const STEPS: { id: WizardStep; label: string; icon: any }[] = [
   { id: 'READY', label: 'Listo', icon: CheckCircle2 },
 ];
 
+const ALLOW_FULL_DEMO_SEED_STORAGE_KEY = 'clic_pos_allow_demo_seed';
+
 const DOCUMENT_TYPES: DocumentType[] = [
   'TICKET',
   'REFUND',
@@ -362,6 +364,16 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
       defaultTariffId: defaultTariffIdToPersist,
       defaultWarehouseId: defaultWarehouseIdToPersist
     });
+
+    try {
+      if (seedMode === 'DEMO') {
+        localStorage.setItem(ALLOW_FULL_DEMO_SEED_STORAGE_KEY, '1');
+      } else {
+        localStorage.removeItem(ALLOW_FULL_DEMO_SEED_STORAGE_KEY);
+      }
+    } catch (error) {
+      console.warn('No se pudo actualizar la bandera local de seed demo:', error);
+    }
 
     if (warehousesToPersist.length) {
       await db.save('warehouses', warehousesToPersist);

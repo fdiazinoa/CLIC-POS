@@ -63,6 +63,7 @@ import { extractTerminalOperationalDocumentState } from './utils/terminalConfigS
 import { mergeDocumentSeriesCollection, resolveDocumentAssignmentId } from './utils/documentSeriesIdentity';
 import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
 import { ThermalPrinterService } from './services/printer/ThermalPrinterService';
+import { resolveDeviceRoleValue } from './utils/deviceRoleHelpers';
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
@@ -77,6 +78,7 @@ import TerminalBindingScreen from './components/TerminalBindingScreen';
 import SyncErrorDiagnosticModal from './components/SyncErrorDiagnosticModal';
 import CustomerVisor from './components/CustomerVisor';
 import PosApkUpdateBanner from './components/PosApkUpdateBanner';
+import GlobalVirtualKeyboard from './components/GlobalVirtualKeyboard';
 import { visorSync } from './utils/visorSync';
 import { markPosInteractionActivity, setPosSaleActivity } from './utils/posSaleActivity';
 
@@ -147,6 +149,7 @@ import {
 } from './utils/cloudMasterRegistry';
 import {
   clearStoredErpSyncBinding,
+  bootstrapErpSyncLifecycle,
   ensureErpSyncLifecycle,
   ERP_FULL_BOOTSTRAP_REQUIRED_EVENT,
   getLifecycleActivationBlockMessage,
@@ -171,8 +174,12 @@ import {
 import {
   DEVICE_REVOKED_EVENT,
   DEVICE_SUPERSEDED_MESSAGE,
+  markDeviceReauthorized,
   persistLocalDeviceId,
+  resetDeviceIdentityBySupport,
   resolveLocalDeviceId,
+  resolveOrCreatePersistentDeviceId,
+  restorePersistentDeviceIdAfterDbReset,
   type DeviceRevocationDetail
 } from './utils/deviceRevocation';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
@@ -202,7 +209,7 @@ import {
   resolveNormalizedRegisterDeviceToken,
   resolveRegisterErpTerminalId,
 } from './services/sync/erpRegisterResponse';
-import { saveTerminalCredentialsSync } from './services/sync/TerminalCredentialStore';
+import { readTerminalCredentials, saveTerminalCredentialsSync } from './services/sync/TerminalCredentialStore';
 import { normalizeErpBaseUrl, resolveErpBaseUrl } from './utils/erpBaseUrl';
 import {
   canRetryFiscalTransaction,
@@ -238,9 +245,296 @@ type RecoverySequencePromptState = RuntimeTerminalRecoveryState & {
   terminalName?: string | null;
 };
 
+type ActiveCartDraft = {
+  id: 'current';
+  status: 'ACTIVE' | 'EMPTY';
+  source: 'AUTO_CART_DRAFT';
+  savedAt: string;
+  reason?: string;
+  currentView?: ViewState;
+  terminalId?: string;
+  activeTable?: Table | null;
+  selectedCustomer?: Pick<Customer, 'id' | 'name'> | null;
+  items: CartItem[];
+  total: number;
+};
+
+type SafeExitSnapshot = {
+  currentView: ViewState;
+  cart: CartItem[];
+  parkedTickets: ParkedTicket[];
+  cashMovements: CashMovement[];
+  selectedCustomer: Customer | null;
+  activeTable: Table | null;
+  terminalId?: string;
+};
+
 const LICENSE_REFRESH_BASE_MS = 60_000;
 const TIMER_JITTER_MIN_MS = 3_000;
 const TIMER_JITTER_MAX_MS = 5_000;
+const ACTIVE_CART_DRAFT_STORAGE_KEY = 'clic_pos_active_cart_draft_v1';
+const PARKED_TICKETS_STORAGE_KEY = 'clic_pos_parked_tickets_mirror_v1';
+const CASH_MOVEMENTS_STORAGE_KEY = 'clic_pos_cash_movements_mirror_v1';
+const ACTIVE_USER_SESSION_STORAGE_KEY = 'clic_pos_active_user_session_v1';
+const FORCE_LOGIN_AFTER_EXIT_STORAGE_KEY = 'clic_pos_force_login_after_exit_v1';
+
+const isTableManagedCartSnapshot = (snapshot: Pick<SafeExitSnapshot, 'activeTable'>): boolean =>
+  Boolean(snapshot.activeTable?.id || snapshot.activeTable?.currentOrderId);
+
+const isTableManagedCartDraft = (draft: Pick<ActiveCartDraft, 'activeTable'>): boolean =>
+  Boolean(draft.activeTable?.id || draft.activeTable?.currentOrderId);
+
+const buildActiveCartDraft = (snapshot: SafeExitSnapshot, reason = 'auto'): ActiveCartDraft => {
+  const items = Array.isArray(snapshot.cart) ? snapshot.cart : [];
+  return {
+    id: 'current',
+    status: items.length > 0 ? 'ACTIVE' : 'EMPTY',
+    source: 'AUTO_CART_DRAFT',
+    savedAt: new Date().toISOString(),
+    reason,
+    currentView: snapshot.currentView,
+    terminalId: snapshot.terminalId,
+    activeTable: snapshot.activeTable || null,
+    selectedCustomer: snapshot.selectedCustomer
+      ? { id: snapshot.selectedCustomer.id, name: snapshot.selectedCustomer.name }
+      : null,
+    items,
+    total: items.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0),
+  };
+};
+
+const normalizeActiveCartDraft = (value: unknown): ActiveCartDraft | null => {
+  const candidate = Array.isArray(value)
+    ? value.find((entry: any) => entry?.id === 'current') || value[0]
+    : value;
+  if (!candidate || typeof candidate !== 'object') return null;
+  const draft = candidate as ActiveCartDraft;
+  if (!Array.isArray(draft.items) || draft.items.length === 0 || draft.status === 'EMPTY') return null;
+  if (isTableManagedCartDraft(draft)) return null;
+  return {
+    ...draft,
+    id: 'current',
+    status: 'ACTIVE',
+    source: 'AUTO_CART_DRAFT',
+    total: Number(draft.total || 0),
+  };
+};
+
+const readActiveCartDraftFromLocalStorage = (): ActiveCartDraft | null => {
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_CART_DRAFT_STORAGE_KEY);
+    return raw ? normalizeActiveCartDraft(JSON.parse(raw)) : null;
+  } catch {
+    return null;
+  }
+};
+
+const readArrayMirrorFromLocalStorage = <T,>(key: string): T[] => {
+  try {
+    const raw = window.localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed as T[] : [];
+  } catch {
+    return [];
+  }
+};
+
+const persistActiveUserSession = (user: User | null, currentView: ViewState) => {
+  try {
+    if (!user?.id) {
+      window.localStorage.removeItem(ACTIVE_USER_SESSION_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(ACTIVE_USER_SESSION_STORAGE_KEY, JSON.stringify({
+      userId: user.id,
+      savedAt: new Date().toISOString(),
+      currentView,
+    }));
+  } catch {
+    // Session restore is best-effort only. Login remains the source of truth.
+  }
+};
+
+const readActiveUserSession = (): { userId: string; currentView?: ViewState } | null => {
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_USER_SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const userId = String(parsed?.userId || '').trim();
+    if (!userId) return null;
+    return {
+      userId,
+      currentView: parsed?.currentView,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const clearActiveUserSession = () => {
+  try {
+    window.localStorage.removeItem(ACTIVE_USER_SESSION_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+};
+
+const readConfigNumber = (...values: unknown[]): number | undefined => {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim() !== '') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return undefined;
+};
+
+const resolveTerminalAutoLogoutMinutes = (terminal: any): number => {
+  const terminalConfig = terminal?.config as any;
+  const security = terminalConfig?.security || {};
+  const session = terminalConfig?.session || {};
+  const workflowSession = terminalConfig?.workflow?.session || {};
+  const operational = terminalConfig?.operational || {};
+
+  return Math.max(0, readConfigNumber(
+    security.autoLogoutMinutes,
+    security.auto_logout_minutes,
+    security.autoLockMinutes,
+    security.auto_lock_minutes,
+    session.autoLogoutMinutes,
+    session.auto_logout_minutes,
+    session.autoLockMinutes,
+    session.auto_lock_minutes,
+    workflowSession.autoLogoutMinutes,
+    workflowSession.auto_logout_minutes,
+    workflowSession.autoLockMinutes,
+    workflowSession.auto_lock_minutes,
+    operational.autoLogoutMinutes,
+    operational.auto_logout_minutes,
+    operational.autoLockMinutes,
+    operational.auto_lock_minutes,
+    terminalConfig?.autoLogoutMinutes,
+    terminalConfig?.auto_logout_minutes,
+    terminalConfig?.autoLockMinutes,
+    terminalConfig?.auto_lock_minutes
+  ) ?? 0);
+};
+
+const markForceLoginAfterExit = () => {
+  try {
+    window.localStorage.setItem(FORCE_LOGIN_AFTER_EXIT_STORAGE_KEY, new Date().toISOString());
+  } catch {
+    // ignore
+  }
+};
+
+const consumeForceLoginAfterExit = (): boolean => {
+  try {
+    const shouldForceLogin = Boolean(window.localStorage.getItem(FORCE_LOGIN_AFTER_EXIT_STORAGE_KEY));
+    if (shouldForceLogin) {
+      window.localStorage.removeItem(FORCE_LOGIN_AFTER_EXIT_STORAGE_KEY);
+    }
+    return shouldForceLogin;
+  } catch {
+    return false;
+  }
+};
+
+const writeCriticalCollectionsMirror = (parkedTickets: ParkedTicket[], cashMovements: CashMovement[]) => {
+  try {
+    window.localStorage.setItem(PARKED_TICKETS_STORAGE_KEY, JSON.stringify(Array.isArray(parkedTickets) ? parkedTickets : []));
+    window.localStorage.setItem(CASH_MOVEMENTS_STORAGE_KEY, JSON.stringify(Array.isArray(cashMovements) ? cashMovements : []));
+  } catch {
+    // SQLite/native adapter remains the primary durable store; this mirror is a crash/kill safety net.
+  }
+};
+
+const mergeById = <T extends { id?: string }>(primary: T[], fallback: T[]): T[] => {
+  const merged = new Map<string, T>();
+  [...fallback, ...primary].forEach((item, index) => {
+    const key = String(item?.id || `idx-${index}`).trim();
+    if (key) merged.set(key, item);
+  });
+  return Array.from(merged.values());
+};
+
+const persistActiveCartDraftSnapshot = async (snapshot: SafeExitSnapshot, reason = 'auto') => {
+  if (isTableManagedCartSnapshot(snapshot)) {
+    await clearActiveCartDraftStorage();
+    return;
+  }
+
+  const draft = buildActiveCartDraft(snapshot, reason);
+  try {
+    if (draft.status === 'ACTIVE') {
+      window.localStorage.setItem(ACTIVE_CART_DRAFT_STORAGE_KEY, JSON.stringify(draft));
+    } else {
+      window.localStorage.removeItem(ACTIVE_CART_DRAFT_STORAGE_KEY);
+    }
+  } catch {
+    // Best effort: SQLite/native adapter remains the durable source.
+  }
+
+  await db.save('activeCartDraft' as any, draft);
+};
+
+const clearActiveCartDraftStorage = async () => {
+  try {
+    window.localStorage.removeItem(ACTIVE_CART_DRAFT_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+  await db.save('activeCartDraft' as any, {
+    id: 'current',
+    status: 'EMPTY',
+    source: 'AUTO_CART_DRAFT',
+    savedAt: new Date().toISOString(),
+    items: [],
+    total: 0,
+  } as ActiveCartDraft);
+};
+
+const persistCriticalLocalStateSnapshot = async (
+  snapshot: SafeExitSnapshot,
+  options: { reason: string; parkActiveCart?: boolean; onParkedTickets?: (tickets: ParkedTicket[]) => void } = { reason: 'auto' },
+) => {
+  let nextParkedTickets = Array.isArray(snapshot.parkedTickets) ? [...snapshot.parkedTickets] : [];
+
+  if (options.parkActiveCart && snapshot.currentView === 'POS' && Array.isArray(snapshot.cart) && snapshot.cart.length > 0) {
+    const existingId = snapshot.activeTable?.currentOrderId;
+    const ticketId = existingId || `AUTO-${Date.now()}`;
+    const tableName = snapshot.activeTable?.nombre || snapshot.activeTable?.name || '';
+    const autoTicket: ParkedTicket = {
+      id: ticketId,
+      name: tableName ? `Mesa: ${tableName}` : 'Ticket recuperado por cierre',
+      alias: tableName ? undefined : 'Recuperado por cierre de app',
+      items: snapshot.cart,
+      total: snapshot.cart.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0),
+      customerId: snapshot.selectedCustomer?.id,
+      customerName: snapshot.selectedCustomer?.name,
+      timestamp: new Date().toISOString(),
+      tableId: snapshot.activeTable?.id,
+    };
+
+    nextParkedTickets = [
+      ...nextParkedTickets.filter(ticket => ticket.id !== autoTicket.id),
+      autoTicket,
+    ];
+    options.onParkedTickets?.(nextParkedTickets);
+  }
+
+  const nextCashMovements = Array.isArray(snapshot.cashMovements) ? snapshot.cashMovements : [];
+  writeCriticalCollectionsMirror(nextParkedTickets, nextCashMovements);
+
+  await Promise.allSettled([
+    db.save('parkedTickets', nextParkedTickets),
+    db.save('cashMovements', nextCashMovements),
+    snapshot.currentView === 'POS' || (Array.isArray(snapshot.cart) && snapshot.cart.length > 0)
+      ? persistActiveCartDraftSnapshot(snapshot, options.reason)
+      : Promise.resolve(),
+  ]);
+};
 
 const getTimerJitterMs = (): number => (
   TIMER_JITTER_MIN_MS + Math.floor(Math.random() * (TIMER_JITTER_MAX_MS - TIMER_JITTER_MIN_MS + 1))
@@ -250,9 +544,12 @@ const resolveSetupTenantId = (): string => {
   const candidates = [
     localStorage.getItem('active_tenant_id'),
     localStorage.getItem('clic_tenant_id'),
+    localStorage.getItem('clic_erp_tenant_id'),
   ];
 
-  return candidates.map((value) => (value || '').trim()).find(Boolean) || 'default-tenant';
+  return candidates
+    .map((value) => (value || '').trim())
+    .find((value) => Boolean(value) && value !== 'default-tenant') || '';
 };
 
 const normalizeSetupBaseUrl = (value?: string | null): string | null =>
@@ -445,6 +742,70 @@ const persistInitialTerminalConfig = (config: BusinessConfig) => {
   }
 };
 
+const restorePersistentOperationalIdentity = (
+  credentials: Record<string, any>,
+  fallbackDeviceId?: string | null
+): boolean => {
+  const terminalId = String(
+    credentials?.erpTerminalId
+    || credentials?.terminalId
+    || localStorage.getItem('clic_erp_sync_terminal_id')
+    || localStorage.getItem('CLIC_POS_TERMINAL_ID')
+    || localStorage.getItem('active_terminal_id')
+    || ''
+  ).trim();
+  const tenantId = String(
+    credentials?.erpTenantId
+    || credentials?.tenantId
+    || credentials?.cloudAdminTenantId
+    || localStorage.getItem('clic_erp_sync_tenant_id')
+    || localStorage.getItem('active_tenant_id')
+    || localStorage.getItem('clic_tenant_id')
+    || ''
+  ).trim();
+  const deviceId = String(
+    credentials?.deviceId
+    || fallbackDeviceId
+    || localStorage.getItem('CLIC_POS_DEVICE_ID')
+    || ''
+  ).trim();
+  const hasToken = Boolean(
+    credentials?.deviceToken
+    || credentials?.syncToken
+    || localStorage.getItem('CLIC_POS_DEVICE_TOKEN')
+    || localStorage.getItem('clic_erp_sync_token')
+  );
+  const alreadyBound = localStorage.getItem(TERMINAL_BINDING_STATUS_KEY) === 'BOUND';
+  const hasInitialConfig = Boolean(localStorage.getItem('initial_terminal_config'));
+  const hasOperationalIdentity = Boolean(terminalId && deviceId && (hasToken || alreadyBound || hasInitialConfig));
+
+  if (!hasOperationalIdentity) return false;
+
+  localStorage.setItem('active_terminal_id', terminalId);
+  localStorage.setItem('CLIC_POS_TERMINAL_ID', terminalId);
+  localStorage.setItem('clic_erp_sync_terminal_id', terminalId);
+  localStorage.setItem('CLIC_POS_DEVICE_ID', deviceId);
+  localStorage.setItem(TERMINAL_BINDING_STATUS_KEY, 'BOUND');
+  localStorage.setItem('clic_sync_auth_status', 'BOUND');
+  localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
+  localStorage.setItem(SETUP_WIZARD_COMPLETED_KEY, '1');
+  if (tenantId) {
+    localStorage.setItem('clic_tenant_id', tenantId);
+    localStorage.setItem('active_tenant_id', tenantId);
+    localStorage.setItem('clic_erp_sync_tenant_id', tenantId);
+  }
+
+  console.info('persistent_operational_identity_restored_before_boot_redirect', {
+    terminalId,
+    tenantId: tenantId || null,
+    deviceId,
+    hasToken,
+    alreadyBound,
+    hasInitialConfig,
+  });
+  return true;
+};
+
 const resolveFriendlyTerminalName = (terminal: any): string => {
   const candidates = [
     terminal?.config?.terminalName,
@@ -459,6 +820,106 @@ const resolveFriendlyTerminalName = (terminal: any): string => {
   return candidates
     .map((value) => String(value || '').trim())
     .find(Boolean) || 'Terminal';
+};
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+const looksLikeUuid = (value?: string | null): boolean => UUID_PATTERN.test(String(value || '').trim());
+
+const resolveTerminalErpIdentity = (terminal: any): string => (
+  String(
+    terminal?.config?.erpTerminalId
+    || terminal?.config?.erpBinding?.terminalId
+    || (looksLikeUuid(terminal?.id) ? terminal?.id : '')
+    || ''
+  ).trim()
+);
+
+const terminalReferenceMatches = (terminal: any, reference?: string | null): boolean => {
+  const normalizedReference = String(reference || '').trim().toLowerCase();
+  if (!normalizedReference) return false;
+  return [
+    terminal?.id,
+    terminal?.config?.erpTerminalId,
+    terminal?.config?.erpBinding?.terminalId,
+    terminal?.config?.terminalName,
+    terminal?.config?.erpBinding?.terminalName,
+    terminal?.name,
+    terminal?.config?.stationNumber,
+  ]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean)
+    .includes(normalizedReference);
+};
+
+const resolveErpTerminalAliasMatch = (terminals: any[], reference?: string | null) => {
+  if (!reference || looksLikeUuid(reference)) return null;
+  return terminals.find((terminal) =>
+    looksLikeUuid(resolveTerminalErpIdentity(terminal)) &&
+    terminalReferenceMatches(terminal, reference)
+  ) || null;
+};
+
+const terminalCompletenessScore = (terminal: any): number => {
+  let score = 0;
+  if (looksLikeUuid(resolveTerminalErpIdentity(terminal))) score += 1000;
+  if (terminal?.config?.erpSnapshot) score += 300;
+  if (terminal?.config?.erpBinding) score += 250;
+  if (terminal?.config?.erpTerminalId) score += 200;
+  if (Array.isArray(terminal?.config?.documentSeries) && terminal.config.documentSeries.length > 0) score += 60;
+  if (terminal?.config?.documentAssignments && Object.keys(terminal.config.documentAssignments).length > 0) score += 45;
+  if (terminal?.config?.inventoryScope) score += 40;
+  if (terminal?.config?.pricing) score += 35;
+  if (terminal?.config?.fiscal) score += 30;
+  if (terminal?.config?.currentDeviceId) score += 15;
+  return score;
+};
+
+const mergeTerminalRecords = (base: any, incoming: any) => {
+  const winner = terminalCompletenessScore(incoming) > terminalCompletenessScore(base) ? incoming : base;
+  const fallback = winner === incoming ? base : incoming;
+  return {
+    ...fallback,
+    ...winner,
+    id: winner?.id || fallback?.id,
+    config: {
+      ...(fallback?.config || {}),
+      ...(winner?.config || {}),
+      erpTerminalId: resolveTerminalErpIdentity(winner) || resolveTerminalErpIdentity(fallback) || winner?.config?.erpTerminalId || fallback?.config?.erpTerminalId,
+      terminalName: winner?.config?.terminalName || fallback?.config?.terminalName || resolveFriendlyTerminalName(winner) || resolveFriendlyTerminalName(fallback),
+      currentDeviceId: winner?.config?.currentDeviceId || fallback?.config?.currentDeviceId,
+      erpBinding: winner?.config?.erpBinding || fallback?.config?.erpBinding,
+      erpSnapshot: winner?.config?.erpSnapshot || fallback?.config?.erpSnapshot,
+    },
+  };
+};
+
+const dedupeConfiguredTerminals = (items: any[]): any[] => {
+  const byKey = new Map<string, any>();
+  const aliasToErpKey = new Map<string, string>();
+
+  for (const terminal of items || []) {
+    const erpIdentity = resolveTerminalErpIdentity(terminal);
+    const alias = String(resolveFriendlyTerminalName(terminal) || '').trim().toLowerCase();
+    const key = looksLikeUuid(erpIdentity)
+      ? `erp:${erpIdentity.toLowerCase()}`
+      : (aliasToErpKey.get(alias) || (alias ? `alias:${alias}` : `id:${String(terminal?.id || '').trim().toLowerCase()}`));
+
+    if (looksLikeUuid(erpIdentity) && alias) {
+      aliasToErpKey.set(alias, key);
+      const aliasKey = `alias:${alias}`;
+      const aliasExisting = byKey.get(aliasKey);
+      if (aliasExisting) {
+        byKey.delete(aliasKey);
+        byKey.set(key, mergeTerminalRecords(aliasExisting, terminal));
+        continue;
+      }
+    }
+
+    const existing = byKey.get(key);
+    byKey.set(key, existing ? mergeTerminalRecords(existing, terminal) : terminal);
+  }
+
+  return Array.from(byKey.values());
 };
 
 const resolvePreferredTerminalForDevice = (
@@ -481,15 +942,19 @@ const resolvePreferredTerminalForDevice = (
     let score = 0;
     const localId = String(terminal?.id || '').trim();
     const erpTerminalId = String(terminal?.config?.erpTerminalId || '').trim();
+    const erpBindingTerminalId = String(terminal?.config?.erpBinding?.terminalId || '').trim();
     const terminalName = String(terminal?.config?.terminalName || '').trim();
     const stationNumber = String(terminal?.config?.stationNumber || '').trim();
+    const hasUuidIdentity = looksLikeUuid(localId) || looksLikeUuid(erpTerminalId) || looksLikeUuid(erpBindingTerminalId);
 
-    if (activeTerminalId && (localId === activeTerminalId || erpTerminalId === activeTerminalId)) score += 100;
+    if (hasUuidIdentity) score += 150;
+    if (activeTerminalId && (localId === activeTerminalId || erpTerminalId === activeTerminalId || erpBindingTerminalId === activeTerminalId)) score += looksLikeUuid(activeTerminalId) ? 120 : 35;
     if (bindingLocalTerminalId && localId === bindingLocalTerminalId) score += 80;
-    if (bindingTerminalId && erpTerminalId === bindingTerminalId) score += 70;
+    if (bindingTerminalId && (erpTerminalId === bindingTerminalId || erpBindingTerminalId === bindingTerminalId || localId === bindingTerminalId)) score += looksLikeUuid(bindingTerminalId) ? 140 : 45;
     if (terminalName) score += 20;
     if (stationNumber) score += 10;
     if (erpTerminalId) score += 8;
+    if (erpBindingTerminalId) score += 8;
 
     return score;
   };
@@ -535,14 +1000,15 @@ const clearDuplicateDeviceAssignments = (
     };
   });
 
-  if (!changed) {
+  const dedupedTerminals = dedupeConfiguredTerminals(nextTerminals);
+  if (!changed && dedupedTerminals.length === nextTerminals.length) {
     return { config, changed: false, preferredTerminalId: preferred.id || null };
   }
 
   return {
     config: {
       ...config,
-      terminals: nextTerminals,
+      terminals: dedupedTerminals,
     },
     changed: true,
     preferredTerminalId: preferred.id || null,
@@ -810,12 +1276,57 @@ const resolveReachableMasterBinding = async (host: string): Promise<{ host: stri
 const isSeedSetupBusinessConfig = (config: BusinessConfig | null | undefined): boolean => {
   if (!config?.companyInfo) return false;
 
+  const normalizedCompanyName = String(config.companyInfo.name || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase();
+
   return (
-    config.companyInfo.name === 'CLIC POS DEMO' &&
-    config.companyInfo.rnc === '131-12345-1' &&
-    config.companyInfo.phone === '809-555-POS1' &&
-    config.companyInfo.address === 'Av. Principal #1, Santo Domingo'
+    (normalizedCompanyName === 'CLIC POS DEMO' || normalizedCompanyName === 'EMPRESA DEMO') &&
+    (!config.companyInfo.rnc || config.companyInfo.rnc === '131-12345-1') &&
+    (!config.companyInfo.phone || config.companyInfo.phone === '809-555-POS1') &&
+    (!config.companyInfo.address || config.companyInfo.address === 'Av. Principal #1, Santo Domingo')
   );
+};
+
+const resolveCompanyNameFromTenantIdentity = (): string | null => {
+  const tenantIdentity = getStoredTenantIdentity();
+  const identityText = [
+    tenantIdentity.tenantSlug,
+    tenantIdentity.tenantEmail,
+    tenantIdentity.tenantId,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (identityText.includes('mercasend')) return 'Mercasend';
+  return null;
+};
+
+const normalizeCompanyInfoFromTenantIdentity = (
+  sourceConfig: BusinessConfig | null | undefined
+): { config: BusinessConfig | null | undefined; changed: boolean } => {
+  if (!sourceConfig?.companyInfo || !isSeedSetupBusinessConfig(sourceConfig)) {
+    return { config: sourceConfig, changed: false };
+  }
+
+  const tenantCompanyName = resolveCompanyNameFromTenantIdentity();
+  if (!tenantCompanyName) {
+    return { config: sourceConfig, changed: false };
+  }
+
+  return {
+    config: {
+      ...sourceConfig,
+      companyInfo: {
+        ...sourceConfig.companyInfo,
+        name: tenantCompanyName,
+      },
+    },
+    changed: true,
+  };
 };
 
 const normalizePaymentMethod = (method: unknown): string => {
@@ -988,11 +1499,68 @@ const AppContent: React.FC = () => {
     const params = new URLSearchParams(window.location.search);
     return params.get('view') === 'VISOR' ? 'VISOR' : 'LOGIN';
   });
+  const currentViewRef = useRef<ViewState>(currentView);
+  const currentUserRef = useRef<User | null>(null);
   const [scanTargetTicketId, setScanTargetTicketId] = useState<string | null>(null); // NEW: Auto-select ticket from scan
   const [restoringHistory, setRestoringHistory] = useState(false);
   const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any));
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLandscape, setIsLandscape] = useState(window.innerWidth > window.innerHeight);
+
+  useEffect(() => {
+    currentViewRef.current = currentView;
+  }, [currentView]);
+
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (currentUser) {
+      persistActiveUserSession(currentUser, currentView);
+    }
+  }, [currentUser, currentView]);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    const pushGuardState = () => {
+      window.history.pushState({ clicPosBackGuard: true }, '', window.location.href);
+    };
+    pushGuardState();
+
+    const handleNativeBack = (event?: Event) => {
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      const view = currentViewRef.current;
+      const user = currentUserRef.current;
+      pushGuardState();
+
+      if (view === 'LOGIN' || view === 'ACTIVATION' || view === 'WIZARD' || view === 'TERMINAL_PAIRING') return;
+
+      if (!user) {
+        setCurrentView('LOGIN');
+        return;
+      }
+
+      if (view === 'POS') {
+        if ((config.vertical === 'RESTAURANT' || (config as any).usesTables) && Array.isArray(rooms) && rooms.length > 0) {
+          setViewData(null);
+          setCurrentView('TABLE_MAP');
+        }
+        return;
+      }
+
+      setViewData(null);
+      setCurrentView('POS');
+    };
+
+    window.addEventListener('popstate', handleNativeBack);
+    document.addEventListener('backbutton', handleNativeBack, false);
+    return () => {
+      window.removeEventListener('popstate', handleNativeBack);
+      document.removeEventListener('backbutton', handleNativeBack, false);
+    };
+  }, [clearSecurityState]);
 
   useEffect(() => {
     const handleResize = () => setIsLandscape(window.innerWidth > window.innerHeight);
@@ -1025,6 +1593,7 @@ const AppContent: React.FC = () => {
     }
   });
   const posApkUpdateCheckStartedRef = useRef(false);
+  const settingsPreloadStartedRef = useRef(false);
   const [recoverySequencePrompt, setRecoverySequencePrompt] = useState<RecoverySequencePromptState | null>(null);
   const [recoverySequenceInput, setRecoverySequenceInput] = useState('');
 
@@ -1033,6 +1602,10 @@ const AppContent: React.FC = () => {
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [licenseError, setLicenseError] = useState<string | null>(null);
   const inactivityTimerRef = useRef<number | null>(null);
+  const inactivityIntervalRef = useRef<number | null>(null);
+  const lastUserActivityAtRef = useRef<number>(Date.now());
+  const appBackgroundSinceRef = useRef<number | null>(null);
+  const isAppInBackgroundRef = useRef(false);
 
   // Security bootstrap logic moved to loadData
 
@@ -1363,6 +1936,7 @@ const AppContent: React.FC = () => {
     setLicenseError(message);
     setIsDataLoaded(true);
     setIsSecurityLoaded(true);
+    clearActiveUserSession();
     setCurrentUser(null);
     Object.keys(localStorage)
       .filter((key) => key.startsWith('sb-'))
@@ -1373,15 +1947,155 @@ const AppContent: React.FC = () => {
     });
   }, []);
 
+  const verifyErpDeviceStillAuthorized = React.useCallback(async (candidateDeviceId?: string | null): Promise<boolean> => {
+    const normalizedDeviceId = String(
+      candidateDeviceId
+      || deviceId
+      || localStorage.getItem('pos_device_id')
+      || localStorage.getItem('CLIC_POS_DEVICE_ID')
+      || ''
+    ).trim().toUpperCase();
+    if (!normalizedDeviceId || isPosOnlyCloudStagingTarget()) return false;
+
+    try {
+      const bootstrap = await bootstrapErpSyncLifecycle(normalizedDeviceId);
+      const payload = (bootstrap || {}) as any;
+      const terminal = payload.terminal || payload.terminal_config?.terminal || payload.terminalConfig?.terminal || {};
+      const config = terminal.config || payload.terminal_config?.config || payload.terminalConfig?.config || {};
+      const profile = payload.profile || payload.terminal_profile || payload.terminalProfile || {};
+      const metadata = terminal.metadata || config.metadata || payload.metadata || {};
+      const auth = payload.authorization || payload.auth || terminal.authorization || terminal.auth || {};
+      const candidates = [
+        terminal.authorized_device_id,
+        terminal.authorizedDeviceId,
+        terminal.current_device_id,
+        terminal.currentDeviceId,
+        terminal.canonical_device_id,
+        terminal.canonicalDeviceId,
+        terminal.device_id,
+        terminal.deviceId,
+        config.authorized_device_id,
+        config.authorizedDeviceId,
+        config.current_device_id,
+        config.currentDeviceId,
+        config.canonical_device_id,
+        config.canonicalDeviceId,
+        config.device_id,
+        config.deviceId,
+        profile.authorized_device_id,
+        profile.authorizedDeviceId,
+        profile.current_device_id,
+        profile.currentDeviceId,
+        profile.canonical_device_id,
+        profile.canonicalDeviceId,
+        profile.device_id,
+        profile.deviceId,
+        metadata.authorized_device_id,
+        metadata.authorizedDeviceId,
+        metadata.bound_device_id,
+        metadata.boundDeviceId,
+        metadata.canonical_device_id,
+        metadata.canonicalDeviceId,
+        auth.authorized_device_id,
+        auth.authorizedDeviceId,
+        auth.current_device_id,
+        auth.currentDeviceId,
+        auth.canonical_device_id,
+        auth.canonicalDeviceId,
+        payload.authorized_device_id,
+        payload.authorizedDeviceId,
+        payload.current_device_id,
+        payload.currentDeviceId,
+        payload.canonical_device_id,
+        payload.canonicalDeviceId,
+        payload.device_id,
+        payload.deviceId,
+      ].map((value) => String(value || '').trim().toUpperCase()).filter(Boolean);
+      const statusText = [
+        payload.status,
+        payload.authorization_status,
+        payload.authorizationStatus,
+        payload.device_status,
+        payload.deviceStatus,
+        terminal.status,
+        terminal.authorization_status,
+        terminal.authorizationStatus,
+        config.status,
+        config.authorization_status,
+        profile.status,
+        auth.status,
+        auth.authorization_status,
+      ].map((value) => String(value || '').trim().toUpperCase()).filter(Boolean).join('|');
+      const revoked = Boolean(
+        payload.revoked
+        || payload.is_revoked
+        || payload.isRevoked
+        || payload.requires_reauth
+        || payload.requiresReauth
+        || payload.reauth_required
+        || payload.reauthRequired
+        || terminal.revoked
+        || terminal.is_revoked
+        || terminal.isRevoked
+        || terminal.requires_reauth
+        || terminal.requiresReauth
+        || config.revoked
+        || config.is_revoked
+        || config.requires_reauth
+        || metadata.revoked
+        || metadata.is_revoked
+        || metadata.requires_reauth
+        || auth.revoked
+        || auth.requires_reauth
+        || /REVOKED|SUPERSEDED|DEVICE_NOT_AUTHORIZED|TAKEOVER_REQUIRED|WAITING_CLOUD_ADMIN_REAUTHORIZATION|NEEDS_REAUTH|LOCKED_AUTH_REQUIRED/.test(statusText)
+      );
+      const isAuthorized = candidates.includes(normalizedDeviceId) && !revoked;
+      if (isAuthorized) {
+        console.info('stale_authorization_block_ignored', {
+          deviceId: normalizedDeviceId,
+          terminalId: terminal.id || payload.terminal_id || payload.terminalId || null,
+        });
+        console.info('pos_reauth_state_ignored_because_device_authorized', {
+          deviceId: normalizedDeviceId,
+          terminalId: terminal.id || payload.terminal_id || payload.terminalId || null,
+          source: 'ERP_BOOTSTRAP_CHECK',
+        });
+      }
+      return isAuthorized;
+    } catch (error) {
+      console.warn('[AUTHORIZATION_GUARD] ERP bootstrap check skipped before lockdown:', error);
+      return false;
+    }
+  }, [deviceId]);
+
+  const triggerLockdownAfterAuthorizationCheck = React.useCallback(async (message: string, candidateDeviceId?: string | null) => {
+    if (await verifyErpDeviceStillAuthorized(candidateDeviceId)) {
+      lockdownHandledRef.current = false;
+      setLicenseError(null);
+      clearSyncErrorDiagnostic();
+      setTerminalBindingDiagnosticStatus('BOUND');
+      setCatalogDiagnosticStatus('SYNCED');
+      setSalesPushDiagnosticStatus('ENABLED');
+      setSyncAuthDiagnosticStatus('AUTHENTICATED');
+      localStorage.setItem(TERMINAL_BINDING_STATUS_KEY, 'BOUND');
+      localStorage.setItem('clic_sync_auth_status', 'AUTHENTICATED');
+      localStorage.removeItem('clic_sync_last_auth_error');
+      localStorage.removeItem('clic_sync_last_reauth_attempt_at');
+      return;
+    }
+    triggerLockdown(message);
+  }, [triggerLockdown, verifyErpDeviceStillAuthorized]);
+
   useEffect(() => {
     const handleDeviceRevoked = (event: Event) => {
       const detail = (event as CustomEvent<DeviceRevocationDetail>).detail;
-      triggerLockdown(detail?.message || DEVICE_SUPERSEDED_MESSAGE);
+      const revokedDeviceId = (detail as any)?.newDeviceId || (detail as any)?.deviceId || deviceId;
+      void triggerLockdownAfterAuthorizationCheck(detail?.message || DEVICE_SUPERSEDED_MESSAGE, revokedDeviceId);
     };
 
     window.addEventListener(DEVICE_REVOKED_EVENT, handleDeviceRevoked as EventListener);
     return () => window.removeEventListener(DEVICE_REVOKED_EVENT, handleDeviceRevoked as EventListener);
-  }, [triggerLockdown]);
+  }, [deviceId, triggerLockdownAfterAuthorizationCheck]);
 
   // --- REALTIME KILL SWITCH (FALLBACK: SMART POLLING) ---
   useEffect(() => {
@@ -1405,7 +2119,7 @@ const AppContent: React.FC = () => {
         }
 
         if (!res.isValid) {
-          triggerLockdown(res.reason || fallbackMessage);
+          await triggerLockdownAfterAuthorizationCheck(res.reason || fallbackMessage, deviceId);
         }
       } catch {
         // Offline tolerance: avoid false positives on transient connectivity issues.
@@ -1435,7 +2149,7 @@ const AppContent: React.FC = () => {
         window.clearTimeout(timeoutId);
       }
     };
-  }, [isDataLoaded, deviceId, triggerLockdown]);
+  }, [isDataLoaded, deviceId, triggerLockdownAfterAuthorizationCheck]);
 
   // --- AUTO-RETRY ON BOOT ERROR ---
   useEffect(() => {
@@ -1458,14 +2172,6 @@ const AppContent: React.FC = () => {
     const bindingTerminalId = localStorage.getItem('clic_erp_sync_terminal_id') || '';
     const bindingLocalTerminalId = localStorage.getItem('clic_erp_sync_local_terminal_id') || '';
 
-    const byActiveId = activeTerminalId
-      ? terminals.find((terminal) =>
-          terminal.id === activeTerminalId
-          || terminal.config?.erpTerminalId === activeTerminalId
-        )
-      : null;
-    if (byActiveId) return byActiveId;
-
     const byBinding = resolvePreferredTerminalForDevice(terminals, deviceId, {
       activeTerminalId,
       bindingTerminalId,
@@ -1473,11 +2179,27 @@ const AppContent: React.FC = () => {
     });
     if (byBinding) return byBinding;
 
+    const byErpAlias =
+      resolveErpTerminalAliasMatch(terminals, activeTerminalId)
+      || resolveErpTerminalAliasMatch(terminals, bindingLocalTerminalId)
+      || resolveErpTerminalAliasMatch(terminals, bindingTerminalId);
+    if (byErpAlias) return byErpAlias;
+
+    const byActiveId = activeTerminalId
+      ? terminals.find((terminal) =>
+          terminal.id === activeTerminalId
+          || terminal.config?.erpTerminalId === activeTerminalId
+          || terminal.config?.erpBinding?.terminalId === activeTerminalId
+        )
+      : null;
+    if (byActiveId) return byActiveId;
+
     if (!activeTerminalId) return undefined;
 
     return terminals.find((terminal) =>
       terminal.id === activeTerminalId
       || terminal.config?.erpTerminalId === activeTerminalId
+      || terminal.config?.erpBinding?.terminalId === activeTerminalId
     );
   }, [config.terminals, deviceId]);
 
@@ -1490,30 +2212,145 @@ const AppContent: React.FC = () => {
       bindingTerminalId,
       bindingLocalTerminalId,
     });
-
-    if (!sanitized.changed) return;
-
     const nextConfig = sanitized.config;
+
+    const aliasPreferredTerminal =
+      resolveErpTerminalAliasMatch(nextConfig.terminals || [], activeTerminalId)
+      || resolveErpTerminalAliasMatch(nextConfig.terminals || [], bindingLocalTerminalId)
+      || resolveErpTerminalAliasMatch(nextConfig.terminals || [], bindingTerminalId);
+    const preferredTerminal = aliasPreferredTerminal || (
+      sanitized.preferredTerminalId
+        ? nextConfig.terminals?.find((terminal) => terminal.id === sanitized.preferredTerminalId)
+        : null
+    );
+    const preferredTerminalId = preferredTerminal?.id || sanitized.preferredTerminalId || null;
+    const preferredErpTerminalId =
+      resolveTerminalErpIdentity(preferredTerminal);
+    const preferredTenantId = String(
+      preferredTerminal?.config?.erpBinding?.tenantId
+      || preferredTerminal?.config?.erpSnapshot?.tenant_id
+      || nextConfig.metadata?.tenantId
+      || localStorage.getItem('active_tenant_id')
+      || localStorage.getItem('clic_tenant_id')
+      || ''
+    ).trim();
+    const storedErpTerminalId = String(localStorage.getItem('clic_erp_sync_terminal_id') || '').trim();
+    const storedErpTenantId = String(localStorage.getItem('clic_erp_sync_tenant_id') || '').trim();
+    const shouldRepairActiveTerminal = Boolean(preferredTerminalId && preferredTerminalId !== activeTerminalId);
+    const shouldRepairErpBinding = Boolean(preferredErpTerminalId && preferredErpTerminalId !== storedErpTerminalId);
+    const shouldRepairErpTenant = Boolean(preferredTenantId && preferredTenantId !== storedErpTenantId);
+
+    if (!sanitized.changed && !shouldRepairActiveTerminal && !shouldRepairErpBinding && !shouldRepairErpTenant) return;
+
     setConfig(nextConfig);
-    if (sanitized.preferredTerminalId) {
-      localStorage.setItem('active_terminal_id', sanitized.preferredTerminalId);
-      localStorage.setItem('CLIC_POS_TERMINAL_ID', sanitized.preferredTerminalId);
+    if (preferredTerminalId) {
+      localStorage.setItem('active_terminal_id', preferredTerminalId);
+      localStorage.setItem('CLIC_POS_TERMINAL_ID', preferredTerminalId);
+    }
+    if (shouldRepairErpBinding) {
+      localStorage.setItem('clic_erp_sync_terminal_id', preferredErpTerminalId);
+    }
+    if (shouldRepairErpTenant) {
+      localStorage.setItem('clic_erp_sync_tenant_id', preferredTenantId);
+      localStorage.setItem('active_tenant_id', preferredTenantId);
+      localStorage.setItem('clic_tenant_id', preferredTenantId);
+    }
+    if (shouldRepairErpBinding || shouldRepairErpTenant) {
+      try {
+        const existingProfile = loadSyncProfile();
+        saveSyncProfileFromContract({
+          ...existingProfile,
+          erpTerminalId: preferredErpTerminalId || existingProfile.erpTerminalId,
+          localTerminalId: preferredTerminalId || existingProfile.localTerminalId,
+          erpTenantId: preferredTenantId || existingProfile.erpTenantId || localStorage.getItem('clic_erp_sync_tenant_id') || localStorage.getItem('active_tenant_id') || undefined,
+          cloudTenantId: preferredTenantId || existingProfile.cloudTenantId || existingProfile.erpTenantId,
+        }, existingProfile.contractSource || 'ERP_REGISTER', {
+          erpTerminalId: preferredErpTerminalId || existingProfile.erpTerminalId,
+          localTerminalId: preferredTerminalId || undefined,
+        });
+      } catch (error) {
+        console.warn('Failed to repair ERP terminal sync profile from selected terminal identity', error);
+      }
     }
     void db.save('config', nextConfig).catch((error) => {
       console.warn('Failed to persist duplicate terminal assignment cleanup', error);
     });
   }, [config, deviceId]);
 
-  // Helper: Get current device role
-  const getCurrentDeviceRole = React.useCallback((): DeviceRole => {
+  // Helper: Get current device role (raw value, no fallback)
+  const getCurrentDeviceRoleRaw = React.useCallback((): DeviceRole | undefined => {
     const terminal = getCurrentTerminal();
-    return terminal?.config?.deviceRole?.role || DeviceRole.STANDARD_POS;
+    return resolveDeviceRoleValue(
+      [
+        terminal?.config,
+        terminal?.config?.erpBinding,
+        terminal?.config?.deviceRole,
+        terminal?.config?.role,
+        terminal?.config?.roleCode,
+        terminal?.config?.role_code,
+        terminal?.config?.deviceRoleCode,
+        terminal?.config?.device_role_code,
+        terminal?.config?.deviceRole?.role_code,
+        terminal?.config?.deviceRole?.device_role_code,
+      ],
+      undefined
+    );
   }, [getCurrentTerminal]);
 
+  const getCurrentDeviceRole = React.useCallback((): DeviceRole => {
+    return getCurrentDeviceRoleRaw() ?? DeviceRole.STANDARD_POS;
+  }, [getCurrentDeviceRoleRaw]);
+
   const navigateToUserLogin = React.useCallback(() => {
+    clearActiveUserSession();
     clearSecurityState();
     setCurrentUser(null);
     setCurrentView('LOGIN');
+  }, [clearSecurityState]);
+
+  const handleExitApplication = React.useCallback(() => {
+    const runtimeWindow = window as any;
+    const exitNativeApp = () => {
+      const capacitorApp = runtimeWindow.Capacitor?.Plugins?.App;
+      if (typeof capacitorApp?.exitApp === 'function') {
+        capacitorApp.exitApp();
+        return;
+      }
+      if (typeof runtimeWindow.ClicPOSAppBridge?.exitApp === 'function') {
+        runtimeWindow.ClicPOSAppBridge.exitApp();
+        return;
+      }
+      const navigatorApp = (navigator as any).app;
+      if (typeof navigatorApp?.exitApp === 'function') {
+        navigatorApp.exitApp();
+        return;
+      }
+      if (typeof runtimeWindow.androidBridge?.exitApp === 'function') {
+        runtimeWindow.androidBridge.exitApp();
+        return;
+      }
+      window.close();
+    };
+
+    markForceLoginAfterExit();
+    clearActiveUserSession();
+    clearSecurityState();
+    setCurrentUser(null);
+    setCurrentView('LOGIN');
+
+    const persistBestEffort = persistCriticalLocalStateSnapshot(safeExitSnapshotRef.current, {
+      reason: 'exit_app_button',
+      parkActiveCart: true,
+      onParkedTickets: setParkedTickets,
+    }).catch((error) => {
+      console.warn('[EXIT_APP] Critical state snapshot failed before native exit:', error);
+    });
+
+    const exitTimeout = new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 750);
+    });
+
+    void Promise.race([persistBestEffort, exitTimeout]).finally(exitNativeApp);
   }, [clearSecurityState]);
 
   useEffect(() => {
@@ -1523,7 +2360,7 @@ const AppContent: React.FC = () => {
       console.info('[Security] Native standalone terminal detected; clearing stale master pointer for inactivity policy.');
       localStorage.removeItem('pos_master_ip');
     }
-    const autoLogoutMinutes = isNativeStandaloneApk ? 0 : (currentTerminal?.config?.security?.autoLogoutMinutes ?? 0);
+    const autoLogoutMinutes = resolveTerminalAutoLogoutMinutes(currentTerminal);
     const shouldTrackInactivity =
       Boolean(currentUser) &&
       currentView !== 'LOGIN' &&
@@ -1536,37 +2373,124 @@ const AppContent: React.FC = () => {
         window.clearTimeout(inactivityTimerRef.current);
         inactivityTimerRef.current = null;
       }
+      if (inactivityIntervalRef.current) {
+        window.clearInterval(inactivityIntervalRef.current);
+        inactivityIntervalRef.current = null;
+      }
       return;
     }
 
     const timeoutMs = autoLogoutMinutes * 60 * 1000;
-    const resetInactivityTimer = () => {
-      if (inactivityTimerRef.current) {
-        window.clearTimeout(inactivityTimerRef.current);
-      }
-      inactivityTimerRef.current = window.setTimeout(() => {
-        console.info(`[Security] Auto-logout triggered after ${autoLogoutMinutes} minute(s) of inactivity.`);
-        navigateToUserLogin();
-      }, timeoutMs);
-    };
-
-    const activityEvents: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'touchstart', 'wheel', 'scroll'];
-    activityEvents.forEach((eventName) => {
-      window.addEventListener(eventName, resetInactivityTimer, { passive: true });
-    });
-
-    resetInactivityTimer();
-
-    return () => {
-      activityEvents.forEach((eventName) => {
-        window.removeEventListener(eventName, resetInactivityTimer as EventListener);
-      });
+    const clearInactivityTimer = () => {
       if (inactivityTimerRef.current) {
         window.clearTimeout(inactivityTimerRef.current);
         inactivityTimerRef.current = null;
       }
     };
+    const triggerAutoLogout = (reason: string) => {
+      if (isAppInBackgroundRef.current) return;
+      clearInactivityTimer();
+      if (inactivityIntervalRef.current) {
+        window.clearInterval(inactivityIntervalRef.current);
+        inactivityIntervalRef.current = null;
+      }
+      console.info(`[Security] Auto-logout triggered after ${autoLogoutMinutes} minute(s) of inactivity (${reason}).`);
+      navigateToUserLogin();
+    };
+    const checkInactivityDeadline = () => {
+      if (isAppInBackgroundRef.current) return;
+      const idleMs = Date.now() - lastUserActivityAtRef.current;
+      if (idleMs >= timeoutMs) {
+        triggerAutoLogout('watchdog');
+      }
+    };
+    const scheduleInactivityTimer = () => {
+      if (isAppInBackgroundRef.current) return;
+      clearInactivityTimer();
+      const remainingMs = Math.max(0, timeoutMs - (Date.now() - lastUserActivityAtRef.current));
+      inactivityTimerRef.current = window.setTimeout(() => {
+        checkInactivityDeadline();
+      }, remainingMs);
+    };
+    const resetInactivityTimer = () => {
+      if (isAppInBackgroundRef.current) return;
+      lastUserActivityAtRef.current = Date.now();
+      scheduleInactivityTimer();
+    };
+
+    const handleForegroundSecurityResume = () => {
+      if (document.hidden) return;
+      const backgroundSince = appBackgroundSinceRef.current;
+      isAppInBackgroundRef.current = false;
+      appBackgroundSinceRef.current = null;
+      if (backgroundSince && Date.now() - backgroundSince >= timeoutMs) {
+        void persistCriticalLocalStateSnapshot(safeExitSnapshotRef.current, {
+          reason: 'resume_auth_timeout',
+          parkActiveCart: false,
+        }).finally(() => {
+          console.info(`[Security] Session requires revalidation after background timeout (${autoLogoutMinutes} minute(s)).`);
+          navigateToUserLogin();
+        });
+        return;
+      }
+      resetInactivityTimer();
+    };
+
+    const activityEvents: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'touchstart'];
+    activityEvents.forEach((eventName) => {
+      window.addEventListener(eventName, resetInactivityTimer, { passive: true });
+    });
+    document.addEventListener('visibilitychange', handleForegroundSecurityResume);
+    const appPlugin = (window as any).Capacitor?.Plugins?.App;
+    const resumeListener = appPlugin?.addListener?.('resume', handleForegroundSecurityResume);
+    const stateListener = appPlugin?.addListener?.('appStateChange', (state: { isActive?: boolean }) => {
+      if (state?.isActive === true) handleForegroundSecurityResume();
+    });
+
+    console.info('[Security] Auto-lock armed', {
+      terminalId: currentTerminal?.id,
+      minutes: autoLogoutMinutes,
+      view: currentView,
+    });
+    lastUserActivityAtRef.current = Date.now();
+    resetInactivityTimer();
+    inactivityIntervalRef.current = window.setInterval(
+      checkInactivityDeadline,
+      Math.min(30000, Math.max(1000, Math.floor(timeoutMs / 4)))
+    );
+
+    return () => {
+      activityEvents.forEach((eventName) => {
+        window.removeEventListener(eventName, resetInactivityTimer as EventListener);
+      });
+      document.removeEventListener('visibilitychange', handleForegroundSecurityResume);
+      resumeListener?.remove?.();
+      stateListener?.remove?.();
+      if (inactivityTimerRef.current) {
+        window.clearTimeout(inactivityTimerRef.current);
+        inactivityTimerRef.current = null;
+      }
+      if (inactivityIntervalRef.current) {
+        window.clearInterval(inactivityIntervalRef.current);
+        inactivityIntervalRef.current = null;
+      }
+    };
   }, [currentUser, currentView, getCurrentTerminal, navigateToUserLogin]);
+
+  useEffect(() => {
+    if (settingsPreloadStartedRef.current) return;
+    if (!isDataLoaded || !isSecurityLoaded || !currentUser || currentView !== 'POS') return;
+
+    settingsPreloadStartedRef.current = true;
+    const preloadTimer = window.setTimeout(() => {
+      import('./components/Settings').catch((error) => {
+        settingsPreloadStartedRef.current = false;
+        console.warn('Settings preload failed; will lazy-load on demand.', error);
+      });
+    }, 1200);
+
+    return () => window.clearTimeout(preloadTimer);
+  }, [currentUser, currentView, isDataLoaded, isSecurityLoaded]);
 
   useEffect(() => {
     if (!isNativeAndroidRuntime()) return;
@@ -1774,7 +2698,14 @@ const AppContent: React.FC = () => {
 
     const HEARTBEAT_INTERVAL_MS = 120000;
     const MANIFEST_REFRESH_INTERVAL_MS = 300000;
-    let lastManifestRefreshAt = 0;
+    const lifecycleManifestKeyParts = [
+      deviceId,
+      currentTerminal?.config?.erpTerminalId || currentTerminal?.id || 'unknown-terminal',
+      currentTerminal?.config?.stationNumber || 'unknown-local-terminal',
+    ].join(':');
+    const bootManifestSyncKey = `clic_pos_lifecycle_boot_manifest_synced:${lifecycleManifestKeyParts}`;
+    const lastManifestRefreshKey = `clic_pos_lifecycle_last_manifest_refresh:${lifecycleManifestKeyParts}`;
+    let lastManifestRefreshAt = Number(sessionStorage.getItem(lastManifestRefreshKey) || '0') || 0;
     let heartbeatTimeoutId: number | null = null;
 
     const syncLifecycle = async (options?: { forceManifestRefresh?: boolean }) => {
@@ -1801,7 +2732,7 @@ const AppContent: React.FC = () => {
 
         const blockingActivation = result?.heartbeat?.activation || result?.registered?.activation || result?.bootstrap?.activation;
         if (!disposed && isLifecycleActivationBlocked(blockingActivation)) {
-          triggerLockdown(getLifecycleActivationBlockMessage(blockingActivation));
+          await triggerLockdownAfterAuthorizationCheck(getLifecycleActivationBlockMessage(blockingActivation), deviceId);
           return;
         }
 
@@ -1814,26 +2745,42 @@ const AppContent: React.FC = () => {
         }
 
         const now = Date.now();
-        const shouldRefreshManifest = Boolean(options?.forceManifestRefresh)
+        const forceManifestRefreshRequested = Boolean(options?.forceManifestRefresh);
+        const shouldHonorForcedManifestRefresh = forceManifestRefreshRequested
+          && sessionStorage.getItem(bootManifestSyncKey) !== 'true';
+        const shouldRefreshManifest = shouldHonorForcedManifestRefresh
           || (result?.outbox?.applied || 0) > 0
           || now - lastManifestRefreshAt >= MANIFEST_REFRESH_INTERVAL_MS;
 
         if (shouldRefreshManifest) {
           const refreshedFromManifest = await syncManager.syncTerminalManifestInBackground(undefined, {
-            bootstrapBlocks: Boolean(options?.forceManifestRefresh),
+            bootstrapBlocks: shouldHonorForcedManifestRefresh,
           });
           if (!disposed && refreshedFromManifest && !Array.isArray(refreshedFromManifest) && refreshedFromManifest.terminals) {
             console.log(`[ERP SYNC] ${terminalName} actualizó su estado runtime desde el manifest del ERP.`);
           }
           lastManifestRefreshAt = now;
+          sessionStorage.setItem(lastManifestRefreshKey, String(now));
+          if (forceManifestRefreshRequested) {
+            sessionStorage.setItem(bootManifestSyncKey, 'true');
+          }
         }
       } catch (error) {
         const blockingMessage = getLifecycleBlockingMessageFromError(error);
         if (!disposed && blockingMessage) {
-          triggerLockdown(blockingMessage);
+          await triggerLockdownAfterAuthorizationCheck(blockingMessage, deviceId);
           return;
         }
         console.warn('[ERP SYNC] lifecycle registration skipped:', error);
+      }
+    };
+
+    const handleErpOnline = () => {
+      if (!disposed) void syncLifecycle();
+    };
+    const handleErpAppResume = () => {
+      if (!disposed && !document.hidden && navigator.onLine) {
+        void syncLifecycle();
       }
     };
 
@@ -1864,12 +2811,16 @@ const AppContent: React.FC = () => {
     };
 
     scheduleNextHeartbeat();
+    window.addEventListener('online', handleErpOnline);
+    document.addEventListener('visibilitychange', handleErpAppResume);
 
     return () => {
       disposed = true;
       if (heartbeatTimeoutId !== null) {
         window.clearTimeout(heartbeatTimeoutId);
       }
+      window.removeEventListener('online', handleErpOnline);
+      document.removeEventListener('visibilitychange', handleErpAppResume);
     };
   }, [currentView, deviceId, getCurrentTerminal]);
 
@@ -1993,6 +2944,40 @@ const AppContent: React.FC = () => {
 
   // --- DATA STORES ---
   const [users, setUsers] = useState<User[]>([]);
+
+  useEffect(() => {
+    if (!isDataLoaded || currentUser || !Array.isArray(users) || users.length === 0) return;
+    if (consumeForceLoginAfterExit()) {
+      clearActiveUserSession();
+      clearSecurityState();
+      if (currentView !== 'LOGIN') setCurrentView('LOGIN');
+      return;
+    }
+    const session = readActiveUserSession();
+    if (!session) return;
+    const restoredUser = users.find(user => String(user.id) === session.userId);
+    if (!restoredUser) {
+      clearActiveUserSession();
+      return;
+    }
+    const forbiddenRestoreViews = new Set<ViewState>([
+      'LOGIN',
+      'ACTIVATION',
+      'WIZARD',
+      'TERMINAL_PAIRING',
+      'TERMINAL_BINDING',
+      'SETUP',
+      'DEVICE_UNAUTHORIZED',
+    ] as ViewState[]);
+    const restoreView = session.currentView && !forbiddenRestoreViews.has(session.currentView)
+      ? session.currentView
+      : 'POS';
+    setCurrentUser(restoredUser);
+    if (currentView === 'LOGIN') {
+      setCurrentView(restoreView);
+    }
+  }, [currentUser, currentView, isDataLoaded, users]);
+
   const [roles, setRoles] = useState<RoleDefinition[]>(DEFAULT_ROLES);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -2020,6 +3005,120 @@ const AppContent: React.FC = () => {
   const [viewData, setViewData] = useState<any>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [activeCartDraftRestorePrompt, setActiveCartDraftRestorePrompt] = useState<ActiveCartDraft | null>(null);
+  const safeExitSnapshotRef = useRef<SafeExitSnapshot>({
+    currentView,
+    cart: [],
+    parkedTickets: [],
+    cashMovements: [],
+    selectedCustomer: null,
+    activeTable: null,
+  });
+
+  useEffect(() => {
+    safeExitSnapshotRef.current = {
+      currentView,
+      cart,
+      parkedTickets,
+      cashMovements,
+      selectedCustomer,
+      activeTable,
+      terminalId: getCurrentTerminal()?.id,
+    };
+  }, [currentView, cart, parkedTickets, cashMovements, selectedCustomer, activeTable, getCurrentTerminal]);
+
+  useEffect(() => {
+    if (!isDataLoaded || currentView !== 'POS') return;
+    void persistActiveCartDraftSnapshot(safeExitSnapshotRef.current, 'cart_state_changed').catch((error) => {
+      console.warn('No se pudo persistir el borrador activo del carrito:', error);
+    });
+  }, [cart, selectedCustomer, activeTable, currentView, isDataLoaded]);
+
+  useEffect(() => {
+    if (!isDataLoaded || cart.length > 0 || activeCartDraftRestorePrompt) return;
+    let cancelled = false;
+
+    const loadDraft = async () => {
+      const localDraft = readActiveCartDraftFromLocalStorage();
+      if (localDraft) {
+        if (!cancelled) setActiveCartDraftRestorePrompt(localDraft);
+        return;
+      }
+
+      try {
+        const dbDraft = normalizeActiveCartDraft(await db.get('activeCartDraft' as any));
+        if (dbDraft && !cancelled) {
+          setActiveCartDraftRestorePrompt(dbDraft);
+        }
+      } catch (error) {
+        console.warn('No se pudo leer el borrador activo del carrito:', error);
+      }
+    };
+
+    void loadDraft();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCartDraftRestorePrompt, cart.length, isDataLoaded]);
+
+  useEffect(() => {
+    if (!isDataLoaded) return;
+
+    const flushNow = (reason: string) => {
+      void persistCriticalLocalStateSnapshot(safeExitSnapshotRef.current, {
+        reason,
+        parkActiveCart: false,
+      }).catch((error) => {
+        console.warn(`No se pudo persistir estado critico (${reason}):`, error);
+      });
+    };
+
+    const markBackground = (reason: string) => {
+      isAppInBackgroundRef.current = true;
+      appBackgroundSinceRef.current = Date.now();
+      if (inactivityTimerRef.current) {
+        window.clearTimeout(inactivityTimerRef.current);
+        inactivityTimerRef.current = null;
+      }
+      flushNow(reason);
+    };
+
+    const markForeground = () => {
+      isAppInBackgroundRef.current = false;
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        markBackground('visibility_hidden');
+      } else {
+        markForeground();
+      }
+    };
+    const handlePageHide = () => flushNow('pagehide');
+    const handleBeforeUnload = () => flushNow('beforeunload');
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    const appPlugin = (window as any).Capacitor?.Plugins?.App;
+    const pauseListener = appPlugin?.addListener?.('pause', () => markBackground('capacitor_pause'));
+    const resumeListener = appPlugin?.addListener?.('resume', () => markForeground());
+    const stateListener = appPlugin?.addListener?.('appStateChange', (state: { isActive?: boolean }) => {
+      if (state?.isActive === false) markBackground('capacitor_inactive');
+      if (state?.isActive === true) markForeground();
+    });
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      pauseListener?.remove?.();
+      resumeListener?.remove?.();
+      stateListener?.remove?.();
+    };
+  }, [isDataLoaded]);
+
   const [kioskRedeemedCoupon, setKioskRedeemedCoupon] = useState<RedeemedCouponRef | null>(null);
   const [kioskCouponBenefit, setKioskCouponBenefit] = useState<KioskCouponBenefit | null>(null);
   useEffect(() => {
@@ -2217,28 +3316,57 @@ const AppContent: React.FC = () => {
   }, [kioskCouponBenefit]);
 
   const normalizeTerminalId = (value?: string | null) => (value || '').trim().toLowerCase();
+  const getTerminalReferenceKeys = (terminalId: string) => {
+    const normalizedInput = normalizeTerminalId(terminalId);
+    const terminal = (config.terminals || []).find((candidate) => {
+      const refs = [
+        candidate.id,
+        candidate.config?.erpTerminalId,
+        candidate.config?.erpBinding?.terminalId,
+        candidate.config?.erpBinding?.terminalName,
+      ].map(normalizeTerminalId).filter(Boolean);
+      return refs.includes(normalizedInput);
+    });
+
+    return new Set(
+      [
+        terminalId,
+        terminal?.id,
+        terminal?.config?.erpTerminalId,
+        terminal?.config?.erpBinding?.terminalId,
+        terminal?.config?.erpBinding?.terminalName,
+      ]
+        .map(normalizeTerminalId)
+        .filter(Boolean)
+    );
+  };
+  const terminalReferenceMatches = (aliases: Set<string>, isDefaultTerminal: boolean, ...values: Array<string | null | undefined>) => {
+    const normalizedValues = values.map(normalizeTerminalId).filter(Boolean);
+    if (normalizedValues.length === 0) return isDefaultTerminal;
+    return normalizedValues.some(value => aliases.has(value));
+  };
   const isRestaurantVertical = (value?: string | null) => value === 'RESTAURANT' || value === 'RESTAURANTE';
   const isRestaurantTerminal = (terminal?: any) =>
     isRestaurantVertical(terminal?.config?.operational?.vertical_negocio) || config.vertical === 'RESTAURANT';
 
   const getLatestZCloseTimestamp = (terminalId: string) => {
-    const terminalKey = normalizeTerminalId(terminalId);
-    const isDefaultTerminal = terminalKey === 't1';
+    const terminalAliases = getTerminalReferenceKeys(terminalId);
+    const isDefaultTerminal = terminalAliases.has('t1');
 
     return zReports
-      .filter(r => normalizeTerminalId(r.terminalId) === terminalKey || (!r.terminalId && isDefaultTerminal))
+      .filter(r => terminalReferenceMatches(terminalAliases, isDefaultTerminal, r.terminalId, r.source_terminal_id))
       .map(r => new Date(r.closedAt).getTime())
       .filter((value) => Number.isFinite(value))
       .reduce((max, value) => value > max ? value : max, 0);
   };
 
   const getPendingTransactionsForTerminal = (terminalId: string) => {
-    const terminalKey = normalizeTerminalId(terminalId);
-    const isDefaultTerminal = terminalKey === 't1';
+    const terminalAliases = getTerminalReferenceKeys(terminalId);
+    const isDefaultTerminal = terminalAliases.has('t1');
     const latestCloseTs = getLatestZCloseTimestamp(terminalId);
 
     const pending = transactions.filter(t => {
-      const belongsToTerminal = normalizeTerminalId(t.terminalId) === terminalKey || (!t.terminalId && isDefaultTerminal);
+      const belongsToTerminal = terminalReferenceMatches(terminalAliases, isDefaultTerminal, t.terminalId, t.source_terminal_id);
       if (!belongsToTerminal) return false;
       if (t.zReportId) return false;
 
@@ -2254,12 +3382,12 @@ const AppContent: React.FC = () => {
   };
 
   const getPendingCashMovementsForTerminal = (terminalId: string) => {
-    const terminalKey = normalizeTerminalId(terminalId);
-    const isDefaultTerminal = terminalKey === 't1';
+    const terminalAliases = getTerminalReferenceKeys(terminalId);
+    const isDefaultTerminal = terminalAliases.has('t1');
     const latestCloseTs = getLatestZCloseTimestamp(terminalId);
 
     return cashMovements.filter(m => {
-      const belongsToTerminal = normalizeTerminalId(m.terminalId) === terminalKey || (!m.terminalId && isDefaultTerminal);
+      const belongsToTerminal = terminalReferenceMatches(terminalAliases, isDefaultTerminal, m.terminalId, (m as any).source_terminal_id);
       if (!belongsToTerminal) return false;
 
       const moveTime = new Date(m.timestamp).getTime();
@@ -2448,7 +3576,7 @@ const AppContent: React.FC = () => {
     return updated;
   }, [currentUser]);
 
-  useKioskMode(getCurrentDeviceRole() === DeviceRole.SELF_CHECKOUT);
+  useKioskMode(getCurrentDeviceRoleRaw() === DeviceRole.SELF_CHECKOUT);
 
   useEffect(() => {
     if (!isDataLoaded || isAdminMode) return;
@@ -2456,7 +3584,9 @@ const AppContent: React.FC = () => {
       return;
     }
 
-    const role = getCurrentDeviceRole();
+    const role = getCurrentDeviceRoleRaw();
+    if (!role) return;
+
     const roleDefaultView: Partial<Record<DeviceRole, ViewState>> = {
       [DeviceRole.SELF_CHECKOUT]: 'KIOSK_WELCOME',
       [DeviceRole.PRICE_CHECKER]: 'CHECKER_SCAN',
@@ -2782,13 +3912,13 @@ const AppContent: React.FC = () => {
         if (confirm('🚨 EMERGENCY RESET: This will unbind this terminal and clear local database config. Continue?')) {
           try {
             console.warn("🧺 EMERGENCY UNBIND TRIGGERED");
-            localStorage.removeItem('pos_device_id');
             localStorage.removeItem('pos_master_ip');
             localStorage.removeItem('CLIC_POS_MASTER_URL');
             localStorage.removeItem('pos_sync_status');
 
             // Wipe Local DB Config to avoid stale Slave/Master role mismatch
             await db.deleteDocument('config', 'config' as any);
+            await restorePersistentDeviceIdAfterDbReset();
 
             alert("Terminal Desvinculada. La aplicación se reiniciará.");
             window.location.reload();
@@ -2834,18 +3964,41 @@ const AppContent: React.FC = () => {
           currentConfig = normalizedBootConfig.config;
           await db.save('config', currentConfig);
         }
+        const tenantCompanyBootConfig = normalizeCompanyInfoFromTenantIdentity(currentConfig);
+        if (tenantCompanyBootConfig.changed && tenantCompanyBootConfig.config) {
+          currentConfig = tenantCompanyBootConfig.config;
+          await db.save('config', currentConfig);
+        }
 
         // 2. Gestión de Identidad de Dispositivo (early, used for safe config source selection)
-        let storedDeviceId = resolveLocalDeviceId();
-        if (!storedDeviceId) {
-          storedDeviceId = 'DEV-' + Math.random().toString(36).substring(2, 10).toUpperCase();
-        }
-        persistLocalDeviceId(storedDeviceId);
+        const storedDeviceId = await resolveOrCreatePersistentDeviceId();
         setDeviceId(storedDeviceId);
+        const persistedTerminalCredentials = await readTerminalCredentials();
+        if (
+          persistedTerminalCredentials.terminalId ||
+          persistedTerminalCredentials.deviceToken ||
+          persistedTerminalCredentials.syncToken
+        ) {
+          saveTerminalCredentialsSync({
+            ...persistedTerminalCredentials,
+            deviceId: persistedTerminalCredentials.deviceId || storedDeviceId,
+            tenantId: persistedTerminalCredentials.tenantId || persistedTerminalCredentials.erpTenantId || localStorage.getItem('clic_tenant_id') || null,
+          });
+          console.info('terminal_credentials_loaded_from_persistent_storage', {
+            terminalId: persistedTerminalCredentials.terminalId || null,
+            deviceId: persistedTerminalCredentials.deviceId || storedDeviceId,
+            deviceTokenPresent: Boolean(persistedTerminalCredentials.deviceToken),
+            syncTokenPresent: Boolean(persistedTerminalCredentials.syncToken),
+          });
+        }
+        const restoredPersistentOperationalIdentity = restorePersistentOperationalIdentity(
+          persistedTerminalCredentials as Record<string, any>,
+          storedDeviceId
+        );
 
         const persistedTenantId = (localStorage.getItem('clic_tenant_id') || '').trim();
         const persistedTenantEmail = (localStorage.getItem('clic_tenant_email') || '').trim().toLowerCase();
-        const hasActivationIdentity = Boolean(persistedTenantId && persistedTenantEmail);
+        const hasActivationIdentity = Boolean(persistedTenantId && persistedTenantEmail) || restoredPersistentOperationalIdentity;
         if (!hasActivationIdentity) {
           // En primera activacion, forzamos sesion cloud limpia para evitar auto-login heredado.
           clearTenantIdentity();
@@ -2869,7 +4022,7 @@ const AppContent: React.FC = () => {
         // --- LICENSE / KILL-SWITCH VALIDATION ---
         const license = await checkLicenseStatus(persistedTenantId, storedDeviceId);
         if (!license.isValid) {
-          triggerLockdown(license.reason || 'Servicio Suspendido.');
+          await triggerLockdownAfterAuthorizationCheck(license.reason || 'Servicio Suspendido.', storedDeviceId);
           return;
         }
 
@@ -2883,9 +4036,110 @@ const AppContent: React.FC = () => {
         const setupMode = getStoredTerminalSetupMode();
         const terminalSetupPending = hasPendingTerminalSetup();
         const localTerminals = (!Array.isArray(currentConfig) && currentConfig?.terminals) ? currentConfig.terminals : [];
-        const localPairedTerminal = (localTerminals || []).find(
+        let localPairedTerminal = (localTerminals || []).find(
           (t: any) => t.config?.currentDeviceId === storedDeviceId
         );
+        const credentialTerminalId = String(
+          persistedTerminalCredentials.terminalId
+          || persistedTerminalCredentials.erpTerminalId
+          || localStorage.getItem('clic_erp_sync_terminal_id')
+          || localStorage.getItem('active_terminal_id')
+          || ''
+        ).trim();
+        const hasPersistedOperationalAuth = Boolean(
+          credentialTerminalId
+          && (persistedTerminalCredentials.deviceToken || persistedTerminalCredentials.syncToken || localStorage.getItem('CLIC_POS_DEVICE_TOKEN') || localStorage.getItem('clic_erp_sync_token'))
+        );
+        if (!localPairedTerminal && hasPersistedOperationalAuth && credentialTerminalId && !Array.isArray(currentConfig)) {
+          try {
+            const storedInitialConfig = localStorage.getItem('initial_terminal_config');
+            const parsedInitialConfig = storedInitialConfig ? JSON.parse(storedInitialConfig) : null;
+            const initialTerminals = Array.isArray(parsedInitialConfig?.terminals) ? parsedInitialConfig.terminals : [];
+            const matchedInitialTerminal = initialTerminals.find((terminal: any) => {
+              const refs = [
+                terminal?.id,
+                terminal?.config?.erpTerminalId,
+                terminal?.config?.erpBinding?.terminalId,
+                terminal?.config?.terminalId,
+                terminal?.config?.localTerminalId,
+              ].map((value) => String(value || '').trim()).filter(Boolean);
+              return terminal?.config?.currentDeviceId === storedDeviceId || refs.includes(credentialTerminalId);
+            });
+
+            if (matchedInitialTerminal) {
+              const patchedInitialTerminal = {
+                ...matchedInitialTerminal,
+                config: {
+                  ...(matchedInitialTerminal.config || {}),
+                  currentDeviceId: storedDeviceId,
+                  erpBinding: {
+                    ...(matchedInitialTerminal.config?.erpBinding || {}),
+                    terminalId: matchedInitialTerminal.config?.erpBinding?.terminalId || credentialTerminalId,
+                    deviceId: storedDeviceId,
+                  },
+                },
+              };
+              currentConfig = {
+                ...currentConfig,
+                ...parsedInitialConfig,
+                terminals: dedupeConfiguredTerminals([
+                  ...((currentConfig as any).terminals || []),
+                  ...initialTerminals.filter((terminal: any) => terminal !== matchedInitialTerminal),
+                  patchedInitialTerminal,
+                ]),
+              };
+              localPairedTerminal = (currentConfig.terminals || []).find(
+                (terminal: any) => terminal.config?.currentDeviceId === storedDeviceId
+              );
+              await db.save('config', currentConfig);
+              setConfig((prev) => ({ ...prev, ...currentConfig }));
+              console.info('terminal_binding_restored_from_initial_terminal_config', {
+                terminalId: localPairedTerminal?.id || credentialTerminalId,
+                deviceId: storedDeviceId,
+              });
+            }
+          } catch (error) {
+            console.warn('No se pudo restaurar terminal desde initial_terminal_config durante boot:', error);
+          }
+        }
+        if (!localPairedTerminal && hasPersistedOperationalAuth && !Array.isArray(currentConfig)) {
+          const matchedCredentialTerminal = (localTerminals || []).find((terminal: any) => {
+            const refs = [
+              terminal?.id,
+              terminal?.config?.erpTerminalId,
+              terminal?.config?.erpBinding?.terminalId,
+              terminal?.config?.terminalId,
+              terminal?.config?.localTerminalId,
+            ].map((value) => String(value || '').trim()).filter(Boolean);
+            return refs.includes(credentialTerminalId);
+          });
+          if (matchedCredentialTerminal) {
+            currentConfig = {
+              ...currentConfig,
+              terminals: (localTerminals || []).map((terminal: any) => {
+                if (terminal !== matchedCredentialTerminal) return terminal;
+                return {
+                  ...terminal,
+                  config: {
+                    ...(terminal.config || {}),
+                    currentDeviceId: storedDeviceId,
+                    erpBinding: {
+                      ...(terminal.config?.erpBinding || {}),
+                      terminalId: terminal.config?.erpBinding?.terminalId || credentialTerminalId,
+                      deviceId: storedDeviceId,
+                    },
+                  },
+                };
+              }),
+            };
+            localPairedTerminal = (currentConfig.terminals || []).find((terminal: any) => terminal.config?.currentDeviceId === storedDeviceId);
+            await db.save('config', currentConfig);
+            console.info('terminal_binding_restored_from_persistent_credentials', {
+              terminalId: localPairedTerminal?.id || credentialTerminalId,
+              deviceId: storedDeviceId,
+            });
+          }
+        }
         const isVisorMode = new URLSearchParams(window.location.search).get('view') === 'VISOR';
         const hasStartupTransactions = Array.isArray(data.transactions) && data.transactions.length > 0;
         const shouldResumeSetupWizard =
@@ -3133,12 +4387,22 @@ const AppContent: React.FC = () => {
           setTransactions(data.transactions || []);
           setProducts(data.products || []);
           setWarehouses(data.warehouses || []);
-          setCashMovements(data.cashMovements || []);
+          const mirroredCashMovements = readArrayMirrorFromLocalStorage<CashMovement>(CASH_MOVEMENTS_STORAGE_KEY);
+          const restoredCashMovements = mergeById(Array.isArray(data.cashMovements) ? data.cashMovements : [], mirroredCashMovements);
+          setCashMovements(restoredCashMovements);
+          if (restoredCashMovements.length > (Array.isArray(data.cashMovements) ? data.cashMovements.length : 0)) {
+            void db.save('cashMovements', restoredCashMovements).catch((error) => console.warn('No se pudo restaurar movimientos de caja desde espejo local:', error));
+          }
           setZReports(data.zReports || []);
           setXReports(Array.isArray(data.xReports) ? data.xReports : []);
           setPurchaseOrders(data.purchaseOrders || []);
           setSuppliers(data.suppliers || []);
-          setParkedTickets(Array.isArray(data.parkedTickets) ? data.parkedTickets : []);
+          const mirroredParkedTickets = readArrayMirrorFromLocalStorage<ParkedTicket>(PARKED_TICKETS_STORAGE_KEY);
+          const restoredParkedTickets = mergeById(Array.isArray(data.parkedTickets) ? data.parkedTickets : [], mirroredParkedTickets);
+          setParkedTickets(restoredParkedTickets);
+          if (restoredParkedTickets.length > (Array.isArray(data.parkedTickets) ? data.parkedTickets.length : 0)) {
+            void db.save('parkedTickets', restoredParkedTickets).catch((error) => console.warn('No se pudo restaurar tickets en espera desde espejo local:', error));
+          }
           setTransfers(data.transfers || []);
           setInternalSequences(data.internalSequences || []);
           setReceptions(data.receptions || []);
@@ -3164,9 +4428,48 @@ const AppContent: React.FC = () => {
 
           // 3. Verificación de Vinculación - USE finalConfig (Master prioritized)
           const terminals = finalConfig.terminals || [];
-          const pairedTerminal = terminals.find(
+          let pairedTerminal = terminals.find(
             (t: any) => t.config?.currentDeviceId === storedDeviceId
           );
+          if (!pairedTerminal && hasPersistedOperationalAuth && credentialTerminalId) {
+            const matchedCredentialTerminal = terminals.find((terminal: any) => {
+              const refs = [
+                terminal?.id,
+                terminal?.config?.erpTerminalId,
+                terminal?.config?.erpBinding?.terminalId,
+                terminal?.config?.terminalId,
+                terminal?.config?.localTerminalId,
+              ].map((value) => String(value || '').trim()).filter(Boolean);
+              return refs.includes(credentialTerminalId);
+            });
+            if (matchedCredentialTerminal) {
+              finalConfig = {
+                ...finalConfig,
+                terminals: terminals.map((terminal: any) => {
+                  if (terminal !== matchedCredentialTerminal) return terminal;
+                  return {
+                    ...terminal,
+                    config: {
+                      ...(terminal.config || {}),
+                      currentDeviceId: storedDeviceId,
+                      erpBinding: {
+                        ...(terminal.config?.erpBinding || {}),
+                        terminalId: terminal.config?.erpBinding?.terminalId || credentialTerminalId,
+                        deviceId: storedDeviceId,
+                      },
+                    },
+                  };
+                }),
+              };
+              await db.save('config', finalConfig);
+              pairedTerminal = (finalConfig.terminals || []).find((terminal: any) => terminal.config?.currentDeviceId === storedDeviceId);
+              setConfig((prev) => ({ ...prev, ...finalConfig }));
+              console.info('terminal_binding_restored_from_persistent_credentials', {
+                terminalId: pairedTerminal?.id || credentialTerminalId,
+                deviceId: storedDeviceId,
+              });
+            }
+          }
           const terminalBindingStatus = localStorage.getItem(TERMINAL_BINDING_STATUS_KEY);
           const isErpSetupMode =
             setupMode === 'SERVER_ERP'
@@ -3273,18 +4576,23 @@ const AppContent: React.FC = () => {
                 ? matchedAllowedCategoriesCount / terminalAllowedCategories.length
                 : 1;
 
-              const hasTinyCatalog = localCount > 0 && localCount <= 5;
+              const hasEmptyCatalog = localCount === 0;
               const hasCategoryMismatch =
                 terminalAllowedCategories.length >= 2 &&
                 (matchedAllowedCategoriesCount === 0 || allowedCoverageRatio < 0.5);
 
-              if (hasTinyCatalog || hasCategoryMismatch) {
+              if (hasEmptyCatalog) {
                 console.warn(
-                  `⚠️ Catalog drift detected on ${effectivePairedTerminal.id}. ` +
+                  `⚠️ Empty catalog detected on ${effectivePairedTerminal.id}. ` +
                   `localProducts=${localCount}, sellableCategories=${sellableCategories.size}, allowedCategories=${terminalAllowedCategories.length}, matchedAllowed=${matchedAllowedCategoriesCount}. ` +
                   `Running forcePullAll...`
                 );
                 await syncManager.forcePullAll();
+              } else if (hasCategoryMismatch) {
+                console.warn(
+                  `⚠️ Catalog category drift detected on ${effectivePairedTerminal.id}; keeping incremental sync. ` +
+                  `localProducts=${localCount}, sellableCategories=${sellableCategories.size}, allowedCategories=${terminalAllowedCategories.length}, matchedAllowed=${matchedAllowedCategoriesCount}.`
+                );
               }
             } catch (driftCheckError) {
               console.error('❌ Catalog auto-heal check failed:', driftCheckError);
@@ -3536,9 +4844,13 @@ const AppContent: React.FC = () => {
         setProductStocks(Array.isArray(freshStocks) ? freshStocks : []);
       }
 
-      if (pendingCatalogRefresh.products || pendingCatalogRefresh.productStocks) {
+      if (pendingCatalogRefresh.products) {
         const freshProducts = await db.get('products') as Product[];
-        setProducts(Array.isArray(freshProducts) ? freshProducts : []);
+        if (Array.isArray(freshProducts) && freshProducts.length > 0) {
+          setProducts(freshProducts);
+        } else {
+          console.warn('Catalog refresh skipped: products collection was empty or unavailable; preserving current POS catalog.');
+        }
 
         const freshWarehouses = await db.get('warehouses') as Warehouse[];
         if (Array.isArray(freshWarehouses) && freshWarehouses.length > 0) {
@@ -3562,6 +4874,13 @@ const AppContent: React.FC = () => {
             matching,
           });
           void posCatalogDebugLogDbRows('App catalog refresh after setProducts');
+        }
+      }
+
+      if (pendingCatalogRefresh.products || pendingCatalogRefresh.productStocks) {
+        const freshWarehouses = await db.get('warehouses') as Warehouse[];
+        if (Array.isArray(freshWarehouses) && freshWarehouses.length > 0) {
+          setWarehouses(freshWarehouses);
         }
       }
 
@@ -3593,7 +4912,11 @@ const AppContent: React.FC = () => {
 
       switch (collection) {
         case 'products':
-          setProducts(freshData as Product[]);
+          if (Array.isArray(freshData) && freshData.length > 0) {
+            setProducts(freshData as Product[]);
+          } else {
+            console.warn('productsUpdated skipped: products collection was empty or unavailable; preserving current POS catalog.');
+          }
           {
             const matching = Array.isArray(freshData)
               ? (freshData as Record<string, unknown>[])
@@ -3618,7 +4941,16 @@ const AppContent: React.FC = () => {
         case 'transfers': setTransfers(Array.isArray(freshData) ? freshData as StockTransfer[] : []); break;
         case 'internalSequences': /* No state for this, used directly from DB */ break;
         case 'transactions': setTransactions(Array.isArray(freshData) ? freshData as Transaction[] : []); break;
-        case 'cashMovements': setCashMovements(freshData as CashMovement[]); break;
+        case 'cashMovements': {
+          const freshCashMovements = Array.isArray(freshData) ? freshData as CashMovement[] : [];
+          const mirroredCashMovements = readArrayMirrorFromLocalStorage<CashMovement>(CASH_MOVEMENTS_STORAGE_KEY);
+          const restoredCashMovements = mergeById(freshCashMovements, mirroredCashMovements);
+          setCashMovements(restoredCashMovements);
+          if (restoredCashMovements.length > freshCashMovements.length) {
+            void db.save('cashMovements', restoredCashMovements).catch((error) => console.warn('No se pudo rehidratar movimientos de caja tras sync event:', error));
+          }
+          break;
+        }
         case 'zReports': setZReports(freshData as ZReport[]); break;
         case 'xReports': setXReports(Array.isArray(freshData) ? freshData as XReport[] : []); break;
         case 'warehouses': setWarehouses(Array.isArray(freshData) ? freshData as Warehouse[] : []); break;
@@ -3740,7 +5072,11 @@ const AppContent: React.FC = () => {
 
   // --- GLOBAL KEYBOARD SHORTCUT FOR ADMIN ACCESS ---
   useEffect(() => {
-    const handleGlobalKeyboard = (e: KeyboardEvent) => {
+   const handleGlobalKeyboard = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+      }
+
       // Ctrl+Alt+A for admin escape hatch (works in kiosk modes)
       if (e.ctrlKey && e.altKey && e.key?.toLowerCase() === 'a') {
         e.preventDefault();
@@ -3749,9 +5085,9 @@ const AppContent: React.FC = () => {
         console.log('🔓 GLOBAL Admin shortcut triggered (Ctrl+Alt+A)');
 
         // Check if we're in a kiosk mode
-        const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
-        const role = currentTerminal?.config.deviceRole?.role;
 
+        const role = getCurrentDeviceRoleRaw();
+        if (!role) return;
         if (role === DeviceRole.SELF_CHECKOUT ||
           role === DeviceRole.PRICE_CHECKER ||
           role === DeviceRole.KITCHEN_DISPLAY) {
@@ -3869,6 +5205,13 @@ const AppContent: React.FC = () => {
         (setupResult as any)?.initialConfigData,
         setupRegisterAuth,
       );
+      const effectiveDeviceToken =
+        normalizedDeviceToken
+        || setupRegisterAuth.deviceToken
+        || setupRegisterAuth.syncToken
+        || setupRegisterAuth.terminalToken
+        || setupRegisterAuth.activationToken
+        || '';
       if (setupRegisterAuth.syncToken) {
         localStorage.setItem('clic_erp_sync_token', setupRegisterAuth.syncToken);
         localStorage.setItem('clic_erp_sync_token_updated_at', new Date().toISOString());
@@ -3876,13 +5219,17 @@ const AppContent: React.FC = () => {
           localStorage.setItem('clic_erp_sync_token_expires_at', setupRegisterAuth.tokenExpiresAt);
         }
       }
-      if (normalizedDeviceToken) {
-        persistSyncDeviceToken(normalizedDeviceToken, 'ERP_REGISTER', setupRegisterAuth.tokenExpiresAt);
+      if (effectiveDeviceToken) {
+        persistSyncDeviceToken(effectiveDeviceToken, normalizedDeviceToken ? 'ERP_REGISTER' : 'ERP_REGISTER_FALLBACK', setupRegisterAuth.tokenExpiresAt);
         saveTerminalCredentialsSync({
           terminalId: setupResult?.erpTerminalId || terminalId,
+          erpTerminalId: setupResult?.erpTerminalId || terminalId,
           deviceId,
-          deviceToken: normalizedDeviceToken,
-          deviceTokenSource: 'ERP_REGISTER',
+          tenantId: localStorage.getItem('clic_tenant_id') || localStorage.getItem('active_tenant_id') || null,
+          erpTenantId: localStorage.getItem('clic_tenant_id') || localStorage.getItem('active_tenant_id') || null,
+          cloudAdminTenantId: localStorage.getItem('cloud_admin_tenant_id') || localStorage.getItem('clic_tenant_id') || null,
+          deviceToken: effectiveDeviceToken,
+          deviceTokenSource: normalizedDeviceToken ? 'ERP_REGISTER' : 'ERP_REGISTER_FALLBACK',
           deviceTokenUpdatedAt: new Date().toISOString(),
           deviceTokenExpiresAt: setupRegisterAuth.tokenExpiresAt || null,
           ...(setupRegisterAuth.syncToken ? {
@@ -3891,8 +5238,13 @@ const AppContent: React.FC = () => {
             syncTokenExpiresAt: setupRegisterAuth.tokenExpiresAt || null,
           } : {}),
         });
+        if (!normalizedDeviceToken) {
+          setSyncAuthDiagnosticStatus('RECOVERED_WITH_REGISTER_FALLBACK');
+          clearSyncErrorDiagnostic();
+          setSyncDiagnostic(null);
+        }
       }
-      if (!normalizedDeviceToken) {
+      if (!effectiveDeviceToken) {
         const missingTokenError = new Error('DEVICE_TOKEN_MISSING_FROM_REGISTER: El ERP vinculó la terminal pero no devolvió deviceToken.');
         setTerminalBindingDiagnosticStatus('BOUND');
         setCatalogDiagnosticStatus('AUTH_ERROR');
@@ -3917,10 +5269,10 @@ const AppContent: React.FC = () => {
         });
         throw missingTokenError;
       }
-      const authMetadata = normalizedDeviceToken || setupRegisterAuth.syncToken
+      const authMetadata = effectiveDeviceToken
         ? {
             ...(setupResult.boundConfig?.metadata?.syncAuth || {}),
-            deviceToken: normalizedDeviceToken,
+            deviceToken: effectiveDeviceToken,
             terminalToken: setupRegisterAuth.terminalToken,
             activationToken: setupRegisterAuth.activationToken,
             syncToken: setupRegisterAuth.syncToken,
@@ -3934,7 +5286,7 @@ const AppContent: React.FC = () => {
         metadata: {
           ...(setupResult.boundConfig.metadata || {}),
           ...(authMetadata ? { syncAuth: authMetadata } : {}),
-          ...(normalizedDeviceToken ? { deviceToken: normalizedDeviceToken } : {}),
+          ...(effectiveDeviceToken ? { deviceToken: effectiveDeviceToken } : {}),
           ...(setupRegisterAuth.syncToken ? { syncToken: setupRegisterAuth.syncToken } : {}),
           ...(setupRegisterAuth.tokenExpiresAt ? { tokenExpiresAt: setupRegisterAuth.tokenExpiresAt } : {}),
         },
@@ -3967,6 +5319,29 @@ const AppContent: React.FC = () => {
 
       setConfig(updatedConfig);
       await db.save('config', updatedConfig);
+      const setupRooms = Array.isArray((setupResult as any)?.rooms)
+        ? (setupResult as any).rooms
+        : Array.isArray((updatedConfig as any).rooms)
+          ? (updatedConfig as any).rooms
+          : Array.isArray((updatedConfig as any).initialRooms)
+            ? (updatedConfig as any).initialRooms
+            : [];
+      const setupTables = Array.isArray((setupResult as any)?.tables)
+        ? (setupResult as any).tables
+        : Array.isArray((updatedConfig as any).tables)
+          ? (updatedConfig as any).tables
+          : Array.isArray((updatedConfig as any).initialTables)
+            ? (updatedConfig as any).initialTables
+            : [];
+      if (setupRooms.length > 0) {
+        await db.save('rooms', setupRooms);
+        setRooms(setupRooms);
+        setActiveRoomId(setupRooms[0]?.id || setupRooms[0]?.room_id || setupRooms[0]?.code || null);
+      }
+      if (setupTables.length > 0) {
+        await db.save('tables', setupTables);
+        setTables(setupTables);
+      }
       setupResult.progress?.({
         stepId: 'apply',
         message: 'Rehidratando series fiscales y documentos operativos...',
@@ -4026,7 +5401,7 @@ const AppContent: React.FC = () => {
         resolvedSyncPermissions?.canPushOperations,
         resolvedSyncPermissions?.pushOperations
       ) ?? (
-        isErpDirectBinding && Boolean(normalizedDeviceToken)
+        isErpDirectBinding && Boolean(effectiveDeviceToken)
           ? true
           : false
       );
@@ -4191,7 +5566,12 @@ const AppContent: React.FC = () => {
           const freshData = await db.init();
           setTransactions(freshData.transactions);
           setProducts(freshData.products);
-          setCashMovements(freshData.cashMovements);
+          const mirroredCashMovements = readArrayMirrorFromLocalStorage<CashMovement>(CASH_MOVEMENTS_STORAGE_KEY);
+          const restoredCashMovements = mergeById(Array.isArray(freshData.cashMovements) ? freshData.cashMovements : [], mirroredCashMovements);
+          setCashMovements(restoredCashMovements);
+          if (restoredCashMovements.length > (Array.isArray(freshData.cashMovements) ? freshData.cashMovements.length : 0)) {
+            await db.save('cashMovements', restoredCashMovements);
+          }
           setZReports(freshData.zReports || []);
           setXReports(Array.isArray(freshData.xReports) ? freshData.xReports : []);
         } catch (error) {
@@ -4297,10 +5677,17 @@ const AppContent: React.FC = () => {
             : {}),
         },
       };
-      if (preservedSyncAuth || updatedConfig.metadata?.deviceToken || updatedConfig.metadata?.syncToken) {
-        await db.save('config', hydratedConfig);
+      const tenantCompanyHydratedConfig = normalizeCompanyInfoFromTenantIdentity(hydratedConfig);
+      const resolvedHydratedConfig = tenantCompanyHydratedConfig.config as BusinessConfig;
+      if (
+        tenantCompanyHydratedConfig.changed
+        || preservedSyncAuth
+        || updatedConfig.metadata?.deviceToken
+        || updatedConfig.metadata?.syncToken
+      ) {
+        await db.save('config', resolvedHydratedConfig);
       }
-      setConfig(hydratedConfig);
+      setConfig(resolvedHydratedConfig);
       if (Array.isArray(freshData.users)) setUsers(freshData.users);
       if (Array.isArray(freshData.roles)) setRoles(freshData.roles);
       if (Array.isArray(freshData.customers)) setCustomers(freshData.customers);
@@ -4311,12 +5698,26 @@ const AppContent: React.FC = () => {
         { setProducts, setWarehouses, setProductStocks },
         'terminal-binding',
       );
-      if (Array.isArray(freshData.cashMovements)) setCashMovements(freshData.cashMovements);
+      if (Array.isArray(freshData.cashMovements)) {
+        const mirroredCashMovements = readArrayMirrorFromLocalStorage<CashMovement>(CASH_MOVEMENTS_STORAGE_KEY);
+        const restoredCashMovements = mergeById(freshData.cashMovements, mirroredCashMovements);
+        setCashMovements(restoredCashMovements);
+        if (restoredCashMovements.length > freshData.cashMovements.length) {
+          await db.save('cashMovements', restoredCashMovements);
+        }
+      }
       if (Array.isArray(freshData.zReports)) setZReports(freshData.zReports);
       if (Array.isArray(freshData.xReports)) setXReports(freshData.xReports);
       if (Array.isArray(freshData.purchaseOrders)) setPurchaseOrders(freshData.purchaseOrders);
       if (Array.isArray(freshData.suppliers)) setSuppliers(freshData.suppliers);
-      if (Array.isArray(freshData.parkedTickets)) setParkedTickets(freshData.parkedTickets);
+      if (Array.isArray(freshData.parkedTickets)) {
+        const mirroredParkedTickets = readArrayMirrorFromLocalStorage<ParkedTicket>(PARKED_TICKETS_STORAGE_KEY);
+        const restoredParkedTickets = mergeById(freshData.parkedTickets, mirroredParkedTickets);
+        setParkedTickets(restoredParkedTickets);
+        if (restoredParkedTickets.length > freshData.parkedTickets.length) {
+          await db.save('parkedTickets', restoredParkedTickets);
+        }
+      }
       if (Array.isArray(freshData.transfers)) setTransfers(freshData.transfers);
       if (Array.isArray(freshData.internalSequences)) setInternalSequences(freshData.internalSequences);
       if (Array.isArray(freshData.receptions)) setReceptions(freshData.receptions);
@@ -4329,6 +5730,7 @@ const AppContent: React.FC = () => {
       localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
       localStorage.setItem('active_terminal_id', terminalId);
       localStorage.setItem('CLIC_POS_TERMINAL_ID', terminalId);
+      localStorage.setItem('clic_last_authorized_erp_terminal_id', resolvedErpTerminalId);
       persistInitialTerminalConfig(hydratedConfig);
       if (resolvedErpBaseUrl) {
         persistSetupErpBaseUrls(resolvedErpBaseUrl);
@@ -4354,6 +5756,7 @@ const AppContent: React.FC = () => {
       );
       clearSyncErrorDiagnostic();
       setSyncDiagnostic(null);
+      markDeviceReauthorized(deviceId);
       if (isErpDirectBinding) {
         console.log('[SYNC_ROUTER] POS_ERP binding complete: skipping POS_CLOUD_STAGING snapshot and PUSH_MASTERS.');
       } else {
@@ -4425,7 +5828,7 @@ const AppContent: React.FC = () => {
         ...config,
         ...finalConfig
       };
-      const effectiveDeviceId = deviceId || localStorage.getItem('pos_device_id') || '';
+      const effectiveDeviceId = deviceId || await restorePersistentDeviceIdAfterDbReset();
       const seedMode = nextConfig.metadata?.seedMode;
       const productSeedPackId = nextConfig.metadata?.productSeedPackId;
       if (seedMode === 'BLANK') {
@@ -4498,18 +5901,20 @@ const AppContent: React.FC = () => {
 
   const handleConfigUpdate = async (newConfig: BusinessConfig) => {
     console.log("handleConfigUpdate called", newConfig); // Debug log
-    setConfig(newConfig);
-    await db.save('config', newConfig);
+    const tenantCompanyConfig = normalizeCompanyInfoFromTenantIdentity(newConfig);
+    const configToSave = tenantCompanyConfig.config as BusinessConfig;
+    setConfig(configToSave);
+    await db.save('config', configToSave);
 
     // Initial Startup Logic for Floor Plan
-    const activeTerminal = (newConfig.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
+    const activeTerminal = (configToSave.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
     const tableBehavior = activeTerminal?.config?.tables?.behavior;
     if (tableBehavior === 'SIEMPRE_MOSTRAR' && currentView === 'LOGIN') {
       // Only valid if we are transitioning from login, but handled in renderView or logic
     }
 
     // Re-initialize services with new config
-    const currentTerminal = (newConfig.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
+    const currentTerminal = (configToSave.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
     if (currentTerminal) {
       console.log(`🔄 Re-initializing services for terminal ${currentTerminal.id} after config update...`);
       permissionService.initialize(newConfig, currentTerminal.id);
@@ -4539,9 +5944,28 @@ const AppContent: React.FC = () => {
 
   // --- PERSISTENCE HANDLER FOR PARKED TICKETS ---
   const handleUpdateParkedTickets = async (tickets: ParkedTicket[]) => {
-    setParkedTickets(tickets);
-    // Persist to DB immediately
-    await db.save('parkedTickets', tickets); // Uses 'settings' table logic or collection
+    const validTickets = Array.isArray(tickets) ? tickets : [];
+    writeCriticalCollectionsMirror(validTickets, cashMovements);
+    setParkedTickets(validTickets);
+    const nextTicketIds = new Set(
+      validTickets
+        .map(ticket => String(ticket?.id || '').trim())
+        .filter(Boolean)
+    );
+    const persistedTickets = await db.get('parkedTickets').catch(() => []) as ParkedTicket[] | null;
+    const staleTickets = [
+      ...(Array.isArray(parkedTickets) ? parkedTickets : []),
+      ...(Array.isArray(persistedTickets) ? persistedTickets : []),
+    ].filter(ticket => {
+      const ticketId = String(ticket?.id || '').trim();
+      return ticketId && !nextTicketIds.has(ticketId);
+    });
+    // Persist to DB immediately and remove tickets that were closed/cleared.
+    await Promise.allSettled([
+      ...staleTickets.map(ticket => db.deleteDocument('parkedTickets' as any, String(ticket.id))),
+      ...validTickets.map(ticket => db.saveDocument('parkedTickets' as any, ticket as any)),
+    ]);
+    await db.save('parkedTickets', validTickets); // Uses 'settings' table logic or collection
   };
 
   const handleParkedOrderSplitFromMap = useCallback(
@@ -5384,7 +6808,11 @@ const AppContent: React.FC = () => {
 
     // Refresh products to reflect changes made by recordInventoryMovement
     const refreshedDb = await db.init();
-    setProducts(refreshedDb.products || []);
+    if (Array.isArray(refreshedDb.products) && refreshedDb.products.length > 0) {
+      setProducts(refreshedDb.products);
+    } else {
+      console.warn("Transaction completion refresh skipped empty products; preserving current POS catalog.");
+    }
 
     // --- CRITICAL: Increment Document Series Sequence in Internal Sequences ---
     // This is the global source of truth for sequences, synced with Settings.
@@ -5443,18 +6871,54 @@ const AppContent: React.FC = () => {
   };
 
   const handleRegisterMovement = async (type: 'IN' | 'OUT', amount: number, reason: string) => {
+    const terminalId = getCurrentTerminal()?.id || 'T1';
+    const baseCurrencyCode = (config.currencies || []).find(c => c.isBase)?.code || (config.currencies || [])[0]?.code || 'DOP';
+    const normalizedAmount = Number(amount || 0);
+
+    if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+      alert('El monto debe ser mayor que cero.');
+      return;
+    }
+
+    if (type === 'OUT') {
+      const terminalTransactions = getPendingTransactionsForTerminal(terminalId).filter(belongsToCurrentCashier);
+      const terminalCashMovements = getPendingCashMovementsForTerminal(terminalId).filter(belongsToCurrentCashier);
+      const cashSales = terminalTransactions
+        .flatMap(t => t?.payments || [])
+        .filter((payment: any) => String(payment?.method || '').toUpperCase() === 'CASH')
+        .reduce((sum, payment: any) => sum + Number(payment?.amount || 0), 0);
+      const cashIn = terminalCashMovements
+        .filter(movement => movement.type === 'IN')
+        .reduce((sum, movement) => sum + Number(movement.amount || 0), 0);
+      const cashOut = terminalCashMovements
+        .filter(movement => movement.type === 'OUT')
+        .reduce((sum, movement) => sum + Number(movement.amount || 0), 0);
+      const availableCash = Math.max(0, cashSales + cashIn - cashOut);
+
+      if (normalizedAmount > availableCash + 0.009) {
+        alert(`No hay efectivo suficiente en caja para esta salida.\n\nDisponible: ${baseCurrencyCode} ${availableCash.toFixed(2)}\nSolicitado: ${baseCurrencyCode} ${normalizedAmount.toFixed(2)}`);
+        return;
+      }
+    }
+
     const move: CashMovement = {
       id: `CM-${Date.now()}`,
-      type, amount, reason,
+      type,
+      amount: normalizedAmount,
+      reason,
       timestamp: new Date().toISOString(),
       userId: currentUser?.id || 'sys',
       userName: currentUser?.name || 'System',
-      terminalId: getCurrentTerminal()?.id || 'T1',
+      terminalId,
+      source_terminal_id: terminalId,
+      currencyCode: baseCurrencyCode,
       syncStatus: 'PENDING' as const
     };
     const updated = [...cashMovements, move];
+    writeCriticalCollectionsMirror(parkedTickets, updated);
     setCashMovements(updated);
     await db.saveDocument('cashMovements', move);
+    await db.save('cashMovements', updated);
 
     // Trigger background sync
     backgroundSyncManager.triggerSync().catch(console.error);
@@ -5657,9 +7121,10 @@ const AppContent: React.FC = () => {
 
     try {
       const terminalKey = normalizeTerminalId(terminalId);
-      const isDefaultTerminal = terminalKey === 't1';
-      const belongsToCurrentTerminal = (value?: string | null) =>
-        normalizeTerminalId(value) === terminalKey || (!value && isDefaultTerminal);
+      const terminalAliases = getTerminalReferenceKeys(terminalId);
+      const isDefaultTerminal = terminalAliases.has('t1') || terminalKey === 't1';
+      const belongsToCurrentTerminal = (...values: Array<string | null | undefined>) =>
+        terminalReferenceMatches(terminalAliases, isDefaultTerminal, ...values);
 
       const terminalTransactions = getPendingTransactionsForTerminal(terminalId).filter(belongsToCurrentCashier);
       const terminalCashMovements = getPendingCashMovementsForTerminal(terminalId).filter(belongsToCurrentCashier);
@@ -5837,6 +7302,21 @@ const AppContent: React.FC = () => {
     }
   };
 
+  const handlePrintXReport = async (report: XReport) => {
+    try {
+      const userRole = roles.find(r => r.id === (currentUser?.roleId || currentUser?.role));
+      const hiddenModules = userRole?.zReportConfig?.hiddenModules || [];
+      const printed = await ThermalPrinterService.printZReport(report, hiddenModules, config);
+      alert(printed
+        ? `Cierre X ${report.sequenceNumber} impreso.`
+        : `No se pudo imprimir el Cierre X ${report.sequenceNumber}. Verifica la impresora configurada.`
+      );
+    } catch (error: any) {
+      console.error('❌ X-Report print failed:', error);
+      alert(`No se pudo imprimir el Cierre X: ${error?.message || 'Error desconocido'}`);
+    }
+  };
+
   const handleZReport = async (cashCounted: number, notes: string, reportData?: any) => {
     // 1. Robust Terminal ID Discovery.
     // The Z modal already knows the active terminal; prefer it over rediscovering by deviceId
@@ -5862,9 +7342,10 @@ const AppContent: React.FC = () => {
 
       // 2. Identify pending operational data since the last Z of this terminal.
       const terminalKey = normalizeTerminalId(terminalId);
-      const isDefaultTerminal = terminalKey === 't1';
-      const belongsToCurrentTerminal = (value?: string | null) =>
-        normalizeTerminalId(value) === terminalKey || (!value && isDefaultTerminal);
+      const terminalAliases = getTerminalReferenceKeys(terminalId);
+      const isDefaultTerminal = terminalAliases.has('t1') || terminalKey === 't1';
+      const belongsToCurrentTerminal = (...values: Array<string | null | undefined>) =>
+        terminalReferenceMatches(terminalAliases, isDefaultTerminal, ...values);
 
       const pendingTransactions = getPendingTransactionsForTerminal(terminalId);
       const pendingCashMovements = getPendingCashMovementsForTerminal(terminalId);
@@ -5879,25 +7360,39 @@ const AppContent: React.FC = () => {
         ? new Set<string>(reportData.collectionIds.map((id: string) => String(id)))
         : null;
 
+      const replacementReportId = typeof reportData?.replaceReportId === 'string' ? reportData.replaceReportId.trim() : '';
+      const replacementArchivedTransactions = replacementReportId
+        ? (((await db.get('transactionHistory')) as Transaction[]) || []).filter(tx =>
+          tx.zReportId === replacementReportId ||
+          (tx as any).zReportSequence === reportData?.replaceSequenceNumber
+        )
+        : [];
+      const transactionSource = replacementArchivedTransactions.length > 0
+        ? [
+          ...transactions,
+          ...replacementArchivedTransactions.filter(archivedTx => !transactions.some(tx => tx.id === archivedTx.id))
+        ]
+        : transactions;
+
       const terminalTransactions = reportTransactionIds
-        ? transactions
+        ? transactionSource
           .filter(t => reportTransactionIds.has(t.id))
-          .filter(t => belongsToCurrentTerminal(t.terminalId))
-          .filter(t => !t.zReportId)
+          .filter(t => belongsToCurrentTerminal(t.terminalId, t.source_terminal_id))
+          .filter(t => !t.zReportId || t.zReportId === replacementReportId)
           .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
         : pendingTransactions;
 
       const terminalCashMovements = reportMovementIds
         ? cashMovements
           .filter(m => reportMovementIds.has(m.id))
-          .filter(m => belongsToCurrentTerminal(m.terminalId))
+          .filter(m => belongsToCurrentTerminal(m.terminalId, (m as any).source_terminal_id))
         : pendingCashMovements;
 
       const terminalCollections = reportCollectionIds
         ? collections
           .filter(c => reportCollectionIds.has(c.id))
-          .filter(c => belongsToCurrentTerminal(c.terminalId))
-        : collections.filter(c => belongsToCurrentTerminal(c.terminalId) && !c.zReportId);
+          .filter(c => belongsToCurrentTerminal(c.terminalId, (c as any).source_terminal_id))
+        : collections.filter(c => belongsToCurrentTerminal(c.terminalId, (c as any).source_terminal_id) && !c.zReportId);
 
       console.log(`🔒 Shift Segregation: Found ${terminalTransactions.length} txns and ${terminalCashMovements.length} cash movements for ${terminalId}`);
 
@@ -5929,6 +7424,15 @@ const AppContent: React.FC = () => {
       const orderedTicketRefs = terminalTransactions
         .map((transaction) => transaction.displayId || transaction.id)
         .filter(Boolean);
+      const cashMovementDetails = terminalCashMovements.map(movement => ({
+        id: movement.id,
+        type: movement.type,
+        amount: Number(movement.amount || 0),
+        reason: movement.reason || 'Movimiento General',
+        timestamp: movement.timestamp,
+        userName: movement.userName,
+        currencyCode: movement.currencyCode,
+      }));
       const firstTicketId = orderedTicketRefs[0] || null;
       const lastTicketId = orderedTicketRefs[orderedTicketRefs.length - 1] || null;
       const openedAtCandidates = [
@@ -5941,7 +7445,7 @@ const AppContent: React.FC = () => {
 
       // 4. Create and Save Z-Report
       let sequenceNumber = '';
-      let zReportId = `ZR-${Date.now()}`;
+      let zReportId = replacementReportId || `ZR-${Date.now()}`;
 
       let zReportSeriesId: string | undefined;
       let zReportSeriesNumber: number | undefined;
@@ -5961,7 +7465,9 @@ const AppContent: React.FC = () => {
         ? availableSeries.find(s => s.id === resolvedSeriesId)
         : undefined;
 
-      if (zReportSeries) {
+      if (replacementReportId && reportData?.replaceSequenceNumber) {
+        sequenceNumber = String(reportData.replaceSequenceNumber);
+      } else if (zReportSeries) {
         // Use the Series
         const prefix = zReportSeries.prefix || '';
         const num = Math.max(1, Number(zReportSeries.nextNumber) || 1);
@@ -6026,7 +7532,7 @@ const AppContent: React.FC = () => {
         sequenceNumber = `Z-${nextSeqNum}`;
       }
 
-      const newZReport: ZReport = {
+      const newZReport: ZReport & Record<string, any> = {
         id: zReportId,
         terminalId,
         sequenceNumber,
@@ -6037,7 +7543,7 @@ const AppContent: React.FC = () => {
         closedAt: new Date().toISOString(),
         closedByUserId: currentUser?.id || 'sys',
         closedByUserName: currentUser?.name || 'System',
-        baseCurrency: config.currencySymbol,
+        baseCurrency: ((config.currencies || []).find(c => c.isBase)?.code || (config.currencies || [])[0]?.code || 'DOP'),
         totalsByMethod,
         cashExpected: reportData?.expectedCashByCurrency || {},
         cashCounted: reportData?.cashCountedByCurrency || {},
@@ -6047,6 +7553,11 @@ const AppContent: React.FC = () => {
         cashSales: reportData?.cashSalesTotal || 0,
         cashIn: reportData?.cashIn || 0,
         cashOut: reportData?.cashOut || 0,
+        cashMovementDetails,
+        requireCashFundOnZ: Boolean(reportData?.requireCashFundOnZ),
+        fixedCashFundAmount: Number(reportData?.fixedCashFundAmount || 0),
+        cashToLeaveInDrawer: Number(reportData?.cashToLeaveInDrawer || 0),
+        cashToWithdraw: Number(reportData?.cashToWithdraw || 0),
         transactionCount,
         notes,
         declared_totals: {
@@ -6071,12 +7582,47 @@ const AppContent: React.FC = () => {
           last_ticket_id: lastTicketId,
         },
         stats,
-        syncStatus: 'PENDING' as const
+        syncStatus: 'PENDING' as const,
+        ...(replacementReportId ? {
+          repeatedAt: new Date().toISOString(),
+          repeatReason: 'USER_REPEAT_Z_REPLACED',
+          replacementOf: replacementReportId
+        } : {})
       };
 
       console.log("💾 Saving Z-Report:", newZReport);
       await db.saveDocument('zReports', newZReport);
-      setZReports(prev => [...prev, newZReport].sort((a, b) => new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime()));
+      setZReports(prev => {
+        const withoutReplaced = prev.filter(report => report.id !== newZReport.id);
+        return [...withoutReplaced, newZReport].sort((a, b) => new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime());
+      });
+
+      const sessionConfig = currentTerminal?.config?.workflow?.session;
+      const shouldEmailZReport = Boolean(sessionConfig?.emailZReport);
+      const zReportRecipients = (sessionConfig?.zReportEmails || config.emailConfig?.defaultRecipient || '').trim();
+      if (shouldEmailZReport && zReportRecipients) {
+        try {
+          const response = await fetch('/smtp/z-report', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to: zReportRecipients,
+              reportData: {
+                ...newZReport,
+                companyName: config.companyInfo?.name,
+                notes,
+              }
+            })
+          });
+          const emailResult = await response.json().catch(() => ({}));
+          if (!response.ok || emailResult.success === false) {
+            throw new Error(emailResult.message || `HTTP ${response.status}`);
+          }
+          console.log(`[EMAIL] Cierre Z ${newZReport.sequenceNumber} enviado a: ${zReportRecipients}`);
+        } catch (emailError) {
+          console.error(`❌ No se pudo enviar el Cierre Z ${newZReport.sequenceNumber} por email:`, emailError);
+        }
+      }
 
       if (syncManager.isInitialized) {
         try {
@@ -6111,6 +7657,7 @@ const AppContent: React.FC = () => {
 
       setTransactions(remainingTransactions);
       setCashMovements(remainingCashMovements);
+      writeCriticalCollectionsMirror(parkedTickets, remainingCashMovements);
       const remainingCollections = collections.filter(c => !terminalCollections.some(tc => tc.id === c.id));
       setCollections(remainingCollections);
 
@@ -6244,10 +7791,12 @@ const AppContent: React.FC = () => {
     const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, currentTerminal?.config);
     const creditNoteFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
     let creditNoteNcf: string | undefined;
-    try {
-      creditNoteNcf = await db.getNextNCF(creditNoteFiscalType, currentTerminalId) || undefined;
-    } catch (e) {
-      console.warn(`No se pudo generar NCF ${creditNoteFiscalType}:`, e);
+    if (fiscalCompliance.mode !== 'NONE') {
+      try {
+        creditNoteNcf = await db.getNextNCF(creditNoteFiscalType, currentTerminalId) || undefined;
+      } catch (e) {
+        console.warn(`No se pudo generar NCF ${creditNoteFiscalType}:`, e);
+      }
     }
 
     // 3. Document Sequence (Internal Refund Series)
@@ -6287,9 +7836,9 @@ const AppContent: React.FC = () => {
       customerId: resolvedCustomerId,
       customerName: resolvedCustomerName,
       ncf: creditNoteNcf || undefined,
-      ncfType: creditNoteFiscalType,
-      legacyNcf: creditNoteFiscalType.startsWith('E') ? undefined : creditNoteNcf || undefined,
-      electronicNcf: creditNoteFiscalType.startsWith('E') ? creditNoteNcf || undefined : undefined,
+      ncfType: creditNoteNcf ? creditNoteFiscalType : undefined,
+      legacyNcf: creditNoteNcf && !creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
+      electronicNcf: creditNoteNcf && creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
       fiscalMode: fiscalCompliance.mode,
       fiscalProvider: creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config, currentTerminal?.config) : 'NONE',
       taxAmount: refundSummary.taxAmount,
@@ -6396,8 +7945,10 @@ const AppContent: React.FC = () => {
         });
       }
 
-      if (Array.isArray(freshProducts)) {
+      if (Array.isArray(freshProducts) && freshProducts.length > 0) {
         setProducts(freshProducts);
+      } else {
+        console.warn('Refund state refresh skipped empty products; preserving current POS catalog.');
       }
     } catch (refreshError) {
       console.warn('⚠️ Refund state refresh fallback:', refreshError);
@@ -6454,7 +8005,7 @@ const AppContent: React.FC = () => {
                   try {
                     const license = await checkLicenseStatus(activatedTenantId, resolvedDeviceId);
                     if (!license.isValid) {
-                      triggerLockdown(license.reason || 'Servicio Suspendido.');
+                      await triggerLockdownAfterAuthorizationCheck(license.reason || 'Servicio Suspendido.', resolvedDeviceId);
                       return;
                     }
                   } catch (error) {
@@ -6579,8 +8130,8 @@ const AppContent: React.FC = () => {
           subVertical: config.subVertical,
           onLogin: (u: User) => {
             setCurrentUser(u);
+            const role = getCurrentDeviceRole();
             const terminal = getCurrentTerminal();
-            const role = terminal?.config?.deviceRole?.role || DeviceRole.STANDARD_POS;
 
             if (role === DeviceRole.HANDHELD_INVENTORY) setCurrentView('INVENTORY_HOME');
             else if (role === DeviceRole.KITCHEN_DISPLAY) setCurrentView('KITCHEN_ORDERS');
@@ -6589,7 +8140,8 @@ const AppContent: React.FC = () => {
             else {
               // Multi-Vertical Startup Flow
               const pantalla = terminal?.config?.operational?.pantalla_inicio;
-              const isRetail = terminal?.config?.ux?.viewMode === 'RETAIL';
+              const terminalViewMode = String(terminal?.config?.ux?.viewMode || '').trim().toUpperCase().replace(/[\s_-]+/g, '_');
+              const isRetail = terminalViewMode === 'RETAIL' || terminalViewMode === 'POS' || terminalViewMode === 'STANDARD' || terminalViewMode === 'RETAIL_MODE';
               const usaMesas = terminal?.config?.operational?.usa_mesas;
 
               if (pantalla === 'MAPA_MESAS' && !isRetail && usaMesas) {
@@ -6641,18 +8193,40 @@ const AppContent: React.FC = () => {
 
                   // Cargar ítems solo de ESTA mesa: órdenes abiertas viven en parkedTickets (no heredar carrito previo).
                   let nextCart: CartItem[] = [];
+                  let nextSelectedCustomer: Customer | null = null;
                   let selectedTable = table;
+                  const isBarTableContext = table.shape === 'BAR';
+                  const resolveParkedCustomer = (ticket?: ParkedTicket | null): Customer | null => {
+                    if (!ticket) return null;
+                    if (ticket.customerId) {
+                      const customerById = customers.find(customer => String(customer.id) === String(ticket.customerId));
+                      if (customerById) return customerById;
+                    }
+                    const snapshot = ticket.customerSnapshot;
+                    if (snapshot?.name || ticket.customerName) {
+                      return {
+                        id: ticket.customerId || `parked-customer-${ticket.id}`,
+                        name: snapshot?.name || ticket.customerName || 'Cliente',
+                        taxId: snapshot?.taxId,
+                        address: snapshot?.address,
+                        phone: snapshot?.phone,
+                        email: snapshot?.email,
+                        isTemporary: true
+                      } as Customer;
+                    }
+                    return null;
+                  };
                   if (table.currentOrderId) {
                     let activeParkedTickets = parkedTickets || [];
                     let parked = activeParkedTickets.find(p => p.id === table.currentOrderId)
-                      || activeParkedTickets.find(p => String(p.tableId) === String(table.id));
+                      || (!isBarTableContext ? activeParkedTickets.find(p => String(p.tableId) === String(table.id)) : undefined);
                     if (!parked) {
                       const persistedTickets = await db.get('parkedTickets') as ParkedTicket[] | null;
                       if (Array.isArray(persistedTickets)) {
                         activeParkedTickets = persistedTickets;
                         setParkedTickets(persistedTickets);
                         parked = activeParkedTickets.find(p => p.id === table.currentOrderId)
-                          || activeParkedTickets.find(p => String(p.tableId) === String(table.id));
+                          || (!isBarTableContext ? activeParkedTickets.find(p => String(p.tableId) === String(table.id)) : undefined);
                       }
                     }
                     const fromTx = (transactions || []).find(t => t.id === table.currentOrderId);
@@ -6668,18 +8242,26 @@ const AppContent: React.FC = () => {
                           : parked.items.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0)
                       };
                       nextCart = parked.items;
+                      nextSelectedCustomer = resolveParkedCustomer(parked);
                     } else if (fromTx?.items?.length) {
                       nextCart = fromTx.items;
+                      if (fromTx.customerId) {
+                        nextSelectedCustomer = customers.find(customer => String(customer.id) === String(fromTx.customerId)) || null;
+                      }
                     }
                   } else if (table.id) {
                     let activeParkedTickets = parkedTickets || [];
-                    let parked = activeParkedTickets.find(p => String(p.tableId) === String(table.id));
+                    let parked = !isBarTableContext
+                      ? activeParkedTickets.find(p => String(p.tableId) === String(table.id))
+                      : undefined;
                     if (!parked) {
                       const persistedTickets = await db.get('parkedTickets') as ParkedTicket[] | null;
                       if (Array.isArray(persistedTickets)) {
                         activeParkedTickets = persistedTickets;
                         setParkedTickets(persistedTickets);
-                        parked = activeParkedTickets.find(p => String(p.tableId) === String(table.id));
+                        parked = !isBarTableContext
+                          ? activeParkedTickets.find(p => String(p.tableId) === String(table.id))
+                          : undefined;
                       }
                     }
                     if (parked?.items?.length) {
@@ -6694,10 +8276,12 @@ const AppContent: React.FC = () => {
                           : parked.items.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0)
                       };
                       nextCart = parked.items;
+                      nextSelectedCustomer = resolveParkedCustomer(parked);
                     }
                   }
 
                   setCart(nextCart);
+                  setSelectedCustomer(nextSelectedCustomer);
                   setActiveTable(selectedTable);
                   setCurrentView('POS');
                 }}
@@ -6783,11 +8367,10 @@ const AppContent: React.FC = () => {
                   handleSaveFloorPlan(updatedRooms, tables);
                 }}
                 onUpdateRoom={(updatedRoom) => {
-                  const normalizedName = (updatedRoom.name || updatedRoom.nombre || '').trim() || 'Sala';
-                  const normalizedRoom = { ...updatedRoom, name: normalizedName, nombre: normalizedName };
+                  const rawName = String(updatedRoom.name ?? updatedRoom.nombre ?? '');
+                  const normalizedRoom = { ...updatedRoom, name: rawName, nombre: rawName };
                   const newRooms = rooms.map(r => r.id === normalizedRoom.id ? normalizedRoom : r);
                   setRooms(newRooms);
-                  handleSaveFloorPlan(newRooms, tables);
                 }}
               />
 
@@ -6818,12 +8401,9 @@ const AppContent: React.FC = () => {
             selectedCustomer={selectedCustomer}
             onSelectCustomer={setSelectedCustomer}
             parkedTickets={parkedTickets}
-            onUpdateParkedTickets={async (pt) => {
-              const validArray = Array.isArray(pt) ? pt : [];
-              setParkedTickets(validArray);
-              await db.save('parkedTickets', validArray);
-            }}
+            onUpdateParkedTickets={handleUpdateParkedTickets}
             onLogout={navigateToUserLogin}
+            onExitApplication={handleExitApplication}
             onOpenSettings={(view, data) => {
               setSettingsInitialView(view);
               setSettingsInitialData(data);
@@ -6831,7 +8411,8 @@ const AppContent: React.FC = () => {
             }}
             onOpenCustomers={() => setCurrentView('CUSTOMERS')}
             onOpenHistory={() => setCurrentView('HISTORY')}
-            onOpenFinance={() => handleViewChange('FINANCE')}
+            onOpenFinance={(initialCashMovementType) => handleViewChange('FINANCE', { initialCashMovementType })}
+            onRegisterCashMovement={handleRegisterMovement}
             onOpenZReport={() => {
               setViewData(undefined);
               setCurrentView('Z_REPORT');
@@ -6872,6 +8453,61 @@ const AppContent: React.FC = () => {
                 });
               } catch (error) {
                 console.warn('No se pudo persistir estado ocupado de mesa en API:', error);
+              }
+            }}
+            onTableOrderClosed={async (table, _closedOrderId, remainingTickets = []) => {
+              await clearActiveCartDraftStorage().catch((error) => console.warn('No se pudo limpiar borrador activo tras cerrar mesa:', error));
+              const closedOrderId = _closedOrderId ? String(_closedOrderId) : '';
+              const tableId = String(table.id ?? '');
+              const effectiveRemainingTickets = (remainingTickets || []).filter(ticket => {
+                const isClosedOrder = closedOrderId && String(ticket.id) === closedOrderId;
+                const isSameClosedTable = table.shape !== 'BAR' && tableId && String(ticket.tableId ?? '') === tableId;
+                return !isClosedOrder && !isSameClosedTable;
+              });
+              const tableTickets = effectiveRemainingTickets.filter(ticket => String(ticket.tableId ?? '') === tableId);
+              const nextTicket = tableTickets[0];
+              const remainingTotal = tableTickets.reduce((sum, ticket) => {
+                const itemsTotal = (ticket.items || []).reduce((itemSum, item) => itemSum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
+                return sum + Number(ticket.total ?? itemsTotal ?? 0);
+              }, 0);
+              const nextTable = nextTicket
+                ? ({
+                    ...table,
+                    status: 'OCCUPIED',
+                    currentOrderId: nextTicket.id,
+                    currentOrderTotal: remainingTotal,
+                    timeSeated: table.timeSeated || nextTicket.timestamp,
+                  } as Table)
+                : ({
+                    ...table,
+                    status: 'FREE',
+                    currentOrderId: undefined,
+                    currentOrderTotal: undefined,
+                    timeSeated: undefined,
+                    waiterId: undefined,
+                    waiterName: undefined,
+                    guests: undefined,
+                    barTabId: undefined,
+                    barTabName: undefined,
+                  } as Table);
+
+              setTables(prev => {
+                const base = prev.some(t => t.id === nextTable.id)
+                  ? prev.map(t => t.id === nextTable.id ? nextTable : t)
+                  : [...prev, nextTable];
+                const reconciled = reconcileTablesWithParkedTickets(base, effectiveRemainingTickets);
+                db.save('tables', reconciled).catch(error => console.error('Failed to persist table release:', error));
+                return reconciled;
+              });
+
+              try {
+                await fetch(`/api/tables/${encodeURIComponent(String(table.id))}`, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(nextTable)
+                });
+              } catch (error) {
+                console.warn('No se pudo persistir estado libre de mesa en API:', error);
               }
             }}
             onOpenAgenda={() => setCurrentView('AGENDA')}
@@ -6943,7 +8579,7 @@ const AppContent: React.FC = () => {
               const freshStocks = await db.get('productStocks') as ProductStock[] || [];
               setProductStocks(freshStocks);
             }}
-            onOpenFinance={() => setCurrentView('FINANCE')}
+            onOpenFinance={(initialCashMovementType) => handleViewChange('FINANCE', { initialCashMovementType })}
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
@@ -6958,7 +8594,7 @@ const AppContent: React.FC = () => {
               setIsAdminMode(false); // Exit admin mode when closing settings
 
               // Return to appropriate view based on role
-              const role = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.config?.deviceRole?.role;
+              const role = getCurrentDeviceRole();
               if (role === DeviceRole.SELF_CHECKOUT) setCurrentView('KIOSK_WELCOME');
               else if (role === DeviceRole.PRICE_CHECKER) setCurrentView('CHECKER_SCAN');
               else if (role === DeviceRole.KITCHEN_DISPLAY) setCurrentView('KITCHEN_ORDERS');
@@ -7010,7 +8646,7 @@ const AppContent: React.FC = () => {
               const freshStocks = await db.get('productStocks') as ProductStock[] || [];
               setProductStocks(freshStocks);
             }}
-            onOpenFinance={() => setCurrentView('FINANCE')}
+            onOpenFinance={(initialCashMovementType) => handleViewChange('FINANCE', { initialCashMovementType })}
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
@@ -7019,7 +8655,7 @@ const AppContent: React.FC = () => {
             initialView="SYNC"
             onClose={() => {
               setIsAdminMode(false);
-              const role = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.config?.deviceRole?.role;
+              const role = getCurrentDeviceRole();
               if (role === DeviceRole.HANDHELD_INVENTORY) setCurrentView('INVENTORY_HOME');
               else setCurrentView('POS');
             }}
@@ -7128,8 +8764,10 @@ const AppContent: React.FC = () => {
               currentUser={currentUser}
               roles={roles}
               allowPartialXReport={allowPartialXReport}
+              initialCashMovementType={viewData?.initialCashMovementType}
               onRegisterMovement={handleRegisterMovement}
               onCloseXReport={handleXReport}
+              onPrintXReport={handlePrintXReport}
               onOpenZReport={() => setCurrentView('Z_REPORT')}
               onClose={() => setCurrentView('POS')}
             />
@@ -7850,7 +9488,11 @@ const AppContent: React.FC = () => {
                 db.get('productStocks') as Promise<ProductStock[]>
               ]);
 
-              setProducts(freshProducts || []);
+              if (Array.isArray(freshProducts) && freshProducts.length > 0) {
+                setProducts(freshProducts);
+              } else {
+                console.warn('Inventory processed refresh skipped empty products; preserving current POS catalog.');
+              }
               setPurchaseOrders(freshOrders || []);
               setTransfers(freshTransfers || []);
               setReceptions(freshReceptions || []);
@@ -8039,8 +9681,10 @@ const AppContent: React.FC = () => {
         await syncManager.pullCatalog('products', true);
       }
       const freshProducts = await db.get('products') as Product[];
-      if (Array.isArray(freshProducts)) {
+      if (Array.isArray(freshProducts) && freshProducts.length > 0) {
         setProducts(freshProducts);
+      } else {
+        console.warn('Manual products sync returned empty catalog; preserving current POS catalog.');
       }
       setCatalogDiagnosticStatus('SYNCED');
       clearSyncErrorDiagnostic();
@@ -8102,6 +9746,76 @@ const AppContent: React.FC = () => {
             onDismiss={() => setPosApkUpdate(null)}
           />
         )}
+        {activeCartDraftRestorePrompt && cart.length === 0 && (
+          <div className="fixed left-1/2 top-4 z-[100002] w-[min(92vw,560px)] -translate-x-1/2 rounded-3xl border border-amber-200 bg-white p-4 shadow-2xl shadow-slate-950/20">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-700">
+                <Layout size={20} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-500">Recuperación automática</p>
+                <h3 className="mt-1 text-base font-black text-slate-900">Hay una venta sin cerrar guardada localmente</h3>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  {activeCartDraftRestorePrompt.items.length} artículo(s) · {new Date(activeCartDraftRestorePrompt.savedAt).toLocaleString()}
+                </p>
+                <div className="mt-4 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const draft = activeCartDraftRestorePrompt;
+                      setCart(draft.items);
+                      if (draft.selectedCustomer?.id) {
+                        setSelectedCustomer(customers.find(customer => customer.id === draft.selectedCustomer?.id) || null);
+                      }
+                      if (draft.activeTable) {
+                        const restoredOrderId = draft.activeTable.currentOrderId || `AUTO-${Date.now()}`;
+                        const restoredTable = {
+                          ...draft.activeTable,
+                          status: 'OCCUPIED' as const,
+                          currentOrderId: restoredOrderId,
+                          currentOrderTotal: draft.total,
+                        };
+                        const restoredTicket: ParkedTicket = {
+                          id: restoredOrderId,
+                          name: `Mesa: ${draft.activeTable.nombre || draft.activeTable.name || 'sin nombre'}`,
+                          items: draft.items,
+                          total: draft.total,
+                          customerId: draft.selectedCustomer?.id,
+                          customerName: draft.selectedCustomer?.name,
+                          timestamp: draft.savedAt,
+                          tableId: draft.activeTable.id,
+                        };
+                        const nextParkedTickets = [
+                          ...parkedTickets.filter(ticket => ticket.id !== restoredTicket.id),
+                          restoredTicket,
+                        ];
+                        writeCriticalCollectionsMirror(nextParkedTickets, cashMovements);
+                        setParkedTickets(nextParkedTickets);
+                        void db.save('parkedTickets', nextParkedTickets).catch(console.error);
+                        setActiveTable(restoredTable);
+                      }
+                      setActiveCartDraftRestorePrompt(null);
+                      setCurrentView('POS');
+                    }}
+                    className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-xs font-black uppercase tracking-[0.12em] text-white shadow-lg active:scale-95"
+                  >
+                    Restaurar venta
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveCartDraftRestorePrompt(null);
+                      void clearActiveCartDraftStorage().catch(console.error);
+                    }}
+                    className="rounded-2xl border border-slate-200 px-4 py-3 text-xs font-black uppercase tracking-[0.12em] text-slate-500 active:scale-95"
+                  >
+                    Descartar
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         <SyncErrorDiagnosticModal
           diagnostic={syncDiagnostic}
           onClose={() => {
@@ -8129,6 +9843,7 @@ const AppContent: React.FC = () => {
             {renderWithLayout()}
           </React.Suspense>
         </div>
+        <GlobalVirtualKeyboard />
       </>
     </ErrorBoundary>
   );

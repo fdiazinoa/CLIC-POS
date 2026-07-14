@@ -25,7 +25,6 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
   const [isRotatingToken, setIsRotatingToken] = useState(false);
   const [isRepairingToken, setIsRepairingToken] = useState(false);
   const [isReauthorizingTerminal, setIsReauthorizingTerminal] = useState(false);
-  const [pairingCode, setPairingCode] = useState('');
   const [nativeTestResult, setNativeTestResult] = useState<unknown>(null);
   const diagnosticJson = useMemo(() => diagnostic ? JSON.stringify(diagnostic, null, 2) : '', [diagnostic]);
 
@@ -412,7 +411,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
       terminalId,
       deviceId,
       oldTokenPresent: Boolean(currentDeviceToken),
-      pairingCodePresent: Boolean(pairingCode.trim()),
+      manualCodeEnabled: false,
     };
 
     try {
@@ -420,8 +419,8 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
         throw new Error('Faltan baseUrl, terminalId o deviceId para reautorizar esta terminal.');
       }
 
-      const takeover = await requestJson<any>({
-        url: `${baseUrl}/terminals/${encodeURIComponent(terminalId)}/takeover`,
+      const register = await requestJson<any>({
+        url: `${baseUrl}/terminals/register`,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -432,51 +431,20 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
         body: JSON.stringify({
           terminalId,
           terminal_id: terminalId,
+          erp_terminal_id: terminalId,
           deviceId,
           device_id: deviceId,
-          takeover: true,
-          rotateDeviceToken: true,
-          ...(pairingCode.trim() ? { pairingCode: pairingCode.trim(), pairing_code: pairingCode.trim() } : {}),
+          forceIssueDeviceToken: true,
         }),
         timeoutMs: 10000,
-        diagnosticContext: { operation: 'REAUTHORIZE_TERMINAL_TAKEOVER' },
+        diagnosticContext: { operation: 'REAUTHORIZE_TERMINAL_REGISTER' },
       });
 
-      result.engine = takeover.networkEngine;
-      result.takeoverStatus = takeover.status;
-      result.takeoverBody = takeover.text.slice(0, 1000);
-
-      let newDeviceToken = pickDeviceToken(takeover.data);
-      if (!takeover.ok || !newDeviceToken) {
-        const register = await requestJson<any>({
-          url: `${baseUrl}/terminals/register`,
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Terminal-Id': terminalId,
-            'X-Device-Id': deviceId,
-            ...(currentDeviceToken ? { 'X-Device-Token': currentDeviceToken } : {}),
-          },
-          body: JSON.stringify({
-            terminalId,
-            terminal_id: terminalId,
-            deviceId,
-            device_id: deviceId,
-            takeover: true,
-            rotateDeviceToken: true,
-            forceIssueDeviceToken: true,
-            ...(pairingCode.trim() ? { pairingCode: pairingCode.trim(), pairing_code: pairingCode.trim() } : {}),
-          }),
-          timeoutMs: 10000,
-          diagnosticContext: { operation: 'REAUTHORIZE_TERMINAL_REGISTER' },
-        });
-
-        result.registerFallbackStatus = register.status;
-        result.registerFallbackBody = register.text.slice(0, 1000);
-        newDeviceToken = pickDeviceToken(register.data);
-        if (!register.ok || !newDeviceToken) {
-          throw new Error(`No se pudo reautorizar la terminal (${takeover.status}/${register.status}).`);
-        }
+      result.registerStatus = register.status;
+      result.registerBody = register.text.slice(0, 1000);
+      const newDeviceToken = pickDeviceToken(register.data);
+      if (!register.ok || !newDeviceToken) {
+        throw new Error(`Pendiente de autorización en Cloud-Admin (${register.status}).`);
       }
 
       persistSyncDeviceToken(newDeviceToken, 'TAKEOVER');
@@ -637,7 +605,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
             </div>
           ) : null}
 
-          {isFiscalConfigMissing ? (
+          {isFiscalConfigMissing && !canIssueNonFiscalSales ? (
             <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
               <p className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-600">Configuración fiscal requerida</p>
               <p className="mt-2 text-sm font-bold leading-relaxed text-amber-900">
@@ -765,12 +733,9 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
           ) : null}
           {isDeviceNotAuthorized ? (
             <div className="flex flex-col gap-2 sm:min-w-[18rem]">
-              <input
-                value={pairingCode}
-                onChange={(event) => setPairingCode(event.target.value)}
-                placeholder="Código de vinculación / pairing code"
-                className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500"
-              />
+              <p className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-bold leading-relaxed text-blue-800">
+                Autoriza este device en Cloud-Admin y luego reintenta la conexión. No se requiere código manual.
+              </p>
               <button
                 type="button"
                 onClick={handleReauthorizeTerminal}
@@ -778,7 +743,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
                 className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white shadow-sm hover:bg-blue-500 disabled:opacity-60"
               >
                 <RefreshCw size={18} className={isReauthorizingTerminal ? 'animate-spin' : ''} />
-                {isReauthorizingTerminal ? 'Solicitando...' : 'Solicitar reautorización'}
+                {isReauthorizingTerminal ? 'Reintentando...' : 'Reintentar conexión'}
               </button>
             </div>
           ) : null}

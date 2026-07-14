@@ -1,7 +1,7 @@
 import React from 'react';
 import {
     Percent, QrCode, Inbox, StickyNote, ArrowRightLeft,
-    Lock, LogOut, Settings, Box, Save, CreditCard, RotateCcw, Package
+    Lock, LogOut, Settings, Box, Save, CreditCard, RotateCcw, Package, Power
 } from 'lucide-react';
 import { BusinessConfig } from '../types';
 
@@ -41,34 +41,34 @@ const SolidFlatActionFooter: React.FC<SolidFlatActionFooterProps> = ({
         switch (group) {
             case 'sales':
                 colors = {
-                    bg: "bg-blue-600/10",
-                    border: "border-b-blue-600",
-                    icon: "text-blue-900",
-                    hover: "hover:bg-blue-600/15"
+                    bg: "bg-blue-600",
+                    border: "border-blue-500",
+                    icon: "text-white",
+                    hover: "hover:bg-blue-700"
                 };
                 break;
             case 'wait':
                 colors = {
-                    bg: "bg-amber-500/10",
-                    border: "border-b-amber-500",
-                    icon: "text-amber-900",
-                    hover: "hover:bg-amber-500/15"
+                    bg: "bg-orange-500",
+                    border: "border-orange-400",
+                    icon: "text-white",
+                    hover: "hover:bg-orange-600"
                 };
                 break;
             case 'config':
                 colors = {
-                    bg: "bg-slate-500/10",
-                    border: "border-b-slate-500",
-                    icon: "text-slate-900",
-                    hover: "hover:bg-slate-500/15"
+                    bg: "bg-emerald-600",
+                    border: "border-emerald-500",
+                    icon: "text-white",
+                    hover: "hover:bg-emerald-700"
                 };
                 break;
             case 'closing':
                 colors = {
-                    bg: "bg-rose-600/10",
-                    border: "border-b-rose-600",
-                    icon: "text-rose-900",
-                    hover: "hover:bg-rose-600/15"
+                    bg: "bg-red-600",
+                    border: "border-red-500",
+                    icon: "text-white",
+                    hover: "hover:bg-red-700"
                 };
                 break;
         }
@@ -76,9 +76,10 @@ const SolidFlatActionFooter: React.FC<SolidFlatActionFooterProps> = ({
         // Special state for active discount
         const isActiveDiscount = id === 'DISCOUNT' && globalDiscountValue > 0;
         if (isActiveDiscount) {
-            colors.bg = "bg-red-600/15";
-            colors.border = "border-b-red-600";
-            colors.icon = "text-red-700";
+            colors.bg = "bg-rose-600";
+            colors.border = "border-rose-500";
+            colors.icon = "text-white";
+            colors.hover = "hover:bg-rose-700";
         }
 
         return (
@@ -88,7 +89,8 @@ const SolidFlatActionFooter: React.FC<SolidFlatActionFooterProps> = ({
                 onClick={() => onAction(id)}
                 className={`
                     flex flex-col items-center justify-center 
-                    ${colors.bg} ${colors.border} border-b-[3px]
+                    ${colors.bg} ${colors.border} border
+                    shadow-sm shadow-slate-900/10
                     rounded-xl transition-all duration-200
                     hover:-translate-y-1 ${colors.hover}
                     active:scale-95 py-2 px-1 h-16 w-full
@@ -134,6 +136,7 @@ const SolidFlatActionFooter: React.FC<SolidFlatActionFooterProps> = ({
                 {/* CIERRE Y SALIDA (Red/Violet) */}
                 {renderButton('Z_REPORT', 'Cierre Z', <Lock />, 'closing')}
                 {renderButton('LOGOUT', 'Salir', <LogOut />, 'closing')}
+                {renderButton('EXIT_APP', 'Cerrar App', <Power />, 'closing')}
             </div>
         </div>
     );

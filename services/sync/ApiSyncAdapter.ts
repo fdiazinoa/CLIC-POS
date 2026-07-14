@@ -8,8 +8,8 @@ import {
     buildErpZReportPayload
 } from './erpOutboundPayloads';
 import { permissionService } from './PermissionService';
-import { getSyncDeviceToken, markSyncDeviceTokenInvalid, previewSyncDeviceToken, resolveSyncDeviceToken } from './deviceToken';
-import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked, resolveLocalDeviceId } from '../../utils/deviceRevocation';
+import { getSyncDeviceToken, markSyncDeviceTokenInvalid, persistSyncDeviceToken, previewSyncDeviceToken, resolveSyncDeviceToken } from './deviceToken';
+import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked, resolveLocalDeviceId, resolveOrCreateLocalDeviceId } from '../../utils/deviceRevocation';
 import {
     getSyncProfileSourcePriority,
     loadSyncProfile,
@@ -30,6 +30,7 @@ import {
 } from './SyncErrorDiagnostic';
 import { requestJson } from '../network/httpClient';
 import { clearStoredSyncToken, readTerminalCredentialsSync, saveTerminalCredentialsSync } from './TerminalCredentialStore';
+import { extractErpRegisterAuth } from './erpRegisterResponse';
 import { isLoopbackHost, isNativeAndroidRuntime } from '../../utils/erpBaseUrl';
 import {
     clearErpIncrementalSyncState,
@@ -60,6 +61,23 @@ export interface SyncMetadata {
     version: number;
     itemCount: number;
     fullSyncVersion?: number;
+}
+
+interface PullDeltaOptions {
+    cursor?: string | null;
+    limit?: number;
+}
+
+interface PullDeltaResult {
+    items: any[];
+    serverTime: string;
+    isFullDownload: boolean;
+    latestVersion?: number;
+    syncStatus?: 'SYNCED_WITH_FULL_FALLBACK';
+    cursor?: string | null;
+    nextCursor?: string | null;
+    lastSyncedAt?: string | null;
+    hasMore?: boolean;
 }
 
 export interface ProductImageManifestItem {
@@ -131,6 +149,8 @@ const ERP_MASTER_PULL_COLLECTIONS = new Set([
     'priceLists',
     'productPrices',
     'categories',
+    'productCategories',
+    'productGroups',
     'collections',
     'serviceTypes',
     'rooms',
@@ -190,16 +210,7 @@ const ERP_OPERATION_PUSH_COLLECTIONS = new Set([
     'crmOpportunities',
     'erp_sales_documents',
 ]);
-const ERP_CRITICAL_MASTER_COLLECTIONS = new Set([
-    'products',
-    'taxes',
-    'warehouses',
-    'paymentMethods',
-    'documentSeries',
-    'fiscalRanges',
-    'fiscalSequences',
-    'terminalFiscalConfig',
-]);
+const ERP_CRITICAL_MASTER_COLLECTIONS = new Set<string>();
 
 const isErpMasterPullCollection = (collection: string): boolean =>
     ERP_MASTER_PULL_COLLECTIONS.has(collection);
@@ -249,6 +260,8 @@ const safeLocalStorageRemove = (key: string): void => {
     }
 };
 
+const normalizeIdentityValue = (value?: unknown): string => String(value || '').trim().toUpperCase();
+
 const previewSyncToken = (token?: string | null): string | null => {
     const normalized = String(token || '').trim();
     if (!normalized) return null;
@@ -276,6 +289,43 @@ const pickFirstString = (...values: unknown[]): string | null => {
     }
     return null;
 };
+
+const ERP_TIMESTAMP_CURSOR_COLLECTIONS = new Set(['products', 'items']);
+
+const isValidIsoTimestampCursor = (value: unknown): value is string => {
+    if (typeof value !== 'string') return false;
+    const trimmed = value.trim();
+    if (!trimmed || Number.isNaN(Date.parse(trimmed))) return false;
+    return /^\d{4}-\d{2}-\d{2}T/.test(trimmed);
+};
+
+const readArrayPayload = (payload: any): any[] => {
+    if (Array.isArray(payload?.items)) return payload.items;
+    if (Array.isArray(payload?.data)) return payload.data;
+    if (Array.isArray(payload?.records)) return payload.records;
+    return [];
+};
+
+const readBooleanPayload = (...values: unknown[]): boolean => {
+    for (const value of values) {
+        if (typeof value === 'boolean') return value;
+    }
+    return false;
+};
+
+const readCursorPayload = (payload: any): string | null => pickFirstString(
+    payload?.nextCursor,
+    payload?.next_cursor,
+    payload?.cursor,
+    payload?.metadata?.nextCursor,
+    payload?.metadata?.next_cursor,
+    payload?.metadata?.cursor,
+    payload?.lastSyncedAt,
+    payload?.last_synced_at,
+    payload?.serverTime,
+    payload?.server_time,
+    payload?.timestamp,
+);
 
 class SyncCircuitBreaker {
     private consecutiveFailures = 0;
@@ -345,6 +395,7 @@ class ApiSyncAdapter {
     private onConnectionRestored: (() => void) | null = null;
     private lastAuthLogAt: Record<'master' | 'erp', number> = { master: 0, erp: 0 };
     private readonly AUTH_LOG_THROTTLE_MS = 5000;
+    private readonly ERP_REAUTH_RETRY_WINDOW_MS = 30000;
 
     private isCircuitBreakerOpenError(error: unknown): boolean {
         const message = error instanceof Error ? error.message : String(error || '');
@@ -448,8 +499,9 @@ class ApiSyncAdapter {
         this.collectResponseFacts(body, facts);
         this.collectResponseFacts(text, facts);
 
-        if (facts.realApplyError && !facts.alreadyApplied && !facts.duplicate) return false;
-        if (facts.alreadyApplied || facts.duplicate) return true;
+        if (facts.realApplyError && !facts.alreadyApplied) return false;
+        if (facts.alreadyApplied) return true;
+        if (facts.duplicate) return false;
         if (responseOk && (facts.success || facts.applied)) return true;
         return false;
     }
@@ -467,6 +519,58 @@ class ApiSyncAdapter {
         this.collectResponseFacts(body, facts);
         this.collectResponseFacts(text, facts);
         return facts.realApplyError && !facts.alreadyApplied && !facts.duplicate;
+    }
+
+    private hasErpApplyConfirmation(body: any, text = ''): boolean {
+        const facts = {
+            success: false,
+            applied: false,
+            alreadyApplied: false,
+            duplicate: false,
+            realApplyError: false,
+            errors: [] as string[]
+        };
+
+        this.collectResponseFacts(body, facts);
+        this.collectResponseFacts(text, facts);
+        if (facts.realApplyError && !facts.alreadyApplied) return false;
+        if (facts.alreadyApplied) return true;
+        if (facts.duplicate) return false;
+
+        const erpInbox = body && typeof body === 'object' ? (body as any).erpInbox : null;
+        if (erpInbox?.skipped || erpInbox?.failed) return false;
+        const numeric = (value: unknown): number => Number.isFinite(Number(value)) ? Number(value) : 0;
+        const appliedCount = numeric((body as any)?.appliedCount ?? erpInbox?.appliedCount);
+        const addedCount = numeric((body as any)?.addedCount ?? erpInbox?.addedCount);
+        const duplicateCount = numeric((body as any)?.duplicateCount ?? erpInbox?.duplicateCount);
+        if (duplicateCount > 0 && appliedCount <= 0 && addedCount <= 0) return false;
+
+        const resultCandidates = [
+            ...(Array.isArray(erpInbox?.results) ? erpInbox.results : []),
+            ...(Array.isArray((body as any)?.results) ? (body as any).results : []),
+            ...(Array.isArray((body as any)?.applyResults) ? (body as any).applyResults : []),
+            ...(Array.isArray((body as any)?.items) ? (body as any).items : [])
+        ];
+
+        const hasAppliedResult = resultCandidates.some((result: any) => {
+            if (!result || typeof result !== 'object') return false;
+            if (result.error || result.applyError) return false;
+            const status = String(result.status || result.syncStatus || result.appliedStatus || '').trim().toLowerCase();
+            const eventType = String(result.eventType || result.type || '').trim().toUpperCase();
+            return Boolean(
+                result.erpDocumentId ||
+                result.erp_document_id ||
+                result.documentId ||
+                result.document_id ||
+                status === 'success' ||
+                status === 'applied' ||
+                eventType === 'SALE_POSTED'
+            );
+        });
+
+        if (hasAppliedResult) return true;
+        if (appliedCount > 0) return true;
+        return facts.applied;
     }
 
     private allApplyIssuesAreIdempotent(issues: unknown): boolean {
@@ -1071,16 +1175,23 @@ class ApiSyncAdapter {
     }
 
     private resolveCurrentDeviceId(): string | null {
+        const storedCredentials = readTerminalCredentialsSync();
         return pickFirstString(
+            storedCredentials.deviceId,
             safeLocalStorageGet('CLIC_POS_DEVICE_ID'),
             safeLocalStorageGet('pos_device_id'),
-            safeLocalStorageGet('clic_pos_device_id')
+            safeLocalStorageGet('clic_pos_device_id'),
+            resolveOrCreateLocalDeviceId()
         );
     }
 
     private resolveCurrentTenantId(): string | null {
         const profile = loadSyncProfile();
+        const storedCredentials = readTerminalCredentialsSync();
         return pickFirstString(
+            storedCredentials.erpTenantId,
+            storedCredentials.tenantId,
+            storedCredentials.cloudAdminTenantId,
             safeLocalStorageGet('clic_erp_sync_tenant_id'),
             safeLocalStorageGet('active_tenant_id'),
             safeLocalStorageGet('clic_tenant_id'),
@@ -1141,6 +1252,84 @@ class ApiSyncAdapter {
         safeLocalStorageRemove(ERP_SYNC_TOKEN_EXPIRES_AT_KEY);
         safeLocalStorageRemove(ERP_SYNC_TOKEN_UPDATED_AT_KEY);
         clearStoredSyncToken();
+    }
+
+    private clearStaleOperationalAuthFlags(): void {
+        [
+            'clic_sync_last_auth_error',
+            'clic_sync_last_reauth_attempt_at',
+            'clic_last_sync_error_diagnostic',
+            'clic_device_taken',
+            'clic_device_reauth_required',
+            'clic_pos_device_taken',
+            'clic_pos_reauth_required',
+            'clic_auth_blocked',
+            'clic_terminal_blocked_message',
+            'device_taken',
+            'reauth_required',
+            'blocked',
+        ].forEach(safeLocalStorageRemove);
+    }
+
+    private reconcileStaleOperationalAuthState(input: {
+        target: { terminalId: string; baseUrl?: string | null };
+        staleStatus: string;
+        deviceId: string | null;
+        deviceTokenPresent: boolean;
+    }): boolean {
+        const credentials = readTerminalCredentialsSync();
+        const currentDeviceId = normalizeIdentityValue(input.deviceId);
+        const credentialDeviceId = normalizeIdentityValue(credentials.deviceId);
+        const credentialTerminalIds = [
+            credentials.erpTerminalId,
+            credentials.terminalId,
+            safeLocalStorageGet('clic_erp_sync_terminal_id'),
+            safeLocalStorageGet('active_terminal_id'),
+        ].map(normalizeIdentityValue).filter(Boolean);
+        const targetTerminalId = normalizeIdentityValue(input.target.terminalId);
+        const terminalMatches = !targetTerminalId || credentialTerminalIds.length === 0 || credentialTerminalIds.includes(targetTerminalId);
+        const deviceMatches = Boolean(currentDeviceId) && (!credentialDeviceId || credentialDeviceId === currentDeviceId);
+        const storedSyncToken = this.resolveStoredErpSyncToken();
+
+        if (!deviceMatches || !terminalMatches || (!storedSyncToken && !input.deviceTokenPresent)) {
+            return false;
+        }
+
+        setTerminalBindingDiagnosticStatus('BOUND');
+        setCatalogDiagnosticStatus('SYNCED');
+        setSalesPushDiagnosticStatus('ENABLED');
+        setSyncAuthDiagnosticStatus(storedSyncToken ? 'AUTHENTICATED' : 'BOUND');
+        safeLocalStorageSet('clic_sync_auth_status', storedSyncToken ? 'AUTHENTICATED' : 'BOUND');
+        this.clearStaleOperationalAuthFlags();
+        saveTerminalCredentialsSync({
+            terminalId: input.target.terminalId,
+            erpTerminalId: input.target.terminalId,
+            deviceId: input.deviceId || credentials.deviceId || null,
+            authStatus: storedSyncToken ? 'AUTHENTICATED' : 'BOUND',
+            lastAuthError: null,
+        });
+        if (storedSyncToken) {
+            this.erpAuthToken = storedSyncToken;
+        }
+        console.info('pos_reauth_state_ignored_because_device_authorized', {
+            terminalId: input.target.terminalId,
+            deviceId: input.deviceId,
+            staleStatus: input.staleStatus,
+            syncTokenPresent: Boolean(storedSyncToken),
+            deviceTokenPresent: input.deviceTokenPresent,
+        });
+        console.info('pos_auth_success_clearing_reauth', {
+            terminalId: input.target.terminalId,
+            deviceId: input.deviceId,
+            source: 'LOCAL_CREDENTIAL_RECONCILIATION',
+        });
+        console.info('pos_terminal_identity_persisted', {
+            terminalId: input.target.terminalId,
+            erpTerminalId: input.target.terminalId,
+            deviceId: input.deviceId || credentials.deviceId || null,
+            source: 'LOCAL_CREDENTIAL_RECONCILIATION',
+        });
+        return true;
     }
 
     private buildOperationalHeaders(
@@ -1316,6 +1505,403 @@ class ApiSyncAdapter {
         return { token, expiresAt };
     }
 
+    private isDeviceTokenRequiredResponse(status: number, payload: any, bodyText?: string): boolean {
+        if (status !== 401 && status !== 403) return false;
+        const backendCode = this.normalizeBackendCode(payload);
+        const message = [
+            backendCode,
+            payload?.code,
+            payload?.error,
+            payload?.message,
+            payload?.detail,
+            bodyText,
+        ].map((entry) => String(entry || '').toUpperCase()).join(' ');
+        return /DEVICE[_\s-]?TOKEN[_\s-]?REQUIRED/.test(message);
+    }
+
+    private isRecoverableAuthResponse(status: number, payload: any, bodyText?: string): boolean {
+        if (status !== 401 && status !== 403) return false;
+        const backendCode = String(this.normalizeBackendCode(payload) || '').toUpperCase();
+        const message = [
+            backendCode,
+            payload?.code,
+            payload?.error,
+            payload?.message,
+            payload?.detail,
+            bodyText,
+        ].map((entry) => String(entry || '').toUpperCase()).join(' ');
+        return /DEVICE_NOT_AUTHORIZED|BOUND_AUTH_MISMATCH|DEVICE_TOKEN_MISSING_LOCAL|LOCKED_AUTH_REQUIRED|AUTH_ERROR|DEVICE[_\s-]?TOKEN[_\s-]?REQUIRED/.test(message);
+    }
+
+    private isWaitingCloudAdminAuthResponse(status: number, payload: any, bodyText?: string): boolean {
+        if (status < 400) return false;
+        const backendCode = String(this.normalizeBackendCode(payload) || '').toUpperCase();
+        const message = [
+            backendCode,
+            payload?.code,
+            payload?.error,
+            payload?.message,
+            payload?.detail,
+            bodyText,
+        ].map((entry) => String(entry || '').toUpperCase()).join(' ');
+        return /DEVICE_NOT_AUTHORIZED|WAITING_CLOUD_ADMIN_REAUTHORIZATION|TAKEOVER_REQUIRED|ERP_REPAIR_PENDING|BOUND_AUTH_MISMATCH/.test(message);
+    }
+
+    private markOperationalAuthNeedsReauth(input: {
+        operation: OperationalSyncOperation;
+        endpoint: string | null;
+        error: Error;
+        backendCode: string;
+        httpStatus?: number | string | null;
+        responseBody?: string | null;
+        nextAction?: string | null;
+        target?: { terminalId?: string | null; baseUrl?: string | null } | null;
+    }): Error {
+        const credentials = readTerminalCredentialsSync();
+        const deviceId = this.resolveCurrentDeviceId();
+        const terminalId = input.target?.terminalId || credentials.erpTerminalId || credentials.terminalId || safeLocalStorageGet('clic_erp_sync_terminal_id') || null;
+        const timestamp = new Date().toISOString();
+        this.erpAuthToken = null;
+        this.clearCanonicalErpSyncToken();
+        setTerminalBindingDiagnosticStatus('NEEDS_REAUTH');
+        setCatalogDiagnosticStatus('AUTH_ERROR');
+        setSalesPushDiagnosticStatus('LOCKED_AUTH_REQUIRED');
+        setSyncAuthDiagnosticStatus('NEEDS_REAUTH');
+        safeLocalStorageSet('clic_sync_auth_status', 'NEEDS_REAUTH');
+        safeLocalStorageSet('clic_sync_last_auth_error', input.backendCode);
+        saveTerminalCredentialsSync({
+            terminalId,
+            erpTerminalId: terminalId,
+            deviceId,
+            authStatus: 'NEEDS_REAUTH',
+            lastAuthError: input.backendCode,
+        });
+        console.warn('POS_SYNC_PAUSED_AUTH_REQUIRED', {
+            terminalId,
+            deviceId,
+            backendCode: input.backendCode,
+            nextAction: input.nextAction || 'WAITING_CLOUD_ADMIN_REAUTHORIZATION',
+        });
+        reportSyncErrorDiagnostic({
+            operation: input.operation,
+            endpoint: input.endpoint,
+            httpStatus: input.httpStatus ?? null,
+            responseBody: input.responseBody || null,
+            error: input.error,
+            authStatus: 'NEEDS_REAUTH',
+            backendCode: input.backendCode,
+            nextAction: input.nextAction || 'WAITING_CLOUD_ADMIN_REAUTHORIZATION',
+            blockedByLocalGuard: true,
+            guardReason: input.backendCode,
+            terminalId,
+            deviceId,
+            userVisibleSeverity: 'warning',
+            timestamp,
+        } as any);
+        return input.error;
+    }
+
+    private canAttemptOperationalReauth(): boolean {
+        const credentials = readTerminalCredentialsSync();
+        const rawLastAttempt = credentials.lastReauthAttemptAt || safeLocalStorageGet('clic_sync_last_reauth_attempt_at');
+        if (!rawLastAttempt) return true;
+        const lastAttemptMs = Date.parse(rawLastAttempt);
+        return !Number.isFinite(lastAttemptMs) || Date.now() - lastAttemptMs >= this.ERP_REAUTH_RETRY_WINDOW_MS;
+    }
+
+    private persistErpAuthPayloadFromResponse(input: {
+        data: any;
+        target: { terminalId: string };
+        deviceId: string | null;
+        tenantId: string | null;
+        existingDeviceToken: string | null;
+        deviceTokenSourceWhenNew: string;
+        deviceTokenSourceWhenRefresh: string;
+    }): { syncToken: string; deviceToken: string | null; canonicalTerminalId: string; expiresAt?: unknown } {
+        const { data, target, deviceId, tenantId, existingDeviceToken, deviceTokenSourceWhenNew, deviceTokenSourceWhenRefresh } = input;
+        const identity = persistErpSyncAuthIdentity(data, target.terminalId);
+        if (identity.terminalId && identity.terminalId !== target.terminalId) {
+            this.operationalTargetHint.terminalId = identity.terminalId;
+            console.info('POS_CANONICAL_TERMINAL_UPDATED', {
+                previousTerminalId: target.terminalId,
+                canonicalTerminalId: identity.terminalId,
+            });
+            console.info('local_terminal_id_replaced_with_canonical', {
+                previousTerminalId: target.terminalId,
+                canonicalTerminalId: identity.terminalId,
+            });
+        }
+        if (erpSyncAuthRequiresFullBootstrap(data)) {
+            clearErpIncrementalSyncState();
+            markErpFullBootstrapRequired(data);
+            this.resetCircuitBreaker();
+        }
+
+        const authPayload = extractErpRegisterAuth(data);
+        const resolvedDeviceToken = authPayload.deviceToken || authPayload.terminalToken || authPayload.activationToken || null;
+        const { token, expiresAt } = this.extractSyncTokenFromAuthResponse(data);
+        const resolvedToken = authPayload.syncToken || token || String(data?.token || '');
+        const resolvedExpiresAt = authPayload.tokenExpiresAt || expiresAt;
+        const canonicalTerminalId =
+            identity.terminalId
+            || pickFirstString(
+                data?.erp_terminal_id,
+                data?.erpTerminalId,
+                data?.terminal_id,
+                data?.terminalId,
+                data?.terminal?.erp_terminal_id,
+                data?.terminal?.erpTerminalId,
+                data?.terminal?.terminal_id,
+                data?.terminal?.terminalId,
+                data?.terminal?.id,
+                data?.profile?.erp_terminal_id,
+                data?.profile?.erpTerminalId,
+                data?.profile?.terminal_id,
+                data?.profile?.terminalId,
+            )
+            || target.terminalId;
+        const deviceTokenSource = existingDeviceToken ? deviceTokenSourceWhenRefresh : deviceTokenSourceWhenNew;
+
+        if (resolvedDeviceToken) {
+            persistSyncDeviceToken(resolvedDeviceToken, deviceTokenSource, resolvedExpiresAt as string | null | undefined);
+        }
+        if (resolvedToken) {
+            this.persistErpSyncToken(resolvedToken, resolvedExpiresAt);
+        }
+        if (resolvedDeviceToken || resolvedToken) {
+            saveTerminalCredentialsSync({
+                terminalId: canonicalTerminalId,
+                erpTerminalId: canonicalTerminalId,
+                terminalCode: pickFirstString(data?.terminalCode, data?.terminal_code, data?.terminal?.code, data?.terminal?.terminal_code),
+                terminalName: pickFirstString(data?.terminalName, data?.terminal_name, data?.terminal?.name, data?.terminal?.terminal_name),
+                deviceId,
+                tenantId,
+                erpTenantId: tenantId,
+                cloudAdminTenantId: readTerminalCredentialsSync().cloudAdminTenantId || safeLocalStorageGet('cloud_admin_tenant_id') || safeLocalStorageGet('clic_cloud_admin_tenant_id') || null,
+                authStatus: 'AUTHENTICATED',
+                lastAuthError: null,
+                ...(resolvedDeviceToken ? {
+                    deviceToken: resolvedDeviceToken,
+                    deviceTokenSource,
+                    deviceTokenUpdatedAt: new Date().toISOString(),
+                    deviceTokenExpiresAt: typeof resolvedExpiresAt === 'string' ? resolvedExpiresAt : null,
+                } : {}),
+                ...(resolvedToken ? {
+                    syncToken: resolvedToken,
+                    syncTokenUpdatedAt: new Date().toISOString(),
+                    syncTokenExpiresAt: typeof resolvedExpiresAt === 'string' ? resolvedExpiresAt : null,
+                } : {}),
+            });
+            setTerminalBindingDiagnosticStatus('BOUND');
+            setSyncAuthDiagnosticStatus('AUTHENTICATED');
+            safeLocalStorageSet('clic_sync_auth_status', 'AUTHENTICATED');
+            this.clearStaleOperationalAuthFlags();
+            console.info('pos_auth_success_clearing_reauth', {
+                terminalId: canonicalTerminalId,
+                erpTerminalId: canonicalTerminalId,
+                deviceId,
+                source: 'ERP_AUTH_RESPONSE',
+            });
+            console.info('pos_terminal_identity_persisted', {
+                terminalId: canonicalTerminalId,
+                erpTerminalId: canonicalTerminalId,
+                deviceId,
+                tenantId,
+                source: 'ERP_AUTH_RESPONSE',
+            });
+            console.info('POS_REAUTH_SUCCEEDED', {
+                terminalId: canonicalTerminalId,
+                deviceId,
+                deviceTokenPresent: Boolean(resolvedDeviceToken),
+                syncTokenPresent: Boolean(resolvedToken),
+            });
+            console.info('POS_SYNC_RESUMED_AFTER_REAUTH', {
+                terminalId: canonicalTerminalId,
+                deviceId,
+            });
+            console.info('reauth_token_saved', {
+                terminalId: canonicalTerminalId,
+                deviceId,
+                deviceTokenPresent: Boolean(resolvedDeviceToken),
+                syncTokenPresent: Boolean(resolvedToken),
+                source: deviceTokenSource,
+            });
+        }
+
+        return {
+            syncToken: sanitizeSyncToken(resolvedToken) || '',
+            deviceToken: resolvedDeviceToken,
+            canonicalTerminalId,
+            expiresAt: resolvedExpiresAt,
+        };
+    }
+
+    private async recoverErpCredentialsViaRegister(input: {
+        target: { baseUrl: string; terminalId: string; useLocalTarget: boolean; kind: ResolvedSyncTarget['kind'] };
+        deviceId: string | null;
+        tenantId: string | null;
+        existingDeviceToken: string | null;
+        channel: CircuitBreakerChannel;
+        operation: OperationalSyncOperation;
+        reason: string;
+    }): Promise<{ syncToken: string; deviceToken: string | null; canonicalTerminalId: string }> {
+        const { target, deviceId, tenantId, existingDeviceToken, channel, operation, reason } = input;
+        const credentials = readTerminalCredentialsSync();
+        const endpoint = `${target.baseUrl}/terminals/register`;
+        const cloudAdminTenantId = credentials.cloudAdminTenantId || safeLocalStorageGet('cloud_admin_tenant_id') || safeLocalStorageGet('clic_cloud_admin_tenant_id') || null;
+        const attemptAt = new Date().toISOString();
+        if (!deviceId) {
+            const error = new Error('DEVICE_ID_REQUIRED: No hay device_id local para reautenticar esta terminal.');
+            console.error('pos_device_id_missing', {
+                terminalId: target.terminalId,
+                tenantId,
+                operation,
+                endpoint: '/terminals/register',
+            });
+            throw this.markOperationalAuthNeedsReauth({
+                operation,
+                endpoint,
+                error,
+                backendCode: 'DEVICE_ID_REQUIRED',
+                nextAction: 'RESTORE_DEVICE_ID',
+                target,
+            });
+        }
+        safeLocalStorageSet('clic_sync_last_reauth_attempt_at', attemptAt);
+        saveTerminalCredentialsSync({
+            lastReauthAttemptAt: attemptAt,
+            authStatus: 'NEEDS_REAUTH',
+            lastAuthError: reason,
+        });
+        const headers = {
+            ...this.buildOperationalHeaders(target, '', true),
+            ...this.getLocalDeviceHeaders(),
+            ...(existingDeviceToken ? { 'X-Device-Token': existingDeviceToken } : {}),
+        };
+
+        console.info('pos_auth_started', {
+            terminalId: target.terminalId,
+            erpTerminalId: target.terminalId,
+            deviceId,
+            tenantId,
+            endpoint: '/terminals/register',
+            reason,
+        });
+        console.info('POS_REAUTH_STARTED', {
+            terminalId: target.terminalId,
+            erpTerminalId: target.terminalId,
+            deviceId,
+            tenantId,
+            endpoint: '/terminals/register',
+            reason,
+        });
+        console.info('reauth_started', {
+            terminalId: target.terminalId,
+            erpTerminalId: target.terminalId,
+            deviceId,
+            tenantId,
+            endpoint: '/terminals/register',
+            reason,
+        });
+
+        const response = await this.fetchWithRetry(endpoint, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+                terminalId: target.terminalId,
+                terminal_id: target.terminalId,
+                erp_terminal_id: target.terminalId,
+                terminalName: credentials.terminalName || null,
+                terminal_name: credentials.terminalName || null,
+                terminalCode: credentials.terminalCode || null,
+                terminal_code: credentials.terminalCode || null,
+                local_terminal_id: credentials.terminalCode || credentials.terminalId || safeLocalStorageGet('active_terminal_id') || target.terminalId,
+                contract_source: 'ERP_REGISTER',
+                ...(existingDeviceToken ? { deviceToken: existingDeviceToken, device_token: existingDeviceToken } : {}),
+                deviceId,
+                device_id: deviceId,
+                tenantId,
+                tenant_id: tenantId,
+                erp_tenant_id: tenantId,
+                cloud_admin_tenant_id: cloudAdminTenantId,
+                app_version: safeLocalStorageGet('CLIC_POS_APP_VERSION') || safeLocalStorageGet('app_version') || null,
+                metadata: {
+                    source: 'CLIC_POS_APK_REAUTH',
+                    reauth: true,
+                    reason,
+                    terminal_id: target.terminalId,
+                    erp_terminal_id: target.terminalId,
+                    device_id: deviceId,
+                },
+            }),
+        }, 2, 500, channel, operation);
+
+        if (!response.ok) {
+            await this.handleDeviceSupersededResponse(response, target.terminalId);
+            const parsedError = await this.parseJsonResponseSafely(response);
+            const backendCode = this.normalizeBackendCode(parsedError.data)
+                || (this.isWaitingCloudAdminAuthResponse(response.status, parsedError.data, parsedError.text)
+                    ? 'WAITING_CLOUD_ADMIN_REAUTHORIZATION'
+                    : `HTTP_${response.status}`);
+            if (this.isWaitingCloudAdminAuthResponse(response.status, parsedError.data, parsedError.text)) {
+                const error = new Error('WAITING_CLOUD_ADMIN_REAUTHORIZATION: Este equipo todavía no está autorizado. Solicita reautorización desde Cloud-Admin.');
+                console.warn('POS_REAUTH_FAILED', {
+                    terminalId: target.terminalId,
+                    deviceId,
+                    backendCode,
+                    httpStatus: response.status,
+                    nextAction: 'WAITING_CLOUD_ADMIN_REAUTHORIZATION',
+                });
+                throw this.markOperationalAuthNeedsReauth({
+                    operation,
+                    endpoint,
+                    responseBody: parsedError.text,
+                    httpStatus: response.status,
+                    error,
+                    backendCode,
+                    nextAction: 'WAITING_CLOUD_ADMIN_REAUTHORIZATION',
+                    target,
+                });
+            }
+            if (this.isDeviceTokenInvalidResponse(response.status, parsedError.data, parsedError.text)) {
+                throw this.handleDeviceTokenInvalid({
+                    operation,
+                    endpoint,
+                    response,
+                    payload: parsedError.data,
+                    responseBody: parsedError.text,
+                    requestHeaders: headers,
+                    tokenResolution: resolveSyncDeviceToken(),
+                });
+            }
+            const errorData = parsedError.data;
+            console.warn('POS_REAUTH_FAILED', {
+                terminalId: target.terminalId,
+                deviceId,
+                backendCode,
+                httpStatus: response.status,
+            });
+            throw new Error(`ERP reauthentication failed: ${response.status} ${response.statusText} - ${errorData?.message || errorData?.error || parsedError.text || 'unknown error'}`);
+        }
+
+        const data = await response.json();
+        const persisted = this.persistErpAuthPayloadFromResponse({
+            data,
+            target,
+            deviceId,
+            tenantId,
+            existingDeviceToken,
+            deviceTokenSourceWhenNew: 'ERP_REGISTER_REAUTH',
+            deviceTokenSourceWhenRefresh: 'ERP_REGISTER_REFRESH',
+        });
+
+        if (!persisted.syncToken && !persisted.deviceToken) {
+            throw new Error('ERP reauthentication failed: register response did not include deviceToken or syncToken.');
+        }
+
+        return persisted;
+    }
+
     private buildSyncTokenError(
         code: 'SYNC_TOKEN_MISSING_LOCAL' | 'SYNC_TOKEN_REJECTED',
         detail?: string
@@ -1366,6 +1952,62 @@ class ApiSyncAdapter {
         );
     }
 
+    private attachSyncErrorMetadata(error: Error, collection: string, backendCode: string, status?: number): Error {
+        const taggedError = error as Error & {
+            __syncBackendCode?: string;
+            __syncCollection?: string;
+            __syncHttpStatus?: number;
+        };
+        taggedError.__syncBackendCode = backendCode;
+        taggedError.__syncCollection = collection;
+        if (status) {
+            taggedError.__syncHttpStatus = status;
+        }
+        return taggedError;
+    }
+
+    private getSyncErrorBackendCode(error: unknown): string | null {
+        if (!error || typeof error !== 'object') return null;
+        return (error as { __syncBackendCode?: string; backendCode?: string }).__syncBackendCode
+            || (error as { backendCode?: string }).backendCode
+            || null;
+    }
+
+    private parseResponsePayload(responseBody: string): any {
+        if (!responseBody) return null;
+        try {
+            return JSON.parse(responseBody);
+        } catch {
+            return null;
+        }
+    }
+
+    private isPaymentMethodsMissingError(input: {
+        collection: string;
+        backendCode: string | null;
+        statusText: string;
+        message?: string;
+        supported?: boolean;
+        critical?: boolean;
+        status?: number;
+    }): boolean {
+        const normalizedCollection = (input.collection || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+        const normalizeCode = (code: string | null | undefined): string => String(code || '').toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+        const normalizeMessage = String(input.message || '').toLowerCase();
+        const normalizedBackendCode = normalizeCode(input.backendCode);
+        const backendCodeHint =
+            normalizedBackendCode === 'PAYMENT_METHODS_MISSING'
+            || normalizedBackendCode === 'PAYMENTMETHODS_MISSING'
+            || /PAYMENT[_\s-]?METHODS?[_\s-]?MISSING/.test(input.backendCode || '');
+        if (normalizedCollection !== 'paymentmethods') return false;
+        if (backendCodeHint || /payment methods missing/.test(normalizeMessage)) return true;
+        if (input.supported === false && input.critical === true) return true;
+        if (input.status === 409 && /m[eé]todo/i.test(normalizeMessage)) return true;
+        if (/payment_methods_missing/i.test(input.statusText)) return true;
+        if (/falta[mn]? met[oó]dos de pago|sin m[eé]todo|faltan m[eó]todos de pago/i.test(normalizeMessage)) return true;
+        return false;
+    }
+
     private normalizeBackendNextAction(payload: any): string | null {
         return pickFirstString(
             payload?.nextAction,
@@ -1399,6 +2041,30 @@ class ApiSyncAdapter {
             || /falta configuraci[oó]n fiscal/i.test(message);
     }
 
+    private logOptionalMasterUnavailable(input: {
+        operation: SyncDiagnosticOperation;
+        collection: string;
+        endpoint: string;
+        status: number;
+        reason: string;
+    }): void {
+        console.warn('[SYNC_COLLECTION_OPTIONAL_UNAVAILABLE]', {
+            collection: input.collection,
+            operation: input.operation,
+            endpoint: input.endpoint,
+            httpStatus: input.status,
+            reason: input.reason,
+            userVisibleSeverity: 'warning',
+        });
+    }
+
+    private isBlockingOperationalAuthError(error: unknown): boolean {
+        const message = error instanceof Error ? error.message : String(error || '');
+        const backendCode = this.getSyncErrorBackendCode(error);
+        return /AUTH_REQUIRED|AUTH_FAILED|SYNC_TOKEN|DEVICE_TOKEN|DEVICE_NOT_AUTHORIZED/i.test(message)
+            || /AUTH_REQUIRED|AUTH_FAILED|SYNC_TOKEN|DEVICE_TOKEN|DEVICE_NOT_AUTHORIZED/i.test(String(backendCode || ''));
+    }
+
     private markDiagnosticReported(error: Error): Error {
         try {
             Object.defineProperty(error, '__syncDiagnosticReported', {
@@ -1426,13 +2092,16 @@ class ApiSyncAdapter {
         requestHeaders: Record<string, string>;
     }): Error {
         const isPosOnlyStaging = isPosOnlyCloudStagingTarget();
-        if (!isPosOnlyStaging) {
-            setCatalogDiagnosticStatus('FISCAL_CONFIG_MISSING');
-            setSalesPushDiagnosticStatus('LOCKED_FISCAL_CONFIG_REQUIRED');
-        }
-
         const canIssueNonFiscalSales = safeLocalStorageGet('canIssueNonFiscalSales') === 'true'
             || safeLocalStorageGet('clic_can_issue_non_fiscal_sales') === 'true';
+        if (!isPosOnlyStaging && !canIssueNonFiscalSales) {
+            setCatalogDiagnosticStatus('FISCAL_CONFIG_MISSING');
+            setSalesPushDiagnosticStatus('LOCKED_FISCAL_CONFIG_REQUIRED');
+        } else if (canIssueNonFiscalSales) {
+            setCatalogDiagnosticStatus('SYNCED');
+            setSalesPushDiagnosticStatus('ENABLED');
+        }
+
         const backendCode = this.normalizeBackendCode(input.payload) || 'FISCAL_CONFIG_MISSING';
         const backendNextAction = this.normalizeBackendNextAction(input.payload);
         const nextAction = canIssueNonFiscalSales
@@ -1721,11 +2390,51 @@ class ApiSyncAdapter {
                 const record = item && typeof item === 'object' && !Array.isArray(item)
                     ? item as Record<string, unknown>
                     : {};
+                const localTerminalId = String(
+                    record.local_terminal_id
+                    || record.localTerminalId
+                    || record.source_terminal_id
+                    || record.terminalId
+                    || ''
+                ).trim();
+                const normalizedPayments = Array.isArray((record as any).payments)
+                    ? (record as any).payments.map((payment: unknown) => {
+                        const paymentRecord = payment && typeof payment === 'object' && !Array.isArray(payment)
+                            ? payment as Record<string, unknown>
+                            : {};
+                        const paymentLocalTerminalId = String(
+                            paymentRecord.local_terminal_id
+                            || paymentRecord.localTerminalId
+                            || paymentRecord.source_terminal_id
+                            || paymentRecord.terminalId
+                            || localTerminalId
+                            || ''
+                        ).trim();
+
+                        return {
+                            ...paymentRecord,
+                            terminalId: target.terminalId,
+                            terminal_id: target.terminalId,
+                            erp_terminal_id: target.terminalId,
+                            source_terminal_id: target.terminalId,
+                            ...(paymentLocalTerminalId && paymentLocalTerminalId !== target.terminalId
+                                ? { local_terminal_id: paymentLocalTerminalId, localTerminalId: paymentLocalTerminalId }
+                                : {}),
+                            ...(deviceId ? { device_id: deviceId } : {})
+                        };
+                    })
+                    : (record as any).payments;
 
                 return {
                     ...record,
                     terminalId: target.terminalId,
                     terminal_id: target.terminalId,
+                    erp_terminal_id: target.terminalId,
+                    source_terminal_id: target.terminalId,
+                    ...(localTerminalId && localTerminalId !== target.terminalId
+                        ? { local_terminal_id: localTerminalId, localTerminalId }
+                        : {}),
+                    ...(normalizedPayments ? { payments: normalizedPayments } : {}),
                     ...(deviceId ? { device_id: deviceId } : {})
                 };
             });
@@ -1813,9 +2522,24 @@ class ApiSyncAdapter {
         }
 
         if (routedTarget.baseUrl && routedTarget.terminalId) {
+            const credentials = readTerminalCredentialsSync();
+            const credentialTerminalId = String(
+                credentials.erpTerminalId
+                || credentials.terminalId
+                || ''
+            ).trim();
+            const terminalId = routedTarget.useLocalTarget
+                ? routedTarget.terminalId
+                : (credentialTerminalId || routedTarget.terminalId);
+            if (!routedTarget.useLocalTarget && credentialTerminalId && credentialTerminalId !== routedTarget.terminalId) {
+                console.info('[SYNC_ROUTER] canonical ERP terminal selected from credentials', {
+                    routedTerminalId: routedTarget.terminalId,
+                    credentialTerminalId,
+                });
+            }
             return {
                 baseUrl: routedTarget.baseUrl,
-                terminalId: routedTarget.terminalId,
+                terminalId,
                 useLocalTarget: routedTarget.kind === 'POS_MASTER',
                 kind: routedTarget.kind,
             };
@@ -1858,12 +2582,7 @@ class ApiSyncAdapter {
         return true;
     }
 
-    private buildEmptyDeltaResult(sinceVersion?: number): {
-        items: any[];
-        serverTime: string;
-        isFullDownload: boolean;
-        latestVersion?: number;
-    } {
+    private buildEmptyDeltaResult(sinceVersion?: number): PullDeltaResult {
         return {
             items: [],
             serverTime: new Date().toISOString(),
@@ -1922,31 +2641,58 @@ class ApiSyncAdapter {
             throw new Error('Browser offline');
         }
 
-        if (!force && safeLocalStorageGet('clic_sync_auth_status') === 'DEVICE_NOT_AUTHORIZED') {
+        const localAuthStatus = String(safeLocalStorageGet('clic_sync_auth_status') || '').toUpperCase();
+        if (!force && ['DEVICE_NOT_AUTHORIZED', 'NEEDS_REAUTH', 'BOUND_AUTH_MISMATCH', 'DEVICE_TOKEN_MISSING_LOCAL', 'LOCKED_AUTH_REQUIRED', 'AUTH_ERROR'].includes(localAuthStatus)) {
             const deviceId = this.resolveCurrentDeviceId();
             const deviceTokenResolution = resolveSyncDeviceToken();
+            const tenantId = this.resolveCurrentTenantId();
+            console.warn('POS_AUTH_MISMATCH_DETECTED', {
+                terminalId: target.terminalId,
+                deviceId,
+                authStatus: localAuthStatus,
+            });
+            if (this.reconcileStaleOperationalAuthState({
+                target,
+                staleStatus: localAuthStatus,
+                deviceId,
+                deviceTokenPresent: Boolean(deviceTokenResolution.token),
+            })) {
+                const storedToken = this.resolveStoredErpSyncToken();
+                if (storedToken) {
+                    return {
+                        ...target,
+                        token: storedToken,
+                    };
+                }
+            }
+            if (this.canAttemptOperationalReauth()) {
+                const recovered = await this.recoverErpCredentialsViaRegister({
+                    target,
+                    deviceId,
+                    tenantId,
+                    existingDeviceToken: deviceTokenResolution.token,
+                    channel,
+                    operation,
+                    reason: localAuthStatus || 'NEEDS_REAUTH',
+                });
+                if (recovered.syncToken) {
+                    this.erpAuthToken = recovered.syncToken;
+                    return {
+                        ...target,
+                        terminalId: recovered.canonicalTerminalId || target.terminalId,
+                        token: recovered.syncToken,
+                    };
+                }
+            }
             const error = new Error('DEVICE_NOT_AUTHORIZED: Esta Caja está vinculada, pero este equipo no está autorizado en el ERP. Solicita reautorización desde Cloud-Admin o usa un código de vinculación.');
-            setTerminalBindingDiagnosticStatus('BOUND_AUTH_MISMATCH');
-            setCatalogDiagnosticStatus('AUTH_ERROR');
-            setSalesPushDiagnosticStatus('LOCKED_AUTH_REQUIRED');
-            reportSyncErrorDiagnostic({
+            this.markOperationalAuthNeedsReauth({
                 operation,
                 endpoint: `${target.baseUrl}/auth`,
                 httpStatus: null,
                 error,
-                authStatus: 'DEVICE_NOT_AUTHORIZED',
                 backendCode: 'DEVICE_NOT_AUTHORIZED',
                 nextAction: 'REAUTHORIZE_TERMINAL',
-                blockedByLocalGuard: true,
-                guardReason: 'DEVICE_NOT_AUTHORIZED',
-                requestAuth: {
-                    authorizationPresent: false,
-                    syncTokenPresent: false,
-                    syncTokenPreview: previewSyncDeviceToken(deviceTokenResolution.token),
-                    terminalIdHeaderPresent: Boolean(target.terminalId),
-                    deviceIdHeaderPresent: Boolean(deviceId),
-                },
-                userVisibleSeverity: 'critical',
+                target,
             });
             throw error;
         }
@@ -1981,8 +2727,30 @@ class ApiSyncAdapter {
             const deviceId = this.resolveCurrentDeviceId();
             const tenantId = this.resolveCurrentTenantId();
             const deviceTokenResolution = resolveSyncDeviceToken();
-            const deviceToken = deviceTokenResolution.token;
+            let deviceToken = deviceTokenResolution.token;
             const storedSyncTokenDiagnostic = this.resolveStoredErpSyncTokenDiagnostic();
+            console.info('pos_device_id_loaded', {
+                terminalId: target.terminalId,
+                deviceId,
+                tenantId,
+                source: deviceId ? 'PERSISTENT_STORAGE' : 'MISSING',
+            });
+            if (!deviceId) {
+                const error = new Error('DEVICE_ID_REQUIRED: No hay device_id local para autenticar esta terminal. Reinicia la identidad del dispositivo o vuelve a abrir el POS.');
+                console.error('pos_device_id_missing', {
+                    terminalId: target.terminalId,
+                    tenantId,
+                    operation,
+                });
+                throw this.markOperationalAuthNeedsReauth({
+                    operation,
+                    endpoint: `${target.baseUrl}/auth`,
+                    error,
+                    backendCode: 'DEVICE_ID_REQUIRED',
+                    nextAction: 'RESTORE_DEVICE_ID',
+                    target,
+                });
+            }
             console.log('[SYNC_AUTH_PREPARE]', {
                 baseUrl: target.baseUrl,
                 terminalId: target.terminalId,
@@ -1995,37 +2763,65 @@ class ApiSyncAdapter {
             });
 
             if (!deviceToken) {
-                const error = new Error('DEVICE_TOKEN_MISSING_LOCAL: No hay deviceToken local para autenticar la terminal vinculada.');
-                setTerminalBindingDiagnosticStatus('BOUND');
-                setCatalogDiagnosticStatus('AUTH_ERROR');
-                setSalesPushDiagnosticStatus('LOCKED_AUTH_REQUIRED');
-                setSyncAuthDiagnosticStatus('DEVICE_TOKEN_MISSING_LOCAL');
-                reportSyncErrorDiagnostic({
-                    operation,
-                    endpoint: `${target.baseUrl}/auth`,
-                    httpStatus: null,
-                    error,
-                    authStatus: 'DEVICE_TOKEN_MISSING_LOCAL',
-                    backendCode: 'DEVICE_TOKEN_MISSING_LOCAL',
-                    nextAction: 'REPAIR_TERMINAL_CREDENTIALS',
-                    requestAuth: {
-                        authorizationPresent: false,
-                        syncTokenPresent: false,
-                        syncTokenPreview: null,
-                        terminalIdHeaderPresent: Boolean(target.terminalId),
-                        deviceIdHeaderPresent: Boolean(deviceId),
-                    },
-                    blockedByLocalGuard: true,
-                    guardReason: 'DEVICE_TOKEN_MISSING_LOCAL',
+                console.warn('local_bound_missing_token_detected', {
+                    terminalId: target.terminalId,
+                    deviceId,
+                    tenantId,
                 });
-                throw error;
+                setTerminalBindingDiagnosticStatus('NEEDS_REAUTH');
+                setSyncAuthDiagnosticStatus('NEEDS_REAUTH');
+                console.warn('[SYNC_AUTH_REAUTH_REQUIRED]', {
+                    reason: 'DEVICE_TOKEN_MISSING_LOCAL',
+                    terminalId: target.terminalId,
+                    deviceId,
+                    tenantId,
+                });
+                if (!this.canAttemptOperationalReauth()) {
+                    const error = new Error('DEVICE_TOKEN_MISSING_LOCAL: Esta caja necesita reautorización. Reintenta autorización o aprueba el equipo desde Cloud-Admin.');
+                    throw this.markOperationalAuthNeedsReauth({
+                        operation,
+                        endpoint: `${target.baseUrl}/terminals/register`,
+                        error,
+                        backendCode: 'DEVICE_TOKEN_MISSING_LOCAL',
+                        nextAction: 'WAITING_CLOUD_ADMIN_REAUTHORIZATION',
+                        target,
+                    });
+                }
+                const recovered = await this.recoverErpCredentialsViaRegister({
+                    target,
+                    deviceId,
+                    tenantId,
+                    existingDeviceToken: null,
+                    channel,
+                    operation,
+                    reason: 'DEVICE_TOKEN_MISSING_LOCAL',
+                });
+                if (recovered.deviceToken) {
+                    deviceToken = recovered.deviceToken;
+                }
+                if (recovered.syncToken) {
+                    return recovered.syncToken;
+                }
             }
 
             const authEndpoint = `${target.baseUrl}/auth`;
+            console.info('pos_auth_started', {
+                terminalId: target.terminalId,
+                erpTerminalId: target.terminalId,
+                deviceId,
+                tenantId,
+                endpoint: '/auth',
+            });
+            console.info('reauth_started', {
+                terminalId: target.terminalId,
+                erpTerminalId: target.terminalId,
+                deviceId,
+                tenantId,
+            });
             const authHeaders = {
                 ...this.buildOperationalHeaders(target, '', true),
                 ...this.getLocalDeviceHeaders(),
-                'X-Device-Token': deviceToken,
+                ...(deviceToken ? { 'X-Device-Token': deviceToken } : {}),
             };
             const response = await this.fetchWithRetry(authEndpoint, {
                 method: 'POST',
@@ -2033,11 +2829,15 @@ class ApiSyncAdapter {
                 body: JSON.stringify({
                     terminalId: target.terminalId,
                     terminal_id: target.terminalId,
-                    deviceToken,
+                    erp_terminal_id: target.terminalId,
+                    ...(deviceToken ? { deviceToken, device_token: deviceToken } : {}),
                     deviceId,
                     device_id: deviceId,
                     tenantId,
-                    tenant_id: tenantId
+                    tenant_id: tenantId,
+                    erp_tenant_id: tenantId,
+                    cloud_admin_tenant_id: readTerminalCredentialsSync().cloudAdminTenantId || safeLocalStorageGet('cloud_admin_tenant_id') || safeLocalStorageGet('clic_cloud_admin_tenant_id') || null,
+                    app_version: safeLocalStorageGet('CLIC_POS_APP_VERSION') || safeLocalStorageGet('app_version') || null,
                 })
             }, 2, 500, channel, operation);
 
@@ -2045,15 +2845,50 @@ class ApiSyncAdapter {
                 await this.handleDeviceSupersededResponse(response, target.terminalId);
                 let errorMessage = `ERP authentication failed: ${response.status} ${response.statusText}`;
                 const parsedError = await this.parseJsonResponseSafely(response);
-                if (this.isDeviceNotAuthorizedResponse(response.status, parsedError.data, parsedError.text)) {
-                    throw this.handleDeviceNotAuthorized({
+                if (this.isRecoverableAuthResponse(response.status, parsedError.data, parsedError.text)) {
+                    const backendCode = this.normalizeBackendCode(parsedError.data) || 'BOUND_AUTH_MISMATCH';
+                    console.warn('POS_AUTH_MISMATCH_DETECTED', {
+                        terminalId: target.terminalId,
+                        deviceId,
+                        tenantId,
+                        backendCode,
+                        httpStatus: response.status,
+                    });
+                    if (this.canAttemptOperationalReauth()) {
+                        const recovered = await this.recoverErpCredentialsViaRegister({
+                            target,
+                            deviceId,
+                            tenantId,
+                            existingDeviceToken: deviceToken,
+                            channel,
+                            operation,
+                            reason: backendCode,
+                        });
+                        if (recovered.syncToken) {
+                            return recovered.syncToken;
+                        }
+                        if (recovered.deviceToken) {
+                            deviceToken = recovered.deviceToken;
+                        }
+                    }
+                    const error = new Error('WAITING_CLOUD_ADMIN_REAUTHORIZATION: Esta caja necesita reautorización. Solicita reautorización desde Cloud-Admin.');
+                    console.warn('pos_auth_blocked_by_erp', {
+                        terminalId: target.terminalId,
+                        deviceId,
+                        tenantId,
+                        backendCode,
+                        httpStatus: response.status,
+                        nextAction: 'WAITING_CLOUD_ADMIN_REAUTHORIZATION',
+                    });
+                    throw this.markOperationalAuthNeedsReauth({
                         operation,
                         endpoint: authEndpoint,
-                        response,
-                        payload: parsedError.data,
                         responseBody: parsedError.text,
-                        requestHeaders: authHeaders,
-                        tokenResolution: deviceTokenResolution,
+                        httpStatus: response.status,
+                        error,
+                        backendCode,
+                        nextAction: 'WAITING_CLOUD_ADMIN_REAUTHORIZATION',
+                        target,
                     });
                 }
                 if (this.isDeviceTokenInvalidResponse(response.status, parsedError.data, parsedError.text)) {
@@ -2067,27 +2902,38 @@ class ApiSyncAdapter {
                         tokenResolution: deviceTokenResolution,
                     });
                 }
+                if (this.isDeviceTokenRequiredResponse(response.status, parsedError.data, parsedError.text)) {
+                    const recovered = await this.recoverErpCredentialsViaRegister({
+                        target,
+                        deviceId,
+                        tenantId,
+                        existingDeviceToken: deviceToken,
+                        channel,
+                        operation,
+                        reason: 'DEVICE_TOKEN_REQUIRED_BY_AUTH',
+                    });
+                    if (recovered.syncToken) {
+                        return recovered.syncToken;
+                    }
+                    if (recovered.deviceToken) {
+                        deviceToken = recovered.deviceToken;
+                    }
+                }
                 const errorData = parsedError.data;
                 errorMessage += ` - ${errorData?.message || errorData?.error || parsedError.text || 'unknown error'}`;
                 throw new Error(errorMessage);
             }
 
             const data = await response.json();
-            const identity = persistErpSyncAuthIdentity(data, target.terminalId);
-            if (identity.terminalId && identity.terminalId !== target.terminalId) {
-                this.operationalTargetHint.terminalId = identity.terminalId;
-            }
-            if (erpSyncAuthRequiresFullBootstrap(data)) {
-                clearErpIncrementalSyncState();
-                markErpFullBootstrapRequired(data);
-                this.resetCircuitBreaker();
-            }
-            const { token, expiresAt } = this.extractSyncTokenFromAuthResponse(data);
-            const resolvedToken = token || String(data.token || '');
-            if (resolvedToken) {
-                this.persistErpSyncToken(resolvedToken, expiresAt);
-            }
-            return resolvedToken;
+            return this.persistErpAuthPayloadFromResponse({
+                data,
+                target,
+                deviceId,
+                tenantId,
+                existingDeviceToken: deviceToken,
+                deviceTokenSourceWhenNew: 'ERP_AUTH_REAUTH',
+                deviceTokenSourceWhenRefresh: 'ERP_AUTH_REFRESH',
+            }).syncToken;
         })();
 
         this.erpAuthInFlight[channel] = erpAuthPromise.finally(() => {
@@ -2152,16 +2998,18 @@ class ApiSyncAdapter {
             }, 2, 500, 'sales', 'PUSH_OPERATIONS');
 
             if (!retryResponse.ok) {
+                const retryText = await retryResponse.clone().text().catch(() => '');
                 await this.handleDeviceSupersededResponse(retryResponse, retriedTarget.terminalId);
-                throw new Error(`Operational sync failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
+                throw new Error(`Operational sync failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}${retryText ? ` — ${retryText.slice(0, 400)}` : ''}`);
             }
 
             return;
         }
 
         if (!response.ok) {
+            const text = await response.clone().text().catch(() => '');
             await this.handleDeviceSupersededResponse(response, target.terminalId);
-            throw new Error(`Operational sync failed: ${response.status} ${response.statusText}`);
+            throw new Error(`Operational sync failed: ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 400)}` : ''}`);
         }
     }
 
@@ -2311,6 +3159,12 @@ class ApiSyncAdapter {
         action: SyncChange['action'] = 'BULK_UPDATE',
         mode: 'UPSERT' | 'FULL_REPLACE' = 'UPSERT'
     ): Promise<void> {
+        const normalizedItems = Array.isArray(items) ? items : [];
+        if (normalizedItems.length === 0) {
+            console.warn(`[POS_CLOUD_STAGING] push skipped collection=${collection}: no items to stage`);
+            return;
+        }
+
         const activeProfile = loadSyncProfile();
         const routedTarget = resolveSyncTarget(activeProfile);
         if (activeProfile.contractedProduct === 'POS_ERP') {
@@ -2343,7 +3197,7 @@ class ApiSyncAdapter {
             }
 
             const buildBody = () => JSON.stringify(
-                this.buildCloudStagingMasterPushBody(target, collection, items, mode, action)
+                this.buildCloudStagingMasterPushBody(target, collection, normalizedItems, mode, action)
             );
             const postCloudStaging = async (authTarget: {
                 baseUrl: string;
@@ -2377,7 +3231,7 @@ class ApiSyncAdapter {
                 return;
             }
 
-            await this.finishCloudStagingPushResponse(response, collection, items.length);
+            await this.finishCloudStagingPushResponse(response, collection, normalizedItems.length);
             return;
         }
 
@@ -2410,7 +3264,7 @@ class ApiSyncAdapter {
                     'Content-Type': 'application/json',
                     'X-Sync-Token': this.authToken
                 },
-                body: JSON.stringify({ items, mode })
+                body: JSON.stringify({ items: normalizedItems, mode })
             }, 2, 500, 'background', 'PUSH_MASTERS');
 
             if (response.status === 401) {
@@ -2424,7 +3278,7 @@ class ApiSyncAdapter {
             }
 
             const data = await response.json();
-            console.log(`📤 ApiSyncAdapter: Pushed ${items.length} items to ${collection} (v${data.version})`);
+            console.log(`📤 ApiSyncAdapter: Pushed ${normalizedItems.length} items to ${collection} (v${data.version})`);
         } catch (error) {
             console.error(`❌ ApiSyncAdapter: Error pushing ${collection}:`, error);
             this.isOnline = false;
@@ -2466,6 +3320,26 @@ class ApiSyncAdapter {
                     }, 2, 500, 'background', 'PULL_MASTERS');
                     if (!retryResponse.ok) {
                         const responseBody = await retryResponse.text().catch(() => '');
+                        const retryPayload = this.parseResponsePayload(responseBody);
+                        const retryBackendCode = this.normalizeBackendCode(retryPayload);
+                        if (this.isPaymentMethodsMissingError({
+                            collection,
+                            backendCode: retryBackendCode,
+                            statusText: retryResponse.statusText,
+                            message: retryPayload?.message,
+                            status: retryResponse.status,
+                            supported: retryPayload?.supported,
+                            critical: retryPayload?.critical,
+                        })) {
+                            this.logOptionalMasterUnavailable({
+                                operation: 'PULL_MASTERS',
+                                collection,
+                                endpoint: url.toString(),
+                                status: retryResponse.status,
+                                reason: retryBackendCode || 'PAYMENT_METHODS_MISSING'
+                            });
+                            return [];
+                        }
                         if (retryResponse.status === 401) {
                             const error = this.buildSyncTokenError('SYNC_TOKEN_REJECTED');
                             reportSyncErrorDiagnostic({
@@ -2483,7 +3357,14 @@ class ApiSyncAdapter {
                             });
                             throw error;
                         }
-                        throw new Error(`Pull failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
+                        this.logOptionalMasterUnavailable({
+                            operation: 'PULL_MASTERS',
+                            collection,
+                            endpoint: url.toString(),
+                            status: retryResponse.status,
+                            reason: `PULL_FAILED_AFTER_REAUTH_${retryResponse.status}`
+                        });
+                        return [];
                     }
                     const retryData = await retryResponse.json();
                     return retryData.items || [];
@@ -2501,11 +3382,16 @@ class ApiSyncAdapter {
                         return [];
                     }
                     const responseBody = await response.text().catch(() => '');
-                    let payload: any = null;
-                    try {
-                        payload = responseBody ? JSON.parse(responseBody) : null;
-                    } catch {
-                        payload = null;
+                    const payload = this.parseResponsePayload(responseBody);
+                    if (this.isFiscalConfigMissingResponse(response.status, payload, responseBody)) {
+                        this.logOptionalMasterUnavailable({
+                            operation: 'PULL_MASTERS',
+                            collection,
+                            endpoint: url.toString(),
+                            status: response.status,
+                            reason: 'FISCAL_CONFIG_MISSING'
+                        });
+                        return [];
                     }
                     this.throwIfKnownMasterPullFailure({
                         operation: 'PULL_MASTERS',
@@ -2516,32 +3402,49 @@ class ApiSyncAdapter {
                         responseBody,
                         requestHeaders: headers,
                     });
-                    const isCriticalMaster = ERP_CRITICAL_MASTER_COLLECTIONS.has(collection);
-                    const error = new Error(
-                        response.status === 404 && isCriticalMaster
-                            ? `ERP no expone endpoint de maestro crítico: ${collection}`
-                            : `Pull failed: ${response.status} ${response.statusText}`
-                    );
-                    reportSyncErrorDiagnostic({
+                    const backendCode = this.normalizeBackendCode(payload);
+                    if (this.isPaymentMethodsMissingError({
+                        collection,
+                        backendCode,
+                        statusText: response.statusText,
+                        message: payload?.message,
+                        status: response.status,
+                        supported: payload?.supported,
+                        critical: payload?.critical,
+                    })) {
+                        this.logOptionalMasterUnavailable({
+                            operation: 'PULL_MASTERS',
+                            collection,
+                            endpoint: url.toString(),
+                            status: response.status,
+                            reason: backendCode || 'PAYMENT_METHODS_MISSING'
+                        });
+                        return [];
+                    }
+                    this.logOptionalMasterUnavailable({
                         operation: 'PULL_MASTERS',
                         collection,
                         endpoint: url.toString(),
-                        httpStatus: response.status,
-                        responseBody,
-                        error,
-                        requestAuth: this.buildRequestAuthDiagnostic(headers),
-                        isMasterCollection: true,
-                        isOperationCollection: false,
-                        isCriticalMaster,
-                        userVisibleSeverity: isCriticalMaster ? 'critical' : 'warning',
+                        status: response.status,
+                        reason: `PULL_FAILED_${response.status}`
                     });
-                    throw error;
+                    return [];
                 }
 
                 const data = await response.json();
                 return data.items || [];
             } catch (error) {
                 console.error(`❌ ApiSyncAdapter: Error pulling ${collection} from ERP target:`, error);
+                if (!this.isBlockingOperationalAuthError(error)) {
+                    this.logOptionalMasterUnavailable({
+                        operation: 'PULL_MASTERS',
+                        collection,
+                        endpoint: url.toString(),
+                        status: 0,
+                        reason: error instanceof Error ? error.message : String(error || 'PULL_ERROR')
+                    });
+                    return [];
+                }
                 if (!this.wasDiagnosticReported(error)) {
                     reportSyncErrorDiagnostic({
                         operation: 'PULL_MASTERS',
@@ -2608,6 +3511,39 @@ class ApiSyncAdapter {
 
             if (!response.ok) {
                 const responseBody = await response.text().catch(() => '');
+                const payload = this.parseResponsePayload(responseBody);
+                const backendCode = this.normalizeBackendCode(payload);
+                if (this.isPaymentMethodsMissingError({
+                    collection,
+                    backendCode,
+                    statusText: response.statusText,
+                    message: payload?.message,
+                    status: response.status,
+                    supported: payload?.supported,
+                    critical: payload?.critical,
+                })) {
+                    const error = this.attachSyncErrorMetadata(
+                        new Error('PAYMENT_METHODS_MISSING: faltan métodos de pago configurados para esta terminal en el ERP.'),
+                        collection,
+                        backendCode || 'PAYMENT_METHODS_MISSING',
+                        response.status
+                    );
+                    reportSyncErrorDiagnostic({
+                        operation: 'PULL_MASTERS',
+                        collection,
+                        endpoint: `${this.config.masterUrl}/api/sync/collections/${collection}/data`,
+                        httpStatus: response.status,
+                        responseBody,
+                        error,
+                    backendCode: (error as { __syncBackendCode?: string }).__syncBackendCode || undefined,
+                        isMasterCollection: true,
+                        isOperationCollection: false,
+                        isCriticalMaster: false,
+                        userVisibleSeverity: 'warning',
+                    });
+                    throw error;
+                }
+
                 const error = new Error(`Pull failed: ${response.status} ${response.statusText}`);
                 reportSyncErrorDiagnostic({
                     operation: 'PULL_MASTERS',
@@ -2658,18 +3594,18 @@ class ApiSyncAdapter {
     /**
      * Pull incremental changes from Master (Delta Sync)
      */
-    private async pullFullFallbackForCriticalMaster(
-        collection: string,
-        target: {
-            baseUrl: string;
-            terminalId: string;
+	    private async pullFullFallbackForCriticalMaster(
+	        collection: string,
+	        target: {
+	            baseUrl: string;
+	            terminalId: string;
             token: string;
             useLocalTarget: boolean;
             kind: ResolvedSyncTarget['kind'];
-        },
-        headers: Record<string, string>,
-        deltaStatus: number
-    ): Promise<{ items: any[], serverTime: string, isFullDownload: boolean, latestVersion?: number, syncStatus?: 'SYNCED_WITH_FULL_FALLBACK' }> {
+	        },
+	        headers: Record<string, string>,
+	        deltaStatus: number
+	    ): Promise<PullDeltaResult> {
         const fullEndpoint = `${target.baseUrl}/collections/${collection}/full`;
         const fullResponse = await this.fetchWithRetry(fullEndpoint, {
             method: 'GET',
@@ -2708,6 +3644,22 @@ class ApiSyncAdapter {
             } catch {
                 payload = null;
             }
+            if (this.isFiscalConfigMissingResponse(fullResponse.status, payload, responseBody)) {
+                this.logOptionalMasterUnavailable({
+                    operation: 'PULL_MASTERS',
+                    collection,
+                    endpoint: fullEndpoint,
+                    status: fullResponse.status,
+                    reason: 'FISCAL_CONFIG_MISSING'
+                });
+                return {
+                    items: [],
+                    serverTime: new Date().toISOString(),
+                    isFullDownload: true,
+                    latestVersion: 0,
+                    syncStatus: 'SYNCED_WITH_FULL_FALLBACK',
+                };
+            }
             this.throwIfKnownMasterPullFailure({
                 operation: 'PULL_MASTERS',
                 collection,
@@ -2742,24 +3694,159 @@ class ApiSyncAdapter {
                 : Array.isArray(fullData.records)
                     ? fullData.records
                     : [];
-        const latestVersion = Number(
-            fullData.latestVersion
-            ?? fullData.version
-            ?? fullData.fullSyncVersion
-            ?? fullData.metadata?.version
-            ?? 0
-        );
+	        const latestVersion = Number(
+	            fullData.latestVersion
+	            ?? fullData.version
+	            ?? fullData.fullSyncVersion
+	            ?? fullData.metadata?.version
+	            ?? 0
+	        );
+	        const serverTime = fullData.serverTime || fullData.server_time || fullData.timestamp || new Date().toISOString();
+	        const cursor = readCursorPayload(fullData) || serverTime;
+
+	        console.log('[SYNC_DELTA_CURSOR]', {
+	            collection,
+	            type: 'full',
+	            cursorSent: null,
+	            cursorReceived: cursor,
+	            count: items.length,
+	            hasMore: false,
+	        });
+
+	        return {
+	            items,
+	            serverTime,
+	            isFullDownload: true,
+	            latestVersion,
+	            cursor,
+	            nextCursor: cursor,
+	            lastSyncedAt: cursor,
+	            syncStatus: 'SYNCED_WITH_FULL_FALLBACK',
+	        };
+    }
+
+    private async pullErpTimestampCursorDelta(
+        collection: string,
+        target: {
+            baseUrl: string;
+            terminalId: string;
+            token: string;
+            useLocalTarget: boolean;
+            kind: ResolvedSyncTarget['kind'];
+        },
+        headers: Record<string, string>,
+        initialCursor: string,
+        limit: number
+    ): Promise<PullDeltaResult> {
+        const allItems: any[] = [];
+        let pageCursor = initialCursor;
+        let responseCursor: string | null = initialCursor;
+        let serverTime = new Date().toISOString();
+        let latestVersion: number | undefined;
+        let hasMore = false;
+        let page = 0;
+
+        do {
+            page += 1;
+            const url = new URL(`${target.baseUrl}/collections/${collection}/delta`);
+            const cursorParam = collection === 'items' ? 'sinceVersion' : 'since';
+            url.searchParams.set(cursorParam, pageCursor);
+            url.searchParams.set('limit', String(limit));
+
+            const response = await this.fetchWithRetry(url.toString(), {
+                method: 'GET',
+                headers
+            }, 2, 500, 'background', 'PULL_MASTERS');
+
+            if (response.status === 401) {
+                this.erpAuthToken = null;
+                this.clearCanonicalErpSyncToken();
+                const retryTarget = await this.authenticateOperationalTarget(true, 'background', 'PULL_MASTERS');
+                const retryHeaders = this.buildOperationalHeaders(retryTarget, retryTarget.token);
+                return this.pullErpTimestampCursorDelta(collection, retryTarget, retryHeaders, initialCursor, limit);
+            }
+
+            if (!response.ok) {
+                if ((response.status === 400 || response.status === 422) && ERP_CRITICAL_MASTER_COLLECTIONS.has(collection)) {
+                    console.warn('[SYNC_DELTA_CURSOR_INVALID]', {
+                        collection,
+                        type: 'delta',
+                        cursorSent: pageCursor,
+                        status: response.status,
+                    });
+                    return this.pullFullFallbackForCriticalMaster(collection, target, headers, response.status);
+                }
+                const responseBody = await response.text().catch(() => '');
+                const payload = this.parseResponsePayload(responseBody);
+                this.throwIfKnownMasterPullFailure({
+                    operation: 'PULL_MASTERS',
+                    collection,
+                    endpoint: url.toString(),
+                    status: response.status,
+                    payload,
+                    responseBody,
+                    requestHeaders: headers,
+                });
+                throw new Error(`Delta pull failed: ${response.status} ${response.statusText}`);
+            }
+
+            const data = await response.json();
+            const pageItems = readArrayPayload(data);
+            allItems.push(...pageItems);
+
+            const nextCursor = readCursorPayload(data);
+            responseCursor = nextCursor || responseCursor;
+            serverTime = pickFirstString(
+                data?.serverTime,
+                data?.server_time,
+                data?.timestamp,
+                data?.lastSyncedAt,
+                data?.last_synced_at,
+                serverTime,
+            ) || serverTime;
+            latestVersion = typeof data?.latestVersion === 'number'
+                ? data.latestVersion
+                : typeof data?.version === 'number'
+                    ? data.version
+                    : latestVersion;
+            hasMore = readBooleanPayload(data?.hasMore, data?.has_more, data?.metadata?.hasMore, data?.metadata?.has_more);
+
+            console.log('[SYNC_DELTA_CURSOR]', {
+                collection,
+                type: 'delta',
+                cursorSent: pageCursor,
+                cursorReceived: responseCursor,
+                count: pageItems.length,
+                hasMore,
+                page,
+            });
+
+            if (!hasMore) break;
+            if (!nextCursor || nextCursor === pageCursor) {
+                console.warn('[SYNC_DELTA_CURSOR_STOPPED]', {
+                    collection,
+                    cursorSent: pageCursor,
+                    cursorReceived: nextCursor,
+                    reason: 'MISSING_OR_REPEATED_CURSOR',
+                });
+                break;
+            }
+            pageCursor = nextCursor;
+        } while (hasMore);
 
         return {
-            items,
-            serverTime: fullData.serverTime || fullData.timestamp || new Date().toISOString(),
-            isFullDownload: true,
+            items: allItems,
+            serverTime,
+            isFullDownload: false,
             latestVersion,
-            syncStatus: 'SYNCED_WITH_FULL_FALLBACK',
+            cursor: responseCursor,
+            nextCursor: responseCursor,
+            lastSyncedAt: responseCursor,
+            hasMore: false,
         };
     }
 
-    async pullDelta(collection: string, sinceVersion?: number): Promise<{ items: any[], serverTime: string, isFullDownload: boolean, latestVersion?: number, syncStatus?: 'SYNCED_WITH_FULL_FALLBACK' }> {
+    async pullDelta(collection: string, sinceVersion?: number, options?: PullDeltaOptions): Promise<PullDeltaResult> {
         const routedTarget = resolveSyncTarget();
         if (routedTarget.kind === 'POS_CLOUD_STAGING') {
             logSkippedNonMasterPull(collection, 'PULL_MASTERS', 'POS_CLOUD_STAGING_PULL_BLOCKED');
@@ -2778,7 +3865,7 @@ class ApiSyncAdapter {
                 };
             }
             const target = await this.authenticateOperationalTarget(false, 'background', 'PULL_MASTERS');
-            const url = new URL(`${target.baseUrl}/delta/${collection}`);
+            const url = new URL(`${target.baseUrl}/collections/${collection}/delta`);
             if (sinceVersion !== undefined) {
                 url.searchParams.set('sinceVersion', sinceVersion.toString());
             }
@@ -2816,12 +3903,29 @@ class ApiSyncAdapter {
                         userVisibleSeverity: 'critical',
                     });
                     throw error;
-                }
-                const headers = this.buildOperationalHeaders(target, target.token);
-                const response = await this.fetchWithRetry(url.toString(), {
-                    method: 'GET',
-                    headers
-                }, 2, 500, 'background', 'PULL_MASTERS');
+	                }
+	                const headers = this.buildOperationalHeaders(target, target.token);
+	                if (ERP_TIMESTAMP_CURSOR_COLLECTIONS.has(collection)) {
+	                    const cursor = typeof options?.cursor === 'string' ? options.cursor.trim() : '';
+	                    const limit = Math.max(1, Math.min(options?.limit || 500, 1000));
+	                    if (!isValidIsoTimestampCursor(cursor)) {
+	                        console.log('[SYNC_DELTA_CURSOR]', {
+	                            collection,
+	                            type: 'full',
+	                            cursorSent: cursor || null,
+	                            cursorReceived: null,
+	                            count: 0,
+	                            hasMore: false,
+	                            reason: 'MISSING_VALID_ISO_CURSOR',
+	                        });
+	                        return this.pullFullFallbackForCriticalMaster(collection, target, headers, 0);
+	                    }
+	                    return this.pullErpTimestampCursorDelta(collection, target, headers, cursor, limit);
+	                }
+	                const response = await this.fetchWithRetry(url.toString(), {
+	                    method: 'GET',
+	                    headers
+	                }, 2, 500, 'background', 'PULL_MASTERS');
 
                 if (response.status === 401) {
                     this.erpAuthToken = null;
@@ -2834,6 +3938,31 @@ class ApiSyncAdapter {
                     }, 2, 500, 'background', 'PULL_MASTERS');
                     if (!retryResponse.ok) {
                         const responseBody = await retryResponse.text().catch(() => '');
+                        const retryPayload = this.parseResponsePayload(responseBody);
+                        const retryBackendCode = this.normalizeBackendCode(retryPayload);
+                    if (this.isPaymentMethodsMissingError({
+                            collection,
+                            backendCode: retryBackendCode,
+                            statusText: retryResponse.statusText,
+                            message: retryPayload?.message,
+                            status: retryResponse.status,
+                            supported: retryPayload?.supported,
+                            critical: retryPayload?.critical,
+                        })) {
+                            this.logOptionalMasterUnavailable({
+                                operation: 'PULL_MASTERS',
+                                collection,
+                                endpoint: url.toString(),
+                                status: retryResponse.status,
+                                reason: retryBackendCode || 'PAYMENT_METHODS_MISSING'
+                            });
+                            return {
+                                items: [],
+                                serverTime: new Date().toISOString(),
+                                isFullDownload: false,
+                                latestVersion: sinceVersion || 0,
+                            };
+                        }
                         if (retryResponse.status === 401) {
                             const error = this.buildProtectedPullAuthError({
                                 collection,
@@ -2854,25 +3983,34 @@ class ApiSyncAdapter {
                                 headers: retryHeaders,
                             });
                         }
-                        let retryPayload: any = null;
-                        try {
-                            retryPayload = responseBody ? JSON.parse(responseBody) : null;
-                        } catch {
-                            retryPayload = null;
+                        if (this.isFiscalConfigMissingResponse(retryResponse.status, retryPayload, responseBody)) {
+                            this.logOptionalMasterUnavailable({
+                                operation: 'PULL_MASTERS',
+                                collection,
+                                endpoint: url.toString(),
+                                status: retryResponse.status,
+                                reason: 'FISCAL_CONFIG_MISSING'
+                            });
+                            return {
+                                items: [],
+                                serverTime: new Date().toISOString(),
+                                isFullDownload: false,
+                                latestVersion: sinceVersion || 0,
+                            };
                         }
-                        this.throwIfKnownMasterPullFailure({
+                        this.logOptionalMasterUnavailable({
                             operation: 'PULL_MASTERS',
                             collection,
                             endpoint: url.toString(),
                             status: retryResponse.status,
-                            payload: retryPayload,
-                            responseBody,
-                            requestHeaders: retryHeaders,
+                            reason: `DELTA_PULL_FAILED_AFTER_REAUTH_${retryResponse.status}`
                         });
-                        if (retryResponse.status === 404 && ERP_CRITICAL_MASTER_COLLECTIONS.has(collection)) {
-                            return this.pullFullFallbackForCriticalMaster(collection, retryTarget, retryHeaders, retryResponse.status);
-                        }
-                        throw new Error(`Delta pull failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
+                        return {
+                            items: [],
+                            serverTime: new Date().toISOString(),
+                            isFullDownload: false,
+                            latestVersion: sinceVersion || 0,
+                        };
                     }
                     return await retryResponse.json();
                 }
@@ -2908,11 +4046,44 @@ class ApiSyncAdapter {
                         return this.pullFullFallbackForCriticalMaster(collection, target, headers, response.status);
                     }
                     const responseBody = await response.text().catch(() => '');
-                    let payload: any = null;
-                    try {
-                        payload = responseBody ? JSON.parse(responseBody) : null;
-                    } catch {
-                        payload = null;
+                    const payload = this.parseResponsePayload(responseBody);
+                    if (this.isFiscalConfigMissingResponse(response.status, payload, responseBody)) {
+                        this.logOptionalMasterUnavailable({
+                            operation: 'PULL_MASTERS',
+                            collection,
+                            endpoint: url.toString(),
+                            status: response.status,
+                            reason: 'FISCAL_CONFIG_MISSING'
+                        });
+                        return {
+                            items: [],
+                            serverTime: new Date().toISOString(),
+                            isFullDownload: false,
+                            latestVersion: sinceVersion || 0,
+                        };
+                    }
+                    if (this.isPaymentMethodsMissingError({
+                        collection,
+                        backendCode: this.normalizeBackendCode(payload),
+                        statusText: response.statusText,
+                        message: payload?.message,
+                        status: response.status,
+                        supported: payload?.supported,
+                        critical: payload?.critical,
+                    })) {
+                        this.logOptionalMasterUnavailable({
+                            operation: 'PULL_MASTERS',
+                            collection,
+                            endpoint: url.toString(),
+                            status: response.status,
+                            reason: this.normalizeBackendCode(payload) || 'PAYMENT_METHODS_MISSING'
+                        });
+                        return {
+                            items: [],
+                            serverTime: new Date().toISOString(),
+                            isFullDownload: false,
+                            latestVersion: sinceVersion || 0,
+                        };
                     }
                     this.throwIfKnownMasterPullFailure({
                         operation: 'PULL_MASTERS',
@@ -2923,30 +4094,39 @@ class ApiSyncAdapter {
                         responseBody,
                         requestHeaders: headers,
                     });
-                    const error = new Error(
-                        response.status === 404 && isCriticalMaster
-                            ? `ERP no expone endpoint de maestro crítico: ${collection}`
-                            : `Delta pull failed: ${response.status} ${response.statusText}`
-                    );
-                    reportSyncErrorDiagnostic({
+                    this.logOptionalMasterUnavailable({
                         operation: 'PULL_MASTERS',
                         collection,
                         endpoint: url.toString(),
-                        httpStatus: response.status,
-                        responseBody,
-                        error,
-                        requestAuth: this.buildRequestAuthDiagnostic(headers),
-                        isMasterCollection: true,
-                        isOperationCollection: false,
-                        isCriticalMaster,
-                        userVisibleSeverity: isCriticalMaster ? 'critical' : 'warning',
+                        status: response.status,
+                        reason: `DELTA_PULL_FAILED_${response.status}`
                     });
-                    throw error;
+                    return {
+                        items: [],
+                        serverTime: new Date().toISOString(),
+                        isFullDownload: false,
+                        latestVersion: sinceVersion || 0,
+                    };
                 }
 
                 return await response.json();
             } catch (error) {
                 console.error(`❌ ApiSyncAdapter: Error pulling ERP delta for ${collection}:`, error);
+                if (!this.isBlockingOperationalAuthError(error)) {
+                    this.logOptionalMasterUnavailable({
+                        operation: 'PULL_MASTERS',
+                        collection,
+                        endpoint: url.toString(),
+                        status: 0,
+                        reason: error instanceof Error ? error.message : String(error || 'DELTA_PULL_ERROR')
+                    });
+                    return {
+                        items: [],
+                        serverTime: new Date().toISOString(),
+                        isFullDownload: false,
+                        latestVersion: sinceVersion || 0,
+                    };
+                }
                 if (!this.wasDiagnosticReported(error)) {
                     reportSyncErrorDiagnostic({
                         operation: 'PULL_MASTERS',
@@ -2999,6 +4179,38 @@ class ApiSyncAdapter {
 
             if (!response.ok) {
                 const responseBody = await response.text().catch(() => '');
+                const payload = this.parseResponsePayload(responseBody);
+                if (this.isPaymentMethodsMissingError({
+                    collection,
+                    backendCode: this.normalizeBackendCode(payload),
+                    statusText: response.statusText,
+                    message: payload?.message,
+                    status: response.status,
+                    supported: payload?.supported,
+                    critical: payload?.critical,
+                })) {
+                    const error = this.attachSyncErrorMetadata(
+                        new Error('PAYMENT_METHODS_MISSING: faltan métodos de pago configurados para esta terminal en el ERP.'),
+                        collection,
+                        this.normalizeBackendCode(payload) || 'PAYMENT_METHODS_MISSING',
+                        response.status
+                    );
+                    reportSyncErrorDiagnostic({
+                        operation: 'PULL_MASTERS',
+                        collection,
+                        endpoint: url.toString(),
+                        httpStatus: response.status,
+                        responseBody,
+                        error,
+                        backendCode: (error as { __syncBackendCode?: string }).__syncBackendCode || undefined,
+                        isMasterCollection: true,
+                        isOperationCollection: false,
+                        isCriticalMaster: ERP_CRITICAL_MASTER_COLLECTIONS.has(collection),
+                        userVisibleSeverity: 'warning',
+                    });
+                    throw error;
+                }
+
                 const error = new Error(`Delta pull failed: ${response.status} ${response.statusText}`);
                 reportSyncErrorDiagnostic({
                     operation: 'PULL_MASTERS',
@@ -3202,6 +4414,16 @@ class ApiSyncAdapter {
                     } catch {
                         payload = null;
                     }
+                    if (this.isFiscalConfigMissingResponse(response.status, payload, responseBody)) {
+                        this.logOptionalMasterUnavailable({
+                            operation,
+                            collection,
+                            endpoint,
+                            status: response.status,
+                            reason: 'FISCAL_CONFIG_MISSING'
+                        });
+                        return null;
+                    }
                     this.throwIfKnownMasterPullFailure({
                         operation,
                         collection,
@@ -3211,23 +4433,12 @@ class ApiSyncAdapter {
                         responseBody,
                         requestHeaders: headers,
                     });
-                    const error = new Error(
-                        response.status === 404 && isCriticalMaster
-                            ? `ERP no expone endpoint de maestro crítico: ${collection}`
-                            : `Get metadata failed: ${response.status} ${response.statusText}`
-                    );
-                    reportSyncErrorDiagnostic({
+                    this.logOptionalMasterUnavailable({
                         operation,
                         collection,
                         endpoint,
-                        httpStatus: response.status,
-                        responseBody,
-                        error,
-                        requestAuth: this.buildRequestAuthDiagnostic(headers),
-                        isMasterCollection: operation === 'PULL_CONFIG' || isErpMasterPullCollection(collection),
-                        isOperationCollection: isErpOperationPushCollection(collection),
-                        isCriticalMaster,
-                        userVisibleSeverity: isCriticalMaster ? 'critical' : 'warning',
+                        status: response.status,
+                        reason: `METADATA_FAILED_${response.status}`
                     });
                     return null;
                 }
@@ -3252,6 +4463,16 @@ class ApiSyncAdapter {
                     return null;
                 }
                 console.error(`❌ ApiSyncAdapter: Error getting ERP metadata for ${collection}:`, error);
+                if (!this.isBlockingOperationalAuthError(error)) {
+                    this.logOptionalMasterUnavailable({
+                        operation,
+                        collection,
+                        endpoint,
+                        status: 0,
+                        reason: error instanceof Error ? error.message : String(error || 'METADATA_ERROR')
+                    });
+                    return null;
+                }
                 if (!this.wasDiagnosticReported(error)) {
                     reportSyncErrorDiagnostic({
                         operation,
@@ -3603,6 +4824,9 @@ class ApiSyncAdapter {
                 if (this.hasRealApplyErrorResponse(syncBody, text)) {
                     throw new Error(`ERP did not persist sale (apply error): ${text.slice(0, 400)}`);
                 }
+                if (!this.hasErpApplyConfirmation(syncBody, text)) {
+                    throw new Error(`ERP did not confirm sale persistence: ${text.slice(0, 400) || 'empty response'}`);
+                }
 
                 this.attachTransactionSyncAudit(transaction, responseAudit, 'APPLIED');
 
@@ -3707,11 +4931,17 @@ class ApiSyncAdapter {
                 );
                 throw new Error(`ERP did not persist sale (apply failures): ${JSON.stringify(syncBody.applyIssues || [])}`);
             }
+            if (erp?.skipped) {
+                throw new Error(`ERP did not persist sale (skipped): ${JSON.stringify(erp).slice(0, 400)}`);
+            }
             if (erp?.failed && !this.isIdempotentAppliedResponse(erp, JSON.stringify(erp), true)) {
                 throw new Error(`ERP did not persist sale (apply error): ${JSON.stringify(erp).slice(0, 400)}`);
             }
             if (this.hasRealApplyErrorResponse(syncBody, JSON.stringify(syncBody))) {
                 throw new Error(`ERP did not persist sale (apply error): ${JSON.stringify(syncBody).slice(0, 400)}`);
+            }
+            if (!this.hasErpApplyConfirmation(syncBody, JSON.stringify(syncBody))) {
+                throw new Error(`ERP did not confirm sale persistence: ${JSON.stringify(syncBody).slice(0, 400)}`);
             }
             this.attachTransactionSyncAudit(transaction, syncBody, 'APPLIED');
             if (erp?.skipped) {

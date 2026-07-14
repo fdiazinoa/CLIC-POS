@@ -49,6 +49,93 @@ const resolveTerminalDisplayName = (terminal: ConfiguredTerminal) => (
    ).trim()
 );
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+const looksLikeUuid = (value?: string | null): boolean => UUID_PATTERN.test(String(value || '').trim());
+const resolveTerminalErpIdentity = (terminal?: ConfiguredTerminal | null): string => (
+   String(
+      terminal?.config?.erpTerminalId
+      || terminal?.config?.erpBinding?.terminalId
+      || (looksLikeUuid(terminal?.id) ? terminal?.id : '')
+      || ''
+   ).trim()
+);
+
+const normalizeTerminalAlias = (value?: string | null): string =>
+   String(value || '').trim().toLowerCase();
+
+const resolveTerminalDedupeKey = (terminal: ConfiguredTerminal): string => {
+   const erpIdentity = resolveTerminalErpIdentity(terminal);
+   if (looksLikeUuid(erpIdentity)) return `erp:${erpIdentity.toLowerCase()}`;
+   const displayName = normalizeTerminalAlias(resolveTerminalDisplayName(terminal));
+   if (displayName) return `alias:${displayName}`;
+   return `id:${normalizeTerminalAlias(terminal.id)}`;
+};
+
+const terminalCompletenessScore = (terminal: ConfiguredTerminal): number => {
+   let score = 0;
+   if (looksLikeUuid(resolveTerminalErpIdentity(terminal))) score += 1000;
+   if (terminal.config?.erpSnapshot) score += 300;
+   if (terminal.config?.erpBinding) score += 250;
+   if (terminal.config?.erpTerminalId) score += 200;
+   if (Array.isArray(terminal.config?.documentSeries) && terminal.config.documentSeries.length > 0) score += 60;
+   if (terminal.config?.documentAssignments && Object.keys(terminal.config.documentAssignments).length > 0) score += 45;
+   if (terminal.config?.inventoryScope) score += 40;
+   if (terminal.config?.pricing) score += 35;
+   if (terminal.config?.fiscal) score += 30;
+   if (terminal.config?.currentDeviceId) score += 15;
+   return score;
+};
+
+const mergeTerminalRecords = (base: ConfiguredTerminal, incoming: ConfiguredTerminal): ConfiguredTerminal => {
+   const winner = terminalCompletenessScore(incoming) > terminalCompletenessScore(base) ? incoming : base;
+   const fallback = winner === incoming ? base : incoming;
+   return {
+      ...fallback,
+      ...winner,
+      id: winner.id || fallback.id,
+      config: {
+         ...DEFAULT_TERMINAL_CONFIG,
+         ...(fallback.config || {}),
+         ...(winner.config || {}),
+         erpTerminalId: resolveTerminalErpIdentity(winner) || resolveTerminalErpIdentity(fallback) || winner.config?.erpTerminalId || fallback.config?.erpTerminalId,
+         terminalName: winner.config?.terminalName || fallback.config?.terminalName || resolveTerminalDisplayName(winner) || resolveTerminalDisplayName(fallback),
+         currentDeviceId: winner.config?.currentDeviceId || fallback.config?.currentDeviceId,
+         deviceBindingToken: winner.config?.deviceBindingToken || fallback.config?.deviceBindingToken || DEFAULT_TERMINAL_CONFIG.deviceBindingToken,
+         erpBinding: winner.config?.erpBinding || fallback.config?.erpBinding,
+         erpSnapshot: winner.config?.erpSnapshot || fallback.config?.erpSnapshot,
+      },
+   };
+};
+
+const dedupeConfiguredTerminals = (items: ConfiguredTerminal[]): ConfiguredTerminal[] => {
+   const byKey = new Map<string, ConfiguredTerminal>();
+   const aliasToErpKey = new Map<string, string>();
+
+   for (const terminal of items || []) {
+      const erpIdentity = resolveTerminalErpIdentity(terminal);
+      const alias = normalizeTerminalAlias(resolveTerminalDisplayName(terminal));
+      const key = looksLikeUuid(erpIdentity)
+         ? `erp:${erpIdentity.toLowerCase()}`
+         : (aliasToErpKey.get(alias) || resolveTerminalDedupeKey(terminal));
+
+      if (looksLikeUuid(erpIdentity) && alias) {
+         aliasToErpKey.set(alias, key);
+         const aliasKey = `alias:${alias}`;
+         const aliasExisting = byKey.get(aliasKey);
+         if (aliasExisting) {
+            byKey.delete(aliasKey);
+            byKey.set(key, mergeTerminalRecords(aliasExisting, terminal));
+            continue;
+         }
+      }
+
+      const existing = byKey.get(key);
+      byKey.set(key, existing ? mergeTerminalRecords(existing, terminal) : terminal);
+   }
+
+   return Array.from(byKey.values());
+};
+
 const PRINTER_ROLES = [
    { id: 'TICKET', label: 'Ticket de Venta', icon: Receipt },
    { id: 'LABEL', label: 'Etiquetas', icon: Tag },
@@ -97,16 +184,25 @@ const NCF_LABELS: Record<NCFType, string> = {
 
 const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [], products = [], isAdminMode = false, currentDeviceId }) => {
    const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
-   const [terminals, setTerminals] = useState(config.terminals || []);
+   const [terminals, setTerminals] = useState(() => dedupeConfiguredTerminals(config.terminals || []));
 
    const [selectedTerminalId, setSelectedTerminalId] = useState<string>(() => {
       if (currentDeviceId) {
          const activeTerminalId = localStorage.getItem('active_terminal_id') || localStorage.getItem('CLIC_POS_TERMINAL_ID') || '';
          const currentCandidates = terminals.filter(t => t.config.currentDeviceId === currentDeviceId);
-         const current =
-            currentCandidates.find((terminal) => terminal.id === activeTerminalId || terminal.config?.erpTerminalId === activeTerminalId)
-            || currentCandidates.find((terminal) => resolveTerminalDisplayName(terminal) !== terminal.id)
-            || currentCandidates[0];
+         const current = [...currentCandidates].sort((left, right) => {
+            const leftErp = resolveTerminalErpIdentity(left);
+            const rightErp = resolveTerminalErpIdentity(right);
+            const leftScore =
+               (looksLikeUuid(leftErp) ? 100 : 0) +
+               (activeTerminalId && (left.id === activeTerminalId || leftErp === activeTerminalId) ? (looksLikeUuid(activeTerminalId) ? 80 : 15) : 0) +
+               (resolveTerminalDisplayName(left) !== left.id ? 10 : 0);
+            const rightScore =
+               (looksLikeUuid(rightErp) ? 100 : 0) +
+               (activeTerminalId && (right.id === activeTerminalId || rightErp === activeTerminalId) ? (looksLikeUuid(activeTerminalId) ? 80 : 15) : 0) +
+               (resolveTerminalDisplayName(right) !== right.id ? 10 : 0);
+            return rightScore - leftScore;
+         })[0];
          if (current) return current.id;
       }
       return terminals[0]?.id || '';
@@ -121,12 +217,17 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
 
    useEffect(() => {
       const loadSequences = async () => {
-         const seqs = (await db.get('internalSequences') || []) as DocumentSeries[];
+         const [seqsRaw, documentSeriesRaw] = await Promise.all([
+            db.get('internalSequences'),
+            db.get('documentSeries' as any)
+         ]);
+         const seqs = (Array.isArray(seqsRaw) ? seqsRaw : []) as DocumentSeries[];
+         const erpSeries = (Array.isArray(documentSeriesRaw) ? documentSeriesRaw : []) as DocumentSeries[];
          const configSeries = (config.terminals || [])
             .flatMap(t => (Array.isArray(t.config?.documentSeries) ? t.config.documentSeries : []))
             .filter((s: any) => !!s?.id && !!s?.documentType) as DocumentSeries[];
 
-         const merged = mergeDocumentSeriesCollection([...seqs, ...configSeries]);
+         const merged = mergeDocumentSeriesCollection([...seqs, ...erpSeries, ...configSeries]);
          if (merged.length !== seqs.length) {
             await db.save('internalSequences', merged);
          }
@@ -138,7 +239,11 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
       loadSequences();
       const handleSeriesUpdate = () => loadSequences();
       window.addEventListener('seriesUpdated', handleSeriesUpdate);
-      return () => window.removeEventListener('seriesUpdated', handleSeriesUpdate);
+      window.addEventListener('documentSeriesUpdated', handleSeriesUpdate);
+      return () => {
+         window.removeEventListener('seriesUpdated', handleSeriesUpdate);
+         window.removeEventListener('documentSeriesUpdated', handleSeriesUpdate);
+      };
    }, [config.terminals]);
 
    const activeTerminal = useMemo(() =>
@@ -235,8 +340,15 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
       setIsSyncing(true);
       try {
          await syncManager.pullCatalog('internalSequences');
-         const seqs = (await db.get('internalSequences') || []) as DocumentSeries[];
-         setMasterSequences(seqs);
+         await syncManager.pullCatalog('documentSeries');
+         const [seqsRaw, documentSeriesRaw] = await Promise.all([
+            db.get('internalSequences'),
+            db.get('documentSeries' as any)
+         ]);
+         const seqs = (Array.isArray(seqsRaw) ? seqsRaw : []) as DocumentSeries[];
+         const erpSeries = (Array.isArray(documentSeriesRaw) ? documentSeriesRaw : []) as DocumentSeries[];
+         const merged = mergeDocumentSeriesCollection([...seqs, ...erpSeries]);
+         setMasterSequences(merged);
          setLastSyncTime(new Date());
       } catch (error) {
          console.error('Error syncing series:', error);
@@ -272,7 +384,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
    }, [activeTerminal]);
 
    const handleSave = () => {
-      const cleanedTerminals = terminals.map((t) => {
+      const cleanedTerminals = dedupeConfiguredTerminals(terminals).map((t) => {
          if (isPartialXReportAllowed(t.config)) return t;
          const da = { ...(t.config.documentAssignments || {}) };
          delete da.X_REPORT;
@@ -383,7 +495,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                  <div className="space-y-2">
                                     <label className="text-[10px] font-black text-slate-400 uppercase">ID de Terminal</label>
-                                    <input type="text" value={activeTerminal.id} readOnly className="w-full p-4 bg-slate-50 rounded-2xl font-bold" />
+                                    <input type="text" value={resolveTerminalErpIdentity(activeTerminal) || activeTerminal.id} readOnly className="w-full p-4 bg-slate-50 rounded-2xl font-bold" />
                                  </div>
                                  <div className="space-y-2">
                                     <label className="text-[10px] font-black text-slate-400 uppercase">Número Estación</label>
@@ -584,8 +696,29 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     icon={Coins}
                                     disabled={isReadOnly}
                                  />
+                                 <Toggle
+                                    label="Solicitar fianza en Z"
+                                    description="Pide confirmar el fondo de caja que debe quedar reservado al realizar el Cierre Z."
+                                    checked={Boolean(activeTerminal.config.workflow.session.requireCashFundOnZ)}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'requireCashFundOnZ', v)}
+                                    icon={Banknote}
+                                    disabled={isReadOnly}
+                                 />
                               </div>
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                 <label className="p-5 bg-slate-50 rounded-3xl border border-slate-100 space-y-3">
+                                    <span className="block text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Fondo fijo de caja</span>
+                                    <input
+                                       type="number"
+                                       min="0"
+                                       step="0.01"
+                                       value={activeTerminal.config.workflow.session.fixedCashFundAmount ?? 0}
+                                       onChange={(e) => handleUpdateActiveConfig('workflow.session', 'fixedCashFundAmount', Math.max(0, Number(e.target.value) || 0))}
+                                       disabled={isReadOnly || !activeTerminal.config.workflow.session.requireCashFundOnZ}
+                                       className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-lg font-black text-slate-800 outline-none focus:border-blue-500 disabled:opacity-50"
+                                    />
+                                    <p className="text-xs font-medium text-slate-500">Monto fijo que debe quedar como fondo/fianza luego de cada cierre Z.</p>
+                                 </label>
                                  <label className="p-5 bg-slate-50 rounded-3xl border border-slate-100 space-y-3">
                                     <span className="block text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Hora inicio jornada (0-23)</span>
                                     <input

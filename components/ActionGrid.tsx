@@ -1,7 +1,8 @@
 import React from 'react';
 import {
     Percent, QrCode, Inbox, StickyNote, Box, Save, Settings,
-    Lock, LogOut, Package, RotateCcw, CreditCard, Calendar
+    Lock, LogOut, Package, RotateCcw, CreditCard, Calendar, Power,
+    ArrowDownLeft, ArrowUpRight
 } from 'lucide-react';
 import { BusinessConfig } from '../types';
 
@@ -41,24 +42,24 @@ const ActionGrid: React.FC<ActionGridProps> = ({
 
         switch (group) {
             case 'sales':
-                colors = "bg-blue-600/10 text-blue-800 hover:bg-blue-600/20";
+                colors = "bg-blue-600 text-white shadow-sm shadow-blue-600/25 hover:bg-blue-700";
                 break;
             case 'wait':
-                colors = "bg-orange-500/10 text-orange-800 hover:bg-orange-500/20";
+                colors = "bg-orange-500 text-white shadow-sm shadow-orange-500/25 hover:bg-orange-600";
                 break;
             case 'utility':
-                colors = "bg-slate-500/10 text-slate-800 hover:bg-slate-500/20";
+                colors = "bg-emerald-600 text-white shadow-sm shadow-emerald-600/25 hover:bg-emerald-700";
                 break;
             case 'closing':
-                colors = "bg-red-600/10 text-red-800 hover:bg-red-600/20";
+                colors = "bg-red-600 text-white shadow-sm shadow-red-600/25 hover:bg-red-700";
                 break;
         }
 
         const isActiveDiscount = id === 'DISCOUNT' && globalDiscountValue > 0;
-        const finalColors = isActiveDiscount ? "bg-red-600/15 text-red-600 hover:bg-red-600/25" : colors;
+        const finalColors = isActiveDiscount ? "bg-rose-600 text-white shadow-sm shadow-rose-600/25 hover:bg-rose-700" : colors;
 
         return (
-            <div key={id} className="relative w-full">
+            <div key={id} className={`relative ${isHorizontal ? 'w-[112px] shrink-0' : 'w-full'}`}>
                 <button
                     disabled={disabled}
                     onClick={() => onAction(id)}
@@ -67,7 +68,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
                         ${isHorizontal ? 'h-14 py-1 gap-0.5' : 'h-20 py-3 gap-1.5'}
                         ${finalColors} rounded-xl
                         transition-all duration-200
-                        active:scale-90
+                        active:scale-90 border border-white/25
                         ${disabled ? 'opacity-30 grayscale pointer-events-none' : ''}
                     `}
                 >
@@ -90,8 +91,8 @@ const ActionGrid: React.FC<ActionGridProps> = ({
     };
 
     return (
-        <div className={`w-full ${isHorizontal ? 'bg-white border-t border-gray-100 p-2 shadow-inner' : ''}`}>
-            <div className={`mx-auto grid ${isHorizontal ? 'max-w-[1800px] grid-cols-6 gap-2' : 'grid-cols-3 gap-2'}`}>
+        <div className={`w-full ${isHorizontal ? 'bg-white border-t border-gray-100 p-2 shadow-inner overflow-x-auto overflow-y-hidden no-scrollbar' : ''}`}>
+            <div className={`mx-auto ${isHorizontal ? 'flex w-max min-w-full gap-2' : 'grid grid-cols-3 gap-2'}`}>
                 {/* SALES GROUP (Blue) */}
                 {renderButton('DISCOUNT', 'Descuento', <Percent />, 'sales')}
                 {renderButton('COUPON', 'Cupón', <QrCode />, 'sales')}
@@ -106,12 +107,15 @@ const ActionGrid: React.FC<ActionGridProps> = ({
                 {/* UTILITY GROUP (Gray) */}
                 {renderButton('SETTINGS', 'Ajustes', <Settings />, 'utility')}
                 {renderButton('DRAWER', 'Cajón', <Box />, 'utility')}
+                {renderButton('CASH_IN', 'Entrada', <ArrowDownLeft />, 'utility')}
+                {renderButton('CASH_OUT', 'Salida', <ArrowUpRight />, 'utility')}
                 {renderButton('TRACKING', 'Rastreo', <Package />, 'utility')}
                 {renderButton('AGENDA', 'Agenda', <Calendar />, 'utility')}
 
                 {/* CLOSING GROUP (Red) */}
                 {renderButton('Z_REPORT', 'Cierre Z', <Lock />, 'closing')}
                 {shouldRenderLogout && renderButton('LOGOUT', 'Salir', <LogOut />, 'closing')}
+                {renderButton('EXIT_APP', 'Cerrar App', <Power />, 'closing')}
             </div>
         </div>
     );

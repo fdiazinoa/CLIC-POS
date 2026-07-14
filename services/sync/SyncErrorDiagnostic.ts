@@ -14,7 +14,7 @@ export type SyncDiagnosticOperation =
     | 'PUSH_MASTERS'
     | 'REGISTER_TERMINAL';
 
-export type TerminalBindingStatus = 'UNBOUND' | 'BINDING' | 'BOUND' | 'BOUND_AUTH_MISMATCH' | 'BINDING_ERROR' | 'TOKEN_INVALID';
+export type TerminalBindingStatus = 'UNBOUND' | 'BINDING' | 'BOUND' | 'NEEDS_REAUTH' | 'BOUND_AUTH_MISMATCH' | 'BINDING_ERROR' | 'TOKEN_INVALID';
 export type CatalogSyncStatus = 'IDLE' | 'SYNCING' | 'SYNCED' | 'ERROR' | 'AUTH_ERROR' | 'FISCAL_CONFIG_MISSING' | 'ERP_MASTER_PULL_FAILED';
 export type SalesPushStatus = 'DISABLED' | 'LOCKED_UNTIL_ERP_READY' | 'LOCKED_AUTH_REQUIRED' | 'LOCKED_FISCAL_CONFIG_REQUIRED' | 'LOCKED_MASTER_SYNC_REQUIRED' | 'ENABLED';
 
@@ -178,7 +178,7 @@ const truncateBody = (value: unknown): string | null => {
 
 const resolveBindingStatus = (): TerminalBindingStatus => {
     const explicit = safeLocalStorageGet(TERMINAL_BINDING_STATUS_KEY) as TerminalBindingStatus | null;
-    if (explicit && ['UNBOUND', 'BINDING', 'BOUND', 'BOUND_AUTH_MISMATCH', 'BINDING_ERROR', 'TOKEN_INVALID'].includes(explicit)) return explicit;
+    if (explicit && ['UNBOUND', 'BINDING', 'BOUND', 'NEEDS_REAUTH', 'BOUND_AUTH_MISMATCH', 'BINDING_ERROR', 'TOKEN_INVALID'].includes(explicit)) return explicit;
     return safeLocalStorageGet('clic_erp_sync_terminal_id') || safeLocalStorageGet('active_terminal_id')
         ? 'BOUND'
         : 'UNBOUND';
@@ -248,6 +248,21 @@ export const isStaleLocalhostSyncMessage = (message: string | null | undefined):
         || normalized.includes('::1');
 };
 
+const isRecoverableNetworkConnectivityMessage = (message: string | null | undefined): boolean => {
+    if (!message) return false;
+    const normalized = message.trim().toLowerCase();
+    return normalized.includes('unable to resolve host')
+        || normalized.includes('no address associated with hostname')
+        || normalized.includes('failed to fetch')
+        || normalized.includes('network request failed')
+        || normalized.includes('networkerror')
+        || normalized.includes('err_internet_disconnected')
+        || normalized.includes('err_name_not_resolved')
+        || normalized.includes('browser offline')
+        || normalized.includes('dns')
+        || normalized.includes('temporary failure in name resolution');
+};
+
 const isRecoverableOperationCollectionDiagnostic = (
     diagnostic: SyncErrorDiagnostic | null | undefined,
 ): boolean => {
@@ -293,6 +308,21 @@ export const isRecoverableStaleSyncDiagnostic = (
         const operationCollection = isRecoverableOperationCollectionDiagnostic(diagnostic);
 
         if (bound && catalogSynced && (erpContract || operationCollection || targetNotConfigured)) {
+            return true;
+        }
+    }
+
+    if (
+        isRecoverableNetworkConnectivityMessage(diagnostic?.errorMessage)
+        || isRecoverableNetworkConnectivityMessage(diagnostic?.fetchDiagnostic?.errorMessage)
+        || diagnostic?.networkOnline === false
+        || diagnostic?.fetchDiagnostic?.networkOnline === false
+    ) {
+        const bound = hasActiveTerminalBinding();
+        const catalogSynced = resolveCatalogStatus() === 'SYNCED';
+        const safeToStayOffline = bound || catalogSynced;
+
+        if (safeToStayOffline) {
             return true;
         }
     }
