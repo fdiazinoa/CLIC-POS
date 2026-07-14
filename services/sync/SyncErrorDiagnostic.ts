@@ -14,7 +14,7 @@ export type SyncDiagnosticOperation =
     | 'PUSH_MASTERS'
     | 'REGISTER_TERMINAL';
 
-export type TerminalBindingStatus = 'UNBOUND' | 'BINDING' | 'BOUND' | 'BOUND_AUTH_MISMATCH' | 'BINDING_ERROR' | 'TOKEN_INVALID';
+export type TerminalBindingStatus = 'UNBOUND' | 'BINDING' | 'BOUND' | 'NEEDS_REAUTH' | 'BOUND_AUTH_MISMATCH' | 'BINDING_ERROR' | 'TOKEN_INVALID';
 export type CatalogSyncStatus = 'IDLE' | 'SYNCING' | 'SYNCED' | 'ERROR' | 'AUTH_ERROR' | 'FISCAL_CONFIG_MISSING' | 'ERP_MASTER_PULL_FAILED';
 export type SalesPushStatus = 'DISABLED' | 'LOCKED_UNTIL_ERP_READY' | 'LOCKED_AUTH_REQUIRED' | 'LOCKED_FISCAL_CONFIG_REQUIRED' | 'LOCKED_MASTER_SYNC_REQUIRED' | 'ENABLED';
 
@@ -178,7 +178,7 @@ const truncateBody = (value: unknown): string | null => {
 
 const resolveBindingStatus = (): TerminalBindingStatus => {
     const explicit = safeLocalStorageGet(TERMINAL_BINDING_STATUS_KEY) as TerminalBindingStatus | null;
-    if (explicit && ['UNBOUND', 'BINDING', 'BOUND', 'BOUND_AUTH_MISMATCH', 'BINDING_ERROR', 'TOKEN_INVALID'].includes(explicit)) return explicit;
+    if (explicit && ['UNBOUND', 'BINDING', 'BOUND', 'NEEDS_REAUTH', 'BOUND_AUTH_MISMATCH', 'BINDING_ERROR', 'TOKEN_INVALID'].includes(explicit)) return explicit;
     return safeLocalStorageGet('clic_erp_sync_terminal_id') || safeLocalStorageGet('active_terminal_id')
         ? 'BOUND'
         : 'UNBOUND';

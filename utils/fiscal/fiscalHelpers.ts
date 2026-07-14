@@ -82,6 +82,30 @@ export const normalizeFiscalProviderId = (value: unknown): FiscalProviderId => {
   return 'NONE';
 };
 
+export const normalizeFiscalMode = (value: unknown): FiscalMode => {
+  if (typeof value === 'boolean') return value ? DEFAULT_FISCAL_COMPLIANCE_CONFIG.mode : 'NONE';
+  const normalized = typeof value === 'string'
+    ? value.trim().toUpperCase().replace(/[\s-]+/g, '_')
+    : '';
+  if (normalized === 'NONE' || normalized === 'LEGACY_B' || normalized === 'ECF') return normalized;
+  if (
+    normalized === 'NO_FISCAL' ||
+    normalized === 'NON_FISCAL' ||
+    normalized === 'SIN_COMPROBANTES' ||
+    normalized === 'SIN_COMPROBANTE' ||
+    normalized === 'COMPROBANTE_NO_FISCAL' ||
+    normalized === 'DISABLED' ||
+    normalized === 'OFF'
+  ) return 'NONE';
+  if (normalized === 'LEGACY_NCF' || normalized === 'LEGACY') return 'LEGACY_B';
+  if (normalized === 'NCF' || normalized === 'B' || normalized === 'B_SERIES') return 'LEGACY_B';
+  if (normalized === 'E_CF' || normalized === 'E-CF' || normalized === 'E_COMPROBANTE' || normalized === 'E_COMPROBANTES') return 'ECF';
+  return DEFAULT_FISCAL_COMPLIANCE_CONFIG.mode;
+};
+
+export const isFiscalComplianceDisabled = (mode?: FiscalMode | null): boolean =>
+  mode === 'NONE';
+
 const normalizeFiscalEnvironment = (value: unknown): FiscalProviderEnvironment => {
   const parsed = Number(value);
   return parsed === 0 || parsed === 1 || parsed === 2 || parsed === 3 ? parsed : 0;
@@ -446,8 +470,10 @@ export const getFiscalComplianceConfig = (
   );
 
   return {
-    mode: incoming.mode || DEFAULT_FISCAL_COMPLIANCE_CONFIG.mode,
-    defaultProvider: normalizeFiscalProviderId(incoming.defaultProvider) || DEFAULT_FISCAL_COMPLIANCE_CONFIG.defaultProvider,
+    mode: normalizeFiscalMode(incoming.mode),
+    defaultProvider: normalizeFiscalMode(incoming.mode) === 'NONE'
+      ? 'NONE'
+      : normalizeFiscalProviderId(incoming.defaultProvider) || DEFAULT_FISCAL_COMPLIANCE_CONFIG.defaultProvider,
     allowLegacyFallback: incoming.allowLegacyFallback ?? DEFAULT_FISCAL_COMPLIANCE_CONFIG.allowLegacyFallback,
     providers: mergedProviders,
     reserveAlert: normalizeFiscalReserveAlertConfig(incoming.reserveAlert)
@@ -466,7 +492,7 @@ export const getEffectiveFiscalComplianceConfig = (
   if (terminalProvider.id === 'NONE' || terminalProvider.enabled === false) {
     return {
       ...base,
-      mode: 'LEGACY_B',
+      mode: 'NONE',
       defaultProvider: 'NONE'
     };
   }

@@ -55,7 +55,7 @@ const TicketOptionsModal: React.FC<TicketOptionsModalProps> = ({ onClose, onActi
     // Print Subtotal (Proforma)
     { 
       id: 'PRINT_SUBTOTAL',
-      label: 'Proforma', 
+      label: 'Subtotal', 
       icon: Printer, 
       color: 'text-cyan-600',
       bg: 'bg-cyan-50'

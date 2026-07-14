@@ -18,6 +18,8 @@ const AuditLogViewer: React.FC<AuditLogViewerProps> = ({ config, users }) => {
 
         return (
             (log.actionType || '').toLowerCase().includes(searchLower) ||
+            (log.actionDescription || '').toLowerCase().includes(searchLower) ||
+            (log.details || '').toLowerCase().includes(searchLower) ||
             (cashierName || '').toLowerCase().includes(searchLower) ||
             (supervisorName || '').toLowerCase().includes(searchLower) ||
             log.reason?.toLowerCase().includes(searchLower)
@@ -64,7 +66,9 @@ const AuditLogViewer: React.FC<AuditLogViewerProps> = ({ config, users }) => {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100">
-                                {filteredLogs.map(log => (
+                                {filteredLogs.map(log => {
+                                    const actionLabel = log.actionDescription || log.actionType.replace('POS_', '').replace(/_/g, ' ');
+                                    return (
                                     <tr key={log.id} className="hover:bg-gray-50 transition-colors">
                                         <td className="p-4 text-sm font-medium text-gray-600 whitespace-nowrap">
                                             <div className="flex items-center gap-2">
@@ -77,8 +81,13 @@ const AuditLogViewer: React.FC<AuditLogViewerProps> = ({ config, users }) => {
                                                 log.actionType.includes('DISCOUNT') ? 'bg-orange-100 text-orange-600' :
                                                     'bg-blue-100 text-blue-600'
                                                 }`}>
-                                                {log.actionType.replace('POS_', '').replace('_', ' ')}
+                                                {actionLabel}
                                             </span>
+                                            {log.actionDescription && (
+                                                <p className="mt-1 text-[10px] font-bold text-gray-400 uppercase tracking-wide">
+                                                    {log.actionType}
+                                                </p>
+                                            )}
                                         </td>
                                         <td className="p-4">
                                             <div className="flex flex-col gap-1 text-xs">
@@ -106,6 +115,11 @@ const AuditLogViewer: React.FC<AuditLogViewerProps> = ({ config, users }) => {
                                                     "{log.reason}"
                                                 </div>
                                             )}
+                                            {log.details && !log.reason && (
+                                                <div className="mt-1 text-xs text-gray-500 bg-gray-100 p-1 rounded">
+                                                    {log.details}
+                                                </div>
+                                            )}
                                         </td>
                                         <td className="p-4 text-xs text-gray-400 font-mono">
                                             <div className="flex items-center gap-1">
@@ -115,7 +129,7 @@ const AuditLogViewer: React.FC<AuditLogViewerProps> = ({ config, users }) => {
                                             {log.itemId && <div>Item: {log.itemId.substring(0, 8)}...</div>}
                                         </td>
                                     </tr>
-                                ))}
+                                )})}
                             </tbody>
                         </table>
                     </div>

@@ -462,7 +462,7 @@ class ProductImageCacheService {
           ...(Array.isArray(localProduct?.images) ? localProduct.images : []),
           localProduct?.image,
         ]);
-      } else if (!this.isNativeAndroid()) {
+      } else {
         normalized.imageLocalPath = null;
         normalized.image = this.buildRenderableWebPath(imageUrl);
         normalized.images = uniqueStrings([normalized.image]);

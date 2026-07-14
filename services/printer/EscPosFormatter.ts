@@ -2,6 +2,7 @@ import { BusinessConfig, CartItem, Reservation, Table, Transaction, ZReport } fr
 import { findTaxByIdentifier } from '../../utils/taxIdentity';
 import { buildPaymentSettlementSummary } from '../../utils/paymentSettlement';
 import { resolveTerminalSellerName } from '../../utils/terminalSnapshotSellers';
+import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../../utils/fiscalBreakdown';
 
 export interface EscPosLabelRecord {
   productId: string;
@@ -361,6 +362,12 @@ export const buildEscPosTicketPayload = (
   const width = RECEIPT_LINE_WIDTH;
   const chunks: Uint8Array[] = [];
   const totals = calculateTransactionTotals(transaction, config);
+  const terminalConfig = (config.terminals || []).find(candidate => candidate.id === transaction.terminalId)?.config;
+  const fiscalSummary = calculateTransactionFiscalSummary(transaction, config, { terminalConfig });
+  const receiptSubtotal = fiscalSummary.subtotal;
+  const receiptTaxTotal = fiscalSummary.taxTotal;
+  const receiptTotal = fiscalSummary.total;
+  const receiptTaxBreakdown = fiscalSummary.taxBreakdown || [];
   const ncfTypeLabels: Record<string, string> = {
     B01: 'FACTURA DE CREDITO FISCAL',
     B02: 'FACTURA DE CONSUMO',
@@ -386,7 +393,7 @@ export const buildEscPosTicketPayload = (
       .map(currency => ({
         code: currency.code,
         symbol: currency.symbol,
-        amount: totals.total / Number(currency.rate || 1)
+        amount: receiptTotal / Number(currency.rate || 1)
       }))
     : [];
 
@@ -433,15 +440,19 @@ export const buildEscPosTicketPayload = (
   });
 
   chunks.push(divider(width));
-  pushPair(chunks, 'SUBTOTAL', formatMoney(config.currencySymbol || '$', totals.subtotal), width);
-  if (totals.taxTotal > 0) {
-    pushPair(chunks, 'ITBIS', formatMoney(config.currencySymbol || '$', totals.taxTotal), width);
+  pushPair(chunks, 'SUBTOTAL', formatMoney(config.currencySymbol || '$', receiptSubtotal), width);
+  if (receiptTaxBreakdown.length > 0) {
+    receiptTaxBreakdown.forEach(tax => {
+      pushPair(chunks, formatTaxLineLabel(tax), formatMoney(config.currencySymbol || '$', tax.amount), width);
+    });
+  } else if (receiptTaxTotal > 0) {
+    pushPair(chunks, 'IMPUESTOS', formatMoney(config.currencySymbol || '$', receiptTaxTotal), width);
   }
   if (totals.discountTotal > 0) {
     pushPair(chunks, 'DESCUENTO', formatMoney(config.currencySymbol || '$', totals.discountTotal), width);
   }
   chunks.push(bold(true));
-  pushPair(chunks, 'TOTAL', formatMoney(config.currencySymbol || '$', totals.total), width);
+  pushPair(chunks, 'TOTAL', formatMoney(config.currencySymbol || '$', receiptTotal), width);
   chunks.push(bold(false));
 
   if (foreignCurrencyLines.length > 0) {
@@ -472,7 +483,7 @@ export const buildEscPosTicketPayload = (
     const baseCurrencyCode = config.currencies?.find(currency => currency.isBase)?.code || 'DOP';
     const settlementSummary = buildPaymentSettlementSummary(
       Array.isArray(transaction.payments) ? transaction.payments as any : [],
-      Number(totals.total || transaction.total || 0),
+      Number(receiptTotal || transaction.total || 0),
       baseCurrencyCode
     );
     const settlementLineById = new Map(settlementSummary.lines.map(line => [line.paymentId, line]));
@@ -726,6 +737,78 @@ export const buildEscPosReservationPayload = (reservation: Reservation, config: 
   return toBase64(concat(chunks));
 };
 
+export const buildEscPosSubtotalPayload = (
+  config: BusinessConfig,
+  params: {
+    items: CartItem[];
+    subtotal: number;
+    discountTotal: number;
+    taxTotal: number;
+    finalTotal: number;
+    table?: Table | null;
+    customerName?: string;
+    terminalId?: string;
+    orderNumber?: string;
+    tableDisplayLabel?: string;
+  }
+): string | null => {
+  if (!params.items?.length) return null;
+
+  const width = RECEIPT_LINE_WIDTH;
+  const chunks: Uint8Array[] = [];
+  const now = new Date();
+
+  buildReceiptHeader(chunks, config, 'SUBTOTAL', width);
+  chunks.push(align(1));
+  chunks.push(bold(true));
+  pushTextLines(chunks, splitLines('NO VALIDO COMO FACTURA FISCAL', width));
+  chunks.push(bold(false));
+  chunks.push(align(0));
+  chunks.push(divider(width));
+
+  pushPair(chunks, 'Fecha', `${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, width);
+  if (params.table || params.tableDisplayLabel) {
+    const tableLabel = params.tableDisplayLabel || params.table?.name || params.table?.nombre || '';
+    pushPair(chunks, 'Mesa', tableLabel, width);
+  }
+  if (params.orderNumber) pushPair(chunks, 'Orden', params.orderNumber, width);
+  if (params.customerName) pushTextLines(chunks, splitLines(`Cliente: ${params.customerName}`, width));
+
+  chunks.push(divider(width));
+  params.items.forEach(item => {
+    pushTextLines(chunks, splitLines(item.name || 'Articulo', width));
+    pushPair(
+      chunks,
+      `${Number(item.quantity || 0).toFixed(item.quantity % 1 === 0 ? 0 : 3)} x ${formatMoney(config.currencySymbol || '$', Number(item.price || 0))}`,
+      formatMoney(config.currencySymbol || '$', Number(item.price || 0) * Number(item.quantity || 0)),
+      width
+    );
+    if (item.modifiers?.length) pushTextLines(chunks, splitLines(`Op: ${item.modifiers.join(', ')}`, width));
+    if (item.note) pushTextLines(chunks, splitLines(`Nota: ${item.note}`, width));
+  });
+
+  chunks.push(divider(width));
+  pushPair(chunks, 'SUBTOTAL', formatMoney(config.currencySymbol || '$', params.subtotal), width);
+  if (params.discountTotal > 0) {
+    pushPair(chunks, 'DESCUENTO', `-${formatMoney(config.currencySymbol || '$', params.discountTotal)}`, width);
+  }
+  pushPair(chunks, 'IMPUESTOS', formatMoney(config.currencySymbol || '$', params.taxTotal), width);
+  chunks.push(bold(true));
+  chunks.push(size(0x11));
+  pushPair(chunks, 'TOTAL', formatMoney(config.currencySymbol || '$', params.finalTotal), width);
+  chunks.push(size(0x00));
+  chunks.push(bold(false));
+
+  chunks.push(divider(width));
+  chunks.push(align(1));
+  pushTextLines(chunks, splitLines('Verifique su consumo antes de facturar.', width));
+  pushTextLines(chunks, splitLines('Propina legal no incluida.', width));
+  chunks.push(align(0));
+  finalizeReceipt(chunks);
+
+  return toBase64(concat(chunks));
+};
+
 export const buildEscPosZReportPayload = (
   report: ZReport,
   hiddenModules: string[] = [],
@@ -782,6 +865,23 @@ export const buildEscPosZReportPayload = (
       pushPair(chunks, 'Esperado', Number(report.cashExpected[currency] || 0).toFixed(2), width);
       pushPair(chunks, 'Contado', Number(report.cashCounted[currency] || 0).toFixed(2), width);
       pushPair(chunks, 'Diferencia', Number(report.cashDiscrepancy[currency] || 0).toFixed(2), width);
+    });
+  }
+
+  const cashMovementDetails = Array.isArray((report as any).cashMovementDetails)
+    ? (report as any).cashMovementDetails
+    : [];
+  if (!hiddenModules.includes('CASH_DETAILS') && cashMovementDetails.length > 0) {
+    chunks.push(divider(width));
+    pushTextLines(chunks, splitLines('ENTRADAS / SALIDAS', width));
+    cashMovementDetails.forEach((movement: any) => {
+      const label = movement.type === 'IN' ? 'Entrada' : 'Salida';
+      const reason = movement.reason || 'Movimiento General';
+      const time = movement.timestamp
+        ? new Date(movement.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : '';
+      pushTextLines(chunks, splitLines(`${label} ${time} - ${reason}`, width));
+      pushPair(chunks, movement.type === 'IN' ? '(+)' : '(-)', formatMoney(currencySymbol, Number(movement.amount || 0)), width);
     });
   }
 

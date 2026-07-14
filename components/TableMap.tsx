@@ -104,6 +104,95 @@ interface TableNoticeState {
     tableToOpen?: Table;
 }
 
+const BarTabsModal: React.FC<{
+    table: Table;
+    tickets: ParkedTicket[];
+    currencySymbol: string;
+    onClose: () => void;
+    onOpenTab: (ticket: ParkedTicket) => void;
+    onCreateTab: (name: string) => void;
+}> = ({ table, tickets, currencySymbol, onClose, onOpenTab, onCreateTab }) => {
+    const [tabName, setTabName] = useState('');
+    const nextName = `Minuta ${tickets.length + 1}`;
+    const total = tickets.reduce((sum, ticket) => {
+        const itemsTotal = (ticket.items || []).reduce((acc, item) => acc + Number(item.price || 0) * Number(item.quantity || 0), 0);
+        return sum + Number(ticket.total ?? itemsTotal ?? 0);
+    }, 0);
+
+    return (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
+            <div className="w-full max-w-2xl rounded-[2rem] bg-white shadow-2xl overflow-hidden">
+                <div className="flex items-start justify-between gap-4 border-b border-slate-100 p-6">
+                    <div>
+                        <p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-500">Barra / Minutas</p>
+                        <h2 className="mt-1 text-3xl font-black text-slate-900">{table.nombre || table.name || 'Barra'}</h2>
+                        <p className="mt-1 text-sm font-bold text-slate-500">
+                            {tickets.length} minuta(s) abierta(s) · {currencySymbol}{total.toLocaleString()}
+                        </p>
+                    </div>
+                    <button onClick={onClose} className="rounded-full bg-slate-100 p-3 text-slate-500 hover:bg-slate-200">
+                        <X size={22} />
+                    </button>
+                </div>
+
+                <div className="grid gap-4 p-6 md:grid-cols-[1fr_280px]">
+                    <div className="space-y-3 max-h-[52vh] overflow-y-auto pr-1">
+                        {tickets.length === 0 ? (
+                            <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center">
+                                <ReceiptText size={38} className="mx-auto mb-3 text-slate-300" />
+                                <p className="font-black text-slate-700">No hay minutas abiertas</p>
+                                <p className="mt-1 text-sm font-semibold text-slate-400">Crea una minuta para empezar una cuenta en esta barra.</p>
+                            </div>
+                        ) : (
+                            tickets.map((ticket, index) => {
+                                const ticketTotal = Number(ticket.total ?? (ticket.items || []).reduce((acc, item) => acc + Number(item.price || 0) * Number(item.quantity || 0), 0));
+                                const label = ticket.barTabName || ticket.alias || ticket.name || `Minuta ${index + 1}`;
+                                return (
+                                    <button
+                                        key={ticket.id}
+                                        type="button"
+                                        onClick={() => onOpenTab(ticket)}
+                                        className="flex w-full items-center justify-between gap-4 rounded-3xl border border-slate-100 bg-white p-4 text-left shadow-sm transition-all hover:border-blue-300 hover:bg-blue-50"
+                                    >
+                                        <div className="min-w-0">
+                                            <p className="truncate text-lg font-black text-slate-900">{label}</p>
+                                            <p className="mt-1 text-xs font-bold uppercase tracking-wide text-slate-400">
+                                                {(ticket.items || []).length} línea(s) · {new Date(ticket.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            </p>
+                                        </div>
+                                        <span className="shrink-0 text-xl font-black text-emerald-600">{currencySymbol}{ticketTotal.toLocaleString()}</span>
+                                    </button>
+                                );
+                            })
+                        )}
+                    </div>
+
+                    <div className="rounded-3xl border border-blue-100 bg-blue-50 p-5">
+                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Nueva minuta</p>
+                        <input
+                            value={tabName}
+                            onChange={(event) => setTabName(event.target.value)}
+                            placeholder={nextName}
+                            className="mt-4 w-full rounded-2xl border border-blue-100 bg-white px-4 py-4 text-lg font-black text-slate-900 outline-none focus:border-blue-500"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => {
+                                onCreateTab(tabName.trim() || nextName);
+                                setTabName('');
+                            }}
+                            className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 py-4 text-sm font-black uppercase tracking-wide text-white shadow-lg shadow-blue-100 active:scale-95"
+                        >
+                            <Plus size={18} />
+                            Abrir minuta
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const CANVAS_WIDTH = 1240;
 const CANVAS_HEIGHT = 860;
 const SCALE_MIN = 0.55;
@@ -195,6 +284,7 @@ const inferArchetype = (table: Table): TableArchetype => {
     if (table.shape === 'BAR') return 'BAR';
     if (table.shape === 'BOOTH') return 'BOOTH';
     if (table.shape === 'CIRCLE') return 'CIRCLE';
+    if (table.shape === 'SQUARE') return 'SQUARE';
 
     const label = `${table.nombre || ''} ${table.name || ''}`.toLowerCase();
     const ratio = table.width / Math.max(1, table.height);
@@ -289,6 +379,7 @@ const TableMap: React.FC<TableMapProps> = ({
 }) => {
     const [activeRoomId, setActiveRoomId] = useState<string>(initialRoomId || rooms[0]?.id || '');
     const [selectedTable, setSelectedTable] = useState<Table | null>(null);
+    const [selectedBarTable, setSelectedBarTable] = useState<Table | null>(null);
     const [tooltip, setTooltip] = useState<TooltipState | null>(null);
     const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
     const [isFullscreen, setIsFullscreen] = useState(false);
@@ -468,10 +559,30 @@ const TableMap: React.FC<TableMapProps> = ({
         (parkedTickets || []).forEach(ticket => {
             if (ticket.tableId === undefined || ticket.tableId === null) return;
             const summary = summarizeParkedTicket(ticket);
-            if (summary) map.set(String(ticket.tableId), summary);
+            if (!summary) return;
+            const tableId = String(ticket.tableId);
+            const existing = map.get(tableId);
+            if (existing) {
+                map.set(tableId, {
+                    ...existing,
+                    itemCount: existing.itemCount + summary.itemCount,
+                    calculatedTotal: existing.calculatedTotal + summary.calculatedTotal,
+                    finalTotal: existing.finalTotal + summary.finalTotal,
+                    hasExplicitTotal: existing.hasExplicitTotal && summary.hasExplicitTotal
+                });
+            } else {
+                map.set(tableId, summary);
+            }
         });
         return map;
     }, [parkedTickets]);
+
+    const getBarTickets = useCallback(
+        (table: Table): ParkedTicket[] => (parkedTickets || [])
+            .filter(ticket => String(ticket.tableId ?? '') === String(table.id))
+            .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
+        [parkedTickets]
+    );
 
     const getParkedSummaryForTable = useCallback(
         (table: Table) => {
@@ -831,6 +942,11 @@ const TableMap: React.FC<TableMapProps> = ({
     }, [completeTableTransfer, resolveTicketForTable, transferSelection]);
 
     const handleTableAction = useCallback(async (table: Table) => {
+        if (table.shape === 'BAR') {
+            setSelectedBarTable(table);
+            return;
+        }
+
         const joinedTableName = String((table as any).joinedTableName || '').trim();
         if (isRestaurantMode && joinedTableName) {
             setTableNotice({
@@ -1036,7 +1152,7 @@ const TableMap: React.FC<TableMapProps> = ({
 
         const buttonClass = variant === 'grid'
             ? 'rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors'
-            : 'shrink-0 min-w-[150px] rounded-2xl bg-white/[0.09] hover:bg-white/[0.16] active:scale-[0.98] text-slate-100 text-sm font-black py-3.5 px-5 border border-white/15 shadow-[0_10px_24px_rgba(2,6,23,0.32)] flex items-center justify-center gap-2.5 whitespace-nowrap transition-colors touch-manipulation';
+            : 'shrink-0 min-w-[138px] rounded-2xl bg-white/[0.09] hover:bg-white/[0.16] active:scale-[0.98] text-slate-100 text-xs font-black py-3 px-4 border border-white/15 shadow-[0_10px_24px_rgba(2,6,23,0.32)] flex items-center justify-center gap-2 whitespace-nowrap transition-colors touch-manipulation';
         const iconSize = variant === 'grid' ? 18 : 20;
 
         return (
@@ -1392,7 +1508,7 @@ const TableMap: React.FC<TableMapProps> = ({
 
                 <div className="absolute bottom-5 left-5 right-5 z-30 flex justify-end pointer-events-none">
                     {isRestaurantMode && (
-                        <div className="ml-[15.5rem] max-w-[min(calc(100vw-18rem),1120px)] rounded-[1.8rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-4 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-3 overflow-x-auto overflow-y-hidden no-scrollbar pointer-events-auto">
+                        <div className="ml-0 w-full max-w-[calc(100vw-2.5rem)] rounded-[1.8rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-3 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-2 overflow-x-auto overflow-y-hidden no-scrollbar pointer-events-auto md:ml-[15.5rem] md:max-w-[calc(100vw-18rem)] md:px-4 md:gap-3">
                             {renderTableControlActions('footer')}
                         </div>
                     )}
@@ -1568,6 +1684,44 @@ const TableMap: React.FC<TableMapProps> = ({
                                 console.error(error);
                                 alert('Error de conexion');
                             }
+                        }}
+                    />
+                )}
+
+                {selectedBarTable && (
+                    <BarTabsModal
+                        table={selectedBarTable}
+                        tickets={getBarTickets(selectedBarTable)}
+                        currencySymbol={currencySymbol}
+                        onClose={() => setSelectedBarTable(null)}
+                        onOpenTab={(ticket) => {
+                            const label = ticket.barTabName || ticket.alias || ticket.name || 'Minuta';
+                            const total = Number(ticket.total ?? (ticket.items || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
+                            onTableClick({
+                                ...selectedBarTable,
+                                status: 'OCCUPIED',
+                                currentOrderId: ticket.id,
+                                currentOrderTotal: total,
+                                timeSeated: selectedBarTable.timeSeated || ticket.timestamp,
+                                barTabId: ticket.barTabId || ticket.id,
+                                barTabName: label
+                            });
+                            setSelectedBarTable(null);
+                        }}
+                        onCreateTab={(name) => {
+                            const orderId = `BAR-${selectedBarTable.id}-${Date.now()}`;
+                            onTableClick({
+                                ...selectedBarTable,
+                                status: 'OCCUPIED',
+                                currentOrderId: orderId,
+                                currentOrderTotal: 0,
+                                timeSeated: new Date().toISOString(),
+                                waiterId: currentUser.id,
+                                waiterName: currentUser.name,
+                                barTabId: orderId,
+                                barTabName: name
+                            });
+                            setSelectedBarTable(null);
                         }}
                     />
                 )}

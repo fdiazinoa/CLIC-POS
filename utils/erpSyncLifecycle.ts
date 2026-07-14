@@ -1,8 +1,8 @@
 import { getStoredTenantIdentity } from './cloudMasterRegistry';
 import { normalizeErpSyncApiBase, resolveErpSyncApiBase } from './erpBaseUrl';
 import { extractErpRegisterAuth, resolveNormalizedRegisterDeviceToken } from '../services/sync/erpRegisterResponse';
-import { persistSyncDeviceToken } from '../services/sync/deviceToken';
-import { saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
+import { getSyncDeviceToken, persistSyncDeviceToken } from '../services/sync/deviceToken';
+import { readTerminalCredentialsSync, saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
 import { extractTerminalConfigRequestedScopes } from './terminalConfigPushScopes';
 import { mergeTerminalConfigSnapshots } from './terminalConfigSnapshot';
 import { db } from './db';
@@ -95,6 +95,40 @@ type SyncOutboxEvent = {
     created_at?: string;
 };
 
+type ConfigPushV2Payload = {
+    contract_version?: number;
+    snapshot_id?: string;
+    version_hash?: string;
+    versions?: Record<string, unknown>;
+    scopes?: unknown;
+    terminal_id?: string;
+    terminalId?: string;
+    created_at?: string;
+};
+
+type ConfigPushV2State = {
+    versionHash: string | null;
+    domainVersions: Record<string, number>;
+    inFlight?: {
+        eventId: string;
+        snapshotId: string;
+        versionHash: string;
+        scopes: string[];
+        attempts: number;
+        lastError: string | null;
+        updatedAt: string;
+    } | null;
+};
+
+type ConfigSnapshotResponse = {
+    status?: string;
+    snapshot_id?: string;
+    version_hash?: string;
+    versions?: Record<string, unknown>;
+    scopes?: unknown;
+    domains?: Record<string, unknown>;
+};
+
 type SyncOutboxPullResponse = {
     status: string;
     events?: SyncOutboxEvent[];
@@ -117,6 +151,8 @@ type SyncRequestError = Error & {
     status?: number;
     code?: string | null;
     payload?: any;
+    retryable?: boolean;
+    retryAfterMs?: number;
 };
 
 type EnsureLifecycleParams = {
@@ -155,6 +191,27 @@ const ERP_FULL_BOOTSTRAP_REASON_KEY = 'clic_erp_sync_full_bootstrap_reason';
 export const ERP_FULL_BOOTSTRAP_REQUIRED_EVENT = 'clic-pos-erp-full-bootstrap-required';
 const TERMINAL_CONFIG_RESTART_NOTICE_KEY = 'clic_pos_terminal_config_restart_notice';
 const TERMINAL_CONFIG_PENDING_SNAPSHOT_KEY = 'clic_pos_terminal_config_pending_snapshot';
+const CONFIG_PUSH_V2_STATE_KEY = 'clic_pos_config_push_v2_state';
+const CONFIG_PUSH_V2_FLAG_KEY = 'CONFIG_PUSH_V2_ENABLED';
+const CONFIG_PUSH_V2_CAPABILITY = 'CONFIG_PUSH_V2';
+const CONFIG_PUSH_V2_SUPPORTED_SCOPES = new Set([
+    'catalog',
+    'prices',
+    'inventory',
+    'loyalty',
+    'documents',
+    'promotions',
+    'config',
+]);
+const CONFIG_PUSH_V2_DOMAIN_COLLECTIONS: Record<string, string[]> = {
+    catalog: ['products', 'items', 'categories', 'productCategories', 'productGroups', 'collections', 'serviceTypes'],
+    prices: ['priceLists', 'productPrices', 'supplierProductPrices'],
+    inventory: ['warehouses', 'productStocks'],
+    loyalty: ['pointsPrograms', 'loyaltyPrograms', 'pointsRules', 'earningRules', 'redemptionRules', 'customerPointBalances', 'loyaltyTiers'],
+    documents: ['documentSeries', 'documentTypes', 'fiscalRanges', 'fiscalReceiptTypes', 'fiscalReceipts', 'fiscalSequences', 'internalSequences', 'terminalFiscalConfig'],
+    promotions: ['promotions', 'campaigns', 'coupons', 'discountRules', 'promotionRules', 'promotionConditions', 'promotionBenefits'],
+    config: ['config'],
+};
 
 let outboxProcessingPromise: Promise<{ processed: number; applied: number; failed: number } | null> | null = null;
 
@@ -177,6 +234,502 @@ const normalizeAllowedModules = (value: unknown): string[] => (
 const normalizeActivationMode = (value?: string | null) => normalizeOptional(value).toUpperCase();
 const normalizeActivationReason = (value?: string | null) => normalizeOptional(value).toUpperCase();
 const normalizeActivationBillingStatus = (value?: string | null) => normalizeOptional(value).toUpperCase();
+
+const compactErrorDetail = (value: unknown): string => {
+    const raw = value instanceof Error ? value.message : String(value || 'Error procesando evento ERP outbox');
+    return raw.replace(/token=[^\s,]+/gi, 'token=[redacted]').slice(0, 240);
+};
+
+const configPushV2Log = (eventName: string, details: Record<string, unknown>) => {
+    const safeDetails = { ...details };
+    delete safeDetails.payload;
+    delete safeDetails.headers;
+    delete safeDetails.token;
+    console.info(eventName, safeDetails);
+};
+
+export const isConfigPushV2Enabled = (): boolean => {
+    const envValue = normalizeOptional(String((import.meta as any)?.env?.VITE_CONFIG_PUSH_V2_ENABLED || ''));
+    const localValue = normalizeOptional(localStorage.getItem(CONFIG_PUSH_V2_FLAG_KEY));
+    const value = (localValue || envValue || 'false').toLowerCase();
+    return ['true', '1', 'yes', 'on'].includes(value);
+};
+
+const getSyncCapabilities = (): string[] => (
+    isConfigPushV2Enabled() ? [CONFIG_PUSH_V2_CAPABILITY] : []
+);
+
+const readConfigPushV2State = (): ConfigPushV2State => {
+    try {
+        const raw = localStorage.getItem(CONFIG_PUSH_V2_STATE_KEY);
+        if (!raw) return { versionHash: null, domainVersions: {} };
+        const parsed = JSON.parse(raw);
+        const domainVersions = parsed?.domainVersions && typeof parsed.domainVersions === 'object'
+            ? Object.fromEntries(
+                Object.entries(parsed.domainVersions).map(([key, value]) => [key, Number(value) || 0])
+            )
+            : {};
+        return {
+            versionHash: normalizeOptional(parsed?.versionHash || null) || null,
+            domainVersions,
+            inFlight: parsed?.inFlight && typeof parsed.inFlight === 'object' ? parsed.inFlight : null,
+        };
+    } catch {
+        return { versionHash: null, domainVersions: {} };
+    }
+};
+
+const writeConfigPushV2State = (state: ConfigPushV2State) => {
+    localStorage.setItem(CONFIG_PUSH_V2_STATE_KEY, JSON.stringify({
+        versionHash: state.versionHash || null,
+        domainVersions: state.domainVersions || {},
+        inFlight: state.inFlight || null,
+    }));
+};
+
+const normalizeConfigPushV2Scope = (value: unknown): string | null => {
+    const normalized = normalizeOptional(String(value || '')).toLowerCase();
+    if (!normalized) return null;
+    if (['product_prices', 'productprices', 'prices'].includes(normalized)) return 'prices';
+    if (['stock', 'stocks', 'inventory_stock'].includes(normalized)) return 'inventory';
+    if (['promo', 'promotion'].includes(normalized)) return 'promotions';
+    return normalized;
+};
+
+const normalizeConfigPushV2Scopes = (value: unknown): string[] => {
+    const raw = Array.isArray(value)
+        ? value
+        : typeof value === 'string'
+            ? value.split(',')
+            : [];
+    return Array.from(new Set(
+        raw
+            .map(normalizeConfigPushV2Scope)
+            .filter((scope): scope is string => Boolean(scope && CONFIG_PUSH_V2_SUPPORTED_SCOPES.has(scope)))
+    ));
+};
+
+const normalizeVersionsMap = (value: unknown): Record<string, number> => {
+    const source = asObject<Record<string, unknown>>(value);
+    const result: Record<string, number> = {};
+    Object.entries(source).forEach(([key, rawValue]) => {
+        const scope = normalizeConfigPushV2Scope(key);
+        const version = Number(rawValue);
+        if (scope && Number.isFinite(version)) {
+            result[scope] = version;
+        }
+    });
+    return result;
+};
+
+const buildRetryableConfigPushV2Error = (message: string, retryAfterMs?: number): SyncRequestError => {
+    const error = new Error(message) as SyncRequestError;
+    error.retryable = true;
+    error.retryAfterMs = retryAfterMs;
+    return error;
+};
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const getRetryAfterMs = (response: Response, payload?: any): number | null => {
+    const retryAfterMs = Number(payload?.retry_after_ms);
+    if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) return retryAfterMs;
+    const retryAfter = Number(response.headers.get('Retry-After'));
+    if (Number.isFinite(retryAfter) && retryAfter > 0) return retryAfter * 1000;
+    return null;
+};
+
+const sameTerminalId = (incoming: string, candidates: Array<string | null | undefined>): boolean => {
+    const normalizedIncoming = normalizeOptional(incoming).toLowerCase();
+    return Boolean(normalizedIncoming && candidates.some((candidate) => normalizeOptional(candidate || '').toLowerCase() === normalizedIncoming));
+};
+
+const getConfigPushV2LocalVersion = (state: ConfigPushV2State, scope: string): number =>
+    Number(state.domainVersions?.[scope] || 0);
+
+const setConfigPushV2InFlight = (
+    eventId: string,
+    snapshotId: string,
+    versionHash: string,
+    scopes: string[],
+    attempts: number,
+    lastError: string | null
+) => {
+    const state = readConfigPushV2State();
+    writeConfigPushV2State({
+        ...state,
+        inFlight: {
+            eventId,
+            snapshotId,
+            versionHash,
+            scopes,
+            attempts,
+            lastError,
+            updatedAt: new Date().toISOString(),
+        },
+    });
+};
+
+const clearConfigPushV2InFlight = () => {
+    const state = readConfigPushV2State();
+    writeConfigPushV2State({ ...state, inFlight: null });
+};
+
+const fetchConfigSnapshotV2 = async (input: {
+    terminalId: string;
+    snapshotId: string;
+    versionHash: string;
+    currentVersionHash: string | null;
+    scopes: string[];
+    deviceId: string;
+}): Promise<{ status: 200 | 304; payload?: ConfigSnapshotResponse; size: number }> => {
+    const baseUrl = getSyncApiBase();
+    if (!baseUrl) {
+        throw new Error('ERP sync lifecycle URL is not configured');
+    }
+
+    const searchParams = new URLSearchParams();
+    searchParams.set('version_hash', input.versionHash);
+    if (input.currentVersionHash) searchParams.set('current_version', input.currentVersionHash);
+    searchParams.set('scopes', input.scopes.join(','));
+
+    const endpoint = `${baseUrl}/terminals/${encodeURIComponent(input.terminalId)}/config-snapshots/${encodeURIComponent(input.snapshotId)}?${searchParams.toString()}`;
+    const response = await fetch(endpoint, {
+        method: 'GET',
+        headers: {
+            'Content-Type': 'application/json',
+            ...buildDeviceHeaders(input.deviceId),
+        },
+    });
+
+    if (response.status === 304) {
+        return { status: 304, size: 0 };
+    }
+
+    const text = await response.text().catch(() => '');
+    const payload = text ? JSON.parse(text) : {};
+    const size = text.length;
+
+    if (response.status === 503) {
+        const retryAfterMs = getRetryAfterMs(response, payload) || 500;
+        const error = buildRetryableConfigPushV2Error(payload?.code || 'SYNC_SNAPSHOT_BUILDING', retryAfterMs);
+        error.status = response.status;
+        error.code = payload?.code || 'SYNC_SNAPSHOT_BUILDING';
+        error.payload = payload;
+        throw error;
+    }
+
+    if (response.status >= 500) {
+        const error = buildRetryableConfigPushV2Error(payload?.code || `HTTP_${response.status}`, getRetryAfterMs(response, payload) || 500);
+        error.status = response.status;
+        error.code = payload?.code || null;
+        error.payload = payload;
+        throw error;
+    }
+
+    if (!response.ok) {
+        const error = new Error(payload?.code || payload?.message || `HTTP_${response.status}`) as SyncRequestError;
+        error.status = response.status;
+        error.code = payload?.code || null;
+        error.payload = payload;
+        throw error;
+    }
+
+    return { status: 200, payload: payload as ConfigSnapshotResponse, size };
+};
+
+const applyConfigPushV2Domain = async (scope: string, domainPayload: unknown): Promise<string[]> => {
+    const domain = asObject<Record<string, unknown>>(domainPayload);
+    const candidateCollections = CONFIG_PUSH_V2_DOMAIN_COLLECTIONS[scope] || [];
+    const touchedCollections: string[] = [];
+    const previousValues = new Map<string, unknown>();
+
+    try {
+        if (scope === 'config' && Object.keys(domain).length > 0) {
+            const configPatch = asObject<Record<string, unknown>>(domain.config || domain);
+            if (Object.keys(configPatch).length > 0) {
+                const localConfig = await db.get('config' as any);
+                previousValues.set('config', localConfig);
+                const nextConfig = {
+                    ...(asObject<Record<string, unknown>>(localConfig)),
+                    ...configPatch,
+                };
+                await db.save('config' as any, nextConfig);
+                touchedCollections.push('config');
+            }
+        }
+
+        for (const collection of candidateCollections) {
+            if (collection === 'config') continue;
+            const value = domain[collection] ?? domain[collection.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)];
+            if (!Array.isArray(value)) continue;
+            previousValues.set(collection, await db.get(collection as any));
+            await db.save(collection as any, value);
+            touchedCollections.push(collection);
+        }
+
+        if (touchedCollections.length === 0) {
+            throw new Error(`Dominio ${scope} no contiene colecciones aplicables`);
+        }
+
+        touchedCollections.forEach((collection) => {
+            window.dispatchEvent(new CustomEvent(`${collection}Updated`));
+        });
+        if (touchedCollections.some((collection) => ['categories', 'productCategories', 'productGroups', 'collections'].includes(collection))) {
+            window.dispatchEvent(new CustomEvent('categoriesUpdated'));
+        }
+        if (touchedCollections.includes('config')) {
+            window.dispatchEvent(new CustomEvent('configUpdated'));
+        }
+
+        return touchedCollections;
+    } catch (error) {
+        for (const [collection, previousValue] of Array.from(previousValues.entries()).reverse()) {
+            await db.save(collection as any, previousValue);
+        }
+        throw error;
+    }
+};
+
+const validateConfigSnapshotResponse = (input: {
+    payload: ConfigSnapshotResponse;
+    snapshotId: string;
+    versionHash: string;
+    requestedScopes: string[];
+}) => {
+    const responseSnapshotId = normalizeOptional(input.payload.snapshot_id || null);
+    const responseVersionHash = normalizeOptional(input.payload.version_hash || null);
+    if (responseSnapshotId !== input.snapshotId) {
+        throw new Error('SYNC_SNAPSHOT_ID_MISMATCH');
+    }
+    if (responseVersionHash !== input.versionHash) {
+        throw new Error('SYNC_SNAPSHOT_VERSION_MISMATCH');
+    }
+
+    const responseScopes = normalizeConfigPushV2Scopes(input.payload.scopes);
+    const requested = new Set(input.requestedScopes);
+    const unauthorized = responseScopes.filter((scope) => !requested.has(scope));
+    if (unauthorized.length > 0) {
+        throw new Error('SYNC_SNAPSHOT_SCOPE_FORBIDDEN');
+    }
+
+    const domains = asObject<Record<string, unknown>>(input.payload.domains);
+    input.requestedScopes.forEach((scope) => {
+        if (!Object.prototype.hasOwnProperty.call(domains, scope)) {
+            throw new Error(`SYNC_SNAPSHOT_DOMAIN_MISSING:${scope}`);
+        }
+    });
+};
+
+const processConfigPushV2Event = async (
+    event: SyncOutboxEvent,
+    params: Pick<EnsureLifecycleParams, 'deviceId' | 'terminalId' | 'localTerminalId' | 'terminalName'>,
+    binding: ReturnType<typeof getStoredErpSyncBinding>
+): Promise<'APPLIED' | 'RETRY'> => {
+    if (!isConfigPushV2Enabled()) {
+        throw new Error('CONFIG_PUSH_V2_DISABLED');
+    }
+
+    const startedAt = Date.now();
+    const payload = asObject<ConfigPushV2Payload>(event.payload);
+    const eventId = normalizeOptional(event.id || null);
+    const snapshotId = normalizeOptional(payload.snapshot_id || null);
+    const versionHash = normalizeOptional(payload.version_hash || null);
+    const versions = normalizeVersionsMap(payload.versions);
+    const scopes = normalizeConfigPushV2Scopes(payload.scopes);
+    const terminalId = normalizeOptional(payload.terminal_id || payload.terminalId || null);
+
+    configPushV2Log('config_push_v2_received', {
+        event_id: eventId,
+        snapshot_id: snapshotId,
+        version_hash: versionHash,
+        scopes,
+    });
+
+    if (!eventId || !snapshotId || !versionHash || scopes.length === 0 || Object.keys(versions).length === 0 || !terminalId) {
+        throw new Error('CONFIG_PUSH_V2_INVALID_EVENT');
+    }
+
+    if (!sameTerminalId(terminalId, [binding.terminalId, binding.terminalUuid, params.terminalId, params.localTerminalId])) {
+        throw new Error('CONFIG_PUSH_V2_TERMINAL_MISMATCH');
+    }
+
+    const state = readConfigPushV2State();
+    const attempts = state.inFlight?.eventId === eventId ? Number(state.inFlight.attempts || 0) : 0;
+
+    if (state.versionHash === versionHash) {
+        configPushV2Log('config_snapshot_skipped_same_version', {
+            event_id: eventId,
+            snapshot_id: snapshotId,
+            version_hash: versionHash,
+            scopes,
+            duration_ms: Date.now() - startedAt,
+        });
+        clearConfigPushV2InFlight();
+        await ackErpOutboxEvent(eventId, 'APPLIED');
+        configPushV2Log('config_push_v2_acknowledged', {
+            event_id: eventId,
+            snapshot_id: snapshotId,
+            version_hash: versionHash,
+            scopes,
+            duration_ms: Date.now() - startedAt,
+        });
+        return 'APPLIED';
+    }
+
+    const staleScopes = scopes.filter((scope) => Number(versions[scope] || 0) > getConfigPushV2LocalVersion(state, scope));
+    if (staleScopes.length === 0) {
+        writeConfigPushV2State({
+            versionHash,
+            domainVersions: {
+                ...(state.domainVersions || {}),
+                ...Object.fromEntries(scopes.map((scope) => [scope, Number(versions[scope] || 0)])),
+            },
+            inFlight: null,
+        });
+        await ackErpOutboxEvent(eventId, 'APPLIED');
+        configPushV2Log('config_push_v2_acknowledged', {
+            event_id: eventId,
+            snapshot_id: snapshotId,
+            version_hash: versionHash,
+            scopes,
+            count: 0,
+            duration_ms: Date.now() - startedAt,
+        });
+        return 'APPLIED';
+    }
+
+    let attempt = attempts;
+    const maxAttemptsThisCycle = 3;
+    while (attempt < attempts + maxAttemptsThisCycle) {
+        attempt += 1;
+        setConfigPushV2InFlight(eventId, snapshotId, versionHash, staleScopes, attempt, null);
+        try {
+            configPushV2Log('config_snapshot_download_started', {
+                event_id: eventId,
+                snapshot_id: snapshotId,
+                version_hash: versionHash,
+                scopes: staleScopes,
+                attempt,
+            });
+            const result = await fetchConfigSnapshotV2({
+                terminalId,
+                snapshotId,
+                versionHash,
+                currentVersionHash: state.versionHash,
+                scopes: staleScopes,
+                deviceId: params.deviceId,
+            });
+
+            if (result.status === 304) {
+                await ackErpOutboxEvent(eventId, 'APPLIED');
+                clearConfigPushV2InFlight();
+                configPushV2Log('config_push_v2_acknowledged', {
+                    event_id: eventId,
+                    snapshot_id: snapshotId,
+                    version_hash: versionHash,
+                    scopes: staleScopes,
+                    duration_ms: Date.now() - startedAt,
+                });
+                return 'APPLIED';
+            }
+
+            const snapshotPayload = result.payload || {};
+            validateConfigSnapshotResponse({
+                payload: snapshotPayload,
+                snapshotId,
+                versionHash,
+                requestedScopes: staleScopes,
+            });
+
+            configPushV2Log('config_snapshot_downloaded', {
+                event_id: eventId,
+                snapshot_id: snapshotId,
+                version_hash: versionHash,
+                scopes: staleScopes,
+                attempt,
+                size: result.size,
+            });
+
+            const domains = asObject<Record<string, unknown>>(snapshotPayload.domains);
+            const nextDomainVersions = { ...(state.domainVersions || {}) };
+            for (const scope of staleScopes) {
+                try {
+                    const touchedCollections = await applyConfigPushV2Domain(scope, domains[scope]);
+                    nextDomainVersions[scope] = Number(snapshotPayload.versions?.[scope] ?? versions[scope] ?? 0);
+                    configPushV2Log('config_snapshot_domain_applied', {
+                        event_id: eventId,
+                        snapshot_id: snapshotId,
+                        version_hash: versionHash,
+                        scopes: [scope],
+                        count: touchedCollections.length,
+                    });
+                } catch (error) {
+                    configPushV2Log('config_snapshot_apply_failed', {
+                        event_id: eventId,
+                        snapshot_id: snapshotId,
+                        version_hash: versionHash,
+                        scopes: [scope],
+                        code: compactErrorDetail(error),
+                    });
+                    throw error;
+                }
+            }
+
+            writeConfigPushV2State({
+                versionHash,
+                domainVersions: {
+                    ...nextDomainVersions,
+                    ...Object.fromEntries(scopes.map((scope) => [scope, Number(versions[scope] || nextDomainVersions[scope] || 0)])),
+                },
+                inFlight: null,
+            });
+            await ackErpOutboxEvent(eventId, 'APPLIED');
+            configPushV2Log('config_push_v2_acknowledged', {
+                event_id: eventId,
+                snapshot_id: snapshotId,
+                version_hash: versionHash,
+                scopes: staleScopes,
+                duration_ms: Date.now() - startedAt,
+            });
+            return 'APPLIED';
+        } catch (error) {
+            const requestError = error as SyncRequestError;
+            const retryAfterMs = Math.min(
+                10000,
+                Math.max(requestError.retryAfterMs || 500, 500 * (2 ** Math.max(0, attempt - 1)))
+            );
+            const code = requestError.code || compactErrorDetail(error);
+            setConfigPushV2InFlight(eventId, snapshotId, versionHash, staleScopes, attempt, code);
+
+            if (requestError.retryable || requestError.status === 503 || requestError.status === 0) {
+                configPushV2Log(requestError.status === 503 ? 'config_snapshot_building' : 'config_push_v2_retry_scheduled', {
+                    event_id: eventId,
+                    snapshot_id: snapshotId,
+                    version_hash: versionHash,
+                    scopes: staleScopes,
+                    attempt,
+                    code,
+                    retry_after_ms: retryAfterMs,
+                });
+                await delay(retryAfterMs);
+                continue;
+            }
+
+            throw error;
+        }
+    }
+
+    configPushV2Log('config_push_v2_retry_scheduled', {
+        event_id: eventId,
+        snapshot_id: snapshotId,
+        version_hash: versionHash,
+        scopes: staleScopes,
+        attempt,
+        code: 'RETRY_LIMIT_THIS_CYCLE',
+    });
+    return 'RETRY';
+};
 
 export const isLifecycleActivationBlocked = (activation?: SyncActivationState | null): boolean => {
     if (!activation) return false;
@@ -580,6 +1133,7 @@ export const clearErpIncrementalSyncState = () => {
     };
 
     removeByPrefix(localStorage, [
+        'clic_pos_collection_timestamp_cursor:',
         'clic_pos_terminal_catalog_cursor:',
         'clic_pos_terminal_manifest_cursor_map:',
         'clic_pos_terminal_config_',
@@ -639,12 +1193,19 @@ const clearBindingIfTenantChanged = (identity: TenantIdentity) => {
 
 const buildDeviceHeaders = (deviceId?: unknown): Record<string, string> => {
     const resolvedDeviceId = normalizeOptional(String(deviceId || resolveLocalDeviceId() || ''));
-    return resolvedDeviceId
+    const credentials = readTerminalCredentialsSync();
+    const syncToken = normalizeOptional(credentials.syncToken || localStorage.getItem('clic_erp_sync_token') || '');
+    const deviceToken = normalizeOptional(getSyncDeviceToken() || credentials.deviceToken || '');
+    return {
+        ...(syncToken ? { 'X-Sync-Token': syncToken } : {}),
+        ...(deviceToken ? { 'X-Device-Token': deviceToken } : {}),
+        ...(resolvedDeviceId
         ? {
             'X-Device-Id': resolvedDeviceId,
             'X-POS-Device-Id': resolvedDeviceId,
         }
-        : {};
+        : {}),
+    };
 };
 
 const postJson = async <T>(path: string, body: Record<string, unknown>): Promise<T> => {
@@ -1258,20 +1819,25 @@ export const registerErpSyncTerminal = async (params: EnsureLifecycleParams): Pr
 
     clearBindingIfTenantChanged(identity);
 
-    const runtimeTelemetry = await resolveRuntimeTelemetry();
-    const storedBinding = getStoredErpSyncBinding();
+	    const runtimeTelemetry = await resolveRuntimeTelemetry();
+	    const storedBinding = getStoredErpSyncBinding();
+	    const syncCapabilities = getSyncCapabilities();
 
-    const payload = await postJson<SyncRegisterResponse>('/terminals/register', {
-        device_id: params.deviceId,
+	    const payload = await postJson<SyncRegisterResponse>('/terminals/register', {
+	        device_id: params.deviceId,
         tenant_id: identity.tenantId || null,
         company_ref: identity.tenantSlug || null,
         company_id: params.companyId || storedBinding.companyId || null,
         store_id: params.storeId || storedBinding.storeId || null,
         name: params.terminalName || params.localTerminalId || params.terminalId,
-        app_version: runtimeTelemetry.appVersion || null,
-        ip_address: runtimeTelemetry.ipAddress || null,
-        metadata: {
-            source: 'CLIC_POS_APK',
+	        app_version: runtimeTelemetry.appVersion || null,
+	        ip_address: runtimeTelemetry.ipAddress || null,
+	        ...(syncCapabilities.length > 0 ? {
+	            sync_capabilities: syncCapabilities,
+	            capabilities: syncCapabilities,
+	        } : {}),
+	        metadata: {
+	            source: 'CLIC_POS_APK',
             terminal_id: params.localTerminalId || params.terminalId,
             erp_terminal_id: params.terminalId,
             terminal_name: params.terminalName || params.localTerminalId || params.terminalId,
@@ -1309,7 +1875,11 @@ export const registerErpSyncTerminal = async (params: EnsureLifecycleParams): Pr
     if (deviceToken || registerAuth.syncToken) {
         saveTerminalCredentialsSync({
             terminalId: resolvedTerminalId,
+            erpTerminalId: resolvedTerminalId,
             deviceId: params.deviceId,
+            tenantId: identity.tenantId || null,
+            erpTenantId: identity.tenantId || null,
+            cloudAdminTenantId: identity.tenantId || null,
             ...(deviceToken ? {
                 deviceToken,
                 deviceTokenSource: 'ERP_REGISTER',
@@ -1333,22 +1903,27 @@ export const heartbeatErpSyncTerminal = async (
 ): Promise<SyncHeartbeatResponse | null> => {
     if (!isConfigured()) return null;
 
-    const runtimeTelemetry = await resolveRuntimeTelemetry();
-    const storedBinding = getStoredErpSyncBinding();
-    const resolvedDeviceId = params.deviceId || fallbackDeviceId || resolveLocalDeviceId();
-    const terminalRef = storedBinding.terminalId || null;
+	    const runtimeTelemetry = await resolveRuntimeTelemetry();
+	    const storedBinding = getStoredErpSyncBinding();
+	    const resolvedDeviceId = params.deviceId || fallbackDeviceId || resolveLocalDeviceId();
+	    const terminalRef = storedBinding.terminalId || null;
+	    const syncCapabilities = getSyncCapabilities();
 
     if (!terminalRef && !resolvedDeviceId) {
         return null;
     }
 
-    const payload = await postJson<SyncHeartbeatResponse>('/terminals/heartbeat', {
-        terminal_id: terminalRef || undefined,
-        device_id: resolvedDeviceId || undefined,
-        app_version: runtimeTelemetry.appVersion || null,
-        ip_address: runtimeTelemetry.ipAddress || null,
-        pending_events: params.pendingEvents || 0,
-    });
+	    const payload = await postJson<SyncHeartbeatResponse>('/terminals/heartbeat', {
+	        terminal_id: terminalRef || undefined,
+	        device_id: resolvedDeviceId || undefined,
+	        app_version: runtimeTelemetry.appVersion || null,
+	        ip_address: runtimeTelemetry.ipAddress || null,
+	        pending_events: params.pendingEvents || 0,
+	        ...(syncCapabilities.length > 0 ? {
+	            sync_capabilities: syncCapabilities,
+	            capabilities: syncCapabilities,
+	        } : {}),
+	    });
 
     if (payload?.terminal) {
         persistBinding(payload.terminal, undefined, {
@@ -1381,13 +1956,21 @@ export const processErpSyncOutbox = async (
         let applied = 0;
         let failed = 0;
 
-        for (const event of events) {
-            const eventType = normalizeOptional(event.event_type || null).toUpperCase();
+	        for (const event of events) {
+	            const eventType = normalizeOptional(event.event_type || null).toUpperCase();
 
-            try {
-                if (eventType === 'CONFIG_PUSH') {
-                    const payload = asObject<Record<string, unknown>>(event.payload);
-                    const appliedLocally = await applyErpConfigPushToLocalTerminal({
+	            try {
+	                if (eventType === 'CONFIG_PUSH_V2') {
+	                    const result = await processConfigPushV2Event(event, params, binding);
+	                    if (result === 'APPLIED') {
+	                        applied += 1;
+	                    }
+	                    continue;
+	                }
+
+	                if (eventType === 'CONFIG_PUSH') {
+	                    const payload = asObject<Record<string, unknown>>(event.payload);
+	                    const appliedLocally = await applyErpConfigPushToLocalTerminal({
                         deviceId: params.deviceId,
                         fallbackTerminalId: binding.terminalId || params.terminalId,
                         payload,
@@ -1406,12 +1989,15 @@ export const processErpSyncOutbox = async (
                 }
 
                 await ackErpOutboxEvent(event.id, 'FAILED', `Evento no soportado por el POS: ${eventType || 'UNKNOWN'}`);
-                failed += 1;
-            } catch (error: any) {
-                console.warn(`[ERP SYNC] Error procesando ${eventType || 'UNKNOWN'}:`, error);
-                await ackErpOutboxEvent(event.id, 'FAILED', error?.message || 'Error procesando evento ERP outbox');
-                failed += 1;
-            }
+	                failed += 1;
+	            } catch (error: any) {
+	                console.warn(`[ERP SYNC] Error procesando ${eventType || 'UNKNOWN'}:`, error);
+	                if (error?.retryable) {
+	                    continue;
+	                }
+	                await ackErpOutboxEvent(event.id, 'FAILED', error?.message || 'Error procesando evento ERP outbox');
+	                failed += 1;
+	            }
         }
 
         return {

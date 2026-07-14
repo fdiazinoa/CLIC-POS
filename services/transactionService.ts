@@ -145,6 +145,80 @@ const createTechnicalId = (prefix: string): string => {
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 };
 
+const normalizeSeriesKey = (value: unknown): string => String(value || '').trim().toUpperCase();
+
+const getSeriesMatchKeys = (series: Partial<DocumentSeries> | null | undefined): string[] => {
+    if (!series) return [];
+    return [
+        series.id,
+        (series as any).code,
+        (series as any).series_code,
+        (series as any).seriesCode,
+        series.prefix,
+    ].map(normalizeSeriesKey).filter(Boolean);
+};
+
+const getTerminalMatchKeys = (terminal: any): string[] => {
+    if (!terminal) return [];
+    return [
+        terminal?.id,
+        terminal?.terminalId,
+        terminal?.terminal_id,
+        terminal?.localTerminalId,
+        terminal?.local_terminal_id,
+        terminal?.erpTerminalId,
+        terminal?.erp_terminal_id,
+        terminal?.config?.terminalId,
+        terminal?.config?.terminal_id,
+        terminal?.config?.localTerminalId,
+        terminal?.config?.local_terminal_id,
+        terminal?.config?.erpTerminalId,
+        terminal?.config?.erp_terminal_id,
+        terminal?.config?.erpBinding?.terminalId,
+        terminal?.config?.erpBinding?.terminal_id,
+    ].map(normalizeSeriesKey).filter(Boolean);
+};
+
+const findOperationalTerminal = (terminals: any[], terminalId?: string): any | undefined => {
+    const requestedKeys = [
+        terminalId,
+        localStorage.getItem('active_terminal_id'),
+        localStorage.getItem('CLIC_POS_TERMINAL_ID'),
+        localStorage.getItem('clic_pos_terminal_id'),
+    ].map(normalizeSeriesKey).filter(Boolean);
+
+    const byRequestedId = (Array.isArray(terminals) ? terminals : []).find((terminal) => {
+        const terminalKeys = getTerminalMatchKeys(terminal);
+        return requestedKeys.some((key) => terminalKeys.includes(key));
+    });
+    if (byRequestedId) return byRequestedId;
+
+    return (Array.isArray(terminals) ? terminals : []).find((terminal: any) =>
+        Array.isArray(terminal?.config?.documentSeries) &&
+        terminal.config.documentSeries.some((series: any) =>
+            String(series?.source || '').toUpperCase() === 'ERP_TERMINAL_CONFIG'
+        )
+    );
+};
+
+const mergeTerminalAuthoritativeSeries = (
+    terminalSeries: DocumentSeries[],
+    existingSeries: DocumentSeries[]
+): DocumentSeries[] => {
+    return mergeDocumentSeriesCollection((terminalSeries || []).map((incoming: any) => {
+        const incomingKeys = getSeriesMatchKeys(incoming);
+        const localMatch = (existingSeries || []).find((candidate) => {
+            const candidateKeys = getSeriesMatchKeys(candidate);
+            return incomingKeys.some((key) => candidateKeys.includes(key));
+        });
+
+        return {
+            ...incoming,
+            nextNumber: Math.max(Number(incoming.nextNumber) || 1, Number(localMatch?.nextNumber) || 1),
+        };
+    }));
+};
+
 /**
  * Transaction Service
  * Handles transaction ID generation with global sequence numbers
@@ -164,11 +238,23 @@ class TransactionService {
         const configRaw = await db.get('config' as any);
         const currentConfig = resolveCurrentConfig(configRaw);
         const terminals = Array.isArray(currentConfig?.terminals) ? currentConfig.terminals : [];
-        const terminal = terminalId ? terminals.find((t: any) => t?.id === terminalId) : undefined;
+        const terminal = findOperationalTerminal(terminals, terminalId);
         const fromTerminalConfig = (Array.isArray(terminal?.config?.documentSeries)
             ? terminal.config.documentSeries
             : []) as DocumentSeries[];
-        const merged = mergeDocumentSeriesCollection([...rawSequences, ...fromTerminalConfig]);
+        const hasAuthoritativeTerminalSeries = fromTerminalConfig.some((series: any) =>
+            String(series?.source || '').toUpperCase() === 'ERP_TERMINAL_CONFIG'
+        );
+        const merged = hasAuthoritativeTerminalSeries
+            ? mergeTerminalAuthoritativeSeries(fromTerminalConfig, rawSequences)
+            : mergeDocumentSeriesCollection([...rawSequences, ...fromTerminalConfig]);
+
+        if (hasAuthoritativeTerminalSeries && JSON.stringify(rawSequences) !== JSON.stringify(merged)) {
+            await db.save('internalSequences', merged);
+            await db.save('documentSeries' as any, merged);
+            window.dispatchEvent(new CustomEvent('internalSequencesUpdated'));
+            window.dispatchEvent(new CustomEvent('documentSeriesUpdated'));
+        }
 
         const assignment = terminal?.config?.documentAssignments?.[documentType];
         if (typeof assignment === 'string' && assignment.trim()) {

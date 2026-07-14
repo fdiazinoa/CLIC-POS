@@ -187,6 +187,17 @@
   color: white;
 }
 
+.modern-user-avatar-fallback {
+  width: 58px;
+  height: 58px;
+  color: #94a3b8;
+  stroke-width: 1.6;
+}
+
+.modern-user-card.active .modern-user-avatar-fallback {
+  color: #e2e8f0;
+}
+
 .modern-user-name {
   font-size: 0.95rem;
   font-weight: 600;

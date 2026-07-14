@@ -14,7 +14,7 @@ interface TeamHubProps {
    users: User[];
    roles: RoleDefinition[];
    onUpdateUsers: (users: User[]) => void;
-   onUpdateRoles: (roles: RoleDefinition[]) => void;
+   onUpdateRoles: (roles: RoleDefinition[]) => void | Promise<void>;
    onClose: () => void;
 }
 
@@ -112,6 +112,7 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
 
    // Roles State
    const [editingRole, setEditingRole] = useState<RoleDefinition | null>(null);
+   const [roleSaveStatus, setRoleSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
 
    // Users Management State
    const [isUserModalOpen, setIsUserModalOpen] = useState(false);
@@ -230,11 +231,12 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
       const newRole: RoleDefinition = {
          id: `role_${Date.now()}`,
          name: 'Nuevo Rol',
-         permissions: ['SALE'],
+         permissions: ['SALE', 'POS_CHECKOUT'],
          isSystem: false
       };
       onUpdateRoles([...roles, newRole]);
       setEditingRole(newRole);
+      setRoleSaveStatus('idle');
    };
 
    const handleUpdateRoleName = (roleId: string, newName: string) => {
@@ -243,6 +245,7 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
       if (editingRole && editingRole.id === roleId) {
          setEditingRole({ ...editingRole, name: newName });
       }
+      setRoleSaveStatus('idle');
    };
 
    const togglePermission = (roleId: string, permKey: string) => {
@@ -263,6 +266,14 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
          return role;
       });
       onUpdateRoles(updatedRoles);
+      setRoleSaveStatus('idle');
+   };
+
+   const handleSaveRoles = async () => {
+      setRoleSaveStatus('saving');
+      await Promise.resolve(onUpdateRoles(roles));
+      setRoleSaveStatus('saved');
+      window.setTimeout(() => setRoleSaveStatus('idle'), 1800);
    };
 
    const handleDeleteRole = (roleId: string) => {
@@ -304,6 +315,53 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
       });
       return reports;
    }, [timeRecords, users]);
+
+   const exportDailyReportsToExcel = () => {
+      const escapeCell = (value: any) => String(value ?? '')
+         .replace(/&/g, '&amp;')
+         .replace(/</g, '&lt;')
+         .replace(/>/g, '&gt;')
+         .replace(/"/g, '&quot;');
+      const rows = dailyReports.map(report => `
+         <tr>
+            <td>${escapeCell(report.userName)}</td>
+            <td>${escapeCell(report.date)}</td>
+            <td>${escapeCell(report.inTime)}</td>
+            <td>${escapeCell(report.outTime)}</td>
+            <td>${escapeCell(report.totalHours)}</td>
+            <td>${escapeCell(report.status)}</td>
+         </tr>
+      `).join('');
+      const html = `
+         <html>
+            <head><meta charset="UTF-8" /></head>
+            <body>
+               <table border="1">
+                  <thead>
+                     <tr>
+                        <th>Empleado</th>
+                        <th>Fecha</th>
+                        <th>Entrada</th>
+                        <th>Salida</th>
+                        <th>Total Horas</th>
+                        <th>Estado</th>
+                     </tr>
+                  </thead>
+                  <tbody>${rows}</tbody>
+               </table>
+            </body>
+         </html>
+      `;
+      const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `reporte-horas-${new Date().toISOString().slice(0, 10)}.xls`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+   };
 
    // --- RENDER CONTENT ---
 
@@ -604,7 +662,7 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
                   {/* ... Reports Content (Unchanged) ... */}
                   <div className="flex justify-between items-end mb-6">
                      <div><h2 className="text-2xl font-black text-gray-800 flex items-center gap-2"><FileBarChart className="text-emerald-600" /> Reporte de Jornada</h2><p className="text-gray-500 mt-1">Resumen de horas trabajadas y alertas de asistencia.</p></div>
-                     <button className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-gray-600 font-bold text-sm shadow-sm hover:bg-gray-50 flex items-center gap-2"><Download size={16} /> Exportar Excel</button>
+                     <button onClick={exportDailyReportsToExcel} className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-gray-600 font-bold text-sm shadow-sm hover:bg-gray-50 flex items-center gap-2"><Download size={16} /> Exportar Excel</button>
                   </div>
                   <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex-1 flex flex-col">
                      <div className="overflow-x-auto flex-1">
@@ -707,20 +765,30 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
                                     ) : (
                                        <h2 className="text-3xl font-black text-gray-800">{editingRole.name}</h2>
                                     )}
-                                    <p className="text-gray-500 text-sm mt-1">
+                                 <p className="text-gray-500 text-sm mt-1">
                                        {editingRole.isSystem ? 'Rol de sistema (Solo lectura parcial).' : 'Define los accesos para este perfil.'}
                                     </p>
                                  </div>
                               </div>
 
-                              {!editingRole.isSystem && (
+                              <div className="flex items-center gap-3">
                                  <button
-                                    onClick={() => handleDeleteRole(editingRole.id)}
-                                    className="px-4 py-2 border border-red-200 text-red-600 rounded-xl font-bold text-sm hover:bg-red-50 flex items-center gap-2 transition-colors"
+                                    onClick={handleSaveRoles}
+                                    disabled={roleSaveStatus === 'saving'}
+                                    className="px-5 py-3 bg-purple-600 text-white rounded-xl font-black text-sm hover:bg-purple-700 disabled:bg-gray-300 flex items-center gap-2 transition-colors shadow-md shadow-purple-100"
                                  >
-                                    <Trash2 size={16} /> Eliminar Rol
+                                    <Check size={16} />
+                                    {roleSaveStatus === 'saving' ? 'Guardando...' : roleSaveStatus === 'saved' ? 'Guardado' : 'Guardar permisos'}
                                  </button>
-                              )}
+                                 {!editingRole.isSystem && (
+                                    <button
+                                       onClick={() => handleDeleteRole(editingRole.id)}
+                                       className="px-4 py-2 border border-red-200 text-red-600 rounded-xl font-bold text-sm hover:bg-red-50 flex items-center gap-2 transition-colors"
+                                    >
+                                       <Trash2 size={16} /> Eliminar Rol
+                                    </button>
+                                 )}
+                              </div>
                            </div>
 
                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

@@ -116,6 +116,110 @@ const productMatchesCategory = (product: any, categoryRef: unknown): boolean => 
     ));
 };
 
+const asNumber = (value: unknown, fallback = 0): number => {
+    const n = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(n) ? n : fallback;
+};
+
+const promotionTriggerConfig = (promotion: Promotion): Record<string, any> => {
+    const record = promotion as any;
+    const config = record.trigger_config ?? record.triggerConfig;
+    return config && typeof config === 'object' ? config : {};
+};
+
+const itemPromotionBasePrice = (item: CartItem): number => (
+    item.adjustmentSource === 'TARIFF'
+        ? item.price
+        : (item.originalPrice || item.price)
+);
+
+const cartPromotionBaseTotal = (cart: CartItem[]): number => (
+    cart.reduce((sum, item) => sum + (itemPromotionBasePrice(item) * item.quantity), 0)
+);
+
+const promotionSelectionGroupsMatch = (cart: CartItem[], groups: any[]): boolean => {
+    if (!Array.isArray(groups) || groups.length === 0) return false;
+
+    return groups.every((group) => {
+        const categoryId = group?.category_id ?? group?.categoryId;
+        const requiredQuantity = asNumber(group?.required_quantity ?? group?.requiredQuantity, 0);
+        if (!categoryId || requiredQuantity <= 0) return false;
+
+        const categoryQuantity = cart.reduce((sum, item) => (
+            productMatchesCategory(item, categoryId) ? sum + item.quantity : sum
+        ), 0);
+
+        return categoryQuantity >= requiredQuantity;
+    });
+};
+
+const itemMatchesSelectionGroups = (item: CartItem, groups: any[]): boolean => (
+    Array.isArray(groups) && groups.some((group) => productMatchesCategory(item, group?.category_id ?? group?.categoryId))
+);
+
+const mixAndMatchEligibleTotal = (cart: CartItem[], groups: any[]): number => (
+    cart.reduce((sum, item) => (
+        itemMatchesSelectionGroups(item, groups)
+            ? sum + (itemPromotionBasePrice(item) * item.quantity)
+            : sum
+    ), 0)
+);
+
+const tieredQuantityDiscountPercent = (promotion: Promotion, quantity: number): number => {
+    const ranges = promotionTriggerConfig(promotion).tiered_quantity_ranges;
+    if (!Array.isArray(ranges)) return 0;
+
+    const matchingRanges = ranges
+        .map((range) => ({
+            minQty: asNumber(range?.min_qty ?? range?.minQty, 0),
+            maxQty: asNumber(range?.max_qty ?? range?.maxQty, 0),
+            discountPercent: asNumber(range?.discount_percent ?? range?.discountPercent, 0),
+        }))
+        .filter((range) => (
+            quantity >= range.minQty
+            && (range.maxQty === 0 || quantity <= range.maxQty)
+            && range.discountPercent > 0
+        ));
+
+    if (matchingRanges.length === 0) return 0;
+    matchingRanges.sort((a, b) => b.minQty - a.minQty);
+    return matchingRanges[0].discountPercent;
+};
+
+const promotionTargetsByTriggerConfig = (promotion: Promotion, product: any): boolean => {
+    const config = promotionTriggerConfig(promotion);
+
+    if (promotion.type === 'GIFT_WITH_PURCHASE') {
+        return productMatchesAnyReference(product, [config.gift_product_id ?? config.giftProductId]);
+    }
+
+    if (promotion.type === 'PREPAID_PACKAGE') {
+        return productMatchesAnyReference(product, [config.service_id ?? config.serviceId]);
+    }
+
+    if (promotion.type === 'MIX_AND_MATCH') {
+        return itemMatchesSelectionGroups(product, config.selection_groups ?? config.selectionGroups);
+    }
+
+    return false;
+};
+
+const promotionAppliesToCartItem = (promotion: Promotion, item: CartItem, config: BusinessConfig): boolean => {
+    if (promotion.type === 'PAYMENT_METHOD_DISCOUNT' || promotion.type === 'NEXT_PURCHASE_COUPON') {
+        return false;
+    }
+
+    if (
+        promotion.type === 'GIFT_WITH_PURCHASE'
+        || promotion.type === 'PREPAID_PACKAGE'
+        || promotion.type === 'MIX_AND_MATCH'
+    ) {
+        return promotionTargetsByTriggerConfig(promotion, item);
+    }
+
+    return promotionTargetsProduct(promotion, item, config) || promotionTargetsByTriggerConfig(promotion, item);
+};
+
 const terminalReferenceCandidates = (config: BusinessConfig, terminalId: string): string[] => {
     const normalizedRequestedId = String(terminalId || '').trim();
     const terminals = Array.isArray(config.terminals) ? config.terminals : [];
@@ -375,7 +479,7 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
     processedCart = processedCart.map(item => {
         // Find ALL applicable promotions for this item
         const applicablePromos = activePromotions.filter(p => {
-            return promotionTargetsProduct(p, item, config);
+            return promotionAppliesToCartItem(p, item, config);
         });
 
         if (
@@ -424,6 +528,57 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
                     // For simplicity, we'll skip complex conditional comparison in this loop 
                     // and assume if it triggers, it might be good. 
                     // Ideally, we refactor the price calculation into a helper function.
+                    break;
+                case 'TIERED_QUANTITY': {
+                    const discountPercent = tieredQuantityDiscountPercent(promo, item.quantity);
+                    if (discountPercent > 0) {
+                        tempPrice = promotionBasePrice * (1 - discountPercent / 100);
+                    }
+                    break;
+                }
+                case 'MIX_AND_MATCH': {
+                    const triggerConfig = promotionTriggerConfig(promo);
+                    const groups = triggerConfig.selection_groups ?? triggerConfig.selectionGroups;
+                    const priceFixed = asNumber(triggerConfig.price_fixed ?? triggerConfig.priceFixed, 0);
+                    const eligibleTotal = mixAndMatchEligibleTotal(processedCart, groups);
+                    if (
+                        priceFixed > 0
+                        && eligibleTotal > priceFixed
+                        && promotionSelectionGroupsMatch(processedCart, groups)
+                        && itemMatchesSelectionGroups(item, groups)
+                    ) {
+                        tempPrice = promotionBasePrice * (priceFixed / eligibleTotal);
+                    }
+                    break;
+                }
+                case 'GIFT_WITH_PURCHASE': {
+                    const triggerConfig = promotionTriggerConfig(promo);
+                    const minimumTicketValue = asNumber(triggerConfig.minimum_ticket_value ?? triggerConfig.minimumTicketValue, 0);
+                    if (
+                        item.quantity > 0
+                        && cartPromotionBaseTotal(processedCart) >= minimumTicketValue
+                        && productMatchesAnyReference(item, [triggerConfig.gift_product_id ?? triggerConfig.giftProductId])
+                    ) {
+                        tempPrice = promotionBasePrice * Math.max(item.quantity - 1, 0) / item.quantity;
+                    }
+                    break;
+                }
+                case 'PREPAID_PACKAGE': {
+                    const triggerConfig = promotionTriggerConfig(promo);
+                    const totalSessions = asNumber(triggerConfig.total_sessions ?? triggerConfig.totalSessions, 0);
+                    const pricePackage = asNumber(triggerConfig.price_package ?? triggerConfig.pricePackage, 0);
+                    if (
+                        totalSessions > 0
+                        && pricePackage > 0
+                        && item.quantity >= totalSessions
+                        && productMatchesAnyReference(item, [triggerConfig.service_id ?? triggerConfig.serviceId])
+                    ) {
+                        tempPrice = pricePackage / totalSessions;
+                    }
+                    break;
+                }
+                case 'PAYMENT_METHOD_DISCOUNT':
+                case 'NEXT_PURCHASE_COUPON':
                     break;
             }
 
@@ -498,6 +653,57 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
                     }
                 }
                 break;
+            case 'TIERED_QUANTITY': {
+                const discountPercent = tieredQuantityDiscountPercent(applicablePromo, item.quantity);
+                if (discountPercent > 0) {
+                    newPrice = promotionBasePrice * (1 - discountPercent / 100);
+                }
+                break;
+            }
+            case 'MIX_AND_MATCH': {
+                const triggerConfig = promotionTriggerConfig(applicablePromo);
+                const groups = triggerConfig.selection_groups ?? triggerConfig.selectionGroups;
+                const priceFixed = asNumber(triggerConfig.price_fixed ?? triggerConfig.priceFixed, 0);
+                const eligibleTotal = mixAndMatchEligibleTotal(processedCart, groups);
+                if (
+                    priceFixed > 0
+                    && eligibleTotal > priceFixed
+                    && promotionSelectionGroupsMatch(processedCart, groups)
+                    && itemMatchesSelectionGroups(item, groups)
+                ) {
+                    newPrice = promotionBasePrice * (priceFixed / eligibleTotal);
+                }
+                break;
+            }
+            case 'GIFT_WITH_PURCHASE': {
+                const triggerConfig = promotionTriggerConfig(applicablePromo);
+                const minimumTicketValue = asNumber(triggerConfig.minimum_ticket_value ?? triggerConfig.minimumTicketValue, 0);
+                if (
+                    item.quantity > 0
+                    && cartPromotionBaseTotal(processedCart) >= minimumTicketValue
+                    && productMatchesAnyReference(item, [triggerConfig.gift_product_id ?? triggerConfig.giftProductId])
+                ) {
+                    newPrice = promotionBasePrice * Math.max(item.quantity - 1, 0) / item.quantity;
+                }
+                break;
+            }
+            case 'PREPAID_PACKAGE': {
+                const triggerConfig = promotionTriggerConfig(applicablePromo);
+                const totalSessions = asNumber(triggerConfig.total_sessions ?? triggerConfig.totalSessions, 0);
+                const pricePackage = asNumber(triggerConfig.price_package ?? triggerConfig.pricePackage, 0);
+                if (
+                    totalSessions > 0
+                    && pricePackage > 0
+                    && item.quantity >= totalSessions
+                    && productMatchesAnyReference(item, [triggerConfig.service_id ?? triggerConfig.serviceId])
+                ) {
+                    newPrice = pricePackage / totalSessions;
+                }
+                break;
+            }
+            case 'PAYMENT_METHOD_DISCOUNT':
+            case 'NEXT_PURCHASE_COUPON':
+                break;
         }
 
         // Ensure we don't increase price (unless it's a weird happy hour)
@@ -535,6 +741,6 @@ export const hasProductPromotion = (product: any, config: BusinessConfig, termin
 
     // 2. Check if any active promotion targets this product
     return activePromotions.some(p => {
-        return promotionTargetsProduct(p, product, config);
+        return promotionAppliesToCartItem(p, product, config);
     });
 };

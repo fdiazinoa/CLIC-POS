@@ -8,6 +8,7 @@ import SyncProgressModal from './SyncProgressModal';
 import { db } from '../utils/db';
 import { loadSyncProfile, resolveSyncTarget, SyncProfile, ResolvedSyncTarget } from '../services/sync/SyncProfile';
 import { posCloudStagingService } from '../services/sync/PosCloudStagingService';
+import { resetDeviceIdentityBySupport } from '../utils/deviceRevocation';
 
 interface SyncSettingsProps {
     config: BusinessConfig;
@@ -85,6 +86,34 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         if (statuses.includes('ERROR')) return 'ERROR';
         if (statuses.includes('PENDING')) return 'PENDING';
         return 'SYNCED';
+    };
+
+    const resolveTerminalDisplayName = (terminalId: any): string => {
+        const rawId = String(terminalId || '').trim();
+        if (!rawId || rawId === '-') return '-';
+        const normalized = normalizeDocumentRef(rawId);
+        const terminal = (config.terminals || []).find((candidate: any) => {
+            const terminalConfig: any = candidate?.config || {};
+            const refs = [
+                candidate?.id,
+                terminalConfig?.terminalName,
+                terminalConfig?.terminalCode,
+                terminalConfig?.stationNumber,
+                terminalConfig?.erpTerminalId,
+                terminalConfig?.erpBinding?.terminalId,
+                terminalConfig?.erpBinding?.terminalName,
+                terminalConfig?.erpBinding?.terminalCode,
+            ].map(normalizeDocumentRef).filter(Boolean);
+            return refs.includes(normalized);
+        });
+        const terminalConfig: any = terminal?.config || {};
+        return String(
+            terminalConfig?.terminalName ||
+            terminalConfig?.erpBinding?.terminalName ||
+            terminalConfig?.terminalCode ||
+            terminalConfig?.stationNumber ||
+            rawId
+        ).trim();
     };
 
     const loadStatus = async () => {
@@ -183,6 +212,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     collection: 'transactions',
                     id: t.displayId || t.id,
                     terminalId: t.terminalId || '-',
+                    terminalLabel: resolveTerminalDisplayName(t.terminalId || t.source_terminal_id || '-'),
                     type: 'VENTA',
                     date: t.date || t.createdAt,
                     status: resolveDocumentStatus(t),
@@ -195,6 +225,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     collection: 'reservations',
                     id: r.code || r.id,
                     terminalId: r.terminalId || '-',
+                    terminalLabel: resolveTerminalDisplayName(r.terminalId || r.source_terminal_id || '-'),
                     type: 'RESERVA',
                     date: r.createdAt,
                     status: resolveDocumentStatus(r),
@@ -241,6 +272,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                         collection: 'inventoryLedger',
                         id,
                         terminalId: first.terminalId || '-',
+                        terminalLabel: resolveTerminalDisplayName(first.terminalId || first.source_terminal_id || '-'),
                         type: 'INVENTARIO',
                         date: latest.createdAt || latest.timestamp || first.createdAt || first.timestamp,
                         status: aggregateDocumentStatus(group),
@@ -261,6 +293,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     collection: 'zReports',
                     id: z.sequenceNumber || z.id,
                     terminalId: z.terminalId || '-',
+                    terminalLabel: resolveTerminalDisplayName(z.terminalId || z.source_terminal_id || '-'),
                     type: 'CIERRE_Z',
                     date: z.closedAt,
                     status: resolveDocumentStatus(z),
@@ -431,7 +464,14 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                         syncStatus: 'PENDING',
                         syncError: undefined,
                         cloudSyncStatus: undefined,
-                        cloudSyncError: undefined
+                        cloudSyncError: undefined,
+                        erpSyncStatus: undefined,
+                        erpSyncResponse: undefined,
+                        erpSyncedAt: undefined,
+                        syncRetryAfter: undefined,
+                        syncStartedAt: undefined,
+                        syncBlockedReason: undefined,
+                        syncBlockedAt: undefined
                     })
                 ));
             } else {
@@ -441,6 +481,15 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     syncError: undefined,
                     cloudSyncStatus: undefined,
                     cloudSyncError: undefined,
+                    syncResponse: undefined,
+                    syncedAt: undefined,
+                    erpSyncStatus: undefined,
+                    erpSyncResponse: undefined,
+                    erpSyncedAt: undefined,
+                    syncRetryAfter: undefined,
+                    syncStartedAt: undefined,
+                    syncBlockedReason: undefined,
+                    syncBlockedAt: undefined,
                     _forceSyncReplay: item.collection === 'transactions' ? true : item.raw?._forceSyncReplay
                 });
             }
@@ -498,9 +547,10 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         setIsRetryingErpForward(true);
         try {
             if (syncManager.isUsingErpOperationalTarget()) {
+                const requeued = await backgroundSyncManager.requeueBlockedOperationalDocuments();
                 await backgroundSyncManager.triggerSyncAndWait();
                 await loadStatus();
-                alert('✅ Reintento ejecutado. Revisa el monitor para confirmar si quedaron documentos pendientes o con error.');
+                alert(`✅ Reintento ejecutado. Documentos reencolados: ${requeued}. Revisa el monitor para confirmar si quedaron pendientes o con error.`);
                 return;
             }
 
@@ -823,10 +873,10 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                 <div className="mt-10 pt-6 border-t border-blue-100">
                                     <button
                                         onClick={async () => {
-                                            if (confirm('⚠️ ¿Deseas REALIZAR UN RESET TOTAL de la red en esta terminal?\n\nAl hacerlo:\n- Se borrará la IP de la Maestra guardada.\n- Se reseteará la configuración local (se restaurarán valores por defecto).\n- Regresarás a la pantalla de vinculación para elegir si eres Maestra o Esclava.')) {
+                                            if (confirm('⚠️ SOPORTE: ¿Deseas resetear la identidad física de este dispositivo?\n\nAl hacerlo:\n- Se generará un nuevo device_id DEV-*.\n- Cloud-Admin deberá reautorizar este equipo.\n- Se borrará la IP de la Maestra guardada.\n- Se reseteará la configuración local.\n\nNo uses esta opción para limpiar solo la BD local.')) {
                                                 try {
-                                                    // 1. Clear LocalStorage identifiers
-                                                    localStorage.removeItem('pos_device_id');
+                                                    // 1. Explicit support-only identity reset
+                                                    await resetDeviceIdentityBySupport();
                                                     localStorage.removeItem('pos_master_ip');
                                                     localStorage.removeItem('CLIC_POS_MASTER_URL');
                                                     localStorage.removeItem('pos_sync_status');
@@ -834,7 +884,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                     // 2. Wipe Local DB Config to avoid stale Slave/Master role mismatch
                                                     await db.deleteDocument('config', 'config' as any); // Delete whole config document
 
-                                                    console.log("🧺 Terminal Unbound & Local Config Wiped.");
+                                                    console.log("🧺 Terminal identity reset by support & local config wiped.");
                                                     window.location.reload();
                                                 } catch (err) {
                                                     console.error("Error during reset:", err);
@@ -845,7 +895,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                         className="w-full py-3 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 border border-red-100"
                                     >
                                         <Monitor size={18} />
-                                        Desvincular y Resetear Identidad de Terminal
+                                        Resetear identidad del dispositivo (Soporte)
                                     </button>
                                 </div>
                             </div>
@@ -1011,7 +1061,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                     </td>
                                                     <td className="py-4 px-6 text-center">
                                                         <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gray-100 text-gray-600 font-bold text-xs">
-                                                            <Monitor size={12} /> {item.terminalId}
+                                                            <Monitor size={12} /> {item.terminalLabel || item.terminalId}
                                                         </div>
                                                     </td>
                                                     <td className="py-4 px-6 text-center">

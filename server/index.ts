@@ -399,16 +399,34 @@ server.post('/api/mesas/unir', (req, res) => {
 server.post('/api/mesas/liberar', (req, res) => {
     const { tableId } = req.body;
     try {
-        db.prepare(`
-            UPDATE tables 
-            SET status = 'FREE', 
-                currentOrderId = NULL, 
-                currentOrderTotal = 0, 
-                timeSeated = NULL, 
-                waiterName = NULL,
-                waiterId = NULL
-            WHERE id = ?
-        `).run(tableId);
+        const table = db.prepare('SELECT * FROM tables WHERE id = ?').get(tableId) as any;
+        const currentOrderId = String(table?.currentOrderId || '').trim();
+        const tableShape = String(table?.shape || '').trim().toUpperCase();
+        const rawParkedTickets = getSetting('parkedTickets');
+        const parkedTickets = Array.isArray(rawParkedTickets) ? rawParkedTickets : [];
+        const nextParkedTickets = parkedTickets.filter((ticket: any) => {
+            const ticketId = String(ticket?.id || '').trim();
+            const ticketTableId = String(ticket?.tableId ?? '').trim();
+            const ticketBarTabId = String(ticket?.barTabId || '').trim();
+            const isClosedOrder = currentOrderId && (ticketId === currentOrderId || ticketBarTabId === currentOrderId);
+            const isSameTable = tableShape !== 'BAR' && String(tableId || '').trim() && ticketTableId === String(tableId).trim();
+            return !isClosedOrder && !isSameTable;
+        });
+
+        const releaseTable = db.transaction(() => {
+            saveSetting('parkedTickets', nextParkedTickets);
+            db.prepare(`
+                UPDATE tables 
+                SET status = 'FREE', 
+                    currentOrderId = NULL, 
+                    currentOrderTotal = 0, 
+                    timeSeated = NULL, 
+                    waiterName = NULL,
+                    waiterId = NULL
+                WHERE id = ?
+            `).run(tableId);
+        });
+        releaseTable();
         res.json({ success: true });
     } catch (error: any) {
         res.status(500).json({ error: error.message });

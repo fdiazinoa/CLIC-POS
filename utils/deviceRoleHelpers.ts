@@ -37,6 +37,13 @@ const normalizeRoleKey = (value: unknown): string => {
 
 const normalizeKnownDeviceRole = (normalized: string): DeviceRole | null => {
     switch (normalized) {
+        case 'SDK':
+        case 'SDK_TERMINAL':
+        case 'TERMINAL_SDK':
+        case 'SDK_TERMINAL_MODE':
+        case 'TERMINAL_MODE_SDK':
+            return DeviceRole.SELF_CHECKOUT;
+
         case 'SELF_CHECKOUT':
         case 'SELF_CHECK_OUT':
         case 'SELFCHECKOUT':

@@ -18,19 +18,31 @@ const LoyaltyDashboard: React.FC<LoyaltyDashboardProps> = ({
     onLinkCard,
     onUnlinkCard
 }) => {
-    const loyaltyTiers = config.loyalty?.tiers || [
+    if (!customer?.id) {
+        return (
+            <div className="text-center py-16 text-gray-400 border-2 border-dashed border-gray-100 rounded-3xl bg-white">
+                <Award size={44} className="mx-auto mb-4 opacity-20" />
+                <p className="text-xs font-black uppercase tracking-widest">Selecciona un cliente para ver su lealtad</p>
+            </div>
+        );
+    }
+
+    const defaultLoyaltyTiers = [
         { id: 'bronze', name: 'BRONZE', minPoints: 0 },
         { id: 'silver', name: 'SILVER', minPoints: 500 },
         { id: 'gold', name: 'GOLD', minPoints: 1500 },
         { id: 'platinum', name: 'PLATINUM', minPoints: 3000 }
     ];
+    const loyaltyTiers = Array.isArray(config.loyalty?.tiers) && config.loyalty.tiers.length > 0
+        ? config.loyalty.tiers
+        : defaultLoyaltyTiers;
 
     const currentPoints = customer.loyaltyPoints || 0;
     const currentTierIdx = [...loyaltyTiers].findIndex(t => currentPoints < t.minPoints) === -1
         ? loyaltyTiers.length - 1
         : Math.max(0, [...loyaltyTiers].findIndex(t => currentPoints < t.minPoints) - 1);
 
-    const currentTier = loyaltyTiers[currentTierIdx];
+    const currentTier = loyaltyTiers[currentTierIdx] || defaultLoyaltyTiers[0];
     const nextTier = loyaltyTiers[currentTierIdx + 1];
 
     const progressPercent = nextTier

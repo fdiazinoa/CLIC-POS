@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
    X, CreditCard, Banknote, QrCode, CheckCircle2,
    Trash2, Plus, Wallet, Printer, Mail, ShieldAlert,
-   Repeat, ArrowRightLeft, DollarSign, Zap, Smartphone
+   Repeat, ArrowRightLeft, DollarSign, Zap, Smartphone, Percent
 } from 'lucide-react';
 import {
    PaymentEntry,
@@ -160,6 +160,59 @@ const createPaymentId = (): string => {
 
 const roundToTwo = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
 
+const resolveSuggestedTipAmount = (baseTotal: number, percentage: number): number => {
+   if (!Number.isFinite(baseTotal) || !Number.isFinite(percentage) || baseTotal <= 0 || percentage <= 0) {
+      return 0;
+   }
+   return roundToTwo(baseTotal * (percentage / 100));
+};
+
+const buildReceiptEmailPayload = (
+   transaction: Transaction,
+   email: string,
+   config: BusinessConfig | undefined,
+   currencySymbol: string
+) => ({
+   email,
+   cart: transaction.items || [],
+   total: transaction.total || 0,
+   paymentMethod: transaction.payments?.[0]?.method || 'CASH',
+   transactionId: transaction.displayId || transaction.id || 'PENDING-ID',
+   ncf: transaction.ncf,
+   date: transaction.date,
+   customerName: transaction.customerSnapshot?.name || transaction.customerName,
+   companyInfo: config?.companyInfo,
+   currencySymbol,
+   subtotal: (transaction.netAmount || 0) + (transaction.discountAmount || 0),
+   tax: transaction.taxAmount,
+   discount: transaction.discountAmount,
+   totalSavings: (transaction.items || []).reduce((sum, item) =>
+      sum + ((item.originalPrice || item.price) - item.price) * item.quantity, 0) + (transaction.discountAmount || 0),
+   showSavings: config?.receiptConfig?.showSavings || false
+});
+
+const sendReceiptEmailRequest = async (
+   transaction: Transaction,
+   email: string,
+   config: BusinessConfig | undefined,
+   currencySymbol: string
+): Promise<{ success: boolean; message?: string }> => {
+   const response = await fetch('/api/email/receipt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildReceiptEmailPayload(transaction, email, config, currencySymbol))
+   });
+
+   const data = await response.json().catch(() => ({}));
+   if (!response.ok || data.success === false) {
+      return {
+         success: false,
+         message: data.message || `HTTP ${response.status}`
+      };
+   }
+   return { success: true, message: data.message };
+};
+
 const roundPaymentAmountByMethod = (
    value: number,
    rule: PaymentMethodRoundingRule,
@@ -256,6 +309,23 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    // Lock total/refund mode at modal open to avoid recalculating to 0 when parent clears cart.
    const [isRefund] = useState(() => total < 0);
    const [absTotal] = useState(() => Math.abs(total));
+   const tipsConfig = config?.tipsConfig;
+   const suggestedTipOptions = useMemo(
+      () => (tipsConfig?.defaultOptions || [])
+         .map((option) => Number(option))
+         .filter((option) => Number.isFinite(option) && option > 0),
+      [tipsConfig?.defaultOptions]
+   );
+   const shouldShowTipSuggestions = Boolean(
+      tipsConfig?.enabled && !isRefund && absTotal > 0 && suggestedTipOptions.length > 0
+   );
+   const allowCustomTip = tipsConfig?.allowCustomTip !== false;
+   const fixedTipAmounts = useMemo(
+      () => ((tipsConfig as any)?.fixedAmountOptions || [100, 200, 500, 1000])
+         .map((amount: unknown) => Number(amount))
+         .filter((amount: number) => Number.isFinite(amount) && amount > 0),
+      [tipsConfig]
+   );
    
    // El total a pagar ahora incluye la propina voluntaria
    const effectiveTotalToPay = useMemo(() => absTotal + voluntaryTip, [absTotal, voluntaryTip]);
@@ -889,7 +959,20 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                const gatewayPayments = (finalizedTransaction.payments || []).filter((payment: any) => payment?.gatewayProvider);
                let autoPrintNotice: string | null = null;
 
-               if (config && gatewayPayments.length > 0) {
+               const preferredReceiptEmail = finalizedTransaction.customerSnapshot?.email || customer?.email;
+               const shouldEmailReceiptOnly = Boolean(customer?.prefersEmail && preferredReceiptEmail);
+
+               if (shouldEmailReceiptOnly && preferredReceiptEmail) {
+                  try {
+                     const emailResult = await sendReceiptEmailRequest(finalizedTransaction, preferredReceiptEmail, config, currencySymbol);
+                     autoPrintNotice = emailResult.success
+                        ? `Ticket enviado automáticamente a ${preferredReceiptEmail}.`
+                        : `Venta aprobada. No se pudo enviar automáticamente el ticket a ${preferredReceiptEmail}: ${emailResult.message || 'error desconocido'}.`;
+                  } catch (emailError) {
+                     console.error('❌ Auto receipt email failed:', emailError);
+                     autoPrintNotice = `Venta aprobada. No se pudo enviar automáticamente el ticket a ${preferredReceiptEmail}.`;
+                  }
+               } else if (config && gatewayPayments.length > 0) {
                   const matchedIntegration = config.integrations?.find(
                      (integration) => integration.id === gatewayPayments[0]?.gatewayIntegrationId
                   );
@@ -992,34 +1075,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    };
 
    const sendReceiptEmail = async (email: string) => {
+      if (!completedTransaction) return;
       setIsSendingEmail(true);
       console.log('Sending Receipt Email. Transaction:', completedTransaction);
       try {
-         const response = await fetch('/api/email/receipt', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-               email,
-               cart: completedTransaction?.items || [],
-               total: completedTransaction?.total || 0,
-               paymentMethod: completedTransaction?.payments?.[0]?.method || 'CASH',
-               // New fields for thermal ticket design
-               transactionId: completedTransaction?.displayId || completedTransaction?.id || 'PENDING-ID',
-               ncf: completedTransaction?.ncf,
-               date: completedTransaction?.date,
-               customerName: completedTransaction?.customerSnapshot?.name || completedTransaction?.customerName,
-               companyInfo: config?.companyInfo,
-               currencySymbol: currencySymbol,
-               subtotal: (completedTransaction?.netAmount || 0) + (completedTransaction?.discountAmount || 0),
-               tax: completedTransaction?.taxAmount,
-               discount: completedTransaction?.discountAmount,
-               totalSavings: (completedTransaction?.items || []).reduce((sum, item) =>
-                  sum + ((item.originalPrice || item.price) - item.price) * item.quantity, 0) + (completedTransaction?.discountAmount || 0),
-               showSavings: config?.receiptConfig?.showSavings || false
-            })
-         });
-
-         const data = await response.json();
+         const data = await sendReceiptEmailRequest(completedTransaction, email, config, currencySymbol);
          if (data.success) {
             alert(`Ticket enviado a ${email}`);
             setShowEmailInput(false);
@@ -1161,12 +1221,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    return (
       <>
          {gatewayProgressOverlay}
-         <div className="fixed inset-0 z-[60] flex items-end lg:items-center justify-center bg-black/60 backdrop-blur-sm">
-            <div className="bg-white w-full max-w-6xl h-[100dvh] lg:h-[85vh] lg:rounded-[2.5rem] shadow-2xl flex flex-col lg:flex-row overflow-hidden">
+         <div className="fixed inset-0 z-[60] flex items-end lg:items-center justify-center bg-black/60 backdrop-blur-sm lg:p-3">
+            <div className="bg-white w-full max-w-6xl h-[100dvh] lg:h-[92dvh] lg:max-h-[760px] lg:rounded-[2.5rem] shadow-2xl flex flex-col lg:flex-row overflow-hidden">
 
             {/* SUMMARY SECTION (Collapsible/Header on mobile, Sidebar on desktop) */}
-            <div className="flex lg:w-[35%] w-full bg-gray-50 border-b lg:border-b-0 lg:border-r border-gray-200 flex-col p-4 md:p-5 lg:p-8 shrink-0 min-h-0">
-               <div className="flex justify-between items-center mb-3 lg:mb-8">
+            <div className="flex lg:w-[34%] w-full bg-gray-50 border-b lg:border-b-0 lg:border-r border-gray-200 flex-col p-4 md:p-5 lg:p-6 shrink-0 min-h-0">
+               <div className="flex justify-between items-center mb-3 lg:mb-4">
                   <button onClick={onClose} className="p-2 -ml-2 text-gray-400 hover:bg-gray-200 rounded-full transition-colors"><X size={24} /></button>
                   <div className="flex md:hidden gap-1">
                      {currencies.filter(c => c.isEnabled).map(c => (
@@ -1181,11 +1241,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   </div>
                </div>
 
-               <div className="mb-3 md:mb-5 lg:mb-8 flex flex-col md:block items-center md:items-start text-center md:text-left">
+               <div className="mb-3 md:mb-4 lg:mb-4 flex flex-col md:block items-center md:items-start text-center md:text-left">
                   <p className={`font-medium uppercase text-[10px] md:text-xs tracking-widest mb-1 ${isRefund ? 'text-rose-500' : 'text-gray-500'}`}>
                      {isRefund ? 'Monto a Devolver' : 'Total a Cobrar'}
                   </p>
-                  <h1 className={`text-3xl md:text-4xl lg:text-5xl font-black leading-none ${isRefund ? 'text-rose-600' : 'text-gray-900'}`}>
+                  <h1 className={`text-3xl md:text-4xl lg:text-[2.7rem] font-black leading-none ${isRefund ? 'text-rose-600' : 'text-gray-900'}`}>
                      {currencySymbol}{effectiveTotalToPay.toFixed(2)}
                   </h1>
                   {voluntaryTip > 0 && (
@@ -1195,42 +1255,64 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   )}
                </div>
 
-               {isRestaurantMode && !isRefund && (
-                  <div className="mb-3 md:mb-4 lg:mb-6 p-3 lg:p-4 rounded-2xl bg-sky-50 border border-sky-100">
-                     <div className="flex justify-between items-center mb-2 lg:mb-3">
-                        <span className="text-[10px] font-black uppercase text-sky-600 tracking-wider">Propina Voluntaria Extra</span>
-                        <div className="flex items-center gap-1">
-                           <span className="text-xs font-bold text-sky-400">{currencySymbol}</span>
-                           <input 
-                              type="number" 
-                              value={voluntaryTip || ''} 
-                              onChange={(e) => setVoluntaryTip(Math.max(0, parseFloat(e.target.value) || 0))}
-                              className="w-20 bg-transparent border-b border-sky-200 focus:border-sky-500 outline-none text-right font-black text-sky-700"
-                              placeholder="0.00"
-                           />
-                        </div>
+               {shouldShowTipSuggestions && (
+                  <div className="mb-3 md:mb-4 lg:mb-4 p-3 rounded-2xl bg-sky-50 border border-sky-100">
+                     <div className="flex justify-between items-center mb-2">
+                        <span className="text-[10px] font-black uppercase text-sky-600 tracking-wider flex items-center gap-1.5">
+                           <Percent size={13} /> Propina sugerida
+                        </span>
+                        {allowCustomTip && (
+                           <div className="flex items-center gap-1">
+                              <span className="text-xs font-bold text-sky-400">{currencySymbol}</span>
+                              <input
+                                 type="number"
+                                 value={voluntaryTip || ''}
+                                 onChange={(e) => setVoluntaryTip(Math.max(0, parseFloat(e.target.value) || 0))}
+                                 className="w-20 bg-transparent border-b border-sky-200 focus:border-sky-500 outline-none text-right font-black text-sky-700"
+                                 placeholder="0.00"
+                              />
+                           </div>
+                        )}
                      </div>
                      <div className="flex gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
-                        {[100, 200, 500, 1000].map(amt => (
-                           <button 
-                             key={amt}
-                             onClick={() => setVoluntaryTip(prev => prev + amt)}
-                             className="whitespace-nowrap px-3 py-2 rounded-xl bg-white border border-sky-200 text-[10px] font-bold text-sky-700 hover:bg-sky-100 transition-all active:scale-95 shadow-sm"
+                        {suggestedTipOptions.map((percentage) => {
+                           const suggestedAmount = resolveSuggestedTipAmount(absTotal, percentage);
+                           const isSelected = Math.abs(voluntaryTip - suggestedAmount) < 0.01;
+                           return (
+                              <button
+                                 key={percentage}
+                                 onClick={() => setVoluntaryTip(suggestedAmount)}
+                                 className={`whitespace-nowrap px-3 py-1.5 rounded-xl border text-[10px] font-bold transition-all active:scale-95 shadow-sm ${
+                                    isSelected
+                                       ? 'bg-sky-600 border-sky-600 text-white'
+                                       : 'bg-white border-sky-200 text-sky-700 hover:bg-sky-100'
+                                 }`}
+                                 title={`${percentage}% = ${currencySymbol}${suggestedAmount.toFixed(2)}`}
+                              >
+                                 {percentage}% · {currencySymbol}{suggestedAmount.toFixed(2)}
+                              </button>
+                           );
+                        })}
+                        {allowCustomTip && fixedTipAmounts.map(amt => (
+                           <button
+                              key={`add-${amt}`}
+                              onClick={() => setVoluntaryTip(prev => roundToTwo(prev + amt))}
+                              className="whitespace-nowrap px-3 py-1.5 rounded-xl bg-white border border-sky-200 text-[10px] font-bold text-sky-700 hover:bg-sky-100 transition-all active:scale-95 shadow-sm"
                            >
-                             +{amt}
+                              +{amt}
                            </button>
                         ))}
-                        <button 
+                        <button
                            onClick={() => setVoluntaryTip(0)}
-                           className="px-3 py-2 rounded-xl bg-rose-50 border border-rose-100 text-[10px] font-bold text-rose-600 hover:bg-rose-100 transition-all active:scale-95"
+                           className="px-3 py-1.5 rounded-xl bg-rose-50 border border-rose-100 text-[10px] font-bold text-rose-600 hover:bg-rose-100 transition-all active:scale-95"
                         >
-                           Borrar
+                           Sin propina
                         </button>
                      </div>
                   </div>
                )}
 
-                  <div className="hidden lg:flex mt-2 lg:mt-4 gap-2">
+                  <div className="hidden lg:flex mt-1 lg:mt-2 gap-2">
                      {currencies.filter(c => c.isEnabled).map(c => (
                         <button
                            key={c.code}
@@ -1243,7 +1325,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   </div>
 
                {/* Payments List (Compact on mobile) */}
-               <div className="flex-1 min-h-[96px] overflow-y-auto space-y-2 md:space-y-3 no-scrollbar max-h-[30vh] lg:max-h-full">
+               <div className="flex-1 min-h-[72px] overflow-y-auto space-y-2 no-scrollbar max-h-[30vh] lg:max-h-none">
                   {payments.map(p => {
                      const EntryIcon = getEntryIcon(p);
                      const previewLine = paymentPreviewById.get(p.id);
@@ -1254,9 +1336,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                      const displayChangeBase = previewLine?.changeBase ?? Number(p.changeAmount || 0);
                      const displayExchangeRate = previewLine?.exchangeRate ?? Number(p.exchangeRate || 1);
                      return (
-                        <div key={p.id} className="flex justify-between items-center bg-white p-3 md:p-4 rounded-xl md:rounded-2xl shadow-sm border border-gray-100 animate-in slide-in-from-left-2">
+                        <div key={p.id} className="flex justify-between items-center bg-white p-3 rounded-xl md:rounded-2xl shadow-sm border border-gray-100 animate-in slide-in-from-left-2">
                            <div className="flex items-center gap-2 md:gap-3">
-                              <div className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-blue-50 flex items-center justify-center text-slate-700 border border-blue-100">
+                              <div className="w-8 h-8 rounded-full bg-blue-50 flex items-center justify-center text-slate-700 border border-blue-100">
                                  <EntryIcon size={16} strokeWidth={2.2} />
                               </div>
                               <div>
@@ -1299,7 +1381,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   })}
                </div>
 
-               <div className="p-3 md:p-4 bg-white border-t border-gray-200 rounded-xl md:rounded-2xl mt-3 lg:mt-4 shadow-inner shrink-0">
+               <div className="sticky bottom-0 z-10 p-3 bg-white border-t border-gray-200 rounded-xl md:rounded-2xl mt-3 lg:mt-3 shadow-inner shrink-0">
                   {finalizeError && (
                      <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-600">
                         {finalizeError}
@@ -1309,7 +1391,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                      {change > 0 ? (
                         <div className="w-full text-right">
                            <p className="text-[9px] md:text-[10px] font-bold text-emerald-600 uppercase tracking-widest">{isRefund ? 'Diferencia a Favor' : 'Cambio'}</p>
-                           <p className="text-xl md:text-3xl font-black text-emerald-600">{currencySymbol}{change.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                           <p className="text-xl md:text-2xl font-black text-emerald-600">{currencySymbol}{change.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
                            <p className="mt-1 text-[10px] font-bold text-slate-500">
                               Aplicado {currencySymbol}{paymentSettlementPreview.totalAppliedBase.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                            </p>
@@ -1317,7 +1399,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                      ) : (
                         <div>
                            <p className="text-[9px] md:text-[10px] font-bold text-gray-400 uppercase tracking-widest">Restante</p>
-                           <p className={`text-xl md:text-3xl font-black ${remaining > 0 ? (isRefund ? 'text-rose-500' : 'text-amber-500') : 'text-emerald-500'}`}>{currencySymbol}{remaining.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                           <p className={`text-xl md:text-2xl font-black ${remaining > 0 ? (isRefund ? 'text-rose-500' : 'text-amber-500') : 'text-emerald-500'}`}>{currencySymbol}{remaining.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
                            {paymentSettlementPreview.totalReceivedBase > 0.009 && (
                               <p className="mt-1 text-[10px] font-bold text-slate-500">
                                  Recibido {currencySymbol}{paymentSettlementPreview.totalReceivedBase.toLocaleString('en-US', { minimumFractionDigits: 2 })}
@@ -1329,7 +1411,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   <button
                      onClick={handleFinalize}
                      disabled={!canFinalize || isFinalizing || isProcessingGateway}
-                     className={`w-full py-3 md:py-4 rounded-xl md:rounded-2xl font-black text-sm md:text-base text-white transition-all shadow-lg ${!canFinalize || isFinalizing || isProcessingGateway ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${isRefund ? 'bg-rose-600 hover:bg-rose-700' : `${themeBgClass} hover:brightness-110`}`}`}
+                     className={`w-full py-3 rounded-xl md:rounded-2xl font-black text-sm md:text-base text-white transition-all shadow-lg ${!canFinalize || isFinalizing || isProcessingGateway ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${isRefund ? 'bg-rose-600 hover:bg-rose-700' : `${themeBgClass} hover:brightness-110`}`}`}
                   >
                      {isProcessingGateway
                         ? 'PROCESANDO TARJETA...'
@@ -1345,9 +1427,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
             </div>
 
             {/* INPUT SECTION */}
-            <div className="flex-1 flex flex-col bg-white overflow-y-auto min-h-0">
+            <div className="flex-1 flex flex-col bg-white overflow-hidden min-h-0">
                {/* Payment Methods */}
-               <div className="flex flex-wrap p-3 md:p-4 gap-3 md:gap-4 shrink-0">
+               <div className="flex flex-wrap p-3 md:p-4 gap-2 md:gap-3 shrink-0 max-h-[150px] overflow-y-auto no-scrollbar">
                   {configuredMethods.map(method => {
                      const methodRuntimeType = resolvePaymentMethodTypeForRuntime(method.type, method.label, method.id);
                      const methodIsCredit = methodRuntimeType === 'CREDIT';
@@ -1361,9 +1443,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                            key={method.key}
                            onClick={() => !methodDisabledOffline && selectPaymentMethod(method)}
                            disabled={methodDisabledOffline}
-                           className={`min-w-[calc(50%-0.375rem)] lg:min-w-[calc(33.333%-0.75rem)] xl:min-w-[120px] flex-1 py-3 md:py-4 rounded-2xl md:rounded-3xl border-2 flex flex-col items-center justify-center gap-1 md:gap-2 transition-all bg-white ${activePaymentMethod?.key === method.key ? `border-current ${themeTextClass} shadow-sm` : 'border-gray-200 text-slate-500 hover:border-gray-300 hover:bg-white'} ${isExceeded ? 'bg-red-50/50 border-red-200' : ''} ${methodDisabledOffline ? 'opacity-50 cursor-not-allowed bg-gray-50 hover:border-gray-200 hover:bg-gray-50' : ''}`}
+                           className={`min-w-[calc(50%-0.25rem)] lg:min-w-[calc(33.333%-0.5rem)] xl:min-w-[120px] flex-1 py-2.5 md:py-3 rounded-2xl border-2 flex flex-col items-center justify-center gap-1 transition-all bg-white ${activePaymentMethod?.key === method.key ? `border-current ${themeTextClass} shadow-sm` : 'border-gray-200 text-slate-500 hover:border-gray-300 hover:bg-white'} ${isExceeded ? 'bg-red-50/50 border-red-200' : ''} ${methodDisabledOffline ? 'opacity-50 cursor-not-allowed bg-gray-50 hover:border-gray-200 hover:bg-gray-50' : ''}`}
                         >
-                           <method.Icon size={24} className="md:w-8 md:h-8" strokeWidth={2.4} />
+                           <method.Icon size={22} className="md:w-7 md:h-7" strokeWidth={2.4} />
                            <span className="font-black text-[9px] md:text-[10px] uppercase tracking-widest">{method.label}</span>
                            {methodIsIntegratedCard && method.integration && (
                               <span className="text-[7px] text-indigo-600 font-bold">{method.integration.provider}</span>
@@ -1395,14 +1477,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                )}
 
                {/* Amount Input */}
-               <div className="px-4 md:px-8 mt-1 shrink-0">
-                  <div className="bg-gray-100 rounded-2xl md:rounded-[2rem] p-4 md:p-6 flex justify-between items-center border border-gray-200 shadow-inner">
-                     <span className="text-xl md:text-3xl text-gray-400 font-black">{selectedCurrency.symbol}</span>
+               <div className="px-4 md:px-6 mt-1 shrink-0">
+                  <div className="bg-gray-100 rounded-2xl md:rounded-[1.5rem] p-3 md:p-4 flex justify-between items-center border border-gray-200 shadow-inner">
+                     <span className="text-xl md:text-2xl text-gray-400 font-black">{selectedCurrency.symbol}</span>
                      <input
                         type="text"
                         readOnly
                         value={inputAmount}
-                        className="bg-transparent text-right text-3xl md:text-5xl font-mono font-black text-gray-800 w-full outline-none"
+                        className="bg-transparent text-right text-3xl md:text-4xl font-mono font-black text-gray-800 w-full outline-none"
                         placeholder="0.00"
                      />
                   </div>
@@ -1417,13 +1499,13 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   )}
 
                   {activeMethod === 'CASH' && (
-                     <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-3 md:mt-4">
+                     <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-2 md:mt-3">
                         {denominations.map(d => (
                            <button
                               key={d}
                               onClick={() => handleAddPayment(d)}
                               disabled={isProcessingGateway || isFinalizing}
-                              className="py-2 bg-white border border-gray-200 rounded-lg md:rounded-xl text-[10px] md:text-xs font-black text-gray-600 hover:border-blue-500 hover:text-blue-600 transition-all shadow-sm"
+                              className="py-1.5 md:py-2 bg-white border border-gray-200 rounded-lg md:rounded-xl text-[10px] md:text-xs font-black text-gray-600 hover:border-blue-500 hover:text-blue-600 transition-all shadow-sm"
                            >
                               {selectedCurrency.symbol}{d}
                            </button>
@@ -1447,13 +1529,13 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                </div>
 
                {/* Numpad - Responsive grid */}
-               <div className="flex-1 p-3 md:p-6 lg:p-8 grid grid-cols-4 gap-2 md:gap-3 content-stretch min-h-[32vh]">
-                  {[1, 2, 3].map(n => <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">{n}</button>)}
+               <div className="flex-1 p-3 md:p-4 lg:p-5 grid grid-cols-4 gap-2 md:gap-3 content-stretch min-h-0">
+                  {[1, 2, 3].map(n => <button key={n} onClick={() => handleNumPad(n.toString())} className="min-h-[50px] bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">{n}</button>)}
 
                   <button
                      onClick={() => handleAddPayment()}
                      disabled={(!isOnline && !isMaster && activeRequiresOnline) || isProcessingGateway || isFinalizing}
-                     className={`row-span-2 rounded-2xl md:rounded-[2rem] font-black shadow-xl flex flex-col items-center justify-center gap-1 md:gap-2 ${(!isOnline && !isMaster && activeRequiresOnline) || isProcessingGateway || isFinalizing ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${themeBgClass} text-white active:scale-95 hover:brightness-110`}`}
+                     className={`row-span-2 min-h-[104px] rounded-2xl md:rounded-[2rem] font-black shadow-xl flex flex-col items-center justify-center gap-1 md:gap-2 ${(!isOnline && !isMaster && activeRequiresOnline) || isProcessingGateway || isFinalizing ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${themeBgClass} text-white active:scale-95 hover:brightness-110`}`}
                   >
                      <Plus size={28} className="md:w-8 md:h-8" />
                      <span className="text-[10px] tracking-widest uppercase">
@@ -1461,13 +1543,13 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                      </span>
                   </button>
 
-                  {[4, 5, 6].map(n => <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">{n}</button>)}
-                  {[7, 8, 9].map(n => <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">{n}</button>)}
+                  {[4, 5, 6].map(n => <button key={n} onClick={() => handleNumPad(n.toString())} className="min-h-[50px] bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">{n}</button>)}
+                  {[7, 8, 9].map(n => <button key={n} onClick={() => handleNumPad(n.toString())} className="min-h-[50px] bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">{n}</button>)}
 
-                  <button onClick={() => handleNumPad('BACK')} className="rounded-xl md:rounded-2xl bg-red-50 text-red-500 flex items-center justify-center active:scale-95 border border-red-100"><Trash2 size={24} className="md:w-7 md:h-7" /></button>
-                  <button onClick={() => handleNumPad('C')} className="rounded-xl md:rounded-2xl bg-gray-200 text-gray-600 font-black text-lg md:text-xl active:scale-95 transition-all shadow-inner">C</button>
-                  <button onClick={() => handleNumPad('0')} className="rounded-xl md:rounded-2xl bg-white border border-gray-100 text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">0</button>
-                  <button onClick={() => handleNumPad('.')} className="rounded-xl md:rounded-2xl bg-white border border-gray-100 text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">.</button>
+                  <button onClick={() => handleNumPad('BACK')} className="min-h-[50px] rounded-xl md:rounded-2xl bg-red-50 text-red-500 flex items-center justify-center active:scale-95 border border-red-100"><Trash2 size={24} className="md:w-7 md:h-7" /></button>
+                  <button onClick={() => handleNumPad('C')} className="min-h-[50px] rounded-xl md:rounded-2xl bg-gray-200 text-gray-600 font-black text-lg md:text-xl active:scale-95 transition-all shadow-inner">C</button>
+                  <button onClick={() => handleNumPad('0')} className="min-h-[50px] rounded-xl md:rounded-2xl bg-white border border-gray-100 text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">0</button>
+                  <button onClick={() => handleNumPad('.')} className="min-h-[50px] rounded-xl md:rounded-2xl bg-white border border-gray-100 text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">.</button>
             </div>
          </div>
       </div>

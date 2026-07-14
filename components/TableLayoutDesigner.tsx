@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import {
-    Square, Circle, Save, Trash2, Plus,
+    Square, Circle, Trash2, Plus,
     Layout, Grid, Armchair, Ban, Settings, Wine
 } from 'lucide-react';
 import { Table, Room, TableShape } from '../types';
@@ -21,7 +21,7 @@ const CANVAS_WIDTH = 800;
 const CANVAS_HEIGHT = 600;
 
 const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
-    rooms, currentRoomId, tables, onSave, onUpdateTables, onCreateRoom, onChangeRoom, onUpdateRoom
+    rooms, currentRoomId, tables, onUpdateTables, onCreateRoom, onChangeRoom, onUpdateRoom
 }) => {
     const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
     const [showRoomSettings, setShowRoomSettings] = useState(false);
@@ -262,10 +262,6 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                     </button>
                     <button onClick={() => handleAddTable('BOOTH')} className="flex items-center gap-2 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 rounded-lg text-xs font-bold text-indigo-700" title="Sofa / Booth">
                         <Armchair size={16} /> Sofa
-                    </button>
-                    <div className="w-px h-8 bg-slate-200 mx-2"></div>
-                    <button onClick={() => onSave(tables)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-lg shadow-blue-200">
-                        <Save size={16} /> Guardar Distribución
                     </button>
                 </div>
             </div>

@@ -7,7 +7,7 @@ import {
    ChevronDown, ChevronRight, Box, AlertCircle, MapPin, Grid, Sun,
    CheckSquare, Square, MoreHorizontal, Settings2, Activity, RefreshCw
 } from 'lucide-react';
-import { Product, BusinessConfig, Tariff, Transaction, ProductVariant, Warehouse, ProductGroup, Season, Watchlist, ProductStock, StockTransfer, Supplier, Room } from '../types';
+import { Product, BusinessConfig, Tariff, Transaction, ProductVariant, Warehouse, ProductGroup, Season, Watchlist, ProductStock, StockTransfer, Supplier, Room, ProductPrice } from '../types';
 import { calculateOptimalInventoryLevels } from '../utils/inventoryEngine';
 import ProductForm from './ProductForm';
 import TariffForm from './TariffForm';
@@ -21,7 +21,7 @@ import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
 import ClassificationManager from './ClassificationManager';
 import ErrorBoundary from './ErrorBoundary';
-import { getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/masterIdentity';
+import { getWarehouseScopedNumber, isProductWarehouseActive, tariffMatchesIdentifier } from '../utils/masterIdentity';
 import {
    productIdMatchesInventoryReference,
    productIdentityCandidates,
@@ -75,6 +75,55 @@ const hasMeaningfulConfigPayload = (config?: BusinessConfig | null) => {
       || config.productGroups?.length
       || config.seasons?.length
    );
+};
+
+const normalizeCategoryOption = (entry: unknown): { id: string; name: string } | null => {
+   if (typeof entry === 'string') {
+      const name = entry.trim();
+      return name ? { id: name, name } : null;
+   }
+   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+   const record = entry as Record<string, unknown>;
+   const name = String(
+      record.name ||
+      record.nombre ||
+      record.label ||
+      record.description ||
+      record.descripcion ||
+      record.code ||
+      record.id ||
+      ''
+   ).trim();
+   if (!name) return null;
+   const id = String(record.id || record.code || name).trim();
+   return { id: id || name, name };
+};
+
+const buildProductPriceRowsForProduct = (product: Product, tariffs: Tariff[]): ProductPrice[] => {
+   const now = new Date().toISOString();
+   return (Array.isArray(product.tariffs) ? product.tariffs : [])
+      .map((entry) => {
+         const tariff = tariffs.find((candidate) =>
+            tariffMatchesIdentifier(candidate, entry.tariffId) ||
+            tariffMatchesIdentifier(candidate, (entry as any).tariffCode) ||
+            tariffMatchesIdentifier(candidate, (entry as any).id) ||
+            tariffMatchesIdentifier(candidate, entry.name)
+         );
+         const tariffId = String(tariff?.id || entry.tariffId || (entry as any).tariffCode || (entry as any).id || entry.name || '').trim();
+         const price = Number(entry.price);
+         if (!product.id || !tariffId || !Number.isFinite(price)) return null;
+         return {
+            id: `${product.id}_${tariffId}`,
+            productId: product.id,
+            tariffId,
+            tariffCode: String((tariff as any)?.code || (entry as any)?.tariffCode || '').trim() || undefined,
+            tariffName: String(tariff?.name || entry.name || '').trim() || undefined,
+            price,
+            currency: String(tariff?.currency || (entry as any)?.currency || '').trim() || undefined,
+            updatedAt: product.updatedAt || now,
+         } as ProductPrice;
+      })
+      .filter(Boolean) as ProductPrice[];
 };
 
 const pickRicherBusinessConfig = (primary?: BusinessConfig | null, secondary?: BusinessConfig | null): BusinessConfig | null => {
@@ -742,11 +791,63 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    const [editingTariff, setEditingTariff] = useState<Tariff | null | 'NEW'>(null);
    const [editingGroup, setEditingGroup] = useState<ProductGroup | null | 'NEW'>(null);
    const [editingSeason, setEditingSeason] = useState<Season | null | 'NEW'>(null);
+   const [erpCategoryOptions, setErpCategoryOptions] = useState<Array<{ id: string; name: string }>>([]);
 
    const categories = useMemo(
-      () => ['ALL', ...Array.from(new Set(products.map((p) => p?.category || 'Sin categoría').filter(Boolean)))],
-      [products]
+      () => {
+         const names = new Set<string>();
+         const addOption = (entry: unknown) => {
+            const option = normalizeCategoryOption(entry);
+            if (option?.name) names.add(option.name);
+         };
+
+         products.forEach((p) => addOption(p?.category || 'Sin categoría'));
+         (config.posCategories || []).forEach(addOption);
+         (config as any).categories?.forEach?.(addOption);
+         (config.productGroups || []).forEach(addOption);
+         (config as any).productCategories?.forEach?.(addOption);
+         erpCategoryOptions.forEach(addOption);
+
+         return ['ALL', ...Array.from(names).filter(Boolean).sort((left, right) => left.localeCompare(right))];
+      },
+      [config, erpCategoryOptions, products]
    );
+
+   useEffect(() => {
+      let cancelled = false;
+      const loadCategories = async () => {
+         try {
+            const [rawCategories, rawProductCategories, rawProductGroups, rawCollections] = await Promise.all([
+               db.get('categories' as any).catch(() => []),
+               db.get('productCategories' as any).catch(() => []),
+               db.get('productGroups' as any).catch(() => []),
+               db.get('collections' as any).catch(() => []),
+            ]);
+            if (cancelled) return;
+            const normalized = [
+               ...(Array.isArray(rawCategories) ? rawCategories : []),
+               ...(Array.isArray(rawProductCategories) ? rawProductCategories : []),
+               ...(Array.isArray(rawProductGroups) ? rawProductGroups : []),
+               ...(Array.isArray(rawCollections) ? rawCollections : []),
+            ]
+               .map(normalizeCategoryOption)
+               .filter(Boolean) as Array<{ id: string; name: string }>;
+            setErpCategoryOptions(normalized);
+         } catch (error) {
+            console.warn('[CatalogManager] No se pudieron cargar clasificaciones ERP:', error);
+         }
+      };
+      const handleCategoriesUpdated = () => {
+         void loadCategories();
+      };
+
+      void loadCategories();
+      window.addEventListener('categoriesUpdated', handleCategoriesUpdated);
+      return () => {
+         cancelled = true;
+         window.removeEventListener('categoriesUpdated', handleCategoriesUpdated);
+      };
+   }, []);
    const filteredProducts = useMemo(() => {
       return products.filter(p => {
          const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -901,6 +1002,13 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
          // 1. Persist ONLY the modified product
          await db.saveDocument('products', savedProduct);
+         const productPriceRows = buildProductPriceRowsForProduct(savedProduct, tariffs);
+         const existingProductPrices = await db.get('productPrices' as any).catch(() => []) as ProductPrice[];
+         const nextProductPrices = [
+            ...(Array.isArray(existingProductPrices) ? existingProductPrices : []).filter((priceRow) => priceRow.productId !== savedProduct.id),
+            ...productPriceRows,
+         ];
+         await db.save('productPrices' as any, nextProductPrices);
 
          // Update local state for UI
          const currentProducts = products;
@@ -964,6 +1072,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
          // Broadcast change to other terminals (if master)
          syncManager.broadcastChange('products', savedProduct, exists ? 'UPDATE' : 'CREATE').catch(console.error);
+         window.dispatchEvent(new CustomEvent('productPricesUpdated'));
       } catch (error) {
          console.error('❌ CatalogManager: Error saving product', error);
          alert('No se pudo guardar el producto. Revise la consola para más detalle.');
