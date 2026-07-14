@@ -37,6 +37,7 @@ interface TerminalCard {
 
 interface TerminalSelectorResponse {
   tenant_id: string;
+  tenant_name?: string | null;
   erp_base_url?: string | null;
   source?: string | null;
   terminals: TerminalCard[];
@@ -291,6 +292,9 @@ const resolveTenantEmail = (): string | null => {
 };
 
 const resolveTenantDisplayName = (tenantId?: string | null): string => {
+  const name = (localStorage.getItem('clic_tenant_name') || '').trim();
+  if (name) return name;
+
   const slug = resolveTenantSlug();
   if (slug) return slug;
 
@@ -764,8 +768,17 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
     setError(null);
 
     const persistListMeta = (data: TerminalSelectorResponse) => {
+      const expectedErpTenantId = (localStorage.getItem('clic_erp_tenant_id') || '').trim();
+      const receivedTenantId = String(data.tenant_id || '').trim();
+      if (expectedErpTenantId && receivedTenantId && expectedErpTenantId !== receivedTenantId) {
+        throw new Error('El ERP devolvió un tenant distinto al de la sesión autenticada. Se rechazó la lista de terminales.');
+      }
+
       setTerminals(Array.isArray(data.terminals) ? data.terminals : []);
       setTenantId(data.tenant_id || 'default-tenant');
+      if (data.tenant_name) {
+        localStorage.setItem('clic_tenant_name', data.tenant_name);
+      }
       const resolvedBase = normalizeBaseUrl(data.erp_base_url || erpBaseUrl) || erpBaseUrl;
       setErpBaseUrl(resolvedBase);
 

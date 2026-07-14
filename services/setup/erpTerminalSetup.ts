@@ -19,6 +19,7 @@ export interface RuntimeTerminalCard {
 
 export interface RuntimeTerminalListResponse {
   tenant_id: string;
+  tenant_name?: string | null;
   erp_base_url?: string | null;
   terminals: RuntimeTerminalCard[];
 }

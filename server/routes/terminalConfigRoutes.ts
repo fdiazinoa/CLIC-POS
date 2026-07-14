@@ -70,7 +70,7 @@ const resolveTenantId = (req: express.Request): string | null => {
     asString(getSetting('active_tenant_id')) ||
     asString(getSetting('tenant_id'));
 
-  return storedTenantId || queryTenantId || headerTenantId || null;
+  return queryTenantId || headerTenantId || storedTenantId || null;
 };
 
 const resolveTenantSlug = (req: express.Request): string | null => {
@@ -78,7 +78,7 @@ const resolveTenantSlug = (req: express.Request): string | null => {
   const headerSlug = asString(req.headers['x-tenant-slug']);
   const storedSlug = asString(resolveStoredErpContext().tenantSlug);
 
-  return storedSlug || querySlug || headerSlug || null;
+  return querySlug || headerSlug || storedSlug || null;
 };
 
 const resolveTenantEmail = (req: express.Request): string | null => {
@@ -86,7 +86,7 @@ const resolveTenantEmail = (req: express.Request): string | null => {
   const headerEmail = asString(req.headers['x-tenant-email']).toLowerCase();
   const storedEmail = asString(resolveStoredErpContext().tenantEmail).toLowerCase();
 
-  return storedEmail || queryEmail || headerEmail || null;
+  return queryEmail || headerEmail || storedEmail || null;
 };
 
 const resolveErpBaseUrl = (req: express.Request): string | null => {
@@ -227,7 +227,7 @@ const resolveErpTenantId = async (
   }
 ): Promise<{ tenantId: string | null; source: string }> => {
   const storedTenantId = asString(resolveStoredErpContext().tenantId) || asString(getSetting('active_tenant_id'));
-  if (storedTenantId) {
+  if (!identity.tenantId && !identity.tenantSlug && !identity.tenantEmail && storedTenantId) {
     return { tenantId: storedTenantId, source: 'STORED_CONTEXT' };
   }
 

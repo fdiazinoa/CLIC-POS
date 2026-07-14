@@ -812,6 +812,7 @@ router.get('/terminals', async (req, res) => {
 
       return res.json({
         tenant_id: resolvedErpTenantId,
+        tenant_name: resolvedContext.tenantName,
         erp_base_url: erpBaseUrl,
         source: 'ERP',
         terminals,
