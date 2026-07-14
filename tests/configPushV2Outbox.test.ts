@@ -42,6 +42,7 @@ const resetRuntime = () => {
     sessionStorage.clear();
     localStorage.setItem('CLIC_ERP_BASE_URL', 'https://erp.example.test');
     localStorage.setItem('CLIC_POS_DEVICE_ID', deviceId);
+    localStorage.setItem('clic_tenant_id', 'tenant-config-push');
     localStorage.setItem('clic_erp_sync_terminal_id', terminalId);
     localStorage.setItem('clic_erp_sync_local_terminal_id', 'T3');
     localStorage.setItem('CONFIG_PUSH_V2_ENABLED', 'true');
@@ -157,4 +158,61 @@ test('heartbeat reports an unacknowledged CONFIG_PUSH_V2 event', async () => {
     });
 
     assert.equal(heartbeatBody?.pending_events, 1);
+});
+
+test('register and heartbeat advertise explicit empty capabilities when CONFIG_PUSH_V2 is disabled', async () => {
+    resetRuntime();
+    localStorage.setItem('CONFIG_PUSH_V2_ENABLED', 'false');
+
+    const requestBodies = new Map<string, Record<string, unknown>>();
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        const body = JSON.parse(String(init?.body || '{}'));
+        if (url.includes('/terminals/register')) {
+            requestBodies.set('register', body);
+            return Response.json({ status: 'success' });
+        }
+        if (url.includes('/terminals/heartbeat')) {
+            requestBodies.set('heartbeat', body);
+            return Response.json({ status: 'success' });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+    }) as typeof fetch;
+
+    await lifecycle.registerErpSyncTerminal({ deviceId, terminalId, localTerminalId: 'T3' });
+    await lifecycle.heartbeatErpSyncTerminal({ deviceId, terminalId, pendingEvents: 0 });
+
+    for (const body of requestBodies.values()) {
+        assert.deepEqual(body.sync_capabilities, []);
+        assert.deepEqual(body.capabilities, []);
+    }
+    assert.equal(requestBodies.size, 2);
+});
+
+test('register and heartbeat advertise CONFIG_PUSH_V2 when enabled', async () => {
+    resetRuntime();
+
+    const requestBodies = new Map<string, Record<string, unknown>>();
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        const body = JSON.parse(String(init?.body || '{}'));
+        if (url.includes('/terminals/register')) {
+            requestBodies.set('register', body);
+            return Response.json({ status: 'success' });
+        }
+        if (url.includes('/terminals/heartbeat')) {
+            requestBodies.set('heartbeat', body);
+            return Response.json({ status: 'success' });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+    }) as typeof fetch;
+
+    await lifecycle.registerErpSyncTerminal({ deviceId, terminalId, localTerminalId: 'T3' });
+    await lifecycle.heartbeatErpSyncTerminal({ deviceId, terminalId, pendingEvents: 0 });
+
+    for (const body of requestBodies.values()) {
+        assert.deepEqual(body.sync_capabilities, ['CONFIG_PUSH_V2']);
+        assert.deepEqual(body.capabilities, ['CONFIG_PUSH_V2']);
+    }
+    assert.equal(requestBodies.size, 2);
 });

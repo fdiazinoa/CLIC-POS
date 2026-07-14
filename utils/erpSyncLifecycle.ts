@@ -2158,10 +2158,8 @@ export const registerErpSyncTerminal = async (params: EnsureLifecycleParams): Pr
         name: params.terminalName || params.localTerminalId || params.terminalId,
 	        app_version: runtimeTelemetry.appVersion || null,
 	        ip_address: runtimeTelemetry.ipAddress || null,
-	        ...(syncCapabilities.length > 0 ? {
-	            sync_capabilities: syncCapabilities,
-	            capabilities: syncCapabilities,
-	        } : {}),
+        sync_capabilities: syncCapabilities,
+        capabilities: syncCapabilities,
 	        metadata: {
 	            source: 'CLIC_POS_APK',
             terminal_id: params.localTerminalId || params.terminalId,
@@ -2245,10 +2243,8 @@ export const heartbeatErpSyncTerminal = async (
 	        app_version: runtimeTelemetry.appVersion || null,
 	        ip_address: runtimeTelemetry.ipAddress || null,
 	        pending_events: Math.max(params.pendingEvents || 0, getConfigPushV2PendingEventCount()),
-	        ...(syncCapabilities.length > 0 ? {
-	            sync_capabilities: syncCapabilities,
-	            capabilities: syncCapabilities,
-	        } : {}),
+        sync_capabilities: syncCapabilities,
+        capabilities: syncCapabilities,
 	    });
 
     if (payload?.terminal) {
