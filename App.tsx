@@ -64,6 +64,7 @@ import { mergeDocumentSeriesCollection, resolveDocumentAssignmentId } from './ut
 import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
 import { ThermalPrinterService } from './services/printer/ThermalPrinterService';
 import { resolveDeviceRoleValue } from './utils/deviceRoleHelpers';
+import { hydrateCustomerState } from './services/customers/customerHydration';
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
@@ -1149,6 +1150,26 @@ const hydrateNativeCatalogFromDb = async (
     }
   } catch (error) {
     console.warn(`[BOOT] Native catalog hydration failed (${reason}):`, error);
+  }
+};
+
+const hydrateNativeCustomersFromDb = async (
+  setCustomers: (value: Customer[]) => void,
+  reason: string,
+) => {
+  if (!isNativeAndroidRuntime()) return;
+
+  try {
+    const hydratedCustomers = await hydrateCustomerState<Customer>(
+      () => db.get('customers'),
+      setCustomers,
+    );
+
+    console.log(`[BOOT] Native customers hydrated (${reason})`, {
+      customers: hydratedCustomers.length,
+    });
+  } catch (error) {
+    console.warn(`[BOOT] Native customer hydration failed (${reason}):`, error);
   }
 };
 const normalizeMasterHost = (value: string | null | undefined) =>
@@ -4408,6 +4429,7 @@ const AppContent: React.FC = () => {
               { setProducts, setWarehouses, setProductStocks },
               'post-boot',
             );
+            void hydrateNativeCustomersFromDb(setCustomers, 'post-boot');
           }, 2000);
 
           // 1.5 Sequence repair is intentionally deferred; running it here can block startup
@@ -5685,6 +5707,7 @@ const AppContent: React.FC = () => {
         { setProducts, setWarehouses, setProductStocks },
         'terminal-binding',
       );
+      await hydrateNativeCustomersFromDb(setCustomers, 'terminal-binding');
       if (Array.isArray(freshData.cashMovements)) {
         const mirroredCashMovements = readArrayMirrorFromLocalStorage<CashMovement>(CASH_MOVEMENTS_STORAGE_KEY);
         const restoredCashMovements = mergeById(freshData.cashMovements, mirroredCashMovements);
