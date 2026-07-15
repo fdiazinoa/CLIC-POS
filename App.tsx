@@ -1608,6 +1608,7 @@ const AppContent: React.FC = () => {
   const lastUserActivityAtRef = useRef<number>(Date.now());
   const appBackgroundSinceRef = useRef<number | null>(null);
   const isAppInBackgroundRef = useRef(false);
+  const lifecycleSyncInFlightRef = useRef<Promise<void> | null>(null);
 
   // Security bootstrap logic moved to loadData
 
@@ -2711,6 +2712,14 @@ const AppContent: React.FC = () => {
     let heartbeatTimeoutId: number | null = null;
 
     const syncLifecycle = async (options?: { forceManifestRefresh?: boolean }) => {
+      // Lifecycle effects can be recreated by runtime config updates. Keep one
+      // shared operation so those recreations cannot overlap manifest refreshes.
+      if (lifecycleSyncInFlightRef.current) {
+        console.log('[ERP SYNC] lifecycle refresh already in flight; skipping overlap.');
+        return lifecycleSyncInFlightRef.current;
+      }
+
+      const operation = (async () => {
       if (isPosOnlyCloudStagingTarget()) {
         return;
       }
@@ -2774,6 +2783,16 @@ const AppContent: React.FC = () => {
           return;
         }
         console.warn('[ERP SYNC] lifecycle registration skipped:', error);
+      }
+      })();
+
+      lifecycleSyncInFlightRef.current = operation;
+      try {
+        await operation;
+      } finally {
+        if (lifecycleSyncInFlightRef.current === operation) {
+          lifecycleSyncInFlightRef.current = null;
+        }
       }
     };
 
