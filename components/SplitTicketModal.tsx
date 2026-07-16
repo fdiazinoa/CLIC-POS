@@ -25,25 +25,7 @@ const itemSignature = (item: CartItem) => JSON.stringify({
 });
 
 const NumberTicker: React.FC<{ value: number; currency: string }> = ({ value, currency }) => {
-  const [displayValue, setDisplayValue] = useState(value);
-
-  useEffect(() => {
-    const start = displayValue;
-    const end = value;
-    if (start === end) return;
-    const duration = 500;
-    const startTime = performance.now();
-    const animate = (currentTime: number) => {
-      const elapsed = currentTime - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-      const ease = 1 - Math.pow(1 - progress, 4);
-      setDisplayValue(start + (end - start) * ease);
-      if (progress < 1) requestAnimationFrame(animate);
-    };
-    requestAnimationFrame(animate);
-  }, [displayValue, value]);
-
-  return <span className="tabular-nums tracking-tight">{currency}{displayValue.toFixed(2)}</span>;
+  return <span className="tabular-nums tracking-tight">{currency}{value.toFixed(2)}</span>;
 };
 
 const SplitTicketModal: React.FC<SplitTicketModalProps> = ({ originalItems, currencySymbol, onClose, onConfirm }) => {

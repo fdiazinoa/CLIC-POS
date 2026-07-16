@@ -797,7 +797,7 @@ const TableMap: React.FC<TableMapProps> = ({
         joinedSourceTableName: undefined
     } as Table), []);
 
-    const completeTableTransfer = useCallback(async (sourceTableId: string, targetTableId: string, mode: TableTransferMode) => {
+    const completeTableTransfer = useCallback(async (sourceTableId: string, targetTableId: string, mode: TableTransferMode, requestedItems?: CartItem[]) => {
         if (sourceTableId === targetTableId) {
             alert('Seleccione dos mesas distintas.');
             return;
@@ -825,6 +825,72 @@ const TableMap: React.FC<TableMapProps> = ({
 
         if (mode === 'MERGE' && targetTicket && String(targetTicket.id) === String(sourceTicket.id)) {
             alert('Estas mesas ya pertenecen a la misma cuenta.');
+            return;
+        }
+
+        if (mode === 'MOVE' && requestedItems) {
+            const requestedById = new Map(requestedItems.map(item => [String(item.cartId || item.id), Number(item.quantity || 0)]));
+            const movedItems = ensureCartIds(sourceTicket.items || []).map(item => ({
+                ...item,
+                quantity: Math.min(Number(item.quantity || 0), requestedById.get(String(item.cartId || item.id)) || 0)
+            })).filter(item => item.quantity > 0);
+            const movedQuantity = movedItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+            const sourceItems = ensureCartIds(sourceTicket.items || []).map(item => {
+                const moved = movedItems.find(candidate => String(candidate.cartId || candidate.id) === String(item.cartId || item.id));
+                return { ...item, quantity: Number(item.quantity || 0) - Number(moved?.quantity || 0) };
+            }).filter(item => item.quantity > 0);
+            if (movedQuantity <= 0 || sourceItems.length === 0 && movedQuantity <= 0) {
+                alert('Seleccione al menos un artículo para mover.');
+                return;
+            }
+
+            const targetRoomLabel = roomLabelById.get(targetTable.roomId);
+            const targetTableLabel = getTableLabel(targetTable);
+            const sourceTableLabel = getTableLabel(sourceTable);
+            const movedTicket: ParkedTicket = {
+                ...sourceTicket,
+                id: `move-${Date.now()}`,
+                items: movedItems,
+                total: movedItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0),
+                tableId: targetTable.id,
+                name: `Mesa: ${targetRoomLabel ? `${targetRoomLabel} · ${targetTableLabel}` : targetTableLabel}`,
+                tableDisplayLabel: targetTableLabel,
+                tableRoomLabel: targetRoomLabel,
+                timestamp: new Date().toISOString()
+            };
+            const sourceNextTicket = {
+                ...sourceTicket,
+                items: sourceItems,
+                total: sourceItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0)
+            } as ParkedTicket;
+            const nextParkedTickets = [
+                ...(parkedTickets || []).filter(ticket => String(ticket.id) !== String(sourceTicket.id)),
+                ...(sourceItems.length > 0 ? [sourceNextTicket] : []),
+                movedTicket
+            ];
+            const nextTargetTable = {
+                ...targetTable,
+                status: 'OCCUPIED',
+                currentOrderId: movedTicket.id,
+                currentOrderTotal: movedTicket.total,
+                waiterId: sourceTable.waiterId || currentUser.id,
+                waiterName: sourceTable.waiterName || currentUser.name,
+                timeSeated: sourceTable.timeSeated || movedTicket.timestamp
+            } as Table;
+            const nextSourceTable = sourceItems.length > 0 ? {
+                ...sourceTable,
+                status: 'OCCUPIED',
+                currentOrderId: sourceNextTicket.id,
+                currentOrderTotal: sourceNextTicket.total
+            } as Table : resetTableRuntimeState(sourceTable);
+            const nextTables = safeTables.map(table => table.id === sourceTable.id ? nextSourceTable : table.id === targetTable.id ? nextTargetTable : table);
+            await Promise.resolve(onUpdateParkedTickets?.(nextParkedTickets));
+            await Promise.resolve(onUpdateTables?.(nextTables));
+            setTableNotice({
+                title: 'Parte de la cuenta movida',
+                message: `${movedItems.length} artículo(s) fueron movidos de ${sourceTableLabel} a ${targetTableLabel}.`,
+                primaryLabel: 'Entendido'
+            });
             return;
         }
 
@@ -1247,6 +1313,11 @@ const TableMap: React.FC<TableMapProps> = ({
         parkedTickets
     ]);
 
+    const splitTicketItems = useMemo(
+        () => splitTicketForModal ? ensureCartIds(splitTicketForModal.items) : [],
+        [splitTicketForModal]
+    );
+
     return (
         <LazyMotion features={domAnimation}>
             <div
@@ -1643,6 +1714,11 @@ const TableMap: React.FC<TableMapProps> = ({
                                 alert('Error de conexion');
                             }
                         }}
+                        sourceItems={ensureCartIds(resolveTicketForTable(selectedTable)?.items || [])}
+                        onMoveTablePartial={(targetTableId, items) => {
+                            void completeTableTransfer(selectedTable.id, targetTableId, 'MOVE', items);
+                            setSelectedTable(null);
+                        }}
                         onMergeTables={async (targetTableIds) => {
                             try {
                                 const res = await fetch('/api/mesas/unir', {
@@ -1728,7 +1804,7 @@ const TableMap: React.FC<TableMapProps> = ({
 
                 {isRestaurantMode && splitTicketForModal && (
                     <SplitTicketModal
-                        originalItems={ensureCartIds(splitTicketForModal.items)}
+                        originalItems={splitTicketItems}
                         currencySymbol={currencySymbol}
                         onClose={() => setSplitTicketForModal(null)}
                         onConfirm={(remainingItems, newTicketItems, extraNewTickets, splitCount) => {
@@ -1851,7 +1927,13 @@ const TableMap: React.FC<TableMapProps> = ({
                                             key={t.id}
                                             type="button"
                                             onClick={() => {
-                                                if (onPrintPrecheck) onPrintPrecheck(t);
+                                                const ticket = parkedTickets?.find(p => p.id === t.currentOrderId);
+                                                if (ticket?.items?.length) {
+                                                    setSplitTicketForModal(ticket);
+                                                    setFractionPickOpen(false);
+                                                } else if (onPrintPrecheck) {
+                                                    onPrintPrecheck(t);
+                                                }
                                             }}
                                             className="w-full text-left px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-white/10"
                                         >
