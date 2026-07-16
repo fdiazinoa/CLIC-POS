@@ -4411,7 +4411,11 @@ const AppContent: React.FC = () => {
 
           setUsers(data.users || []);
           setRoles(data.roles || DEFAULT_ROLES);
-          setCustomers(data.customers || []);
+          // Android defers customers during db.init(); prefer the persisted
+          // collection so the bootstrap fallback cannot overwrite a synced
+          // customer list with an empty array.
+          const persistedCustomers = await db.get('customers') as Customer[];
+          setCustomers(Array.isArray(persistedCustomers) ? persistedCustomers : (data.customers || []));
           setTransactions(data.transactions || []);
           setProducts(data.products || []);
           setWarehouses(data.warehouses || []);
