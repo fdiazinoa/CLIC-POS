@@ -4813,7 +4813,10 @@ class SyncManager {
 
             const snapshotRows = this.snapshotMasterRows(snapshot, collection);
 
-            if (snapshotRows !== null) {
+            // An empty array can mean that the terminal config snapshot was
+            // persisted without this master scope. It must not suppress the
+            // collection pull, especially when the manifest reports records.
+            if (snapshotRows !== null && snapshotRows.length > 0) {
                 results[collection] = await this.applySnapshotImageBackedCollection(collection, snapshotRows);
                 continue;
             }
