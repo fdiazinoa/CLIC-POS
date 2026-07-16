@@ -89,7 +89,7 @@ interface ParkedOrderSummary {
     hasExplicitTotal: boolean;
 }
 
-type TableTransferMode = 'MOVE' | 'MERGE';
+type TableTransferMode = 'MOVE' | 'MERGE' | 'SPLIT';
 
 interface TableTransferSelection {
     mode: TableTransferMode;
@@ -111,7 +111,9 @@ const BarTabsModal: React.FC<{
     onClose: () => void;
     onOpenTab: (ticket: ParkedTicket) => void;
     onCreateTab: (name: string) => void;
-}> = ({ table, tickets, currencySymbol, onClose, onOpenTab, onCreateTab }) => {
+    allowCreate?: boolean;
+    titleLabel?: string;
+}> = ({ table, tickets, currencySymbol, onClose, onOpenTab, onCreateTab, allowCreate = true, titleLabel = 'Barra / Minutas' }) => {
     const [tabName, setTabName] = useState('');
     const nextName = `Minuta ${tickets.length + 1}`;
     const total = tickets.reduce((sum, ticket) => {
@@ -124,10 +126,10 @@ const BarTabsModal: React.FC<{
             <div className="w-full max-w-2xl rounded-[2rem] bg-white shadow-2xl overflow-hidden">
                 <div className="flex items-start justify-between gap-4 border-b border-slate-100 p-6">
                     <div>
-                        <p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-500">Barra / Minutas</p>
+                            <p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-500">{titleLabel}</p>
                         <h2 className="mt-1 text-3xl font-black text-slate-900">{table.nombre || table.name || 'Barra'}</h2>
-                        <p className="mt-1 text-sm font-bold text-slate-500">
-                            {tickets.length} minuta(s) abierta(s) · {currencySymbol}{total.toLocaleString()}
+                            <p className="mt-1 text-sm font-bold text-slate-500">
+                            {tickets.length} cuenta(s) abierta(s) · {currencySymbol}{total.toLocaleString()}
                         </p>
                     </div>
                     <button onClick={onClose} className="rounded-full bg-slate-100 p-3 text-slate-500 hover:bg-slate-200">
@@ -140,13 +142,13 @@ const BarTabsModal: React.FC<{
                         {tickets.length === 0 ? (
                             <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center">
                                 <ReceiptText size={38} className="mx-auto mb-3 text-slate-300" />
-                                <p className="font-black text-slate-700">No hay minutas abiertas</p>
-                                <p className="mt-1 text-sm font-semibold text-slate-400">Crea una minuta para empezar una cuenta en esta barra.</p>
+                                <p className="font-black text-slate-700">No hay cuentas abiertas</p>
+                                <p className="mt-1 text-sm font-semibold text-slate-400">No hay artículos pendientes en esta mesa.</p>
                             </div>
                         ) : (
                             tickets.map((ticket, index) => {
                                 const ticketTotal = Number(ticket.total ?? (ticket.items || []).reduce((acc, item) => acc + Number(item.price || 0) * Number(item.quantity || 0), 0));
-                                const label = ticket.barTabName || ticket.alias || ticket.name || `Minuta ${index + 1}`;
+                                            const label = ticket.barTabName || ticket.alias || ticket.name || `Cuenta ${index + 1}`;
                                 return (
                                     <button
                                         key={ticket.id}
@@ -167,8 +169,8 @@ const BarTabsModal: React.FC<{
                         )}
                     </div>
 
-                    <div className="rounded-3xl border border-blue-100 bg-blue-50 p-5">
-                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Nueva minuta</p>
+                    {allowCreate && <div className="rounded-3xl border border-blue-100 bg-blue-50 p-5">
+                            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Nueva minuta</p>
                         <input
                             value={tabName}
                             onChange={(event) => setTabName(event.target.value)}
@@ -186,7 +188,7 @@ const BarTabsModal: React.FC<{
                             <Plus size={18} />
                             Abrir minuta
                         </button>
-                    </div>
+                    </div>}
                 </div>
             </div>
         </div>
@@ -234,6 +236,8 @@ const ensureCartIds = (items: CartItem[]): CartItem[] =>
 
 const getRoomLabel = (room?: Room): string => room?.nombre || room?.name || 'Sala';
 const getTableLabel = (table: Table): string => table.nombre || table.name || 'Mesa';
+const getFirstNumber = (value: string): string => value.match(/\d+/)?.[0] || '';
+const padLocationNumber = (value: string): string => value ? value.padStart(2, '0') : '';
 
 const getElapsedMinutes = (timeSeated?: string): number => {
     if (!timeSeated) return 0;
@@ -384,6 +388,7 @@ const TableMap: React.FC<TableMapProps> = ({
     const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [splitTicketForModal, setSplitTicketForModal] = useState<ParkedTicket | null>(null);
+    const [selectedAccountTable, setSelectedAccountTable] = useState<Table | null>(null);
     const [transferSelection, setTransferSelection] = useState<TableTransferSelection | null>(null);
     const [subtotalPickOpen, setSubtotalPickOpen] = useState(false);
     const [fractionPickOpen, setFractionPickOpen] = useState(false);
@@ -434,7 +439,12 @@ const TableMap: React.FC<TableMapProps> = ({
     const getTableRoomLabel = useCallback((table: Table): string => {
         const tableLabel = getTableLabel(table);
         const roomLabel = roomLabelById.get(table.roomId);
-        return roomLabel ? `${roomLabel} · ${tableLabel}` : tableLabel;
+        const roomNumber = getFirstNumber(roomLabel || '');
+        const tableNumber = getFirstNumber(tableLabel);
+        if (roomNumber && tableNumber) {
+            return `${padLocationNumber(roomNumber)}-${padLocationNumber(tableNumber)} · ${roomLabel} · ${tableLabel}`;
+        }
+        return roomLabel ? `${roomLabel} · ${tableLabel}`.slice(0, 48) : tableLabel.slice(0, 42);
     }, [roomLabelById]);
 
     const currentRolePermissions = useMemo<Permission[]>(() => {
@@ -577,12 +587,18 @@ const TableMap: React.FC<TableMapProps> = ({
         return map;
     }, [parkedTickets]);
 
-    const getBarTickets = useCallback(
+    const getTableTickets = useCallback(
         (table: Table): ParkedTicket[] => (parkedTickets || [])
             .filter(ticket => String(ticket.tableId ?? '') === String(table.id))
-            .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
+            .sort((a, b) => {
+                if (String(a.id) === String(table.currentOrderId)) return -1;
+                if (String(b.id) === String(table.currentOrderId)) return 1;
+                return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+            }),
         [parkedTickets]
     );
+
+    const getBarTickets = getTableTickets;
 
     const getParkedSummaryForTable = useCallback(
         (table: Table) => {
@@ -990,6 +1006,11 @@ const TableMap: React.FC<TableMapProps> = ({
                 alert('Seleccione una mesa origen con artículos.');
                 return true;
             }
+            if (transferSelection.mode === 'SPLIT') {
+                setSplitTicketForModal(sourceTicket);
+                setTransferSelection(null);
+                return true;
+            }
             setTransferSelection({
                 ...transferSelection,
                 step: 'TARGET',
@@ -1008,6 +1029,11 @@ const TableMap: React.FC<TableMapProps> = ({
     }, [completeTableTransfer, resolveTicketForTable, transferSelection]);
 
     const handleTableAction = useCallback(async (table: Table) => {
+        const tableTickets = getTableTickets(table);
+        if (isRestaurantMode && table.shape !== 'BAR' && tableTickets.length > 1) {
+            setSelectedAccountTable(table);
+            return;
+        }
         if (table.shape === 'BAR') {
             setSelectedBarTable(table);
             return;
@@ -1065,7 +1091,7 @@ const TableMap: React.FC<TableMapProps> = ({
         }
 
         setSelectedTable(table);
-    }, [currentUser.id, currentUser.name, isRestaurantMode, onOpenTable, onRefreshTables, onTableClick]);
+    }, [currentUser.id, currentUser.name, getTableTickets, isRestaurantMode, onOpenTable, onRefreshTables, onTableClick]);
 
     const handleNodeSelect = useCallback(
         (model: SmartTableModel) => {
@@ -1265,7 +1291,13 @@ const TableMap: React.FC<TableMapProps> = ({
                 </button>
                 <button
                     type="button"
-                    onClick={() => setFractionPickOpen(true)}
+                    onClick={() => {
+                        if (occupiedForTools.filter(t => t.currentOrderId).length === 0) {
+                            alert('No hay mesas ocupadas con cuenta.');
+                            return;
+                        }
+                        setTransferSelection({ mode: 'SPLIT', step: 'SOURCE' });
+                    }}
                     className={buttonClass}
                 >
                     <PieChart size={iconSize} className="opacity-95" />
@@ -1279,16 +1311,7 @@ const TableMap: React.FC<TableMapProps> = ({
                             alert('No hay mesas ocupadas con cuenta.');
                             return;
                         }
-                        if (withOrders.length === 1) {
-                            const ticket = parkedTickets?.find(p => p.id === withOrders[0].currentOrderId);
-                            if (ticket?.items?.length) {
-                                setSplitTicketForModal(ticket);
-                            } else {
-                                alert('La cuenta no tiene ítems cargados.');
-                            }
-                            return;
-                        }
-                        setSplitPickOpen(true);
+                        setTransferSelection({ mode: 'SPLIT', step: 'SOURCE' });
                     }}
                     className={buttonClass}
                 >
@@ -1353,11 +1376,11 @@ const TableMap: React.FC<TableMapProps> = ({
                             className="absolute left-1/2 top-6 z-40 -translate-x-1/2 rounded-2xl border border-sky-200/25 bg-slate-950/78 px-5 py-3 text-center shadow-[0_18px_48px_rgba(2,6,23,0.62)] backdrop-blur-xl"
                         >
                             <p className="text-[10px] font-black uppercase tracking-[0.22em] text-sky-200">
-                                {transferSelection.mode === 'MERGE' ? 'Unir mesas' : 'Mover mesa'}
+                                {transferSelection.mode === 'MERGE' ? 'Unir mesas' : transferSelection.mode === 'SPLIT' ? 'Dividir cuenta' : 'Mover mesa'}
                             </p>
                             <p className="mt-1 text-sm font-black text-white">
                                 {transferSelection.step === 'SOURCE'
-                                    ? 'Mesa a mover: toque la mesa origen'
+                                    ? (transferSelection.mode === 'SPLIT' ? 'Toque en el mapa la mesa que desea dividir' : 'Mesa a mover: toque la mesa origen')
                                     : 'Mesa destino: toque la mesa que recibirá la cuenta'}
                             </p>
                             <button
@@ -1761,6 +1784,29 @@ const TableMap: React.FC<TableMapProps> = ({
                                 alert('Error de conexion');
                             }
                         }}
+                    />
+                )}
+
+                {selectedAccountTable && (
+                    <BarTabsModal
+                        table={selectedAccountTable}
+                        tickets={getTableTickets(selectedAccountTable)}
+                        currencySymbol={currencySymbol}
+                        allowCreate={false}
+                        titleLabel="Cuentas separadas"
+                        onClose={() => setSelectedAccountTable(null)}
+                        onOpenTab={(ticket) => {
+                            const total = Number(ticket.total ?? (ticket.items || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
+                            onTableClick({
+                                ...selectedAccountTable,
+                                status: 'OCCUPIED',
+                                currentOrderId: ticket.id,
+                                currentOrderTotal: total,
+                                timeSeated: selectedAccountTable.timeSeated || ticket.timestamp
+                            });
+                            setSelectedAccountTable(null);
+                        }}
+                        onCreateTab={() => undefined}
                     />
                 )}
 
