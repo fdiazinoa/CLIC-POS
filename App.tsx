@@ -4998,6 +4998,18 @@ const AppContent: React.FC = () => {
     const syncEvents = ['productsUpdated', 'customersUpdated', 'suppliersUpdated', 'usersUpdated', 'rolesUpdated', 'purchaseOrdersUpdated', 'transfersUpdated', 'internalSequencesUpdated', 'transactionsUpdated', 'cashMovementsUpdated', 'zReportsUpdated', 'warehousesUpdated', 'productStocksUpdated', 'tablesUpdated'];
     syncEvents.forEach(e => window.addEventListener(e, handleSyncEvent));
 
+    // Android defers heavy collections during db.init(). The customer sync can
+    // therefore finish before this effect subscribes to customersUpdated.
+    // Re-read the persisted collection once after subscribing to close that
+    // startup race without querying SQLite on every render.
+    void db.get('customers').then((freshCustomers) => {
+      if (Array.isArray(freshCustomers)) {
+        setCustomers(freshCustomers as Customer[]);
+      }
+    }).catch((error) => {
+      console.warn('Failed to hydrate customers after sync listeners were registered:', error);
+    });
+
     return () => {
       if (catalogRefreshTimer) clearTimeout(catalogRefreshTimer);
       syncEvents.forEach(e => window.removeEventListener(e, handleSyncEvent));
