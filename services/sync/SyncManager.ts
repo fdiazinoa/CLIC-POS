@@ -5464,6 +5464,20 @@ class SyncManager {
             return 0;
         }
 
+        // A local database reset can leave the legacy sync version behind. In
+        // that state ERP correctly reports "no changes" while SQLite has no
+        // customers to hydrate, so the empty collection must force a full pull.
+        if (!force && collection === 'customers') {
+            const localCustomers = await db.get('customers');
+            if (Array.isArray(localCustomers) && localCustomers.length === 0) {
+                force = true;
+                this.syncVersions.set(collection, 0);
+                localStorage.removeItem(`sync_version_${collection}`);
+                localStorage.removeItem(`sync_timestamp_${collection}`);
+                console.warn('[SYNC_CUSTOMERS_EMPTY_RECOVERY] forcing full customer pull');
+            }
+        }
+
         // Throttling...
         // Throttling...
         if (this.isInternalSyncing && !options?.ignoreThrottle) {
