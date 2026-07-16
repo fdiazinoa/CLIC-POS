@@ -720,6 +720,7 @@ interface ProductGridCardProps {
    isProductWarehouseBlockedForSale: (product: Product) => boolean;
    getTerminalWarehouseName: () => string;
    getProductPrice: (product: Product) => number;
+   isProductOutOfStock: (product: Product) => boolean;
    hasPromotionForProduct: (product: Product) => boolean;
    onProductClick: (product: Product) => void;
    onOpenPromotion: (product: Product) => void;
@@ -739,6 +740,7 @@ const ProductGridCard = React.memo(({
    isProductWarehouseBlockedForSale,
    getTerminalWarehouseName,
    getProductPrice,
+   isProductOutOfStock,
    hasPromotionForProduct,
    onProductClick,
    onOpenPromotion,
@@ -752,6 +754,7 @@ const ProductGridCard = React.memo(({
    const hasVariants = (product.variants || []).length > 0 || (product.attributes || []).length > 0;
    const isCompactMobileCard = isMobile && !usesExpandedCatalog;
    const warehouseSaleBlocked = isProductWarehouseBlockedForSale(product);
+   const outOfStock = isProductOutOfStock(product);
    const imageSrc = showProductImages ? resolveProductImageSrc(product) : '';
    const hasPromotion = hasPromotionForProduct(product);
    const price = getProductPrice(product);
@@ -819,6 +822,14 @@ const ProductGridCard = React.memo(({
                      </div>
                   </div>
                )}
+               {outOfStock && (
+                  <div className="absolute top-0 right-0 z-20 pointer-events-none">
+                     <div className="bg-rose-600 text-white text-[10px] font-black px-2 py-1 rounded-bl-xl shadow-md flex items-center gap-1">
+                        <AlertTriangle size={10} strokeWidth={3} />
+                        <span>SIN STOCK</span>
+                     </div>
+                  </div>
+               )}
             </div>
          )}
 
@@ -830,6 +841,14 @@ const ProductGridCard = React.memo(({
                <div className="bg-red-500 text-white text-[10px] font-black px-3 py-1.5 rounded-bl-2xl shadow-sm flex items-center gap-1 hover:bg-red-600 transition-colors">
                   <Tag size={12} className="fill-white" />
                   <span>OFERTA</span>
+               </div>
+            </div>
+         )}
+         {!showProductImages && outOfStock && (
+            <div className="absolute top-0 right-0 z-20 pointer-events-none">
+               <div className="bg-rose-600 text-white text-[10px] font-black px-3 py-1.5 rounded-bl-2xl shadow-sm flex items-center gap-1">
+                  <AlertTriangle size={12} strokeWidth={3} />
+                  <span>SIN STOCK</span>
                </div>
             </div>
          )}
@@ -1469,6 +1488,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       normalizeScopeKey,
       warehouses,
    ]);
+   const isProductOutOfStock = useCallback((product: Product) => {
+      const trackInventory = product.operationalFlags?.trackInventory ?? config.features.stockTracking;
+      return Boolean(trackInventory && getScopedProductStock(product) <= 0);
+   }, [config.features.stockTracking, getScopedProductStock]);
    const effectiveAllowedCategorySet = useMemo(() => {
       const configuredCategories = new Set(
          (activeTerminalConfig?.catalog?.allowedCategories || [])
@@ -6176,6 +6199,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         isProductWarehouseBlockedForSale={isProductWarehouseBlockedForSale}
                         getTerminalWarehouseName={getTerminalWarehouseName}
                         getProductPrice={getProductPrice}
+                        isProductOutOfStock={isProductOutOfStock}
                         hasPromotionForProduct={hasPromotionForProduct}
                         onProductClick={handleProductCardClick}
                         onOpenPromotion={openProductPromotionSheet}

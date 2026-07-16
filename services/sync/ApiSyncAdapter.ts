@@ -299,12 +299,26 @@ const isValidIsoTimestampCursor = (value: unknown): value is string => {
     return /^\d{4}-\d{2}-\d{2}T/.test(trimmed);
 };
 
-const readArrayPayload = (payload: any): any[] => {
+const readArrayPayload = (payload: any, collection?: string): any[] => {
+    const collectionKeys: Record<string, string[]> = {
+        products: ['products', 'items'],
+        items: ['items', 'products'],
+        customers: ['customers', 'clients', 'clients_data'],
+        suppliers: ['suppliers', 'vendors'],
+    };
+    for (const key of collectionKeys[collection || ''] || []) {
+        if (Array.isArray(payload?.[key])) return payload[key];
+    }
     if (Array.isArray(payload?.items)) return payload.items;
     if (Array.isArray(payload?.data)) return payload.data;
     if (Array.isArray(payload?.records)) return payload.records;
     return [];
 };
+
+const normalizePullDeltaPayload = (collection: string, payload: any): PullDeltaResult => ({
+    ...(payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {}),
+    items: readArrayPayload(payload, collection),
+});
 
 const readBooleanPayload = (...values: unknown[]): boolean => {
     for (const value of values) {
@@ -3687,13 +3701,7 @@ class ApiSyncAdapter {
         }
 
         const fullData = await fullResponse.json();
-        const items = Array.isArray(fullData.items)
-            ? fullData.items
-            : Array.isArray(fullData.data)
-                ? fullData.data
-                : Array.isArray(fullData.records)
-                    ? fullData.records
-                    : [];
+        const items = readArrayPayload(fullData, collection);
 	        const latestVersion = Number(
 	            fullData.latestVersion
 	            ?? fullData.version
@@ -3791,7 +3799,7 @@ class ApiSyncAdapter {
             }
 
             const data = await response.json();
-            const pageItems = readArrayPayload(data);
+            const pageItems = readArrayPayload(data, collection);
             allItems.push(...pageItems);
 
             const nextCursor = readCursorPayload(data);
@@ -4012,7 +4020,7 @@ class ApiSyncAdapter {
                             latestVersion: sinceVersion || 0,
                         };
                     }
-                    return await retryResponse.json();
+                    return normalizePullDeltaPayload(collection, await retryResponse.json());
                 }
 
                 if (!response.ok) {
@@ -4109,7 +4117,7 @@ class ApiSyncAdapter {
                     };
                 }
 
-                return await response.json();
+                return normalizePullDeltaPayload(collection, await response.json());
             } catch (error) {
                 console.error(`❌ ApiSyncAdapter: Error pulling ERP delta for ${collection}:`, error);
                 if (!this.isBlockingOperationalAuthError(error)) {
@@ -4223,7 +4231,7 @@ class ApiSyncAdapter {
                 throw error;
             }
 
-            return await response.json();
+            return normalizePullDeltaPayload(collection, await response.json());
         } catch (error) {
             console.error(`❌ ApiSyncAdapter: Error pulling delta for ${collection}:`, error);
             reportSyncErrorDiagnostic({

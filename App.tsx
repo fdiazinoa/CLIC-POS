@@ -1606,6 +1606,7 @@ const AppContent: React.FC = () => {
   const inactivityTimerRef = useRef<number | null>(null);
   const inactivityIntervalRef = useRef<number | null>(null);
   const lastUserActivityAtRef = useRef<number>(Date.now());
+  const inactivitySessionKeyRef = useRef<string>('');
   const appBackgroundSinceRef = useRef<number | null>(null);
   const isAppInBackgroundRef = useRef(false);
   const lifecycleSyncInFlightRef = useRef<Promise<void> | null>(null);
@@ -2371,6 +2372,13 @@ const AppContent: React.FC = () => {
       currentView !== 'WIZARD' &&
       autoLogoutMinutes > 0;
 
+    const inactivitySessionKey = `${currentUser?.id || ''}:${currentView}`;
+    const isNewInactivitySession = inactivitySessionKeyRef.current !== inactivitySessionKey;
+    if (isNewInactivitySession) {
+      inactivitySessionKeyRef.current = inactivitySessionKey;
+      lastUserActivityAtRef.current = Date.now();
+    }
+
     if (!shouldTrackInactivity) {
       if (inactivityTimerRef.current) {
         window.clearTimeout(inactivityTimerRef.current);
@@ -2455,7 +2463,6 @@ const AppContent: React.FC = () => {
       minutes: autoLogoutMinutes,
       view: currentView,
     });
-    lastUserActivityAtRef.current = Date.now();
     resetInactivityTimer();
     inactivityIntervalRef.current = window.setInterval(
       checkInactivityDeadline,

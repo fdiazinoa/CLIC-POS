@@ -494,8 +494,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               <h3 className="text-2xl font-black text-slate-800 flex items-center gap-3"><UserCircle className="text-blue-600" /> Identidad</h3>
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                  <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase">ID de Terminal</label>
-                                    <input type="text" value={resolveTerminalErpIdentity(activeTerminal) || activeTerminal.id} readOnly className="w-full p-4 bg-slate-50 rounded-2xl font-bold" />
+                                    <label className="text-[10px] font-black text-slate-400 uppercase">Identificador operativo</label>
+                                    <input type="text" value={resolveTerminalDisplayName(activeTerminal)} readOnly className="w-full p-4 bg-slate-50 rounded-2xl font-bold" />
                                  </div>
                                  <div className="space-y-2">
                                     <label className="text-[10px] font-black text-slate-400 uppercase">Número Estación</label>
