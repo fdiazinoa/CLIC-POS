@@ -5521,11 +5521,20 @@ class SyncManager {
 	            const lastVersion = force ? 0 : (this.syncVersions.get(collection) || 0);
 	            // const timestamp = new Date().toISOString();
 	            // console.log(`[PULL_INICIO] ${timestamp} Descargando colección: ${collection} (LastVersion: ${lastVersion})`);
-	            // Pull Delta from API
-	            const response = await apiSyncAdapter.pullDelta(collection, lastVersion || undefined, usesTimestampCursor ? {
-	                cursor: timestampCursor,
-	                limit: 500,
-	            } : undefined);
+            // A forced customer recovery must bypass the version cursor. The ERP
+            // delta endpoint can legitimately return no rows for sinceVersion=0,
+            // while the full master endpoint is the authoritative rehydration path.
+            const response = force && collection === 'customers'
+                ? {
+                    items: await apiSyncAdapter.pull(collection),
+                    serverTime: new Date().toISOString(),
+                    isFullDownload: true,
+                    latestVersion: 0,
+                }
+                : await apiSyncAdapter.pullDelta(collection, lastVersion || undefined, usesTimestampCursor ? {
+                    cursor: timestampCursor,
+                    limit: 500,
+                } : undefined);
 	            const { items, serverTime, isFullDownload, latestVersion, cursor, nextCursor, lastSyncedAt, hasMore } = response;
 	            let metadataCache: any = undefined;
 
