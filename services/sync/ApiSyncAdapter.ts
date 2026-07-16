@@ -3381,7 +3381,7 @@ class ApiSyncAdapter {
                         return [];
                     }
                     const retryData = await retryResponse.json();
-                    return retryData.items || [];
+                    return readArrayPayload(retryData, collection);
                 }
 
                 if (!response.ok) {
@@ -3446,7 +3446,7 @@ class ApiSyncAdapter {
                 }
 
                 const data = await response.json();
-                return data.items || [];
+                return readArrayPayload(data, collection);
             } catch (error) {
                 console.error(`❌ ApiSyncAdapter: Error pulling ${collection} from ERP target:`, error);
                 if (!this.isBlockingOperationalAuthError(error)) {
@@ -3588,8 +3588,9 @@ class ApiSyncAdapter {
                 return [];
             }
 
-            console.log(`📥 ApiSyncAdapter: Pulled ${data.items.length} items from ${collection} (v${data.version})`);
-            return data.items;
+            const items = readArrayPayload(data, collection);
+            console.log(`📥 ApiSyncAdapter: Pulled ${items.length} items from ${collection} (v${data.version})`);
+            return items;
 
         } catch (error) {
             console.error(`❌ ApiSyncAdapter: Error pulling ${collection}:`, error);
