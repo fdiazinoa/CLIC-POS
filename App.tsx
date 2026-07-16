@@ -2286,7 +2286,12 @@ const AppContent: React.FC = () => {
     const terminal = getCurrentTerminal();
     return resolveDeviceRoleValue(
       [
+        terminal,
         terminal?.config,
+        terminal?.terminalType,
+        terminal?.terminal_type,
+        terminal?.deviceType,
+        terminal?.device_type,
         terminal?.config?.erpBinding,
         terminal?.config?.deviceRole,
         terminal?.config?.role,
@@ -2296,6 +2301,10 @@ const AppContent: React.FC = () => {
         terminal?.config?.device_role_code,
         terminal?.config?.deviceRole?.role_code,
         terminal?.config?.deviceRole?.device_role_code,
+        terminal?.config?.terminalType,
+        terminal?.config?.terminal_type,
+        terminal?.config?.deviceType,
+        terminal?.config?.device_type,
       ],
       undefined
     );
@@ -2306,21 +2315,46 @@ const AppContent: React.FC = () => {
   }, [getCurrentDeviceRoleRaw]);
 
   useEffect(() => {
-    if (getCurrentDeviceRoleRaw() !== DeviceRole.KITCHEN_DISPLAY) return;
+    let disposed = false;
+    const ensureKdsServer = () => {
+      if (disposed || getCurrentDeviceRoleRaw() !== DeviceRole.KITCHEN_DISPLAY) return;
+      const nativeBridge = (window as any).ClicPOSNativePrinter;
+      if (typeof nativeBridge?.startKdsServer !== 'function') return;
 
-    const nativeBridge = (window as any).ClicPOSNativePrinter;
-    if (typeof nativeBridge?.startKdsServer !== 'function') return;
+      Promise.resolve(nativeBridge.startKdsServer({ port: 8001 }))
+        .then((status: any) => {
+          if (!disposed) {
+            console.info('[KDS] Native server ensured', {
+              running: Boolean(status?.running || status?.success),
+              port: status?.port || 8001,
+              localIp: status?.localIp || null,
+            });
+          }
+        })
+        .catch((error: unknown) => console.warn('[KDS] Could not ensure native server:', error));
+    };
 
-    Promise.resolve(nativeBridge.startKdsServer({ port: 8001 }))
-      .then((status: any) => {
-        console.info('[KDS] Native server ensured after POS bootstrap', {
-          running: Boolean(status?.running || status?.success),
-          port: status?.port || 8001,
-        });
-      })
-      .catch((error: unknown) => {
-        console.warn('[KDS] Could not ensure native server after bootstrap:', error);
-      });
+    const handleResume = () => {
+      if (!document.hidden) ensureKdsServer();
+    };
+    ensureKdsServer();
+    const watchdog = window.setInterval(ensureKdsServer, 30000);
+    window.addEventListener('online', ensureKdsServer);
+    document.addEventListener('visibilitychange', handleResume);
+    const appPlugin = (window as any).Capacitor?.Plugins?.App;
+    const resumeListener = appPlugin?.addListener?.('resume', ensureKdsServer);
+    const stateListener = appPlugin?.addListener?.('appStateChange', (state: { isActive?: boolean }) => {
+      if (state?.isActive) ensureKdsServer();
+    });
+
+    return () => {
+      disposed = true;
+      window.clearInterval(watchdog);
+      window.removeEventListener('online', ensureKdsServer);
+      document.removeEventListener('visibilitychange', handleResume);
+      resumeListener?.remove?.();
+      stateListener?.remove?.();
+    };
   }, [getCurrentDeviceRoleRaw]);
 
   const navigateToUserLogin = React.useCallback(() => {

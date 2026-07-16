@@ -4086,6 +4086,25 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
 
+   const syncOrderToConfiguredKds = useCallback(async (orderId: string, payload: Record<string, unknown>) => {
+      if (!orderId) return;
+      const configuredAreas = await db.get('productionAreas' as any).catch(() => []) as any;
+      const productionAreas: ProductionAreaConfig[] = Array.isArray(configuredAreas) ? configuredAreas : [];
+      const targets = Array.from(new Set(
+         productionAreas
+            .filter(area => {
+               const mode = normalizeProductionMode(area.modo_salida);
+               return mode === 'KDS' || mode === 'AMBOS';
+            })
+            .map(area => resolveKdsBaseUrl(area, config))
+            .filter((url): url is string => Boolean(url))
+      ));
+
+      await Promise.all(targets.map(async (baseUrl) => {
+         await postJsonWithTimeout(`${baseUrl}/api/ordenes/${encodeURIComponent(orderId)}`, payload);
+      }));
+   }, [config]);
+
    const updateCartItem = async (updatedItem: CartItem | null, cartIdToDelete?: string) => {
       if (blockRecoveredUberOrderMutation('editar el pedido')) return;
       if (hasSubtotalizedCart) {
@@ -4152,16 +4171,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             onUpdateParkedTickets(updatedTickets);
          }
 
-         // Update KDS
-         try {
-            fetch(`http://localhost:8001/api/ordenes/${ticketId}`, {
-               method: 'PUT',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ items: newCart, total, status: 'OCCUPIED' })
-            });
-         } catch (e) {
-            console.error("Auto-sync delete failed:", e);
-         }
+         void syncOrderToConfiguredKds(String(ticketId || ''), { items: newCart, total, status: 'OCCUPIED' })
+            .catch(error => console.error('Auto-sync KDS failed:', error));
       }
    };
 
@@ -4213,11 +4224,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             await Promise.resolve(onUpdateParkedTickets(updatedTickets));
 
             try {
-               fetch(`http://localhost:8001/api/ordenes/${ticketId}`, {
-                  method: 'PUT',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ items: dispatchedItems, total, status: 'OCCUPIED' })
-               });
+               await syncOrderToConfiguredKds(String(ticketId), { items: dispatchedItems, total, status: 'OCCUPIED' });
             } catch (e) {
                console.error('Auto-sync clear failed:', e);
             }
@@ -5458,15 +5465,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          try {
             const total = ticketItems.reduce((sum, i) => sum + (i.price * i.quantity), 0);
 
-            // Sync with KDS backend
-            await fetch(`http://localhost:8001/api/ordenes/${newParked.id}`, {
-               method: 'PUT',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({
-                  items: ticketItems,
-                  total: total,
-                  status: 'OCCUPIED'
-               })
+            await syncOrderToConfiguredKds(newParked.id, {
+               items: ticketItems,
+               total,
+               status: 'OCCUPIED'
             });
 
             if (onClearActiveTable) onClearActiveTable();
@@ -5532,14 +5534,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       void (async () => {
          try {
-            await fetch(`http://localhost:8001/api/ordenes/${tableOrder.id}`, {
-               method: 'PUT',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({
-                  items: tableOrder.items,
-                  total: tableOrder.total,
-                  status: 'OCCUPIED'
-               })
+            await syncOrderToConfiguredKds(tableOrder.id, {
+               items: tableOrder.items,
+               total: tableOrder.total,
+               status: 'OCCUPIED'
             });
          } catch (error) {
             console.warn('No se pudo sincronizar la mesa con cocina al volver al mapa:', error);
