@@ -99,6 +99,8 @@ const resolveKdsPort = (): string => {
     }
 };
 
+const resolveKdsLocalBaseUrl = (): string => `http://localhost:${resolveKdsPort()}`;
+
 const resolveKitchenTerminalIdentity = () => {
     try {
         const params = new URLSearchParams(window.location.search);
@@ -256,7 +258,7 @@ const KitchenDisplay: React.FC = () => {
     useEffect(() => {
         const fetchOrders = async () => {
             try {
-                const response = await fetch('http://localhost:8001/api/cocina/ordenes-activas');
+                const response = await fetch(`${resolveKdsLocalBaseUrl()}/api/cocina/ordenes-activas`);
                 if (response.ok) {
                     const data = await response.json();
                     const nextOrders = Array.isArray(data) ? data : [];
@@ -301,7 +303,7 @@ const KitchenDisplay: React.FC = () => {
             const payload = type === 'item'
                 ? { item_id: id, nuevo_estado: newStatus }
                 : { orden_id: id, nuevo_estado: newStatus };
-            const response = await fetch('http://localhost:8001/api/cocina/cambiar-estado', {
+            const response = await fetch(`${resolveKdsLocalBaseUrl()}/api/cocina/cambiar-estado`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)

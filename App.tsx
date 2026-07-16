@@ -2305,6 +2305,24 @@ const AppContent: React.FC = () => {
     return getCurrentDeviceRoleRaw() ?? DeviceRole.STANDARD_POS;
   }, [getCurrentDeviceRoleRaw]);
 
+  useEffect(() => {
+    if (getCurrentDeviceRoleRaw() !== DeviceRole.KITCHEN_DISPLAY) return;
+
+    const nativeBridge = (window as any).ClicPOSNativePrinter;
+    if (typeof nativeBridge?.startKdsServer !== 'function') return;
+
+    Promise.resolve(nativeBridge.startKdsServer({ port: 8001 }))
+      .then((status: any) => {
+        console.info('[KDS] Native server ensured after POS bootstrap', {
+          running: Boolean(status?.running || status?.success),
+          port: status?.port || 8001,
+        });
+      })
+      .catch((error: unknown) => {
+        console.warn('[KDS] Could not ensure native server after bootstrap:', error);
+      });
+  }, [getCurrentDeviceRoleRaw]);
+
   const navigateToUserLogin = React.useCallback(() => {
     clearActiveUserSession();
     clearSecurityState();
