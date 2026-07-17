@@ -108,7 +108,12 @@ SOURCE_BRANCH="$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref "${SOURCE_REF}" 2>
 [[ -d "${CANONICAL_BUILD_WORKTREE}" ]] || fail "No existe la worktree canónica: ${CANONICAL_BUILD_WORKTREE}"
 
 CANONICAL_STATUS="$(git -C "${CANONICAL_BUILD_WORKTREE}" status --porcelain)"
-[[ -z "${CANONICAL_STATUS}" ]] || fail "La worktree canónica no está limpia. Corrige eso antes de compilar."
+if [[ -n "${CANONICAL_STATUS}" ]]; then
+  if [[ "${ALLOW_DIRTY_SIGNING_WORKTREE:-0}" != "1" ]]; then
+    fail "La worktree canónica no está limpia. Corrige eso antes de compilar."
+  fi
+  info "ADVERTENCIA: la worktree de firma tiene cambios; el build aislado usará únicamente key.properties, keystore y local.properties."
+fi
 
 KEY_PROPERTIES="${CANONICAL_BUILD_WORKTREE}/android/key.properties"
 KEYSTORE_FILE="${CANONICAL_BUILD_WORKTREE}/android/keys/clic-pos-release.keystore"
