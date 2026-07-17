@@ -26,6 +26,7 @@ import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from '
 import TableOptionsModal from './TableOptionsModal';
 import SplitTicketModal from './SplitTicketModal';
 import { createPaymentFractionPlan } from '../utils/paymentFractions';
+import { getRenderableFloorTables } from '../utils/tableLayout';
 
 interface TableMapProps {
     rooms: Room[];
@@ -407,10 +408,8 @@ const TableMap: React.FC<TableMapProps> = ({
     const panRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
     const viewportStateRef = useRef(viewport);
 
-    // A generic label is valid user data. Tables are removed only through the
-    // explicit designer action, never inferred from their name or runtime state.
     const safeTables = useMemo(
-        () => (Array.isArray(tables) ? tables : []),
+        () => getRenderableFloorTables(Array.isArray(tables) ? tables : []),
         [tables]
     );
 
@@ -442,6 +441,7 @@ const TableMap: React.FC<TableMapProps> = ({
     }, []);
 
     const activeRoom = useMemo(() => rooms.find(r => r.id === activeRoomId), [rooms, activeRoomId]);
+    const usesWhiteBackground = activeRoom?.data?.backgroundStyle === 'WHITE';
     const roomLabelById = useMemo(() => {
         return new Map(rooms.map(room => [room.id, getRoomLabel(room)]));
     }, [rooms]);
@@ -1360,25 +1360,25 @@ const TableMap: React.FC<TableMapProps> = ({
         <LazyMotion features={domAnimation}>
             <div
                 ref={mapShellRef}
-                className="relative h-full w-full overflow-hidden bg-slate-950 text-slate-100 select-none"
+                className={`relative h-full w-full overflow-hidden select-none ${usesWhiteBackground ? 'bg-white text-slate-900' : 'bg-slate-950 text-slate-100'}`}
             >
-                <div className="absolute inset-0 bg-gradient-to-br from-[#030712] via-[#07122a] to-[#040816]" />
+                <div className={`absolute inset-0 ${usesWhiteBackground ? 'bg-white' : 'bg-gradient-to-br from-[#030712] via-[#07122a] to-[#040816]'}`} />
 
                 <div
-                    className="absolute inset-0 pointer-events-none opacity-45"
+                    className={`absolute inset-0 pointer-events-none ${usesWhiteBackground ? 'opacity-70' : 'opacity-45'}`}
                     style={{
                         backgroundImage: [
-                            'linear-gradient(rgba(148,163,184,0.13) 1px, transparent 1px)',
-                            'linear-gradient(90deg, rgba(148,163,184,0.13) 1px, transparent 1px)',
-                            'radial-gradient(circle at 25% 25%, rgba(56,189,248,0.18), transparent 45%)',
-                            'radial-gradient(circle at 85% 12%, rgba(147,51,234,0.12), transparent 42%)'
+                            `linear-gradient(${usesWhiteBackground ? 'rgba(148,163,184,0.2)' : 'rgba(148,163,184,0.13)'} 1px, transparent 1px)`,
+                            `linear-gradient(90deg, ${usesWhiteBackground ? 'rgba(148,163,184,0.2)' : 'rgba(148,163,184,0.13)'} 1px, transparent 1px)`,
+                            usesWhiteBackground ? 'none' : 'radial-gradient(circle at 25% 25%, rgba(56,189,248,0.18), transparent 45%)',
+                            usesWhiteBackground ? 'none' : 'radial-gradient(circle at 85% 12%, rgba(147,51,234,0.12), transparent 42%)'
                         ].join(','),
                         backgroundSize: `${34 * viewport.scale}px ${34 * viewport.scale}px, ${34 * viewport.scale}px ${34 * viewport.scale}px, 100% 100%, 100% 100%`,
                         backgroundPosition: `${viewport.x * 0.06}px ${viewport.y * 0.06}px, ${viewport.x * 0.06}px ${viewport.y * 0.06}px, center, center`
                     }}
                 />
 
-                <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_20%_18%,rgba(56,189,248,0.22),transparent_48%),radial-gradient(circle_at_82%_78%,rgba(168,85,247,0.16),transparent_42%)]" />
+                {!usesWhiteBackground && <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_20%_18%,rgba(56,189,248,0.22),transparent_48%),radial-gradient(circle_at_82%_78%,rgba(168,85,247,0.16),transparent_42%)]" />}
 
                 <AnimatePresence>
                     {transferSelection && (
@@ -1657,6 +1657,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                         model={model}
                                         currencySymbol={currencySymbol}
                                         reduceMotion={Boolean(reduceMotion)}
+                                        lightBackground={usesWhiteBackground}
                                         onSelect={handleNodeSelect}
                                         onTooltipOpen={openTooltip}
                                         onTooltipMove={moveTooltip}
@@ -2083,6 +2084,7 @@ const SmartTableNode = React.memo(({
     model,
     currencySymbol,
     reduceMotion,
+    lightBackground,
     onSelect,
     onTooltipOpen,
     onTooltipMove,
@@ -2091,6 +2093,7 @@ const SmartTableNode = React.memo(({
     model: SmartTableModel;
     currencySymbol: string;
     reduceMotion: boolean;
+    lightBackground: boolean;
     onSelect: (model: SmartTableModel) => void;
     onTooltipOpen: (model: SmartTableModel, x: number, y: number) => void;
     onTooltipMove: (modelId: string, x: number, y: number) => void;
@@ -2146,7 +2149,7 @@ const SmartTableNode = React.memo(({
             }}
             onPointerUp={() => clearLongPress()}
             onPointerCancel={() => clearLongPress()}
-            className={`absolute isolate overflow-hidden border text-left transition-[box-shadow,border-color,background-color] duration-300 ${shapeClass} ${statusPalette[model.smartStatus].shell}`}
+            className={`absolute isolate overflow-hidden border text-left transition-[box-shadow,border-color,background-color] duration-300 ${shapeClass} ${lightBackground && isFree ? 'border-emerald-500/50 bg-white text-slate-900 shadow-lg shadow-slate-200/70' : statusPalette[model.smartStatus].shell}`}
             style={{
                 left: model.table.posX,
                 top: model.table.posY,
@@ -2229,8 +2232,8 @@ const SmartTableNode = React.memo(({
                     <>
                         <div className="flex items-center justify-between">
                             <span className="h-2 w-2 rounded-full bg-emerald-300/85" />
-                            <span className="inline-flex items-center justify-center h-5 w-5 rounded-full border border-emerald-300/30 bg-emerald-400/10">
-                                <Check size={10} className="text-emerald-200" />
+                            <span className="inline-flex items-center justify-center h-5 w-5 rounded-full border border-emerald-400/40 bg-emerald-400/10">
+                                <Check size={10} className={lightBackground ? 'text-emerald-600' : 'text-emerald-200'} />
                             </span>
                         </div>
 

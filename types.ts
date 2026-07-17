@@ -1466,11 +1466,17 @@ export interface Room {
     height?: number;
     gridConfig?: any;
     backgroundImage?: string;
+    backgroundStyle?: 'DARK' | 'WHITE';
   };
 }
 
 export interface Table {
   id: string;
+  code?: string;
+  label?: string;
+  room_id?: string;
+  sort_order?: number;
+  active?: boolean;
   roomId: string;
   nombre: string;
   name?: string;

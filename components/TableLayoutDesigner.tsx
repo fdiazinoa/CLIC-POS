@@ -3,6 +3,7 @@ import {
     Trash2, Plus, Layout, Grid, Settings
 } from 'lucide-react';
 import { Table, Room, TableShape } from '../types';
+import { getRenderableFloorTables } from '../utils/tableLayout';
 
 interface TableLayoutDesignerProps {
     rooms: Room[];
@@ -145,9 +146,11 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
         return `${namePrefix} ${nextNumber}`;
     };
     const currentRoom = rooms.find(r => r.id === currentRoomId);
+    const usesWhiteBackground = currentRoom?.data?.backgroundStyle === 'WHITE';
+    const renderableTables = useMemo(() => getRenderableFloorTables(tables), [tables]);
     const currentRoomTables = useMemo(
-        () => tables.filter(t => t.roomId === currentRoomId),
-        [tables, currentRoomId]
+        () => renderableTables.filter(t => t.roomId === currentRoomId),
+        [renderableTables, currentRoomId]
     );
 
     useEffect(() => {
@@ -343,7 +346,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                 {/* Canvas Area */}
                 <div
                     ref={canvasHostRef}
-                    className="flex-1 bg-gradient-to-br from-[#06172b] via-[#081124] to-[#101023] overflow-auto flex items-start justify-start relative"
+                    className={`flex-1 overflow-auto flex items-start justify-start relative ${usesWhiteBackground ? 'bg-slate-100' : 'bg-gradient-to-br from-[#06172b] via-[#081124] to-[#101023]'}`}
                 >
                     <div
                         className="absolute inset-0 pointer-events-none opacity-45"
@@ -361,7 +364,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                         onPointerMove={handleCanvasPointerMove}
                         onPointerUp={handleCanvasPointerEnd}
                         onPointerCancel={handleCanvasPointerEnd}
-                        className="bg-white/95 shadow-2xl relative select-none overflow-hidden touch-none"
+                        className={`shadow-2xl relative select-none overflow-hidden touch-none ${usesWhiteBackground ? 'bg-white' : 'bg-slate-50'}`}
                         style={{
                             width: canvasSize.width,
                             height: canvasSize.height,
@@ -574,6 +577,32 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                                         }}
                                         className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500"
                                     />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Fondo del mapa</label>
+                                <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => currentRoom && onUpdateRoom?.({
+                                            ...currentRoom,
+                                            data: { ...(currentRoom.data || {}), backgroundStyle: 'DARK' }
+                                        })}
+                                        className={`rounded-lg px-3 py-2 text-sm font-bold ${!usesWhiteBackground ? 'bg-slate-900 text-white shadow' : 'text-slate-500 hover:bg-white'}`}
+                                    >
+                                        Oscuro
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => currentRoom && onUpdateRoom?.({
+                                            ...currentRoom,
+                                            data: { ...(currentRoom.data || {}), backgroundStyle: 'WHITE' }
+                                        })}
+                                        className={`rounded-lg px-3 py-2 text-sm font-bold ${usesWhiteBackground ? 'bg-white text-slate-900 shadow' : 'text-slate-500 hover:bg-white'}`}
+                                    >
+                                        Blanco
+                                    </button>
                                 </div>
                             </div>
 
