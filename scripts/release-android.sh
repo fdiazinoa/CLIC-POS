@@ -133,6 +133,10 @@ NEXT_VERSION_CODE="$(resolve_next_version_code "${CANONICAL_GRADLE_FILE}")"
 SOURCE_VERSION_CODE="$(git -C "${REPO_ROOT}" show "${SOURCE_COMMIT}:android/app/build.gradle" | awk '/versionCode[[:space:]]+[0-9]+/ { print $2; exit }')"
 SOURCE_VERSION_NAME="$(git -C "${REPO_ROOT}" show "${SOURCE_COMMIT}:android/app/build.gradle" | sed -n 's/.*versionName[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
 
+if [[ "${SOURCE_VERSION_CODE}" =~ ^[0-9]+$ ]] && (( SOURCE_VERSION_CODE > NEXT_VERSION_CODE )); then
+  NEXT_VERSION_CODE="${SOURCE_VERSION_CODE}"
+fi
+
 if [[ "${SOURCE_VERSION_CODE}" == "${NEXT_VERSION_CODE}" && -n "${SOURCE_VERSION_NAME}" ]]; then
   VERSION_NAME="${SOURCE_VERSION_NAME}"
 elif [[ "${SOURCE_VERSION_NAME}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
