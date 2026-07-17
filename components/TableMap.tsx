@@ -25,6 +25,7 @@ import {
 import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from 'framer-motion';
 import TableOptionsModal from './TableOptionsModal';
 import SplitTicketModal from './SplitTicketModal';
+import { createPaymentFractionPlan } from '../utils/paymentFractions';
 
 interface TableMapProps {
     rooms: Room[];
@@ -51,7 +52,7 @@ interface TableMapProps {
 }
 
 type SmartStatus = 'FREE' | 'ATTENTION' | 'OCCUPIED' | 'CHECK_REQUESTED';
-type TableArchetype = 'CIRCLE' | 'SQUARE' | 'BAR' | 'BOOTH';
+type TableArchetype = 'CIRCLE' | 'SQUARE' | 'BAR' | 'BOOTH' | 'CHAISE_LONGUE';
 
 interface SmartTableModel {
     table: Table;
@@ -89,7 +90,7 @@ interface ParkedOrderSummary {
     hasExplicitTotal: boolean;
 }
 
-type TableTransferMode = 'MOVE' | 'MERGE' | 'SPLIT';
+type TableTransferMode = 'MOVE' | 'MERGE' | 'SPLIT' | 'FRACTION';
 
 interface TableTransferSelection {
     mode: TableTransferMode;
@@ -197,14 +198,14 @@ const BarTabsModal: React.FC<{
 
 const CANVAS_WIDTH = 1240;
 const CANVAS_HEIGHT = 860;
-const SCALE_MIN = 0.55;
+const SCALE_MIN = 0.35;
 const SCALE_MAX = 2.2;
 const TABLE_CONTROL_CENTER_PERMISSION: Permission = 'TABLE_CONTROL_CENTER';
 /** Ancho del panel "Control de Sala" (w-[318px]) + márgenes; evita encimar mesas bajo el aside */
 const RESTAURANT_SIDEBAR_RESERVE_PX = 400;
-/** Zona inferior del selector de salas + margen */
-const RESTAURANT_BOTTOM_BAR_RESERVE_PX = 112;
-const RESTAURANT_FIT_FILL = 1.16;
+/** Dos filas de controles + separación para mantener las mesas visibles. */
+const RESTAURANT_BOTTOM_BAR_RESERVE_PX = 174;
+const RESTAURANT_FIT_FILL = 0.92;
 const DEFAULT_EXPECTED_STAY = 70;
 const NO_ORDER_TOTAL_THRESHOLD = 0.01;
 
@@ -287,6 +288,7 @@ const getServiceStage = (progress: number): { icon: string; label: string } => {
 const inferArchetype = (table: Table): TableArchetype => {
     if (table.shape === 'BAR') return 'BAR';
     if (table.shape === 'BOOTH') return 'BOOTH';
+    if (table.shape === 'CHAISE_LONGUE') return 'CHAISE_LONGUE';
     if (table.shape === 'CIRCLE') return 'CIRCLE';
     if (table.shape === 'SQUARE') return 'SQUARE';
 
@@ -393,6 +395,8 @@ const TableMap: React.FC<TableMapProps> = ({
     const [subtotalPickOpen, setSubtotalPickOpen] = useState(false);
     const [fractionPickOpen, setFractionPickOpen] = useState(false);
     const [splitPickOpen, setSplitPickOpen] = useState(false);
+    const [fractionTicketForModal, setFractionTicketForModal] = useState<ParkedTicket | null>(null);
+    const [fractionCount, setFractionCount] = useState(2);
     const [showRoomPicker, setShowRoomPicker] = useState(false);
     const [isControlCenterOpen, setIsControlCenterOpen] = useState(false);
     const [tableNotice, setTableNotice] = useState<TableNoticeState | null>(null);
@@ -403,7 +407,12 @@ const TableMap: React.FC<TableMapProps> = ({
     const panRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
     const viewportStateRef = useRef(viewport);
 
-    const safeTables = Array.isArray(tables) ? tables : [];
+    // A generic label is valid user data. Tables are removed only through the
+    // explicit designer action, never inferred from their name or runtime state.
+    const safeTables = useMemo(
+        () => (Array.isArray(tables) ? tables : []),
+        [tables]
+    );
 
     useEffect(() => {
         viewportStateRef.current = viewport;
@@ -1011,6 +1020,12 @@ const TableMap: React.FC<TableMapProps> = ({
                 setTransferSelection(null);
                 return true;
             }
+            if (transferSelection.mode === 'FRACTION') {
+                setFractionTicketForModal(sourceTicket);
+                setFractionCount(sourceTicket.paymentFraction?.count || 2);
+                setTransferSelection(null);
+                return true;
+            }
             setTransferSelection({
                 ...transferSelection,
                 step: 'TARGET',
@@ -1243,8 +1258,8 @@ const TableMap: React.FC<TableMapProps> = ({
         if (!isRestaurantMode) return null;
 
         const buttonClass = variant === 'grid'
-            ? 'rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors'
-            : 'shrink-0 min-w-[138px] rounded-2xl bg-white/[0.09] hover:bg-white/[0.16] active:scale-[0.98] text-slate-100 text-xs font-black py-3 px-4 border border-white/15 shadow-[0_10px_24px_rgba(2,6,23,0.32)] flex items-center justify-center gap-2 whitespace-nowrap transition-colors touch-manipulation';
+            ? 'min-w-0 min-h-14 rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-2 px-2 border border-white/25 shadow-md flex items-center justify-center gap-2 transition-colors'
+            : 'min-w-0 h-14 w-full rounded-2xl bg-white/[0.09] hover:bg-white/[0.16] active:scale-[0.98] text-slate-100 text-[10px] sm:text-xs font-black px-2 sm:px-3 border border-white/15 shadow-[0_10px_24px_rgba(2,6,23,0.32)] flex items-center justify-center gap-1.5 sm:gap-2 whitespace-normal text-center leading-tight transition-colors touch-manipulation';
         const iconSize = variant === 'grid' ? 18 : 20;
 
         return (
@@ -1296,7 +1311,7 @@ const TableMap: React.FC<TableMapProps> = ({
                             alert('No hay mesas ocupadas con cuenta.');
                             return;
                         }
-                        setTransferSelection({ mode: 'SPLIT', step: 'SOURCE' });
+                        setTransferSelection({ mode: 'FRACTION', step: 'SOURCE' });
                     }}
                     className={buttonClass}
                 >
@@ -1527,7 +1542,7 @@ const TableMap: React.FC<TableMapProps> = ({
                     )}
                 </AnimatePresence>
 
-                <div className="absolute bottom-24 right-6 z-30 flex flex-col gap-2">
+                <div className="absolute bottom-[11rem] right-4 z-30 flex flex-col gap-2 sm:right-6">
                     <GlassButton onClick={() => handleZoom(0.11)} title="Zoom +">
                         <Plus size={18} />
                     </GlassButton>
@@ -1539,24 +1554,7 @@ const TableMap: React.FC<TableMapProps> = ({
                     </GlassButton>
                 </div>
 
-                <div className="absolute bottom-5 left-5 z-40 flex flex-col-reverse items-start gap-3 pointer-events-auto">
-                    <div className="flex items-center gap-3">
-                        <GlassButton onClick={() => setShowRoomPicker(prev => !prev)} title="Salas" className="w-auto px-4">
-                            <span className="flex items-center gap-2">
-                                <LayoutGrid size={18} />
-                                <span className="text-xs font-black uppercase tracking-widest">Salas</span>
-                            </span>
-                        </GlassButton>
-                        {hasControlCenterAccess && (
-                            <GlassButton onClick={() => setIsControlCenterOpen(prev => !prev)} title="Control" className="w-auto px-4">
-                                <span className="flex items-center gap-2">
-                                    <Activity size={18} />
-                                    <span className="text-xs font-black uppercase tracking-widest">Control</span>
-                                </span>
-                            </GlassButton>
-                        )}
-                    </div>
-
+                <div className="absolute bottom-3 left-3 right-3 z-40 pointer-events-none sm:bottom-4 sm:left-4 sm:right-4">
                     <AnimatePresence>
                         {showRoomPicker && (
                             <m.div
@@ -1564,7 +1562,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                 animate={{ opacity: 1, y: 0, scale: 1 }}
                                 exit={{ opacity: 0, y: 12, scale: 0.98 }}
                                 transition={{ duration: 0.16 }}
-                                className="mb-1 max-h-[min(58vh,28rem)] w-[min(16rem,58vw)] rounded-[1.6rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-2.5 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex flex-col gap-2 overflow-y-auto overflow-x-hidden no-scrollbar"
+                                className="pointer-events-auto absolute bottom-[calc(100%+0.5rem)] left-0 max-h-[min(58vh,28rem)] w-[min(16rem,70vw)] rounded-[1.6rem] border border-white/10 bg-slate-950/80 backdrop-blur-xl px-2.5 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex flex-col gap-2 overflow-y-auto overflow-x-hidden no-scrollbar"
                             >
                                 {rooms.map(room => {
                                     const isActive = room.id === activeRoomId;
@@ -1598,14 +1596,24 @@ const TableMap: React.FC<TableMapProps> = ({
                             </m.div>
                         )}
                     </AnimatePresence>
-                </div>
 
-                <div className="absolute bottom-5 left-5 right-5 z-30 flex justify-end pointer-events-none">
-                    {isRestaurantMode && (
-                        <div className="ml-0 w-full max-w-[calc(100vw-2.5rem)] rounded-[1.8rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-3 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-2 overflow-x-auto overflow-y-hidden no-scrollbar pointer-events-auto md:ml-[15.5rem] md:max-w-[calc(100vw-18rem)] md:px-4 md:gap-3">
-                            {renderTableControlActions('footer')}
-                        </div>
-                    )}
+                    <div className="pointer-events-auto grid w-full grid-cols-4 gap-2 rounded-[1.5rem] border border-white/10 bg-slate-950/70 p-2 shadow-[0_16px_50px_rgba(2,6,23,0.5)] backdrop-blur-xl sm:gap-3 sm:p-3">
+                        <GlassButton onClick={() => setShowRoomPicker(prev => !prev)} title="Salas" className="h-14 w-full min-w-0 px-2 sm:px-3">
+                            <span className="flex min-w-0 items-center justify-center gap-1.5 sm:gap-2">
+                                <LayoutGrid size={18} className="shrink-0" />
+                                <span className="truncate text-[10px] font-black uppercase tracking-wide sm:text-xs">Salas</span>
+                            </span>
+                        </GlassButton>
+                        {hasControlCenterAccess && (
+                            <GlassButton onClick={() => setIsControlCenterOpen(prev => !prev)} title="Control" className="h-14 w-full min-w-0 px-2 sm:px-3">
+                                <span className="flex min-w-0 items-center justify-center gap-1.5 sm:gap-2">
+                                    <Activity size={18} className="shrink-0" />
+                                    <span className="truncate text-[10px] font-black uppercase tracking-wide sm:text-xs">Control</span>
+                                </span>
+                            </GlassButton>
+                        )}
+                        {isRestaurantMode && renderTableControlActions('footer')}
+                    </div>
                 </div>
 
                 <div
@@ -1711,7 +1719,8 @@ const TableMap: React.FC<TableMapProps> = ({
                         onSplitPayment={() => {
                             const ticket = parkedTickets?.find(p => p.id === selectedTable.currentOrderId);
                             if (ticket?.items?.length) {
-                                setSplitTicketForModal(ticket);
+                                setFractionTicketForModal(ticket);
+                                setFractionCount(ticket.paymentFraction?.count || 2);
                                 setSelectedTable(null);
                             } else {
                                 alert('Sin cuenta activa para dividir pago.');
@@ -1997,6 +2006,74 @@ const TableMap: React.FC<TableMapProps> = ({
                         </div>
                     </div>
                 )}
+
+                {isRestaurantMode && fractionTicketForModal && (
+                    <div
+                        className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+                        onClick={() => setFractionTicketForModal(null)}
+                    >
+                        <div
+                            className="w-full max-w-md rounded-2xl border border-white/15 bg-slate-900 p-6 text-white shadow-2xl"
+                            onClick={event => event.stopPropagation()}
+                        >
+                            <div className="flex items-start justify-between gap-4">
+                                <div>
+                                    <p className="text-xs font-black uppercase tracking-widest text-sky-400">Cobro separado</p>
+                                    <h3 className="mt-1 text-2xl font-black">Fraccionar cuenta</h3>
+                                    <p className="mt-1 text-sm text-slate-400">Los artículos permanecen en una sola cuenta.</p>
+                                </div>
+                                <button type="button" onClick={() => setFractionTicketForModal(null)} className="rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-white" aria-label="Cerrar">
+                                    <X size={20} />
+                                </button>
+                            </div>
+
+                            <div className="mt-6 rounded-xl border border-white/10 bg-slate-950/60 p-4">
+                                <div className="flex items-center justify-between text-sm">
+                                    <span className="font-semibold text-slate-400">Total</span>
+                                    <span className="text-xl font-black">{currencySymbol}{Number(fractionTicketForModal.total || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                </div>
+                                <div className="mt-4 flex items-center justify-center gap-4">
+                                    <button type="button" onClick={() => setFractionCount(value => Math.max(2, value - 1))} disabled={fractionCount <= 2} className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/10 disabled:opacity-30" aria-label="Quitar una parte"><Minus size={20} /></button>
+                                    <div className="min-w-28 text-center">
+                                        <p className="text-4xl font-black">{fractionCount}</p>
+                                        <p className="text-xs font-bold uppercase tracking-wider text-slate-400">partes</p>
+                                    </div>
+                                    <button type="button" onClick={() => setFractionCount(value => Math.min(20, value + 1))} disabled={fractionCount >= 20} className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/10 disabled:opacity-30" aria-label="Agregar una parte"><Plus size={20} /></button>
+                                </div>
+                                <p className="mt-4 text-center text-lg font-black text-sky-300">
+                                    {currencySymbol}{(Number(fractionTicketForModal.total || 0) / fractionCount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} por persona
+                                </p>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={async () => {
+                                    const paidParts = fractionTicketForModal.paymentFraction?.parts.filter(part => part.status === 'PAID') || [];
+                                    if (paidParts.length > 0) {
+                                        alert('Esta cuenta ya tiene cuotas cobradas y no puede volver a fraccionarse.');
+                                        return;
+                                    }
+                                    const total = Number(fractionTicketForModal.total || 0);
+                                    const nextTicket = {
+                                        ...fractionTicketForModal,
+                                        paymentFraction: createPaymentFractionPlan(total, fractionCount)
+                                    };
+                                    const nextTickets = (parkedTickets || []).map(ticket => ticket.id === nextTicket.id ? nextTicket : ticket);
+                                    await Promise.resolve(onUpdateParkedTickets?.(nextTickets));
+                                    setFractionTicketForModal(null);
+                                    setTableNotice({
+                                        title: 'Cuenta fraccionada',
+                                        message: `Se generaron ${fractionCount} cuotas para cobro separado.`,
+                                        primaryLabel: 'Entendido'
+                                    });
+                                }}
+                                className="mt-5 w-full rounded-xl bg-sky-500 px-4 py-3.5 font-black text-slate-950 hover:bg-sky-400"
+                            >
+                                Crear {fractionCount} cuotas
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
         </LazyMotion>
     );
@@ -2036,7 +2113,7 @@ const SmartTableNode = React.memo(({
     const shapeClass =
         model.archetype === 'CIRCLE' || model.archetype === 'BAR'
             ? 'rounded-full'
-            : model.archetype === 'BOOTH'
+            : model.archetype === 'BOOTH' || model.archetype === 'CHAISE_LONGUE'
                 ? 'rounded-[1.3rem]'
                 : 'rounded-2xl';
     const isFree = model.smartStatus === 'FREE';
@@ -2141,6 +2218,10 @@ const SmartTableNode = React.memo(({
                     <span className="h-1.5 w-1.5 rounded-full bg-white/60" />
                     <span className="h-1.5 w-1.5 rounded-full bg-white/70" />
                 </div>
+            )}
+
+            {model.archetype === 'CHAISE_LONGUE' && (
+                <div className="pointer-events-none absolute inset-x-3 bottom-2 h-1 rounded-full bg-white/25" />
             )}
 
             <div className="absolute inset-0 p-2 flex flex-col justify-between">

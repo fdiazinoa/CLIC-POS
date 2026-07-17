@@ -1446,7 +1446,7 @@ export interface InventoryTracking {
 }
 
 // --- FLOOR PLAN TYPES ---
-export type TableShape = 'SQUARE' | 'CIRCLE' | 'OBSTACLE' | 'BAR' | 'BOOTH';
+export type TableShape = 'SQUARE' | 'CIRCLE' | 'OBSTACLE' | 'BAR' | 'BOOTH' | 'CHAISE_LONGUE';
 
 export interface Room {
   id: string;
@@ -2058,6 +2058,23 @@ export interface ParkedTicket {
   tableRoomLabel?: string;
   barTabId?: string;
   barTabName?: string;
+  paymentFraction?: PaymentFractionPlan;
+}
+
+export interface PaymentFractionPart {
+  index: number;
+  amount: number;
+  status: 'PENDING' | 'PAID';
+  payments?: PaymentEntry[];
+  voluntaryTip?: number;
+  paidAt?: string;
+}
+
+export interface PaymentFractionPlan {
+  originalTotal: number;
+  count: number;
+  createdAt: string;
+  parts: PaymentFractionPart[];
 }
 
 export type ReservationStatus = 'ACTIVE' | 'INVOICED' | 'EXPIRED' | 'CANCELLED';

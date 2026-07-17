@@ -3079,6 +3079,11 @@ const AppContent: React.FC = () => {
   const [activeRoomId, setActiveRoomId] = useState<string>('');
   const [activeRoomId2, setActiveRoomId2] = useState<string>(''); // For backward compatibility if needed
   const [supplierProductPrices, setSupplierProductPrices] = useState<any[]>([]);
+  const defaultRoomBootstrapRef = useRef(false);
+  const locallySavedFloorPlanRef = useRef<{
+    roomIds: Set<string>;
+    tableIds: Set<string>;
+  } | null>(null);
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [settingsInitialView, setSettingsInitialView] = useState<string | undefined>();
   const [settingsInitialData, setSettingsInitialData] = useState<any>();
@@ -3086,6 +3091,61 @@ const AppContent: React.FC = () => {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [activeCartDraftRestorePrompt, setActiveCartDraftRestorePrompt] = useState<ActiveCartDraft | null>(null);
+
+  useEffect(() => {
+    if (currentView !== 'TABLE_DESIGNER') {
+      defaultRoomBootstrapRef.current = false;
+      return;
+    }
+
+    if (rooms.length === 0) {
+      if (defaultRoomBootstrapRef.current) return;
+      defaultRoomBootstrapRef.current = true;
+
+      const defaultRoomId = `R-${Date.now()}`;
+      const defaultRoom: Room = {
+        id: defaultRoomId,
+        name: 'Sala 1',
+        nombre: 'Sala 1',
+        orden: 1
+      };
+      const repairedTables = tables.map(table => (
+        table.roomId ? table : { ...table, roomId: defaultRoomId }
+      ));
+
+      setRooms([defaultRoom]);
+      setActiveRoomId(defaultRoomId);
+      if (repairedTables.some((table, index) => table !== tables[index])) {
+        setTables(repairedTables);
+      }
+
+      void (async () => {
+        await db.save('rooms', [defaultRoom]);
+        await db.save('tables', repairedTables);
+      })().catch(error => console.error('No se pudo crear la sala predeterminada:', error));
+      return;
+    }
+
+    defaultRoomBootstrapRef.current = false;
+    const fallbackRoomId = rooms[0].id;
+    if (!activeRoomId || !rooms.some(room => room.id === activeRoomId)) {
+      setActiveRoomId(fallbackRoomId);
+    }
+
+    const hasOrphanTables = tables.some(table => !table.roomId || !rooms.some(room => room.id === table.roomId));
+    if (hasOrphanTables) {
+      const repairedTables = tables.map(table => (
+        table.roomId && rooms.some(room => room.id === table.roomId)
+          ? table
+          : { ...table, roomId: fallbackRoomId }
+      ));
+      setTables(repairedTables);
+      void (async () => {
+        await db.save('tables', repairedTables);
+      })().catch(error => console.error('No se pudieron reparar las mesas del plano:', error));
+    }
+  }, [activeRoomId, currentView, rooms, tables]);
+
   const safeExitSnapshotRef = useRef<SafeExitSnapshot>({
     currentView,
     cart: [],
@@ -3561,20 +3621,70 @@ const AppContent: React.FC = () => {
           throw new Error('API de mesas no disponible en este entorno.');
         }
         const data = await res.json();
+        const mergeRemoteTables = (incomingTables: Table[], previousTables: Table[]) => {
+          const localFloorPlan = locallySavedFloorPlanRef.current;
+          const allowedIncoming = localFloorPlan
+            ? incomingTables.filter(table => localFloorPlan.tableIds.has(String(table.id)))
+            : incomingTables;
+
+          if (previousTables.length === 0) {
+            return reconcileTablesWithParkedTickets(allowedIncoming, parkedTickets);
+          }
+
+          const incomingById = new Map(allowedIncoming.map(table => [String(table.id), table]));
+          const merged = previousTables.map(localTable => {
+            const remoteTable = incomingById.get(String(localTable.id));
+            if (!remoteTable) return localTable;
+            incomingById.delete(String(localTable.id));
+            return { ...localTable, ...remoteTable };
+          });
+
+          incomingById.forEach(table => merged.push(table));
+          return reconcileTablesWithParkedTickets(merged, parkedTickets);
+        };
 
         // Backward compatibility: some endpoints may return only Table[].
         if (Array.isArray(data)) {
-          setTables(reconcileTablesWithParkedTickets(data, parkedTickets));
+          setTables(previousTables => {
+            if (data.length === 0 && previousTables.length > 0) {
+              console.warn('Se ignoró una respuesta vacía de mesas para preservar el layout local.');
+              return previousTables;
+            }
+            return mergeRemoteTables(data, previousTables);
+          });
           return;
         }
 
         const nextTables = Array.isArray(data?.tables) ? data.tables : [];
         const nextRooms = Array.isArray(data?.rooms) ? data.rooms : [];
 
-        setTables(reconcileTablesWithParkedTickets(nextTables, parkedTickets));
+        setTables(previousTables => {
+          if (nextTables.length === 0 && previousTables.length > 0) {
+            console.warn('Se ignoró una respuesta vacía de mesas para preservar el layout local.');
+            return previousTables;
+          }
+          return mergeRemoteTables(nextTables, previousTables);
+        });
 
         if (nextRooms.length > 0) {
-          setRooms(nextRooms);
+          setRooms(previousRooms => {
+            const localFloorPlan = locallySavedFloorPlanRef.current;
+            if (!localFloorPlan || previousRooms.length === 0) return nextRooms;
+
+            const incomingById = new Map<string, Room>(
+              nextRooms
+                .filter((room: Room) => localFloorPlan.roomIds.has(String(room.id)))
+                .map((room: Room) => [String(room.id), room])
+            );
+            const merged = previousRooms.map(localRoom => {
+              const remoteRoom = incomingById.get(String(localRoom.id));
+              if (!remoteRoom) return localRoom;
+              incomingById.delete(String(localRoom.id));
+              return { ...localRoom, ...remoteRoom };
+            });
+            incomingById.forEach(room => merged.push(room));
+            return merged;
+          });
           setActiveRoomId(prev =>
             prev && nextRooms.some((room: Room) => room.id === prev)
               ? prev
@@ -7064,7 +7174,8 @@ const AppContent: React.FC = () => {
       CIRCLE: 'Mesa',
       OBSTACLE: 'Muro',
       BAR: 'Barra',
-      BOOTH: 'Sofa'
+      BOOTH: 'Sofa',
+      CHAISE_LONGUE: 'Chaise longue'
     };
     const fallback = fallbackByShape[table.shape] || 'Mesa';
     return fromName || fromNombre || fallback;
@@ -7078,14 +7189,16 @@ const AppContent: React.FC = () => {
       CIRCLE: 100,
       OBSTACLE: 120,
       BAR: 180,
-      BOOTH: 160
+      BOOTH: 160,
+      CHAISE_LONGUE: 180
     };
     const defaultHeightByShape: Record<Table['shape'], number> = {
       SQUARE: 100,
       CIRCLE: 100,
       OBSTACLE: 20,
       BAR: 60,
-      BOOTH: 90
+      BOOTH: 90,
+      CHAISE_LONGUE: 70
     };
     return {
       ...table,
@@ -7179,6 +7292,10 @@ const AppContent: React.FC = () => {
     console.log('💾 Saving Floor Plan:', { rooms: newRooms.length, tables: newTables.length });
     const normalizedRooms = newRooms.map(normalizeRoomForLayout);
     const normalizedTablesInput = newTables.map(normalizeTableForLayout);
+    locallySavedFloorPlanRef.current = {
+      roomIds: new Set(normalizedRooms.map(room => String(room.id))),
+      tableIds: new Set(normalizedTablesInput.map(table => String(table.id)))
+    };
 
     // 1. Save Rooms (Overwrite is fine for config)
     await db.save('rooms', normalizedRooms);
@@ -8481,7 +8598,8 @@ const AppContent: React.FC = () => {
                   const newRoom: Room = { id: 'R-' + Date.now(), name, nombre: name }; // Ensure 'nombre' is set for types
                   const updatedRooms = [...rooms, newRoom];
                   setRooms(updatedRooms);
-                  handleSaveFloorPlan(updatedRooms, tables);
+                  setActiveRoomId(newRoom.id);
+                  void handleSaveFloorPlan(updatedRooms, tables);
                 }}
                 onUpdateRoom={(updatedRoom) => {
                   const rawName = String(updatedRoom.name ?? updatedRoom.nombre ?? '');
@@ -8572,14 +8690,43 @@ const AppContent: React.FC = () => {
                 console.warn('No se pudo persistir estado ocupado de mesa en API:', error);
               }
             }}
+            onSelectTableAccount={(ticket) => {
+              if (!activeTable || String(ticket.tableId || '') !== String(activeTable.id || '')) return;
+
+              const accountTotal = typeof ticket.total === 'number'
+                ? Number(ticket.total || 0)
+                : (ticket.items || []).reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
+              const accountCustomer = ticket.customerId
+                ? customers.find(customer => String(customer.id) === String(ticket.customerId)) || null
+                : null;
+              const snapshotCustomer = !accountCustomer && (ticket.customerSnapshot?.name || ticket.customerName)
+                ? {
+                    id: ticket.customerId || `parked-customer-${ticket.id}`,
+                    name: ticket.customerSnapshot?.name || ticket.customerName || 'Cliente',
+                    taxId: ticket.customerSnapshot?.taxId,
+                    address: ticket.customerSnapshot?.address,
+                    phone: ticket.customerSnapshot?.phone,
+                    email: ticket.customerSnapshot?.email,
+                    isTemporary: true
+                  } as Customer
+                : null;
+
+              setCart(ticket.items || []);
+              setSelectedCustomer(accountCustomer || snapshotCustomer);
+              setActiveTable({
+                ...activeTable,
+                currentOrderId: ticket.id,
+                currentOrderTotal: accountTotal,
+                status: 'OCCUPIED'
+              });
+            }}
             onTableOrderClosed={async (table, _closedOrderId, remainingTickets = []) => {
               await clearActiveCartDraftStorage().catch((error) => console.warn('No se pudo limpiar borrador activo tras cerrar mesa:', error));
               const closedOrderId = _closedOrderId ? String(_closedOrderId) : '';
               const tableId = String(table.id ?? '');
               const effectiveRemainingTickets = (remainingTickets || []).filter(ticket => {
                 const isClosedOrder = closedOrderId && String(ticket.id) === closedOrderId;
-                const isSameClosedTable = table.shape !== 'BAR' && tableId && String(ticket.tableId ?? '') === tableId;
-                return !isClosedOrder && !isSameClosedTable;
+                return !isClosedOrder;
               });
               const tableTickets = effectiveRemainingTickets.filter(ticket => String(ticket.tableId ?? '') === tableId);
               const nextTicket = tableTickets[0];

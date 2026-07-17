@@ -1134,11 +1134,21 @@ class ApiSyncAdapter {
 
         const balances = Array.isArray(nested.balances)
             ? nested.balances
-            : Array.isArray(root.balances)
-                ? root.balances
-                : Array.isArray((root.data as any)?.inventory?.balances)
-                    ? (root.data as any).inventory.balances
-                    : [];
+            : Array.isArray(nested.stock_balances)
+                ? nested.stock_balances
+                : Array.isArray(nested.stockBalances)
+                    ? nested.stockBalances
+                    : Array.isArray(root.balances)
+                        ? root.balances
+                        : Array.isArray(root.stock_balances)
+                            ? root.stock_balances
+                            : Array.isArray(root.stockBalances)
+                                ? root.stockBalances
+                                : Array.isArray((root.data as any)?.inventory?.balances)
+                                    ? (root.data as any).inventory.balances
+                                    : Array.isArray((root.data as any)?.inventory?.stock_balances)
+                                        ? (root.data as any).inventory.stock_balances
+                                        : [];
 
         const cursor = typeof nested.cursor === 'string'
             ? nested.cursor.trim() || null
@@ -3659,6 +3669,25 @@ class ApiSyncAdapter {
             } catch {
                 payload = null;
             }
+            // ERP exposes timestamp deltas for products/items but may not expose
+            // the legacy full endpoint. A first KDS bootstrap can proceed with
+            // the pairing snapshot/order payload, so an absent optional full
+            // endpoint must not turn into a blocking sync error.
+            if (fullResponse.status === 404 && (collection === 'products' || collection === 'items')) {
+                console.warn('[SYNC_FULL_ENDPOINT_UNAVAILABLE]', {
+                    collection,
+                    endpoint: fullEndpoint,
+                    status: fullResponse.status,
+                    action: 'KEEP_LOCAL_OR_SNAPSHOT',
+                });
+                return {
+                    items: [],
+                    serverTime: new Date().toISOString(),
+                    isFullDownload: true,
+                    latestVersion: 0,
+                    syncStatus: 'SYNCED_WITH_FULL_FALLBACK',
+                };
+            }
             if (this.isFiscalConfigMissingResponse(fullResponse.status, payload, responseBody)) {
                 this.logOptionalMasterUnavailable({
                     operation: 'PULL_MASTERS',
@@ -3927,7 +3956,16 @@ class ApiSyncAdapter {
 	                            hasMore: false,
 	                            reason: 'MISSING_VALID_ISO_CURSOR',
 	                        });
-	                        return this.pullFullFallbackForCriticalMaster(collection, target, headers, 0);
+                        // A first ERP bootstrap can legitimately have no local
+                        // cursor. Products/items are hydrated from the pairing
+                        // snapshot; do not call the legacy /full endpoint here.
+                        return {
+                            items: [],
+                            serverTime: new Date().toISOString(),
+                            isFullDownload: true,
+                            latestVersion: 0,
+                            syncStatus: 'SYNCED_WITH_FULL_FALLBACK',
+                        };
 	                    }
 	                    return this.pullErpTimestampCursorDelta(collection, target, headers, cursor, limit);
 	                }

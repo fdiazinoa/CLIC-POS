@@ -4,7 +4,7 @@ import {
    Search, Trash2, MoreVertical,
    CreditCard, User, Tag, Grid, Save,
    Settings, Users, History, Wallet,
-   UserPlus, PlusCircle, X, Percent, ArrowLeft, ChevronRight,
+   UserPlus, PlusCircle, X, Percent, ArrowLeft, ChevronLeft, ChevronRight,
    Scale as ScaleIcon, PauseCircle, LogOut, Minus, Plus, Edit3,
    ArrowRightLeft, Globe, DollarSign, Split,
    ChevronDown, Check, AlertCircle, Layers,
@@ -78,6 +78,7 @@ import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from
 import { resolveCustomerImageSrc, resolveProductImageSrc } from '../utils/entityImage';
 import { getWarehouseScopedNumber, resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
+import { isPaymentFractionPlanCurrent } from '../utils/paymentFractions';
 import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
 import { productIdentityCandidates, productReferenceCandidates, resolveOperationalProductId } from '../utils/productReferences';
@@ -116,6 +117,7 @@ export interface POSInterfaceProps {
    parkedTickets: ParkedTicket[];
    onUpdateParkedTickets: (tickets: ParkedTicket[]) => void | Promise<void>;
    onTableOrderSaved?: (table: Table, ticket: ParkedTicket) => void | Promise<void>;
+   onSelectTableAccount?: (ticket: ParkedTicket) => void | Promise<void>;
    onTableOrderClosed?: (table: Table, closedOrderId?: string, remainingTickets?: ParkedTicket[]) => void | Promise<void>;
    onLogout: () => void;
    onExitApplication?: () => void;
@@ -660,6 +662,9 @@ const extractFirstNumberToken = (value?: unknown): string => {
    return match ? match[0] : '';
 };
 
+const formatCompactLocationNumber = (value: string): string =>
+   value.replace(/^\d+$/, token => token.padStart(2, '0'));
+
 const buildTableContextLabels = (table?: Partial<Table> | null, rooms: Room[] = []) => {
    const tableName = String(table?.nombre || table?.name || '').trim();
    if (!tableName) {
@@ -677,7 +682,7 @@ const buildTableContextLabels = (table?: Partial<Table> | null, rooms: Room[] = 
    const roomNumber = extractFirstNumberToken(roomLabel);
    const tableNumber = extractFirstNumberToken(tableName);
    const compactLabel = roomNumber && tableNumber
-      ? `${roomNumber}-${tableNumber}`
+      ? `${formatCompactLocationNumber(roomNumber)}-${formatCompactLocationNumber(tableNumber)}`
       : roomLabel
          ? `${roomLabel} - ${tableName}`
          : tableName;
@@ -982,6 +987,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onOpenAudit,
    onOpenTableMap,
    onTableOrderSaved,
+   onSelectTableAccount,
    onTableOrderClosed,
    onOpenAgenda,
    onTransactionComplete,
@@ -1106,6 +1112,63 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       () => buildTableContextLabels(activeTable, rooms),
       [activeTable, rooms]
    );
+   const activeTableAccounts = useMemo(() => {
+      const tableId = String(activeTable?.id || '').trim();
+      if (!tableId) return [];
+
+      const readAccountNumber = (ticket: ParkedTicket) => {
+         const label = `${ticket.name || ''} ${ticket.alias || ''}`;
+         const match = label.match(/cuenta\s+(\d+)/i);
+         return match ? Number(match[1]) : 1;
+      };
+
+      return (Array.isArray(parkedTickets) ? parkedTickets : [])
+         .filter(ticket => String(ticket.tableId || '').trim() === tableId)
+         .sort((left, right) => {
+            const numberDelta = readAccountNumber(left) - readAccountNumber(right);
+            if (numberDelta !== 0) return numberDelta;
+            return String(left.timestamp || '').localeCompare(String(right.timestamp || ''));
+         });
+   }, [activeTable?.id, parkedTickets]);
+   const activeTableAccountIndex = Math.max(
+      0,
+      activeTableAccounts.findIndex(ticket => String(ticket.id) === String(activeTable?.currentOrderId || ''))
+   );
+   const handleNavigateTableAccount = useCallback((direction: -1 | 1) => {
+      if (activeTableAccounts.length < 2 || !onSelectTableAccount) return;
+      const nextIndex = (activeTableAccountIndex + direction + activeTableAccounts.length) % activeTableAccounts.length;
+      const nextTicket = activeTableAccounts[nextIndex];
+      if (!nextTicket) return;
+
+      ticketAutoSyncFlushRef.current?.();
+      activeTableHydrationRef.current = null;
+      void Promise.resolve(onSelectTableAccount(nextTicket));
+   }, [activeTableAccountIndex, activeTableAccounts, onSelectTableAccount]);
+   const renderTableAccountNavigator = () => activeTableAccounts.length > 1 ? (
+      <div className="flex shrink-0 items-center gap-1 rounded-xl border border-blue-200 bg-blue-50 p-1 shadow-sm">
+         <button
+            type="button"
+            onClick={() => handleNavigateTableAccount(-1)}
+            className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-blue-600 shadow-sm hover:bg-blue-100"
+            title="Cuenta anterior"
+            aria-label="Cuenta anterior"
+         >
+            <ChevronLeft size={16} strokeWidth={3} />
+         </button>
+         <span className="min-w-[92px] text-center text-xs font-black text-blue-800">
+            Cuenta {activeTableAccountIndex + 1} de {activeTableAccounts.length}
+         </span>
+         <button
+            type="button"
+            onClick={() => handleNavigateTableAccount(1)}
+            className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-blue-600 shadow-sm hover:bg-blue-100"
+            title="Cuenta siguiente"
+            aria-label="Cuenta siguiente"
+         >
+            <ChevronRight size={16} strokeWidth={3} />
+         </button>
+      </div>
+   ) : null;
    const activeBarTabId = String(activeTable?.barTabId || '').trim();
    const activeBarTabName = String(activeTable?.barTabName || '').trim();
    const markKdsQueueItemsSent = useCallback(async (entry: any) => {
@@ -3083,7 +3146,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const handleProductCardContextMenu = useCallback((product: Product, event: React.MouseEvent<HTMLDivElement>) => {
       event.preventDefault();
       const now = Date.now();
-      if (now - lastProductTouchAtRef.current < 900) return;
+      // Android emits contextmenu during a long touch before touchend. Open
+      // the quick actions here instead of discarding that gesture.
+      if (now - lastProductTouchAtRef.current < 900) {
+         if (quickActionTouchTimerRef.current) {
+            window.clearTimeout(quickActionTouchTimerRef.current);
+            quickActionTouchTimerRef.current = null;
+         }
+         quickActionOpenedAtRef.current = now;
+         lastTouchContextMenuAtRef.current = now;
+         setQuickActionData({ product, x: event.clientX, y: event.clientY });
+         return;
+      }
       if (now - lastTouchContextMenuAtRef.current < 900) return;
       quickActionOpenedAtRef.current = now;
       setQuickActionData({ product, x: event.clientX, y: event.clientY });
@@ -3840,9 +3914,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const reservationBalanceDue = isRecoveredUberOrder
       ? 0
       : Math.max(0, cartTotal - reservationAdvanceApplied);
+   const activeParkedTicket = activeTable?.currentOrderId
+      ? parkedTickets.find(ticket => ticket.id === activeTable.currentOrderId)
+      : undefined;
+   const activePaymentFraction = activeParkedTicket?.paymentFraction;
+   const isCurrentPaymentFraction = isPaymentFractionPlanCurrent(activePaymentFraction, cartTotal);
+   const nextPaymentFractionPart = isCurrentPaymentFraction
+      ? activePaymentFraction?.parts.find(part => part.status === 'PENDING')
+      : undefined;
+   const pendingPaymentFractionCount = isCurrentPaymentFraction
+      ? activePaymentFraction?.parts.filter(part => part.status === 'PENDING').length || 0
+      : 0;
+   const isIntermediateFractionPayment = Boolean(nextPaymentFractionPart && pendingPaymentFractionCount > 1);
    const amountDueNow = activeRecoveredReservation
       ? (isRecoveredUberOrder ? 0 : reservationBalanceDue)
-      : cartTotal;
+      : nextPaymentFractionPart?.amount ?? cartTotal;
    const canCheckoutWithFiscalPolicy = isFiscalModeDisabled || fiscalStatus.hasNCF;
    const checkoutActionLabel = !canCheckoutWithFiscalPolicy
       ? 'Sin Secuencia'
@@ -3850,7 +3936,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          ? 'FACTURAR UBER'
          : activeRecoveredReservation
             ? 'COBRAR SALDO'
-            : 'COBRAR';
+            : nextPaymentFractionPart
+               ? `COBRAR CUOTA ${nextPaymentFractionPart.index} DE ${activePaymentFraction?.count}`
+               : 'COBRAR';
    const editableRecoveredReservation = isRecoveredUberOrder ? null : activeRecoveredReservation;
    const isEditingRecoveredReservation = !!editableRecoveredReservation;
 
@@ -4337,6 +4425,56 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       };
 
       try {
+         const fractionPlan = activeParkedTicket?.paymentFraction;
+         const currentFractionPart = isPaymentFractionPlanCurrent(fractionPlan, cartTotal)
+            ? fractionPlan?.parts.find(part => part.status === 'PENDING')
+            : undefined;
+         const pendingFractionParts = fractionPlan?.parts.filter(part => part.status === 'PENDING') || [];
+
+         if (currentFractionPart && pendingFractionParts.length > 1) {
+            const paidAt = new Date().toISOString();
+            const nextPlan = {
+               ...fractionPlan!,
+               parts: fractionPlan!.parts.map(part => part.index === currentFractionPart.index ? {
+                  ...part,
+                  status: 'PAID' as const,
+                  payments,
+                  voluntaryTip: voluntaryTip || 0,
+                  paidAt
+               } : part)
+            };
+            const nextTickets = parkedTickets.map(ticket => ticket.id === activeParkedTicket?.id ? {
+               ...ticket,
+               paymentFraction: nextPlan
+            } : ticket);
+            await Promise.resolve(onUpdateParkedTickets(nextTickets));
+
+            return {
+               id: `fraction-${activeParkedTicket?.id}-${currentFractionPart.index}-${Date.now()}`,
+               documentType: 'TICKET',
+               date: paidAt,
+               items: [],
+               total: currentFractionPart.amount,
+               payments,
+               userId: currentUser.id,
+               userName: currentUser.name,
+               terminalId: activeTerminalId,
+               status: 'PENDING',
+               customerId: effectiveSelectedCustomer?.id,
+               customerName: effectiveSelectedCustomer?.name,
+               observations: `Cuota ${currentFractionPart.index} de ${fractionPlan?.count}`
+            };
+         }
+
+         if (currentFractionPart && pendingFractionParts.length === 1) {
+            const priorParts = fractionPlan?.parts.filter(part => part.status === 'PAID') || [];
+            payments = [
+               ...priorParts.flatMap(part => part.payments || []),
+               ...payments
+            ];
+            voluntaryTip = priorParts.reduce((sum, part) => sum + Number(part.voluntaryTip || 0), 0) + Number(voluntaryTip || 0);
+         }
+
          const terminalId = activeTerminalId || 't1';
          const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, activeTerminalConfig);
          const isFiscalModeDisabledForCheckout = fiscalCompliance.mode === 'NONE';
@@ -4821,18 +4959,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      ticketAutoSyncFlushRef.current = null;
                      const remaining = (Array.isArray(parkedTickets) ? parkedTickets : []).filter(p => {
                         const ticketId = String(p.id || '').trim();
-                        const ticketTableId = String(p.tableId ?? '').trim();
                         const ticketBarTabId = String((p as any).barTabId || '').trim();
                         const isClosedOrder = closedOrderId && ticketId === closedOrderId;
                         const isClosedBarTab = activeBarTabId && (ticketId === activeBarTabId || ticketBarTabId === activeBarTabId);
-                        const isSameTable = activeTable.shape !== 'BAR' && activeTableId && ticketTableId === activeTableId;
-                        return !isClosedOrder && !isClosedBarTab && !isSameTable;
+                        return !isClosedOrder && !isClosedBarTab;
                      });
                      await Promise.resolve(onUpdateParkedTickets(remaining));
 
-                     const hasOtherBarTabs = activeTable.shape === 'BAR' && remaining.some(ticket => String(ticket.tableId ?? '') === String(activeTable.id));
+                     const hasOtherTableAccounts = remaining.some(ticket => (
+                        String(ticket.tableId ?? '') === activeTableId
+                     ));
                      await Promise.resolve(onTableOrderClosed?.(activeTable, activeTable.currentOrderId, remaining));
-                     if (!hasOtherBarTabs) {
+                     if (!hasOtherTableAccounts) {
                         // 1. Free table in the main API so status/currentOrderId are reset.
                         const controller = new AbortController();
                         const timeoutId = window.setTimeout(() => controller.abort(), 4000);
@@ -4956,6 +5094,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const proceedToCheckout = async () => {
       const hasSaleLines = cart.some(item => Number(item.quantity || 0) > 0);
       if (hasSaleLines && !ensureSalesWithOpenZPermission()) return;
+      if (activePaymentFraction && !isCurrentPaymentFraction) {
+         alert('El total de la cuenta cambió después de fraccionarla. Vuelva a usar Fraccionar antes de cobrar.');
+         return;
+      }
       if (!canCheckout) {
          const authorized = await requestApproval({
             permission: 'POS_CHECKOUT',
@@ -5369,18 +5511,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const releasedTableId = String(tableToRelease.id ?? '');
          const remaining = parkedTickets.filter(p => {
             const isReleasedOrder = String(p.id) === releasedOrderId;
-            const isSameTable = tableToRelease.shape !== 'BAR' && releasedTableId && String(p.tableId ?? '') === releasedTableId;
-            return !isReleasedOrder && !isSameTable;
+            return !isReleasedOrder;
          });
          await Promise.resolve(onUpdateParkedTickets(remaining));
          await Promise.resolve(onTableOrderClosed?.(tableToRelease, tableToRelease.currentOrderId, remaining));
-         if (tableToRelease.shape === 'BAR' && remaining.some(ticket => String(ticket.tableId ?? '') === String(tableToRelease.id))) {
+         if (remaining.some(ticket => String(ticket.tableId ?? '') === releasedTableId)) {
             onUpdateCart([]);
             onSelectCustomer(null);
             setActiveRecoveredReservation(null);
             if (onClearActiveTable) onClearActiveTable();
             if (!options.silent) {
-               setSuccessToast('Minuta liberada. La barra sigue abierta.');
+               setSuccessToast(tableToRelease.shape === 'BAR'
+                  ? 'Minuta liberada. La barra sigue abierta.'
+                  : 'Cuenta liberada. La mesa conserva cuentas pendientes.');
             }
             return true;
          }
@@ -6377,12 +6520,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </button>
                      <h2 className="font-black text-gray-800 text-lg leading-tight">
                         {activeTable ? (
-                           <div className="flex flex-col">
-                              <span className="text-[10px] text-gray-400 -mb-1 font-bold uppercase">
-                                 {activeTableContext.roomLabel || 'Mesa Activa'}
-                              </span>
-                              <span>{activeBarTabName || activeTableContext.compactLabel || activeTable.nombre || activeTable.name}</span>
-                           </div>
+                           <span>{activeBarTabName || activeTableContext.compactLabel || activeTable.nombre || activeTable.name}</span>
                         ) : 'Ticket Actual'}
                      </h2>
                   </div>
@@ -6637,27 +6775,29 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </span>
                      </div>
 
-                     <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 shadow-sm transition-all hover:shadow-md">
-                        <button
-                           onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
-                           className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
-                           title="Reducir comensales"
-                        >
-                           <Minus size={10} strokeWidth={3} />
-                        </button>
+                     <div className="flex shrink-0 items-center gap-2">
+                        <div className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 shadow-sm transition-all hover:shadow-md">
+                           <button
+                              onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
+                              className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                              title="Reducir comensales"
+                           >
+                              <Minus size={10} strokeWidth={3} />
+                           </button>
 
-                        <div className="flex items-center gap-1 px-1">
-                           <Users size={12} className="text-blue-500" />
-                           <span className="min-w-[1rem] text-center text-xs font-black text-slate-700">{activeTable.guests || 1}</span>
+                           <div className="flex items-center gap-1 px-1">
+                              <Users size={12} className="text-blue-500" />
+                              <span className="min-w-[1rem] text-center text-xs font-black text-slate-700">{activeTable.guests || 1}</span>
+                           </div>
+
+                           <button
+                              onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
+                              className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-500"
+                              title="Aumentar comensales"
+                           >
+                              <Plus size={10} strokeWidth={3} />
+                           </button>
                         </div>
-
-                        <button
-                           onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
-                           className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-500"
-                           title="Aumentar comensales"
-                        >
-                           <Plus size={10} strokeWidth={3} />
-                        </button>
                      </div>
                   </div>
                )}
@@ -7295,8 +7435,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            </div>
                         ) : (
                            <>
+                              {activeTable && activeTableAccounts.length > 1 && (
+                                 <div className="flex w-full justify-center pb-2">
+                                    {renderTableAccountNavigator()}
+                                 </div>
+                              )}
+
                               {/* --- BLOQUE DE TOTALES --- */}
-                              <div className="space-y-1.5 pt-1 border-t border-dashed border-gray-200 mt-2">
+                              <div className="space-y-1.5 pt-3 border-t border-dashed border-gray-200">
                                  <div className="flex justify-between items-center text-xs font-bold text-gray-500">
                                     <span>SUBTOTAL</span>
                                     <span>{formatCurrency(cartSubtotal, baseCurrency.symbol)}</span>
@@ -7414,6 +7560,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   className="md:hidden fixed left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5"
                   style={mobileFooterStyle}
                >
+                  {activeTable && activeTableAccounts.length > 1 && (
+                     <div className="flex w-full justify-center pb-3">
+                        {renderTableAccountNavigator()}
+                     </div>
+                  )}
                   <div className="flex justify-between items-center mb-4 px-2 gap-3">
                      <div className="flex gap-2 overflow-x-auto overflow-y-hidden no-scrollbar pr-1">
                         <button onClick={() => {
@@ -7521,7 +7672,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                onConfirm={handleSplitConfirm}
             />
          )}
-         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} />}
+         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={nextPaymentFractionPart && cartTotal > 0 ? cartTax * (amountDueNow / cartTotal) : cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} salesUsers={salesUsers} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={!isKdsReturnedCartItem(editingItem)} canVoidItem={!editingItem.dispatched} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, selectedVariant, variantInfo) => { addToCart(p, 1, pr, m, undefined, selectedVariant, variantInfo); setSelectedProductForVariants(null); }} />}

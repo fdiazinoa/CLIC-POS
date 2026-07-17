@@ -125,7 +125,16 @@ CANONICAL_GRADLE_FILE="${CANONICAL_BUILD_WORKTREE}/android/app/build.gradle"
 require_file "${CANONICAL_GRADLE_FILE}"
 
 NEXT_VERSION_CODE="$(resolve_next_version_code "${CANONICAL_GRADLE_FILE}")"
-VERSION_NAME="1.0.${NEXT_VERSION_CODE}"
+SOURCE_VERSION_CODE="$(git -C "${REPO_ROOT}" show "${SOURCE_COMMIT}:android/app/build.gradle" | awk '/versionCode[[:space:]]+[0-9]+/ { print $2; exit }')"
+SOURCE_VERSION_NAME="$(git -C "${REPO_ROOT}" show "${SOURCE_COMMIT}:android/app/build.gradle" | sed -n 's/.*versionName[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+
+if [[ "${SOURCE_VERSION_CODE}" == "${NEXT_VERSION_CODE}" && -n "${SOURCE_VERSION_NAME}" ]]; then
+  VERSION_NAME="${SOURCE_VERSION_NAME}"
+elif [[ "${SOURCE_VERSION_NAME}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+  VERSION_NAME="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
+else
+  VERSION_NAME="1.0.${NEXT_VERSION_CODE}"
+fi
 
 TEMP_WORKTREE="$(mktemp -d /private/tmp/clicpos-release-XXXXXX)"
 cleanup() {

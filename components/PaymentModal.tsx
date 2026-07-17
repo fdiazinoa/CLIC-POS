@@ -59,6 +59,7 @@ interface PaymentModalProps {
    currentUser?: User | null;
    roles?: RoleDefinition[];
    isRestaurantMode?: boolean;
+   isInstallmentPayment?: boolean;
 }
 
 type ResolvedPaymentMethod = {
@@ -262,7 +263,7 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
    const [payments, setPayments] = useState<PaymentEntry[]>([]);
    const [activeMethodKey, setActiveMethodKey] = useState<string>('');
    const [inputAmount, setInputAmount] = useState<string>('');
@@ -962,7 +963,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                const preferredReceiptEmail = finalizedTransaction.customerSnapshot?.email || customer?.email;
                const shouldEmailReceiptOnly = Boolean(customer?.prefersEmail && preferredReceiptEmail);
 
-               if (shouldEmailReceiptOnly && preferredReceiptEmail) {
+               if (!isInstallmentPayment && shouldEmailReceiptOnly && preferredReceiptEmail) {
                   try {
                      const emailResult = await sendReceiptEmailRequest(finalizedTransaction, preferredReceiptEmail, config, currencySymbol);
                      autoPrintNotice = emailResult.success
@@ -972,7 +973,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                      console.error('❌ Auto receipt email failed:', emailError);
                      autoPrintNotice = `Venta aprobada. No se pudo enviar automáticamente el ticket a ${preferredReceiptEmail}.`;
                   }
-               } else if (config && gatewayPayments.length > 0) {
+               } else if (!isInstallmentPayment && config && gatewayPayments.length > 0) {
                   const matchedIntegration = config.integrations?.find(
                      (integration) => integration.id === gatewayPayments[0]?.gatewayIntegrationId
                   );
@@ -1136,7 +1137,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-6">
                   <CheckCircle2 size={40} className="text-green-600" />
                </div>
-               <h2 className="text-3xl font-black text-gray-900 mb-2">¡Venta Exitosa!</h2>
+               <h2 className="text-3xl font-black text-gray-900 mb-2">{isInstallmentPayment ? 'Cuota registrada' : '¡Venta Exitosa!'}</h2>
                <div className="w-full bg-gray-50 rounded-2xl p-6 mb-8 border border-gray-100">
                   <div className="flex items-end justify-between gap-4 mb-2">
                      <span className="text-lg md:text-xl font-black text-gray-700">Recibido</span>
@@ -1187,7 +1188,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                         {successNotice}
                      </div>
                   )}
-                  <div className="flex gap-3">
+                  {!isInstallmentPayment && <div className="flex gap-3">
                      <button
                         onClick={async () => {
                            if (!config || !completedTransaction) return;
@@ -1207,9 +1208,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                         {isSendingEmail ? 'Enviando...' : 'Email'}
                         <Mail size={18} />
                      </button>
-                  </div>
+                  </div>}
                   {hasPermission('POS_NEW_SALE') && (
-                     <button onClick={onClose} className={`w-full py-4 rounded-xl font-bold text-white shadow-xl flex items-center justify-center gap-2 ${themeBgClass}`}><Repeat size={20} /> Nueva Venta</button>
+                     <button onClick={onClose} className={`w-full py-4 rounded-xl font-bold text-white shadow-xl flex items-center justify-center gap-2 ${themeBgClass}`}><Repeat size={20} /> {isInstallmentPayment ? 'Continuar con la cuenta' : 'Nueva Venta'}</button>
                   )}
                </div>
             </div>

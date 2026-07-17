@@ -1932,8 +1932,16 @@ class SyncManager {
                     balances:
                         Array.isArray(inventory.balances)
                             ? inventory.balances as TerminalInventoryBalancePayload[]
+                            : Array.isArray(inventory.stock_balances)
+                                ? inventory.stock_balances as TerminalInventoryBalancePayload[]
+                                : Array.isArray(inventory.stockBalances)
+                                    ? inventory.stockBalances as TerminalInventoryBalancePayload[]
                             : Array.isArray(root.balances)
                                 ? root.balances as TerminalInventoryBalancePayload[]
+                                : Array.isArray(root.stock_balances)
+                                    ? root.stock_balances as TerminalInventoryBalancePayload[]
+                                    : Array.isArray(root.stockBalances)
+                                        ? root.stockBalances as TerminalInventoryBalancePayload[]
                                 : [],
                     has_changes:
                         typeof inventory.has_changes === 'boolean'
@@ -2655,9 +2663,23 @@ class SyncManager {
 
             const warehouseBalanceMap = canonicalizeWarehouseRecord(
                 matchedBalances.reduce<Record<string, number>>((acc, entry) => {
-                    const warehouseId = String(entry?.warehouse_id || '').trim();
+                    const warehouseId = String(
+                        entry?.warehouse_id
+                        || (entry as any)?.warehouseId
+                        || (entry as any)?.store_id
+                        || (entry as any)?.storeId
+                        || ''
+                    ).trim();
                     if (!warehouseId) return acc;
-                    acc[warehouseId] = Number(acc[warehouseId] || 0) + Number(entry?.qty_on_hand ?? 0);
+                    acc[warehouseId] = Number(acc[warehouseId] || 0) + Number(
+                        entry?.qty_on_hand
+                        ?? (entry as any)?.qtyOnHand
+                        ?? (entry as any)?.quantity
+                        ?? (entry as any)?.qty
+                        ?? (entry as any)?.stock
+                        ?? (entry as any)?.balance
+                        ?? 0
+                    );
                     return acc;
                 }, {}),
                 runtimeWarehouses,
@@ -2668,7 +2690,9 @@ class SyncManager {
                 stockBalances: warehouseBalanceMap,
                 stock: Object.values(warehouseBalanceMap).reduce((sum, quantity) => sum + Number(quantity || 0), 0),
                 updatedAt: matchedBalances.reduce((latest, entry) => {
-                    const candidate = typeof entry?.updated_at === 'string' ? entry.updated_at : '';
+                    const candidate = typeof (entry?.updated_at || (entry as any)?.updatedAt) === 'string'
+                        ? (entry.updated_at || (entry as any)?.updatedAt)
+                        : '';
                     if (!candidate) return latest;
                     return !latest || candidate > latest ? candidate : latest;
                 }, product.updatedAt || now),
@@ -2683,7 +2707,13 @@ class SyncManager {
             for (const warehouseId of warehouseIds) {
                 const lookupKey = this.buildSnapshotProductStockLookupKey(nextProduct.id, warehouseId);
                 const existingStock = this.resolveExistingSnapshotProductStock(nextProduct.id, warehouseId, aliasProductIds, existingStocksByProductWarehouse);
-                const matchedWarehouseBalances = matchedBalances.filter((entry) => String(entry?.warehouse_id || '').trim() === warehouseId);
+                const matchedWarehouseBalances = matchedBalances.filter((entry) => String(
+                    entry?.warehouse_id
+                    || (entry as any)?.warehouseId
+                    || (entry as any)?.store_id
+                    || (entry as any)?.storeId
+                    || ''
+                ).trim() === warehouseId);
                 const matchedBalance = matchedWarehouseBalances[matchedWarehouseBalances.length - 1];
                 const qtyPhysical = Number(warehouseBalanceMap?.[warehouseId] ?? 0);
                 const qtyCommitted = matchedWarehouseBalances.reduce((sum, entry) => {
@@ -2702,7 +2732,9 @@ class SyncManager {
                     qtyPhysical,
                     qtyCommitted,
                     qtyAvailable: qtyPhysical - qtyCommitted - qtyReserved,
-                    updatedAt: typeof matchedBalance?.updated_at === 'string' ? matchedBalance.updated_at : now,
+                    updatedAt: typeof (matchedBalance?.updated_at || (matchedBalance as any)?.updatedAt) === 'string'
+                        ? (matchedBalance.updated_at || (matchedBalance as any)?.updatedAt)
+                        : now,
                 };
 
                 nextStockKeys.add(`${nextProduct.id}::${warehouseId}`);
