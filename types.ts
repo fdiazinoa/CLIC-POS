@@ -642,6 +642,7 @@ export interface TerminalConfig {
     requirePinForDiscount: boolean;
     requireManagerForRefunds: boolean;
     autoLogoutMinutes: number;
+    reduceSyncAfterMinutes?: number;
     allowBiometrics?: boolean; // NEW: Biometric Auth Toggle
   };
   pricing: {

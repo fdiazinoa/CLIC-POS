@@ -744,6 +744,18 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     />
                                     <p className="text-xs font-medium text-slate-500">0 desactiva el bloqueo automático.</p>
                                  </label>
+                                 <label className="p-5 bg-slate-50 rounded-3xl border border-slate-100 space-y-3">
+                                    <span className="block text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Sincronización reducida (minutos)</span>
+                                    <input
+                                       type="number"
+                                       min="0"
+                                       value={activeTerminal.config.security.reduceSyncAfterMinutes ?? 0}
+                                       onChange={(e) => handleUpdateActiveConfig('security', 'reduceSyncAfterMinutes', clampInteger(e.target.value, 0))}
+                                       disabled={isReadOnly}
+                                       className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-lg font-black text-slate-800 outline-none focus:border-blue-500 disabled:opacity-50"
+                                    />
+                                    <p className="text-xs font-medium text-slate-500">Pausa catálogo e imágenes por inactividad. Ventas, ACK, configuración crítica y KDS continúan activos. 0 desactiva esta función.</p>
+                                 </label>
                                  <label className="md:col-span-2 p-5 bg-slate-50 rounded-3xl border border-slate-100 space-y-3">
                                     <span className="block text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Correos para reporte Z</span>
                                     <textarea

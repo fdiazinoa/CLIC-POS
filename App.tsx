@@ -64,6 +64,8 @@ import { mergeDocumentSeriesCollection, resolveDocumentAssignmentId } from './ut
 import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
 import { ThermalPrinterService } from './services/printer/ThermalPrinterService';
 import { resolveDeviceRoleValue } from './utils/deviceRoleHelpers';
+import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from './utils/posSaleActivity';
+import { canEnterReducedSyncMode, resolveReducedSyncAfterMinutes } from './utils/syncInactivityPolicy';
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
@@ -1607,6 +1609,8 @@ const AppContent: React.FC = () => {
   const inactivityIntervalRef = useRef<number | null>(null);
   const lastUserActivityAtRef = useRef<number>(Date.now());
   const inactivitySessionKeyRef = useRef<string>('');
+  const syncInactivityTimerRef = useRef<number | null>(null);
+  const lastSyncActivityAtRef = useRef<number>(Date.now());
   const appBackgroundSinceRef = useRef<number | null>(null);
   const isAppInBackgroundRef = useRef(false);
   const lifecycleSyncInFlightRef = useRef<Promise<void> | null>(null);
@@ -2538,6 +2542,94 @@ const AppContent: React.FC = () => {
       }
     };
   }, [currentUser, currentView, getCurrentTerminal, navigateToUserLogin]);
+
+  useEffect(() => {
+    const currentTerminal = getCurrentTerminal();
+    const reduceAfterMinutes = resolveReducedSyncAfterMinutes(currentTerminal);
+    const shouldTrackSyncInactivity =
+      Boolean(currentUser) &&
+      currentView !== 'LOGIN' &&
+      currentView !== 'ACTIVATION' &&
+      currentView !== 'WIZARD' &&
+      reduceAfterMinutes > 0;
+
+    const clearTimer = () => {
+      if (syncInactivityTimerRef.current) {
+        window.clearTimeout(syncInactivityTimerRef.current);
+        syncInactivityTimerRef.current = null;
+      }
+    };
+
+    if (!shouldTrackSyncInactivity) {
+      clearTimer();
+      syncManager.setReducedSyncMode(false, 'disabled_or_logged_out');
+      return;
+    }
+
+    const thresholdMs = reduceAfterMinutes * 60 * 1000;
+
+    const scheduleCheck = (delayMs: number) => {
+      clearTimer();
+      syncInactivityTimerRef.current = window.setTimeout(checkDeadline, Math.max(1000, delayMs));
+    };
+
+    const checkDeadline = () => {
+      const criticalState = backgroundSyncManager.getState();
+      const idleMs = Date.now() - lastSyncActivityAtRef.current;
+      const canReduce = canEnterReducedSyncMode({
+        idleMs,
+        thresholdMs,
+        saleActive: isPosSaleActive(),
+        pendingCriticalCount: criticalState.pendingCount,
+        criticalSyncInProgress: criticalState.isSyncing,
+      });
+
+      if (canReduce) {
+        clearTimer();
+        syncManager.setReducedSyncMode(true, `idle_${reduceAfterMinutes}m`);
+        return;
+      }
+
+      const remainingMs = thresholdMs - idleMs;
+      scheduleCheck(remainingMs > 0 ? remainingMs : 15000);
+    };
+
+    const markActive = (reason: string) => {
+      lastSyncActivityAtRef.current = Date.now();
+      syncManager.setReducedSyncMode(false, reason);
+      scheduleCheck(thresholdMs);
+    };
+
+    const handleActivity = () => markActive('user_activity');
+    const handleOnline = () => markActive('network_reconnected');
+    const handleVisibility = () => {
+      if (!document.hidden) markActive('app_foreground');
+    };
+    const handleSaleActivity = () => {
+      if (isPosSaleActive()) markActive('sale_activity');
+      else checkDeadline();
+    };
+
+    const activityEvents: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'touchstart'];
+    activityEvents.forEach((eventName) => window.addEventListener(eventName, handleActivity, { passive: true }));
+    window.addEventListener('online', handleOnline);
+    window.addEventListener(POS_SALE_ACTIVITY_EVENT, handleSaleActivity);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    console.info('[SYNC_POLICY] Inactivity reduction armed', {
+      terminalId: currentTerminal?.id,
+      minutes: reduceAfterMinutes,
+    });
+    markActive('policy_armed');
+
+    return () => {
+      activityEvents.forEach((eventName) => window.removeEventListener(eventName, handleActivity as EventListener));
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener(POS_SALE_ACTIVITY_EVENT, handleSaleActivity);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      clearTimer();
+    };
+  }, [currentUser, currentView, getCurrentTerminal]);
 
   useEffect(() => {
     if (settingsPreloadStartedRef.current) return;

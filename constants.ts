@@ -69,7 +69,8 @@ export const DEFAULT_TERMINAL_CONFIG = {
     requirePinForDiscount: true,
     requireManagerForRefunds: true,
     allowBiometrics: false,
-    autoLogoutMinutes: 15
+    autoLogoutMinutes: 15,
+    reduceSyncAfterMinutes: 0
   },
   pricing: {
     allowedTariffIds: ['trf-gen', 'trf-vip'],

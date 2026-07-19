@@ -2338,12 +2338,20 @@ export const applyTerminalConfigSnapshot = (
         readErpSessionNumber(fallbackSession, 'autoLogoutMinutes', 'auto_logout_minutes') ??
         readErpSessionNumber(fallbackSecurity, 'autoLockMinutes', 'auto_lock_minutes') ??
         readErpSessionNumber(fallbackSecurity, 'autoLogoutMinutes', 'auto_logout_minutes');
+      const erpReducedSync =
+        readErpSessionNumber(fallbackSession, 'reduceSyncAfterMinutes', 'reduce_sync_after_minutes') ??
+        readErpSessionNumber(fallbackSecurity, 'reduceSyncAfterMinutes', 'reduce_sync_after_minutes');
       const fromErpLock =
         erpAutoLock !== undefined && Number.isFinite(erpAutoLock) && erpAutoLock >= 0 ? { autoLogoutMinutes: erpAutoLock } : {};
+      const fromErpReducedSync =
+        erpReducedSync !== undefined && Number.isFinite(erpReducedSync) && erpReducedSync >= 0
+          ? { reduceSyncAfterMinutes: erpReducedSync }
+          : {};
       return {
         ...terminalTemplate.security,
         ...fallbackSecurity,
         ...fromErpLock,
+        ...fromErpReducedSync,
       };
     })(),
     workflow: {

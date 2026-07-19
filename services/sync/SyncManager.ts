@@ -51,6 +51,7 @@ import { isPosCloudStagingPushCollection } from './PosCloudStagingService';
 import { reportSyncErrorDiagnostic, setCatalogDiagnosticStatus } from './SyncErrorDiagnostic';
 import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked } from '../../utils/deviceRevocation';
 import { triggerErpSyncOutbox } from '../../utils/erpSyncLifecycle';
+import { isPosSaleActive } from '../../utils/posSaleActivity';
 
 export type SyncableCollection =
     | 'products' | 'items' | 'taxes' | 'customers' | 'suppliers' | 'warehouses'
@@ -394,6 +395,7 @@ class SyncManager {
     private lastProductImageManifestVersion = 0;
     private productImageHashes: Map<string, string> = new Map();
     private imageSyncOnlineHandler: (() => void) | null = null;
+    private reducedSyncMode = false;
     private readonly IMAGE_SYNC_INTERVAL_MS = 180000;
     private readonly IMAGE_SYNC_BATCH_SIZE = 40;
     private terminalManifestSyncInFlight = false;
@@ -4971,6 +4973,7 @@ class SyncManager {
     private attachImageSyncReconnectHandler() {
         if (this.imageSyncOnlineHandler) return;
         this.imageSyncOnlineHandler = () => {
+            if (this.reducedSyncMode) return;
             this.syncProductImages({ forceManifestCheck: true }).catch((error) => {
                 console.warn('⚠️ Image sync on reconnect failed:', error);
             });
@@ -4990,6 +4993,7 @@ class SyncManager {
         }
 
         this.imageSyncInterval = setInterval(() => {
+            if (this.reducedSyncMode) return;
             this.syncProductImages().catch((error) => {
                 console.warn('⚠️ Scheduled image sync failed:', error);
             });
@@ -6575,23 +6579,8 @@ class SyncManager {
             this.stopAutoSync();
         }
 
-        this.autoSyncInterval = setInterval(async () => {
-            // Auto-sync for ALL terminals (including Master w/ LocalStorage)
-            // console.log('🔄 Auto-sync: Checking for updates...');
-            if (!permissionService.isMasterTerminal()) {
-                try {
-                    await this.pullConfig();
-                } catch (error) {
-                    console.warn('⚠️ Auto-sync: Failed to refresh config:', error);
-                }
-            }
-
-            const updates = await this.checkForUpdates();
-
-            if (updates.length > 0) {
-                console.log(`📥 Auto-sync: Found updates for ${updates.join(', ')}`);
-                await this.syncAllCatalogs();
-            }
+        this.autoSyncInterval = setInterval(() => {
+            void this.runAutomaticMasterDataSync();
         }, intervalMs);
 
         if (!permissionService.isMasterTerminal()) {
@@ -6599,6 +6588,42 @@ class SyncManager {
         }
 
         console.log(`⏰ Auto-sync started (${intervalMs / 1000}s interval)`);
+    }
+
+    private async runAutomaticMasterDataSync(): Promise<void> {
+        if (!permissionService.isMasterTerminal()) {
+            try {
+                await this.pullConfig();
+            } catch (error) {
+                console.warn('⚠️ Auto-sync: Failed to refresh config:', error);
+            }
+        }
+
+        // Configuration remains critical while idle. Only large master-data
+        // checks and image transfers are reduced.
+        if (this.reducedSyncMode) return;
+
+        const updates = await this.checkForUpdates();
+        if (updates.length > 0) {
+            console.log(`📥 Auto-sync: Found updates for ${updates.join(', ')}`);
+            await this.syncAllCatalogs();
+        }
+    }
+
+    setReducedSyncMode(reduced: boolean, reason = 'inactivity'): void {
+        if (this.reducedSyncMode === reduced) return;
+        this.reducedSyncMode = reduced;
+        console.info(`[SYNC_POLICY] Master data sync ${reduced ? 'reduced' : 'active'} (${reason}).`);
+
+        if (!reduced && navigator.onLine && !isPosSaleActive()) {
+            window.setTimeout(() => {
+                void this.runAutomaticMasterDataSync();
+            }, 0);
+        }
+    }
+
+    isReducedSyncMode(): boolean {
+        return this.reducedSyncMode;
     }
 
     /**
