@@ -130,6 +130,8 @@ type TerminalAuthorizationBlock = {
   message: string;
 };
 
+type TerminalAuthorizationCheckState = 'idle' | 'checking' | 'authorized';
+
 
 import { seriesSyncService } from './services/sync/SeriesSyncService';
 import { permissionService } from './services/sync/PermissionService';
@@ -1613,6 +1615,7 @@ const AppContent: React.FC = () => {
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [licenseError, setLicenseError] = useState<string | null>(null);
   const [terminalAuthorizationBlock, setTerminalAuthorizationBlock] = useState<TerminalAuthorizationBlock | null>(null);
+  const [terminalAuthorizationCheckState, setTerminalAuthorizationCheckState] = useState<TerminalAuthorizationCheckState>('idle');
   const terminalAuthorizationCheckInFlightRef = useRef(false);
   const inactivityTimerRef = useRef<number | null>(null);
   const inactivityIntervalRef = useRef<number | null>(null);
@@ -2109,7 +2112,7 @@ const AppContent: React.FC = () => {
     message: string,
     candidateDeviceId?: string | null,
     options?: { terminalId?: string | null; preserveDiagnosticWhenAuthorized?: boolean },
-  ) => {
+  ): Promise<boolean> => {
     if (await verifyErpDeviceStillAuthorized(candidateDeviceId)) {
       lockdownHandledRef.current = false;
       setLicenseError(null);
@@ -2126,7 +2129,7 @@ const AppContent: React.FC = () => {
       localStorage.setItem('clic_sync_auth_status', 'AUTHENTICATED');
       localStorage.removeItem('clic_sync_last_auth_error');
       localStorage.removeItem('clic_sync_last_reauth_attempt_at');
-      return;
+      return true;
     }
     const terminalLabel = resolveBlockedTerminalLabel(options?.terminalId);
     triggerLockdown(message, {
@@ -2134,6 +2137,7 @@ const AppContent: React.FC = () => {
       terminalLabel,
       message: `La caja ${terminalLabel} está activa en otro equipo. Por seguridad, este dispositivo no puede ingresar ni sincronizar hasta que la caja sea reautorizada.`,
     });
+    return false;
   }, [resolveBlockedTerminalLabel, triggerLockdown, verifyErpDeviceStillAuthorized]);
 
   useEffect(() => {
@@ -2152,16 +2156,25 @@ const AppContent: React.FC = () => {
   }, [deviceId, triggerLockdownAfterAuthorizationCheck]);
 
   useEffect(() => {
-    if (!isTerminalAuthorizationLossDiagnostic(syncDiagnostic) || terminalAuthorizationCheckInFlightRef.current) return;
+    if (!isTerminalAuthorizationLossDiagnostic(syncDiagnostic)) {
+      setTerminalAuthorizationCheckState('idle');
+      return;
+    }
+    if (terminalAuthorizationCheckInFlightRef.current) return;
     terminalAuthorizationCheckInFlightRef.current = true;
+    setTerminalAuthorizationCheckState('checking');
     const affectedTerminalId = syncDiagnostic?.resolvedTarget?.terminalId || syncDiagnostic?.terminalId || null;
     void triggerLockdownAfterAuthorizationCheck(
       DEVICE_SUPERSEDED_MESSAGE,
       deviceId,
       { terminalId: affectedTerminalId, preserveDiagnosticWhenAuthorized: true },
-    ).finally(() => {
-      terminalAuthorizationCheckInFlightRef.current = false;
-    });
+    )
+      .then((authorized) => {
+        setTerminalAuthorizationCheckState(authorized ? 'authorized' : 'idle');
+      })
+      .finally(() => {
+        terminalAuthorizationCheckInFlightRef.current = false;
+      });
   }, [deviceId, syncDiagnostic, triggerLockdownAfterAuthorizationCheck]);
 
   // --- REALTIME KILL SWITCH (FALLBACK: SMART POLLING) ---
@@ -10286,7 +10299,12 @@ const AppContent: React.FC = () => {
           </div>
         )}
         <SyncErrorDiagnosticModal
-          diagnostic={syncDiagnostic}
+          diagnostic={
+            isTerminalAuthorizationLossDiagnostic(syncDiagnostic)
+              && terminalAuthorizationCheckState !== 'authorized'
+              ? null
+              : syncDiagnostic
+          }
           onClose={() => {
             clearSyncErrorDiagnostic();
             setSyncDiagnostic(null);
