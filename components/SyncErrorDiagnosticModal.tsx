@@ -1,6 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import { AlertTriangle, Clipboard, RefreshCw, Server, X } from 'lucide-react';
-import type { SyncErrorDiagnostic } from '../services/sync/SyncErrorDiagnostic';
+import {
+  isTerminalAuthorizationLossDiagnostic,
+  type SyncErrorDiagnostic,
+} from '../services/sync/SyncErrorDiagnostic';
 import { requestJson } from '../services/network/httpClient';
 import { persistSyncDeviceToken, resolveSyncDeviceToken } from '../services/sync/deviceToken';
 import { clearStoredSyncToken, saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
@@ -28,7 +31,7 @@ const SyncErrorDiagnosticModal: React.FC<SyncErrorDiagnosticModalProps> = ({ dia
   const [nativeTestResult, setNativeTestResult] = useState<unknown>(null);
   const diagnosticJson = useMemo(() => diagnostic ? JSON.stringify(diagnostic, null, 2) : '', [diagnostic]);
 
-  if (!diagnostic) return null;
+  if (!diagnostic || isTerminalAuthorizationLossDiagnostic(diagnostic)) return null;
 
   const isDeviceNotAuthorized = diagnostic.authStatus === 'DEVICE_NOT_AUTHORIZED' || diagnostic.backendCode === 'DEVICE_NOT_AUTHORIZED';
   const isFiscalConfigMissing = diagnostic.catalogSyncStatus === 'FISCAL_CONFIG_MISSING'

@@ -62,6 +62,15 @@ test('detects a rejected sync token as a possible terminal authorization loss', 
   );
   assert.equal(
     isTerminalAuthorizationLossDiagnostic({
+      httpStatus: null,
+      responseBody: null,
+      errorMessage: 'SYNC_TOKEN_REJECTED: El ERP rechazó el token de sincronización.',
+      backendCode: null,
+    }),
+    true,
+  );
+  assert.equal(
+    isTerminalAuthorizationLossDiagnostic({
       httpStatus: 500,
       responseBody: 'Internal Server Error',
       errorMessage: 'Metadata failed',

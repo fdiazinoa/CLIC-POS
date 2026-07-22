@@ -345,10 +345,10 @@ export const isTerminalAuthorizationLossDiagnostic = (
         diagnostic.errorMessage,
     ].map((value) => String(value || '').toUpperCase()).join(' ');
 
-    return (
-        (httpStatus === 401 && /SYNC_TOKEN_(?:INVALID|REJECTED)|INVALID OR MISSING SYNC TOKEN/.test(details))
-        || (httpStatus === 403 && /DEVICE_SUPERSEDED|TAKEOVER_REQUIRED|DEVICE_NOT_AUTHORIZED/.test(details))
-    );
+    const syncTokenWasRejected = /SYNC_TOKEN_(?:INVALID|REJECTED)|INVALID OR MISSING SYNC TOKEN/.test(details);
+    const deviceAuthorizationWasRejected = /DEVICE_SUPERSEDED|TAKEOVER_REQUIRED|DEVICE_NOT_AUTHORIZED/.test(details);
+
+    return syncTokenWasRejected || (httpStatus === 403 && deviceAuthorizationWasRejected);
 };
 
 export const clearStaleSyncErrorDiagnosticIfRecovered = (): boolean => {
