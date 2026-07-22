@@ -7,9 +7,11 @@ import {
     CheckCircle2,
     Timer,
     Copy,
+    Monitor,
     Wifi,
     WifiOff
 } from 'lucide-react';
+import { formatKdsIdentityLabel } from '../../utils/kdsPresentation';
 
 interface KDSItem {
     id: string;
@@ -29,6 +31,11 @@ interface KDSOrder {
     userName: string;
     customerId: string;
     customerName: string;
+    sourceTerminal?: {
+        id?: string;
+        code?: string;
+        name?: string;
+    } | null;
     table?: {
         id?: string;
         name?: string;
@@ -106,6 +113,7 @@ const resolveKitchenTerminalIdentity = () => {
         const params = new URLSearchParams(window.location.search);
         const name = params.get('terminalName')
             || window.localStorage.getItem('CLIC_POS_TERMINAL_NAME')
+            || window.localStorage.getItem('clic_erp_sync_terminal_name')
             || window.localStorage.getItem('terminalName')
             || window.localStorage.getItem('kdsTerminalName')
             || '';
@@ -114,12 +122,19 @@ const resolveKitchenTerminalIdentity = () => {
             || window.localStorage.getItem('terminalId')
             || window.localStorage.getItem('kdsTerminalId')
             || '';
+        const explicitCode = params.get('terminalCode')
+            || window.localStorage.getItem('CLIC_POS_TERMINAL_CODE')
+            || window.localStorage.getItem('terminalCode')
+            || window.localStorage.getItem('kdsTerminalCode')
+            || '';
+        const technicalId = /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(id) || id.length > 18;
         return {
             name: name.trim() || 'Terminal cocina',
-            id: id.trim()
+            id: id.trim(),
+            code: explicitCode.trim() || (technicalId ? '' : id.trim())
         };
     } catch {
-        return { name: 'Terminal cocina', id: '' };
+        return { name: 'Terminal cocina', id: '', code: '' };
     }
 };
 
@@ -363,7 +378,7 @@ const KitchenDisplay: React.FC = () => {
                     <div className="min-w-0">
                         <div className="text-xl font-black tracking-tight leading-none">Display de Cocina</div>
                         <div className="text-xs text-gray-400 font-semibold mt-1">
-                            {terminalIdentity.name}{terminalIdentity.id ? ` · ${terminalIdentity.id}` : ''} · Órdenes en tiempo real
+                            {formatKdsIdentityLabel(terminalIdentity.code, terminalIdentity.name)} · Órdenes en tiempo real
                         </div>
                     </div>
                 </div>
@@ -546,6 +561,8 @@ const TicketCard: React.FC<{
     const tableLabel = resolveTableLabel(order);
     const visibleOrderNumber = resolveVisibleOrderNumber(order);
     const headerTitle = tableLabel || (visibleOrderNumber ? `Orden ${visibleOrderNumber}` : 'Venta directa');
+    const sourceTerminalLabel = formatKdsIdentityLabel(order.sourceTerminal?.code, order.sourceTerminal?.name);
+    const productionAreaLabel = String(order.area?.name || order.area?.nombre || '').trim();
     const severityStyles = {
         normal: {
             card: 'border-emerald-500/30 bg-gray-900 text-gray-100',
@@ -598,6 +615,16 @@ const TicketCard: React.FC<{
                     <span className="flex items-center gap-1"><Users size={10} /> {order.userName}</span>
                     <span>{visibleOrderNumber ? `Orden: ${visibleOrderNumber}` : `Ref: ${String(order.id).slice(-4)}`}</span>
                 </div>
+                {(productionAreaLabel || order.sourceTerminal) && (
+                    <div className="flex items-center justify-between gap-3 text-[10px] font-black uppercase tracking-wide opacity-90">
+                        <span className="truncate">{productionAreaLabel ? `Centro: ${productionAreaLabel}` : 'Centro de producción'}</span>
+                        {order.sourceTerminal && (
+                            <span className="flex max-w-[48%] items-center gap-1 truncate" title={sourceTerminalLabel}>
+                                <Monitor size={11} className="shrink-0" /> {sourceTerminalLabel}
+                            </span>
+                        )}
+                    </div>
+                )}
             </div>
 
             {/* Items List */}

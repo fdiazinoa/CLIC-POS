@@ -12,6 +12,7 @@ import {
     Sparkles,
     Check,
     AlertTriangle,
+    CircleHelp,
     ReceiptText,
     Link2,
     Scissors,
@@ -27,6 +28,7 @@ import TableOptionsModal from './TableOptionsModal';
 import SplitTicketModal from './SplitTicketModal';
 import { createPaymentFractionPlan } from '../utils/paymentFractions';
 import { getRenderableFloorTables } from '../utils/tableLayout';
+import { hasPendingKdsDispatch } from '../utils/kdsPresentation';
 
 interface TableMapProps {
     rooms: Room[];
@@ -72,6 +74,7 @@ interface SmartTableModel {
         label: string;
     };
     needsRevenueGlow: boolean;
+    hasPendingKitchenDispatch: boolean;
     lastOrderHint: string;
 }
 
@@ -115,9 +118,10 @@ const BarTabsModal: React.FC<{
     onCreateTab: (name: string) => void;
     allowCreate?: boolean;
     titleLabel?: string;
-}> = ({ table, tickets, currencySymbol, onClose, onOpenTab, onCreateTab, allowCreate = true, titleLabel = 'Barra / Minutas' }) => {
+    accountMode?: boolean;
+}> = ({ table, tickets, currencySymbol, onClose, onOpenTab, onCreateTab, allowCreate = true, titleLabel = 'Barra / Minutas', accountMode = false }) => {
     const [tabName, setTabName] = useState('');
-    const nextName = `Minuta ${tickets.length + 1}`;
+    const nextName = `${accountMode ? 'Cuenta' : 'Minuta'} ${tickets.length + 1}`;
     const total = tickets.reduce((sum, ticket) => {
         const itemsTotal = (ticket.items || []).reduce((acc, item) => acc + Number(item.price || 0) * Number(item.quantity || 0), 0);
         return sum + Number(ticket.total ?? itemsTotal ?? 0);
@@ -172,7 +176,7 @@ const BarTabsModal: React.FC<{
                     </div>
 
                     {allowCreate && <div className="rounded-3xl border border-blue-100 bg-blue-50 p-5">
-                            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Nueva minuta</p>
+                            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">{accountMode ? 'Nueva cuenta' : 'Nueva minuta'}</p>
                         <input
                             value={tabName}
                             onChange={(event) => setTabName(event.target.value)}
@@ -188,7 +192,7 @@ const BarTabsModal: React.FC<{
                             className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 py-4 text-sm font-black uppercase tracking-wide text-white shadow-lg shadow-blue-100 active:scale-95"
                         >
                             <Plus size={18} />
-                            Abrir minuta
+                            {accountMode ? 'Crear cuenta' : 'Abrir minuta'}
                         </button>
                     </div>}
                 </div>
@@ -743,6 +747,7 @@ const TableMap: React.FC<TableMapProps> = ({
             const progress = isOccupiedLike ? clamp(elapsedMinutes / Math.max(1, expectedStayMinutes), 0, 1) : 0;
             const serviceStage = getServiceStage(progress);
             const needsRevenueGlow = isOccupiedLike && highRevenueThreshold > 0 && total >= highRevenueThreshold;
+            const hasPendingKitchenDispatch = getTableTickets(displayTable).some(hasPendingKdsDispatch);
 
             const baseModel: SmartTableModel = {
                 table: displayTable,
@@ -758,6 +763,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 progress,
                 serviceStage,
                 needsRevenueGlow,
+                hasPendingKitchenDispatch,
                 lastOrderHint: ''
             };
 
@@ -766,7 +772,43 @@ const TableMap: React.FC<TableMapProps> = ({
                 lastOrderHint: computeLastOrderHint(baseModel)
             };
         });
-    }, [serviceTables, bloqueoMeseros, currentUser.id, isAdmin, expectedStayMinutes, highRevenueThreshold, getParkedSummaryForTable, enrichTableWithParkedTicket, getVisualTableState]);
+    }, [serviceTables, bloqueoMeseros, currentUser.id, isAdmin, expectedStayMinutes, highRevenueThreshold, getParkedSummaryForTable, enrichTableWithParkedTicket, getTableTickets, getVisualTableState]);
+
+    const createTableAccount = useCallback(async (table: Table, requestedName?: string) => {
+        const existingTickets = getTableTickets(table);
+        const accountNumber = existingTickets.length + 1;
+        const tableLabel = getTableLabel(table);
+        const roomLabel = roomLabelById.get(table.roomId);
+        const accountName = String(requestedName || '').trim() || `Cuenta ${accountNumber}`;
+        const timestamp = new Date().toISOString();
+        const ticket: ParkedTicket = {
+            id: `TABLE-${table.id}-ACCOUNT-${Date.now()}-${accountNumber}`,
+            name: `${tableLabel} - ${accountName}`,
+            alias: accountName,
+            items: [],
+            total: 0,
+            timestamp,
+            tableId: table.id,
+            tableDisplayLabel: tableLabel,
+            tableRoomLabel: roomLabel,
+        };
+        const nextTickets = [...(parkedTickets || []), ticket];
+        const nextTable = {
+            ...table,
+            status: 'OCCUPIED',
+            currentOrderId: table.currentOrderId || ticket.id,
+            currentOrderTotal: Number(table.currentOrderTotal || 0),
+            waiterId: table.waiterId || currentUser.id,
+            waiterName: table.waiterName || currentUser.name,
+            timeSeated: table.timeSeated || timestamp,
+        } as Table;
+        const nextTables = (Array.isArray(tables) ? tables : []).map(candidate => candidate.id === table.id ? nextTable : candidate);
+
+        await Promise.resolve(onUpdateParkedTickets?.(nextTickets));
+        await Promise.resolve(onUpdateTables?.(nextTables));
+        setSelectedAccountTable(nextTable);
+        return ticket;
+    }, [currentUser.id, currentUser.name, getTableTickets, onUpdateParkedTickets, onUpdateTables, parkedTickets, roomLabelById, tables]);
 
     const stats = useMemo(() => {
         const total = smartTables.length;
@@ -908,7 +950,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 currentOrderId: sourceNextTicket.id,
                 currentOrderTotal: sourceNextTicket.total
             } as Table : resetTableRuntimeState(sourceTable);
-            const nextTables = safeTables.map(table => table.id === sourceTable.id ? nextSourceTable : table.id === targetTable.id ? nextTargetTable : table);
+            const nextTables = (Array.isArray(tables) ? tables : []).map(table => table.id === sourceTable.id ? nextSourceTable : table.id === targetTable.id ? nextTargetTable : table);
             await Promise.resolve(onUpdateParkedTickets?.(nextParkedTickets));
             await Promise.resolve(onUpdateTables?.(nextTables));
             setTableNotice({
@@ -976,7 +1018,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 joinedSourceTableName: sourceTableLabel
             } as Table
             : resetTableRuntimeState(sourceTable);
-        const nextTables = safeTables.map(table => {
+        const nextTables = (Array.isArray(tables) ? tables : []).map(table => {
             if (table.id === sourceTable.id) return nextSourceTable;
             if (table.id === targetTable.id) return nextTargetTable;
             return table;
@@ -1003,7 +1045,8 @@ const TableMap: React.FC<TableMapProps> = ({
         resetTableRuntimeState,
         resolveTicketForTable,
         roomLabelById,
-        safeTables
+        safeTables,
+        tables
     ]);
 
     const handleTransferTableClick = useCallback((table: Table) => {
@@ -1026,6 +1069,11 @@ const TableMap: React.FC<TableMapProps> = ({
                 setTransferSelection(null);
                 return true;
             }
+            if (transferSelection.mode === 'MOVE') {
+                setSelectedTable(table);
+                setTransferSelection(null);
+                return true;
+            }
             setTransferSelection({
                 ...transferSelection,
                 step: 'TARGET',
@@ -1045,7 +1093,7 @@ const TableMap: React.FC<TableMapProps> = ({
 
     const handleTableAction = useCallback(async (table: Table) => {
         const tableTickets = getTableTickets(table);
-        if (isRestaurantMode && table.shape !== 'BAR' && tableTickets.length > 1) {
+        if (isRestaurantMode && table.shape !== 'BAR' && tableTickets.length > 0) {
             setSelectedAccountTable(table);
             return;
         }
@@ -1071,6 +1119,10 @@ const TableMap: React.FC<TableMapProps> = ({
         }
 
         if (isRestaurantMode) {
+            if (onUpdateParkedTickets && onUpdateTables) {
+                setSelectedAccountTable(table);
+                return;
+            }
             if (onOpenTable) {
                 const openedTable = await onOpenTable(table);
                 if (openedTable) {
@@ -1689,6 +1741,9 @@ const TableMap: React.FC<TableMapProps> = ({
                                 <p><span className="text-slate-400">Mesero:</span> {tooltip.model.table.waiterName || 'Sin asignar'}</p>
                                 <p><span className="text-slate-400">Total:</span> {currencySymbol}{tooltip.model.total.toLocaleString()}</p>
                                 <p><span className="text-slate-400">Tiempo:</span> {tooltip.model.elapsedLabel}</p>
+                                {tooltip.model.hasPendingKitchenDispatch && (
+                                    <p className="font-black text-amber-300"><span className="text-amber-200/75">Cocina:</span> pendiente de recepción</p>
+                                )}
                             </div>
                         </m.div>
                     )}
@@ -1699,7 +1754,7 @@ const TableMap: React.FC<TableMapProps> = ({
                         table={selectedTable}
                         room={rooms.find(candidate => candidate.id === selectedTable.roomId) || activeRoom}
                         rooms={rooms}
-                        allTables={safeTables}
+                        allTables={safeTables.map(table => enrichTableWithParkedTicket(getVisualTableState(table)))}
                         onClose={() => setSelectedTable(null)}
                         onAddOrder={() => {
                             onTableClick(selectedTable);
@@ -1727,25 +1782,9 @@ const TableMap: React.FC<TableMapProps> = ({
                                 alert('Sin cuenta activa para dividir pago.');
                             }
                         }}
-                        onMoveTable={async (targetTableId) => {
-                            try {
-                                const res = await fetch('/api/mesas/mover', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ fromTableId: selectedTable.id, toTableId: targetTableId })
-                                });
-                                const data = await res.json();
-                                if (data.success) {
-                                    onRefreshTables?.();
-                                    alert('Mesa movida correctamente');
-                                    setSelectedTable(null);
-                                } else {
-                                    alert('Error moviendo mesa: ' + data.message);
-                                }
-                            } catch (error) {
-                                console.error(error);
-                                alert('Error de conexion');
-                            }
+                        onMoveTable={(targetTableId) => {
+                            void completeTableTransfer(selectedTable.id, targetTableId, 'MOVE');
+                            setSelectedTable(null);
                         }}
                         sourceItems={ensureCartIds(resolveTicketForTable(selectedTable)?.items || [])}
                         onMoveTablePartial={(targetTableId, items) => {
@@ -1802,8 +1841,9 @@ const TableMap: React.FC<TableMapProps> = ({
                         table={selectedAccountTable}
                         tickets={getTableTickets(selectedAccountTable)}
                         currencySymbol={currencySymbol}
-                        allowCreate={false}
-                        titleLabel="Cuentas separadas"
+                        allowCreate
+                        accountMode
+                        titleLabel="Cuentas de la mesa"
                         onClose={() => setSelectedAccountTable(null)}
                         onOpenTab={(ticket) => {
                             const total = Number(ticket.total ?? (ticket.items || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
@@ -1816,7 +1856,9 @@ const TableMap: React.FC<TableMapProps> = ({
                             });
                             setSelectedAccountTable(null);
                         }}
-                        onCreateTab={() => undefined}
+                        onCreateTab={(name) => {
+                            void createTableAccount(selectedAccountTable, name);
+                        }}
                     />
                 )}
 
@@ -2265,7 +2307,12 @@ const SmartTableNode = React.memo(({
                                         strokeDashoffset={ringOffset}
                                     />
                                 </svg>
-                                <span className="absolute inset-0 flex items-center justify-center text-[10px]">{model.serviceStage.icon}</span>
+                                <span
+                                    className={`absolute inset-0 flex items-center justify-center text-[10px] ${model.hasPendingKitchenDispatch ? 'rounded-full bg-amber-400 text-amber-950 shadow-[0_0_18px_rgba(251,191,36,0.8)]' : ''}`}
+                                    title={model.hasPendingKitchenDispatch ? 'Pedido pendiente de recepción en cocina' : model.serviceStage.label}
+                                >
+                                    {model.hasPendingKitchenDispatch ? <CircleHelp size={19} strokeWidth={3} /> : model.serviceStage.icon}
+                                </span>
                             </div>
                         </div>
 

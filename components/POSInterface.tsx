@@ -149,6 +149,7 @@ type ProductionAreaConfig = {
    nombre?: string;
    modo_salida?: 'KDS' | 'PRINTER' | 'AMBOS' | string;
    target_terminal_id?: string;
+   target_terminal_name?: string;
    kds_host?: string;
    kds_port?: string | number;
    kds_warning_minutes?: number | string;
@@ -1245,6 +1246,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   customerName: payload.customerName,
                   table: payload.table,
                   area: payload.area,
+                  sourceTerminal: payload.sourceTerminal,
                   kdsTiming: payload.kdsTiming,
                });
                await postJsonWithTimeout(`${kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(orderId)}`, payload);
@@ -5234,6 +5236,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   orderNumber,
                   date: new Date().toISOString(),
                   terminalId: activeTerminalId,
+                  sourceTerminal: {
+                     id: activeTerminalId,
+                     code: activeTerminalConfig?.stationNumber || activeTerminalConfig?.erpBinding?.stationNumber || terminalDisplayLabel,
+                     name: activeTerminalConfig?.terminalName || activeTerminalConfig?.erpBinding?.terminalName || terminalDisplayLabel,
+                  },
                   userName: currentUser.name,
                   customerName: selectedCustomer?.name || 'Cliente General',
                   table: kdsTablePayload,
@@ -5241,6 +5248,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      id: areaId,
                      name: areaData.title,
                      targetTerminalId: areaData.area.target_terminal_id || null,
+                     targetTerminalName: areaData.area.target_terminal_name || areaData.title,
                      warningMinutes,
                      criticalMinutes,
                   },
@@ -5272,6 +5280,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         displayId: displayOrderRef,
                         orderNumber,
                         terminalId: activeTerminalId,
+                        sourceTerminal: kdsPayload.sourceTerminal,
                         userName: currentUser.name,
                         customerName: selectedCustomer?.name || 'Cliente General',
                         table: kdsTablePayload,

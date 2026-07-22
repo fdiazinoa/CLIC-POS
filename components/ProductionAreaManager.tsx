@@ -11,6 +11,7 @@ interface ProductionArea {
     modo_salida: 'KDS' | 'PRINTER' | 'AMBOS';
     kds_delivery_mode?: 'LAN' | 'WEB';
     target_terminal_id?: string;
+    target_terminal_name?: string;
     kds_host?: string;
     kds_port?: string;
     kds_warning_minutes?: number | string;
@@ -155,6 +156,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
         handleUpdateArea(area.id, {
             kds_delivery_mode: 'LAN',
             target_terminal_id: targetId || undefined,
+            target_terminal_name: target?.label || undefined,
             kds_host: target?.host || area.kds_host,
             kds_port: target?.port || area.kds_port || '8001',
         });
