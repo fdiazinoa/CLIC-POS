@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   isRecoverableNetworkConnectivityMessage,
   isRecoverableStaleSyncDiagnostic,
+  isTerminalAuthorizationLossDiagnostic,
 } from '../services/sync/SyncErrorDiagnostic';
 
 const installLocalStorage = (initial: Record<string, string> = {}) => {
@@ -46,5 +47,26 @@ test('discards a persisted native connection diagnostic when the terminal is alr
       errorMessage: 'Failed to connect to clic-erp.vercel.app/64.29.17.3:443',
     } as any),
     true,
+  );
+});
+
+test('detects a rejected sync token as a possible terminal authorization loss', () => {
+  assert.equal(
+    isTerminalAuthorizationLossDiagnostic({
+      httpStatus: 401,
+      responseBody: JSON.stringify({ code: 'SYNC_TOKEN_INVALID', message: 'Invalid or missing sync token' }),
+      errorMessage: 'SYNC_TOKEN_REJECTED: El ERP rechazó el token de sincronización.',
+      backendCode: null,
+    }),
+    true,
+  );
+  assert.equal(
+    isTerminalAuthorizationLossDiagnostic({
+      httpStatus: 500,
+      responseBody: 'Internal Server Error',
+      errorMessage: 'Metadata failed',
+      backendCode: null,
+    }),
+    false,
   );
 });

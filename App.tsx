@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { Layout } from 'lucide-react';
+import { Layout, LockKeyhole, Monitor, RefreshCw } from 'lucide-react';
 import {
   User,
   RoleDefinition,
@@ -124,6 +124,12 @@ const RouteLoadingFallback: React.FC = () => (
   </div>
 );
 
+type TerminalAuthorizationBlock = {
+  terminalId?: string | null;
+  terminalLabel: string;
+  message: string;
+};
+
 
 import { seriesSyncService } from './services/sync/SeriesSyncService';
 import { permissionService } from './services/sync/PermissionService';
@@ -167,6 +173,7 @@ import {
   CATALOG_SYNC_STATUS_KEY,
   isRecoverableNetworkConnectivityMessage,
   isRecoverableStaleSyncDiagnostic,
+  isTerminalAuthorizationLossDiagnostic,
   reportSyncErrorDiagnostic,
   setCatalogDiagnosticStatus,
   setSalesPushDiagnosticStatus,
@@ -1605,6 +1612,8 @@ const AppContent: React.FC = () => {
   const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [licenseError, setLicenseError] = useState<string | null>(null);
+  const [terminalAuthorizationBlock, setTerminalAuthorizationBlock] = useState<TerminalAuthorizationBlock | null>(null);
+  const terminalAuthorizationCheckInFlightRef = useRef(false);
   const inactivityTimerRef = useRef<number | null>(null);
   const inactivityIntervalRef = useRef<number | null>(null);
   const lastUserActivityAtRef = useRef<number>(Date.now());
@@ -1938,12 +1947,32 @@ const AppContent: React.FC = () => {
     }
   }, []);
 
-  const triggerLockdown = React.useCallback((message: string) => {
+  const resolveBlockedTerminalLabel = React.useCallback((candidateTerminalId?: string | null) => {
+    const normalizedId = String(candidateTerminalId || '').trim();
+    const matchedTerminal = (config.terminals || []).find((terminal) => {
+      const ids = [terminal.id, terminal.config?.erpTerminalId].map((value) => String(value || '').trim());
+      return normalizedId ? ids.includes(normalizedId) : false;
+    });
+    const candidates = [
+      matchedTerminal?.config?.stationNumber,
+      matchedTerminal?.config?.terminalName,
+      localStorage.getItem('clic_erp_sync_terminal_code'),
+      localStorage.getItem('clic_erp_sync_terminal_name'),
+      normalizedId,
+    ].map((value) => String(value || '').trim()).filter(Boolean);
+    const readable = candidates.find((value) => !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(value));
+    return readable || 'Caja vinculada';
+  }, [config.terminals]);
+
+  const triggerLockdown = React.useCallback((message: string, terminalBlock?: TerminalAuthorizationBlock | null) => {
     if (lockdownHandledRef.current) return;
     lockdownHandledRef.current = true;
+    setTerminalAuthorizationBlock(terminalBlock || null);
     setLicenseError(message);
     setIsDataLoaded(true);
     setIsSecurityLoaded(true);
+    clearSyncErrorDiagnostic();
+    setSyncDiagnostic(null);
     clearActiveUserSession();
     setCurrentUser(null);
     Object.keys(localStorage)
@@ -2076,11 +2105,19 @@ const AppContent: React.FC = () => {
     }
   }, [deviceId]);
 
-  const triggerLockdownAfterAuthorizationCheck = React.useCallback(async (message: string, candidateDeviceId?: string | null) => {
+  const triggerLockdownAfterAuthorizationCheck = React.useCallback(async (
+    message: string,
+    candidateDeviceId?: string | null,
+    options?: { terminalId?: string | null; preserveDiagnosticWhenAuthorized?: boolean },
+  ) => {
     if (await verifyErpDeviceStillAuthorized(candidateDeviceId)) {
       lockdownHandledRef.current = false;
       setLicenseError(null);
-      clearSyncErrorDiagnostic();
+      setTerminalAuthorizationBlock(null);
+      if (!options?.preserveDiagnosticWhenAuthorized) {
+        clearSyncErrorDiagnostic();
+        setSyncDiagnostic(null);
+      }
       setTerminalBindingDiagnosticStatus('BOUND');
       setCatalogDiagnosticStatus('SYNCED');
       setSalesPushDiagnosticStatus('ENABLED');
@@ -2091,19 +2128,41 @@ const AppContent: React.FC = () => {
       localStorage.removeItem('clic_sync_last_reauth_attempt_at');
       return;
     }
-    triggerLockdown(message);
-  }, [triggerLockdown, verifyErpDeviceStillAuthorized]);
+    const terminalLabel = resolveBlockedTerminalLabel(options?.terminalId);
+    triggerLockdown(message, {
+      terminalId: options?.terminalId || null,
+      terminalLabel,
+      message: `La caja ${terminalLabel} está activa en otro equipo. Por seguridad, este dispositivo no puede ingresar ni sincronizar hasta que la caja sea reautorizada.`,
+    });
+  }, [resolveBlockedTerminalLabel, triggerLockdown, verifyErpDeviceStillAuthorized]);
 
   useEffect(() => {
     const handleDeviceRevoked = (event: Event) => {
       const detail = (event as CustomEvent<DeviceRevocationDetail>).detail;
-      const revokedDeviceId = (detail as any)?.newDeviceId || (detail as any)?.deviceId || deviceId;
-      void triggerLockdownAfterAuthorizationCheck(detail?.message || DEVICE_SUPERSEDED_MESSAGE, revokedDeviceId);
+      const revokedDeviceId = detail?.previousDeviceId || (detail as any)?.deviceId || deviceId;
+      void triggerLockdownAfterAuthorizationCheck(
+        detail?.message || DEVICE_SUPERSEDED_MESSAGE,
+        revokedDeviceId,
+        { terminalId: detail?.terminalId || null },
+      );
     };
 
     window.addEventListener(DEVICE_REVOKED_EVENT, handleDeviceRevoked as EventListener);
     return () => window.removeEventListener(DEVICE_REVOKED_EVENT, handleDeviceRevoked as EventListener);
   }, [deviceId, triggerLockdownAfterAuthorizationCheck]);
+
+  useEffect(() => {
+    if (!isTerminalAuthorizationLossDiagnostic(syncDiagnostic) || terminalAuthorizationCheckInFlightRef.current) return;
+    terminalAuthorizationCheckInFlightRef.current = true;
+    const affectedTerminalId = syncDiagnostic?.resolvedTarget?.terminalId || syncDiagnostic?.terminalId || null;
+    void triggerLockdownAfterAuthorizationCheck(
+      DEVICE_SUPERSEDED_MESSAGE,
+      deviceId,
+      { terminalId: affectedTerminalId, preserveDiagnosticWhenAuthorized: true },
+    ).finally(() => {
+      terminalAuthorizationCheckInFlightRef.current = false;
+    });
+  }, [deviceId, syncDiagnostic, triggerLockdownAfterAuthorizationCheck]);
 
   // --- REALTIME KILL SWITCH (FALLBACK: SMART POLLING) ---
   useEffect(() => {
@@ -8010,6 +8069,60 @@ const AppContent: React.FC = () => {
   };
 
   // --- VIEW RENDERING LOGIC ---
+  if (terminalAuthorizationBlock) {
+    return (
+      <div className="fixed inset-0 z-[200000] flex items-center justify-center overflow-y-auto bg-slate-950/70 p-4 backdrop-blur-md">
+        <section
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="terminal-occupied-title"
+          className="w-full max-w-xl overflow-hidden rounded-[2rem] border border-white/70 bg-white shadow-[0_32px_100px_rgba(15,23,42,0.45)]"
+        >
+          <div className="border-b border-amber-100 bg-amber-50 px-6 py-6 sm:px-8">
+            <div className="flex items-start gap-4">
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-amber-500 text-white shadow-lg shadow-amber-200">
+                <LockKeyhole size={28} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[11px] font-black uppercase tracking-[0.24em] text-amber-700">Acceso protegido</p>
+                <h1 id="terminal-occupied-title" className="mt-1 text-2xl font-black text-slate-950 sm:text-3xl">
+                  Terminal ocupada en otro equipo
+                </h1>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-5 px-6 py-6 sm:px-8 sm:py-7">
+            <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+              <Monitor size={22} className="shrink-0 text-blue-600" />
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Caja vinculada</p>
+                <p className="truncate text-xl font-black text-slate-900">{terminalAuthorizationBlock.terminalLabel}</p>
+              </div>
+            </div>
+
+            <p className="text-base font-semibold leading-relaxed text-slate-600">
+              {terminalAuthorizationBlock.message}
+            </p>
+
+            <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-4 text-sm font-semibold leading-relaxed text-blue-900">
+              Use el equipo que ya tiene esta caja, seleccione otra terminal disponible o reautorice este dispositivo desde Cloud-Admin. Esta pantalla no permitirá entrar al POS mientras la caja continúe ocupada.
+            </div>
+
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-4 text-sm font-black uppercase tracking-[0.12em] text-white shadow-xl transition active:scale-[0.98]"
+            >
+              <RefreshCw size={18} />
+              Reintentar autorización
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   if (licenseError) {
     return (
       <div className="h-screen w-screen bg-red-50 flex flex-col items-center justify-center p-6 text-center">

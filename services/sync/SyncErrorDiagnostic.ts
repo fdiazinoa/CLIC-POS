@@ -334,6 +334,23 @@ export const isRecoverableStaleSyncDiagnostic = (
     return false;
 };
 
+export const isTerminalAuthorizationLossDiagnostic = (
+    diagnostic: Pick<SyncErrorDiagnostic, 'backendCode' | 'httpStatus' | 'responseBody' | 'errorMessage'> | null | undefined,
+): boolean => {
+    if (!diagnostic) return false;
+    const httpStatus = Number(diagnostic.httpStatus);
+    const details = [
+        diagnostic.backendCode,
+        diagnostic.responseBody,
+        diagnostic.errorMessage,
+    ].map((value) => String(value || '').toUpperCase()).join(' ');
+
+    return (
+        (httpStatus === 401 && /SYNC_TOKEN_(?:INVALID|REJECTED)|INVALID OR MISSING SYNC TOKEN/.test(details))
+        || (httpStatus === 403 && /DEVICE_SUPERSEDED|TAKEOVER_REQUIRED|DEVICE_NOT_AUTHORIZED/.test(details))
+    );
+};
+
 export const clearStaleSyncErrorDiagnosticIfRecovered = (): boolean => {
     try {
         const stored = safeLocalStorageGet(SYNC_DIAGNOSTIC_STORAGE_KEY);
