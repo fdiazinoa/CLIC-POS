@@ -1784,7 +1784,10 @@ export const applyTerminalConfigSnapshot = (
   const taxes = resolvedTaxes
     .map((item, index) => normalizeTax(item, index))
     .filter(Boolean) as TaxDefinition[];
+  const snapshotTerminalConfig = asObject(asObject(effectiveSnapshot).terminal).config;
   const remoteCurrencySources = [
+    asObject(snapshotTerminalConfig),
+    resolvedTerminalConfig,
     resolvedIdentity,
     asObject(effectiveResolved),
     resolvedTerminal,

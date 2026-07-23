@@ -232,6 +232,66 @@ test('applies and persists USD from CONFIG_PUSH_V2 while keeping DOP enabled', a
     assert.ok(diagnostics.appliedAt);
 });
 
+test('applies DOP, EUR and USD from terminal.config when resolved data is present', async () => {
+    const { localTerminalId } = resetHarness();
+    const { result, acks } = await runEvent({
+        id: 'terminal-multicurrency-list',
+        scopes: ['terminal_config'],
+        versions: { terminal_config: 8 },
+        domains: {
+            terminal_config: {
+                currency_code: 'DOP',
+                terminal: {
+                    terminal_id: terminalId,
+                    config: {
+                        currency_code: 'DOP',
+                        allowed_currency_codes: ['DOP', 'EUR', 'USD'],
+                        currencies: {
+                            default: 'DOP',
+                            base: 'DOP',
+                            list: [
+                                { code: 'DOP', name: 'Peso Dominicano', symbol: 'RD$', exchange_rate: 1, is_base: true, enabled: true },
+                                { code: 'EUR', name: 'Euro', symbol: '€', exchange_rate: 70, is_base: false, enabled: true },
+                                { code: 'USD', name: 'Dólar Estadounidense', symbol: '$', exchange_rate: 60, is_base: false, enabled: true },
+                            ],
+                        },
+                    },
+                },
+                resolved: {
+                    pricing: {
+                        tariffs: [],
+                    },
+                },
+            },
+        },
+    });
+
+    assert.equal(result?.applied, 1);
+    assert.equal(acks[0].status, 'APPLIED');
+
+    const persisted = clone(collections.get('config')) as any;
+    const persistedTerminal = persisted.terminals.find((terminal: any) => terminal.id === localTerminalId);
+    assert.deepEqual(
+        persisted.currencies.map((currency: any) => currency.code),
+        ['DOP', 'EUR', 'USD']
+    );
+    assert.equal(persisted.currencies.find((currency: any) => currency.code === 'DOP')?.isBase, true);
+    assert.equal(persisted.currencies.find((currency: any) => currency.code === 'EUR')?.rate, 70);
+    assert.equal(persisted.currencies.find((currency: any) => currency.code === 'USD')?.rate, 60);
+    assert.deepEqual(persistedTerminal.config.allowedCurrencyCodes, ['DOP', 'EUR', 'USD']);
+    assert.deepEqual(persistedTerminal.config.financial.acceptedCurrencies, ['DOP', 'EUR', 'USD']);
+    assert.deepEqual(
+        persistedTerminal.config.currencies.list.map((currency: any) => currency.code),
+        ['DOP', 'EUR', 'USD']
+    );
+
+    const configReloadedAfterRestart = clone(collections.get('config')) as any;
+    assert.deepEqual(
+        configReloadedAfterRestart.currencies.map((currency: any) => currency.code),
+        ['DOP', 'EUR', 'USD']
+    );
+});
+
 test('applies RETAIL to RESTAURANT terminal_config, persists it and refreshes runtime state', async () => {
     const { localTerminalId } = resetHarness();
     const { result, acks } = await runEvent({
