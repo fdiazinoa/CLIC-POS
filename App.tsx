@@ -1970,6 +1970,7 @@ const AppContent: React.FC = () => {
   const triggerLockdown = React.useCallback((message: string, terminalBlock?: TerminalAuthorizationBlock | null) => {
     if (lockdownHandledRef.current) return;
     lockdownHandledRef.current = true;
+    syncManager.stopAutoSync();
     setTerminalAuthorizationBlock(terminalBlock || null);
     setLicenseError(message);
     setIsDataLoaded(true);

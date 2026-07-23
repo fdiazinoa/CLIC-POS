@@ -79,3 +79,30 @@ test('detects a rejected sync token as a possible terminal authorization loss', 
     false,
   );
 });
+
+test('detects an invalid device token before showing a technical sync diagnostic', () => {
+  assert.equal(
+    isTerminalAuthorizationLossDiagnostic({
+      httpStatus: 401,
+      responseBody: JSON.stringify({
+        code: 'DEVICE_TOKEN_INVALID',
+        nextAction: 'ROTATE_DEVICE_TOKEN_OR_REBIND',
+      }),
+      errorMessage: 'DEVICE_TOKEN_INVALID: El token de esta terminal no coincide con el registrado en el ERP.',
+      backendCode: 'DEVICE_TOKEN_INVALID',
+    }),
+    true,
+  );
+});
+
+test('keeps device-not-authorized classified after a background retry loses the HTTP status', () => {
+  assert.equal(
+    isTerminalAuthorizationLossDiagnostic({
+      httpStatus: null,
+      responseBody: null,
+      errorMessage: 'DEVICE_NOT_AUTHORIZED: Esta Caja esta vinculada, pero este equipo no esta autorizado.',
+      backendCode: 'DEVICE_NOT_AUTHORIZED',
+    }),
+    true,
+  );
+});

@@ -338,7 +338,6 @@ export const isTerminalAuthorizationLossDiagnostic = (
     diagnostic: Pick<SyncErrorDiagnostic, 'backendCode' | 'httpStatus' | 'responseBody' | 'errorMessage'> | null | undefined,
 ): boolean => {
     if (!diagnostic) return false;
-    const httpStatus = Number(diagnostic.httpStatus);
     const details = [
         diagnostic.backendCode,
         diagnostic.responseBody,
@@ -346,9 +345,11 @@ export const isTerminalAuthorizationLossDiagnostic = (
     ].map((value) => String(value || '').toUpperCase()).join(' ');
 
     const syncTokenWasRejected = /SYNC_TOKEN_(?:INVALID|REJECTED)|INVALID OR MISSING SYNC TOKEN/.test(details);
-    const deviceAuthorizationWasRejected = /DEVICE_SUPERSEDED|TAKEOVER_REQUIRED|DEVICE_NOT_AUTHORIZED/.test(details);
+    const deviceAuthorizationWasRejected = /DEVICE_TOKEN_INVALID|DEVICE_SUPERSEDED|TAKEOVER_REQUIRED|DEVICE_NOT_AUTHORIZED|BOUND_AUTH_MISMATCH|WAITING_CLOUD_ADMIN_REAUTHORIZATION/.test(details);
 
-    return syncTokenWasRejected || (httpStatus === 403 && deviceAuthorizationWasRejected);
+    // Background retries can lose the original HTTP status after the ERP error
+    // has been normalized. The backend code remains authoritative.
+    return syncTokenWasRejected || deviceAuthorizationWasRejected;
 };
 
 export const clearStaleSyncErrorDiagnosticIfRecovered = (): boolean => {
