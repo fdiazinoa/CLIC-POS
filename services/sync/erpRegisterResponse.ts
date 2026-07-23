@@ -34,6 +34,8 @@ const pickAuthString = (...values: unknown[]): string | undefined => {
 const asObject = (value: unknown): Record<string, any> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const flattenRegisterRecords = (...sources: unknown[]): Record<string, any>[] => {
     return sources
         .map(asObject)
@@ -51,10 +53,13 @@ const flattenRegisterRecords = (...sources: unknown[]): Record<string, any>[] =>
             asObject(record.incoming_profile),
             asObject(record.terminal),
             asObject(asObject(record.terminal).auth),
+            asObject(asObject(record.terminal).config),
             asObject(record.terminal_config),
+            asObject(asObject(record.terminal_config).config),
             asObject(asObject(record.terminal_config).auth),
             asObject(asObject(record.terminal_config).metadata),
             asObject(asObject(asObject(record.terminal_config).metadata).syncAuth),
+            asObject(record.config),
             asObject(record.metadata),
             asObject(asObject(record.metadata).syncAuth),
             asObject(record.session),
@@ -154,6 +159,25 @@ export const resolveRegisterErpTerminalId = (...sources: unknown[]): string | un
     );
 };
 
+export const resolveRegisterTerminalCode = (...sources: unknown[]): string | undefined => {
+    const records = flattenRegisterRecords(...sources);
+    const candidates = records.flatMap((record) => [
+        record.terminalCode,
+        record.terminal_code,
+        record.stationNumber,
+        record.station_number,
+        record.posCode,
+        record.pos_code,
+        record.code,
+        record.localTerminalId,
+        record.local_terminal_id,
+    ]);
+
+    return candidates
+        .map((candidate) => pickAuthString(candidate))
+        .find((candidate): candidate is string => Boolean(candidate && !UUID_PATTERN.test(candidate)));
+};
+
 export const resolveIncomingSyncProfileFromRegister = (
     response: unknown,
     fallbacks: Partial<SyncProfile> = {},
@@ -182,8 +206,9 @@ export const resolveIncomingSyncProfileFromRegister = (
         asObject(profileCandidate).erp_terminal_id,
     );
     merged.localTerminalId = pickAuthString(
-        merged.localTerminalId,
+        resolveRegisterTerminalCode(response, fallbacks),
         fallbacks.localTerminalId,
+        merged.localTerminalId,
         root.name,
         asObject(root.terminal).name,
     );

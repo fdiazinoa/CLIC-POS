@@ -29,6 +29,7 @@ export interface RuntimeBindTerminalResponse {
   tenant_id: string;
   terminal_id: string;
   erp_terminal_id: string;
+  terminal_code?: string | null;
   terminal_name?: string | null;
   company_id?: string | null;
   store_id?: string | null;
@@ -1498,7 +1499,7 @@ export const bindTerminalFromErp = async (input: {
     registerPayload,
     {
       erpTerminalId: targetErpTerminalId,
-      localTerminalId: targetTerminalId,
+      localTerminalId: targetTerminalCode,
       localTenantId: resolvedContext.tenantId || undefined,
       localStoreId: asString(targetTerminal.store_id) || resolvedContext.storeId || undefined,
       erpBaseUrl: input.erpBaseUrl,
@@ -1512,6 +1513,7 @@ export const bindTerminalFromErp = async (input: {
     tenant_id: resolvedContext.tenantId,
     terminal_id: targetTerminalId,
     erp_terminal_id: targetErpTerminalId,
+    terminal_code: targetTerminalCode,
     terminal_name: targetTerminalName,
     company_id: asString(targetTerminal.company_id) || resolvedContext.companyId || null,
     store_id: asString(targetTerminal.store_id) || resolvedContext.storeId || null,

@@ -22,7 +22,11 @@ import {
   type RuntimeTerminalRecoveryState,
 } from '../services/setup/erpTerminalSetup';
 import { persistSyncDeviceToken } from '../services/sync/deviceToken';
-import { extractErpRegisterAuth, resolveNormalizedRegisterDeviceToken } from '../services/sync/erpRegisterResponse';
+import {
+  extractErpRegisterAuth,
+  resolveNormalizedRegisterDeviceToken,
+  resolveRegisterTerminalCode,
+} from '../services/sync/erpRegisterResponse';
 import { saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
 import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../services/sync/SyncProfile';
 
@@ -59,6 +63,7 @@ interface BindTerminalResponse {
   tenant_id: string;
   terminal_id: string;
   erp_terminal_id?: string | null;
+  terminal_code?: string | null;
   terminal_name?: string | null;
   company_id?: string | null;
   store_id?: string | null;
@@ -105,6 +110,7 @@ interface InitialConfigResponse {
   tenant_id?: string;
   terminal_id?: string;
   erp_terminal_id?: string;
+  terminal_code?: string;
   config?: BusinessConfig;
   items?: Product[];
   rooms?: any[];
@@ -1313,6 +1319,18 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           || terminal.erpTerminalId
           || (looksLikeUuid(terminal.id) ? terminal.id : undefined)
           || undefined;
+        const resolvedTerminalCode =
+          resolveRegisterTerminalCode(
+            data,
+            initialConfigData,
+            initialConfigData.terminal_config,
+            terminal,
+            terminal.config,
+          )
+          || terminal.name
+          || data.terminal_name
+          || resolvedErpTerminalId
+          || terminal.id;
         const resolvedTerminalId =
           resolvedErpTerminalId
           || data.terminal_id
@@ -1323,7 +1341,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             bindingMode,
             expectsErpDirect,
             erpBaseUrl,
-            terminalId: resolvedTerminalId,
+            terminalId: resolvedTerminalCode,
             erpTerminalId: resolvedErpTerminalId,
             tenantId: initialConfigData.tenant_id || data.tenant_id || tenantId,
             storeId: data.store_id || undefined,
@@ -1331,6 +1349,8 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             initialConfigData,
           }),
           ...(data.syncProfile || data.sync_profile || data.incomingProfile || data.incoming_profile || data.profile || {}),
+          localTerminalId: resolvedTerminalCode,
+          erpTerminalId: resolvedErpTerminalId,
         };
         const syncPermissions =
           data.syncPermissions ||
@@ -1381,6 +1401,8 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         saveTerminalCredentialsSync({
           terminalId: canonicalTerminalId,
           erpTerminalId: canonicalTerminalId,
+          terminalCode: resolvedTerminalCode,
+          terminalName: data.terminal_name || terminal.name || resolvedTerminalCode,
           deviceId,
           tenantId: tenantId || initialTenantId || null,
           erpTenantId: tenantId || initialTenantId || null,
