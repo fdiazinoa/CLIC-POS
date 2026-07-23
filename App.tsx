@@ -223,6 +223,7 @@ import {
   resolveIncomingSyncProfileFromRegister,
   resolveNormalizedRegisterDeviceToken,
   resolveRegisterErpTerminalId,
+  resolveRegisterTerminalCode,
 } from './services/sync/erpRegisterResponse';
 import { readTerminalCredentials, saveTerminalCredentialsSync } from './services/sync/TerminalCredentialStore';
 import { normalizeErpBaseUrl, resolveErpBaseUrl } from './utils/erpBaseUrl';
@@ -5578,6 +5579,7 @@ const AppContent: React.FC = () => {
     pairingContext?: string | {
       tenantId?: string;
       erpTerminalId?: string;
+      terminalCode?: string;
       erpBaseUrl?: string;
       terminalName?: string;
       companyId?: string;
@@ -5626,6 +5628,15 @@ const AppContent: React.FC = () => {
     const previousCatalogDiagnosticStatus = localStorage.getItem(CATALOG_SYNC_STATUS_KEY);
     try {
       const setupResult = typeof pairingContext === 'object' && pairingContext !== null ? pairingContext : undefined;
+      const resolvedOperationalTerminalId =
+        resolveRegisterTerminalCode(
+          { terminalCode: setupResult?.terminalCode },
+          setupResult,
+          setupResult?.syncProfile,
+          setupResult?.incomingProfile,
+          setupResult?.profile,
+        )
+        || terminalId;
       const resolvedMasterIp = typeof pairingContext === 'string' ? pairingContext : setupResult?.masterIp;
       const previouslyAssignedTerminal = (config.terminals || []).find(t => t.id === terminalId);
       const normalizedResolvedMasterIp = normalizeMasterHost(resolvedMasterIp || '');
@@ -5680,6 +5691,8 @@ const AppContent: React.FC = () => {
         saveTerminalCredentialsSync({
           terminalId: setupResult?.erpTerminalId || terminalId,
           erpTerminalId: setupResult?.erpTerminalId || terminalId,
+          terminalCode: resolvedOperationalTerminalId,
+          terminalName: setupResult?.terminalName || resolvedOperationalTerminalId,
           deviceId,
           tenantId: localStorage.getItem('clic_tenant_id') || localStorage.getItem('active_tenant_id') || null,
           erpTenantId: localStorage.getItem('clic_tenant_id') || localStorage.getItem('active_tenant_id') || null,
@@ -5750,7 +5763,7 @@ const AppContent: React.FC = () => {
       const updatedConfig = clearDuplicateDeviceAssignments(configWithAuthMetadata, deviceId, {
         activeTerminalId: terminalId,
         bindingTerminalId: setupResult?.erpTerminalId || terminalId,
-        bindingLocalTerminalId: terminalId,
+        bindingLocalTerminalId: resolvedOperationalTerminalId,
       }).config;
       const selectedTerminal = (updatedConfig.terminals || []).find(t => t.id === terminalId);
       const resolvedTerminalName =
@@ -5877,7 +5890,7 @@ const AppContent: React.FC = () => {
           erpUiEnabled: isErpDirectBinding,
           localTenantId: resolvedTenantId,
           localStoreId: setupResult?.storeId || setupResult?.syncProfile?.localStoreId,
-          localTerminalId: terminalId,
+          localTerminalId: resolvedOperationalTerminalId,
           cloudBaseUrl: resolvedErpBaseUrl || setupResult?.syncProfile?.cloudBaseUrl,
           erpBaseUrl: resolvedErpBaseUrl || setupResult?.syncProfile?.erpBaseUrl,
           cloudTenantId: setupResult?.syncProfile?.cloudTenantId || localStorage.getItem('clic_cloud_tenant_id') || localStorage.getItem('active_tenant_id') || resolvedTenantId,
@@ -5893,7 +5906,7 @@ const AppContent: React.FC = () => {
       );
       syncProfilePersistence = saveSyncProfileFromContract(incomingSyncProfile, contractSource, {
         erpTerminalId: resolvedErpTerminalId,
-        localTerminalId: terminalId,
+        localTerminalId: resolvedOperationalTerminalId,
         terminalName:
           setupResult?.terminalName
           || incomingSyncProfile.localTerminalId
@@ -5958,7 +5971,7 @@ const AppContent: React.FC = () => {
 
       void publishMasterEndpointToCloud({
         deviceId,
-        terminalId,
+        terminalId: resolvedOperationalTerminalId,
         terminalName: resolvedTerminalName,
         isPrimary: !isSlave,
       });
@@ -5966,7 +5979,7 @@ const AppContent: React.FC = () => {
       persistStoredErpSyncBinding({
         tenantId: setupResult?.tenantId || localStorage.getItem('active_tenant_id') || null,
         terminalId: resolvedErpTerminalId,
-        localTerminalId: terminalId,
+        localTerminalId: resolvedOperationalTerminalId,
         terminalName: resolvedTerminalName,
         companyId: setupResult?.companyId || null,
         storeId: setupResult?.storeId || null,
@@ -6050,6 +6063,32 @@ const AppContent: React.FC = () => {
       });
       permissionService.initialize(updatedConfig, terminalId);
       await syncManager.initialize(updatedConfig, terminalId);
+      if (isErpDirectBinding && navigator.onLine) {
+        try {
+          setupResult.progress?.({
+            stepId: 'sync',
+            message: 'Confirmando terminal online y aplicando configuración pendiente...',
+          });
+          const lifecycleResult = await ensureErpSyncLifecycle({
+            deviceId,
+            terminalId: resolvedErpTerminalId,
+            localTerminalId: resolvedOperationalTerminalId,
+            terminalName: resolvedTerminalName,
+            companyId: setupResult?.companyId || null,
+            storeId: setupResult?.storeId || null,
+            isPrimary: !isSlave,
+            pendingEvents: 0,
+          });
+          console.info('[ERP SYNC] initial terminal lifecycle completed.', {
+            terminalId: resolvedErpTerminalId,
+            localTerminalId: resolvedOperationalTerminalId,
+            heartbeatStatus: lifecycleResult?.heartbeat?.terminal?.status || null,
+            outboxApplied: lifecycleResult?.outbox?.applied || 0,
+          });
+        } catch (lifecycleError) {
+          console.warn('[ERP SYNC] initial heartbeat/outbox failed; background lifecycle will retry.', lifecycleError);
+        }
+      }
       const shouldFullPullOnPairing = setupResult?.snapshotMeta?.fullPullOnPairing ?? true;
       if (shouldFullPullOnPairing) {
         setupResult.progress?.({
@@ -6198,7 +6237,7 @@ const AppContent: React.FC = () => {
       persistStoredErpSyncBinding({
         tenantId: setupResult?.tenantId || localStorage.getItem('active_tenant_id') || null,
         terminalId: resolvedErpTerminalId,
-        localTerminalId: terminalId,
+        localTerminalId: resolvedOperationalTerminalId,
         terminalName: resolvedTerminalName,
         companyId: setupResult?.companyId || null,
         storeId: setupResult?.storeId || null,

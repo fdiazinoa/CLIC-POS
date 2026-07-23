@@ -156,6 +156,7 @@ interface InitialConfigResponse {
 interface BoundTerminalPayload {
   terminalId: string;
   erpTerminalId?: string;
+  terminalCode?: string;
   erpBaseUrl?: string;
   terminalName?: string;
   tenantId: string;
@@ -1430,6 +1431,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         await onBound({
           terminalId: resolvedTerminalId,
           erpTerminalId: resolvedErpTerminalId,
+          terminalCode: resolvedTerminalCode,
           erpBaseUrl: erpBaseUrl || undefined,
           terminalName: data.terminal_name || terminal.name || data.terminal_id || terminal.id,
           tenantId: initialConfigData.tenant_id || data.tenant_id || tenantId,
