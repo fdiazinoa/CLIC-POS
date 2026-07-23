@@ -9,7 +9,7 @@ import { db } from '../utils/db';
 import { loadSyncProfile, resolveSyncTarget, SyncProfile, ResolvedSyncTarget } from '../services/sync/SyncProfile';
 import { posCloudStagingService } from '../services/sync/PosCloudStagingService';
 import { resetDeviceIdentityBySupport } from '../utils/deviceRevocation';
-import { triggerErpSyncOutbox } from '../utils/erpSyncLifecycle';
+import { getConfigPushV2Diagnostics, triggerErpSyncOutbox } from '../utils/erpSyncLifecycle';
 
 interface SyncSettingsProps {
     config: BusinessConfig;
@@ -43,6 +43,18 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const [syncTarget, setSyncTarget] = useState<ResolvedSyncTarget>(() => resolveSyncTarget());
     const [diagnosticCounts, setDiagnosticCounts] = useState<Record<string, number>>({});
     const [isSendingSnapshot, setIsSendingSnapshot] = useState(false);
+    const [configPushDiagnostics, setConfigPushDiagnostics] = useState<{
+        baseCurrency: string;
+        enabledCurrencies: string[];
+        versionHash: string | null;
+        configVersion: number;
+        appliedAt: string | null;
+    } | null>(null);
+    const [isRetryingConfigPush, setIsRetryingConfigPush] = useState(false);
+    const [configPushRetryResult, setConfigPushRetryResult] = useState<{
+        type: 'success' | 'error';
+        message: string;
+    } | null>(null);
 
     const resolveDocumentStatus = (raw: any): 'SYNCED' | 'PENDING' | 'ERROR' => {
         const status = String(raw?.syncStatus || raw?.cloudSyncStatus || '').toUpperCase();
@@ -126,6 +138,26 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
             const target = resolveSyncTarget(profile);
             setSyncProfile(profile);
             setSyncTarget(target);
+            const persistedValue = await db.get('config');
+            const persistedConfig = persistedValue && !Array.isArray(persistedValue)
+                ? persistedValue as unknown as BusinessConfig
+                : null;
+            const effectiveConfig = persistedConfig || config;
+            const enabledCurrencies = (effectiveConfig.currencies || [])
+                .filter((currency) => currency.isEnabled)
+                .map((currency) => currency.code);
+            const baseCurrency = (effectiveConfig.currencies || [])
+                .find((currency) => currency.isBase)?.code
+                || enabledCurrencies[0]
+                || 'DOP';
+            const configPushState = getConfigPushV2Diagnostics();
+            setConfigPushDiagnostics({
+                baseCurrency,
+                enabledCurrencies,
+                versionHash: configPushState.versionHash,
+                configVersion: Number(configPushState.domainVersions.config || 0),
+                appliedAt: configPushState.appliedAt,
+            });
 
             // Get connection status
             const connStatus = syncManager.getSyncConnectionStatus();
@@ -449,6 +481,34 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
             alert('❌ Error durante la sincronización: ' + (error instanceof Error ? error.message : 'Error desconocido'));
         } finally {
             setIsSyncing(false);
+        }
+    };
+
+    const handleRetryConfigPush = async () => {
+        setIsRetryingConfigPush(true);
+        setConfigPushRetryResult(null);
+        try {
+            const result = await triggerErpSyncOutbox('manual_sync');
+            await loadStatus();
+            if (!result) {
+                throw new Error('La terminal no tiene una identidad ERP activa para consultar configuración.');
+            }
+            if (result.failed > 0) {
+                throw new Error(`${result.failed} evento(s) de configuración terminaron con error.`);
+            }
+            setConfigPushRetryResult({
+                type: 'success',
+                message: result.applied > 0
+                    ? `Configuración aplicada correctamente (${result.applied} evento(s)).`
+                    : 'Sin cambios pendientes. La configuración local ya está actualizada.',
+            });
+        } catch (error) {
+            setConfigPushRetryResult({
+                type: 'error',
+                message: error instanceof Error ? error.message : 'No se pudo sincronizar la configuración.',
+            });
+        } finally {
+            setIsRetryingConfigPush(false);
         }
     };
 
@@ -951,6 +1011,59 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                             </div>
                                         ))}
                                     </div>
+                                </div>
+
+                                <div className="rounded-2xl border border-blue-200 bg-white p-5 shadow-sm">
+                                    <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                                        <div>
+                                            <h3 className="text-sm font-black uppercase tracking-widest text-slate-700">
+                                                Configuración recibida del ERP
+                                            </h3>
+                                            <p className="mt-1 text-sm font-semibold text-slate-500">
+                                                Estado local confirmado después del último CONFIG_PUSH_V2.
+                                            </p>
+                                        </div>
+                                        <button
+                                            onClick={handleRetryConfigPush}
+                                            disabled={isRetryingConfigPush}
+                                            className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            <RotateCcw size={15} className={isRetryingConfigPush ? 'animate-spin' : ''} />
+                                            Reintentar sincronización de configuración
+                                        </button>
+                                    </div>
+                                    <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                                        {[
+                                            ['Moneda base', configPushDiagnostics?.baseCurrency || 'N/D'],
+                                            ['Monedas habilitadas', configPushDiagnostics?.enabledCurrencies.join(', ') || 'N/D'],
+                                            ['Versión terminal_config', configPushDiagnostics?.configVersion || 'N/D'],
+                                            ['Última aplicación', configPushDiagnostics?.appliedAt
+                                                ? new Date(configPushDiagnostics.appliedAt).toLocaleString()
+                                                : 'N/D'],
+                                        ].map(([label, value]) => (
+                                            <div key={label} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                                                <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">{label}</div>
+                                                <div className="mt-1 break-words text-sm font-black text-slate-800">{value}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                                        <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                                            Último hash CONFIG_PUSH_V2
+                                        </div>
+                                        <div className="mt-1 break-all font-mono text-xs font-bold text-slate-700">
+                                            {configPushDiagnostics?.versionHash || 'N/D'}
+                                        </div>
+                                    </div>
+                                    {configPushRetryResult && (
+                                        <div className={`mt-3 rounded-xl border px-4 py-3 text-sm font-bold ${
+                                            configPushRetryResult.type === 'success'
+                                                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                                                : 'border-red-200 bg-red-50 text-red-800'
+                                        }`}>
+                                            {configPushRetryResult.message}
+                                        </div>
+                                    )}
                                 </div>
 
                                 {isMaster && erpForwardStatus && (
