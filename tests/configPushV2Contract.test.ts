@@ -179,6 +179,57 @@ test('maps terminal_config to the existing terminal without replacing BusinessCo
     assert.equal(nextConfig.terminals.find((terminal: any) => terminal.id === localTerminalId).config.security.autoLogoutMinutes, 7);
 });
 
+test('applies and persists USD from CONFIG_PUSH_V2 while keeping DOP enabled', async () => {
+    const { localTerminalId } = resetHarness();
+    const { result, acks } = await runEvent({
+        id: 'usd-base-currency',
+        scopes: ['terminal_config'],
+        versions: { terminal_config: 7 },
+        domains: {
+            terminal_config: {
+                terminal: {
+                    terminal_id: terminalId,
+                    config: {
+                        currency_code: 'USD',
+                        currencies: {
+                            default: 'USD',
+                            base: 'USD',
+                            list: [
+                                { code: 'DOP', symbol: 'RD$', exchange_rate: 1, is_base: false, enabled: true },
+                                { code: 'USD', symbol: 'US$', exchange_rate: 59, is_base: true, enabled: true },
+                            ],
+                        },
+                    },
+                },
+                resolved: {},
+            },
+        },
+    });
+
+    assert.equal(result?.applied, 1);
+    assert.equal(acks[0].status, 'APPLIED');
+
+    const persisted = clone(collections.get('config')) as any;
+    assert.ok(persisted.terminals.find((terminal: any) => terminal.id === localTerminalId));
+    assert.equal(persisted.currencies.find((currency: any) => currency.code === 'USD')?.isBase, true);
+    assert.equal(persisted.currencies.find((currency: any) => currency.code === 'USD')?.isEnabled, true);
+    assert.equal(persisted.currencies.find((currency: any) => currency.code === 'DOP')?.isBase, false);
+    assert.equal(persisted.currencies.find((currency: any) => currency.code === 'DOP')?.isEnabled, true);
+    assert.equal(persisted.currencySymbol, 'US$');
+
+    const configEvent = dispatchedEvents.find((event) => event.type === 'configUpdated');
+    assert.deepEqual(configEvent?.detail, persisted);
+
+    const configReloadedAfterRestart = clone(collections.get('config')) as any;
+    assert.equal(configReloadedAfterRestart.currencies.find((currency: any) => currency.isBase)?.code, 'USD');
+    assert.equal(configReloadedAfterRestart.currencySymbol, 'US$');
+
+    const diagnostics = lifecycle.getConfigPushV2Diagnostics();
+    assert.equal(diagnostics.versionHash, 'hash-usd-base-currency');
+    assert.equal(diagnostics.domainVersions.config, 7);
+    assert.ok(diagnostics.appliedAt);
+});
+
 test('applies RETAIL to RESTAURANT terminal_config, persists it and refreshes runtime state', async () => {
     const { localTerminalId } = resetHarness();
     const { result, acks } = await runEvent({

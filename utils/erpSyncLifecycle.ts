@@ -109,6 +109,7 @@ type ConfigPushV2Payload = {
 type ConfigPushV2State = {
     versionHash: string | null;
     domainVersions: Record<string, number>;
+    appliedAt?: string | null;
     inFlight?: {
         eventId: string;
         snapshotId: string;
@@ -288,6 +289,7 @@ const readConfigPushV2State = (): ConfigPushV2State => {
         return {
             versionHash: normalizeOptional(parsed?.versionHash || null) || null,
             domainVersions,
+            appliedAt: normalizeOptional(parsed?.appliedAt || null) || null,
             inFlight: parsed?.inFlight && typeof parsed.inFlight === 'object' ? parsed.inFlight : null,
         };
     } catch {
@@ -299,8 +301,20 @@ const writeConfigPushV2State = (state: ConfigPushV2State) => {
     localStorage.setItem(CONFIG_PUSH_V2_STATE_KEY, JSON.stringify({
         versionHash: state.versionHash || null,
         domainVersions: state.domainVersions || {},
+        appliedAt: state.appliedAt || null,
         inFlight: state.inFlight || null,
     }));
+};
+
+export const getConfigPushV2Diagnostics = () => {
+    const state = readConfigPushV2State();
+    return {
+        enabled: isConfigPushV2Enabled(),
+        versionHash: state.versionHash,
+        domainVersions: { ...state.domainVersions },
+        appliedAt: state.appliedAt || null,
+        inFlight: state.inFlight ? { ...state.inFlight } : null,
+    };
 };
 
 const normalizeConfigPushV2Scope = (value: unknown): string | null => {
@@ -882,6 +896,7 @@ const processConfigPushV2Event = async (
                 ...(state.domainVersions || {}),
                 ...Object.fromEntries(scopes.map((scope) => [scope, Number(versions[scope] || 0)])),
             },
+            appliedAt: new Date().toISOString(),
             inFlight: readConfigPushV2State().inFlight,
         });
         await ackErpOutboxEvent(eventId, 'APPLIED');
@@ -1009,6 +1024,7 @@ const processConfigPushV2Event = async (
                     ...nextDomainVersions,
                     ...Object.fromEntries(scopes.map((scope) => [scope, Number(versions[scope] || nextDomainVersions[scope] || 0)])),
                 },
+                appliedAt: new Date().toISOString(),
                 inFlight: readConfigPushV2State().inFlight,
             });
             configPushV2Log('config_snapshot_version_persisted', {
