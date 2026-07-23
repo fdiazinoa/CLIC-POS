@@ -1804,9 +1804,13 @@ export const applyTerminalConfigSnapshot = (
   const remoteBaseCurrencyCode =
     resolveCurrencyCodeFromSources(remoteCurrencySources)
     || resolveBaseCurrencyFromExplicitList(remoteCurrencySources);
+  const fallbackBaseCurrencyCode =
+    resolveCurrencyCodeFromSources(fallbackCurrencySources)
+    || resolveBaseCurrencyFromExplicitList(fallbackCurrencySources);
   const shouldReplaceLocalCurrencies = Boolean(remoteBaseCurrencyCode || hasRemoteCurrencySignal(remoteCurrencySources));
   const incomingBaseCurrencyCode =
     remoteBaseCurrencyCode
+    || fallbackBaseCurrencyCode
     || (nextConfig.currencies || []).find((currency) => currency.isBase)?.code
     || (nextConfig.currencies || []).find((currency) => currency.isEnabled)?.code
     || nextConfig.currencies?.[0]?.code

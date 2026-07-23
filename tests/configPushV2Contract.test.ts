@@ -179,6 +179,33 @@ test('maps terminal_config to the existing terminal without replacing BusinessCo
     assert.equal(nextConfig.terminals.find((terminal: any) => terminal.id === localTerminalId).config.security.autoLogoutMinutes, 7);
 });
 
+test('applies USD configured by ERP as the terminal base currency', async () => {
+    const { localTerminalId } = resetHarness();
+    const writes = await lifecycle.buildConfigPushV2DomainWrites('config', {
+        terminal: {
+            terminal_id: terminalId,
+            config: {
+                currency_code: 'USD',
+                currencies: {
+                    default: 'USD',
+                    base: 'USD',
+                    list: [
+                        { code: 'DOP', symbol: 'RD$', exchange_rate: 1, is_base: false, enabled: true },
+                        { code: 'USD', symbol: 'US$', exchange_rate: 59, is_base: true, enabled: true },
+                    ],
+                },
+            },
+        },
+        resolved: {},
+    });
+
+    const nextConfig = writes.find((write) => write.collection === 'config')?.value as any;
+    assert.ok(nextConfig.terminals.find((terminal: any) => terminal.id === localTerminalId));
+    assert.equal(nextConfig.currencies.find((currency: any) => currency.code === 'USD')?.isBase, true);
+    assert.equal(nextConfig.currencies.find((currency: any) => currency.code === 'DOP')?.isBase, false);
+    assert.equal(nextConfig.currencySymbol, 'US$');
+});
+
 test('applies RETAIL to RESTAURANT terminal_config, persists it and refreshes runtime state', async () => {
     const { localTerminalId } = resetHarness();
     const { result, acks } = await runEvent({
