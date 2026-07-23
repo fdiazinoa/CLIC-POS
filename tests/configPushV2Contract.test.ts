@@ -61,7 +61,6 @@ const resetHarness = () => {
     localStorage.setItem('clic_erp_sync_terminal_id', terminalId);
     localStorage.setItem('clic_erp_sync_local_terminal_id', localTerminalId);
     localStorage.setItem('active_terminal_id', localTerminalId);
-    localStorage.setItem('CONFIG_PUSH_V2_ENABLED', 'true');
     localStorage.setItem('clic_pos_config_push_v2_state', JSON.stringify({
         versionHash: null,
         domainVersions: {},
@@ -210,12 +209,15 @@ test('applies and persists USD from CONFIG_PUSH_V2 while keeping DOP enabled', a
     assert.equal(acks[0].status, 'APPLIED');
 
     const persisted = clone(collections.get('config')) as any;
-    assert.ok(persisted.terminals.find((terminal: any) => terminal.id === localTerminalId));
+    const persistedTerminal = persisted.terminals.find((terminal: any) => terminal.id === localTerminalId);
+    assert.ok(persistedTerminal);
     assert.equal(persisted.currencies.find((currency: any) => currency.code === 'USD')?.isBase, true);
     assert.equal(persisted.currencies.find((currency: any) => currency.code === 'USD')?.isEnabled, true);
     assert.equal(persisted.currencies.find((currency: any) => currency.code === 'DOP')?.isBase, false);
     assert.equal(persisted.currencies.find((currency: any) => currency.code === 'DOP')?.isEnabled, true);
     assert.equal(persisted.currencySymbol, 'US$');
+    assert.equal(persistedTerminal.config.currencies.list.find((currency: any) => currency.code === 'USD')?.enabled, true);
+    assert.equal(persistedTerminal.config.currencies.list.find((currency: any) => currency.code === 'DOP')?.enabled, true);
 
     const configEvent = dispatchedEvents.find((event) => event.type === 'configUpdated');
     assert.deepEqual(configEvent?.detail, persisted);

@@ -1839,10 +1839,23 @@ export const applyTerminalConfigSnapshot = (
     isBase: incomingBaseCurrencyCode ? currency.code === incomingBaseCurrencyCode : currency.isBase,
     isEnabled: incomingBaseCurrencyCode && currency.code === incomingBaseCurrencyCode ? true : currency.isEnabled,
   }));
+  const effectiveBaseCurrency = effectiveCurrencies.find((currency) => currency.isBase) || effectiveCurrencies[0];
+  const enabledCurrencyCodes = effectiveCurrencies
+    .filter((currency) => currency.isEnabled)
+    .map((currency) => currency.code);
+  const terminalCurrencies = {
+    default: effectiveBaseCurrency?.code,
+    base: effectiveBaseCurrency?.code,
+    list: effectiveCurrencies.map((currency) => ({
+      ...currency,
+      exchange_rate: currency.rate,
+      is_base: Boolean(currency.isBase),
+      enabled: currency.isEnabled,
+    })),
+  };
   if (effectiveCurrencies.length > 0) {
     nextConfig.currencies = effectiveCurrencies;
-    const baseCurrency = effectiveCurrencies.find((currency) => currency.isBase) || effectiveCurrencies[0];
-    nextConfig.currencySymbol = baseCurrency?.symbol || nextConfig.currencySymbol;
+    nextConfig.currencySymbol = effectiveBaseCurrency?.symbol || nextConfig.currencySymbol;
   } else if (explicitCurrencies !== null) {
     nextConfig.currencies = [];
   }
@@ -2246,6 +2259,16 @@ export const applyTerminalConfigSnapshot = (
       normalizeStationNumber(resolvedIdentity.station_number) ||
       terminalTemplate.stationNumber ||
       null,
+    ...(effectiveCurrencies.length > 0 ? {
+      currencyCode: effectiveBaseCurrency?.code,
+      primaryCurrencyCode: effectiveBaseCurrency?.code,
+      currency: effectiveBaseCurrency?.code,
+      allowedCurrencyCodes: enabledCurrencyCodes,
+      allowed_currency_codes: enabledCurrencyCodes,
+      currencyCodes: enabledCurrencyCodes,
+      currency_codes: enabledCurrencyCodes,
+      currencies: terminalCurrencies,
+    } : {}),
     deviceRole: {
       ...deviceRoleDefaults,
       ...(deviceRoleChanged ? {} : terminalTemplate.deviceRole || {}),
@@ -2297,6 +2320,10 @@ export const applyTerminalConfigSnapshot = (
       defaultTariffId: effectiveDefaultTariffId,
       allowedTariffIds: effectiveAllowedTariffIds,
       tariffs: effectiveTariffs,
+    },
+    financial: {
+      ...terminalTemplate.financial,
+      ...(effectiveCurrencies.length > 0 ? { acceptedCurrencies: enabledCurrencyCodes } : {}),
     },
     documentSeries: effectiveDocumentSeries,
     documentAssignments:

@@ -37,7 +37,7 @@ const terminalId = '9ffc6771-7845-4976-afd3-20cebc3cc6e8';
 const deviceId = 'DEV-QA-CONFIG-PUSH';
 const versionHash = 'version-already-installed';
 
-const resetRuntime = () => {
+const resetRuntime = (options: { configPushV2?: string | null } = {}) => {
     localStorage.clear();
     sessionStorage.clear();
     localStorage.setItem('CLIC_ERP_BASE_URL', 'https://erp.example.test');
@@ -46,7 +46,9 @@ const resetRuntime = () => {
     localStorage.setItem('clic_erp_sync_tenant_id', 'tenant-config-push');
     localStorage.setItem('clic_erp_sync_terminal_id', terminalId);
     localStorage.setItem('clic_erp_sync_local_terminal_id', 'T3');
-    localStorage.setItem('CONFIG_PUSH_V2_ENABLED', 'true');
+    if (options.configPushV2 !== null) {
+        localStorage.setItem('CONFIG_PUSH_V2_ENABLED', options.configPushV2 || 'true');
+    }
     localStorage.setItem('clic_pos_config_push_v2_state', JSON.stringify({
         versionHash,
         domainVersions: { prices: 1 },
@@ -189,9 +191,18 @@ test('heartbeat reports an unacknowledged CONFIG_PUSH_V2 event', async () => {
     assert.equal(heartbeatBody?.pending_events, 1);
 });
 
+test('CONFIG_PUSH_V2 is enabled by default without a local flag or environment override', () => {
+    resetRuntime({ configPushV2: null });
+    assert.equal(lifecycle.isConfigPushV2Enabled(), true);
+});
+
+test('an explicit false keeps CONFIG_PUSH_V2 disabled as an emergency switch', () => {
+    resetRuntime({ configPushV2: 'false' });
+    assert.equal(lifecycle.isConfigPushV2Enabled(), false);
+});
+
 test('register and heartbeat advertise explicit empty capabilities when CONFIG_PUSH_V2 is disabled', async () => {
-    resetRuntime();
-    localStorage.setItem('CONFIG_PUSH_V2_ENABLED', 'false');
+    resetRuntime({ configPushV2: 'false' });
 
     const requestBodies = new Map<string, Record<string, unknown>>();
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -218,8 +229,8 @@ test('register and heartbeat advertise explicit empty capabilities when CONFIG_P
     assert.equal(requestBodies.size, 2);
 });
 
-test('register and heartbeat advertise CONFIG_PUSH_V2 when enabled', async () => {
-    resetRuntime();
+test('register and heartbeat advertise CONFIG_PUSH_V2 by default', async () => {
+    resetRuntime({ configPushV2: null });
 
     const requestBodies = new Map<string, Record<string, unknown>>();
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {

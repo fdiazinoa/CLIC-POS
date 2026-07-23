@@ -598,6 +598,22 @@ export interface TerminalConfig {
   erpTerminalId?: string;
   terminalName?: string;
   stationNumber?: string | null;
+  currencyCode?: string;
+  primaryCurrencyCode?: string;
+  currency?: string;
+  allowedCurrencyCodes?: string[];
+  allowed_currency_codes?: string[];
+  currencyCodes?: string[];
+  currency_codes?: string[];
+  currencies?: {
+    default?: string;
+    base?: string;
+    list: Array<CurrencyConfig & {
+      exchange_rate: number;
+      is_base: boolean;
+      enabled: boolean;
+    }>;
+  };
   isPrimaryNode?: boolean; // Rol jerárquico de la terminal
   governedByMaster?: boolean; // NEW: If true, this terminal follows the configuration defined by the Master
   startWithAgenda?: boolean; // NEW: Boot directly into Agenda view
