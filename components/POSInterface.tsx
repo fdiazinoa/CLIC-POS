@@ -44,7 +44,7 @@ import { isSessionExpired } from '../utils/session';
 import { FiscalRangeDGII } from '../types';
 import { parseScaleBarcode } from '../utils/barcodeParser';
 import { transactionService } from '../services/transactionService';
-import { validateTerminalSeries } from '../utils/seriesValidation';
+import { resolveTerminalDocumentSeriesId, validateTerminalSeries } from '../utils/seriesValidation';
 import { applyPromotions } from '../utils/promotionEngine';
 import { calculatePointsEarned, getPrimaryLoyaltyCard } from '../utils/loyaltyEngine';
 import { couponService } from '../utils/couponService';
@@ -4502,8 +4502,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (hasSales && !ensureSalesWithOpenZPermission()) return null;
          const productsById = new Map(products.map(product => [product.id, product] as const));
          const isRefundOnly = hasReturns && !hasSales;
-         const refundSeriesId = activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND';
-         const assignedSequenceId = activeTerminalConfig?.documentAssignments?.['TICKET']!;
+         const refundSeriesId = resolveTerminalDocumentSeriesId(activeTerminalConfig, 'REFUND') || 'REFUND';
+         const assignedSequenceId = resolveTerminalDocumentSeriesId(activeTerminalConfig, 'TICKET')!;
          const normalizedRefundItems = processedCart
             .filter(i => i.quantity < 0)
             .map(item => ({ ...item, quantity: Math.abs(item.quantity) }));

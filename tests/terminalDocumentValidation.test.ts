@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { validateTerminalDocument } from '../utils/validation';
+import { resolveTerminalDocumentSeriesId, validateTerminalSeries } from '../utils/seriesValidation';
 
 const buildConfig = (terminals: any[]) => ({ terminals } as any);
 
@@ -37,6 +38,29 @@ test('acepta una serie terminal autoritativa mientras se hidrata el mapa de asig
   }]);
 
   assert.deepEqual(validateTerminalDocument(config, 'terminal-1', 'TICKET'), { isValid: true });
+  assert.equal(resolveTerminalDocumentSeriesId(config.terminals[0].config, 'TICKET'), 'ticket-erp');
+  assert.deepEqual(validateTerminalSeries(config.terminals[0].config, 'TICKET'), { isValid: true });
+});
+
+test('resuelve la asignación desde el snapshot ERP aunque el mapa superior aún no esté hidratado', () => {
+  const terminalConfig = {
+    erpSnapshot: {
+      resolved: {
+        documents: {
+          assignments: { TICKET: 'ticket-snapshot' },
+          document_series: [{
+            id: 'ticket-snapshot',
+            documentType: 'TICKET',
+            prefix: 'TCK03',
+            source: 'ERP_TERMINAL_CONFIG',
+          }],
+        },
+      },
+    },
+  } as any;
+
+  assert.equal(resolveTerminalDocumentSeriesId(terminalConfig, 'TICKET'), 'ticket-snapshot');
+  assert.deepEqual(validateTerminalSeries(terminalConfig, 'TICKET'), { isValid: true });
 });
 
 test('no sustituye una terminal desconocida por la primera configurada', () => {
