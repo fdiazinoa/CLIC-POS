@@ -2309,6 +2309,14 @@ const AppContent: React.FC = () => {
     const preferredTerminalId = preferredTerminal?.id || sanitized.preferredTerminalId || null;
     const preferredErpTerminalId =
       resolveTerminalErpIdentity(preferredTerminal);
+    const preferredLocalTerminalId = String(
+      preferredTerminal?.config?.stationNumber
+      || preferredTerminal?.config?.erpBinding?.stationNumber
+      || (!looksLikeUuid(preferredTerminal?.config?.terminalName) ? preferredTerminal?.config?.terminalName : '')
+      || (!looksLikeUuid(preferredTerminal?.name) ? preferredTerminal?.name : '')
+      || preferredTerminalId
+      || ''
+    ).trim();
     const preferredTenantId = String(
       preferredTerminal?.config?.erpBinding?.tenantId
       || preferredTerminal?.config?.erpSnapshot?.tenant_id
@@ -2318,12 +2326,14 @@ const AppContent: React.FC = () => {
       || ''
     ).trim();
     const storedErpTerminalId = String(localStorage.getItem('clic_erp_sync_terminal_id') || '').trim();
+    const storedLocalTerminalId = String(localStorage.getItem('clic_erp_sync_local_terminal_id') || '').trim();
     const storedErpTenantId = String(localStorage.getItem('clic_erp_sync_tenant_id') || '').trim();
     const shouldRepairActiveTerminal = Boolean(preferredTerminalId && preferredTerminalId !== activeTerminalId);
     const shouldRepairErpBinding = Boolean(preferredErpTerminalId && preferredErpTerminalId !== storedErpTerminalId);
+    const shouldRepairLocalTerminal = Boolean(preferredLocalTerminalId && preferredLocalTerminalId !== storedLocalTerminalId);
     const shouldRepairErpTenant = Boolean(preferredTenantId && preferredTenantId !== storedErpTenantId);
 
-    if (!sanitized.changed && !shouldRepairActiveTerminal && !shouldRepairErpBinding && !shouldRepairErpTenant) return;
+    if (!sanitized.changed && !shouldRepairActiveTerminal && !shouldRepairErpBinding && !shouldRepairLocalTerminal && !shouldRepairErpTenant) return;
 
     setConfig(nextConfig);
     if (preferredTerminalId) {
@@ -2333,23 +2343,35 @@ const AppContent: React.FC = () => {
     if (shouldRepairErpBinding) {
       localStorage.setItem('clic_erp_sync_terminal_id', preferredErpTerminalId);
     }
+    if (shouldRepairLocalTerminal) {
+      localStorage.setItem('clic_erp_sync_local_terminal_id', preferredLocalTerminalId);
+      localStorage.setItem('clic_erp_sync_terminal_code', preferredLocalTerminalId);
+    }
     if (shouldRepairErpTenant) {
       localStorage.setItem('clic_erp_sync_tenant_id', preferredTenantId);
       localStorage.setItem('active_tenant_id', preferredTenantId);
       localStorage.setItem('clic_tenant_id', preferredTenantId);
     }
-    if (shouldRepairErpBinding || shouldRepairErpTenant) {
+    if (shouldRepairErpBinding || shouldRepairLocalTerminal || shouldRepairErpTenant) {
       try {
         const existingProfile = loadSyncProfile();
         saveSyncProfileFromContract({
           ...existingProfile,
           erpTerminalId: preferredErpTerminalId || existingProfile.erpTerminalId,
-          localTerminalId: preferredTerminalId || existingProfile.localTerminalId,
+          localTerminalId: preferredLocalTerminalId || existingProfile.localTerminalId,
           erpTenantId: preferredTenantId || existingProfile.erpTenantId || localStorage.getItem('clic_erp_sync_tenant_id') || localStorage.getItem('active_tenant_id') || undefined,
           cloudTenantId: preferredTenantId || existingProfile.cloudTenantId || existingProfile.erpTenantId,
         }, existingProfile.contractSource || 'ERP_REGISTER', {
           erpTerminalId: preferredErpTerminalId || existingProfile.erpTerminalId,
-          localTerminalId: preferredTerminalId || undefined,
+          localTerminalId: preferredLocalTerminalId || undefined,
+        });
+        saveTerminalCredentialsSync({
+          terminalId: preferredErpTerminalId || preferredTerminalId,
+          erpTerminalId: preferredErpTerminalId || preferredTerminalId,
+          terminalCode: preferredLocalTerminalId || null,
+          terminalName: resolveFriendlyTerminalName(preferredTerminal),
+          tenantId: preferredTenantId || null,
+          erpTenantId: preferredTenantId || null,
         });
       } catch (error) {
         console.warn('Failed to repair ERP terminal sync profile from selected terminal identity', error);
