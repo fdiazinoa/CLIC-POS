@@ -43,6 +43,7 @@ const resetRuntime = () => {
     localStorage.setItem('CLIC_ERP_BASE_URL', 'https://erp.example.test');
     localStorage.setItem('CLIC_POS_DEVICE_ID', deviceId);
     localStorage.setItem('clic_tenant_id', 'tenant-config-push');
+    localStorage.setItem('clic_erp_sync_tenant_id', 'tenant-config-push');
     localStorage.setItem('clic_erp_sync_terminal_id', terminalId);
     localStorage.setItem('clic_erp_sync_local_terminal_id', 'T3');
     localStorage.setItem('CONFIG_PUSH_V2_ENABLED', 'true');
@@ -68,6 +69,34 @@ const event = (id: string) => ({
 });
 
 const lifecycle = await import('../utils/erpSyncLifecycle');
+
+test('outbox pull and ACK send the bound tenant, terminal and device identity', async () => {
+    resetRuntime();
+    let pullUrl: URL | null = null;
+    let ackBody: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (url.pathname.includes('/outbox/pull')) {
+            pullUrl = url;
+            return Response.json({ status: 'success', events: [event('outbox-identity')] });
+        }
+        if (url.pathname.includes('/outbox/ack')) {
+            ackBody = JSON.parse(String(init?.body || '{}'));
+            return Response.json({ status: 'success', outbox_id: 'outbox-identity', applied_status: 'APPLIED' });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+    }) as typeof fetch;
+
+    const result = await lifecycle.triggerErpSyncOutbox('startup');
+
+    assert.equal(result?.applied, 1);
+    assert.equal(pullUrl?.searchParams.get('tenant_id'), 'tenant-config-push');
+    assert.equal(pullUrl?.searchParams.get('terminal_id'), terminalId);
+    assert.equal(pullUrl?.searchParams.get('device_id'), deviceId);
+    assert.equal(ackBody?.tenant_id, 'tenant-config-push');
+    assert.equal(ackBody?.terminal_id, terminalId);
+    assert.equal(ackBody?.device_id, deviceId);
+});
 
 test('manual and force triggers share one outbox pull and one ACK', async () => {
     resetRuntime();

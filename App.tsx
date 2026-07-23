@@ -165,7 +165,8 @@ import {
   getLifecycleActivationBlockMessage,
   getLifecycleBlockingMessageFromError,
   isLifecycleActivationBlocked,
-  persistStoredErpSyncBinding
+  persistStoredErpSyncBinding,
+  triggerErpSyncOutbox
 } from './utils/erpSyncLifecycle';
 import {
   SYNC_DIAGNOSTIC_EVENT,
@@ -200,6 +201,7 @@ import type { RuntimeTerminalRecoveryState } from './services/setup/erpTerminalS
 import { resolveCustomerImageSrc } from './utils/entityImage';
 import { posCatalogDebugElapsedMs, posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugNow, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
 import { buildTerminalConfigRefreshRequest, type TerminalConfigSyncRequestDetail } from './utils/terminalConfigPushScopes';
+import { resolvePosSalesStartView } from './utils/posStartupView';
 import {
   checkForPosApkUpdate,
   openPosApkDownloadUrl,
@@ -2924,6 +2926,8 @@ const AppContent: React.FC = () => {
     };
 
     const HEARTBEAT_INTERVAL_MS = 120000;
+    const OUTBOX_POLL_BASE_MS = 30000;
+    const OUTBOX_POLL_MAX_MS = 300000;
     const MANIFEST_REFRESH_INTERVAL_MS = 300000;
     const lifecycleManifestKeyParts = [
       deviceId,
@@ -2934,6 +2938,8 @@ const AppContent: React.FC = () => {
     const lastManifestRefreshKey = `clic_pos_lifecycle_last_manifest_refresh:${lifecycleManifestKeyParts}`;
     let lastManifestRefreshAt = Number(sessionStorage.getItem(lastManifestRefreshKey) || '0') || 0;
     let heartbeatTimeoutId: number | null = null;
+    let outboxPollTimeoutId: number | null = null;
+    let outboxPollFailures = 0;
 
     const syncLifecycle = async (options?: { forceManifestRefresh?: boolean }) => {
       // Lifecycle effects can be recreated by runtime config updates. Keep one
@@ -3021,10 +3027,14 @@ const AppContent: React.FC = () => {
     };
 
     const handleErpOnline = () => {
-      if (!disposed) void syncLifecycle();
+      if (!disposed) {
+        void triggerErpSyncOutbox('online');
+        void syncLifecycle();
+      }
     };
     const handleErpAppResume = () => {
       if (!disposed && !document.hidden && navigator.onLine) {
+        void triggerErpSyncOutbox('app_resumed');
         void syncLifecycle();
       }
     };
@@ -3032,6 +3042,7 @@ const AppContent: React.FC = () => {
     // Boot: publica endpoint; lifecycle ERP/manifest solo en contratos ERP o legacy con pull.
     void publishEndpoint();
     if (!isPosOnlyCloudStagingTarget()) {
+      void triggerErpSyncOutbox('startup');
       void syncLifecycle({ forceManifestRefresh: true });
     } else {
       console.log('[CLOUD STAGING] ERP lifecycle and manifest refresh disabled for POS_CLOUD_STAGING.');
@@ -3056,6 +3067,36 @@ const AppContent: React.FC = () => {
     };
 
     scheduleNextHeartbeat();
+
+    const scheduleNextOutboxPoll = (delayMs = OUTBOX_POLL_BASE_MS) => {
+      if (disposed || isPosOnlyCloudStagingTarget()) return;
+      if (outboxPollTimeoutId !== null) {
+        window.clearTimeout(outboxPollTimeoutId);
+      }
+      outboxPollTimeoutId = window.setTimeout(async () => {
+        if (disposed) return;
+        if (navigator.onLine) {
+          try {
+            await triggerErpSyncOutbox('periodic');
+            outboxPollFailures = 0;
+          } catch (error) {
+            outboxPollFailures += 1;
+            console.warn('[ERP SYNC] periodic outbox pull failed; retrying with backoff.', {
+              terminalId: currentTerminal.config?.erpTerminalId || currentTerminal.id,
+              failures: outboxPollFailures,
+              error,
+            });
+          }
+        }
+        const backoffMs = Math.min(
+          OUTBOX_POLL_MAX_MS,
+          OUTBOX_POLL_BASE_MS * (2 ** Math.min(outboxPollFailures, 4)),
+        );
+        scheduleNextOutboxPoll(backoffMs + getTimerJitterMs());
+      }, delayMs);
+    };
+
+    scheduleNextOutboxPoll();
     window.addEventListener('online', handleErpOnline);
     document.addEventListener('visibilitychange', handleErpAppResume);
 
@@ -3063,6 +3104,9 @@ const AppContent: React.FC = () => {
       disposed = true;
       if (heartbeatTimeoutId !== null) {
         window.clearTimeout(heartbeatTimeoutId);
+      }
+      if (outboxPollTimeoutId !== null) {
+        window.clearTimeout(outboxPollTimeoutId);
       }
       window.removeEventListener('online', handleErpOnline);
       document.removeEventListener('visibilitychange', handleErpAppResume);
@@ -5372,6 +5416,7 @@ const AppContent: React.FC = () => {
       const newConfigJson = JSON.stringify(sanitize(incomingConfig));
       const hasSubstantialChanges = oldConfigJson !== newConfigJson;
 
+      persistInitialTerminalConfig(incomingConfig);
       if (!hasSubstantialChanges) {
         console.log('🔔 App: configUpdated received but no structural changes detected. Skipping re-init.');
         setConfig(incomingConfig);
@@ -5381,8 +5426,25 @@ const AppContent: React.FC = () => {
       console.log('🔔 App: configUpdated received. Applying synchronized config...');
       setConfig(incomingConfig);
 
-      const currentTerminal = (incomingConfig.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
+      const activeTerminalId =
+        localStorage.getItem('active_terminal_id')
+        || localStorage.getItem('CLIC_POS_TERMINAL_ID')
+        || '';
+      const currentTerminal = (incomingConfig.terminals || []).find(t =>
+        t.config?.currentDeviceId === deviceId
+        || t.id === activeTerminalId
+        || t.config?.erpTerminalId === activeTerminalId
+      );
       if (!currentTerminal) return;
+
+      if (
+        currentUser
+        && currentView === 'POS'
+        && !isPosSaleActive()
+        && resolvePosSalesStartView(incomingConfig, currentTerminal.config) === 'TABLE_MAP'
+      ) {
+        setCurrentView('TABLE_MAP');
+      }
 
       try {
         permissionService.initialize(incomingConfig, currentTerminal.id);
@@ -5439,7 +5501,7 @@ const AppContent: React.FC = () => {
     return () => {
       window.removeEventListener('configUpdated', handleConfigUpdated as EventListener);
     };
-  }, [config, deviceId, syncConfigToLocalServer]);
+  }, [config, currentUser, currentView, deviceId, syncConfigToLocalServer]);
 
   // --- GLOBAL KEYBOARD SHORTCUT FOR ADMIN ACCESS ---
   useEffect(() => {
@@ -8592,16 +8654,7 @@ const AppContent: React.FC = () => {
             else if (role === DeviceRole.PRICE_CHECKER) setCurrentView('CHECKER_SCAN');
             else {
               // Multi-Vertical Startup Flow
-              const pantalla = terminal?.config?.operational?.pantalla_inicio;
-              const terminalViewMode = String(terminal?.config?.ux?.viewMode || '').trim().toUpperCase().replace(/[\s_-]+/g, '_');
-              const isRetail = terminalViewMode === 'RETAIL' || terminalViewMode === 'POS' || terminalViewMode === 'STANDARD' || terminalViewMode === 'RETAIL_MODE';
-              const usaMesas = terminal?.config?.operational?.usa_mesas;
-
-              if (pantalla === 'MAPA_MESAS' && !isRetail && usaMesas) {
-                setCurrentView('TABLE_MAP');
-              } else {
-                setCurrentView('POS');
-              }
+              setCurrentView(resolvePosSalesStartView(config, terminal?.config));
             }
           }
         };

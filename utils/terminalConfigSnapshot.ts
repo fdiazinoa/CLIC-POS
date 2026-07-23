@@ -2445,13 +2445,50 @@ export const applyTerminalConfigSnapshot = (
     (nextConfig as any).pantalla_inicio = effectiveErpStartScreen;
     (nextConfig as any).startScreen = effectiveErpStartScreen;
   }
+  if (erpBusinessVertical || erpUsesTables !== undefined || effectiveErpStartScreen) {
+    const currentBusinessConfig = asObject(
+      (nextConfig as any).business_config || (nextConfig as any).businessConfig
+    );
+    const nextBusinessConfig = {
+      ...currentBusinessConfig,
+      ...(erpBusinessVertical ? {
+        vertical_negocio: erpBusinessVertical,
+        businessVertical: erpBusinessVertical,
+      } : {}),
+      ...(erpUsesTables !== undefined ? {
+        usa_mesas: erpUsesTables,
+        useTables: erpUsesTables,
+      } : {}),
+      ...(effectiveErpStartScreen ? { pantalla_inicio: effectiveErpStartScreen } : {}),
+    };
+    (nextConfig as any).business_config = nextBusinessConfig;
+    (nextConfig as any).businessConfig = nextBusinessConfig;
+    nextConfig.operational = {
+      ...(nextConfig.operational || {}),
+      ...(erpBusinessVertical ? { vertical_negocio: erpBusinessVertical } : {}),
+      ...(erpUsesTables !== undefined ? { usa_mesas: erpUsesTables } : {}),
+      ...(effectiveErpStartScreen ? { pantalla_inicio: effectiveErpStartScreen } : {}),
+    } as BusinessConfig['operational'];
+  }
   if (erpRooms.length > 0) {
+    const nestedBusinessConfig = {
+      ...asObject((nextConfig as any).business_config),
+      rooms: cloneDeep(erpRooms),
+    };
     (nextConfig as any).rooms = cloneDeep(erpRooms);
     (nextConfig as any).initialRooms = cloneDeep(erpRooms);
+    (nextConfig as any).business_config = nestedBusinessConfig;
+    (nextConfig as any).businessConfig = nestedBusinessConfig;
   }
   if (erpTables.length > 0) {
+    const nestedBusinessConfig = {
+      ...asObject((nextConfig as any).business_config),
+      tables: cloneDeep(erpTables),
+    };
     (nextConfig as any).tables = cloneDeep(erpTables);
     (nextConfig as any).initialTables = cloneDeep(erpTables);
+    (nextConfig as any).business_config = nestedBusinessConfig;
+    (nextConfig as any).businessConfig = nestedBusinessConfig;
   }
   if (fiscalModeFromSnapshot) {
     const previousFiscalCompliance = nextConfig.fiscalCompliance || DEFAULT_FISCAL_COMPLIANCE_CONFIG;

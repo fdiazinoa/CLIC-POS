@@ -584,9 +584,13 @@ const buildConfigWriteFromSnapshot = async (
     const terminalId = resolveConfigPushV2TerminalId(domain);
     if (!terminalId) return null;
     const incomingSnapshot = {
+        ...domain,
         ...terminal,
         terminal_id: terminal.terminal_id || terminal.id || terminalId,
-        config: asObject<Record<string, unknown>>(terminal.config),
+        config: {
+            ...asObject<Record<string, unknown>>(domain.config),
+            ...asObject<Record<string, unknown>>(terminal.config),
+        },
         resolved,
     };
     const baseline = applyTerminalConfigSnapshot(localConfig as any, {
@@ -691,6 +695,28 @@ const rollbackConfigPushV2Collections = async (journal: ConfigPushV2RollbackJour
     }
 };
 
+const assertConfigPushV2ConfigPersisted = async (expectedValue: unknown): Promise<Record<string, unknown>> => {
+    const expected = asObject<Record<string, unknown>>(expectedValue);
+    const persisted = asObject<Record<string, unknown>>(await db.get('config' as any));
+    const expectedVertical = normalizeOptional(String(expected.vertical || expected.vertical_negocio || ''));
+    const persistedVertical = normalizeOptional(String(persisted.vertical || persisted.vertical_negocio || ''));
+    if (!Array.isArray(persisted.terminals) || (expectedVertical && expectedVertical !== persistedVertical)) {
+        throw new Error('CONFIG_PUSH_V2_CONFIG_PERSISTENCE_MISMATCH');
+    }
+
+    const expectedBusinessConfig = asObject<Record<string, unknown>>(expected.business_config || expected.businessConfig);
+    const persistedBusinessConfig = asObject<Record<string, unknown>>(persisted.business_config || persisted.businessConfig);
+    for (const key of ['vertical_negocio', 'businessVertical', 'usa_mesas', 'useTables', 'pantalla_inicio']) {
+        if (
+            Object.prototype.hasOwnProperty.call(expectedBusinessConfig, key)
+            && expectedBusinessConfig[key] !== persistedBusinessConfig[key]
+        ) {
+            throw new Error(`CONFIG_PUSH_V2_CONFIG_PERSISTENCE_MISMATCH:${key}`);
+        }
+    }
+    return persisted;
+};
+
 const applyConfigPushV2Domain = async (
     scope: string,
     domainPayload: unknown,
@@ -707,19 +733,28 @@ const applyConfigPushV2Domain = async (
             rollbackJournal.set(write.collection, await db.get(write.collection as any));
         }
         await db.save(write.collection as any, write.value);
+        if (write.collection === 'config') {
+            await assertConfigPushV2ConfigPersisted(write.value);
+        }
         touchedCollections.push(write.collection);
     }
+    return touchedCollections;
+};
 
-    touchedCollections.forEach((collection) => {
-        window.dispatchEvent(new CustomEvent(`${collection}Updated`));
-    });
-    if (touchedCollections.some((collection) => ['categories', 'productCategories', 'productGroups', 'collections'].includes(collection))) {
+const dispatchConfigPushV2CollectionUpdates = async (collections: string[]) => {
+    const uniqueCollections = Array.from(new Set(collections));
+    uniqueCollections
+        .filter((collection) => collection !== 'config')
+        .forEach((collection) => {
+            window.dispatchEvent(new CustomEvent(`${collection}Updated`));
+        });
+    if (uniqueCollections.some((collection) => ['categories', 'productCategories', 'productGroups', 'collections'].includes(collection))) {
         window.dispatchEvent(new CustomEvent('categoriesUpdated'));
     }
-    if (touchedCollections.includes('config')) {
-        window.dispatchEvent(new CustomEvent('configUpdated'));
+    if (uniqueCollections.includes('config')) {
+        const persistedConfig = await assertConfigPushV2ConfigPersisted(await db.get('config' as any));
+        window.dispatchEvent(new CustomEvent('configUpdated', { detail: persistedConfig }));
     }
-    return touchedCollections;
 };
 
 const validateConfigSnapshotResponse = (input: {
@@ -941,16 +976,18 @@ const processConfigPushV2Event = async (
             const snapshotVersions = normalizeVersionsMap(snapshotPayload.versions);
             const nextDomainVersions = { ...(state.domainVersions || {}) };
             const rollbackJournal: ConfigPushV2RollbackJournal = new Map();
+            const touchedCollections: string[] = [];
             try {
                 for (const scope of staleScopes) {
-                    const touchedCollections = await applyConfigPushV2Domain(scope, domains[scope], rollbackJournal);
+                    const touchedForScope = await applyConfigPushV2Domain(scope, domains[scope], rollbackJournal);
+                    touchedCollections.push(...touchedForScope);
                     nextDomainVersions[scope] = Number(snapshotVersions[scope] ?? versions[scope] ?? 0);
                     configPushV2Log('config_snapshot_domain_applied', {
                         event_id: eventId,
                         snapshot_id: snapshotId,
                         version_hash: versionHash,
                         scopes: [scope],
-                        count: touchedCollections.length,
+                        count: touchedForScope.length,
                     });
                 }
             } catch (error) {
@@ -974,6 +1011,14 @@ const processConfigPushV2Event = async (
                 },
                 inFlight: readConfigPushV2State().inFlight,
             });
+            configPushV2Log('config_snapshot_version_persisted', {
+                event_id: eventId,
+                snapshot_id: snapshotId,
+                version_hash: versionHash,
+                scopes: staleScopes,
+                domain_versions: nextDomainVersions,
+            });
+            await dispatchConfigPushV2CollectionUpdates(touchedCollections);
             await ackErpOutboxEvent(eventId, 'APPLIED');
             clearConfigPushV2InFlight();
             configPushV2Log('config_push_v2_acknowledged', {
@@ -2051,7 +2096,9 @@ const pullErpOutbox = async (bindingTerminalId: string | null, deviceId: string)
     if (!isConfigured()) return null;
     if (!bindingTerminalId && !deviceId) return null;
 
+    const binding = getStoredErpSyncBinding();
     return getJson<SyncOutboxPullResponse>('/outbox/pull', {
+        tenant_id: binding.tenantId || undefined,
         terminal_id: bindingTerminalId || undefined,
         device_id: deviceId || undefined,
         limit: 20,
@@ -2071,10 +2118,15 @@ const ackErpOutboxEvent = async (
         status,
     });
     try {
+        const binding = getStoredErpSyncBinding();
+        const deviceId = resolveLocalDeviceId();
         const response = await postJson<SyncOutboxAckResponse>('/outbox/ack', {
             outbox_id: outboxId,
             status,
             error_detail: errorDetail || null,
+            tenant_id: binding.tenantId || null,
+            terminal_id: binding.terminalId || null,
+            device_id: deviceId || null,
         });
         configPushV2Log('OUTBOX_ACK_COMPLETED', {
             outbox_id: outboxId,
@@ -2282,7 +2334,10 @@ export const processErpSyncOutbox = async (
         const startedAt = Date.now();
         const binding = getStoredErpSyncBinding();
         configPushV2Log('OUTBOX_PULL_STARTED', {
+            tenant_id: binding.tenantId || null,
             terminal_id: binding.terminalId || params.terminalId || null,
+            local_terminal_id: binding.localTerminalId || params.localTerminalId || null,
+            device_id: params.deviceId,
         });
         let outbox: SyncOutboxPullResponse | null = null;
         try {
@@ -2403,7 +2458,10 @@ export const triggerErpSyncOutbox = async (
 
     configPushV2Log('OUTBOX_TRIGGERED', {
         reason,
+        tenant_id: binding.tenantId,
         terminal_id: binding.terminalId,
+        local_terminal_id: binding.localTerminalId,
+        device_id: deviceId,
     });
     return processErpSyncOutbox({
         deviceId,

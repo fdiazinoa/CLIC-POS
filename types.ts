@@ -1101,6 +1101,17 @@ export interface ClassificationItem {
 
 export interface BusinessConfig {
   vertical: VerticalType;
+  business_config?: {
+    vertical_negocio?: VerticalType;
+    businessVertical?: VerticalType;
+    usa_mesas?: boolean;
+    useTables?: boolean;
+    pantalla_inicio?: 'VENTA_DIRECTA' | 'MAPA_MESAS';
+    rooms?: Room[];
+    tables?: Table[];
+    [key: string]: unknown;
+  };
+  businessConfig?: BusinessConfig['business_config'];
   subVertical: SubVertical;
   currencySymbol: string;
   taxRate: number;

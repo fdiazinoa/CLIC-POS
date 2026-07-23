@@ -20,7 +20,7 @@ class TestCustomEvent {
 
 const localStorage = new MemoryStorage();
 const sessionStorage = new MemoryStorage();
-const dispatchedEvents: string[] = [];
+const dispatchedEvents: Array<{ type: string; detail?: unknown }> = [];
 Object.assign(globalThis, {
     localStorage,
     sessionStorage,
@@ -29,8 +29,8 @@ Object.assign(globalThis, {
         localStorage,
         setTimeout,
         clearTimeout,
-        dispatchEvent: (event: { type?: string }) => {
-            if (event?.type) dispatchedEvents.push(event.type);
+        dispatchEvent: (event: { type?: string; detail?: unknown }) => {
+            if (event?.type) dispatchedEvents.push({ type: event.type, detail: event.detail });
             return true;
         },
     },
@@ -39,6 +39,7 @@ Object.assign(globalThis, {
 const { getInitialConfig } = await import('../constants');
 const { db } = await import('../utils/db');
 const lifecycle = await import('../utils/erpSyncLifecycle');
+const { resolvePosSalesStartView } = await import('../utils/posStartupView');
 
 const terminalId = '9ffc6771-7845-4976-afd3-20cebc3cc6e8';
 const deviceId = 'DEV-QA-CONTRACT';
@@ -176,6 +177,117 @@ test('maps terminal_config to the existing terminal without replacing BusinessCo
     const nextConfig = writes.find((write) => write.collection === 'config')?.value as any;
     assert.equal(nextConfig.currencySymbol, config.currencySymbol);
     assert.equal(nextConfig.terminals.find((terminal: any) => terminal.id === localTerminalId).config.security.autoLogoutMinutes, 7);
+});
+
+test('applies RETAIL to RESTAURANT terminal_config, persists it and refreshes runtime state', async () => {
+    const { localTerminalId } = resetHarness();
+    const { result, acks } = await runEvent({
+        id: 'restaurant-mode',
+        scopes: ['terminal_config'],
+        versions: { terminal_config: 2 },
+        domains: {
+            terminal_config: {
+                terminal: { terminal_id: terminalId, config: {} },
+                business_config: {
+                    vertical_negocio: 'RESTAURANT',
+                    businessVertical: 'RESTAURANT',
+                    usa_mesas: true,
+                    useTables: true,
+                    pantalla_inicio: 'MAPA_MESAS',
+                },
+                operational: {
+                    vertical_negocio: 'RESTAURANT',
+                    usa_mesas: true,
+                    pantalla_inicio: 'MAPA_MESAS',
+                },
+                vertical_negocio: 'RESTAURANT',
+                usa_mesas: true,
+                useTables: true,
+                pantalla_inicio: 'MAPA_MESAS',
+            },
+        },
+    });
+
+    assert.equal(result?.applied, 1);
+    assert.equal(acks[0].status, 'APPLIED');
+    const persisted = clone(collections.get('config')) as any;
+    const terminal = persisted.terminals.find((entry: any) => entry.id === localTerminalId);
+    assert.equal(persisted.vertical, 'RESTAURANT');
+    assert.equal(persisted.business_config.vertical_negocio, 'RESTAURANT');
+    assert.equal(persisted.business_config.businessVertical, 'RESTAURANT');
+    assert.equal(persisted.business_config.usa_mesas, true);
+    assert.equal(persisted.business_config.useTables, true);
+    assert.equal(persisted.business_config.pantalla_inicio, 'MAPA_MESAS');
+    assert.equal(persisted.operational.vertical_negocio, 'RESTAURANT');
+    assert.equal(terminal.config.operational.vertical_negocio, 'RESTAURANT');
+    assert.equal(terminal.config.operational.usa_mesas, true);
+    assert.equal(terminal.config.operational.pantalla_inicio, 'MAPA_MESAS');
+
+    const configEvent = dispatchedEvents.find((event) => event.type === 'configUpdated');
+    assert.deepEqual(configEvent?.detail, persisted);
+
+    const configReloadedAfterRestart = clone(collections.get('config')) as any;
+    const reloadedTerminal = configReloadedAfterRestart.terminals.find((entry: any) => entry.id === localTerminalId);
+    assert.equal(resolvePosSalesStartView(configReloadedAfterRestart, reloadedTerminal.config), 'TABLE_MAP');
+});
+
+test('same terminal_config version hash is idempotent and does not download or reapply', async () => {
+    resetHarness();
+    const input = {
+        id: 'restaurant-idempotent',
+        scopes: ['terminal_config'],
+        versions: { terminal_config: 2 },
+        domains: {
+            terminal_config: {
+                terminal: { terminal_id: terminalId, config: {} },
+                business_config: {
+                    vertical_negocio: 'RESTAURANT',
+                    usa_mesas: true,
+                    pantalla_inicio: 'MAPA_MESAS',
+                },
+            },
+        },
+    };
+    const first = await runEvent(input);
+    const second = await runEvent(input);
+
+    assert.equal(first.result?.applied, 1);
+    assert.equal(second.result?.applied, 1);
+    assert.equal(second.snapshotUrls.length, 0);
+    assert.equal(second.acks[0].status, 'APPLIED');
+});
+
+test('terminal_config persistence failure never ACKs APPLIED', async () => {
+    const { config } = resetHarness();
+    let failNextConfigWrite = true;
+    (db as any).save = async (collection: string, value: unknown) => {
+        if (collection === 'config' && failNextConfigWrite) {
+            failNextConfigWrite = false;
+            throw new Error('simulated config persistence failure');
+        }
+        collections.set(collection, clone(value));
+    };
+
+    const { result, acks } = await runEvent({
+        id: 'restaurant-persistence-failure',
+        scopes: ['terminal_config'],
+        versions: { terminal_config: 2 },
+        domains: {
+            terminal_config: {
+                terminal: { terminal_id: terminalId, config: {} },
+                business_config: {
+                    vertical_negocio: 'RESTAURANT',
+                    usa_mesas: true,
+                    pantalla_inicio: 'MAPA_MESAS',
+                },
+            },
+        },
+    });
+
+    assert.equal(result?.applied, 0);
+    assert.equal(result?.failed, 1);
+    assert.equal(acks[0].status, 'FAILED');
+    assert.equal((collections.get('config') as any).vertical, config.vertical);
 });
 
 test('maps nested loyalty into BusinessConfig and legacy loyalty collections', async () => {
