@@ -218,6 +218,15 @@ test('register and heartbeat advertise explicit empty capabilities when CONFIG_P
     assert.equal(requestBodies.size, 2);
 });
 
+test('CONFIG_PUSH_V2 is enabled by default unless an explicit flag disables it', () => {
+    resetRuntime();
+    localStorage.removeItem('CONFIG_PUSH_V2_ENABLED');
+    assert.equal(lifecycle.isConfigPushV2Enabled(), true);
+
+    localStorage.setItem('CONFIG_PUSH_V2_ENABLED', 'false');
+    assert.equal(lifecycle.isConfigPushV2Enabled(), false);
+});
+
 test('register and heartbeat advertise CONFIG_PUSH_V2 when enabled', async () => {
     resetRuntime();
 

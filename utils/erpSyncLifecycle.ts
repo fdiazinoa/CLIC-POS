@@ -268,7 +268,10 @@ const getConfigPushV2PendingEventCount = (): number => {
 export const isConfigPushV2Enabled = (): boolean => {
     const envValue = normalizeOptional(String((import.meta as any)?.env?.VITE_CONFIG_PUSH_V2_ENABLED || ''));
     const localValue = normalizeOptional(localStorage.getItem(CONFIG_PUSH_V2_FLAG_KEY));
-    const value = (localValue || envValue || 'false').toLowerCase();
+    // CONFIG_PUSH_V2 es el contrato operativo vigente. Las instalaciones que
+    // no tengan un flag legado ahora lo anuncian y procesan por defecto; un
+    // valor explícito sigue permitiendo deshabilitarlo durante una incidencia.
+    const value = (localValue || envValue || 'true').toLowerCase();
     return ['true', '1', 'yes', 'on'].includes(value);
 };
 
