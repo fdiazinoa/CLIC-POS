@@ -6252,16 +6252,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                </div>
 
-               <button
-                  type="button"
-                  onClick={onOpenAttendance}
-                  className="flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 text-sky-700 shadow-sm transition-all hover:bg-sky-100 active:scale-95"
-                  title="Abrir asistencia"
-               >
-                  <Clock size={18} />
-                  <span className="hidden text-xs font-black uppercase tracking-wide sm:inline">Asistencia</span>
-               </button>
-
                <div className="flex items-center gap-2 px-3 md:px-4 py-2 rounded-2xl bg-gray-50 border border-gray-100 shadow-inner shrink-0">
                   {syncState.isSyncing ? (
                      <RefreshCw size={18} className="text-amber-500 animate-spin" />
@@ -6663,6 +6653,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                </div>
 
+               <button
+                  type="button"
+                  onClick={onOpenAttendance}
+                  className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 text-xs font-black uppercase tracking-wide text-sky-700 shadow-sm transition-all active:scale-[0.99]"
+               >
+                  <Clock size={18} />
+                  <span>Asistencia</span>
+               </button>
+
                {/* CUSTOMER PILL (MOBILE) */}
                {
                   selectedCustomer ? (
@@ -6802,7 +6801,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
-                  <div className="ml-auto flex max-w-[240px] shrink-0 items-center justify-end gap-2">
+                  <div className="ml-auto flex max-w-[380px] shrink-0 items-center justify-end gap-2">
+                     <button
+                        type="button"
+                        onClick={onOpenAttendance}
+                        className="flex h-12 shrink-0 items-center justify-center gap-2 rounded-[1.05rem] border border-sky-200 bg-sky-50 px-3 text-xs font-black uppercase tracking-wide text-sky-700 transition-all hover:bg-sky-100 active:scale-95"
+                        title="Abrir asistencia"
+                     >
+                        <Clock size={18} />
+                        <span>Asistencia</span>
+                     </button>
                      {cart.length > 0 && (
                         <button
                            onClick={handleClearFreshCartItems}
