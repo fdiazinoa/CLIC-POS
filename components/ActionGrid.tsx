@@ -2,7 +2,7 @@ import React from 'react';
 import {
     Percent, QrCode, Inbox, StickyNote, Box, Save, Settings,
     Lock, LogOut, Package, RotateCcw, CreditCard, Calendar, Power,
-    ArrowDownLeft, ArrowUpRight
+    ArrowDownLeft, ArrowUpRight, Clock
 } from 'lucide-react';
 import { BusinessConfig } from '../types';
 
@@ -106,6 +106,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
 
                 {/* UTILITY GROUP (Gray) */}
                 {renderButton('SETTINGS', 'Ajustes', <Settings />, 'utility')}
+                {renderButton('ATTENDANCE', 'Asistencia', <Clock />, 'utility')}
                 {renderButton('DRAWER', 'Cajón', <Box />, 'utility')}
                 {renderButton('CASH_IN', 'Entrada', <ArrowDownLeft />, 'utility')}
                 {renderButton('CASH_OUT', 'Salida', <ArrowUpRight />, 'utility')}
