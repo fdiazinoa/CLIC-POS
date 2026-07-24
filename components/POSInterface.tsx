@@ -122,6 +122,7 @@ export interface POSInterfaceProps {
    onLogout: () => void;
    onExitApplication?: () => void;
    onOpenSettings: (initialView?: string, initialData?: any) => void;
+   onOpenAttendance: () => void;
    onOpenCustomers: () => void;
    onOpenHistory: () => void;
    onOpenFinance: (initialCashMovementType?: 'IN' | 'OUT' | 'X_REPORT') => void;
@@ -1057,6 +1058,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onLogout,
    onExitApplication,
    onOpenSettings,
+   onOpenAttendance,
    onOpenCustomers,
    onOpenHistory,
    onOpenFinance,
@@ -6651,6 +6653,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                </div>
 
+               <button
+                  type="button"
+                  onClick={onOpenAttendance}
+                  className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 text-xs font-black uppercase tracking-wide text-sky-700 shadow-sm transition-all active:scale-[0.99]"
+               >
+                  <Clock size={18} />
+                  <span>Asistencia</span>
+               </button>
+
                {/* CUSTOMER PILL (MOBILE) */}
                {
                   selectedCustomer ? (
@@ -6790,7 +6801,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
-                  <div className="ml-auto flex max-w-[240px] shrink-0 items-center justify-end gap-2">
+                  <div className="ml-auto flex max-w-[380px] shrink-0 items-center justify-end gap-2">
+                     <button
+                        type="button"
+                        onClick={onOpenAttendance}
+                        className="flex h-12 shrink-0 items-center justify-center gap-2 rounded-[1.05rem] border border-sky-200 bg-sky-50 px-3 text-xs font-black uppercase tracking-wide text-sky-700 transition-all hover:bg-sky-100 active:scale-95"
+                        title="Abrir asistencia"
+                     >
+                        <Clock size={18} />
+                        <span>Asistencia</span>
+                     </button>
                      {cart.length > 0 && (
                         <button
                            onClick={handleClearFreshCartItems}

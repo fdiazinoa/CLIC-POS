@@ -108,6 +108,7 @@ import KitchenDisplay from './components/kds/KitchenDisplay';
 import InventoryAuditClosure from './components/inventory/InventoryAuditClosure';
 
 const Settings = React.lazy(() => import('./components/Settings'));
+const TeamHub = React.lazy(() => import('./components/TeamHub'));
 const CustomerManagement = React.lazy(() => import('./components/CustomerManagement'));
 const TicketHistory = React.lazy(() => import('./components/TicketHistory'));
 const FinanceDashboard = React.lazy(() => import('./components/FinanceDashboard'));
@@ -3502,6 +3503,7 @@ const AppContent: React.FC = () => {
     const inputSensitiveViews = new Set<ViewState>([
       'LOGIN',
       'POS',
+      'ATTENDANCE',
       'TABLE_MAP',
       'KIOSK_WELCOME',
       'KIOSK_BROWSER',
@@ -8977,6 +8979,7 @@ const AppContent: React.FC = () => {
               setSettingsInitialData(data);
               setCurrentView('SETTINGS');
             }}
+            onOpenAttendance={() => setCurrentView('ATTENDANCE')}
             onOpenCustomers={() => setCurrentView('CUSTOMERS')}
             onOpenHistory={() => setCurrentView('HISTORY')}
             onOpenFinance={(initialCashMovementType) => handleViewChange('FINANCE', { initialCashMovementType })}
@@ -9130,6 +9133,30 @@ const AppContent: React.FC = () => {
         setSettingsInitialView('AGENDA');
         setCurrentView('SETTINGS');
         return null;
+
+      case 'ATTENDANCE': {
+        const currentRoleId = currentUser?.roleId || currentUser?.role;
+        const currentRole = roles.find(role => role.id === currentRoleId);
+        const canManageAttendance = Boolean(
+          currentRole?.permissions?.includes('ALL')
+          || currentRole?.permissions?.includes('SETTINGS_USERS')
+        );
+
+        return (
+          <TeamHub
+            users={users}
+            roles={roles}
+            onUpdateUsers={handleUsersUpdate}
+            onUpdateRoles={async (nextRoles) => {
+              setRoles(nextRoles);
+              await db.save('roles', nextRoles);
+            }}
+            onClose={() => setCurrentView('POS')}
+            mode="ATTENDANCE"
+            canManageAttendance={canManageAttendance}
+          />
+        );
+      }
 
       case 'SETTINGS':
         return (
