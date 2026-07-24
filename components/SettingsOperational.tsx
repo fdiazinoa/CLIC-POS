@@ -3,7 +3,8 @@ import React from 'react';
 import {
     Building2, LayoutGrid, ShieldCheck,
     Monitor, Utensils, ShoppingBag,
-    Lock, Users, Info, Sparkles, CalendarDays, Percent, Landmark, Hash, Package
+    Lock, Users, Info, Sparkles, CalendarDays, Percent, Landmark, Hash, Package,
+    Image as ImageIcon
 } from 'lucide-react';
 
 interface SettingsOperationalProps {
@@ -360,6 +361,15 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                 </div>
 
                 <div className="space-y-4">
+                    <Toggle
+                        label="Usar imágenes en artículos"
+                        description="Muestra la fotografía del artículo. Al desactivarlo, el nombre ocupa el área gráfica y la tarjeta se vuelve más compacta."
+                        checked={config.ux?.showProductImages !== false}
+                        onChange={(v: boolean) => onUpdate('ux', 'showProductImages', v)}
+                        icon={ImageIcon}
+                        disabled={isReadOnly}
+                    />
+
                     <Toggle
                         label="Modo Supermercado (Grid Expandido)"
                         description="Oculta la barra de categorías y expande la cuadrícula de productos para maximizar el espacio de venta."

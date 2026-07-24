@@ -716,6 +716,21 @@ const formatOrderNumber = (settings: ReturnType<typeof normalizeOrderNumberSetti
    return `${settings.prefix}${numeric}`;
 };
 
+const PRODUCT_GRAPHIC_TONES = [
+   { backgroundColor: '#dbeafe', borderColor: '#bfdbfe', color: '#1e3a8a' },
+   { backgroundColor: '#d1fae5', borderColor: '#a7f3d0', color: '#064e3b' },
+   { backgroundColor: '#ffe4e6', borderColor: '#fecdd3', color: '#881337' },
+   { backgroundColor: '#ffedd5', borderColor: '#fed7aa', color: '#7c2d12' },
+   { backgroundColor: '#cffafe', borderColor: '#a5f3fc', color: '#164e63' },
+   { backgroundColor: '#fef3c7', borderColor: '#fde68a', color: '#78350f' },
+];
+
+const resolveProductGraphicTone = (product: Product): React.CSSProperties => {
+   const seed = String(product.category || product.name || product.id || '');
+   const index = Array.from(seed).reduce((total, character) => total + character.charCodeAt(0), 0) % PRODUCT_GRAPHIC_TONES.length;
+   return PRODUCT_GRAPHIC_TONES[index];
+};
+
 interface ProductGridCardProps {
    product: Product;
    usesSupermarketLayout: boolean;
@@ -764,6 +779,12 @@ const ProductGridCard = React.memo(({
    const imageSrc = showProductImages ? resolveProductImageSrc(product) : '';
    const hasPromotion = hasPromotionForProduct(product);
    const price = getProductPrice(product);
+   const graphicTone = resolveProductGraphicTone(product);
+   const graphicNameSize = productName.length > 34
+      ? 'text-[1.05rem]'
+      : productName.length > 20
+         ? 'text-[1.2rem]'
+         : 'text-[1.4rem]';
 
    const handleTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
       const touch = e.touches[0];
@@ -800,7 +821,19 @@ const ProductGridCard = React.memo(({
             warehouseSaleBlocked
                ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
                : 'cursor-pointer hover:border-purple-300 hover:-translate-y-1 active:scale-95'
-         } ${(usesSupermarketLayout && showProductImages) ? 'rounded-[1.75rem] p-3.5 shadow-[0_10px_26px_rgba(15,23,42,0.08)] min-h-[230px] grid grid-rows-[60%_40%]' : (usesExpandedCatalog && showProductImages) ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[214px] grid grid-rows-[56%_44%]' : usesExpandedCatalog ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] min-h-[190px] flex flex-col h-full' : isCompactMobileCard ? `rounded-[2rem] p-3.5 min-h-[230px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}` : `rounded-[2rem] p-3 min-h-[214px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
+         } ${showProductImages
+            ? usesSupermarketLayout
+               ? 'rounded-[1.75rem] p-3.5 shadow-[0_10px_26px_rgba(15,23,42,0.08)] min-h-[230px] grid grid-rows-[60%_40%]'
+               : usesExpandedCatalog
+                  ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[214px] grid grid-rows-[56%_44%]'
+                  : isCompactMobileCard
+                     ? `rounded-[2rem] p-3.5 min-h-[230px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`
+                     : `rounded-[2rem] p-3 min-h-[214px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`
+            : usesExpandedCatalog
+               ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[168px] flex flex-col'
+               : isCompactMobileCard
+                  ? `rounded-[1.6rem] p-3 min-h-[176px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`
+                  : `rounded-[1.6rem] p-3 min-h-[166px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
       >
          {showProductImages && (
             <div className={`${usesSupermarketLayout ? 'h-full rounded-[1.35rem] mb-0 p-2.5' : usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-[8.5rem] rounded-[1.5rem] mb-2.5 p-2.5' : 'h-28 md:h-32 rounded-[1.5rem] mb-2.5'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
@@ -839,6 +872,27 @@ const ProductGridCard = React.memo(({
             </div>
          )}
 
+         {!showProductImages && (
+            <div
+               className="relative flex h-[92px] shrink-0 items-center justify-center overflow-hidden rounded-[1.15rem] border px-4 py-3 text-center"
+               style={graphicTone}
+            >
+               <h3 className={`max-w-full break-words font-black uppercase leading-[1.05] line-clamp-3 ${graphicNameSize}`}>
+                  {productName}
+               </h3>
+               {isWeighted && (
+                  <div className="absolute left-2 top-2 rounded-lg bg-emerald-500 p-1.5 text-white shadow-md" title="Requiere Balanza">
+                     <ScaleIcon size={14} strokeWidth={3} />
+                  </div>
+               )}
+               {!isWeighted && hasVariants && (
+                  <div className="absolute left-2 top-2 rounded-lg bg-blue-600 p-1.5 text-white shadow-md" title="Tiene Variantes">
+                     <Layers size={14} strokeWidth={3} />
+                  </div>
+               )}
+            </div>
+         )}
+
          {!showProductImages && hasPromotion && (
             <div
                className="absolute top-0 right-0 cursor-pointer z-20"
@@ -858,13 +912,37 @@ const ProductGridCard = React.memo(({
                </div>
             </div>
          )}
-         <div className={`flex flex-col ${usesExpandedCatalog ? 'min-h-0 h-full pt-2 justify-between' : usesSupermarketLayout ? 'flex-1 gap-1 pt-1.5' : 'flex-1 justify-between gap-2 pt-1'}`}>
+         <div className={`flex flex-col ${showProductImages
+            ? usesExpandedCatalog
+               ? 'min-h-0 h-full pt-2 justify-between'
+               : usesSupermarketLayout
+                  ? 'flex-1 gap-1 pt-1.5'
+                  : 'flex-1 justify-between gap-2 pt-1'
+            : 'min-h-0 flex-1 justify-end gap-1 pt-2'}`}>
             <div className={usesSupermarketLayout ? 'space-y-1.5' : usesExpandedCatalog ? 'space-y-1' : 'space-y-1.5'}>
                <span className={`block font-black text-purple-500 uppercase opacity-70 line-clamp-1 ${usesSupermarketLayout ? 'text-[11px]' : usesExpandedCatalog ? 'text-[10px]' : isCompactMobileCard ? 'text-[10px]' : 'text-[9px]'}`}>{product.category}</span>
-               <h3 className={`font-black text-gray-800 dark:text-white leading-[1.08] truncate tracking-[-0.02em] ${usesSupermarketLayout ? 'text-[1.22rem] min-h-[1.35rem]' : usesExpandedCatalog ? 'text-[1.16rem] min-h-[1.3rem]' : isCompactMobileCard ? 'text-[1.16rem] min-h-[1.3rem]' : 'text-[1rem] min-h-[1.15rem]'}`}>{product.name}</h3>
+               {showProductImages && (
+                  <h3 className={`font-black text-gray-800 dark:text-white leading-[1.08] truncate tracking-[-0.02em] ${usesSupermarketLayout ? 'text-[1.22rem] min-h-[1.35rem]' : usesExpandedCatalog ? 'text-[1.16rem] min-h-[1.3rem]' : isCompactMobileCard ? 'text-[1.16rem] min-h-[1.3rem]' : 'text-[1rem] min-h-[1.15rem]'}`}>{product.name}</h3>
+               )}
             </div>
-            <div className={`${usesSupermarketLayout ? 'mt-0 pt-0' : usesExpandedCatalog ? 'mt-0.5 pt-0.5 border-t border-gray-100 dark:border-slate-700' : 'mt-auto pt-1.5 border-t border-gray-50 dark:border-slate-700'}`}>
-               <span className={`font-black text-gray-900 dark:text-white leading-none ${usesSupermarketLayout ? 'text-[1.78rem]' : usesExpandedCatalog ? 'text-[1.5rem]' : isCompactMobileCard ? 'text-[1.75rem]' : 'text-lg'}`}>{baseCurrencySymbol}{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            <div className={`${showProductImages
+               ? usesSupermarketLayout
+                  ? 'mt-0 pt-0'
+                  : usesExpandedCatalog
+                     ? 'mt-0.5 pt-0.5 border-t border-gray-100 dark:border-slate-700'
+                     : 'mt-auto pt-1.5 border-t border-gray-50 dark:border-slate-700'
+               : 'pt-0'}`}>
+               <span className={`font-black text-gray-900 dark:text-white leading-none ${showProductImages
+                  ? usesSupermarketLayout
+                     ? 'text-[1.78rem]'
+                     : usesExpandedCatalog
+                        ? 'text-[1.5rem]'
+                        : isCompactMobileCard
+                           ? 'text-[1.75rem]'
+                           : 'text-lg'
+                  : usesExpandedCatalog
+                     ? 'text-[1.42rem]'
+                     : 'text-[1.5rem]'}`}>{baseCurrencySymbol}{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
             </div>
          </div>
          {warehouseSaleBlocked && (
@@ -1390,7 +1468,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return /^t-/i.test(normalized) ? normalized.toUpperCase() : `T-${normalized.toUpperCase()}`;
    }, [terminalDisplaySource, terminalId]);
    const defaultSalesWarehouseId = activeTerminalConfig?.inventoryScope?.defaultSalesWarehouseId;
-   const uxConfig = activeTerminalConfig?.ux || { showProductImages: true, gridDensity: 'COMFORTABLE', theme: 'LIGHT', quickKeysLayout: 'A' };
+   const uxConfig = {
+      showProductImages: true,
+      gridDensity: 'COMFORTABLE' as const,
+      theme: 'LIGHT' as const,
+      quickKeysLayout: 'A' as const,
+      viewMode: 'VISUAL' as const,
+      ...(activeTerminalConfig?.ux || {}),
+   };
    const normalizeScopeKey = useCallback((value: unknown) => {
       return typeof value === 'string' ? value.trim().toLowerCase() : '';
    }, []);
@@ -6310,20 +6395,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   const selectedCategoryKey = categoryFilter === 'ALL' ? 'ALL' : canonicalizeCategory(categoryFilter);
                   const isActiveCategory = selectedCategoryKey === categoryOption.id;
                   const categoryTone = [
-                     'border-blue-100 text-blue-700 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-800',
-                     'border-emerald-100 text-emerald-700 hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800',
-                     'border-rose-100 text-rose-700 hover:border-rose-200 hover:bg-rose-50 hover:text-rose-800',
-                     'border-orange-100 text-orange-700 hover:border-orange-200 hover:bg-orange-50 hover:text-orange-800',
-                     'border-sky-100 text-sky-700 hover:border-sky-200 hover:bg-sky-50 hover:text-sky-800',
-                     'border-amber-100 text-amber-700 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-800',
+                     { idle: 'bg-indigo-100 border-indigo-200 text-indigo-800 hover:bg-indigo-200', active: 'bg-indigo-600 border-indigo-600 text-white shadow-indigo-200' },
+                     { idle: 'bg-emerald-100 border-emerald-200 text-emerald-800 hover:bg-emerald-200', active: 'bg-emerald-600 border-emerald-600 text-white shadow-emerald-200' },
+                     { idle: 'bg-rose-100 border-rose-200 text-rose-800 hover:bg-rose-200', active: 'bg-rose-600 border-rose-600 text-white shadow-rose-200' },
+                     { idle: 'bg-orange-100 border-orange-200 text-orange-800 hover:bg-orange-200', active: 'bg-orange-600 border-orange-600 text-white shadow-orange-200' },
+                     { idle: 'bg-sky-100 border-sky-200 text-sky-800 hover:bg-sky-200', active: 'bg-sky-600 border-sky-600 text-white shadow-sky-200' },
+                     { idle: 'bg-amber-100 border-amber-200 text-amber-900 hover:bg-amber-200', active: 'bg-amber-500 border-amber-500 text-slate-950 shadow-amber-200' },
                   ][idx % 6];
                   return (
                   <button
                      key={categoryOption.id || `cat-${idx}`}
                      onClick={() => setCategoryFilter(categoryOption.id)}
-                     className={`h-[34px] min-w-[86px] px-5 rounded-lg text-[10px] font-black uppercase tracking-[0.12em] transition-all whitespace-nowrap border shadow-sm active:scale-95 ${isActiveCategory
-                        ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-200 -translate-y-0.5'
-                        : `bg-white ${categoryTone} hover:-translate-y-0.5 hover:shadow-md`
+                     className={`h-[48px] min-w-[116px] px-6 rounded-xl text-[12px] font-black uppercase tracking-[0.1em] transition-all whitespace-nowrap border shadow-sm active:scale-95 ${isActiveCategory
+                        ? `${categoryTone.active} shadow-lg -translate-y-0.5`
+                        : `${categoryTone.idle} hover:-translate-y-0.5 hover:shadow-md`
                         }`}
                   >
                      {categoryOption.label}
