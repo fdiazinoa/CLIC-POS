@@ -122,6 +122,7 @@ export interface POSInterfaceProps {
    onLogout: () => void;
    onExitApplication?: () => void;
    onOpenSettings: (initialView?: string, initialData?: any) => void;
+   onOpenAttendance: () => void;
    onOpenCustomers: () => void;
    onOpenHistory: () => void;
    onOpenFinance: (initialCashMovementType?: 'IN' | 'OUT' | 'X_REPORT') => void;
@@ -1057,6 +1058,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onLogout,
    onExitApplication,
    onOpenSettings,
+   onOpenAttendance,
    onOpenCustomers,
    onOpenHistory,
    onOpenFinance,
@@ -6249,6 +6251,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <p className="text-[0.84rem] font-extrabold text-red-500 uppercase tracking-[0.16em] mt-1 truncate max-w-[140px]">{terminalDisplayLabel}</p>
                   </div>
                </div>
+
+               <button
+                  type="button"
+                  onClick={onOpenAttendance}
+                  className="flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 text-sky-700 shadow-sm transition-all hover:bg-sky-100 active:scale-95"
+                  title="Abrir asistencia"
+               >
+                  <Clock size={18} />
+                  <span className="hidden text-xs font-black uppercase tracking-wide sm:inline">Asistencia</span>
+               </button>
 
                <div className="flex items-center gap-2 px-3 md:px-4 py-2 rounded-2xl bg-gray-50 border border-gray-100 shadow-inner shrink-0">
                   {syncState.isSyncing ? (

@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
    Users, Calendar, ShieldCheck, Clock, Check, X,
    UserPlus, ScanFace, ChevronRight, Lock,
@@ -9,6 +9,7 @@ import {
 import { User, RoleDefinition, Shift, TimeRecord, ZReportModule } from '../types';
 import { AVAILABLE_PERMISSIONS } from '../constants';
 import { biometricService } from '../services/BiometricAuthService';
+import { resolveTeamHubTabs, TeamHubMode, TeamHubTab } from '../utils/teamHubAccess';
 
 interface TeamHubProps {
    users: User[];
@@ -16,6 +17,8 @@ interface TeamHubProps {
    onUpdateUsers: (users: User[]) => void;
    onUpdateRoles: (roles: RoleDefinition[]) => void | Promise<void>;
    onClose: () => void;
+   mode?: TeamHubMode;
+   canManageAttendance?: boolean;
 }
 
 // --- MOCK DATA FOR SHIFTS ---
@@ -97,8 +100,26 @@ const SlideUnlock: React.FC<{ onUnlock: () => void; label: string; mode: 'IN' | 
    );
 };
 
-const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdateRoles, onClose }) => {
-   const [activeTab, setActiveTab] = useState<'CLOCK' | 'USERS' | 'SCHEDULE' | 'ROLES' | 'REPORTS'>('CLOCK');
+const TeamHub: React.FC<TeamHubProps> = ({
+   users,
+   roles,
+   onUpdateUsers,
+   onUpdateRoles,
+   onClose,
+   mode = 'ADMIN',
+   canManageAttendance = false
+}) => {
+   const availableTabs = useMemo(
+      () => resolveTeamHubTabs(mode, canManageAttendance),
+      [canManageAttendance, mode]
+   );
+   const [activeTab, setActiveTab] = useState<TeamHubTab>(() => availableTabs[0]);
+
+   useEffect(() => {
+      if (!availableTabs.includes(activeTab)) {
+         setActiveTab(availableTabs[0]);
+      }
+   }, [activeTab, availableTabs]);
 
    // Clock-in State
    const [pin, setPin] = useState('');
@@ -369,39 +390,64 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
       <div className="h-screen w-full bg-gray-100 flex flex-col overflow-hidden animate-in fade-in">
 
          {/* Header Tabs */}
-         <div className="bg-white border-b border-gray-200 px-4 md:px-6 pt-4 md:pt-6 pb-0 shrink-0">
+         <div className="bg-white border-b border-gray-200 px-4 md:px-6 pt-4 md:pt-5 pb-0 shrink-0">
+            <div className="mb-2 flex items-center gap-3">
+               <div className={`flex h-10 w-10 items-center justify-center rounded-xl text-white ${mode === 'ATTENDANCE' ? 'bg-sky-600' : 'bg-indigo-600'}`}>
+                  {mode === 'ATTENDANCE' ? <Clock size={20} /> : <Users size={20} />}
+               </div>
+               <div className="min-w-0">
+                  <h1 className="text-lg font-black text-slate-900">
+                     {mode === 'ATTENDANCE' ? 'Asistencia' : 'Equipo y Roles'}
+                  </h1>
+                  <p className="text-xs font-semibold text-slate-500">
+                     {mode === 'ATTENDANCE'
+                        ? 'Fichaje, turnos y control de horas'
+                        : 'Usuarios, roles y permisos'}
+                  </p>
+               </div>
+            </div>
             <div className="flex items-center gap-3 md:gap-4">
                <div className="mobile-tab-scroller no-scrollbar -mx-4 px-4 md:mx-0 md:px-0 flex-1 min-w-0">
+               {availableTabs.includes('CLOCK') && (
                <button
                   onClick={() => setActiveTab('CLOCK')}
                   className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'CLOCK' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                >
                   <Clock size={18} /> Fichaje
                </button>
+               )}
+               {availableTabs.includes('USERS') && (
                <button
                   onClick={() => setActiveTab('USERS')}
                   className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'USERS' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                >
                   <Users size={18} /> Equipo
                </button>
+               )}
+               {availableTabs.includes('SCHEDULE') && (
                <button
                   onClick={() => setActiveTab('SCHEDULE')}
                   className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'SCHEDULE' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                >
                   <Calendar size={18} /> Turnos & Horarios
                </button>
+               )}
+               {availableTabs.includes('REPORTS') && (
                <button
                   onClick={() => setActiveTab('REPORTS')}
                   className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'REPORTS' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                >
                   <FileBarChart size={18} /> Reporte de Horas
                </button>
+               )}
+               {availableTabs.includes('ROLES') && (
                <button
                   onClick={() => setActiveTab('ROLES')}
                   className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'ROLES' ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                >
                   <ShieldCheck size={18} /> Roles & Permisos
                </button>
+               )}
                </div>
             <button onClick={onClose} className="mb-4 shrink-0 p-2 bg-gray-100 rounded-full text-gray-500 hover:bg-gray-200">
                <X size={20} />

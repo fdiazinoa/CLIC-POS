@@ -479,6 +479,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
             onUpdateUsers={props.onUpdateUsers}
             onUpdateRoles={props.onUpdateRoles}
             onClose={() => setCurrentView('HOME')}
+            mode="ADMIN"
           />
         );
 
@@ -936,7 +937,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
               <section>
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Equipo y Marketing</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                  <SettingsCard icon={Users} label="Equipo y Roles" description="Usuarios, Turnos, Permisos" color="bg-pink-500" onClick={() => setCurrentView('TEAM')} locked={!hasPermission('SETTINGS_USERS')} />
+                  <SettingsCard icon={Users} label="Equipo y Roles" description="Usuarios, Roles y Permisos" color="bg-pink-500" onClick={() => setCurrentView('TEAM')} locked={!hasPermission('SETTINGS_USERS')} />
                   <SettingsCard icon={UserCircle} label="Clientes" description="Directorio, Histórico, Fiscal" color="bg-teal-600" onClick={() => setCurrentView('CUSTOMERS')} locked={!hasPermission('CUSTOMER_MANAGE')} />
                   <SettingsCard icon={Award} label="Programa de Lealtad" description="Puntos, Canjes y Reglas" color="bg-purple-500" onClick={() => setCurrentView('LOYALTY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Percent} label="Promociones" description="Descuentos, 2x1 y Temporadas" color="bg-rose-500" onClick={() => setCurrentView('PROMOTIONS')} locked={!hasPermission('CATALOG_MANAGE')} />

@@ -1787,6 +1787,7 @@ export type ViewState =
   | 'WIZARD'
   | 'LOGIN'
   | 'POS'
+  | 'ATTENDANCE'
   | 'SETTINGS'
   | 'SETTINGS_SYNC'
   | 'CUSTOMERS'
