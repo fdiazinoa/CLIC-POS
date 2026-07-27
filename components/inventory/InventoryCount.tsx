@@ -5,11 +5,12 @@
  * Scan products and adjust quantities.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ScanBarcode, Plus, Minus, Save, X, Camera, Cloud, Wifi, WifiOff } from 'lucide-react';
 import { Product } from '../../types';
 import BarcodeScannerModal from '../BarcodeScannerModal';
 import { useOfflineSync } from '../../hooks/useOfflineSync';
+import { filterInventoryProducts, findExactInventoryProduct } from '../../utils/inventoryProductSearch';
 
 interface CountedItem {
     productId: string;
@@ -60,6 +61,10 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
     const [syncTab, setSyncTab] = useState<'PENDING' | 'CONFLICTS'>('PENDING');
     const [startedAt] = useState(() => new Date().toISOString());
     const [sessionId] = useState(() => `CNT-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+    const filteredProducts = useMemo(
+        () => filterInventoryProducts(products, scanInput, 12),
+        [products, scanInput]
+    );
 
     // Get expected qty for a product in the selected warehouse
     const getExpectedQty = (product: Product) => {
@@ -67,54 +72,53 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
         return product.stockBalances?.[warehouseId] ?? 0;
     };
 
-    // Handle scan
-    const handleScan = async () => {
-        if (!scanInput.trim()) return;
-
-        const product = products.find(p =>
-            p.barcode === scanInput.trim() || p.id === scanInput.trim()
-        );
-
-        if (product) {
-            const existing = counts.find(c => c.productId === product.id);
-            const expected = getExpectedQty(product);
-
+    const addProductToCount = async (product: Product, code: string) => {
+        const expected = getExpectedQty(product);
+        setCounts(currentCounts => {
+            const existing = currentCounts.find(c => c.productId === product.id);
             if (existing) {
-                // Increment count
-                setCounts(counts.map(c =>
+                return currentCounts.map(c =>
                     c.productId === product.id
                         ? { ...c, countedQty: c.countedQty + 1, difference: c.countedQty + 1 - c.expectedQty }
                         : c
-                ));
-            } else {
-                // Add new item
-                setCounts([...counts, {
-                    productId: product.id,
-                    productName: product.name,
-                    expectedQty: expected,
-                    countedQty: 1,
-                    difference: 1 - expected
-                }]);
+                );
             }
-
-            if (onSave) {
-                // Legacy support if needed, but we prefer hook
-            }
-
-            await recordOfflineScan({
-                documentId: sessionId,
-                documentCode: sessionId,
-                warehouseId,
+            return [...currentCounts, {
                 productId: product.id,
-                code: scanInput.trim()
-            } as any);
+                productName: product.name,
+                expectedQty: expected,
+                countedQty: 1,
+                difference: 1 - expected
+            }];
+        });
 
-            // Clear input
-            setScanInput('');
-        } else {
-            alert('Producto no encontrado');
-            setScanInput('');
+        await recordOfflineScan({
+            documentId: sessionId,
+            documentCode: sessionId,
+            warehouseId,
+            productId: product.id,
+            code
+        } as any);
+        setScanInput('');
+    };
+
+    // Handle barcode, ID or an unambiguous keyboard search.
+    const handleScan = async () => {
+        const query = scanInput.trim();
+        if (!query) return;
+
+        const product = findExactInventoryProduct(products, query)
+            || (filteredProducts.length === 1 ? filteredProducts[0] : undefined);
+
+        if (!product) {
+            alert(filteredProducts.length > 1
+                ? 'Selecciona un producto de los resultados.'
+                : 'Producto no encontrado');
+            if (filteredProducts.length === 0) setScanInput('');
+            return;
         }
+
+        await addProductToCount(product, query);
     };
 
     useEffect(() => {
@@ -125,40 +129,10 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
 
     // Handle camera scan
     const handleCameraScan = async (code: string): Promise<{ success: boolean; message?: string }> => {
-        const product = products.find(p =>
-            p.barcode === code.trim() || p.id === code.trim()
-        );
+        const product = findExactInventoryProduct(products, code);
 
         if (product) {
-            const existing = counts.find(c => c.productId === product.id);
-            const expected = getExpectedQty(product);
-
-            if (existing) {
-                // Increment count
-                setCounts(counts.map(c =>
-                    c.productId === product.id
-                        ? { ...c, countedQty: c.countedQty + 1, difference: c.countedQty + 1 - c.expectedQty }
-                        : c
-                ));
-            } else {
-                // Add new item
-                setCounts([...counts, {
-                    productId: product.id,
-                    productName: product.name,
-                    expectedQty: expected,
-                    countedQty: 1,
-                    difference: 1 - expected
-                }]);
-            }
-
-            await recordOfflineScan({
-                documentId: sessionId,
-                documentCode: sessionId,
-                warehouseId,
-                productId: product.id,
-                code: code.trim()
-            } as any);
-
+            await addProductToCount(product, code.trim());
             return { success: true, message: `${product.name} agregado` };
         } else {
             return { success: false, message: 'Producto no encontrado' };
@@ -269,8 +243,8 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                             type="text"
                             value={scanInput}
                             onChange={(e) => setScanInput(e.target.value)}
-                            onKeyPress={(e) => e.key === 'Enter' && void handleScan()}
-                            placeholder="Escanear código..."
+                            onKeyDown={(e) => e.key === 'Enter' && void handleScan()}
+                            placeholder="Buscar por nombre, SKU o código..."
                             className="w-full pl-10 pr-12 py-3 bg-white/10 border-2 border-white/20 rounded-xl text-white placeholder-blue-200 font-bold outline-none focus:bg-white/20"
                             autoFocus
                         />
@@ -290,6 +264,30 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                         Agregar
                     </button>
                 </div>
+                {scanInput.trim() && filteredProducts.length > 0 && (
+                    <div className="mt-2 max-h-56 overflow-y-auto rounded-xl border border-white/20 bg-white text-gray-900 shadow-xl">
+                        {filteredProducts.map(product => {
+                            const productRecord = product as Product & Record<string, unknown>;
+                            const reference = String(productRecord.sku || product.barcode || productRecord.code || '').trim();
+                            return (
+                                <button
+                                    key={product.id}
+                                    type="button"
+                                    onClick={() => void addProductToCount(product, scanInput.trim())}
+                                    className="flex w-full items-center justify-between gap-3 border-b border-gray-100 px-4 py-3 text-left last:border-b-0 hover:bg-blue-50"
+                                >
+                                    <span className="min-w-0">
+                                        <span className="block truncate font-black">{product.name}</span>
+                                        <span className="block truncate text-xs font-bold text-gray-500">
+                                            {product.category || 'Sin categoría'}{reference ? ` · ${reference}` : ''}
+                                        </span>
+                                    </span>
+                                    <Plus size={20} className="shrink-0 text-blue-600" />
+                                </button>
+                            );
+                        })}
+                    </div>
+                )}
             </div>
 
             {/* Count Summary */}

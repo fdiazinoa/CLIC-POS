@@ -97,6 +97,7 @@ import {
    type ErpConsignmentLine,
 } from '../services/sync/ConsignmentSyncService';
 import { resolveDeviceRoleValue } from '../utils/deviceRoleHelpers';
+import { normalizeProductionOutputMode, resolveProductionOutputTargets } from '../utils/productionOutputMode';
 
 // ... existing imports
 
@@ -197,13 +198,6 @@ const resolveConsignmentDownloadEnabled = (config: Record<string, unknown> | nul
       normalizeBooleanSetting(operational.enableConsignments) ??
       false
    );
-};
-
-const normalizeProductionMode = (value: unknown): 'KDS' | 'PRINTER' | 'AMBOS' => {
-   const normalized = String(value || '').trim().toUpperCase();
-   if (normalized === 'PRINTER' || normalized === 'TICKET') return 'PRINTER';
-   if (normalized === 'AMBOS' || normalized === 'BOTH') return 'AMBOS';
-   return 'KDS';
 };
 
 const normalizeViewMode = (value: unknown): string => {
@@ -4270,7 +4264,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const targets = Array.from(new Set(
          productionAreas
             .filter(area => {
-               const mode = normalizeProductionMode(area.modo_salida);
+               const mode = normalizeProductionOutputMode(area.modo_salida);
                return mode === 'KDS' || mode === 'AMBOS';
             })
             .map(area => resolveKdsBaseUrl(area, config))
@@ -5292,23 +5286,36 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          // 2. Print and/or send to KDS per configured area.
          for (const [areaId, areaData] of Object.entries(areas)) {
-            const mode = normalizeProductionMode(areaData.area.modo_salida);
-            const shouldPrint = mode === 'PRINTER' || mode === 'AMBOS';
-            const shouldSendKds = mode === 'KDS' || mode === 'AMBOS';
+            const { mode, shouldPrint, shouldSendKds } = resolveProductionOutputTargets(areaData.area.modo_salida);
 
             if (shouldPrint) {
-               const printed = await printComanda(config, {
-                  items: areaData.items,
-                  table: activeTable
-                     ? ({ ...activeTable, tableDisplayLabel: activeTableContext.compactLabel } as any)
-                     : undefined,
-                  orderNumber,
-                  customerName: selectedCustomer?.name,
-                  areaTitle: areaData.title,
-                  productionAreaId: areaId,
-                  printerId: areaData.area.printer_id || areaData.area.printerId
-               });
-               if (printed) printedCount += 1;
+               try {
+                  const printed = await printComanda(config, {
+                     items: areaData.items,
+                     table: activeTable
+                        ? ({ ...activeTable, tableDisplayLabel: activeTableContext.compactLabel } as any)
+                        : undefined,
+                     orderNumber,
+                     customerName: selectedCustomer?.name,
+                     areaTitle: areaData.title,
+                     productionAreaId: areaId,
+                     printerId: areaData.area.printer_id || areaData.area.printerId
+                  });
+                  if (printed) {
+                     printedCount += 1;
+                  } else {
+                     console.warn('[PRODUCTION] La impresora no confirmó la comanda; se continuará con las demás salidas.', {
+                        areaId,
+                        mode,
+                     });
+                  }
+               } catch (printError) {
+                  console.error('[PRODUCTION] Falló la impresión de comanda; se continuará con KDS.', {
+                     areaId,
+                     mode,
+                     error: printError,
+                  });
+               }
             }
 
             if (shouldSendKds) {
