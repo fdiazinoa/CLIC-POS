@@ -9,7 +9,8 @@ import {
     Copy,
     Monitor,
     Wifi,
-    WifiOff
+    WifiOff,
+    RefreshCw
 } from 'lucide-react';
 import { formatKdsIdentityLabel } from '../../utils/kdsPresentation';
 
@@ -72,6 +73,22 @@ interface KDSNetworkInfo {
 const DEFAULT_KDS_PORT = '8001';
 const DEFAULT_WARNING_MINUTES = 10;
 const DEFAULT_CRITICAL_MINUTES = 20;
+const KDS_REQUEST_TIMEOUT_MS = 4500;
+const KDS_NETWORK_WATCHDOG_MS = 15000;
+
+const fetchWithTimeout = async (url: string, options?: RequestInit): Promise<Response> => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), KDS_REQUEST_TIMEOUT_MS);
+    try {
+        return await fetch(url, {
+            ...options,
+            cache: 'no-store',
+            signal: controller.signal
+        });
+    } finally {
+        window.clearTimeout(timeout);
+    }
+};
 
 const getOrderSignature = (order: KDSOrder): string => {
     const itemSignature = (order.items || [])
@@ -196,10 +213,15 @@ const KitchenDisplay: React.FC = () => {
         serverRunning: false
     });
     const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+    const [connectionState, setConnectionState] = useState<'connecting' | 'online' | 'offline'>('connecting');
+    const [connectionMessage, setConnectionMessage] = useState('Iniciando servicio de cocina...');
     const terminalIdentity = useMemo(() => resolveKitchenTerminalIdentity(), []);
     const audioContextRef = useRef<AudioContext | null>(null);
+    const networkInfoRef = useRef(networkInfo);
     const knownOrderSignaturesRef = useRef<Set<string>>(new Set());
     const didPrimeOrdersRef = useRef(false);
+    const fetchInFlightRef = useRef(false);
+    const reconnectInFlightRef = useRef(false);
 
     const ensureAudioContext = useCallback(() => {
         const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
@@ -258,46 +280,124 @@ const KitchenDisplay: React.FC = () => {
         };
     }, [ensureAudioContext]);
 
+    const fetchOrders = useCallback(async (): Promise<boolean> => {
+        if (fetchInFlightRef.current) return false;
+        fetchInFlightRef.current = true;
+        try {
+            const response = await fetchWithTimeout(`${resolveKdsLocalBaseUrl()}/api/cocina/ordenes-activas`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            const data = await response.json();
+            const nextOrders = Array.isArray(data) ? data : [];
+            const nextSignatures = new Set(nextOrders.map(getOrderSignature));
+            const hasNewOrder = didPrimeOrdersRef.current
+                && nextOrders.some((order) => !knownOrderSignaturesRef.current.has(getOrderSignature(order)));
+            knownOrderSignaturesRef.current = nextSignatures;
+            didPrimeOrdersRef.current = true;
+            setOrders(nextOrders);
+            if (networkInfoRef.current.host && networkInfoRef.current.serverRunning) {
+                setConnectionState('online');
+                setConnectionMessage('Servicio KDS conectado');
+            } else {
+                setConnectionState('offline');
+                setConnectionMessage('Servicio local activo, pero la red no tiene una IP disponible');
+            }
+            if (hasNewOrder) playKitchenAlert();
+            return true;
+        } catch (error) {
+            setConnectionState('offline');
+            setConnectionMessage(error instanceof Error && error.name === 'AbortError'
+                ? 'El servicio KDS no respondió a tiempo'
+                : 'Sin comunicación con el servicio KDS');
+            console.warn('[KDS] No se pudieron consultar las órdenes:', error);
+            return false;
+        } finally {
+            fetchInFlightRef.current = false;
+            setLoading(false);
+        }
+    }, [playKitchenAlert]);
+
+    const reconnectKds = useCallback(async (forceRestart = false) => {
+        if (reconnectInFlightRef.current) return;
+        reconnectInFlightRef.current = true;
+        setConnectionState('connecting');
+        setConnectionMessage('Reconectando servicio KDS...');
+        try {
+            const nativeBridge = (window as any).ClicPOSNativePrinter;
+            if (forceRestart && typeof nativeBridge?.stopKdsServer === 'function') {
+                await nativeBridge.stopKdsServer({});
+            }
+
+            const info = await resolveKdsNetworkInfo();
+            networkInfoRef.current = info;
+            setNetworkInfo(info);
+            const ordersAvailable = await fetchOrders();
+            if (!info.serverRunning || !info.host || !ordersAvailable) {
+                setConnectionState('offline');
+                setConnectionMessage(info.message || (!info.host
+                    ? 'Conecta Ethernet o Wi-Fi y pulsa reconectar'
+                    : 'El servicio KDS todavía no está disponible'));
+                return;
+            }
+
+            setConnectionState('online');
+            setConnectionMessage('Servicio KDS conectado');
+            console.info('[KDS] Conexión renovada', {
+                url: info.url,
+                ips: info.ips,
+                forced: forceRestart
+            });
+        } catch (error) {
+            setConnectionState('offline');
+            setConnectionMessage('No fue posible reconectar el servicio KDS');
+            console.warn('[KDS] Falló la reconexión:', error);
+        } finally {
+            reconnectInFlightRef.current = false;
+        }
+    }, [fetchOrders]);
+
     useEffect(() => {
-        let mounted = true;
-        resolveKdsNetworkInfo().then((info) => {
-            if (mounted) setNetworkInfo(info);
+        const handleOnline = () => void reconnectKds(true);
+        const handleOffline = () => {
+            const offlineInfo = {
+                ...networkInfoRef.current,
+                host: null,
+                url: null,
+                ips: [],
+                serverRunning: false
+            };
+            networkInfoRef.current = offlineInfo;
+            setNetworkInfo(offlineInfo);
+            setConnectionState('offline');
+            setConnectionMessage('Red desconectada. Esperando reconexión...');
+        };
+        const handleResume = () => {
+            if (!document.hidden) void reconnectKds(true);
+        };
+
+        void reconnectKds(false);
+        const orderPolling = window.setInterval(() => void fetchOrders(), 5000);
+        const networkWatchdog = window.setInterval(() => void reconnectKds(false), KDS_NETWORK_WATCHDOG_MS);
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+        document.addEventListener('visibilitychange', handleResume);
+
+        const appPlugin = (window as any).Capacitor?.Plugins?.App;
+        const resumeListener = appPlugin?.addListener?.('resume', () => void reconnectKds(true));
+        const stateListener = appPlugin?.addListener?.('appStateChange', (state: { isActive?: boolean }) => {
+            if (state?.isActive) void reconnectKds(true);
         });
 
         return () => {
-            mounted = false;
+            window.clearInterval(orderPolling);
+            window.clearInterval(networkWatchdog);
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('offline', handleOffline);
+            document.removeEventListener('visibilitychange', handleResume);
+            resumeListener?.remove?.();
+            stateListener?.remove?.();
         };
-    }, []);
-
-    // Poll for updates every 5 seconds
-    useEffect(() => {
-        const fetchOrders = async () => {
-            try {
-                const response = await fetch(`${resolveKdsLocalBaseUrl()}/api/cocina/ordenes-activas`);
-                if (response.ok) {
-                    const data = await response.json();
-                    const nextOrders = Array.isArray(data) ? data : [];
-                    const nextSignatures = new Set(nextOrders.map(getOrderSignature));
-                    const hasNewOrder = didPrimeOrdersRef.current
-                        && nextOrders.some((order) => !knownOrderSignaturesRef.current.has(getOrderSignature(order)));
-                    knownOrderSignaturesRef.current = nextSignatures;
-                    didPrimeOrdersRef.current = true;
-                    setOrders(nextOrders);
-                    if (hasNewOrder) {
-                        playKitchenAlert();
-                    }
-                }
-            } catch (error) {
-                console.error("Error fetching KDS orders:", error);
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        fetchOrders();
-        const interval = setInterval(fetchOrders, 5000);
-        return () => clearInterval(interval);
-    }, []);
+    }, [fetchOrders, reconnectKds]);
 
     const handleCopyEndpoint = async () => {
         if (!networkInfo.url) return;
@@ -318,7 +418,7 @@ const KitchenDisplay: React.FC = () => {
             const payload = type === 'item'
                 ? { item_id: id, nuevo_estado: newStatus }
                 : { orden_id: id, nuevo_estado: newStatus };
-            const response = await fetch(`${resolveKdsLocalBaseUrl()}/api/cocina/cambiar-estado`, {
+            const response = await fetchWithTimeout(`${resolveKdsLocalBaseUrl()}/api/cocina/cambiar-estado`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -386,6 +486,23 @@ const KitchenDisplay: React.FC = () => {
                 <div className="flex items-center gap-5">
                     <button
                         type="button"
+                        onClick={() => void reconnectKds(true)}
+                        disabled={connectionState === 'connecting'}
+                        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-colors disabled:cursor-wait ${
+                            connectionState === 'online'
+                                ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                                : connectionState === 'connecting'
+                                    ? 'border-blue-400/30 bg-blue-500/10 text-blue-300'
+                                    : 'border-amber-400/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20'
+                        }`}
+                        title={`${connectionMessage}. Reconectar servicio`}
+                        aria-label="Reconectar servicio de cocina"
+                    >
+                        <RefreshCw size={20} className={connectionState === 'connecting' ? 'animate-spin' : ''} />
+                    </button>
+
+                    <button
+                        type="button"
                         onClick={handleCopyEndpoint}
                         disabled={!networkInfo.url}
                         className={`hidden lg:flex items-center gap-2 rounded-2xl border px-3 py-2 text-left transition-colors ${networkInfo.url && networkInfo.serverRunning
@@ -397,10 +514,16 @@ const KitchenDisplay: React.FC = () => {
                         {networkInfo.url && networkInfo.serverRunning ? <Wifi size={18} className="text-cyan-300" /> : <WifiOff size={18} className="text-amber-300" />}
                         <div className="min-w-0">
                             <div className="text-[9px] font-black uppercase tracking-[0.2em] text-gray-400">
-                                {networkInfo.serverRunning ? 'Ruta KDS activa' : 'Servidor KDS'}
+                                {connectionState === 'connecting'
+                                    ? 'Reconectando'
+                                    : connectionState === 'online' && networkInfo.serverRunning
+                                        ? 'Ruta KDS activa'
+                                        : 'Servidor KDS sin conexión'}
                             </div>
                             <div className="max-w-[260px] truncate text-xs font-black">
-                                {networkInfo.url || networkInfo.message || `IP no detectada · puerto ${networkInfo.port}`}
+                                {connectionState === 'online'
+                                    ? networkInfo.url
+                                    : connectionMessage || networkInfo.message || `IP no detectada · puerto ${networkInfo.port}`}
                             </div>
                             {networkInfo.ips.length > 1 && (
                                 <div className="max-w-[260px] truncate text-[9px] font-bold text-gray-400">
