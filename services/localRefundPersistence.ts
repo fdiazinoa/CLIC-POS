@@ -1,5 +1,6 @@
 import { CartItem, Transaction } from '../types';
 import { db } from '../utils/db';
+import { getRemainingRefundQuantities, hasRefundableItems } from '../utils/refundAvailability';
 
 type RefundCondition = 'SELLABLE' | 'DAMAGED';
 
@@ -91,9 +92,12 @@ export async function persistStandaloneRefundTransaction(
 
   let updatedOriginal: Transaction | undefined;
   if (originalTransaction) {
-    const totalOriginalQty = (originalTransaction.items || []).reduce((acc, item) => acc + Math.abs(Number(item.quantity || 0)), 0);
-    const refundedQty = normalizedItems.reduce((acc, item) => acc + Math.abs(Number(item.quantity || 0)), 0);
-    const nextStatus = refundedQty >= totalOriginalQty ? 'REFUNDED' : 'PARTIAL_REFUND';
+    const persistedTransactions = await db.get('transactions') as Transaction[];
+    const remaining = getRemainingRefundQuantities(
+      originalTransaction,
+      Array.isArray(persistedTransactions) ? persistedTransactions : [persistedRefund]
+    );
+    const nextStatus = hasRefundableItems(remaining) ? 'PARTIAL_REFUND' : 'REFUNDED';
 
     updatedOriginal = {
       ...originalTransaction,

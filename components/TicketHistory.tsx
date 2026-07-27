@@ -44,6 +44,11 @@ import {
    buildPaymentSettlementSummary,
    resolveCurrencySymbol,
 } from '../utils/paymentSettlement';
+import {
+   getRemainingRefundQuantities,
+   hasRefundableItems,
+   validateRefundItems,
+} from '../utils/refundAvailability';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -1263,6 +1268,14 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    const [refundTx, setRefundTx] = useState<Transaction | null>(null);
    const [refundRequestMode, setRefundRequestMode] = useState<RefundRequestMode>('STANDARD');
    const [gatewayProgress, setGatewayProgress] = useState<GatewayProgressOverlayState | null>(null);
+   const allKnownTransactions = useMemo(
+      () => Array.from(new Map([...historyTransactions, ...transactions].map(transaction => [transaction.id, transaction])).values()),
+      [historyTransactions, transactions]
+   );
+   const refundRemainingQuantities = useMemo(
+      () => refundTx ? getRemainingRefundQuantities(refundTx, allKnownTransactions) : new Map<string, number>(),
+      [allKnownTransactions, refundTx]
+   );
 
    const normalizeTerminalKey = (value?: unknown) => String(value || '').trim().toLowerCase();
 
@@ -2197,6 +2210,11 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       reason: string
    ) => {
       if (!originalTx || refundItems.length === 0) return;
+      const availability = validateRefundItems(originalTx, refundItems, allKnownTransactions);
+      if ('message' in availability) {
+         alert(availability.message);
+         return;
+      }
 
       const terminalId = originalTx.terminalId || config.terminals?.[0]?.id || 'T1';
       const validation = validateTerminalDocument(config, terminalId, 'REFUND');
@@ -2400,6 +2418,11 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             onClose={() => setSelectedTxId(null)}
             onPrint={(tx) => { void handlePrintTransaction(tx); }}
             onRequestRefund={(tx) => {
+               const remaining = getRemainingRefundQuantities(tx, allKnownTransactions);
+               if (!hasRefundableItems(remaining)) {
+                  alert('Esta factura ya fue abonada completamente y no tiene saldo pendiente de devolución.');
+                  return;
+               }
                setRefundRequestMode('STANDARD');
                setRefundTx(tx);
                setIsRefundModalOpen(true);
@@ -2464,6 +2487,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             onConfirm={handleConfirmRefundFromModal}
             currencySymbol={config.currencySymbol}
             mode={refundRequestMode}
+            remainingQuantities={refundRemainingQuantities}
          />
 
          <SupervisorModal {...supervisorModalProps} users={users} />

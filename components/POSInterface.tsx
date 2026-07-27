@@ -5100,6 +5100,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                setIsReturnMode(false);
                setRefundAuthorizedBy(null);
                setActiveRecoveredReservation(null);
+               if (activeTable && onOpenTableMap) {
+                  onOpenTableMap();
+               }
                return txn;
             }
          } catch (error: any) {

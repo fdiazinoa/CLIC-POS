@@ -52,6 +52,8 @@ interface TableMapProps {
     onParkedOrderSplitResult?: (orderId: string, remainingItems: CartItem[], newTicketItems: CartItem[], extraNewTickets?: CartItem[][], splitCount?: number) => void | Promise<void>;
     /** Restaurante: abrir diseñador de plano de mesas */
     onOpenTableLayoutDesigner?: () => void;
+    /** Conserva la sala seleccionada aunque el mapa se desmonte. */
+    onChangeRoom?: (roomId: string) => void;
 }
 
 type SmartStatus = 'FREE' | 'ATTENTION' | 'OCCUPIED' | 'CHECK_REQUESTED';
@@ -76,6 +78,7 @@ interface SmartTableModel {
     needsRevenueGlow: boolean;
     hasPendingKitchenDispatch: boolean;
     lastOrderHint: string;
+    firstCustomerName?: string;
 }
 
 interface TooltipState {
@@ -386,7 +389,8 @@ const TableMap: React.FC<TableMapProps> = ({
     roles = [],
     onPrintPrecheck,
     onParkedOrderSplitResult,
-    onOpenTableLayoutDesigner
+    onOpenTableLayoutDesigner,
+    onChangeRoom
 }) => {
     const [activeRoomId, setActiveRoomId] = useState<string>(initialRoomId || rooms[0]?.id || '');
     const [selectedTable, setSelectedTable] = useState<Table | null>(null);
@@ -748,6 +752,9 @@ const TableMap: React.FC<TableMapProps> = ({
             const serviceStage = getServiceStage(progress);
             const needsRevenueGlow = isOccupiedLike && highRevenueThreshold > 0 && total >= highRevenueThreshold;
             const hasPendingKitchenDispatch = getTableTickets(displayTable).some(hasPendingKdsDispatch);
+            const firstCustomerName = getTableTickets(displayTable)
+                .map(ticket => String(ticket.customerSnapshot?.name || ticket.customerName || '').trim())
+                .find(Boolean);
 
             const baseModel: SmartTableModel = {
                 table: displayTable,
@@ -764,7 +771,8 @@ const TableMap: React.FC<TableMapProps> = ({
                 serviceStage,
                 needsRevenueGlow,
                 hasPendingKitchenDispatch,
-                lastOrderHint: ''
+                lastOrderHint: '',
+                firstCustomerName
             };
 
             return {
@@ -1629,6 +1637,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                             key={room.id}
                                             onClick={() => {
                                                 setActiveRoomId(room.id);
+                                                onChangeRoom?.(room.id);
                                                 setShowRoomPicker(false);
                                             }}
                                             className={`w-full px-3 py-2.5 rounded-2xl border transition-all duration-200 text-sm font-bold flex items-center gap-2 text-left ${
@@ -1739,6 +1748,7 @@ const TableMap: React.FC<TableMapProps> = ({
                             <div className="mt-2 space-y-1.5 text-xs text-slate-200/95">
                                 <p><span className="text-slate-400">Ultimo pedido:</span> {tooltip.model.lastOrderHint}</p>
                                 <p><span className="text-slate-400">Mesero:</span> {tooltip.model.table.waiterName || 'Sin asignar'}</p>
+                                <p><span className="text-slate-400">Cliente:</span> {tooltip.model.firstCustomerName || 'Sin asignar'}</p>
                                 <p><span className="text-slate-400">Total:</span> {currencySymbol}{tooltip.model.total.toLocaleString()}</p>
                                 <p><span className="text-slate-400">Tiempo:</span> {tooltip.model.elapsedLabel}</p>
                                 {tooltip.model.hasPendingKitchenDispatch && (
