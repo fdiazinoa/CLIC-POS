@@ -2,13 +2,14 @@ import React, { useEffect, useMemo, useState, useRef } from 'react';
 import {
     Trash2, Plus, Layout, Grid, Settings
 } from 'lucide-react';
-import { Table, Room, TableShape } from '../types';
+import { Table, Room, TableShape, ParkedTicket } from '../types';
 import { getRenderableFloorTables } from '../utils/tableLayout';
 
 interface TableLayoutDesignerProps {
     rooms: Room[];
     currentRoomId: string;
     tables: Table[];
+    parkedTickets?: ParkedTicket[];
     onSave: (tables: Table[]) => void;
     onUpdateTables: (tables: Table[]) => void;
     onCreateRoom?: (name: string) => void;
@@ -88,7 +89,7 @@ const TableShapeVisual: React.FC<{ shape: TableShape; compact?: boolean }> = ({ 
 };
 
 const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
-    rooms, currentRoomId, tables, onUpdateTables, onCreateRoom, onChangeRoom, onUpdateRoom
+    rooms, currentRoomId, tables, parkedTickets = [], onUpdateTables, onCreateRoom, onChangeRoom, onUpdateRoom
 }) => {
     const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
     const [showRoomSettings, setShowRoomSettings] = useState(false);
@@ -249,6 +250,21 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
     };
 
     const deleteTable = (id: string) => {
+        const table = tables.find(candidate => String(candidate.id) === String(id));
+        if (!table) return;
+        const hasAssociatedOrders = Boolean(
+            table.currentOrderId
+            || Number(table.currentOrderTotal || 0) > 0
+            || parkedTickets.some(ticket =>
+                String(ticket.tableId ?? '') === String(table.id)
+                && (ticket.items || []).some(item => Number(item.quantity || 0) > 0)
+            )
+        );
+        if (hasAssociatedOrders) {
+            alert('No se puede eliminar esta mesa porque tiene pedidos asociados. Finalice o mueva las cuentas antes de editar el layout.');
+            return;
+        }
+        if (!window.confirm(`¿Eliminar ${getTableLabel(table)} del layout?`)) return;
         onUpdateTables(tables.filter(t => t.id !== id));
         setSelectedTableId(null);
     };

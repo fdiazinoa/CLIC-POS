@@ -66,6 +66,7 @@ import { ThermalPrinterService } from './services/printer/ThermalPrinterService'
 import { resolveDeviceRoleValue } from './utils/deviceRoleHelpers';
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from './utils/posSaleActivity';
 import { canEnterReducedSyncMode, resolveReducedSyncAfterMinutes } from './utils/syncInactivityPolicy';
+import { validateRefundItems } from './utils/refundAvailability';
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
@@ -8338,6 +8339,19 @@ const AppContent: React.FC = () => {
       return null;
     }
 
+    const persistedTransactionsForValidation = await db.get('transactions') as Transaction[];
+    const refundAvailability = validateRefundItems(
+      originalTx,
+      normalizedRefundItems,
+      Array.isArray(persistedTransactionsForValidation)
+        ? [...transactions, ...persistedTransactionsForValidation]
+        : transactions
+    );
+    if ('message' in refundAvailability) {
+      alert(refundAvailability.message);
+      return null;
+    }
+
     // 1. Calculations
     const refundSummary = calculateTransactionTaxSummary(
       itemsToRefund,
@@ -8348,7 +8362,7 @@ const AppContent: React.FC = () => {
     const refundTotal = refundSummary.total;
 
     // Check if full refund
-    const totalOriginalQty = originalTx.items.reduce((acc, i) => acc + Math.abs(Number(i.quantity || 0)), 0);
+    const totalOriginalQty = Array.from(refundAvailability.remaining.values()).reduce((acc, quantity) => acc + quantity, 0);
     const totalRefundedQty = normalizedRefundItems.reduce((acc, i) => acc + Math.abs(Number(i.quantity || 0)), 0);
     const isFullRefund = totalRefundedQty >= totalOriginalQty;
     const newStatus = isFullRefund ? 'REFUNDED' : 'PARTIAL_REFUND';
@@ -8755,6 +8769,7 @@ const AppContent: React.FC = () => {
               <TableMap
                 rooms={rooms}
                 currentRoomId={activeRoomId}
+                onChangeRoom={setActiveRoomId}
                 tables={tables}
                 parkedTickets={parkedTickets}
                 onTableClick={async (table) => {
@@ -8926,6 +8941,7 @@ const AppContent: React.FC = () => {
                 rooms={rooms}
                 currentRoomId={activeRoomId || rooms[0]?.id || ''}
                 tables={tables}
+                parkedTickets={parkedTickets}
                 onSave={(newTables) => handleSaveFloorPlan(rooms, newTables)}
                 onUpdateTables={(newTables) => setTables(newTables)}
                 onChangeRoom={(roomId) => setActiveRoomId(roomId)}
