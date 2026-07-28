@@ -49,6 +49,10 @@ import {
    hasRefundableItems,
    validateRefundItems,
 } from '../utils/refundAvailability';
+import {
+   resolveHistoryDiscountTotal,
+   resolveHistoryTerminalName,
+} from '../utils/transactionHistoryPresentation';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -675,6 +679,8 @@ const TicketDetailDrawer: React.FC<{
    const affectedNCF = (tx.affectedNCF || '').toString().trim();
    const terminalConfig = config.terminals?.find(t => t.id === tx.terminalId)?.config;
    const fiscalSummary = calculateTransactionFiscalSummary(tx, config, { terminalConfig });
+   const historyDiscountTotal = resolveHistoryDiscountTotal(tx);
+   const historyTerminalName = resolveHistoryTerminalName(tx, config.terminals || []);
    const canRetryFiscal = canRetryFiscalTransaction(tx) && Boolean(onRetryFiscalDocument);
    const retryActionLabel = getFiscalRetryActionLabel(tx) || 'Reintentar envío';
    const canRequestAzulRefund = !isRefundDoc && tx.status !== 'REFUNDED' && canOfferAzulRefundAction(tx, config);
@@ -854,6 +860,12 @@ const TicketDetailDrawer: React.FC<{
                      <span>Subtotal</span>
                      <span>{config.currencySymbol}{fiscalSummary.subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
+                  {historyDiscountTotal > 0 && (
+                     <div className="flex justify-between text-xs font-bold text-rose-600 uppercase tracking-wider">
+                        <span>Descuento</span>
+                        <span>-{config.currencySymbol}{historyDiscountTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                     </div>
+                  )}
                   {fiscalSummary.taxBreakdown.length > 0 ? (
                      fiscalSummary.taxBreakdown.map((tax) => (
                         <div key={`${tx.id}-${tax.id}`} className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
@@ -887,7 +899,7 @@ const TicketDetailDrawer: React.FC<{
                      </div>
                      <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
                         <p className="text-[10px] font-bold text-gray-400 uppercase">Terminal</p>
-                        <p className="text-xs font-bold text-gray-800">{tx.terminalId || 'N/D'}</p>
+                        <p className="text-xs font-bold text-gray-800">{historyTerminalName}</p>
                      </div>
                      <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
                         <p className="text-[10px] font-bold text-gray-400 uppercase">NCF</p>

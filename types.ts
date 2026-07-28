@@ -1632,6 +1632,7 @@ export interface Transaction {
   userId: string;
   userName: string;
   terminalId?: string;
+  terminalName?: string;
 
   // Status
   status: 'PENDING' | 'COMPLETED' | 'REFUNDED' | 'PARTIAL_REFUND';
