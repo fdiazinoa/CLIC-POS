@@ -30,6 +30,7 @@ import TableMoveConfirmationModal from './TableMoveConfirmationModal';
 import { createPaymentFractionPlan } from '../utils/paymentFractions';
 import { getRenderableFloorTables } from '../utils/tableLayout';
 import { hasPendingKdsDispatch } from '../utils/kdsPresentation';
+import { resolveOperationalApiUrl } from '../utils/masterOperationalApi';
 
 interface TableMapProps {
     rooms: Room[];
@@ -1176,7 +1177,7 @@ const TableMap: React.FC<TableMapProps> = ({
             }
 
             try {
-                const res = await fetch('/api/mesas/abrir', {
+                const res = await fetch(resolveOperationalApiUrl('/api/mesas/abrir'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1884,7 +1885,7 @@ const TableMap: React.FC<TableMapProps> = ({
                         }}
                         onMergeTables={async (targetTableIds) => {
                             try {
-                                const res = await fetch('/api/mesas/unir', {
+                                const res = await fetch(resolveOperationalApiUrl('/api/mesas/unir'), {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({
@@ -1907,7 +1908,7 @@ const TableMap: React.FC<TableMapProps> = ({
                         }}
                         onFree={async () => {
                             try {
-                                const res = await fetch('/api/mesas/liberar', {
+                                const res = await fetch(resolveOperationalApiUrl('/api/mesas/liberar'), {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ tableId: selectedTable.id })

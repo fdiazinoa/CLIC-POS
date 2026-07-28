@@ -98,6 +98,7 @@ import {
 } from '../services/sync/ConsignmentSyncService';
 import { resolveDeviceRoleValue } from '../utils/deviceRoleHelpers';
 import { normalizeProductionOutputMode, resolveProductionOutputTargets } from '../utils/productionOutputMode';
+import { resolveOperationalApiUrl } from '../utils/masterOperationalApi';
 
 // ... existing imports
 
@@ -5058,7 +5059,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         const controller = new AbortController();
                         const timeoutId = window.setTimeout(() => controller.abort(), 4000);
                         try {
-                           const releaseRes = await fetch('/api/mesas/liberar', {
+                           const releaseRes = await fetch(resolveOperationalApiUrl('/api/mesas/liberar'), {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({ tableId: activeTable.id }),
@@ -5649,7 +5650,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const controller = new AbortController();
          const timeoutId = window.setTimeout(() => controller.abort(), 2500);
          try {
-            const releaseRes = await fetch('/api/mesas/liberar', {
+            const releaseRes = await fetch(resolveOperationalApiUrl('/api/mesas/liberar'), {
                method: 'POST',
                headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ tableId: tableToRelease.id }),

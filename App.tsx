@@ -67,6 +67,7 @@ import { resolveDeviceRoleValue } from './utils/deviceRoleHelpers';
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from './utils/posSaleActivity';
 import { canEnterReducedSyncMode, resolveReducedSyncAfterMinutes } from './utils/syncInactivityPolicy';
 import { validateRefundItems } from './utils/refundAvailability';
+import { isClientTerminalMode, resolveOperationalApiUrl } from './utils/masterOperationalApi';
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
@@ -3378,6 +3379,7 @@ const AppContent: React.FC = () => {
     roomIds: new Set(persistedFloorPlanMirror.rooms.map(room => String(room.id))),
     tableIds: new Set(persistedFloorPlanMirror.tables.map(table => String(table.id)))
   } : null);
+  const clientFloorPlanCacheSignatureRef = useRef('');
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [settingsInitialView, setSettingsInitialView] = useState<string | undefined>();
   const [settingsInitialData, setSettingsInitialData] = useState<any>();
@@ -3910,9 +3912,11 @@ const AppContent: React.FC = () => {
 
   const fetchTables = async () => {
     try {
+      const isClientRuntime = isClientTerminalMode();
       const terminalId = getCurrentTerminal()?.id;
       const query = terminalId ? `?terminal_id=${encodeURIComponent(terminalId)}` : '';
-      const res = await fetch(`/api/mesas${query}`);
+      const endpoint = resolveOperationalApiUrl(`/api/mesas${query}`);
+      const res = await fetch(endpoint);
       if (res.ok) {
         const contentType = res.headers.get('content-type') || '';
         if (!contentType.toLowerCase().includes('application/json')) {
@@ -3920,6 +3924,10 @@ const AppContent: React.FC = () => {
         }
         const data = await res.json();
         const mergeRemoteTables = (incomingTables: Table[], previousTables: Table[]) => {
+          if (isClientRuntime) {
+            return reconcileTablesWithParkedTickets(incomingTables, parkedTickets);
+          }
+
           const localFloorPlan = locallySavedFloorPlanRef.current;
           const allowedIncoming = localFloorPlan
             ? incomingTables.filter(table => localFloorPlan.tableIds.has(String(table.id)))
@@ -3966,6 +3974,27 @@ const AppContent: React.FC = () => {
         const nextTables = Array.isArray(data?.tables) ? data.tables : [];
         const nextRooms = Array.isArray(data?.rooms) ? data.rooms : [];
 
+        if (isClientRuntime && nextRooms.length > 0 && nextTables.length > 0) {
+          const cacheSignature = JSON.stringify({ rooms: nextRooms, tables: nextTables });
+          if (cacheSignature !== clientFloorPlanCacheSignatureRef.current) {
+            await Promise.all([
+              db.save('rooms', nextRooms),
+              db.save('tables', nextTables)
+            ]);
+            writeFloorPlanMirror(nextRooms, nextTables);
+            clientFloorPlanCacheSignatureRef.current = cacheSignature;
+          }
+          locallySavedFloorPlanRef.current = {
+            roomIds: new Set(nextRooms.map((room: Room) => String(room.id))),
+            tableIds: new Set(nextTables.map((table: Table) => String(table.id)))
+          };
+          console.log('[TABLE_LAYOUT_CLIENT_SYNC]', {
+            source: endpoint,
+            rooms: nextRooms.length,
+            tables: nextTables.length
+          });
+        }
+
         setTables(previousTables => {
           if (nextTables.length === 0 && previousTables.length > 0) {
             console.warn('Se ignoró una respuesta vacía de mesas para preservar el layout local.');
@@ -3976,6 +4005,8 @@ const AppContent: React.FC = () => {
 
         if (nextRooms.length > 0) {
           setRooms(previousRooms => {
+            if (isClientRuntime) return nextRooms;
+
             const localFloorPlan = locallySavedFloorPlanRef.current;
             if (!localFloorPlan || previousRooms.length === 0) return nextRooms;
 
@@ -4001,7 +4032,7 @@ const AppContent: React.FC = () => {
         }
       }
     } catch (e) {
-      console.warn("Failed to fetch tables from API, falling back to local DB:", e);
+      console.warn("Failed to fetch tables from Master/API, falling back to local DB:", e);
       try {
         const [localRooms, localTables] = await Promise.all([
           db.get('rooms') as Promise<Room[]>,
@@ -4050,7 +4081,7 @@ const AppContent: React.FC = () => {
     };
 
     try {
-      const res = await fetch('/api/mesas/abrir', {
+      const res = await fetch(resolveOperationalApiUrl('/api/mesas/abrir'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -6623,7 +6654,7 @@ const AppContent: React.FC = () => {
       setActiveTable(updatedTable);
       
       // Update in server
-      await fetch(`/api/tables/${activeTable.id}`, {
+      await fetch(resolveOperationalApiUrl(`/api/tables/${activeTable.id}`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ guests })
@@ -7621,7 +7652,7 @@ const AppContent: React.FC = () => {
     };
 
     // Pull current server snapshot to compute deletions safely
-    const snapshotRes = await fetch('/api/mesas');
+    const snapshotRes = await fetch(resolveOperationalApiUrl('/api/mesas'));
     if (!snapshotRes.ok) {
       throw new Error(`No se pudo leer estado actual de mesas (HTTP ${snapshotRes.status})`);
     }
@@ -7635,7 +7666,7 @@ const AppContent: React.FC = () => {
 
     // Upsert rooms first
     for (const roomPayload of normalizedRoomsPayload) {
-      const res = await fetch(`/api/rooms/${encodeURIComponent(roomPayload.id)}`, {
+      const res = await fetch(resolveOperationalApiUrl(`/api/rooms/${encodeURIComponent(roomPayload.id)}`), {
         method: 'PUT',
         headers,
         body: JSON.stringify(roomPayload)
@@ -7647,7 +7678,7 @@ const AppContent: React.FC = () => {
 
     // Upsert tables with normalized designer defaults
     for (const tablePayload of normalizedTablesPayload) {
-      const res = await fetch(`/api/tables/${encodeURIComponent(tablePayload.id)}`, {
+      const res = await fetch(resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(tablePayload.id)}`), {
         method: 'PUT',
         headers,
         body: JSON.stringify(tablePayload)
@@ -7660,7 +7691,7 @@ const AppContent: React.FC = () => {
     // Delete removed tables, then rooms
     const removedTables = serverTables.filter(t => !nextTableIds.has(t.id));
     for (const table of removedTables) {
-      const res = await fetch(`/api/tables/${encodeURIComponent(table.id)}`, { method: 'DELETE' });
+      const res = await fetch(resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(table.id)}`), { method: 'DELETE' });
       if (!res.ok) {
         throw new Error(`Error eliminando mesa ${table.id} (HTTP ${res.status})`);
       }
@@ -7668,7 +7699,7 @@ const AppContent: React.FC = () => {
 
     const removedRooms = serverRooms.filter(r => !nextRoomIds.has(r.id));
     for (const room of removedRooms) {
-      const res = await fetch(`/api/rooms/${encodeURIComponent(room.id)}`, { method: 'DELETE' });
+      const res = await fetch(resolveOperationalApiUrl(`/api/rooms/${encodeURIComponent(room.id)}`), { method: 'DELETE' });
       if (!res.ok) {
         throw new Error(`Error eliminando sala ${room.id} (HTTP ${res.status})`);
       }
@@ -9151,7 +9182,7 @@ const AppContent: React.FC = () => {
               });
 
               try {
-                await fetch(`/api/tables/${encodeURIComponent(String(table.id))}`, {
+                await fetch(resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`), {
                   method: 'PUT',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify(updatedTable)
@@ -9235,7 +9266,7 @@ const AppContent: React.FC = () => {
               });
 
               try {
-                await fetch(`/api/tables/${encodeURIComponent(String(table.id))}`, {
+                await fetch(resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`), {
                   method: 'PUT',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify(nextTable)
