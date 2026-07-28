@@ -1,4 +1,8 @@
 import { TerminalConfig, DocumentType } from '../types';
+import {
+    isDocumentSeriesCompatibleWithType,
+    resolveEffectiveSeriesIdForDocumentType,
+} from './documentSeriesIdentity';
 
 /** Mensaje cuando el ERP / política deshabilitó cortes parciales (X). */
 export const PARTIAL_X_REPORT_DISABLED_MESSAGE =
@@ -8,6 +12,60 @@ export const PARTIAL_X_REPORT_DISABLED_MESSAGE =
 export function isPartialXReportAllowed(terminalConfig: TerminalConfig | undefined): boolean {
     return terminalConfig?.workflow?.session?.allowPartialXReport !== false;
 }
+
+const getAssignmentSources = (terminalConfig: TerminalConfig): Array<Record<string, unknown>> => {
+    const config = terminalConfig as any;
+    const snapshot = config.erpSnapshot || {};
+    return [
+        config.documentAssignments,
+        config.document_assignments,
+        config.documents?.assignments,
+        snapshot.resolved?.documents?.assignments,
+        snapshot.config?.documents?.assignments,
+        snapshot.terminal_config?.documents?.assignments,
+        snapshot.terminalConfig?.documents?.assignments,
+    ].filter((source) => source && typeof source === 'object');
+};
+
+const getSeriesSources = (terminalConfig: TerminalConfig): unknown[][] => {
+    const config = terminalConfig as any;
+    const snapshot = config.erpSnapshot || {};
+    return [
+        config.documentSeries,
+        config.document_series,
+        snapshot.resolved?.documents?.documentSeries,
+        snapshot.resolved?.documents?.document_series,
+        snapshot.terminal_config?.documentSeries,
+        snapshot.terminal_config?.document_series,
+    ].filter(Array.isArray);
+};
+
+export const resolveTerminalDocumentSeriesId = (
+    terminalConfig: TerminalConfig | undefined,
+    documentType: DocumentType
+): string | undefined => {
+    if (!terminalConfig) return undefined;
+
+    const series = getSeriesSources(terminalConfig).flat() as any[];
+    const assignment = getAssignmentSources(terminalConfig)
+        .map((source) => source[documentType] ?? source[documentType.toLowerCase()])
+        .find((value) => typeof value === 'string' && value.trim());
+
+    if (typeof assignment === 'string' && assignment.trim()) {
+        return resolveEffectiveSeriesIdForDocumentType(documentType, series, assignment.trim()) || assignment.trim();
+    }
+
+    const authoritativeMatch = series.find((candidate) => (
+        String(candidate?.source || candidate?.syncSource || '').toUpperCase().includes('ERP') &&
+        candidate?.active !== false &&
+        candidate?.enabled !== false &&
+        isDocumentSeriesCompatibleWithType(documentType, candidate)
+    ));
+
+    return typeof authoritativeMatch?.id === 'string' && authoritativeMatch.id.trim()
+        ? authoritativeMatch.id.trim()
+        : undefined;
+};
 
 /**
  * Validate if a terminal has a series assigned for a specific document type
@@ -27,7 +85,7 @@ export function validateTerminalSeries(
         return { isValid: false, message: PARTIAL_X_REPORT_DISABLED_MESSAGE };
     }
 
-    const assignedSeriesId = terminalConfig.documentAssignments?.[documentType];
+    const assignedSeriesId = resolveTerminalDocumentSeriesId(terminalConfig, documentType);
 
     if (!assignedSeriesId) {
         const typeLabels: Record<DocumentType, string> = {

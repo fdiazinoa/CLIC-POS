@@ -1,10 +1,28 @@
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { syncManager } from './SyncManager';
 import { ensureSupabaseSessionRestored, supabase } from '../../utils/supabase';
-import { getStoredErpSyncBinding } from '../../utils/erpSyncLifecycle';
+import { getStoredErpSyncBinding, triggerErpSyncOutbox } from '../../utils/erpSyncLifecycle';
 import { dispatchDeviceRevoked, resolveLocalDeviceId } from '../../utils/deviceRevocation';
 
 const FORCE_SYNC_NOTICE_KEY = 'clic_pos_force_sync_notice';
+const LIGHTWEIGHT_SYNC_NOTICE_KEY = 'clic_pos_lightweight_sync_notice';
+const LIGHTWEIGHT_SYNC_DEBOUNCE_MS = 1800;
+const LIGHTWEIGHT_SYNC_JITTER_MS = 2200;
+const LIGHTWEIGHT_COLLECTIONS = new Set([
+    'products',
+    'productStocks',
+    'productPrices',
+    'priceLists',
+    'warehouses',
+    'taxes',
+    'paymentMethods',
+    'customers',
+    'suppliers',
+    'documentSeries',
+    'internalSequences',
+    'fiscalRanges',
+    'terminalFiscalConfig',
+]);
 
 const asObject = (value: unknown): Record<string, any> => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -30,9 +48,75 @@ const persistForceSyncNotice = (payload: unknown) => {
     localStorage.setItem(FORCE_SYNC_NOTICE_KEY, JSON.stringify(notice));
 };
 
+const asString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+
+const uniqueStrings = (values: unknown[]): string[] =>
+    Array.from(new Set(values.map(asString).filter(Boolean)));
+
+const normalizeCollections = (payload: unknown, fallback: string[] = []): string[] => {
+    const eventPayload = asObject(payload);
+    const rawCollections = Array.isArray(eventPayload.collections)
+        ? eventPayload.collections
+        : Array.isArray(eventPayload.collection)
+            ? eventPayload.collection
+            : eventPayload.collection
+                ? [eventPayload.collection]
+                : [];
+
+    return uniqueStrings([...rawCollections, ...fallback]).filter((collection) => LIGHTWEIGHT_COLLECTIONS.has(collection));
+};
+
+const persistLightweightSyncNotice = (payload: unknown, collections: string[]) => {
+    const eventPayload = asObject(payload);
+    localStorage.setItem(LIGHTWEIGHT_SYNC_NOTICE_KEY, JSON.stringify({
+        receivedAt: new Date().toISOString(),
+        event: eventPayload.event || eventPayload.reason || null,
+        collections,
+        ids: Array.isArray(eventPayload.ids) ? eventPayload.ids : [],
+        imageOnly: Boolean(eventPayload.imageOnly || eventPayload.image_only),
+        version: eventPayload.version || null,
+    }));
+};
+
 class RealtimeNotificationService {
     private channel: RealtimeChannel | null = null;
     private storeId: string | null = null;
+    private lightweightSyncTimer: ReturnType<typeof setTimeout> | null = null;
+    private pendingCollections = new Set<string>();
+
+    private scheduleLightweightSync(payload: unknown, fallbackCollections: string[]) {
+        const collections = normalizeCollections(payload, fallbackCollections);
+        if (collections.length === 0) return;
+
+        collections.forEach((collection) => this.pendingCollections.add(collection));
+        persistLightweightSyncNotice(payload, Array.from(this.pendingCollections));
+
+        if (this.lightweightSyncTimer) {
+            clearTimeout(this.lightweightSyncTimer);
+        }
+
+        const jitter = Math.floor(Math.random() * LIGHTWEIGHT_SYNC_JITTER_MS);
+        this.lightweightSyncTimer = setTimeout(async () => {
+            this.lightweightSyncTimer = null;
+            const collectionsToSync = Array.from(this.pendingCollections);
+            this.pendingCollections.clear();
+
+            if (syncManager.getIsInternalSyncing()) {
+                console.log('📡 RealtimeNotificationService: Sync already running, delaying lightweight sync.');
+                this.scheduleLightweightSync({ collections: collectionsToSync, reason: 'RETRY_AFTER_BUSY' }, collectionsToSync);
+                return;
+            }
+
+            try {
+                console.log('📡 RealtimeNotificationService: Running lightweight sync.', { collections: collectionsToSync });
+                for (const collection of collectionsToSync) {
+                    await syncManager.pullCatalog(collection as any, false, { ignoreThrottle: true });
+                }
+            } catch (error) {
+                console.error('❌ RealtimeNotificationService: Error during lightweight sync handling:', error);
+            }
+        }, LIGHTWEIGHT_SYNC_DEBOUNCE_MS + jitter);
+    }
 
     async initialize(_masterUrl: string, terminalId: string) {
         await this.disconnect();
@@ -57,6 +141,19 @@ class RealtimeNotificationService {
         channel.on('broadcast', { event: 'force_sync' }, async ({ payload }) => {
             console.log('📡 RealtimeNotificationService: Received force_sync broadcast.', payload);
             persistForceSyncNotice(payload);
+            try {
+                await triggerErpSyncOutbox('force_sync');
+            } catch (error) {
+                console.error('❌ RealtimeNotificationService: ERP outbox failed during force_sync.', error);
+            }
+            const eventPayload = asObject(payload);
+            const specificCollections = normalizeCollections(eventPayload);
+            const imageOnly = Boolean(eventPayload.imageOnly || eventPayload.image_only || eventPayload.reason === 'PRODUCT_IMAGE_UPDATED');
+
+            if (imageOnly || specificCollections.length > 0) {
+                this.scheduleLightweightSync(eventPayload, imageOnly ? ['products'] : specificCollections);
+                return;
+            }
 
             if (syncManager.getIsInternalSyncing()) {
                 console.log('📡 RealtimeNotificationService: Sync already running, skipping force_sync.');
@@ -75,6 +172,21 @@ class RealtimeNotificationService {
             }
         });
 
+        channel.on('broadcast', { event: 'catalog_changed' }, ({ payload }) => {
+            console.log('📡 RealtimeNotificationService: Received catalog_changed broadcast.', payload);
+            this.scheduleLightweightSync(payload, normalizeCollections(payload));
+        });
+
+        channel.on('broadcast', { event: 'products_changed' }, ({ payload }) => {
+            console.log('📡 RealtimeNotificationService: Received products_changed broadcast.', payload);
+            this.scheduleLightweightSync(payload, ['products']);
+        });
+
+        channel.on('broadcast', { event: 'product_images_changed' }, ({ payload }) => {
+            console.log('📡 RealtimeNotificationService: Received product_images_changed broadcast.', payload);
+            this.scheduleLightweightSync(payload, ['products']);
+        });
+
         channel.on('broadcast', { event: 'device_revoked' }, ({ payload }) => {
             const eventPayload = asObject(payload);
             const localDeviceId = resolveLocalDeviceId();
@@ -82,9 +194,9 @@ class RealtimeNotificationService {
             const terminalIdFromEvent = String(eventPayload.terminal_id || '').trim();
             const boundTerminalId = getStoredErpSyncBinding().terminalId || '';
 
-            const appliesToThisDevice =
-                Boolean(localDeviceId && previousDeviceId && localDeviceId === previousDeviceId)
-                || Boolean(boundTerminalId && terminalIdFromEvent && boundTerminalId === terminalIdFromEvent);
+            const appliesByDevice = Boolean(localDeviceId && previousDeviceId && localDeviceId === previousDeviceId);
+            const appliesByTerminalFallback = Boolean(!previousDeviceId && boundTerminalId && terminalIdFromEvent && boundTerminalId === terminalIdFromEvent);
+            const appliesToThisDevice = appliesByDevice || appliesByTerminalFallback;
 
             if (!appliesToThisDevice) {
                 return;
@@ -133,6 +245,11 @@ class RealtimeNotificationService {
                 console.warn('📡 RealtimeNotificationService: Failed to unsubscribe channel.', error);
             }
         }
+        if (this.lightweightSyncTimer) {
+            clearTimeout(this.lightweightSyncTimer);
+            this.lightweightSyncTimer = null;
+        }
+        this.pendingCollections.clear();
         this.storeId = null;
     }
 }

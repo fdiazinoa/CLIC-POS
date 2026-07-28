@@ -1,12 +1,22 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { Delete, Lock, Fingerprint } from 'lucide-react';
+import { Delete, Lock, Fingerprint, User as UserIcon } from 'lucide-react';
 import { User as UserType, TerminalConfig } from '../types';
 import { biometricService } from '../services/BiometricAuthService';
 import './ModernLoginScreen.css';
 
 /** En WebView/Capacitor, enfocar un input numérico abre el teclado virtual y desplaza la UI; el PIN se sigue pudiendo digitar con teclado físico vía `keydown` global. */
 const suppressNativeSoftKeyboardForPin = Capacitor.isNativePlatform();
+
+const isGeneratedAvatarPlaceholder = (value: string): boolean => {
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized.includes('api.dicebear.com') ||
+    normalized.includes('/avataaars/') ||
+    normalized.includes('placeholder') ||
+    normalized.includes('placehold.co')
+  );
+};
 
 interface ModernLoginScreenProps {
   onLogin: (user: UserType) => void;
@@ -29,6 +39,7 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
   const [isHardwareAvailable, setIsHardwareAvailable] = useState(false);
   const [buildVersion, setBuildVersion] = useState<string>('');
   const [currentDateTime, setCurrentDateTime] = useState(() => new Date());
+  const [failedUserPhotos, setFailedUserPhotos] = useState<Record<string, boolean>>({});
   const pinInputRef = useRef<HTMLInputElement>(null);
   const usersByPin = useMemo(() => {
     const map = new Map<string, UserType>();
@@ -241,28 +252,38 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
           </div>
 
           <div className="modern-user-grid">
-            {availableUsers.slice(0, 12).map((user) => (
-              <button
-                key={user.id}
-                onClick={() => {
-                  setSelectedUser(user);
-                  setPin('');
-                  setError(false);
-                }}
-                className={`modern-user-card ${selectedUser?.id === user.id ? 'active' : ''}`}
-              >
-                <div className="modern-user-avatar-wrapper">
-                  <div className="modern-user-avatar">
-                    {user.photo ? (
-                      <img src={user.photo} alt={user.name} className="w-full h-full object-cover" />
-                    ) : (
-                      user.name.charAt(0)
-                    )}
+            {availableUsers.slice(0, 12).map((user) => {
+              const photoSrc = typeof user.photo === 'string' ? user.photo.trim() : '';
+              const shouldShowPhoto = photoSrc && !isGeneratedAvatarPlaceholder(photoSrc) && !failedUserPhotos[user.id];
+
+              return (
+                <button
+                  key={user.id}
+                  onClick={() => {
+                    setSelectedUser(user);
+                    setPin('');
+                    setError(false);
+                  }}
+                  className={`modern-user-card ${selectedUser?.id === user.id ? 'active' : ''}`}
+                >
+                  <div className="modern-user-avatar-wrapper">
+                    <div className="modern-user-avatar">
+                      {shouldShowPhoto ? (
+                        <img
+                          src={photoSrc}
+                          alt={user.name}
+                          className="w-full h-full object-cover"
+                          onError={() => setFailedUserPhotos((prev) => ({ ...prev, [user.id]: true }))}
+                        />
+                      ) : (
+                        <UserIcon className="modern-user-avatar-fallback" aria-hidden="true" />
+                      )}
+                    </div>
                   </div>
-                </div>
-                <span className="modern-user-name">{user.name.split(' ')[0]}</span>
-              </button>
-            ))}
+                  <span className="modern-user-name">{user.name.split(' ')[0]}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
 

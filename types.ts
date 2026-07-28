@@ -203,7 +203,7 @@ export interface FingerprintDiscoveredDevice {
 export type NCFType = 'B01' | 'B02' | 'B04' | 'B14' | 'B15';
 export type ElectronicNCFType = 'E31' | 'E32' | 'E34' | 'E44' | 'E45';
 export type FiscalDocumentCode = NCFType | ElectronicNCFType;
-export type FiscalMode = 'LEGACY_B' | 'ECF';
+export type FiscalMode = 'NONE' | 'LEGACY_B' | 'ECF';
 export type FiscalProviderId = 'NONE' | 'POLARIS' | 'DIGIFACT';
 export type FiscalProviderEnvironment = 0 | 1 | 2 | 3;
 export type FiscalProviderDeliveryMode = 'LOCAL_DIRECT' | 'DELEGATED_ERP';
@@ -492,12 +492,15 @@ export type DocumentType =
 
 export interface DocumentSeries {
   id: string;
+  code?: string;
   documentType: DocumentType;  // Functional type
   name: string;
   description: string;
   prefix: string;
   nextNumber: number;
   padding: number;
+  enabled?: boolean;
+  source?: string;
   icon: string;
   color: string;
   businessUnit?: string;  // Optional: "Tienda Norte", "Caja Express"
@@ -595,6 +598,22 @@ export interface TerminalConfig {
   erpTerminalId?: string;
   terminalName?: string;
   stationNumber?: string | null;
+  currencyCode?: string;
+  primaryCurrencyCode?: string;
+  currency?: string;
+  allowedCurrencyCodes?: string[];
+  allowed_currency_codes?: string[];
+  currencyCodes?: string[];
+  currency_codes?: string[];
+  currencies?: {
+    default?: string;
+    base?: string;
+    list: Array<CurrencyConfig & {
+      exchange_rate: number;
+      is_base: boolean;
+      enabled: boolean;
+    }>;
+  };
   isPrimaryNode?: boolean; // Rol jerárquico de la terminal
   governedByMaster?: boolean; // NEW: If true, this terminal follows the configuration defined by the Master
   startWithAgenda?: boolean; // NEW: Boot directly into Agenda view
@@ -639,6 +658,7 @@ export interface TerminalConfig {
     requirePinForDiscount: boolean;
     requireManagerForRefunds: boolean;
     autoLogoutMinutes: number;
+    reduceSyncAfterMinutes?: number;
     allowBiometrics?: boolean; // NEW: Biometric Auth Toggle
   };
   pricing: {
@@ -666,6 +686,8 @@ export interface TerminalConfig {
       forceDenominationCount: boolean;
       cashVarianceThreshold: number;
       emailZReport: boolean;
+      requireCashFundOnZ?: boolean;
+      fixedCashFundAmount?: number;
       // New fields for Force Z on Day Change
       forceZChange: boolean;
       businessStartHour: number;
@@ -706,6 +728,8 @@ export interface TerminalConfig {
     usa_modulos_cocina: boolean;
     recibir_consignaciones?: boolean;
     receiveConsignments?: boolean;
+    receive_consignments?: boolean;
+    descargar_consignaciones?: boolean;
     defaultTaxIds?: string[];
     reservationPolicy?: {
       validityDays: number;
@@ -1010,6 +1034,7 @@ export interface Season {
 export interface TipConfiguration {
   enabled: boolean;
   defaultOptions: [number, number, number];
+  fixedAmountOptions?: number[];
   allowCustomTip: boolean;
   serviceCharge: {
     enabled: boolean;
@@ -1092,6 +1117,17 @@ export interface ClassificationItem {
 
 export interface BusinessConfig {
   vertical: VerticalType;
+  business_config?: {
+    vertical_negocio?: VerticalType;
+    businessVertical?: VerticalType;
+    usa_mesas?: boolean;
+    useTables?: boolean;
+    pantalla_inicio?: 'VENTA_DIRECTA' | 'MAPA_MESAS';
+    rooms?: Room[];
+    tables?: Table[];
+    [key: string]: unknown;
+  };
+  businessConfig?: BusinessConfig['business_config'];
   subVertical: SubVertical;
   currencySymbol: string;
   taxRate: number;
@@ -1146,6 +1182,8 @@ export interface BusinessConfig {
     usa_modulos_cocina: boolean;
     recibir_consignaciones?: boolean;
     receiveConsignments?: boolean;
+    receive_consignments?: boolean;
+    descargar_consignaciones?: boolean;
     reservationPolicy?: {
       validityDays: number;
       printCopies: number;
@@ -1377,6 +1415,8 @@ export interface Product {
   updatedAt?: string;
   hasActivePromotion?: boolean; // UI Flag for badges
   returnReason?: string; // For items with qty < 0
+  subtotalizedAt?: string;
+  subtotalizedBy?: string;
   primarySupplierId?: string; // NEW: Preferred supplier for lead time calculation
   production_area_id?: string; // NEW: For command routing
 
@@ -1434,7 +1474,7 @@ export interface InventoryTracking {
 }
 
 // --- FLOOR PLAN TYPES ---
-export type TableShape = 'SQUARE' | 'CIRCLE' | 'OBSTACLE' | 'BAR' | 'BOOTH';
+export type TableShape = 'SQUARE' | 'CIRCLE' | 'OBSTACLE' | 'BAR' | 'BOOTH' | 'CHAISE_LONGUE';
 
 export interface Room {
   id: string;
@@ -1454,11 +1494,17 @@ export interface Room {
     height?: number;
     gridConfig?: any;
     backgroundImage?: string;
+    backgroundStyle?: 'DARK' | 'WHITE';
   };
 }
 
 export interface Table {
   id: string;
+  code?: string;
+  label?: string;
+  room_id?: string;
+  sort_order?: number;
+  active?: boolean;
   roomId: string;
   nombre: string;
   name?: string;
@@ -1479,6 +1525,8 @@ export interface Table {
   waiterId?: string;
   timeSeated?: string;
   guests?: number;
+  barTabId?: string;
+  barTabName?: string;
 }
 
 /**
@@ -1584,6 +1632,7 @@ export interface Transaction {
   userId: string;
   userName: string;
   terminalId?: string;
+  terminalName?: string;
 
   // Status
   status: 'PENDING' | 'COMPLETED' | 'REFUNDED' | 'PARTIAL_REFUND';
@@ -1739,6 +1788,7 @@ export type ViewState =
   | 'WIZARD'
   | 'LOGIN'
   | 'POS'
+  | 'ATTENDANCE'
   | 'SETTINGS'
   | 'SETTINGS_SYNC'
   | 'CUSTOMERS'
@@ -1849,7 +1899,18 @@ export interface StockTransfer {
   syncSource?: 'LOCAL' | 'ERP_SNAPSHOT';
 }
 
-export type PromotionType = 'DISCOUNT' | 'BOGO' | 'HAPPY_HOUR' | 'CONDITIONAL_TARGET' | 'BUNDLE';
+export type PromotionType =
+  | 'DISCOUNT'
+  | 'BOGO'
+  | 'HAPPY_HOUR'
+  | 'CONDITIONAL_TARGET'
+  | 'BUNDLE'
+  | 'TIERED_QUANTITY'
+  | 'MIX_AND_MATCH'
+  | 'GIFT_WITH_PURCHASE'
+  | 'PAYMENT_METHOD_DISCOUNT'
+  | 'PREPAID_PACKAGE'
+  | 'NEXT_PURCHASE_COUPON';
 export type PromotionTargetType = 'ALL' | 'PRODUCT' | 'CATEGORY' | 'GROUP' | 'SEASON';
 export type PromotionBenefitType = 'DISCOUNT_PERCENT' | 'FIXED_PRICE' | 'CASHBACK' | 'POINTS_MULTIPLIER';
 
@@ -1863,6 +1924,8 @@ export interface Promotion {
   name: string;
   type: PromotionType;
   priority: number;
+  trigger_config?: Record<string, any>;
+  triggerConfig?: Record<string, any>;
 
   // Trigger
   trigger?: {
@@ -2017,11 +2080,37 @@ export interface ParkedTicket {
   total?: number;
   customerId?: string;
   customerName?: string;
+  customerSnapshot?: {
+    name?: string;
+    taxId?: string;
+    address?: string;
+    phone?: string;
+    email?: string;
+  };
   timestamp: string;
   tableId?: string | number;
   orderNumber?: string;
   tableDisplayLabel?: string;
   tableRoomLabel?: string;
+  barTabId?: string;
+  barTabName?: string;
+  paymentFraction?: PaymentFractionPlan;
+}
+
+export interface PaymentFractionPart {
+  index: number;
+  amount: number;
+  status: 'PENDING' | 'PAID';
+  payments?: PaymentEntry[];
+  voluntaryTip?: number;
+  paidAt?: string;
+}
+
+export interface PaymentFractionPlan {
+  originalTotal: number;
+  count: number;
+  createdAt: string;
+  parts: PaymentFractionPart[];
 }
 
 export type ReservationStatus = 'ACTIVE' | 'INVOICED' | 'EXPIRED' | 'CANCELLED';
@@ -2301,6 +2390,7 @@ export type Permission =
   | 'POS_RETURNS'
   | 'POS_REPRINT_RECEIPT'
   | 'POS_NEW_SALE'
+  | 'POS_CHECKOUT'
   | 'POS_CHANGE_TARIFF'
   | 'POS_VIEW_X_REPORT'
   | 'POS_CLOSE_X'
@@ -2347,6 +2437,7 @@ export interface AuditLogEntry {
   id: string;
   timestamp: string;
   actionType: Permission;
+  actionDescription?: string;
   cashierId: string;
   supervisorId: string;
   terminalId: string;
@@ -2355,6 +2446,7 @@ export interface AuditLogEntry {
   originalValue?: number;
   newValue?: number;
   reason?: string;
+  details?: string;
   hash: string;
 }
 
@@ -2454,6 +2546,16 @@ export interface ZReportDenominationLine {
 
 export type ZReportDenominationBreakdown = Record<string, ZReportDenominationLine[]>;
 
+export interface ZReportCashMovementLine {
+  id: string;
+  type: 'IN' | 'OUT';
+  amount: number;
+  reason: string;
+  timestamp: string;
+  userName?: string;
+  currencyCode?: string;
+}
+
 export interface ZReport {
   id: string;
   terminalId: string;
@@ -2484,6 +2586,11 @@ export interface ZReport {
   cashSales: number;
   cashIn: number;
   cashOut: number;
+  cashMovementDetails?: ZReportCashMovementLine[];
+  requireCashFundOnZ?: boolean;
+  fixedCashFundAmount?: number;
+  cashToLeaveInDrawer?: number;
+  cashToWithdraw?: number;
 
   // Metadata
   transactionCount: number;

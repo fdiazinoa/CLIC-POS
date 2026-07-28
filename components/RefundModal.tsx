@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, RotateCcw, AlertTriangle, Check, Archive, Trash2 } from 'lucide-react';
+import { X, RotateCcw, AlertTriangle, Check, Archive, Trash2, ListChecks } from 'lucide-react';
 import { Transaction, CartItem } from '../types';
+import { getRefundItemKey, hasRefundableItems } from '../utils/refundAvailability';
 
 type RefundModalMode = 'STANDARD' | 'AZUL_GATEWAY_REFUND';
 
@@ -16,6 +17,7 @@ interface RefundModalProps {
     ) => void;
     currencySymbol: string;
     mode?: RefundModalMode;
+    remainingQuantities?: Map<string, number>;
 }
 
 export const RefundModal: React.FC<RefundModalProps> = ({
@@ -24,7 +26,8 @@ export const RefundModal: React.FC<RefundModalProps> = ({
     transaction,
     onConfirm,
     currencySymbol,
-    mode = 'STANDARD'
+    mode = 'STANDARD',
+    remainingQuantities
 }) => {
     const [refundQuantities, setRefundQuantities] = useState<Map<string, number>>(new Map());
     const [itemConditions, setItemConditions] = useState<Map<string, 'SELLABLE' | 'DAMAGED'>>(new Map());
@@ -35,7 +38,10 @@ export const RefundModal: React.FC<RefundModalProps> = ({
             const initialQuantities = new Map<string, number>();
             if (mode === 'AZUL_GATEWAY_REFUND') {
                 transaction.items.forEach(item => {
-                    initialQuantities.set(item.cartId, item.quantity);
+                    initialQuantities.set(item.cartId, Math.min(
+                        item.quantity,
+                        remainingQuantities?.get(getRefundItemKey(item)) ?? item.quantity
+                    ));
                 });
             }
             setRefundQuantities(initialQuantities);
@@ -48,11 +54,29 @@ export const RefundModal: React.FC<RefundModalProps> = ({
             setItemConditions(initialConditions);
             setReason('');
         }
-    }, [isOpen, mode, transaction]);
+    }, [isOpen, mode, remainingQuantities, transaction]);
 
     if (!isOpen || !transaction) return null;
 
     const isGatewayRefundMode = mode === 'AZUL_GATEWAY_REFUND';
+    const getMaxRefundQuantity = (item: CartItem) =>
+        Math.max(0, Math.min(
+            Math.abs(Number(item.quantity || 0)),
+            remainingQuantities?.get(getRefundItemKey(item)) ?? Math.abs(Number(item.quantity || 0))
+        ));
+    const hasAvailableBalance = remainingQuantities
+        ? hasRefundableItems(remainingQuantities)
+        : transaction.items.some(item => Number(item.quantity || 0) > 0);
+
+    const selectAll = () => {
+        if (isGatewayRefundMode) return;
+        const next = new Map<string, number>();
+        transaction.items.forEach(item => {
+            const max = getMaxRefundQuantity(item);
+            if (max > 0) next.set(item.cartId, max);
+        });
+        setRefundQuantities(next);
+    };
 
     const handleQtyChange = (cartId: string, max: number, delta: number) => {
         if (isGatewayRefundMode) return;
@@ -82,7 +106,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
     }, 0);
 
     const isFullRefund = transaction.items.every(item =>
-        (refundQuantities.get(item.cartId) || 0) === item.quantity
+        (refundQuantities.get(item.cartId) || 0) === getMaxRefundQuantity(item)
     );
 
     const handleConfirm = () => {
@@ -148,6 +172,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                         <tbody className="divide-y divide-gray-50">
                             {transaction.items.map((item) => {
                                 const returnQty = refundQuantities.get(item.cartId) || 0;
+                                const maxRefundQty = getMaxRefundQuantity(item);
                                 const condition = itemConditions.get(item.cartId) || 'SELLABLE';
                                 const isSelected = returnQty > 0;
 
@@ -159,11 +184,14 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                                         </td>
                                         <td className="py-3 text-center text-sm font-medium text-gray-500">
                                             {item.quantity}
+                                            {maxRefundQty < item.quantity && (
+                                                <p className="text-[10px] font-bold text-amber-600">Disponible: {maxRefundQty}</p>
+                                            )}
                                         </td>
                                         <td className="py-3">
                                             <div className="flex items-center justify-center gap-2">
                                                 <button
-                                                    onClick={() => handleQtyChange(item.cartId, item.quantity, -1)}
+                                                    onClick={() => handleQtyChange(item.cartId, maxRefundQty, -1)}
                                                     className={`w-7 h-7 flex items-center justify-center rounded-lg border transition-colors ${
                                                         isGatewayRefundMode
                                                             ? 'border-gray-100 text-gray-300 cursor-not-allowed'
@@ -179,15 +207,15 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                                                     {returnQty}
                                                 </span>
                                                 <button
-                                                    onClick={() => handleQtyChange(item.cartId, item.quantity, 1)}
+                                                    onClick={() => handleQtyChange(item.cartId, maxRefundQty, 1)}
                                                     className={`w-7 h-7 flex items-center justify-center rounded-lg border transition-colors ${
                                                         isGatewayRefundMode
                                                             ? 'border-gray-100 text-gray-300 cursor-not-allowed'
-                                                            : returnQty < item.quantity
+                                                            : returnQty < maxRefundQty
                                                                 ? 'border-gray-200 text-gray-600 hover:bg-gray-100'
                                                                 : 'border-gray-100 text-gray-300'
                                                     }`}
-                                                    disabled={returnQty >= item.quantity || isGatewayRefundMode}
+                                                    disabled={returnQty >= maxRefundQty || isGatewayRefundMode}
                                                 >
                                                     +
                                                 </button>
@@ -226,6 +254,22 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                             })}
                         </tbody>
                     </table>
+
+                    {!isGatewayRefundMode && (
+                        <div className="mt-4 flex items-center justify-between gap-3">
+                            <button
+                                type="button"
+                                onClick={selectAll}
+                                disabled={!hasAvailableBalance}
+                                className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-black text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                <ListChecks size={17} /> Seleccionar todos
+                            </button>
+                            {!hasAvailableBalance && (
+                                <p className="text-sm font-bold text-red-600">Esta factura ya no tiene saldo pendiente de devolución.</p>
+                            )}
+                        </div>
+                    )}
 
                     <div className="mt-6">
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Motivo de la Devolución</label>

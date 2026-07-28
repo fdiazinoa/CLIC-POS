@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { X, ArrowLeft, ArrowRight, Check, AlertCircle, Split, GripVertical, MoveRight } from 'lucide-react';
+import { X, ArrowLeft, ArrowRight, Check, AlertCircle, Split, GripVertical, MoveRight, Plus } from 'lucide-react';
 import { CartItem } from '../types';
 
 interface SplitTicketModalProps {
@@ -25,28 +25,11 @@ const itemSignature = (item: CartItem) => JSON.stringify({
 });
 
 const NumberTicker: React.FC<{ value: number; currency: string }> = ({ value, currency }) => {
-  const [displayValue, setDisplayValue] = useState(value);
-
-  useEffect(() => {
-    const start = displayValue;
-    const end = value;
-    if (start === end) return;
-    const duration = 500;
-    const startTime = performance.now();
-    const animate = (currentTime: number) => {
-      const elapsed = currentTime - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-      const ease = 1 - Math.pow(1 - progress, 4);
-      setDisplayValue(start + (end - start) * ease);
-      if (progress < 1) requestAnimationFrame(animate);
-    };
-    requestAnimationFrame(animate);
-  }, [displayValue, value]);
-
-  return <span className="tabular-nums tracking-tight">{currency}{displayValue.toFixed(2)}</span>;
+  return <span className="tabular-nums tracking-tight">{currency}{value.toFixed(2)}</span>;
 };
 
 const SplitTicketModal: React.FC<SplitTicketModalProps> = ({ originalItems, currencySymbol, onClose, onConfirm }) => {
+  const MAX_SPLIT_ACCOUNTS = 20;
   const [splitCount, setSplitCount] = useState(2);
   const [accounts, setAccounts] = useState<CartItem[][]>([[], []]);
   const [activeDestination, setActiveDestination] = useState(1);
@@ -170,7 +153,7 @@ const SplitTicketModal: React.FC<SplitTicketModalProps> = ({ originalItems, curr
             <div className="bg-orange-500 p-3 rounded-2xl shadow-lg shadow-orange-500/20"><Split size={28} className="text-white" /></div>
             <div>
               <h1 className="text-3xl font-black tracking-tight">Dividir Cuenta</h1>
-              <p className="text-white/60 font-medium">Elige 2, 3 o 4 cuentas y mueve artículos entre ellas</p>
+              <p className="text-white/60 font-medium">Elige las cuentas y mueve artículos entre ellas</p>
             </div>
           </div>
           <button onClick={onClose} className="p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white"><X size={24} /></button>
@@ -188,6 +171,16 @@ const SplitTicketModal: React.FC<SplitTicketModalProps> = ({ originalItems, curr
                 {count} cuentas
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => normalizeAccountCount(Math.min(MAX_SPLIT_ACCOUNTS, splitCount + 1))}
+              disabled={splitCount >= MAX_SPLIT_ACCOUNTS}
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-dashed border-white/30 bg-white/10 text-white transition-all hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label="Agregar cuenta"
+              title={splitCount >= MAX_SPLIT_ACCOUNTS ? 'Máximo de cuentas alcanzado' : 'Agregar cuenta'}
+            >
+              <Plus size={22} strokeWidth={3} />
+            </button>
           </div>
 
           <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">

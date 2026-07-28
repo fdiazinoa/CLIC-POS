@@ -3,7 +3,8 @@ import React from 'react';
 import {
     Building2, LayoutGrid, ShieldCheck,
     Monitor, Utensils, ShoppingBag,
-    Lock, Users, Info, Sparkles, CalendarDays, Percent, Landmark, Hash, Package
+    Lock, Users, Info, Sparkles, CalendarDays, Percent, Landmark, Hash, Package,
+    Image as ImageIcon
 } from 'lucide-react';
 
 interface SettingsOperationalProps {
@@ -55,6 +56,8 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
         bloqueo_meseros: false,
         pedir_comensales: true,
         recibir_consignaciones: false,
+        receive_consignments: false,
+        descargar_consignaciones: false,
         receiveConsignments: false,
         reservationPolicy: {
             validityDays: 7,
@@ -83,6 +86,15 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
         prefix: String(operational.orderNumbers?.prefix || ''),
         padding: Math.max(0, Math.min(10, Math.floor(Number(operational.orderNumbers?.padding ?? 3))))
     };
+    const verticalValue = String(
+        operational.vertical_negocio
+        || config.business_config?.vertical_negocio
+        || config.vertical
+        || 'RETAIL'
+    ).trim().toUpperCase();
+    const activeVertical = verticalValue === 'RESTAURANT' || verticalValue === 'RESTAURANTE'
+        ? 'RESTAURANT'
+        : 'RETAIL';
 
     const handleToggle = (key: string, val: boolean) => {
         onUpdate('operational', key, val);
@@ -101,6 +113,36 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
             ...orderNumbers,
             ...patch
         });
+    };
+
+    const toBoolean = (value: unknown): boolean | undefined => {
+        if (typeof value === 'boolean') return value;
+        if (typeof value === 'number') return value === 1;
+        if (typeof value === 'string') {
+            const normalized = value.trim().toLowerCase();
+            if (['1', 'true', 'yes', 'si', 'sí', 'on'].includes(normalized)) return true;
+            if (['0', 'false', 'no', 'off', ''].includes(normalized)) return false;
+        }
+        return undefined;
+    };
+
+    const consignmentSetting = (operational as Record<string, unknown> | undefined);
+    const getConsignmentSetting = (): boolean => Boolean(
+        toBoolean(consignmentSetting?.recibir_consignaciones) ??
+        toBoolean(consignmentSetting?.receiveConsignments) ??
+        toBoolean(consignmentSetting?.receive_consignments) ??
+        toBoolean(consignmentSetting?.descargar_consignaciones) ??
+        toBoolean(consignmentSetting?.downloadConsignments) ??
+        toBoolean(consignmentSetting?.descargarConsignacion) ??
+        toBoolean(consignmentSetting?.enableConsignments) ?? false
+    );
+    const handleConsignmentUpdate = (v: boolean) => {
+        onUpdate('operational', 'recibir_consignaciones', v);
+        onUpdate('operational', 'receiveConsignments', v);
+        onUpdate('operational', 'receive_consignments', v);
+        onUpdate('operational', 'descargar_consignaciones', v);
+        onUpdate('operational', 'descargarConsignaciones', v);
+        onUpdate('operational', 'downloadConsignments', v);
     };
 
     return (
@@ -140,22 +182,29 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                         <h3 className="text-lg font-black text-gray-800">Modelo de Negocio</h3>
                         <p className="text-xs text-gray-400 font-bold uppercase tracking-widest">Configuración Base</p>
                     </div>
+                    <span className={`ml-auto rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-wider ${
+                        activeVertical === 'RESTAURANT'
+                            ? 'bg-orange-100 text-orange-700'
+                            : 'bg-blue-100 text-blue-700'
+                    }`}>
+                        Modo activo: {activeVertical === 'RESTAURANT' ? 'Restaurante' : 'Retail'}
+                    </span>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <button
                         onClick={() => onUpdate('operational', 'vertical_negocio', 'RETAIL')}
                         disabled={isReadOnly}
-                        className={`p-6 rounded-[2rem] border-2 transition-all flex flex-col gap-4 text-left ${operational.vertical_negocio === 'RETAIL' ? 'bg-blue-50 border-blue-500 shadow-md ring-4 ring-blue-50' : 'bg-white border-gray-100 hover:border-blue-200'}`}
+                        className={`p-6 rounded-[2rem] border-2 transition-all flex flex-col gap-4 text-left ${activeVertical === 'RETAIL' ? 'bg-blue-50 border-blue-500 shadow-md ring-4 ring-blue-50' : 'bg-white border-gray-100 hover:border-blue-200'}`}
                     >
-                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${operational.vertical_negocio === 'RETAIL' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>
+                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${activeVertical === 'RETAIL' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>
                             <ShoppingBag size={24} />
                         </div>
                         <div>
                             <p className="font-black text-gray-800">RETAIL (Comercio)</p>
                             <p className="text-xs text-gray-500 mt-1 leading-snug">Venta rápida, código de barras y atención directa en mostrador.</p>
                         </div>
-                        {operational.vertical_negocio === 'RETAIL' && (
+                        {activeVertical === 'RETAIL' && (
                             <div className="mt-auto pt-2">
                                 <span className="bg-blue-600 text-white text-[10px] font-black px-3 py-1 rounded-full uppercase">Activo</span>
                             </div>
@@ -163,18 +212,18 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                     </button>
 
                     <button
-                        onClick={() => onUpdate('operational', 'vertical_negocio', 'RESTAURANTE')}
+                        onClick={() => onUpdate('operational', 'vertical_negocio', 'RESTAURANT')}
                         disabled={isReadOnly}
-                        className={`p-6 rounded-[2rem] border-2 transition-all flex flex-col gap-4 text-left ${operational.vertical_negocio === 'RESTAURANTE' ? 'bg-orange-50 border-orange-500 shadow-md ring-4 ring-orange-50' : 'bg-white border-gray-100 hover:border-orange-200'}`}
+                        className={`p-6 rounded-[2rem] border-2 transition-all flex flex-col gap-4 text-left ${activeVertical === 'RESTAURANT' ? 'bg-orange-50 border-orange-500 shadow-md ring-4 ring-orange-50' : 'bg-white border-gray-100 hover:border-orange-200'}`}
                     >
-                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${operational.vertical_negocio === 'RESTAURANTE' ? 'bg-orange-600 text-white' : 'bg-gray-100 text-gray-400'}`}>
+                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${activeVertical === 'RESTAURANT' ? 'bg-orange-600 text-white' : 'bg-gray-100 text-gray-400'}`}>
                             <Utensils size={24} />
                         </div>
                         <div>
                             <p className="font-black text-gray-800">RESTAURANTE (Hospitalidad)</p>
                             <p className="text-xs text-gray-500 mt-1 leading-snug">Gestión de mesas, comensales y seguimiento de órdenes pendientes.</p>
                         </div>
-                        {operational.vertical_negocio === 'RESTAURANTE' && (
+                        {activeVertical === 'RESTAURANT' && (
                             <div className="mt-auto pt-2">
                                 <span className="bg-orange-600 text-white text-[10px] font-black px-3 py-1 rounded-full uppercase">Activo</span>
                             </div>
@@ -329,6 +378,15 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
 
                 <div className="space-y-4">
                     <Toggle
+                        label="Usar imágenes en artículos"
+                        description="Muestra la fotografía del artículo. Al desactivarlo, el nombre ocupa el área gráfica y la tarjeta se vuelve más compacta."
+                        checked={config.ux?.showProductImages !== false}
+                        onChange={(v: boolean) => onUpdate('ux', 'showProductImages', v)}
+                        icon={ImageIcon}
+                        disabled={isReadOnly}
+                    />
+
+                    <Toggle
                         label="Modo Supermercado (Grid Expandido)"
                         description="Oculta la barra de categorías y expande la cuadrícula de productos para maximizar el espacio de venta."
                         checked={config.ux?.viewMode === 'RETAIL'}
@@ -389,13 +447,10 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                     />
 
                     <Toggle
-                        label="Recibir consignaciones"
-                        description="Activa el botón de consignaciones ERP en la pantalla de ventas para buscar y agregar consignaciones al ticket."
-                        checked={Boolean(operational.recibir_consignaciones ?? operational.receiveConsignments)}
-                        onChange={(v: boolean) => {
-                            onUpdate('operational', 'recibir_consignaciones', v);
-                            onUpdate('operational', 'receiveConsignments', v);
-                        }}
+                        label="Descargar consignaciones"
+                        description="Activa el botón de descarga de consignaciones ERP en la pantalla de ventas para buscar y agregar líneas al ticket."
+                        checked={getConsignmentSetting()}
+                        onChange={handleConsignmentUpdate}
                         icon={Package}
                         disabled={isReadOnly}
                     />

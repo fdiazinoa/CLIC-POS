@@ -12,6 +12,7 @@ import {
     Sparkles,
     Check,
     AlertTriangle,
+    CircleHelp,
     ReceiptText,
     Link2,
     Scissors,
@@ -25,6 +26,11 @@ import {
 import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from 'framer-motion';
 import TableOptionsModal from './TableOptionsModal';
 import SplitTicketModal from './SplitTicketModal';
+import TableMoveConfirmationModal from './TableMoveConfirmationModal';
+import { createPaymentFractionPlan } from '../utils/paymentFractions';
+import { getRenderableFloorTables } from '../utils/tableLayout';
+import { hasPendingKdsDispatch } from '../utils/kdsPresentation';
+import { resolveOperationalApiUrl } from '../utils/masterOperationalApi';
 
 interface TableMapProps {
     rooms: Room[];
@@ -48,10 +54,12 @@ interface TableMapProps {
     onParkedOrderSplitResult?: (orderId: string, remainingItems: CartItem[], newTicketItems: CartItem[], extraNewTickets?: CartItem[][], splitCount?: number) => void | Promise<void>;
     /** Restaurante: abrir diseñador de plano de mesas */
     onOpenTableLayoutDesigner?: () => void;
+    /** Conserva la sala seleccionada aunque el mapa se desmonte. */
+    onChangeRoom?: (roomId: string) => void;
 }
 
 type SmartStatus = 'FREE' | 'ATTENTION' | 'OCCUPIED' | 'CHECK_REQUESTED';
-type TableArchetype = 'CIRCLE' | 'SQUARE' | 'BAR' | 'BOOTH';
+type TableArchetype = 'CIRCLE' | 'SQUARE' | 'BAR' | 'BOOTH' | 'CHAISE_LONGUE';
 
 interface SmartTableModel {
     table: Table;
@@ -70,7 +78,9 @@ interface SmartTableModel {
         label: string;
     };
     needsRevenueGlow: boolean;
+    hasPendingKitchenDispatch: boolean;
     lastOrderHint: string;
+    firstCustomerName?: string;
 }
 
 interface TooltipState {
@@ -89,12 +99,17 @@ interface ParkedOrderSummary {
     hasExplicitTotal: boolean;
 }
 
-type TableTransferMode = 'MOVE' | 'MERGE';
+type TableTransferMode = 'MOVE' | 'MERGE' | 'SPLIT' | 'FRACTION';
 
 interface TableTransferSelection {
     mode: TableTransferMode;
     step: 'SOURCE' | 'TARGET';
     sourceTableId?: string;
+}
+
+interface PendingTableMove {
+    sourceTableId: string;
+    targetTableId: string;
 }
 
 interface TableNoticeState {
@@ -104,16 +119,111 @@ interface TableNoticeState {
     tableToOpen?: Table;
 }
 
+const BarTabsModal: React.FC<{
+    table: Table;
+    tickets: ParkedTicket[];
+    currencySymbol: string;
+    onClose: () => void;
+    onOpenTab: (ticket: ParkedTicket) => void;
+    onCreateTab: (name: string) => void;
+    allowCreate?: boolean;
+    titleLabel?: string;
+    accountMode?: boolean;
+}> = ({ table, tickets, currencySymbol, onClose, onOpenTab, onCreateTab, allowCreate = true, titleLabel = 'Barra / Minutas', accountMode = false }) => {
+    const [tabName, setTabName] = useState('');
+    const nextName = `${accountMode ? 'Cuenta' : 'Minuta'} ${tickets.length + 1}`;
+    const total = tickets.reduce((sum, ticket) => {
+        const itemsTotal = (ticket.items || []).reduce((acc, item) => acc + Number(item.price || 0) * Number(item.quantity || 0), 0);
+        return sum + Number(ticket.total ?? itemsTotal ?? 0);
+    }, 0);
+
+    return (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
+            <div className="w-full max-w-2xl rounded-[2rem] bg-white shadow-2xl overflow-hidden">
+                <div className="flex items-start justify-between gap-4 border-b border-slate-100 p-6">
+                    <div>
+                            <p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-500">{titleLabel}</p>
+                        <h2 className="mt-1 text-3xl font-black text-slate-900">{table.nombre || table.name || 'Barra'}</h2>
+                            <p className="mt-1 text-sm font-bold text-slate-500">
+                            {tickets.length} cuenta(s) abierta(s) · {currencySymbol}{total.toLocaleString()}
+                        </p>
+                    </div>
+                    <button onClick={onClose} className="rounded-full bg-slate-100 p-3 text-slate-500 hover:bg-slate-200">
+                        <X size={22} />
+                    </button>
+                </div>
+
+                <div className="grid gap-4 p-6 md:grid-cols-[1fr_280px]">
+                    <div className="space-y-3 max-h-[52vh] overflow-y-auto pr-1">
+                        {tickets.length === 0 ? (
+                            <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center">
+                                <ReceiptText size={38} className="mx-auto mb-3 text-slate-300" />
+                                <p className="font-black text-slate-700">No hay cuentas abiertas</p>
+                                <p className="mt-1 text-sm font-semibold text-slate-400">No hay artículos pendientes en esta mesa.</p>
+                            </div>
+                        ) : (
+                            tickets.map((ticket, index) => {
+                                const ticketTotal = Number(ticket.total ?? (ticket.items || []).reduce((acc, item) => acc + Number(item.price || 0) * Number(item.quantity || 0), 0));
+                                            const label = ticket.barTabName || ticket.alias || ticket.name || `Cuenta ${index + 1}`;
+                                return (
+                                    <button
+                                        key={ticket.id}
+                                        type="button"
+                                        onClick={() => onOpenTab(ticket)}
+                                        className="flex w-full items-center justify-between gap-4 rounded-3xl border border-slate-100 bg-white p-4 text-left shadow-sm transition-all hover:border-blue-300 hover:bg-blue-50"
+                                    >
+                                        <div className="min-w-0">
+                                            <p className="truncate text-lg font-black text-slate-900">{label}</p>
+                                            <p className="mt-1 text-xs font-bold uppercase tracking-wide text-slate-400">
+                                                {(ticket.items || []).length} línea(s) · {new Date(ticket.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            </p>
+                                        </div>
+                                        <span className="shrink-0 text-xl font-black text-emerald-600">{currencySymbol}{ticketTotal.toLocaleString()}</span>
+                                    </button>
+                                );
+                            })
+                        )}
+                    </div>
+
+                    {allowCreate && <div className="rounded-3xl border border-blue-100 bg-blue-50 p-5">
+                            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">{accountMode ? 'Nueva cuenta' : 'Nueva minuta'}</p>
+                        <label className="mt-4 block text-xs font-bold text-slate-600">
+                            Nombre opcional
+                        </label>
+                        <input
+                            value={tabName}
+                            onChange={(event) => setTabName(event.target.value)}
+                            placeholder={nextName}
+                            className="mt-2 w-full rounded-2xl border border-blue-100 bg-white px-4 py-4 text-lg font-black text-slate-900 outline-none focus:border-blue-500"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => {
+                                onCreateTab(tabName.trim() || nextName);
+                                setTabName('');
+                            }}
+                            className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 py-4 text-sm font-black uppercase tracking-wide text-white shadow-lg shadow-blue-100 active:scale-95"
+                        >
+                            <Plus size={18} />
+                            {accountMode ? 'Crear cuenta' : 'Abrir minuta'}
+                        </button>
+                    </div>}
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const CANVAS_WIDTH = 1240;
 const CANVAS_HEIGHT = 860;
-const SCALE_MIN = 0.55;
+const SCALE_MIN = 0.35;
 const SCALE_MAX = 2.2;
 const TABLE_CONTROL_CENTER_PERMISSION: Permission = 'TABLE_CONTROL_CENTER';
 /** Ancho del panel "Control de Sala" (w-[318px]) + márgenes; evita encimar mesas bajo el aside */
 const RESTAURANT_SIDEBAR_RESERVE_PX = 400;
-/** Zona inferior del selector de salas + margen */
-const RESTAURANT_BOTTOM_BAR_RESERVE_PX = 112;
-const RESTAURANT_FIT_FILL = 1.16;
+/** Dos filas de controles + separación para mantener las mesas visibles. */
+const RESTAURANT_BOTTOM_BAR_RESERVE_PX = 174;
+const RESTAURANT_FIT_FILL = 0.92;
 const DEFAULT_EXPECTED_STAY = 70;
 const NO_ORDER_TOTAL_THRESHOLD = 0.01;
 
@@ -145,6 +255,8 @@ const ensureCartIds = (items: CartItem[]): CartItem[] =>
 
 const getRoomLabel = (room?: Room): string => room?.nombre || room?.name || 'Sala';
 const getTableLabel = (table: Table): string => table.nombre || table.name || 'Mesa';
+const getFirstNumber = (value: string): string => value.match(/\d+/)?.[0] || '';
+const padLocationNumber = (value: string): string => value ? value.padStart(2, '0') : '';
 
 const getElapsedMinutes = (timeSeated?: string): number => {
     if (!timeSeated) return 0;
@@ -194,7 +306,9 @@ const getServiceStage = (progress: number): { icon: string; label: string } => {
 const inferArchetype = (table: Table): TableArchetype => {
     if (table.shape === 'BAR') return 'BAR';
     if (table.shape === 'BOOTH') return 'BOOTH';
+    if (table.shape === 'CHAISE_LONGUE') return 'CHAISE_LONGUE';
     if (table.shape === 'CIRCLE') return 'CIRCLE';
+    if (table.shape === 'SQUARE') return 'SQUARE';
 
     const label = `${table.nombre || ''} ${table.name || ''}`.toLowerCase();
     const ratio = table.width / Math.max(1, table.height);
@@ -285,18 +399,24 @@ const TableMap: React.FC<TableMapProps> = ({
     roles = [],
     onPrintPrecheck,
     onParkedOrderSplitResult,
-    onOpenTableLayoutDesigner
+    onOpenTableLayoutDesigner,
+    onChangeRoom
 }) => {
     const [activeRoomId, setActiveRoomId] = useState<string>(initialRoomId || rooms[0]?.id || '');
     const [selectedTable, setSelectedTable] = useState<Table | null>(null);
+    const [selectedBarTable, setSelectedBarTable] = useState<Table | null>(null);
     const [tooltip, setTooltip] = useState<TooltipState | null>(null);
     const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [splitTicketForModal, setSplitTicketForModal] = useState<ParkedTicket | null>(null);
+    const [selectedAccountTable, setSelectedAccountTable] = useState<Table | null>(null);
     const [transferSelection, setTransferSelection] = useState<TableTransferSelection | null>(null);
+    const [pendingTableMove, setPendingTableMove] = useState<PendingTableMove | null>(null);
     const [subtotalPickOpen, setSubtotalPickOpen] = useState(false);
     const [fractionPickOpen, setFractionPickOpen] = useState(false);
     const [splitPickOpen, setSplitPickOpen] = useState(false);
+    const [fractionTicketForModal, setFractionTicketForModal] = useState<ParkedTicket | null>(null);
+    const [fractionCount, setFractionCount] = useState(2);
     const [showRoomPicker, setShowRoomPicker] = useState(false);
     const [isControlCenterOpen, setIsControlCenterOpen] = useState(false);
     const [tableNotice, setTableNotice] = useState<TableNoticeState | null>(null);
@@ -307,7 +427,10 @@ const TableMap: React.FC<TableMapProps> = ({
     const panRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
     const viewportStateRef = useRef(viewport);
 
-    const safeTables = Array.isArray(tables) ? tables : [];
+    const safeTables = useMemo(
+        () => getRenderableFloorTables(Array.isArray(tables) ? tables : []),
+        [tables]
+    );
 
     useEffect(() => {
         viewportStateRef.current = viewport;
@@ -337,13 +460,19 @@ const TableMap: React.FC<TableMapProps> = ({
     }, []);
 
     const activeRoom = useMemo(() => rooms.find(r => r.id === activeRoomId), [rooms, activeRoomId]);
+    const usesWhiteBackground = activeRoom?.data?.backgroundStyle === 'WHITE';
     const roomLabelById = useMemo(() => {
         return new Map(rooms.map(room => [room.id, getRoomLabel(room)]));
     }, [rooms]);
     const getTableRoomLabel = useCallback((table: Table): string => {
         const tableLabel = getTableLabel(table);
         const roomLabel = roomLabelById.get(table.roomId);
-        return roomLabel ? `${roomLabel} · ${tableLabel}` : tableLabel;
+        const roomNumber = getFirstNumber(roomLabel || '');
+        const tableNumber = getFirstNumber(tableLabel);
+        if (roomNumber && tableNumber) {
+            return `${padLocationNumber(roomNumber)}-${padLocationNumber(tableNumber)} · ${roomLabel} · ${tableLabel}`;
+        }
+        return roomLabel ? `${roomLabel} · ${tableLabel}`.slice(0, 48) : tableLabel.slice(0, 42);
     }, [roomLabelById]);
 
     const currentRolePermissions = useMemo<Permission[]>(() => {
@@ -468,10 +597,36 @@ const TableMap: React.FC<TableMapProps> = ({
         (parkedTickets || []).forEach(ticket => {
             if (ticket.tableId === undefined || ticket.tableId === null) return;
             const summary = summarizeParkedTicket(ticket);
-            if (summary) map.set(String(ticket.tableId), summary);
+            if (!summary) return;
+            const tableId = String(ticket.tableId);
+            const existing = map.get(tableId);
+            if (existing) {
+                map.set(tableId, {
+                    ...existing,
+                    itemCount: existing.itemCount + summary.itemCount,
+                    calculatedTotal: existing.calculatedTotal + summary.calculatedTotal,
+                    finalTotal: existing.finalTotal + summary.finalTotal,
+                    hasExplicitTotal: existing.hasExplicitTotal && summary.hasExplicitTotal
+                });
+            } else {
+                map.set(tableId, summary);
+            }
         });
         return map;
     }, [parkedTickets]);
+
+    const getTableTickets = useCallback(
+        (table: Table): ParkedTicket[] => (parkedTickets || [])
+            .filter(ticket => String(ticket.tableId ?? '') === String(table.id))
+            .sort((a, b) => {
+                if (String(a.id) === String(table.currentOrderId)) return -1;
+                if (String(b.id) === String(table.currentOrderId)) return 1;
+                return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+            }),
+        [parkedTickets]
+    );
+
+    const getBarTickets = getTableTickets;
 
     const getParkedSummaryForTable = useCallback(
         (table: Table) => {
@@ -607,6 +762,10 @@ const TableMap: React.FC<TableMapProps> = ({
             const progress = isOccupiedLike ? clamp(elapsedMinutes / Math.max(1, expectedStayMinutes), 0, 1) : 0;
             const serviceStage = getServiceStage(progress);
             const needsRevenueGlow = isOccupiedLike && highRevenueThreshold > 0 && total >= highRevenueThreshold;
+            const hasPendingKitchenDispatch = getTableTickets(displayTable).some(hasPendingKdsDispatch);
+            const firstCustomerName = getTableTickets(displayTable)
+                .map(ticket => String(ticket.customerSnapshot?.name || ticket.customerName || '').trim())
+                .find(Boolean);
 
             const baseModel: SmartTableModel = {
                 table: displayTable,
@@ -622,7 +781,9 @@ const TableMap: React.FC<TableMapProps> = ({
                 progress,
                 serviceStage,
                 needsRevenueGlow,
-                lastOrderHint: ''
+                hasPendingKitchenDispatch,
+                lastOrderHint: '',
+                firstCustomerName
             };
 
             return {
@@ -630,7 +791,43 @@ const TableMap: React.FC<TableMapProps> = ({
                 lastOrderHint: computeLastOrderHint(baseModel)
             };
         });
-    }, [serviceTables, bloqueoMeseros, currentUser.id, isAdmin, expectedStayMinutes, highRevenueThreshold, getParkedSummaryForTable, enrichTableWithParkedTicket, getVisualTableState]);
+    }, [serviceTables, bloqueoMeseros, currentUser.id, isAdmin, expectedStayMinutes, highRevenueThreshold, getParkedSummaryForTable, enrichTableWithParkedTicket, getTableTickets, getVisualTableState]);
+
+    const createTableAccount = useCallback(async (table: Table, requestedName?: string) => {
+        const existingTickets = getTableTickets(table);
+        const accountNumber = existingTickets.length + 1;
+        const tableLabel = getTableLabel(table);
+        const roomLabel = roomLabelById.get(table.roomId);
+        const accountName = String(requestedName || '').trim() || `Cuenta ${accountNumber}`;
+        const timestamp = new Date().toISOString();
+        const ticket: ParkedTicket = {
+            id: `TABLE-${table.id}-ACCOUNT-${Date.now()}-${accountNumber}`,
+            name: `${tableLabel} - ${accountName}`,
+            alias: accountName,
+            items: [],
+            total: 0,
+            timestamp,
+            tableId: table.id,
+            tableDisplayLabel: tableLabel,
+            tableRoomLabel: roomLabel,
+        };
+        const nextTickets = [...(parkedTickets || []), ticket];
+        const nextTable = {
+            ...table,
+            status: 'OCCUPIED',
+            currentOrderId: table.currentOrderId || ticket.id,
+            currentOrderTotal: Number(table.currentOrderTotal || 0),
+            waiterId: table.waiterId || currentUser.id,
+            waiterName: table.waiterName || currentUser.name,
+            timeSeated: table.timeSeated || timestamp,
+        } as Table;
+        const nextTables = (Array.isArray(tables) ? tables : []).map(candidate => candidate.id === table.id ? nextTable : candidate);
+
+        await Promise.resolve(onUpdateParkedTickets?.(nextTickets));
+        await Promise.resolve(onUpdateTables?.(nextTables));
+        setSelectedAccountTable(nextTable);
+        return ticket;
+    }, [currentUser.id, currentUser.name, getTableTickets, onUpdateParkedTickets, onUpdateTables, parkedTickets, roomLabelById, tables]);
 
     const stats = useMemo(() => {
         const total = smartTables.length;
@@ -686,7 +883,7 @@ const TableMap: React.FC<TableMapProps> = ({
         joinedSourceTableName: undefined
     } as Table), []);
 
-    const completeTableTransfer = useCallback(async (sourceTableId: string, targetTableId: string, mode: TableTransferMode) => {
+    const completeTableTransfer = useCallback(async (sourceTableId: string, targetTableId: string, mode: TableTransferMode, requestedItems?: CartItem[]) => {
         if (sourceTableId === targetTableId) {
             alert('Seleccione dos mesas distintas.');
             return;
@@ -714,6 +911,72 @@ const TableMap: React.FC<TableMapProps> = ({
 
         if (mode === 'MERGE' && targetTicket && String(targetTicket.id) === String(sourceTicket.id)) {
             alert('Estas mesas ya pertenecen a la misma cuenta.');
+            return;
+        }
+
+        if (mode === 'MOVE' && requestedItems) {
+            const requestedById = new Map(requestedItems.map(item => [String(item.cartId || item.id), Number(item.quantity || 0)]));
+            const movedItems = ensureCartIds(sourceTicket.items || []).map(item => ({
+                ...item,
+                quantity: Math.min(Number(item.quantity || 0), requestedById.get(String(item.cartId || item.id)) || 0)
+            })).filter(item => item.quantity > 0);
+            const movedQuantity = movedItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+            const sourceItems = ensureCartIds(sourceTicket.items || []).map(item => {
+                const moved = movedItems.find(candidate => String(candidate.cartId || candidate.id) === String(item.cartId || item.id));
+                return { ...item, quantity: Number(item.quantity || 0) - Number(moved?.quantity || 0) };
+            }).filter(item => item.quantity > 0);
+            if (movedQuantity <= 0 || sourceItems.length === 0 && movedQuantity <= 0) {
+                alert('Seleccione al menos un artículo para mover.');
+                return;
+            }
+
+            const targetRoomLabel = roomLabelById.get(targetTable.roomId);
+            const targetTableLabel = getTableLabel(targetTable);
+            const sourceTableLabel = getTableLabel(sourceTable);
+            const movedTicket: ParkedTicket = {
+                ...sourceTicket,
+                id: `move-${Date.now()}`,
+                items: movedItems,
+                total: movedItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0),
+                tableId: targetTable.id,
+                name: `Mesa: ${targetRoomLabel ? `${targetRoomLabel} · ${targetTableLabel}` : targetTableLabel}`,
+                tableDisplayLabel: targetTableLabel,
+                tableRoomLabel: targetRoomLabel,
+                timestamp: new Date().toISOString()
+            };
+            const sourceNextTicket = {
+                ...sourceTicket,
+                items: sourceItems,
+                total: sourceItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0)
+            } as ParkedTicket;
+            const nextParkedTickets = [
+                ...(parkedTickets || []).filter(ticket => String(ticket.id) !== String(sourceTicket.id)),
+                ...(sourceItems.length > 0 ? [sourceNextTicket] : []),
+                movedTicket
+            ];
+            const nextTargetTable = {
+                ...targetTable,
+                status: 'OCCUPIED',
+                currentOrderId: movedTicket.id,
+                currentOrderTotal: movedTicket.total,
+                waiterId: sourceTable.waiterId || currentUser.id,
+                waiterName: sourceTable.waiterName || currentUser.name,
+                timeSeated: sourceTable.timeSeated || movedTicket.timestamp
+            } as Table;
+            const nextSourceTable = sourceItems.length > 0 ? {
+                ...sourceTable,
+                status: 'OCCUPIED',
+                currentOrderId: sourceNextTicket.id,
+                currentOrderTotal: sourceNextTicket.total
+            } as Table : resetTableRuntimeState(sourceTable);
+            const nextTables = (Array.isArray(tables) ? tables : []).map(table => table.id === sourceTable.id ? nextSourceTable : table.id === targetTable.id ? nextTargetTable : table);
+            await Promise.resolve(onUpdateParkedTickets?.(nextParkedTickets));
+            await Promise.resolve(onUpdateTables?.(nextTables));
+            setTableNotice({
+                title: 'Parte de la cuenta movida',
+                message: `${movedItems.length} artículo(s) fueron movidos de ${sourceTableLabel} a ${targetTableLabel}.`,
+                primaryLabel: 'Entendido'
+            });
             return;
         }
 
@@ -774,7 +1037,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 joinedSourceTableName: sourceTableLabel
             } as Table
             : resetTableRuntimeState(sourceTable);
-        const nextTables = safeTables.map(table => {
+        const nextTables = (Array.isArray(tables) ? tables : []).map(table => {
             if (table.id === sourceTable.id) return nextSourceTable;
             if (table.id === targetTable.id) return nextTargetTable;
             return table;
@@ -801,7 +1064,8 @@ const TableMap: React.FC<TableMapProps> = ({
         resetTableRuntimeState,
         resolveTicketForTable,
         roomLabelById,
-        safeTables
+        safeTables,
+        tables
     ]);
 
     const handleTransferTableClick = useCallback((table: Table) => {
@@ -811,6 +1075,17 @@ const TableMap: React.FC<TableMapProps> = ({
             const sourceTicket = resolveTicketForTable(table);
             if (!sourceTicket?.items?.length) {
                 alert('Seleccione una mesa origen con artículos.');
+                return true;
+            }
+            if (transferSelection.mode === 'SPLIT') {
+                setSplitTicketForModal(sourceTicket);
+                setTransferSelection(null);
+                return true;
+            }
+            if (transferSelection.mode === 'FRACTION') {
+                setFractionTicketForModal(sourceTicket);
+                setFractionCount(sourceTicket.paymentFraction?.count || 2);
+                setTransferSelection(null);
                 return true;
             }
             setTransferSelection({
@@ -826,11 +1101,41 @@ const TableMap: React.FC<TableMapProps> = ({
             return true;
         }
 
+        if (transferSelection.mode === 'MOVE') {
+            if (table.id === transferSelection.sourceTableId) {
+                alert('Seleccione una mesa destino distinta.');
+                return true;
+            }
+            const targetTicket = resolveTicketForTable(table);
+            const targetIsOccupied = Boolean(targetTicket?.items?.length)
+                || getVisualTableState(table).status !== 'FREE';
+            if (targetIsOccupied) {
+                alert('Seleccione una mesa destino libre.');
+                return true;
+            }
+            setPendingTableMove({
+                sourceTableId: transferSelection.sourceTableId,
+                targetTableId: table.id
+            });
+            setTransferSelection(null);
+            return true;
+        }
+
         void completeTableTransfer(transferSelection.sourceTableId, table.id, transferSelection.mode);
         return true;
-    }, [completeTableTransfer, resolveTicketForTable, transferSelection]);
+    }, [completeTableTransfer, getVisualTableState, resolveTicketForTable, transferSelection]);
 
     const handleTableAction = useCallback(async (table: Table) => {
+        const tableTickets = getTableTickets(table);
+        if (isRestaurantMode && table.shape !== 'BAR' && tableTickets.length > 0) {
+            setSelectedAccountTable(table);
+            return;
+        }
+        if (table.shape === 'BAR') {
+            setSelectedBarTable(table);
+            return;
+        }
+
         const joinedTableName = String((table as any).joinedTableName || '').trim();
         if (isRestaurantMode && joinedTableName) {
             setTableNotice({
@@ -848,6 +1153,20 @@ const TableMap: React.FC<TableMapProps> = ({
         }
 
         if (isRestaurantMode) {
+            if (onUpdateParkedTickets && onUpdateTables) {
+                const ticket = await createTableAccount(table);
+                setSelectedAccountTable(null);
+                onTableClick({
+                    ...table,
+                    status: 'OCCUPIED',
+                    currentOrderId: ticket.id,
+                    currentOrderTotal: 0,
+                    timeSeated: ticket.timestamp,
+                    waiterId: table.waiterId || currentUser.id,
+                    waiterName: table.waiterName || currentUser.name
+                });
+                return;
+            }
             if (onOpenTable) {
                 const openedTable = await onOpenTable(table);
                 if (openedTable) {
@@ -858,7 +1177,7 @@ const TableMap: React.FC<TableMapProps> = ({
             }
 
             try {
-                const res = await fetch('/api/mesas/abrir', {
+                const res = await fetch(resolveOperationalApiUrl('/api/mesas/abrir'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -883,7 +1202,7 @@ const TableMap: React.FC<TableMapProps> = ({
         }
 
         setSelectedTable(table);
-    }, [currentUser.id, currentUser.name, isRestaurantMode, onOpenTable, onRefreshTables, onTableClick]);
+    }, [createTableAccount, currentUser.id, currentUser.name, getTableTickets, isRestaurantMode, onOpenTable, onRefreshTables, onTableClick, onUpdateParkedTickets, onUpdateTables]);
 
     const handleNodeSelect = useCallback(
         (model: SmartTableModel) => {
@@ -1035,8 +1354,8 @@ const TableMap: React.FC<TableMapProps> = ({
         if (!isRestaurantMode) return null;
 
         const buttonClass = variant === 'grid'
-            ? 'rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors'
-            : 'shrink-0 min-w-[150px] rounded-2xl bg-white/[0.09] hover:bg-white/[0.16] active:scale-[0.98] text-slate-100 text-sm font-black py-3.5 px-5 border border-white/15 shadow-[0_10px_24px_rgba(2,6,23,0.32)] flex items-center justify-center gap-2.5 whitespace-nowrap transition-colors touch-manipulation';
+            ? 'min-w-0 min-h-14 rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-2 px-2 border border-white/25 shadow-md flex items-center justify-center gap-2 transition-colors'
+            : 'min-w-0 h-14 w-full rounded-2xl bg-white/[0.09] hover:bg-white/[0.16] active:scale-[0.98] text-slate-100 text-[10px] sm:text-xs font-black px-2 sm:px-3 border border-white/15 shadow-[0_10px_24px_rgba(2,6,23,0.32)] flex items-center justify-center gap-1.5 sm:gap-2 whitespace-normal text-center leading-tight transition-colors touch-manipulation';
         const iconSize = variant === 'grid' ? 18 : 20;
 
         return (
@@ -1083,7 +1402,13 @@ const TableMap: React.FC<TableMapProps> = ({
                 </button>
                 <button
                     type="button"
-                    onClick={() => setFractionPickOpen(true)}
+                    onClick={() => {
+                        if (occupiedForTools.filter(t => t.currentOrderId).length === 0) {
+                            alert('No hay mesas ocupadas con cuenta.');
+                            return;
+                        }
+                        setTransferSelection({ mode: 'FRACTION', step: 'SOURCE' });
+                    }}
                     className={buttonClass}
                 >
                     <PieChart size={iconSize} className="opacity-95" />
@@ -1097,16 +1422,7 @@ const TableMap: React.FC<TableMapProps> = ({
                             alert('No hay mesas ocupadas con cuenta.');
                             return;
                         }
-                        if (withOrders.length === 1) {
-                            const ticket = parkedTickets?.find(p => p.id === withOrders[0].currentOrderId);
-                            if (ticket?.items?.length) {
-                                setSplitTicketForModal(ticket);
-                            } else {
-                                alert('La cuenta no tiene ítems cargados.');
-                            }
-                            return;
-                        }
-                        setSplitPickOpen(true);
+                        setTransferSelection({ mode: 'SPLIT', step: 'SOURCE' });
                     }}
                     className={buttonClass}
                 >
@@ -1131,29 +1447,52 @@ const TableMap: React.FC<TableMapProps> = ({
         parkedTickets
     ]);
 
+    const splitTicketItems = useMemo(
+        () => splitTicketForModal ? ensureCartIds(splitTicketForModal.items) : [],
+        [splitTicketForModal]
+    );
+    const pendingMoveSource = useMemo(
+        () => pendingTableMove
+            ? safeTables.find(table => table.id === pendingTableMove.sourceTableId)
+            : undefined,
+        [pendingTableMove, safeTables]
+    );
+    const pendingMoveTarget = useMemo(
+        () => pendingTableMove
+            ? safeTables.find(table => table.id === pendingTableMove.targetTableId)
+            : undefined,
+        [pendingTableMove, safeTables]
+    );
+    const pendingMoveItems = useMemo(
+        () => pendingMoveSource
+            ? ensureCartIds(resolveTicketForTable(pendingMoveSource)?.items || [])
+            : [],
+        [pendingMoveSource, resolveTicketForTable]
+    );
+
     return (
         <LazyMotion features={domAnimation}>
             <div
                 ref={mapShellRef}
-                className="relative h-full w-full overflow-hidden bg-slate-950 text-slate-100 select-none"
+                className={`relative h-full w-full overflow-hidden select-none ${usesWhiteBackground ? 'bg-white text-slate-900' : 'bg-slate-950 text-slate-100'}`}
             >
-                <div className="absolute inset-0 bg-gradient-to-br from-[#030712] via-[#07122a] to-[#040816]" />
+                <div className={`absolute inset-0 ${usesWhiteBackground ? 'bg-white' : 'bg-gradient-to-br from-[#030712] via-[#07122a] to-[#040816]'}`} />
 
                 <div
-                    className="absolute inset-0 pointer-events-none opacity-45"
+                    className={`absolute inset-0 pointer-events-none ${usesWhiteBackground ? 'opacity-70' : 'opacity-45'}`}
                     style={{
                         backgroundImage: [
-                            'linear-gradient(rgba(148,163,184,0.13) 1px, transparent 1px)',
-                            'linear-gradient(90deg, rgba(148,163,184,0.13) 1px, transparent 1px)',
-                            'radial-gradient(circle at 25% 25%, rgba(56,189,248,0.18), transparent 45%)',
-                            'radial-gradient(circle at 85% 12%, rgba(147,51,234,0.12), transparent 42%)'
+                            `linear-gradient(${usesWhiteBackground ? 'rgba(148,163,184,0.2)' : 'rgba(148,163,184,0.13)'} 1px, transparent 1px)`,
+                            `linear-gradient(90deg, ${usesWhiteBackground ? 'rgba(148,163,184,0.2)' : 'rgba(148,163,184,0.13)'} 1px, transparent 1px)`,
+                            usesWhiteBackground ? 'none' : 'radial-gradient(circle at 25% 25%, rgba(56,189,248,0.18), transparent 45%)',
+                            usesWhiteBackground ? 'none' : 'radial-gradient(circle at 85% 12%, rgba(147,51,234,0.12), transparent 42%)'
                         ].join(','),
                         backgroundSize: `${34 * viewport.scale}px ${34 * viewport.scale}px, ${34 * viewport.scale}px ${34 * viewport.scale}px, 100% 100%, 100% 100%`,
                         backgroundPosition: `${viewport.x * 0.06}px ${viewport.y * 0.06}px, ${viewport.x * 0.06}px ${viewport.y * 0.06}px, center, center`
                     }}
                 />
 
-                <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_20%_18%,rgba(56,189,248,0.22),transparent_48%),radial-gradient(circle_at_82%_78%,rgba(168,85,247,0.16),transparent_42%)]" />
+                {!usesWhiteBackground && <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_20%_18%,rgba(56,189,248,0.22),transparent_48%),radial-gradient(circle_at_82%_78%,rgba(168,85,247,0.16),transparent_42%)]" />}
 
                 <AnimatePresence>
                     {transferSelection && (
@@ -1166,11 +1505,11 @@ const TableMap: React.FC<TableMapProps> = ({
                             className="absolute left-1/2 top-6 z-40 -translate-x-1/2 rounded-2xl border border-sky-200/25 bg-slate-950/78 px-5 py-3 text-center shadow-[0_18px_48px_rgba(2,6,23,0.62)] backdrop-blur-xl"
                         >
                             <p className="text-[10px] font-black uppercase tracking-[0.22em] text-sky-200">
-                                {transferSelection.mode === 'MERGE' ? 'Unir mesas' : 'Mover mesa'}
+                                {transferSelection.mode === 'MERGE' ? 'Unir mesas' : transferSelection.mode === 'SPLIT' ? 'Dividir cuenta' : 'Mover mesa'}
                             </p>
                             <p className="mt-1 text-sm font-black text-white">
                                 {transferSelection.step === 'SOURCE'
-                                    ? 'Mesa a mover: toque la mesa origen'
+                                    ? (transferSelection.mode === 'SPLIT' ? 'Toque en el mapa la mesa que desea dividir' : 'Mesa a mover: toque la mesa origen')
                                     : 'Mesa destino: toque la mesa que recibirá la cuenta'}
                             </p>
                             <button
@@ -1317,7 +1656,7 @@ const TableMap: React.FC<TableMapProps> = ({
                     )}
                 </AnimatePresence>
 
-                <div className="absolute bottom-24 right-6 z-30 flex flex-col gap-2">
+                <div className="absolute bottom-[11rem] right-4 z-30 flex flex-col gap-2 sm:right-6">
                     <GlassButton onClick={() => handleZoom(0.11)} title="Zoom +">
                         <Plus size={18} />
                     </GlassButton>
@@ -1329,24 +1668,7 @@ const TableMap: React.FC<TableMapProps> = ({
                     </GlassButton>
                 </div>
 
-                <div className="absolute bottom-5 left-5 z-40 flex flex-col-reverse items-start gap-3 pointer-events-auto">
-                    <div className="flex items-center gap-3">
-                        <GlassButton onClick={() => setShowRoomPicker(prev => !prev)} title="Salas" className="w-auto px-4">
-                            <span className="flex items-center gap-2">
-                                <LayoutGrid size={18} />
-                                <span className="text-xs font-black uppercase tracking-widest">Salas</span>
-                            </span>
-                        </GlassButton>
-                        {hasControlCenterAccess && (
-                            <GlassButton onClick={() => setIsControlCenterOpen(prev => !prev)} title="Control" className="w-auto px-4">
-                                <span className="flex items-center gap-2">
-                                    <Activity size={18} />
-                                    <span className="text-xs font-black uppercase tracking-widest">Control</span>
-                                </span>
-                            </GlassButton>
-                        )}
-                    </div>
-
+                <div className="absolute bottom-3 left-3 right-3 z-40 pointer-events-none sm:bottom-4 sm:left-4 sm:right-4">
                     <AnimatePresence>
                         {showRoomPicker && (
                             <m.div
@@ -1354,7 +1676,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                 animate={{ opacity: 1, y: 0, scale: 1 }}
                                 exit={{ opacity: 0, y: 12, scale: 0.98 }}
                                 transition={{ duration: 0.16 }}
-                                className="mb-1 max-h-[min(58vh,28rem)] w-[min(16rem,58vw)] rounded-[1.6rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-2.5 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex flex-col gap-2 overflow-y-auto overflow-x-hidden no-scrollbar"
+                                className="pointer-events-auto absolute bottom-[calc(100%+0.5rem)] left-0 max-h-[min(58vh,28rem)] w-[min(16rem,70vw)] rounded-[1.6rem] border border-white/10 bg-slate-950/80 backdrop-blur-xl px-2.5 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex flex-col gap-2 overflow-y-auto overflow-x-hidden no-scrollbar"
                             >
                                 {rooms.map(room => {
                                     const isActive = room.id === activeRoomId;
@@ -1369,6 +1691,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                             key={room.id}
                                             onClick={() => {
                                                 setActiveRoomId(room.id);
+                                                onChangeRoom?.(room.id);
                                                 setShowRoomPicker(false);
                                             }}
                                             className={`w-full px-3 py-2.5 rounded-2xl border transition-all duration-200 text-sm font-bold flex items-center gap-2 text-left ${
@@ -1388,14 +1711,24 @@ const TableMap: React.FC<TableMapProps> = ({
                             </m.div>
                         )}
                     </AnimatePresence>
-                </div>
 
-                <div className="absolute bottom-5 left-5 right-5 z-30 flex justify-end pointer-events-none">
-                    {isRestaurantMode && (
-                        <div className="ml-[15.5rem] max-w-[min(calc(100vw-18rem),1120px)] rounded-[1.8rem] border border-white/10 bg-slate-950/55 backdrop-blur-xl px-4 py-3 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-3 overflow-x-auto overflow-y-hidden no-scrollbar pointer-events-auto">
-                            {renderTableControlActions('footer')}
-                        </div>
-                    )}
+                    <div className="pointer-events-auto grid w-full grid-cols-4 gap-2 rounded-[1.5rem] border border-white/10 bg-slate-950/70 p-2 shadow-[0_16px_50px_rgba(2,6,23,0.5)] backdrop-blur-xl sm:gap-3 sm:p-3">
+                        <GlassButton onClick={() => setShowRoomPicker(prev => !prev)} title="Salas" className="h-14 w-full min-w-0 px-2 sm:px-3">
+                            <span className="flex min-w-0 items-center justify-center gap-1.5 sm:gap-2">
+                                <LayoutGrid size={18} className="shrink-0" />
+                                <span className="truncate text-[10px] font-black uppercase tracking-wide sm:text-xs">Salas</span>
+                            </span>
+                        </GlassButton>
+                        {hasControlCenterAccess && (
+                            <GlassButton onClick={() => setIsControlCenterOpen(prev => !prev)} title="Control" className="h-14 w-full min-w-0 px-2 sm:px-3">
+                                <span className="flex min-w-0 items-center justify-center gap-1.5 sm:gap-2">
+                                    <Activity size={18} className="shrink-0" />
+                                    <span className="truncate text-[10px] font-black uppercase tracking-wide sm:text-xs">Control</span>
+                                </span>
+                            </GlassButton>
+                        )}
+                        {isRestaurantMode && renderTableControlActions('footer')}
+                    </div>
                 </div>
 
                 <div
@@ -1439,6 +1772,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                         model={model}
                                         currencySymbol={currencySymbol}
                                         reduceMotion={Boolean(reduceMotion)}
+                                        lightBackground={usesWhiteBackground}
                                         onSelect={handleNodeSelect}
                                         onTooltipOpen={openTooltip}
                                         onTooltipMove={moveTooltip}
@@ -1468,19 +1802,51 @@ const TableMap: React.FC<TableMapProps> = ({
                             <div className="mt-2 space-y-1.5 text-xs text-slate-200/95">
                                 <p><span className="text-slate-400">Ultimo pedido:</span> {tooltip.model.lastOrderHint}</p>
                                 <p><span className="text-slate-400">Mesero:</span> {tooltip.model.table.waiterName || 'Sin asignar'}</p>
+                                <p><span className="text-slate-400">Cliente:</span> {tooltip.model.firstCustomerName || 'Sin asignar'}</p>
                                 <p><span className="text-slate-400">Total:</span> {currencySymbol}{tooltip.model.total.toLocaleString()}</p>
                                 <p><span className="text-slate-400">Tiempo:</span> {tooltip.model.elapsedLabel}</p>
+                                {tooltip.model.hasPendingKitchenDispatch && (
+                                    <p className="font-black text-amber-300"><span className="text-amber-200/75">Cocina:</span> pendiente de recepción</p>
+                                )}
                             </div>
                         </m.div>
                     )}
                 </AnimatePresence>
+
+                {pendingTableMove && pendingMoveSource && pendingMoveTarget && (
+                    <TableMoveConfirmationModal
+                        sourceLabel={getTableRoomLabel(pendingMoveSource)}
+                        targetLabel={getTableRoomLabel(pendingMoveTarget)}
+                        items={pendingMoveItems}
+                        onClose={() => setPendingTableMove(null)}
+                        onMoveAll={() => {
+                            const selection = pendingTableMove;
+                            setPendingTableMove(null);
+                            void completeTableTransfer(
+                                selection.sourceTableId,
+                                selection.targetTableId,
+                                'MOVE'
+                            );
+                        }}
+                        onMovePartial={(items) => {
+                            const selection = pendingTableMove;
+                            setPendingTableMove(null);
+                            void completeTableTransfer(
+                                selection.sourceTableId,
+                                selection.targetTableId,
+                                'MOVE',
+                                items
+                            );
+                        }}
+                    />
+                )}
 
                 {selectedTable && (
                     <TableOptionsModal
                         table={selectedTable}
                         room={rooms.find(candidate => candidate.id === selectedTable.roomId) || activeRoom}
                         rooms={rooms}
-                        allTables={safeTables}
+                        allTables={safeTables.map(table => enrichTableWithParkedTicket(getVisualTableState(table)))}
                         onClose={() => setSelectedTable(null)}
                         onAddOrder={() => {
                             onTableClick(selectedTable);
@@ -1501,35 +1867,25 @@ const TableMap: React.FC<TableMapProps> = ({
                         onSplitPayment={() => {
                             const ticket = parkedTickets?.find(p => p.id === selectedTable.currentOrderId);
                             if (ticket?.items?.length) {
-                                setSplitTicketForModal(ticket);
+                                setFractionTicketForModal(ticket);
+                                setFractionCount(ticket.paymentFraction?.count || 2);
                                 setSelectedTable(null);
                             } else {
                                 alert('Sin cuenta activa para dividir pago.');
                             }
                         }}
-                        onMoveTable={async (targetTableId) => {
-                            try {
-                                const res = await fetch('/api/mesas/mover', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ fromTableId: selectedTable.id, toTableId: targetTableId })
-                                });
-                                const data = await res.json();
-                                if (data.success) {
-                                    onRefreshTables?.();
-                                    alert('Mesa movida correctamente');
-                                    setSelectedTable(null);
-                                } else {
-                                    alert('Error moviendo mesa: ' + data.message);
-                                }
-                            } catch (error) {
-                                console.error(error);
-                                alert('Error de conexion');
-                            }
+                        onMoveTable={(targetTableId) => {
+                            void completeTableTransfer(selectedTable.id, targetTableId, 'MOVE');
+                            setSelectedTable(null);
+                        }}
+                        sourceItems={ensureCartIds(resolveTicketForTable(selectedTable)?.items || [])}
+                        onMoveTablePartial={(targetTableId, items) => {
+                            void completeTableTransfer(selectedTable.id, targetTableId, 'MOVE', items);
+                            setSelectedTable(null);
                         }}
                         onMergeTables={async (targetTableIds) => {
                             try {
-                                const res = await fetch('/api/mesas/unir', {
+                                const res = await fetch(resolveOperationalApiUrl('/api/mesas/unir'), {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({
@@ -1552,7 +1908,7 @@ const TableMap: React.FC<TableMapProps> = ({
                         }}
                         onFree={async () => {
                             try {
-                                const res = await fetch('/api/mesas/liberar', {
+                                const res = await fetch(resolveOperationalApiUrl('/api/mesas/liberar'), {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ tableId: selectedTable.id })
@@ -1572,9 +1928,73 @@ const TableMap: React.FC<TableMapProps> = ({
                     />
                 )}
 
+                {selectedAccountTable && (
+                    <BarTabsModal
+                        table={selectedAccountTable}
+                        tickets={getTableTickets(selectedAccountTable)}
+                        currencySymbol={currencySymbol}
+                        allowCreate
+                        accountMode
+                        titleLabel="Cuentas de la mesa"
+                        onClose={() => setSelectedAccountTable(null)}
+                        onOpenTab={(ticket) => {
+                            const total = Number(ticket.total ?? (ticket.items || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
+                            onTableClick({
+                                ...selectedAccountTable,
+                                status: 'OCCUPIED',
+                                currentOrderId: ticket.id,
+                                currentOrderTotal: total,
+                                timeSeated: selectedAccountTable.timeSeated || ticket.timestamp
+                            });
+                            setSelectedAccountTable(null);
+                        }}
+                        onCreateTab={(name) => {
+                            void createTableAccount(selectedAccountTable, name);
+                        }}
+                    />
+                )}
+
+                {selectedBarTable && (
+                    <BarTabsModal
+                        table={selectedBarTable}
+                        tickets={getBarTickets(selectedBarTable)}
+                        currencySymbol={currencySymbol}
+                        onClose={() => setSelectedBarTable(null)}
+                        onOpenTab={(ticket) => {
+                            const label = ticket.barTabName || ticket.alias || ticket.name || 'Minuta';
+                            const total = Number(ticket.total ?? (ticket.items || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
+                            onTableClick({
+                                ...selectedBarTable,
+                                status: 'OCCUPIED',
+                                currentOrderId: ticket.id,
+                                currentOrderTotal: total,
+                                timeSeated: selectedBarTable.timeSeated || ticket.timestamp,
+                                barTabId: ticket.barTabId || ticket.id,
+                                barTabName: label
+                            });
+                            setSelectedBarTable(null);
+                        }}
+                        onCreateTab={(name) => {
+                            const orderId = `BAR-${selectedBarTable.id}-${Date.now()}`;
+                            onTableClick({
+                                ...selectedBarTable,
+                                status: 'OCCUPIED',
+                                currentOrderId: orderId,
+                                currentOrderTotal: 0,
+                                timeSeated: new Date().toISOString(),
+                                waiterId: currentUser.id,
+                                waiterName: currentUser.name,
+                                barTabId: orderId,
+                                barTabName: name
+                            });
+                            setSelectedBarTable(null);
+                        }}
+                    />
+                )}
+
                 {isRestaurantMode && splitTicketForModal && (
                     <SplitTicketModal
-                        originalItems={ensureCartIds(splitTicketForModal.items)}
+                        originalItems={splitTicketItems}
                         currencySymbol={currencySymbol}
                         onClose={() => setSplitTicketForModal(null)}
                         onConfirm={(remainingItems, newTicketItems, extraNewTickets, splitCount) => {
@@ -1697,7 +2117,13 @@ const TableMap: React.FC<TableMapProps> = ({
                                             key={t.id}
                                             type="button"
                                             onClick={() => {
-                                                if (onPrintPrecheck) onPrintPrecheck(t);
+                                                const ticket = parkedTickets?.find(p => p.id === t.currentOrderId);
+                                                if (ticket?.items?.length) {
+                                                    setSplitTicketForModal(ticket);
+                                                    setFractionPickOpen(false);
+                                                } else if (onPrintPrecheck) {
+                                                    onPrintPrecheck(t);
+                                                }
                                             }}
                                             className="w-full text-left px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-white/10"
                                         >
@@ -1715,6 +2141,74 @@ const TableMap: React.FC<TableMapProps> = ({
                         </div>
                     </div>
                 )}
+
+                {isRestaurantMode && fractionTicketForModal && (
+                    <div
+                        className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+                        onClick={() => setFractionTicketForModal(null)}
+                    >
+                        <div
+                            className="w-full max-w-md rounded-2xl border border-white/15 bg-slate-900 p-6 text-white shadow-2xl"
+                            onClick={event => event.stopPropagation()}
+                        >
+                            <div className="flex items-start justify-between gap-4">
+                                <div>
+                                    <p className="text-xs font-black uppercase tracking-widest text-sky-400">Cobro separado</p>
+                                    <h3 className="mt-1 text-2xl font-black">Fraccionar cuenta</h3>
+                                    <p className="mt-1 text-sm text-slate-400">Los artículos permanecen en una sola cuenta.</p>
+                                </div>
+                                <button type="button" onClick={() => setFractionTicketForModal(null)} className="rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-white" aria-label="Cerrar">
+                                    <X size={20} />
+                                </button>
+                            </div>
+
+                            <div className="mt-6 rounded-xl border border-white/10 bg-slate-950/60 p-4">
+                                <div className="flex items-center justify-between text-sm">
+                                    <span className="font-semibold text-slate-400">Total</span>
+                                    <span className="text-xl font-black">{currencySymbol}{Number(fractionTicketForModal.total || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                </div>
+                                <div className="mt-4 flex items-center justify-center gap-4">
+                                    <button type="button" onClick={() => setFractionCount(value => Math.max(2, value - 1))} disabled={fractionCount <= 2} className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/10 disabled:opacity-30" aria-label="Quitar una parte"><Minus size={20} /></button>
+                                    <div className="min-w-28 text-center">
+                                        <p className="text-4xl font-black">{fractionCount}</p>
+                                        <p className="text-xs font-bold uppercase tracking-wider text-slate-400">partes</p>
+                                    </div>
+                                    <button type="button" onClick={() => setFractionCount(value => Math.min(20, value + 1))} disabled={fractionCount >= 20} className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/10 disabled:opacity-30" aria-label="Agregar una parte"><Plus size={20} /></button>
+                                </div>
+                                <p className="mt-4 text-center text-lg font-black text-sky-300">
+                                    {currencySymbol}{(Number(fractionTicketForModal.total || 0) / fractionCount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} por persona
+                                </p>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={async () => {
+                                    const paidParts = fractionTicketForModal.paymentFraction?.parts.filter(part => part.status === 'PAID') || [];
+                                    if (paidParts.length > 0) {
+                                        alert('Esta cuenta ya tiene cuotas cobradas y no puede volver a fraccionarse.');
+                                        return;
+                                    }
+                                    const total = Number(fractionTicketForModal.total || 0);
+                                    const nextTicket = {
+                                        ...fractionTicketForModal,
+                                        paymentFraction: createPaymentFractionPlan(total, fractionCount)
+                                    };
+                                    const nextTickets = (parkedTickets || []).map(ticket => ticket.id === nextTicket.id ? nextTicket : ticket);
+                                    await Promise.resolve(onUpdateParkedTickets?.(nextTickets));
+                                    setFractionTicketForModal(null);
+                                    setTableNotice({
+                                        title: 'Cuenta fraccionada',
+                                        message: `Se generaron ${fractionCount} cuotas para cobro separado.`,
+                                        primaryLabel: 'Entendido'
+                                    });
+                                }}
+                                className="mt-5 w-full rounded-xl bg-sky-500 px-4 py-3.5 font-black text-slate-950 hover:bg-sky-400"
+                            >
+                                Crear {fractionCount} cuotas
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
         </LazyMotion>
     );
@@ -1724,6 +2218,7 @@ const SmartTableNode = React.memo(({
     model,
     currencySymbol,
     reduceMotion,
+    lightBackground,
     onSelect,
     onTooltipOpen,
     onTooltipMove,
@@ -1732,6 +2227,7 @@ const SmartTableNode = React.memo(({
     model: SmartTableModel;
     currencySymbol: string;
     reduceMotion: boolean;
+    lightBackground: boolean;
     onSelect: (model: SmartTableModel) => void;
     onTooltipOpen: (model: SmartTableModel, x: number, y: number) => void;
     onTooltipMove: (modelId: string, x: number, y: number) => void;
@@ -1754,7 +2250,7 @@ const SmartTableNode = React.memo(({
     const shapeClass =
         model.archetype === 'CIRCLE' || model.archetype === 'BAR'
             ? 'rounded-full'
-            : model.archetype === 'BOOTH'
+            : model.archetype === 'BOOTH' || model.archetype === 'CHAISE_LONGUE'
                 ? 'rounded-[1.3rem]'
                 : 'rounded-2xl';
     const isFree = model.smartStatus === 'FREE';
@@ -1787,7 +2283,7 @@ const SmartTableNode = React.memo(({
             }}
             onPointerUp={() => clearLongPress()}
             onPointerCancel={() => clearLongPress()}
-            className={`absolute isolate overflow-hidden border text-left transition-[box-shadow,border-color,background-color] duration-300 ${shapeClass} ${statusPalette[model.smartStatus].shell}`}
+            className={`absolute isolate overflow-hidden border text-left transition-[box-shadow,border-color,background-color] duration-300 ${shapeClass} ${lightBackground && isFree ? 'border-emerald-500/50 bg-white text-slate-900 shadow-lg shadow-slate-200/70' : statusPalette[model.smartStatus].shell}`}
             style={{
                 left: model.table.posX,
                 top: model.table.posY,
@@ -1861,13 +2357,17 @@ const SmartTableNode = React.memo(({
                 </div>
             )}
 
+            {model.archetype === 'CHAISE_LONGUE' && (
+                <div className="pointer-events-none absolute inset-x-3 bottom-2 h-1 rounded-full bg-white/25" />
+            )}
+
             <div className="absolute inset-0 p-2 flex flex-col justify-between">
                 {isFree ? (
                     <>
                         <div className="flex items-center justify-between">
                             <span className="h-2 w-2 rounded-full bg-emerald-300/85" />
-                            <span className="inline-flex items-center justify-center h-5 w-5 rounded-full border border-emerald-300/30 bg-emerald-400/10">
-                                <Check size={10} className="text-emerald-200" />
+                            <span className="inline-flex items-center justify-center h-5 w-5 rounded-full border border-emerald-400/40 bg-emerald-400/10">
+                                <Check size={10} className={lightBackground ? 'text-emerald-600' : 'text-emerald-200'} />
                             </span>
                         </div>
 
@@ -1899,7 +2399,12 @@ const SmartTableNode = React.memo(({
                                         strokeDashoffset={ringOffset}
                                     />
                                 </svg>
-                                <span className="absolute inset-0 flex items-center justify-center text-[10px]">{model.serviceStage.icon}</span>
+                                <span
+                                    className={`absolute inset-0 flex items-center justify-center text-[10px] ${model.hasPendingKitchenDispatch ? 'rounded-full bg-amber-400 text-amber-950 shadow-[0_0_18px_rgba(251,191,36,0.8)]' : ''}`}
+                                    title={model.hasPendingKitchenDispatch ? 'Pedido pendiente de recepción en cocina' : model.serviceStage.label}
+                                >
+                                    {model.hasPendingKitchenDispatch ? <CircleHelp size={19} strokeWidth={3} /> : model.serviceStage.icon}
+                                </span>
                             </div>
                         </div>
 

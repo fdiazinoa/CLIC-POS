@@ -10,14 +10,21 @@ export const ThermalPrinterService = {
      * @param report The Z-Report data to print
      * @returns Promise<boolean> indicating success
      */
-    printZReport: async (report: ZReport, hiddenModules: string[] = [], config?: BusinessConfig): Promise<boolean> => {
+    printZReport: async (
+        report: ZReport,
+        hiddenModules: string[] = [],
+        config?: BusinessConfig,
+        options?: { terminalId?: string; preferredPrinterId?: string; jobType?: string }
+    ): Promise<boolean> => {
         try {
             console.log("🖨️ Starting Thermal Print Job for Z-Report:", report.sequenceNumber);
 
-            // 1. Generate HTML Content for Thermal Paper (80mm width approx)
+            // 1. Generate native ESC/POS first. Legacy saved Z reports may contain
+            // non-ISO currency symbols in baseCurrency, so HTML fallback must never
+            // block the native thermal payload.
             const runtimeConfig = config || ({ terminals: [], availablePrinters: [] } as BusinessConfig);
-            const receiptHtml = generateZReportReceipt(report, hiddenModules);
             const escPosBase64 = buildEscPosZReportPayload(report, hiddenModules, config);
+            const buildReceiptHtml = () => generateZReportReceipt(report, hiddenModules);
 
             let printedSilently = false;
 
@@ -26,20 +33,22 @@ export const ThermalPrinterService = {
                     config: runtimeConfig,
                     escPosBase64,
                     role: 'TICKET',
-                    terminalId: report.terminalId,
-                    jobType: 'Z_REPORT',
+                    terminalId: options?.terminalId || report.terminalId,
+                    jobType: options?.jobType || 'Z_REPORT',
                     referenceId: report.id,
+                    preferredPrinterId: options?.preferredPrinterId,
                 });
             }
 
             if (!printedSilently && !shouldSuppressBrowserPrintFallback()) {
                 printedSilently = await PrintRouterService.routeAndPrintHtml({
                     config: runtimeConfig,
-                    html: receiptHtml,
+                    html: buildReceiptHtml(),
                     role: 'TICKET',
-                    terminalId: report.terminalId,
-                    jobType: 'Z_REPORT',
+                    terminalId: options?.terminalId || report.terminalId,
+                    jobType: options?.jobType || 'Z_REPORT',
                     referenceId: report.id,
+                    preferredPrinterId: options?.preferredPrinterId,
                 });
             }
 
@@ -51,6 +60,7 @@ export const ThermalPrinterService = {
             }
 
             // 2. Create a hidden iframe to print without disrupting the UI
+            const receiptHtml = buildReceiptHtml();
             const iframe = document.createElement('iframe');
             iframe.style.position = 'fixed';
             iframe.style.right = '0';

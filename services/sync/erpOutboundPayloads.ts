@@ -169,9 +169,20 @@ export function buildErpSalePayload(transaction: Transaction): Transaction & {
     original_source_display_id?: string;
 } {
     const base = sanitizeTransactionForErp(normalizeTransactionForSync(coerceTransactionItemsForErp(transaction)));
-    const isCreditNote = base.documentType === 'REFUND' || base.ncfType === 'B04';
+    const isFiscalDisabled = base.fiscalMode === 'NONE';
+    const fiscalFields = isFiscalDisabled
+        ? {
+              ncf: undefined,
+              ncfType: undefined,
+              legacyNcf: undefined,
+              electronicNcf: undefined,
+              fiscalProvider: 'NONE' as const,
+          }
+        : {};
+    const isCreditNote = !isFiscalDisabled && (base.documentType === 'REFUND' || base.ncfType === 'B04' || base.ncfType === 'E34');
     return {
         ...base,
+        ...fiscalFields,
         transaction_date: base.date,
         currency_code: pickTransactionCurrency(base),
         exchange_rate: pickTransactionExchangeRate(base),

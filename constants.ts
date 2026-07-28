@@ -69,7 +69,8 @@ export const DEFAULT_TERMINAL_CONFIG = {
     requirePinForDiscount: true,
     requireManagerForRefunds: true,
     allowBiometrics: false,
-    autoLogoutMinutes: 15
+    autoLogoutMinutes: 15,
+    reduceSyncAfterMinutes: 0
   },
   pricing: {
     allowedTariffIds: ['trf-gen', 'trf-vip'],
@@ -178,9 +179,9 @@ export const DEFAULT_TERMINAL_CONFIG = {
 };
 
 export const MOCK_USERS: User[] = [
-  { id: 'u1', name: 'Admin Master', pin: '1234', role: 'ADMIN', roleId: 'ADMIN', photo: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Admin' },
-  { id: 'u2', name: 'Cajero Principal', pin: '0000', role: 'CASHIER', roleId: 'CASHIER', photo: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Cashier' },
-  { id: 'u3', name: 'Supervisor Turno', pin: '9999', role: 'SUPERVISOR', roleId: 'SUPERVISOR', photo: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Supervisor' }
+  { id: 'u1', name: 'Admin Master', pin: '1234', role: 'ADMIN', roleId: 'ADMIN' },
+  { id: 'u2', name: 'Cajero Principal', pin: '0000', role: 'CASHIER', roleId: 'CASHIER' },
+  { id: 'u3', name: 'Supervisor Turno', pin: '9999', role: 'SUPERVISOR', roleId: 'SUPERVISOR' }
 ];
 
 export const DEFAULT_ROLES: RoleDefinition[] = [
@@ -191,7 +192,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
       'ALL',
       'POS_VOID_ITEM', 'POS_VOID_TICKET', 'POS_DISCOUNT',
       'POS_PRICE_OVERRIDE', 'POS_OPEN_DRAWER', 'POS_RETURNS',
-      'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHANGE_TARIFF', 'POS_VIEW_X_REPORT', 'POS_CLOSE_X', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'TABLE_CONTROL_CENTER', 'SETTINGS_ACCESS', 'POS_ALLOW_ZERO_PRICE'
+      'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHECKOUT', 'POS_CHANGE_TARIFF', 'POS_VIEW_X_REPORT', 'POS_CLOSE_X', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'TABLE_CONTROL_CENTER', 'SETTINGS_ACCESS', 'POS_ALLOW_ZERO_PRICE'
     ],
     isSystem: true,
     maxDiscountPercent: 100
@@ -201,7 +202,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
     name: 'Supervisor',
     permissions: [
       'POS_VOID_ITEM', 'POS_DISCOUNT', 'POS_OPEN_DRAWER',
-      'POS_RETURNS', 'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHANGE_TARIFF', 'POS_VIEW_X_REPORT', 'POS_CLOSE_X', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'TABLE_CONTROL_CENTER'
+      'POS_RETURNS', 'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHECKOUT', 'POS_CHANGE_TARIFF', 'POS_VIEW_X_REPORT', 'POS_CLOSE_X', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'TABLE_CONTROL_CENTER'
     ],
     isSystem: true,
     maxDiscountPercent: 20
@@ -209,7 +210,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
   {
     id: 'CASHIER',
     name: 'Cajero',
-    permissions: ['POS_REPRINT_RECEIPT', 'POS_ALLOW_SALES_WITH_OPEN_Z'],
+    permissions: ['POS_CHECKOUT', 'POS_REPRINT_RECEIPT', 'POS_ALLOW_SALES_WITH_OPEN_Z'],
     isSystem: true,
     maxDiscountPercent: 0
   }
@@ -396,6 +397,7 @@ export const FOOD_PRODUCTS: Product[] = [
 export const AVAILABLE_PERMISSIONS = [
   // --- POS CORE ---
   { key: 'SALE', label: 'Realizar Ventas', description: 'Acceso a pantalla de cobro', category: 'SALES' },
+  { key: 'POS_CHECKOUT', label: 'Cobrar', description: 'Permite abrir la pantalla de pago y finalizar ventas', category: 'SALES' },
   { key: 'POS_ALLOW_SALES_WITH_OPEN_Z', label: 'Permitir ventas con cierre Z abierto', description: 'Permite agregar y cobrar ventas durante la jornada/corte Z abierto', category: 'SALES' },
   { key: 'POS_PAY_CREDIT', label: 'Cobrar a Crédito (Pendiente)', description: 'Permite finalizar ventas con el método de pago a crédito', category: 'SALES' },
   { key: 'POS_DISCOUNT', label: 'Aplicar Descuentos', description: 'Descuentos manuales en ítems o total', category: 'SALES' },

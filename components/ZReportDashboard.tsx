@@ -4,8 +4,9 @@ import {
    ArrowLeft, Receipt, CheckCircle, Banknote, Calendar,
    AlertTriangle, Lock, RefreshCw, Printer, Mail, Loader2
 } from 'lucide-react';
-import { Transaction, BusinessConfig, CashMovement, User, RoleDefinition, Collection } from '../types';
+import { Transaction, BusinessConfig, CashMovement, User, RoleDefinition, Collection, ZReport } from '../types';
 import { sendZReportEmail } from '../utils/email';
+import { db } from '../utils/db';
 import ZReportHistory from './ZReportHistory';
 import { calculateZReportStats } from '../utils/analytics';
 import { ThermalPrinterService } from '../services/printer/ThermalPrinterService';
@@ -92,6 +93,8 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const [declaredCard, setDeclaredCard] = useState('');
    const [declaredOther, setDeclaredOther] = useState('');
    const [notes, setNotes] = useState('');
+   const [replacementReport, setReplacementReport] = useState<ZReport | null>(null);
+   const [replacementTransactions, setReplacementTransactions] = useState<Transaction[]>([]);
 
    // Closing workflow states
    const [isProcessing, setIsProcessing] = useState(false);
@@ -176,9 +179,18 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const isDefaultTerminal = terminalKey === 't1';
    const matchesCurrentTerminal = (value?: string | null) => normalizeTerminalId(value) === terminalKey;
 
-   const filteredTransactions = transactions.filter(t =>
+   const transactionSource = replacementReport
+      ? [
+         ...transactions,
+         ...replacementTransactions.filter(replacementTx =>
+            !transactions.some(activeTx => activeTx.id === replacementTx.id)
+         )
+      ]
+      : transactions;
+
+   const filteredTransactions = transactionSource.filter(t =>
       (matchesCurrentTerminal(t.terminalId) || (!t.terminalId && isDefaultTerminal)) &&
-      !t.zReportId
+      (!t.zReportId || t.zReportId === replacementReport?.id)
    );
    const filteredCashMovements = cashMovements.filter(m =>
       matchesCurrentTerminal(m.terminalId) || (!m.terminalId && isDefaultTerminal)
@@ -186,6 +198,15 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const filteredCollections = collections.filter(c =>
       matchesCurrentTerminal(c.terminalId) || (!c.terminalId && isDefaultTerminal)
    );
+   const cashMovementDetails = filteredCashMovements.map(movement => ({
+      id: movement.id,
+      type: movement.type,
+      amount: Number(movement.amount || 0),
+      reason: movement.reason || 'Movimiento General',
+      timestamp: movement.timestamp,
+      userName: movement.userName,
+      currencyCode: movement.currencyCode,
+   }));
 
    const handleStartClosing = () => {
       const hasCashToCount = currenciesRequiringCashCount.length > 0;
@@ -194,6 +215,14 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
       if (hasCashToCount && !hasAllCashCounted) {
          alert("Por favor, ingresa el conteo físico de cada moneda antes de cerrar.");
          return;
+      }
+
+      if (requireCashFundOnZ && fixedCashFundAmount > 0) {
+         const declaredBaseCash = getDeclaredCashForCurrency(baseCurrencyCode);
+         if (declaredBaseCash < fixedCashFundAmount) {
+            alert(`El conteo físico debe cubrir el fondo fijo de caja: ${baseCurrency?.symbol || baseCurrencyCode}${fixedCashFundAmount.toFixed(2)}.`);
+            return;
+         }
       }
 
       setIsProcessing(true);
@@ -220,6 +249,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                   cashExpected: expectedCashByCurrency,
                   cashCounted: previewCashCountedData,
                   cashDiscrepancy: cashDiscrepancyByCurrency,
+                  cashMovementDetails,
                   denominationBreakdown: buildDenominationBreakdown(),
                   transactionCount: filteredTransactions.length,
                   stats: calculateZReportStats(filteredTransactions, filteredCollections)
@@ -268,45 +298,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
 
             // Step 2: Emails
             setCurrentStep(2);
-            // Use terminal specific email or fallback to global default
-            const emails = activeTerminalConfig?.workflow?.session?.zReportEmails || config.emailConfig?.defaultRecipient;
-            if (emails) {
-               // Construct report data for email
-               const emailReportData: any = {
-                  sequenceNumber: 'PRE-CLOSE', // Will be updated on save
-                  closedAt: new Date().toISOString(),
-                  closedByUserName: userName,
-                  terminalId: activeTerminal?.id || 'POS-01',
-                  baseCurrency: baseCurrencyCode,
-                  totalsByMethod: finalTotalsByMethod,
-                  cashExpected: expectedCashByCurrency,
-                  cashCounted: cashCountedData,
-                  cashDiscrepancy: cashDiscrepancyByCurrency,
-                  denominationBreakdown: buildDenominationBreakdown(),
-                  transactionCount: finalTxCount,
-                  stats: finalStats,
-                  companyName: config.companyInfo.name,
-                  notes: notes
-               };
-
-               try {
-                  const controller = new AbortController();
-                  const timeoutId = setTimeout(() => controller.abort(), 8000);
-                  await fetch('/smtp/z-report', {
-                     method: 'POST',
-                     headers: { 'Content-Type': 'application/json' },
-                     body: JSON.stringify({
-                        to: emails,
-                        reportData: emailReportData
-                     }),
-                     signal: controller.signal
-                  });
-                  clearTimeout(timeoutId);
-                  console.log(`[EMAIL] Reporte Z enviado a: ${emails}`);
-               } catch (error) {
-                  console.error("Error enviando email:", error);
-               }
-            }
+            // El email se envia en App.tsx despues de guardar el Z real, con secuencia definitiva.
             await new Promise(r => setTimeout(r, 1000));
 
             // Step 3: Finalizar
@@ -316,8 +308,11 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
             // Pass base currency cash counted for backwards compatibility, plus full report data
             const reportData = {
                terminalId: currentTerminalId,
+               replaceReportId: replacementReport?.id,
+               replaceSequenceNumber: replacementReport?.sequenceNumber,
                transactionIds: filteredTransactions.map(t => t.id),
                cashMovementIds: filteredCashMovements.map(m => m.id),
+               cashMovementDetails,
                cashCountedByCurrency: cashCountedData,
                expectedCashByCurrency,
                cashDiscrepancyByCurrency,
@@ -325,6 +320,10 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                cashIn,
                cashOut,
                expectedCash: expectedCashInDrawer,
+               requireCashFundOnZ,
+               fixedCashFundAmount,
+               cashToLeaveInDrawer,
+               cashToWithdraw,
                declaredCardTotal: parseFloat(declaredCard) || 0,
                declaredOtherTotal: parseFloat(declaredOther) || 0,
                expectedCardTotal,
@@ -361,6 +360,8 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const activeCurrencies = config.currencies?.filter(c => c.isEnabled) || [];
    const baseCurrency = config.currencies?.find(c => c.isBase) || activeCurrencies[0];
    const baseCurrencyCode = baseCurrency?.code || 'DOP';
+   const requireCashFundOnZ = Boolean(activeTerminalConfig?.workflow?.session?.requireCashFundOnZ);
+   const fixedCashFundAmount = Math.max(0, Number(activeTerminalConfig?.workflow?.session?.fixedCashFundAmount || 0));
 
    // --- STATS CALCS (MULTI-CURRENCY) ---
    const payments = filteredTransactions.flatMap(t => t?.payments || []).filter(Boolean);
@@ -410,7 +411,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
 
    const currenciesRequiringCashCount = Array.from(allCurrenciesInUse).filter(currency => {
       const expected = expectedCashByCurrency[currency] || 0;
-      return Math.abs(expected) > 0.0001;
+      return Math.abs(expected) > 0.0001 || (requireCashFundOnZ && fixedCashFundAmount > 0 && currency === baseCurrencyCode);
    });
 
    // Calculate discrepancies per currency
@@ -427,6 +428,10 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const cashOut = cashOutByCurrency[baseCurrencyCode] || 0;
    const expectedCashInDrawer = expectedCashByCurrency[baseCurrencyCode] || 0;
    const cashDiscrepancy = cashDiscrepancyByCurrency[baseCurrencyCode] || 0;
+   const cashToLeaveInDrawer = requireCashFundOnZ ? fixedCashFundAmount : 0;
+   const cashToWithdraw = requireCashFundOnZ
+      ? Math.max(0, getDeclaredCashForCurrency(baseCurrencyCode) - fixedCashFundAmount)
+      : Math.max(0, getDeclaredCashForCurrency(baseCurrencyCode));
    const expectedCardTotal = payments
       .filter(p => p.method === 'CARD')
       .reduce((sum, p) => sum + getPaymentAppliedBaseAmount(p), 0);
@@ -446,8 +451,28 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    }, [expectedOtherTotal]);
 
 
+   const handleRepeatReportFromHistory = async (report: ZReport) => {
+      try {
+         const archived = await (db.get('transactionHistory') as Promise<Transaction[]>);
+         setReplacementReport(report);
+         setReplacementTransactions((Array.isArray(archived) ? archived : []).filter(tx =>
+            tx.zReportId === report.id ||
+            (tx as any).zReportSequence === report.sequenceNumber
+         ));
+         setCashCountedByCurrency({});
+         setDenominationCounts({});
+         setDeclaredCard('');
+         setDeclaredOther('');
+         setNotes(`Repetición/Reemplazo de ${report.sequenceNumber}`);
+         setShowHistory(false);
+      } catch (error) {
+         console.error('❌ No se pudo preparar repetición de Z:', error);
+         alert('No se pudo cargar el detalle del Z para repetirlo.');
+      }
+   };
+
    if (showHistory) {
-      return <ZReportHistory config={config} currentUser={currentUser} roles={roles} onClose={() => setShowHistory(false)} />;
+      return <ZReportHistory config={config} currentUser={currentUser} roles={roles} activeTerminalId={currentTerminalId} onRepeatReport={handleRepeatReportFromHistory} onClose={() => setShowHistory(false)} />;
    }
 
    return (
@@ -603,6 +628,18 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                                           <span className="font-black text-gray-800 uppercase text-xs">Debe haber en caja</span>
                                           <span className="font-black text-xl text-blue-600">{symbol}{expected.toFixed(2)}</span>
                                        </div>
+                                       {requireCashFundOnZ && currencyCode === baseCurrencyCode && (
+                                          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 space-y-2">
+                                             <div className="flex justify-between items-center text-sm">
+                                                <span className="font-black text-amber-700 uppercase text-xs">Fondo fijo a dejar</span>
+                                                <span className="font-black text-amber-700">{symbol}{fixedCashFundAmount.toFixed(2)}</span>
+                                             </div>
+                                             <div className="flex justify-between items-center text-sm">
+                                                <span className="font-bold text-amber-700">Retirar / depositar estimado</span>
+                                                <span className="font-black text-amber-900">{symbol}{cashToWithdraw.toFixed(2)}</span>
+                                             </div>
+                                          </div>
+                                       )}
                                     </div>
                                  </div>
                               );

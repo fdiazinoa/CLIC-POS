@@ -108,7 +108,12 @@ SOURCE_BRANCH="$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref "${SOURCE_REF}" 2>
 [[ -d "${CANONICAL_BUILD_WORKTREE}" ]] || fail "No existe la worktree canónica: ${CANONICAL_BUILD_WORKTREE}"
 
 CANONICAL_STATUS="$(git -C "${CANONICAL_BUILD_WORKTREE}" status --porcelain)"
-[[ -z "${CANONICAL_STATUS}" ]] || fail "La worktree canónica no está limpia. Corrige eso antes de compilar."
+if [[ -n "${CANONICAL_STATUS}" ]]; then
+  if [[ "${ALLOW_DIRTY_SIGNING_WORKTREE:-0}" != "1" ]]; then
+    fail "La worktree canónica no está limpia. Corrige eso antes de compilar."
+  fi
+  info "ADVERTENCIA: la worktree de firma tiene cambios; el build aislado usará únicamente key.properties, keystore y local.properties."
+fi
 
 KEY_PROPERTIES="${CANONICAL_BUILD_WORKTREE}/android/key.properties"
 KEYSTORE_FILE="${CANONICAL_BUILD_WORKTREE}/android/keys/clic-pos-release.keystore"
@@ -125,7 +130,20 @@ CANONICAL_GRADLE_FILE="${CANONICAL_BUILD_WORKTREE}/android/app/build.gradle"
 require_file "${CANONICAL_GRADLE_FILE}"
 
 NEXT_VERSION_CODE="$(resolve_next_version_code "${CANONICAL_GRADLE_FILE}")"
-VERSION_NAME="1.0.${NEXT_VERSION_CODE}"
+SOURCE_VERSION_CODE="$(git -C "${REPO_ROOT}" show "${SOURCE_COMMIT}:android/app/build.gradle" | awk '/versionCode[[:space:]]+[0-9]+/ { print $2; exit }')"
+SOURCE_VERSION_NAME="$(git -C "${REPO_ROOT}" show "${SOURCE_COMMIT}:android/app/build.gradle" | sed -n 's/.*versionName[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+
+if [[ "${SOURCE_VERSION_CODE}" =~ ^[0-9]+$ ]] && (( SOURCE_VERSION_CODE > NEXT_VERSION_CODE )); then
+  NEXT_VERSION_CODE="${SOURCE_VERSION_CODE}"
+fi
+
+if [[ "${SOURCE_VERSION_CODE}" == "${NEXT_VERSION_CODE}" && -n "${SOURCE_VERSION_NAME}" ]]; then
+  VERSION_NAME="${SOURCE_VERSION_NAME}"
+elif [[ "${SOURCE_VERSION_NAME}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+  VERSION_NAME="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
+else
+  VERSION_NAME="1.0.${NEXT_VERSION_CODE}"
+fi
 
 TEMP_WORKTREE="$(mktemp -d /private/tmp/clicpos-release-XXXXXX)"
 cleanup() {

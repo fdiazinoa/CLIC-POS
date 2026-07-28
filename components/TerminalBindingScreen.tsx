@@ -99,10 +99,12 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
     let lastError: Error | null = null;
 
     for (const baseUrl of candidates) {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 3500);
       try {
         const [configResponse, usersResponse] = await Promise.all([
-          fetch(`${baseUrl}/api/config`),
-          fetch(`${baseUrl}/api/users`),
+          fetch(`${baseUrl}/api/config`, { signal: controller.signal }),
+          fetch(`${baseUrl}/api/users`, { signal: controller.signal }),
         ]);
 
         if (!configResponse.ok) {
@@ -119,6 +121,8 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
         };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
+      } finally {
+        window.clearTimeout(timeoutId);
       }
     }
 
@@ -167,19 +171,16 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
       setStep('AUTH');
     } catch (err) {
       console.error('Failed to connect to master during terminal activation:', err);
-      const isHttps = window.location.protocol === 'https:';
-      const isNetworkError =
-        (err as Error).message.includes('fetch') || (err as Error).name === 'TypeError';
-
-      let cleanError = `No se pudo conectar a la Maestra (${masterIp}).`;
-      if (isNetworkError && isHttps) {
-        cleanError +=
-          '\n\n⚠️ Posible error de Certificado SSL detectado:\nDebes aceptar el certificado en el navegador antes de continuar.';
-      } else {
-        cleanError += `\nError: ${(err as Error).message}`;
-      }
-
-      setError(cleanError);
+      const normalizedHost = normalizeMasterHost(masterIp);
+      const detail = (err as Error).name === 'AbortError'
+        ? 'La Maestra no respondió dentro de 3.5 segundos.'
+        : 'No hay un servicio Master disponible en esa dirección.';
+      setError(
+        `No se pudo conectar a la Maestra (${normalizedHost}).\n\n`
+        + `${detail}\n`
+        + `Verifique que la Maestra tenga el APK actualizado y esté abierta en la misma red.\n`
+        + `Dirección esperada: http://${normalizedHost}:3001`
+      );
     } finally {
       setIsConnecting(false);
     }

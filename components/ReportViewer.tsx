@@ -126,6 +126,28 @@ const toNumber = (value: unknown): number => {
 
 const normalizeTerminalId = (terminalId?: string): string => String(terminalId || 'T1').trim().toLowerCase();
 
+const resolveTerminalAliases = (terminal: any): string[] => [
+    terminal?.id,
+    terminal?.name,
+    terminal?.config?.terminalName,
+    terminal?.config?.stationNumber,
+    terminal?.config?.erpTerminalId,
+    terminal?.config?.erpBinding?.terminalId,
+    terminal?.config?.erpBinding?.terminalName,
+    terminal?.config?.terminalId,
+    terminal?.config?.localTerminalId,
+].map(value => String(value || '').trim()).filter(Boolean);
+
+const resolveTerminalLabel = (terminal: any, fallback?: string): string => (
+    terminal?.config?.terminalName
+    || terminal?.config?.erpBinding?.terminalName
+    || terminal?.name
+    || terminal?.config?.stationNumber
+    || fallback
+    || terminal?.id
+    || 'Terminal'
+);
+
 const toMs = (value: unknown): number => new Date(String(value || '')).getTime();
 
 const sumRecordValues = (record: Record<string, number> | undefined): number =>
@@ -409,7 +431,8 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                     { key: 'ncf', label: 'NCF', type: 'text' },
                     { key: 'ticketNo', label: 'Ticket No.', type: 'text' },
                     { key: 'ncfType', label: 'Tipo NCF', type: 'text' },
-                    { key: 'terminalId', label: 'Terminal', type: 'text' },
+                    { key: 'establishment', label: 'Establecimiento', type: 'text' },
+                    { key: 'terminalName', label: 'Terminal', type: 'text' },
                     { key: 'status', label: 'Estado', type: 'status' },
                     { key: 'total', label: 'Total', type: 'currency' },
                     { key: 'date', label: 'Fecha', type: 'date' },
@@ -648,7 +671,14 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
 
     const isFiscalTerminalMatch = (terminalId?: string): boolean => {
         if (fiscalTerminalFilter === 'ALL') return true;
-        return normalizeTerminalId(terminalId) === normalizeTerminalId(fiscalTerminalFilter);
+        const selectedTerminal = (config.terminals || []).find((terminal: any) =>
+            resolveTerminalAliases(terminal).some(alias => normalizeTerminalId(alias) === normalizeTerminalId(fiscalTerminalFilter))
+            || normalizeTerminalId(terminal?.id) === normalizeTerminalId(fiscalTerminalFilter)
+        );
+        const aliases = selectedTerminal
+            ? Array.from(new Set([fiscalTerminalFilter, ...resolveTerminalAliases(selectedTerminal)]))
+            : [fiscalTerminalFilter];
+        return aliases.map(normalizeTerminalId).includes(normalizeTerminalId(terminalId));
     };
 
     const filteredData = useMemo(() => {
@@ -674,7 +704,7 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
             });
         }
         return result;
-    }, [data, searchTerm, sortConfig, dateRange.startMs, dateRange.endMs, isFiscalView, fiscalTerminalFilter]);
+    }, [data, searchTerm, sortConfig, dateRange.startMs, dateRange.endMs, isFiscalView, fiscalTerminalFilter, config.terminals]);
 
     const fiscalTaxSummaryRows = useMemo<FiscalTaxSummaryRow[]>(() => {
         if (!isFiscalView || !fiscalContext || fiscalReportMode !== 'TAX_SUMMARY') return [];
@@ -2022,15 +2052,36 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
             : [];
     const fiscalTerminalOptions = useMemo(() => {
         if (!isFiscalView || !fiscalContext) return [];
-        const terminalMap = new Map<string, string>();
-        (config.terminals || []).forEach(terminal => terminalMap.set(terminal.id, terminal.id));
+        const terminalMap = new Map<string, { value: string; label: string; aliases: string[] }>();
+        (config.terminals || []).forEach((terminal: any) => {
+            const aliases = resolveTerminalAliases(terminal);
+            const value = String(terminal?.id || aliases[0] || '').trim();
+            if (!value) return;
+            terminalMap.set(value, {
+                value,
+                label: resolveTerminalLabel(terminal, value),
+                aliases: Array.from(new Set([value, ...aliases])),
+            });
+        });
+        const appendTerminal = (rawTerminalId?: string) => {
+            const terminalId = String(rawTerminalId || '').trim();
+            if (!terminalId) return;
+            const existing = Array.from(terminalMap.values()).find(option =>
+                option.aliases.some(alias => normalizeTerminalId(alias) === normalizeTerminalId(terminalId))
+            );
+            if (existing) {
+                existing.aliases = Array.from(new Set([...existing.aliases, terminalId]));
+                return;
+            }
+            terminalMap.set(terminalId, { value: terminalId, label: terminalId, aliases: [terminalId] });
+        };
         [...fiscalContext.transactions, ...fiscalContext.transactionHistory].forEach(tx => {
-            if (tx.terminalId) terminalMap.set(tx.terminalId, tx.terminalId);
+            appendTerminal(tx.terminalId);
         });
         fiscalContext.receptions.forEach(reception => {
-            if (reception.terminalId) terminalMap.set(reception.terminalId, reception.terminalId);
+            appendTerminal(reception.terminalId);
         });
-        return Array.from(terminalMap.values()).sort((a, b) => a.localeCompare(b));
+        return Array.from(terminalMap.values()).sort((a, b) => a.label.localeCompare(b.label));
     }, [isFiscalView, fiscalContext, config.terminals]);
     const tableRows = isInventoryView
         ? sortedInventoryRows
@@ -2161,8 +2212,8 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                                     className="appearance-none min-w-[220px] h-[50px] pl-4 pr-10 bg-white border border-gray-200 rounded-2xl text-sm font-black text-gray-700 shadow-sm hover:border-blue-400 transition-all outline-none"
                                 >
                                     <option value="ALL">Todas las cajas (Master)</option>
-                                    {fiscalTerminalOptions.map(terminalId => (
-                                        <option key={terminalId} value={terminalId}>{terminalId}</option>
+                                    {fiscalTerminalOptions.map(terminal => (
+                                        <option key={terminal.value} value={terminal.value}>{terminal.label}</option>
                                     ))}
                                 </select>
                                 <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />

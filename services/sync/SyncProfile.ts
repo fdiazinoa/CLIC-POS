@@ -566,6 +566,15 @@ export function resolveSyncTarget(profile: SyncProfile = loadSyncProfile()): Res
                 reason: 'ERP_ACTIVE_NOT_CONFIGURED',
             };
         }
+        const erpRegisteredOperationalTarget = activeProfile.contractSource === 'ERP_REGISTER'
+            && Boolean(activeProfile.erpBaseUrl || activeProfile.cloudBaseUrl)
+            && Boolean(activeProfile.erpTerminalId);
+        const canPushOperations = Boolean(
+            activeProfile.erpReadyForSales
+            || activeProfile.readyForErpActivation
+            || activeProfile.syncPermissions?.canPushOperations
+            || erpRegisteredOperationalTarget
+        );
 
         return {
             kind: 'ERP_ACTIVE',
@@ -574,10 +583,10 @@ export function resolveSyncTarget(profile: SyncProfile = loadSyncProfile()): Res
             useLocalTarget: false,
             canPullMasters: true,
             canPushMasters: false,
-            canPushOperations: Boolean(activeProfile.erpReadyForSales),
+            canPushOperations,
             dataMaster: 'ERP',
             customerErpAccess: true,
-            reason: activeProfile.erpReadyForSales ? undefined : 'ERP_NOT_READY_FOR_SALES',
+            reason: canPushOperations ? undefined : 'ERP_NOT_READY_FOR_SALES',
         };
     }
 

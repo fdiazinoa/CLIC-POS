@@ -13,10 +13,12 @@ interface ZReportHistoryProps {
     config: BusinessConfig;
     currentUser?: User | null;
     roles?: RoleDefinition[];
+    activeTerminalId?: string;
+    onRepeatReport?: (report: ZReport) => void;
     onClose: () => void;
 }
 
-const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, roles = [], onClose }) => {
+const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, roles = [], activeTerminalId, onRepeatReport, onClose }) => {
     const [reports, setReports] = useState<ZReport[]>([]);
     const [selectedReport, setSelectedReport] = useState<ZReport | null>(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -24,6 +26,7 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
     const [reprintingReportId, setReprintingReportId] = useState<string | null>(null);
+    const [reprocessingReportId, setReprocessingReportId] = useState<string | null>(null);
 
     const sortReportsByDate = (data: ZReport[]) =>
         [...(data || [])].sort((a, b) =>
@@ -145,22 +148,90 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
 
     const canRepeatZReport = hasPermission('POS_REPEAT_Z_REPORT');
 
+    const resolveActivePrintTerminal = () => {
+        const terminals = config.terminals || [];
+
+        const activeMatch = terminals.find(terminal =>
+            terminal.id === activeTerminalId ||
+            terminal.config?.erpTerminalId === activeTerminalId ||
+            (terminal.config as any)?.terminalId === activeTerminalId ||
+            (terminal.config as any)?.localTerminalId === activeTerminalId
+        );
+        if (activeMatch) return activeMatch;
+
+        const storedTerminalId =
+            localStorage.getItem('active_terminal_id') ||
+            localStorage.getItem('CLIC_POS_TERMINAL_ID') ||
+            '';
+        const storedMatch = terminals.find(terminal =>
+            terminal.id === storedTerminalId ||
+            terminal.config?.erpTerminalId === storedTerminalId ||
+            (terminal.config as any)?.terminalId === storedTerminalId ||
+            (terminal.config as any)?.localTerminalId === storedTerminalId
+        );
+        if (storedMatch) return storedMatch;
+
+        const reportTerminal = terminals.find(terminal =>
+            terminal.id === selectedReport?.terminalId ||
+            terminal.config?.erpTerminalId === selectedReport?.terminalId
+        );
+        if (reportTerminal) return reportTerminal;
+
+        const terminalWithReceiptPrinter = terminals.find(terminal =>
+            Boolean(terminal.config?.hardware?.receiptPrinterId) ||
+            Boolean(terminal.config?.hardware?.printerAssignments?.TICKET)
+        );
+        if (terminalWithReceiptPrinter) return terminalWithReceiptPrinter;
+
+        return terminals[0];
+    };
+
     const handleRepeatZReport = async (report: ZReport) => {
+        if (reprocessingReportId) return;
+        if (!onRepeatReport) {
+            alert('No se pudo abrir el formulario para repetir este cierre Z.');
+            return;
+        }
+        if (!confirm(`¿Repetir el cierre ${report.sequenceNumber}? Se abrirá el formulario para ingresar nuevamente los montos y reemplazar este Z.`)) return;
+        setReprocessingReportId(report.id);
+        try {
+            onRepeatReport(report);
+        } catch (error) {
+            console.error('❌ Error repitiendo Z:', error);
+            alert('No se pudo repetir el Z. Intenta nuevamente.');
+        } finally {
+            setReprocessingReportId(null);
+        }
+    };
+
+    const handleReprintZReport = async (report: ZReport) => {
         if (reprintingReportId) return;
         setReprintingReportId(report.id);
         try {
             const roleId = currentUser?.roleId || currentUser?.role;
             const role = roles.find(r => r.id === roleId);
             const hiddenModules = role?.zReportConfig?.hiddenModules || [];
-            const printed = await ThermalPrinterService.printZReport(report, hiddenModules, config);
+            const printTerminal = resolveActivePrintTerminal();
+            const preferredPrinterId =
+                printTerminal?.config?.hardware?.printerAssignments?.TICKET ||
+                printTerminal?.config?.hardware?.receiptPrinterId;
+            const printReport = {
+                ...report,
+                terminalId: printTerminal?.id || activeTerminalId || report.terminalId
+            };
+            const printed = await ThermalPrinterService.printZReport(printReport, hiddenModules, config, {
+                preferredPrinterId,
+                terminalId: printReport.terminalId,
+                jobType: 'TICKET'
+            });
             if (printed === false) {
-                alert('No se pudo repetir el Z. Verifica la impresora configurada.');
+                alert('No se pudo reimprimir el Z. Verifica la impresora configurada.');
                 return;
             }
             alert(`Reporte ${report.sequenceNumber} enviado a impresión.`);
         } catch (error) {
-            console.error('❌ Error repitiendo Z:', error);
-            alert('No se pudo repetir el Z. Verifica la impresora configurada.');
+            console.error('❌ Error reimprimiendo Z:', error);
+            alert('No se pudo reimprimir el Z. Verifica la impresora configurada.');
         } finally {
             setReprintingReportId(null);
         }
@@ -204,21 +275,33 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
                         {canRepeatZReport && (
                             <button
                                 onClick={() => handleRepeatZReport(r)}
+                                disabled={reprocessingReportId === r.id}
+                                className="px-4 py-2 bg-amber-50 hover:bg-amber-600 hover:text-white rounded-xl text-amber-700 transition-all font-bold text-sm flex items-center gap-2 shadow-sm disabled:opacity-60 disabled:cursor-wait"
+                                title="Repetir/Reprocesar cierre Z"
+                            >
+                                <RefreshCw size={18} className={reprocessingReportId === r.id ? 'animate-spin' : ''} />
+                                <span className="hidden sm:inline">{reprocessingReportId === r.id ? 'Reprocesando...' : 'Repetir Z'}</span>
+                            </button>
+                        )}
+                        {canRepeatZReport && (
+                            <button
+                                onClick={() => handleReprintZReport(r)}
                                 disabled={reprintingReportId === r.id}
                                 className="px-4 py-2 bg-blue-50 hover:bg-blue-600 hover:text-white rounded-xl text-blue-700 transition-all font-bold text-sm flex items-center gap-2 shadow-sm disabled:opacity-60 disabled:cursor-wait"
-                                title="Repetir cierre Z"
+                                title="Reimprimir cierre Z"
                             >
-                                <RefreshCw size={18} className={reprintingReportId === r.id ? 'animate-spin' : ''} />
-                                <span className="hidden sm:inline">{reprintingReportId === r.id ? 'Enviando...' : 'Repetir Z'}</span>
+                                <Printer size={18} className={reprintingReportId === r.id ? 'animate-pulse' : ''} />
+                                <span className="hidden sm:inline">{reprintingReportId === r.id ? 'Imprimiendo...' : 'Reimprimir Z'}</span>
                             </button>
                         )}
                         <button
                             onClick={async () => {
                                 // Try to get emails from the first terminal's workflow config or fallback to default
-                                const recipients = config.terminals?.[0]?.config?.workflow?.session?.zReportEmails || config.emailConfig?.defaultRecipient;
+                                let recipients = config.terminals?.[0]?.config?.workflow?.session?.zReportEmails || config.emailConfig?.defaultRecipient;
                                 if (!recipients) {
-                                    alert("No hay correos configurados para reportes Z.");
-                                    return;
+                                    recipients = window.prompt('Ingrese el correo electrónico para enviar este cierre Z:', '') || '';
+                                    recipients = recipients.trim();
+                                    if (!recipients) return;
                                 }
 
                                 if (confirm(`¿Reenviar reporte a ${recipients}?`)) {

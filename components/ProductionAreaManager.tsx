@@ -11,6 +11,7 @@ interface ProductionArea {
     modo_salida: 'KDS' | 'PRINTER' | 'AMBOS';
     kds_delivery_mode?: 'LAN' | 'WEB';
     target_terminal_id?: string;
+    target_terminal_name?: string;
     kds_host?: string;
     kds_port?: string;
     kds_warning_minutes?: number | string;
@@ -26,11 +27,13 @@ interface ProductionAreaManagerProps {
 }
 
 const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals, config, onUpdateConfig }) => {
+    const NO_CATEGORY_FILTER_VALUE = '__NO_CATEGORY__';
     const [areas, setAreas] = useState<ProductionArea[]>([]);
     const [products, setProducts] = useState<Product[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [productSearch, setProductSearch] = useState('');
+    const [selectedCategory, setSelectedCategory] = useState('');
     const [savingProductAreaId, setSavingProductAreaId] = useState<string | null>(null);
     const [testingKdsAreaId, setTestingKdsAreaId] = useState<string | null>(null);
     const [kdsTestResults, setKdsTestResults] = useState<Record<string, { ok: boolean; message: string; baseUrl?: string }>>({});
@@ -58,6 +61,24 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
             if (areaId) counts[areaId] = (counts[areaId] || 0) + 1;
         });
         return counts;
+    }, [products]);
+
+    const normalizedCategories = useMemo(() => {
+        const categorySet = new Set<string>();
+        products.forEach(product => {
+            const normalized = String(product.category || '').trim();
+            if (!normalized) {
+                categorySet.add(NO_CATEGORY_FILTER_VALUE);
+            } else {
+                categorySet.add(normalized);
+            }
+        });
+        return Array.from(categorySet)
+            .sort((a, b) => a.localeCompare(b))
+            .map(category => ({
+                label: category === NO_CATEGORY_FILTER_VALUE ? 'Sin categoría' : category,
+                value: category,
+            }));
     }, [products]);
 
     const resolveLocalConfig = async (): Promise<BusinessConfig> => {
@@ -135,6 +156,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
         handleUpdateArea(area.id, {
             kds_delivery_mode: 'LAN',
             target_terminal_id: targetId || undefined,
+            target_terminal_name: target?.label || undefined,
             kds_host: target?.host || area.kds_host,
             kds_port: target?.port || area.kds_port || '8001',
         });
@@ -184,6 +206,26 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
         }
     };
 
+    const getAreaFilteredProducts = (areaId: string) => {
+        const query = productSearch.trim().toLowerCase();
+        const categoryFilter = selectedCategory.trim();
+        return products
+            .filter(product => {
+                const text = `${product.name || ''} ${product.category || ''} ${product.barcode || ''}`.toLowerCase();
+                const normalizedCategory = String(product.category || '').trim();
+                const productCategoryFilterValue = normalizedCategory || NO_CATEGORY_FILTER_VALUE;
+                const matchesCategory = !categoryFilter || productCategoryFilterValue === categoryFilter;
+                return matchesCategory && (!query || text.includes(query));
+            })
+            .sort((a, b) => {
+                const aAssigned = resolveRestaurantProductConfig(a).production_area_id === areaId ? 0 : 1;
+                const bAssigned = resolveRestaurantProductConfig(b).production_area_id === areaId ? 0 : 1;
+                if (aAssigned !== bAssigned) return aAssigned - bAssigned;
+                return String(a.name || '').localeCompare(String(b.name || ''));
+            })
+            .slice(0, 80);
+    };
+
     const handleAssignProductToArea = async (productId: string, areaId: string, assign: boolean) => {
         setSavingProductAreaId(areaId);
         try {
@@ -214,20 +256,55 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
         }
     };
 
-    const getAreaProducts = (areaId: string) => {
-        const query = productSearch.trim().toLowerCase();
-        return products
-            .filter(product => {
-                const text = `${product.name || ''} ${product.category || ''} ${product.barcode || ''}`.toLowerCase();
-                return !query || text.includes(query);
-            })
-            .sort((a, b) => {
-                const aAssigned = resolveRestaurantProductConfig(a).production_area_id === areaId ? 0 : 1;
-                const bAssigned = resolveRestaurantProductConfig(b).production_area_id === areaId ? 0 : 1;
-                if (aAssigned !== bAssigned) return aAssigned - bAssigned;
-                return String(a.name || '').localeCompare(String(b.name || ''));
-            })
-            .slice(0, 80);
+    const getFilteredSelectionState = (areaId: string) => {
+        const visibleProducts = getAreaFilteredProducts(areaId);
+        const selectedCount = visibleProducts.filter(product =>
+            resolveRestaurantProductConfig(product).production_area_id === areaId
+        ).length;
+        return {
+            visibleProducts,
+            selectedCount,
+            allSelected: visibleProducts.length > 0 && selectedCount === visibleProducts.length,
+        };
+    };
+
+    const handleSetFilteredProductsForArea = async (areaId: string, assign: boolean) => {
+        const visibleProducts = getAreaFilteredProducts(areaId);
+        if (visibleProducts.length === 0) return;
+
+        setSavingProductAreaId(areaId);
+        try {
+            const visibleIds = new Set(visibleProducts.map(product => product.id));
+            const nextProducts = products.map(product => {
+                if (!visibleIds.has(product.id)) return product;
+                const resolved = resolveRestaurantProductConfig(product);
+                const currentAreaId = resolved.production_area_id;
+                const nextAreaId = assign ? areaId : (currentAreaId === areaId ? undefined : currentAreaId);
+                return normalizeRestaurantProductConfig({
+                    ...product,
+                    production_area_id: nextAreaId,
+                    restaurant: {
+                        ...(product.restaurant || {}),
+                        production_area_id: nextAreaId,
+                        product_type: resolved.product_type || product.product_type || 'SIMPLE',
+                    },
+                    updatedAt: new Date().toISOString(),
+                });
+            });
+            setProducts(nextProducts);
+            await db.save('products' as any, nextProducts);
+            await ensureKitchenModuleEnabled();
+        } catch (error) {
+            console.error('Failed to bulk assign products to production area', error);
+            alert('No se pudo asignar los artículos visibles al centro de producción.');
+            fetchProducts();
+        } finally {
+            setSavingProductAreaId(null);
+        }
+    };
+
+    const handleAssignFilteredProductsToArea = async (areaId: string) => {
+        await handleSetFilteredProductsForArea(areaId, true);
     };
 
     const handleTestKdsConnection = async (area: ProductionArea) => {
@@ -566,12 +643,54 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                                     className="w-full rounded-2xl border-2 border-white bg-white py-3 pl-9 pr-3 text-xs font-bold text-slate-700 outline-none transition-all focus:border-blue-200"
                                 />
                             </div>
+                            <div className="mb-3">
+                                <select
+                                    value={selectedCategory}
+                                    onChange={(event) => setSelectedCategory(event.target.value)}
+                                    className="w-full rounded-2xl border-2 border-white bg-white py-3 px-4 text-xs font-bold text-slate-700 outline-none transition-all focus:border-blue-200"
+                                >
+                                    <option value="">Todas las categorías</option>
+                                    {normalizedCategories.map((category) => (
+                                        <option key={category.value || 'sin-categoria'} value={category.value}>
+                                            {category.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="mb-3 flex flex-col gap-2 rounded-2xl border border-blue-100 bg-white px-3 py-3">
+                                <label className={`flex items-center justify-between gap-3 text-xs font-black uppercase tracking-wide ${savingProductAreaId === area.id || getAreaFilteredProducts(area.id).length === 0 ? 'cursor-not-allowed text-slate-300' : 'cursor-pointer text-blue-700'}`}>
+                                    <span className="inline-flex items-center gap-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={getFilteredSelectionState(area.id).allSelected}
+                                            disabled={savingProductAreaId === area.id || getAreaFilteredProducts(area.id).length === 0}
+                                            onChange={(event) => {
+                                                void handleSetFilteredProductsForArea(area.id, event.target.checked);
+                                            }}
+                                            className="h-4 w-4 rounded border-blue-200 text-blue-600 focus:ring-blue-500"
+                                        />
+                                        Seleccionar todo lo visible
+                                    </span>
+                                    <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] text-blue-600">
+                                        {getFilteredSelectionState(area.id).selectedCount}/{getAreaFilteredProducts(area.id).length}
+                                    </span>
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={() => handleAssignFilteredProductsToArea(area.id)}
+                                    disabled={savingProductAreaId === area.id || getAreaFilteredProducts(area.id).length === 0}
+                                    className="inline-flex items-center justify-center gap-2 rounded-xl border-2 border-blue-200 bg-blue-50 px-4 py-2 text-xs font-black uppercase tracking-wide text-blue-700 transition-all hover:border-blue-300 hover:bg-blue-100 disabled:opacity-60"
+                                >
+                                    <PackageCheck size={15} />
+                                    Aplicar visibles
+                                </button>
+                            </div>
                             <div className="max-h-[24rem] space-y-2 overflow-y-auto pr-1">
-                                {getAreaProducts(area.id).length === 0 ? (
+                                {getAreaFilteredProducts(area.id).length === 0 ? (
                                     <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-center text-xs font-bold text-slate-400">
                                         No hay artículos que coincidan.
                                     </div>
-                                ) : getAreaProducts(area.id).map(product => {
+                                ) : getAreaFilteredProducts(area.id).map(product => {
                                     const productAreaId = resolveRestaurantProductConfig(product).production_area_id;
                                     const assignedHere = productAreaId === area.id;
                                     const assignedElsewhere = Boolean(productAreaId && productAreaId !== area.id);

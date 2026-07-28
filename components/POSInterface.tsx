@@ -4,7 +4,7 @@ import {
    Search, Trash2, MoreVertical,
    CreditCard, User, Tag, Grid, Save,
    Settings, Users, History, Wallet,
-   UserPlus, PlusCircle, X, Percent, ArrowLeft, ChevronRight,
+   UserPlus, PlusCircle, X, Percent, ArrowLeft, ChevronLeft, ChevronRight,
    Scale as ScaleIcon, PauseCircle, LogOut, Minus, Plus, Edit3,
    ArrowRightLeft, Globe, DollarSign, Split,
    ChevronDown, Check, AlertCircle, Layers,
@@ -18,6 +18,7 @@ import {
 import { Html5Qrcode } from "html5-qrcode";
 import {
    BusinessConfig, User as UserType, RoleDefinition,
+   DeviceRole,
    Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType, FiscalDocumentCode,
    PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, RedeemedCouponRef, ProductVariant
 } from '../types';
@@ -43,7 +44,7 @@ import { isSessionExpired } from '../utils/session';
 import { FiscalRangeDGII } from '../types';
 import { parseScaleBarcode } from '../utils/barcodeParser';
 import { transactionService } from '../services/transactionService';
-import { validateTerminalSeries } from '../utils/seriesValidation';
+import { resolveTerminalDocumentSeriesId, validateTerminalSeries } from '../utils/seriesValidation';
 import { applyPromotions } from '../utils/promotionEngine';
 import { calculatePointsEarned, getPrimaryLoyaltyCard } from '../utils/loyaltyEngine';
 import { couponService } from '../utils/couponService';
@@ -56,6 +57,7 @@ import MobileConfigModal from './MobileConfigModal';
 import ReturnModal from './ReturnModal';
 import PromoBottomSheet from './PromoBottomSheet';
 import { backgroundSyncManager, SyncState } from '../services/sync/BackgroundSyncManager';
+import { syncManager } from '../services/sync/SyncManager';
 import ProductTableSupermarket from './ProductTableSupermarket';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { printComanda, printPrecuenta } from '../utils/printer';
@@ -74,8 +76,9 @@ import { calculateTaxBreakdownFromItems, formatTaxLineLabel, resolveEffectiveTax
 import { formatCurrency } from '../utils/format';
 import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from '../services/localRefundPersistence';
 import { resolveCustomerImageSrc, resolveProductImageSrc } from '../utils/entityImage';
-import { resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
+import { getWarehouseScopedNumber, resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
+import { isPaymentFractionPlanCurrent } from '../utils/paymentFractions';
 import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
 import { productIdentityCandidates, productReferenceCandidates, resolveOperationalProductId } from '../utils/productReferences';
@@ -93,6 +96,9 @@ import {
    type ErpConsignment,
    type ErpConsignmentLine,
 } from '../services/sync/ConsignmentSyncService';
+import { resolveDeviceRoleValue } from '../utils/deviceRoleHelpers';
+import { normalizeProductionOutputMode, resolveProductionOutputTargets } from '../utils/productionOutputMode';
+import { resolveOperationalApiUrl } from '../utils/masterOperationalApi';
 
 // ... existing imports
 
@@ -113,11 +119,16 @@ export interface POSInterfaceProps {
    parkedTickets: ParkedTicket[];
    onUpdateParkedTickets: (tickets: ParkedTicket[]) => void | Promise<void>;
    onTableOrderSaved?: (table: Table, ticket: ParkedTicket) => void | Promise<void>;
+   onSelectTableAccount?: (ticket: ParkedTicket) => void | Promise<void>;
+   onTableOrderClosed?: (table: Table, closedOrderId?: string, remainingTickets?: ParkedTicket[]) => void | Promise<void>;
    onLogout: () => void;
+   onExitApplication?: () => void;
    onOpenSettings: (initialView?: string, initialData?: any) => void;
+   onOpenAttendance: () => void;
    onOpenCustomers: () => void;
    onOpenHistory: () => void;
-   onOpenFinance: () => void;
+   onOpenFinance: (initialCashMovementType?: 'IN' | 'OUT' | 'X_REPORT') => void;
+   onRegisterCashMovement?: (type: 'IN' | 'OUT', amount: number, reason: string) => void | Promise<void>;
    onOpenZReport?: () => void;
    onOpenInventoryTracking: (productId?: string) => void;
    onOpenAudit?: () => void;
@@ -141,6 +152,7 @@ type ProductionAreaConfig = {
    nombre?: string;
    modo_salida?: 'KDS' | 'PRINTER' | 'AMBOS' | string;
    target_terminal_id?: string;
+   target_terminal_name?: string;
    kds_host?: string;
    kds_port?: string | number;
    kds_warning_minutes?: number | string;
@@ -164,12 +176,40 @@ const buildModifierSignature = (modifiers?: unknown[]): string => {
 const looksLikeDocumentScan = (code: string): boolean =>
    /^(TCK|INV|B0[1-4]|E3[1245]|NC|ZS|ZR|REC|TXN-)/i.test(code.trim());
 
-const normalizeProductionMode = (value: unknown): 'KDS' | 'PRINTER' | 'AMBOS' => {
-   const normalized = String(value || '').trim().toUpperCase();
-   if (normalized === 'PRINTER' || normalized === 'TICKET') return 'PRINTER';
-   if (normalized === 'AMBOS' || normalized === 'BOTH') return 'AMBOS';
-   return 'KDS';
+const normalizeBooleanSetting = (value: unknown): boolean | undefined => {
+   if (typeof value === 'boolean') return value;
+   if (typeof value === 'number') return value === 1;
+   if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (['1', 'true', 'yes', 'si', 'sí', 'on'].includes(normalized)) return true;
+      if (['0', 'false', 'no', 'off', ''].includes(normalized)) return false;
+   }
+   return undefined;
 };
+
+const resolveConsignmentDownloadEnabled = (config: Record<string, unknown> | null | undefined): boolean => {
+   const operational = config || {};
+   return Boolean(
+      normalizeBooleanSetting(operational.recibir_consignaciones) ??
+      normalizeBooleanSetting(operational.receiveConsignments) ??
+      normalizeBooleanSetting(operational.receive_consignments) ??
+      normalizeBooleanSetting(operational.descargar_consignaciones) ??
+      normalizeBooleanSetting(operational.descargarConsignaciones) ??
+      normalizeBooleanSetting(operational.downloadConsignments) ??
+      normalizeBooleanSetting(operational.enableConsignments) ??
+      false
+   );
+};
+
+const normalizeViewMode = (value: unknown): string => {
+   const normalized = String(value || '').trim().toUpperCase().replace(/[\s_-]+/g, '_');
+   if (!normalized) return '';
+   if (normalized === 'POS' || normalized === 'STANDARD') return 'RETAIL';
+   if (normalized === 'RETAIL_MODE') return 'RETAIL';
+   return normalized;
+};
+
+const isRetailViewMode = (value: unknown): boolean => normalizeViewMode(value) === 'RETAIL';
 
 const postJsonWithTimeout = async (url: string, payload: unknown, timeoutMs = 5000) => {
    const controller = new AbortController();
@@ -193,26 +233,79 @@ const postJsonWithTimeout = async (url: string, payload: unknown, timeoutMs = 50
 };
 
 const getConsignmentDocumentNo = (consignment: ErpConsignment): string =>
-   String(consignment.documentNo || consignment.document_no || consignment.number || consignment.id || '').trim();
+   String(consignment.documentNo || consignment.document_no || consignment.documentNumber || consignment.document_number || consignment.number || consignment.code || consignment.id || '').trim();
 
-const getConsignmentCustomerName = (consignment: ErpConsignment): string =>
-   String(consignment.customerName || consignment.customer_name || '').trim();
+const getConsignmentCustomerName = (consignment: ErpConsignment): string => {
+   const source = consignment as Record<string, any>;
+   const customer = source.customer || source.client || source.account || source.third_party || source.thirdParty;
+   return String(
+      consignment.customerName
+      || consignment.customer_name
+      || source.clientName
+      || source.client_name
+      || source.customer_full_name
+      || source.customerFullName
+      || source.customer_display_name
+      || source.customerDisplayName
+      || source.partyName
+      || source.party_name
+      || customer?.name
+      || customer?.fullName
+      || customer?.full_name
+      || customer?.displayName
+      || customer?.display_name
+      || ''
+   ).trim();
+};
 
 const getConsignmentLines = (consignment: ErpConsignment): ErpConsignmentLine[] => {
-   const lines = Array.isArray(consignment.lines) ? consignment.lines : consignment.items;
+   const source = consignment as Record<string, any>;
+   const lines = Array.isArray(consignment.lines) ? consignment.lines
+      : Array.isArray(consignment.items) ? consignment.items
+      : Array.isArray(source.details) ? source.details
+      : Array.isArray(source.lines_detail) ? source.lines_detail
+      : Array.isArray(source.line_items) ? source.line_items
+      : Array.isArray(source.lineItems) ? source.lineItems
+      : Array.isArray(source.consignment_lines) ? source.consignment_lines
+      : Array.isArray(source.consignmentLines) ? source.consignmentLines
+      : Array.isArray(source.document_lines) ? source.document_lines
+      : Array.isArray(source.documentLines) ? source.documentLines
+      : Array.isArray(source.products) ? source.products
+      : Array.isArray(source.articles) ? source.articles
+      : [];
    return Array.isArray(lines) ? lines : [];
 };
 
 const getConsignmentLineProductName = (line: ErpConsignmentLine): string =>
-   String(line.name || line.description || line.sku || line.productId || line.product_id || line.id || 'Artículo').trim();
+   String(line.name || line.description || (line as any).productName || (line as any).product_name || (line as any).itemName || (line as any).item_name || (line as any).product?.name || (line as any).item?.name || line.sku || line.productId || line.product_id || line.id || 'Artículo').trim();
 
 const getConsignmentLineQuantity = (line: ErpConsignmentLine): number => {
-   const value = Number(line.availableQuantity ?? line.available_quantity ?? line.quantity ?? line.qty ?? 1);
-   return Number.isFinite(value) && value > 0 ? value : 1;
+   const source = line as Record<string, unknown>;
+   const candidates = [
+      source.quantity_open,
+      source.quantityOpen,
+      source.availableQuantity,
+      source.available_quantity,
+      source.open_quantity,
+      source.openQuantity,
+      source.qty_open,
+      source.qtyOpen,
+      source.quantity_total,
+      source.quantityTotal,
+      line.quantity,
+      line.qty,
+   ];
+
+   for (const candidate of candidates) {
+      const quantity = Number(candidate);
+      if (Number.isFinite(quantity) && quantity > 0) return quantity;
+   }
+
+   return 1;
 };
 
 const getConsignmentLinePrice = (line: ErpConsignmentLine, fallbackPrice: number): number => {
-   const value = Number(line.unitPrice ?? line.unit_price ?? line.price ?? fallbackPrice);
+   const value = Number(line.unitPrice ?? line.unit_price ?? (line as any).salePrice ?? (line as any).sale_price ?? (line as any).price_unit ?? line.price ?? fallbackPrice);
    return Number.isFinite(value) && value >= 0 ? value : fallbackPrice;
 };
 
@@ -351,6 +444,11 @@ const isKdsReturnedCartItem = (item?: Partial<CartItem> | null): boolean => {
    return status === 'DEVUELTO' || Boolean((item as any)?.kdsReturnedAt);
 };
 
+const isKdsPendingCartItem = (item?: Partial<CartItem> | null): boolean => {
+   const status = String((item as any)?.kdsStatus || '').trim().toUpperCase();
+   return status === 'PENDIENTE' || status === 'PENDING' || status === 'RETRY_PENDING';
+};
+
 const isKitchenDispatchedCartItem = (item?: Partial<CartItem> | null): boolean => {
    const status = String((item as any)?.kdsStatus || '').trim().toUpperCase();
    return Boolean(
@@ -359,6 +457,9 @@ const isKitchenDispatchedCartItem = (item?: Partial<CartItem> | null): boolean =
       (item as any)?.kdsAreaId ||
       ((item as any)?.kdsItemIds && (item as any).kdsItemIds.length > 0) ||
       status === 'ENVIADO' ||
+      status === 'PENDIENTE' ||
+      status === 'PENDING' ||
+      status === 'RETRY_PENDING' ||
       status === 'DEVUELTO' ||
       status === 'RETURN_PENDING'
    );
@@ -391,15 +492,34 @@ const queuePendingKdsDispatch = async (payload: Record<string, unknown>) => {
    try {
       const existing = await db.get('kdsDispatchQueue' as any).catch(() => []) as any;
       const queue = Array.isArray(existing) ? existing : [];
+      const payloadRecord = (payload?.payload || {}) as Record<string, any>;
+      const orderId = String(payloadRecord.orderId || payload.orderId || '').trim();
+      const areaId = String(payload.areaId || payloadRecord.area?.id || '').trim();
+      const cartIds = Array.isArray(payload.cartIds)
+         ? payload.cartIds.map((id) => String(id)).filter(Boolean)
+         : [];
+      const duplicateIndex = queue.findIndex((entry: any) => {
+         if (entry?.status === 'SENT') return false;
+         const entryPayload = entry?.payload || {};
+         const sameOrder = String(entryPayload.orderId || entry.orderId || '').trim() === orderId;
+         const sameArea = String(entry.areaId || entryPayload.area?.id || '').trim() === areaId;
+         const entryCartIds = Array.isArray(entry.cartIds) ? entry.cartIds.map((id: unknown) => String(id)).filter(Boolean) : [];
+         const sameItems = cartIds.length > 0 && entryCartIds.length === cartIds.length && cartIds.every((id) => entryCartIds.includes(id));
+         return sameOrder && sameArea && (sameItems || cartIds.length === 0);
+      });
+      const nextEntry = {
+         id: duplicateIndex >= 0 ? queue[duplicateIndex].id : `kdsq_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+         status: 'PENDING',
+         attempts: duplicateIndex >= 0 ? Number(queue[duplicateIndex].attempts || 0) : 0,
+         createdAt: duplicateIndex >= 0 ? queue[duplicateIndex].createdAt : new Date().toISOString(),
+         updatedAt: new Date().toISOString(),
+         ...payload,
+      };
+      const nextQueue = duplicateIndex >= 0
+         ? queue.map((entry: any, index: number) => index === duplicateIndex ? nextEntry : entry)
+         : [...queue, nextEntry];
       await db.save('kdsDispatchQueue' as any, [
-         ...queue,
-         {
-            id: `kdsq_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            status: 'PENDING',
-            attempts: 0,
-            createdAt: new Date().toISOString(),
-            ...payload,
-         }
+         ...nextQueue,
       ]);
    } catch (error) {
       console.warn('No se pudo guardar la comanda KDS pendiente:', error);
@@ -475,6 +595,11 @@ const productBusinessKeys = (product: Product): string[] => {
    if (code) keys.add(`code:${code}`);
    if (itemCode) keys.add(`item_code:${itemCode}`);
    if (name) keys.add(`namecat:${name}::${category}`);
+   addKey('description', (product as any).description);
+   addKey('description', (product as any).descripcion);
+   addKey('reference', (product as any).reference);
+   addKey('reference', (product as any).referencia);
+   addKey('reference', (product as any).external_reference);
 
    return Array.from(keys);
 };
@@ -534,6 +659,9 @@ const extractFirstNumberToken = (value?: unknown): string => {
    return match ? match[0] : '';
 };
 
+const formatCompactLocationNumber = (value: string): string =>
+   value.replace(/^\d+$/, token => token.padStart(2, '0'));
+
 const buildTableContextLabels = (table?: Partial<Table> | null, rooms: Room[] = []) => {
    const tableName = String(table?.nombre || table?.name || '').trim();
    if (!tableName) {
@@ -551,7 +679,7 @@ const buildTableContextLabels = (table?: Partial<Table> | null, rooms: Room[] = 
    const roomNumber = extractFirstNumberToken(roomLabel);
    const tableNumber = extractFirstNumberToken(tableName);
    const compactLabel = roomNumber && tableNumber
-      ? `${roomNumber}-${tableNumber}`
+      ? `${formatCompactLocationNumber(roomNumber)}-${formatCompactLocationNumber(tableNumber)}`
       : roomLabel
          ? `${roomLabel} - ${tableName}`
          : tableName;
@@ -584,6 +712,21 @@ const formatOrderNumber = (settings: ReturnType<typeof normalizeOrderNumberSetti
    return `${settings.prefix}${numeric}`;
 };
 
+const PRODUCT_GRAPHIC_TONES = [
+   { backgroundColor: '#dbeafe', borderColor: '#bfdbfe', color: '#1e3a8a' },
+   { backgroundColor: '#d1fae5', borderColor: '#a7f3d0', color: '#064e3b' },
+   { backgroundColor: '#ffe4e6', borderColor: '#fecdd3', color: '#881337' },
+   { backgroundColor: '#ffedd5', borderColor: '#fed7aa', color: '#7c2d12' },
+   { backgroundColor: '#cffafe', borderColor: '#a5f3fc', color: '#164e63' },
+   { backgroundColor: '#fef3c7', borderColor: '#fde68a', color: '#78350f' },
+];
+
+const resolveProductGraphicTone = (product: Product): React.CSSProperties => {
+   const seed = String(product.category || product.name || product.id || '');
+   const index = Array.from(seed).reduce((total, character) => total + character.charCodeAt(0), 0) % PRODUCT_GRAPHIC_TONES.length;
+   return PRODUCT_GRAPHIC_TONES[index];
+};
+
 interface ProductGridCardProps {
    product: Product;
    usesSupermarketLayout: boolean;
@@ -594,6 +737,7 @@ interface ProductGridCardProps {
    isProductWarehouseBlockedForSale: (product: Product) => boolean;
    getTerminalWarehouseName: () => string;
    getProductPrice: (product: Product) => number;
+   isProductOutOfStock: (product: Product) => boolean;
    hasPromotionForProduct: (product: Product) => boolean;
    onProductClick: (product: Product) => void;
    onOpenPromotion: (product: Product) => void;
@@ -613,6 +757,7 @@ const ProductGridCard = React.memo(({
    isProductWarehouseBlockedForSale,
    getTerminalWarehouseName,
    getProductPrice,
+   isProductOutOfStock,
    hasPromotionForProduct,
    onProductClick,
    onOpenPromotion,
@@ -626,9 +771,16 @@ const ProductGridCard = React.memo(({
    const hasVariants = (product.variants || []).length > 0 || (product.attributes || []).length > 0;
    const isCompactMobileCard = isMobile && !usesExpandedCatalog;
    const warehouseSaleBlocked = isProductWarehouseBlockedForSale(product);
+   const outOfStock = isProductOutOfStock(product);
    const imageSrc = showProductImages ? resolveProductImageSrc(product) : '';
    const hasPromotion = hasPromotionForProduct(product);
    const price = getProductPrice(product);
+   const graphicTone = resolveProductGraphicTone(product);
+   const graphicNameSize = productName.length > 34
+      ? 'text-[1.05rem]'
+      : productName.length > 20
+         ? 'text-[1.2rem]'
+         : 'text-[1.4rem]';
 
    const handleTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
       const touch = e.touches[0];
@@ -665,7 +817,19 @@ const ProductGridCard = React.memo(({
             warehouseSaleBlocked
                ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
                : 'cursor-pointer hover:border-purple-300 hover:-translate-y-1 active:scale-95'
-         } ${(usesSupermarketLayout && showProductImages) ? 'rounded-[1.75rem] p-3.5 shadow-[0_10px_26px_rgba(15,23,42,0.08)] min-h-[230px] grid grid-rows-[60%_40%]' : (usesExpandedCatalog && showProductImages) ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[214px] grid grid-rows-[56%_44%]' : usesExpandedCatalog ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] min-h-[190px] flex flex-col h-full' : isCompactMobileCard ? `rounded-[2rem] p-3.5 min-h-[230px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}` : `rounded-[2rem] p-3 min-h-[214px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
+         } ${showProductImages
+            ? usesSupermarketLayout
+               ? 'rounded-[1.75rem] p-3.5 shadow-[0_10px_26px_rgba(15,23,42,0.08)] min-h-[230px] grid grid-rows-[60%_40%]'
+               : usesExpandedCatalog
+                  ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[214px] grid grid-rows-[56%_44%]'
+                  : isCompactMobileCard
+                     ? `rounded-[2rem] p-3.5 min-h-[230px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`
+                     : `rounded-[2rem] p-3 min-h-[214px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`
+            : usesExpandedCatalog
+               ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[168px] flex flex-col'
+               : isCompactMobileCard
+                  ? `rounded-[1.6rem] p-3 min-h-[176px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`
+                  : `rounded-[1.6rem] p-3 min-h-[166px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
       >
          {showProductImages && (
             <div className={`${usesSupermarketLayout ? 'h-full rounded-[1.35rem] mb-0 p-2.5' : usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-[8.5rem] rounded-[1.5rem] mb-2.5 p-2.5' : 'h-28 md:h-32 rounded-[1.5rem] mb-2.5'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
@@ -693,6 +857,35 @@ const ProductGridCard = React.memo(({
                      </div>
                   </div>
                )}
+               {outOfStock && (
+                  <div className="absolute top-0 right-0 z-20 pointer-events-none">
+                     <div className="bg-rose-600 text-white text-[10px] font-black px-2 py-1 rounded-bl-xl shadow-md flex items-center gap-1">
+                        <AlertTriangle size={10} strokeWidth={3} />
+                        <span>SIN STOCK</span>
+                     </div>
+                  </div>
+               )}
+            </div>
+         )}
+
+         {!showProductImages && (
+            <div
+               className="relative flex h-[92px] shrink-0 items-center justify-center overflow-hidden rounded-[1.15rem] border px-4 py-3 text-center"
+               style={graphicTone}
+            >
+               <h3 className={`max-w-full break-words font-black uppercase leading-[1.05] line-clamp-3 ${graphicNameSize}`}>
+                  {productName}
+               </h3>
+               {isWeighted && (
+                  <div className="absolute left-2 top-2 rounded-lg bg-emerald-500 p-1.5 text-white shadow-md" title="Requiere Balanza">
+                     <ScaleIcon size={14} strokeWidth={3} />
+                  </div>
+               )}
+               {!isWeighted && hasVariants && (
+                  <div className="absolute left-2 top-2 rounded-lg bg-blue-600 p-1.5 text-white shadow-md" title="Tiene Variantes">
+                     <Layers size={14} strokeWidth={3} />
+                  </div>
+               )}
             </div>
          )}
 
@@ -707,13 +900,45 @@ const ProductGridCard = React.memo(({
                </div>
             </div>
          )}
-         <div className={`flex flex-col ${usesExpandedCatalog ? 'min-h-0 h-full pt-0.5 justify-between' : usesSupermarketLayout ? 'flex-1 gap-0.5' : 'flex-1 justify-between gap-2'}`}>
-            <div className={usesSupermarketLayout ? 'space-y-1' : usesExpandedCatalog ? 'space-y-0.5' : 'space-y-1'}>
-               <span className={`block font-bold text-purple-500 uppercase opacity-60 line-clamp-1 ${usesSupermarketLayout ? 'text-[11px]' : usesExpandedCatalog ? 'text-[10px]' : isCompactMobileCard ? 'text-[10px]' : 'text-[8px]'}`}>{product.category}</span>
-               <h3 className={`font-bold text-gray-800 dark:text-white leading-tight line-clamp-2 ${usesSupermarketLayout ? 'text-[1.08rem] min-h-[1.7rem]' : usesExpandedCatalog ? 'text-[0.98rem] min-h-[1.8rem]' : isCompactMobileCard ? 'text-[1rem] min-h-[2.25rem]' : 'text-sm min-h-[2.1rem]'}`}>{product.name}</h3>
+         {!showProductImages && outOfStock && (
+            <div className="absolute top-0 right-0 z-20 pointer-events-none">
+               <div className="bg-rose-600 text-white text-[10px] font-black px-3 py-1.5 rounded-bl-2xl shadow-sm flex items-center gap-1">
+                  <AlertTriangle size={12} strokeWidth={3} />
+                  <span>SIN STOCK</span>
+               </div>
             </div>
-            <div className={`${usesSupermarketLayout ? 'mt-0 pt-0' : usesExpandedCatalog ? 'mt-0.5 pt-0.5 border-t border-gray-100 dark:border-slate-700' : 'mt-auto pt-1.5 border-t border-gray-50 dark:border-slate-700'}`}>
-               <span className={`font-black text-gray-900 dark:text-white leading-none ${usesSupermarketLayout ? 'text-[1.78rem]' : usesExpandedCatalog ? 'text-[1.5rem]' : isCompactMobileCard ? 'text-[1.75rem]' : 'text-lg'}`}>{baseCurrencySymbol}{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+         )}
+         <div className={`flex flex-col ${showProductImages
+            ? usesExpandedCatalog
+               ? 'min-h-0 h-full pt-2 justify-between'
+               : usesSupermarketLayout
+                  ? 'flex-1 gap-1 pt-1.5'
+                  : 'flex-1 justify-between gap-2 pt-1'
+            : 'min-h-0 flex-1 justify-end gap-1 pt-2'}`}>
+            <div className={usesSupermarketLayout ? 'space-y-1.5' : usesExpandedCatalog ? 'space-y-1' : 'space-y-1.5'}>
+               <span className={`block font-black text-purple-500 uppercase opacity-70 line-clamp-1 ${usesSupermarketLayout ? 'text-[11px]' : usesExpandedCatalog ? 'text-[10px]' : isCompactMobileCard ? 'text-[10px]' : 'text-[9px]'}`}>{product.category}</span>
+               {showProductImages && (
+                  <h3 className={`font-black text-gray-800 dark:text-white leading-[1.08] truncate tracking-[-0.02em] ${usesSupermarketLayout ? 'text-[1.22rem] min-h-[1.35rem]' : usesExpandedCatalog ? 'text-[1.16rem] min-h-[1.3rem]' : isCompactMobileCard ? 'text-[1.16rem] min-h-[1.3rem]' : 'text-[1rem] min-h-[1.15rem]'}`}>{product.name}</h3>
+               )}
+            </div>
+            <div className={`${showProductImages
+               ? usesSupermarketLayout
+                  ? 'mt-0 pt-0'
+                  : usesExpandedCatalog
+                     ? 'mt-0.5 pt-0.5 border-t border-gray-100 dark:border-slate-700'
+                     : 'mt-auto pt-1.5 border-t border-gray-50 dark:border-slate-700'
+               : 'pt-0'}`}>
+               <span className={`font-black text-gray-900 dark:text-white leading-none ${showProductImages
+                  ? usesSupermarketLayout
+                     ? 'text-[1.78rem]'
+                     : usesExpandedCatalog
+                        ? 'text-[1.5rem]'
+                        : isCompactMobileCard
+                           ? 'text-[1.75rem]'
+                           : 'text-lg'
+                  : usesExpandedCatalog
+                     ? 'text-[1.42rem]'
+                     : 'text-[1.5rem]'}`}>{baseCurrencySymbol}{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
             </div>
          </div>
          {warehouseSaleBlocked && (
@@ -826,15 +1051,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    parkedTickets,
    onUpdateParkedTickets,
    onLogout,
+   onExitApplication,
    onOpenSettings,
+   onOpenAttendance,
    onOpenCustomers,
    onOpenHistory,
    onOpenFinance,
+   onRegisterCashMovement,
    onOpenZReport,
    onOpenInventoryTracking,
    onOpenAudit,
    onOpenTableMap,
    onTableOrderSaved,
+   onSelectTableAccount,
+   onTableOrderClosed,
    onOpenAgenda,
    onTransactionComplete,
    onAddCustomer,
@@ -855,13 +1085,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const desktopActionGridRef = useRef<HTMLDivElement>(null);
    const ticketAutoSyncTimeoutRef = useRef<number | null>(null);
    const ticketAutoSyncFlushRef = useRef<(() => void) | null>(null);
+   const closedTableOrderIdsRef = useRef<Set<string>>(new Set());
    const activeTableHydrationRef = useRef<{ key: string; missingTicket: boolean } | null>(null);
+   const kdsRetryInFlightRef = useRef(false);
    const quickActionTouchTimerRef = useRef<number | null>(null);
    const quickActionTouchStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
    const lastTouchContextMenuAtRef = useRef(0);
    const lastProductTouchAtRef = useRef(0);
    const quickActionOpenedAtRef = useRef(0);
    const [productPrices, setProductPrices] = useState<ProductPrice[]>(externalProductPrices);
+   const catalogProducts = products;
 
    useEffect(() => {
       setProductPrices(Array.isArray(externalProductPrices) ? externalProductPrices : []);
@@ -899,6 +1132,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [customers, selectedCustomer]);
    const [quickActionData, setQuickActionData] = useState<{ product: Product; x: number; y: number } | null>(null);
    const [successToast, setSuccessToast] = useState<string | null>(null);
+   const [cashMovementModalType, setCashMovementModalType] = useState<'IN' | 'OUT' | null>(null);
+   const [cashMovementAmount, setCashMovementAmount] = useState('');
+   const [cashMovementReason, setCashMovementReason] = useState('');
+   const [isSavingCashMovement, setIsSavingCashMovement] = useState(false);
    const [incomingUberToast, setIncomingUberToast] = useState<{ count: number; displayIds: string[] } | null>(null);
    const knownUberOrderIdsRef = useRef<Set<string>>(new Set());
    const uberOrdersMonitorPrimedRef = useRef(false);
@@ -943,10 +1180,188 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const activeTerminal = (config.terminals || []).find(t => t.id === activeTerminalId) || (config.terminals || [])[0];
    const activeTerminalConfig = activeTerminal?.config;
    const terminalId = activeTerminal?.id || 'T1';
+   const activeTerminalConfigRaw = useMemo<Record<string, unknown>>(
+      () => activeTerminalConfig ? (activeTerminalConfig as unknown as Record<string, unknown>) : {},
+      [activeTerminalConfig]
+   );
    const activeTableContext = useMemo(
       () => buildTableContextLabels(activeTable, rooms),
       [activeTable, rooms]
    );
+   const activeTableAccounts = useMemo(() => {
+      const tableId = String(activeTable?.id || '').trim();
+      if (!tableId) return [];
+
+      const readAccountNumber = (ticket: ParkedTicket) => {
+         const label = `${ticket.name || ''} ${ticket.alias || ''}`;
+         const match = label.match(/cuenta\s+(\d+)/i);
+         return match ? Number(match[1]) : 1;
+      };
+
+      return (Array.isArray(parkedTickets) ? parkedTickets : [])
+         .filter(ticket => String(ticket.tableId || '').trim() === tableId)
+         .sort((left, right) => {
+            const numberDelta = readAccountNumber(left) - readAccountNumber(right);
+            if (numberDelta !== 0) return numberDelta;
+            return String(left.timestamp || '').localeCompare(String(right.timestamp || ''));
+         });
+   }, [activeTable?.id, parkedTickets]);
+   const activeTableAccountIndex = Math.max(
+      0,
+      activeTableAccounts.findIndex(ticket => String(ticket.id) === String(activeTable?.currentOrderId || ''))
+   );
+   const handleNavigateTableAccount = useCallback((direction: -1 | 1) => {
+      if (activeTableAccounts.length < 2 || !onSelectTableAccount) return;
+      const nextIndex = (activeTableAccountIndex + direction + activeTableAccounts.length) % activeTableAccounts.length;
+      const nextTicket = activeTableAccounts[nextIndex];
+      if (!nextTicket) return;
+
+      ticketAutoSyncFlushRef.current?.();
+      activeTableHydrationRef.current = null;
+      void Promise.resolve(onSelectTableAccount(nextTicket));
+   }, [activeTableAccountIndex, activeTableAccounts, onSelectTableAccount]);
+   const renderTableAccountNavigator = () => activeTableAccounts.length > 1 ? (
+      <div className="flex shrink-0 items-center gap-1 rounded-xl border border-blue-200 bg-blue-50 p-1 shadow-sm">
+         <button
+            type="button"
+            onClick={() => handleNavigateTableAccount(-1)}
+            className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-blue-600 shadow-sm hover:bg-blue-100"
+            title="Cuenta anterior"
+            aria-label="Cuenta anterior"
+         >
+            <ChevronLeft size={16} strokeWidth={3} />
+         </button>
+         <span className="min-w-[92px] text-center text-xs font-black text-blue-800">
+            Cuenta {activeTableAccountIndex + 1} de {activeTableAccounts.length}
+         </span>
+         <button
+            type="button"
+            onClick={() => handleNavigateTableAccount(1)}
+            className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-blue-600 shadow-sm hover:bg-blue-100"
+            title="Cuenta siguiente"
+            aria-label="Cuenta siguiente"
+         >
+            <ChevronRight size={16} strokeWidth={3} />
+         </button>
+      </div>
+   ) : null;
+   const activeBarTabId = String(activeTable?.barTabId || '').trim();
+   const activeBarTabName = String(activeTable?.barTabName || '').trim();
+   const markKdsQueueItemsSent = useCallback(async (entry: any) => {
+      const payload = entry?.payload || {};
+      const orderId = String(payload.orderId || entry?.orderId || '').trim();
+      if (!orderId) return;
+
+      const cartIds = new Set(
+         (Array.isArray(entry?.cartIds) ? entry.cartIds : [])
+            .map((id: unknown) => String(id))
+            .filter(Boolean)
+      );
+      const areaId = String(entry?.areaId || payload?.area?.id || '').trim();
+      const shouldMark = (item: CartItem) => {
+         const cartKey = getCartDispatchKey(item);
+         if (cartIds.size > 0) return cartIds.has(cartKey);
+         const sameOrder = String(item.kdsOrderId || '') === orderId;
+         const sameArea = !areaId || String(item.kdsAreaId || '') === areaId;
+         return sameOrder && sameArea && isKdsPendingCartItem(item);
+      };
+      const markItems = (items: CartItem[]) => items.map(item => shouldMark(item)
+         ? {
+            ...item,
+            dispatched: true,
+            kdsStatus: 'ENVIADO',
+            kdsLastError: undefined,
+            kdsQueuedAt: undefined,
+         } as CartItem
+         : item
+      );
+
+      const nextTickets = (Array.isArray(parkedTickets) ? parkedTickets : []).map(ticket => {
+         if (String(ticket.id) !== orderId) return ticket;
+         return { ...ticket, items: markItems(ticket.items || []) };
+      });
+      await Promise.resolve(onUpdateParkedTickets(nextTickets));
+
+      if (String(activeTable?.currentOrderId || '') === orderId) {
+         onUpdateCart(prev => markItems(prev));
+      }
+   }, [activeTable?.currentOrderId, onUpdateCart, onUpdateParkedTickets, parkedTickets]);
+
+   const retryPendingKdsDispatches = useCallback(async () => {
+      if (kdsRetryInFlightRef.current) return;
+      kdsRetryInFlightRef.current = true;
+      try {
+         const storedQueue = await db.get('kdsDispatchQueue' as any).catch(() => []) as any;
+         const queue = Array.isArray(storedQueue) ? storedQueue : [];
+         if (queue.length === 0) return;
+
+         const nextQueue: any[] = [];
+         let sentCount = 0;
+         for (const entry of queue) {
+            const status = String(entry?.status || 'PENDING').toUpperCase();
+            if (status === 'SENT') continue;
+
+            const payload = entry?.payload || {};
+            const kdsBaseUrl = String(entry?.kdsBaseUrl || '').trim().replace(/\/+$/, '');
+            const orderId = String(payload.orderId || entry?.orderId || '').trim();
+            if (!kdsBaseUrl || !orderId) {
+               nextQueue.push(entry);
+               continue;
+            }
+
+            try {
+               await postJsonWithTimeout(`${kdsBaseUrl}/api/ordenes/${encodeURIComponent(orderId)}`, {
+                  items: payload.items || [],
+                  total: payload.total || 0,
+                  status: 'OCCUPIED',
+                  displayId: payload.displayId,
+                  orderNumber: payload.orderNumber,
+                  terminalId: payload.terminalId,
+                  userName: payload.userName,
+                  customerName: payload.customerName,
+                  table: payload.table,
+                  area: payload.area,
+                  sourceTerminal: payload.sourceTerminal,
+                  kdsTiming: payload.kdsTiming,
+               });
+               await postJsonWithTimeout(`${kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(orderId)}`, payload);
+               await markKdsQueueItemsSent(entry);
+               sentCount += 1;
+            } catch (error: any) {
+               nextQueue.push({
+                  ...entry,
+                  status: 'PENDING',
+                  attempts: Number(entry?.attempts || 0) + 1,
+                  lastError: error?.message || 'KDS_UNREACHABLE',
+                  updatedAt: new Date().toISOString(),
+               });
+            }
+         }
+
+         await db.save('kdsDispatchQueue' as any, nextQueue);
+         if (sentCount > 0) {
+            setSuccessToast(`${sentCount} comanda(s) pendiente(s) enviada(s) a cocina`);
+         }
+      } finally {
+         kdsRetryInFlightRef.current = false;
+      }
+   }, [markKdsQueueItemsSent]);
+
+   useEffect(() => {
+      const retry = () => {
+         retryPendingKdsDispatches().catch(error => console.warn('[KDS] Reintento de cola falló:', error));
+      };
+      retry();
+      const interval = window.setInterval(retry, 10000);
+      window.addEventListener('online', retry);
+      window.addEventListener('focus', retry);
+      return () => {
+         window.clearInterval(interval);
+         window.removeEventListener('online', retry);
+         window.removeEventListener('focus', retry);
+      };
+   }, [retryPendingKdsDispatches]);
+
    const reserveNextOrderNumber = useCallback((): string | undefined => {
       const settings = normalizeOrderNumberSettings(activeTerminalConfig?.operational?.orderNumbers);
       if (!settings.enabled || !activeTerminal?.id) return undefined;
@@ -1002,15 +1417,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
    const productById = useMemo(() => {
       const index = new Map<string, Product>();
-      for (const product of products || []) {
+      for (const product of catalogProducts || []) {
          if (product?.id) index.set(product.id, product);
       }
       return index;
-   }, [products]);
+   }, [catalogProducts]);
    const marketplaceProductLookup = useMemo(() => {
       const byReference = new Map<string, Product>();
       const byName = new Map<string, Product>();
-      const rankedProducts = [...(products || [])].sort(
+      const rankedProducts = [...(catalogProducts || [])].sort(
          (left, right) => scoreProductForSales(right, warehouses) - scoreProductForSales(left, warehouses)
       );
 
@@ -1038,7 +1453,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       return { byReference, byName };
-   }, [products, warehouses]);
+   }, [catalogProducts, warehouses]);
    const salesUsers = useMemo(() => getTerminalSnapshotSellers(config, terminalId), [config, terminalId]);
    const resolveSalespersonLabel = useCallback((salespersonId?: string | null) => {
       return resolveTerminalSellerName(salespersonId, config, terminalId, users) || 'Vendedor';
@@ -1050,7 +1465,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return /^t-/i.test(normalized) ? normalized.toUpperCase() : `T-${normalized.toUpperCase()}`;
    }, [terminalDisplaySource, terminalId]);
    const defaultSalesWarehouseId = activeTerminalConfig?.inventoryScope?.defaultSalesWarehouseId;
-   const uxConfig = activeTerminalConfig?.ux || { showProductImages: true, gridDensity: 'COMFORTABLE', theme: 'LIGHT', quickKeysLayout: 'A' };
+   const uxConfig = {
+      showProductImages: true,
+      gridDensity: 'COMFORTABLE' as const,
+      theme: 'LIGHT' as const,
+      quickKeysLayout: 'A' as const,
+      viewMode: 'VISUAL' as const,
+      ...(activeTerminalConfig?.ux || {}),
+   };
    const normalizeScopeKey = useCallback((value: unknown) => {
       return typeof value === 'string' ? value.trim().toLowerCase() : '';
    }, []);
@@ -1163,12 +1585,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    /** Tarifa OK en ERP pero almacenes activos no intersectan la caja: se muestra atenuado y no deja vender. */
    const productWarehouseBlockedById = useMemo(() => {
       const index = new Map<string, boolean>();
-      for (const product of products || []) {
+      for (const product of catalogProducts || []) {
          if (!product?.id) continue;
          index.set(product.id, !productMatchesTerminalWarehouse(product));
       }
       return index;
-   }, [productMatchesTerminalWarehouse, products]);
+   }, [productMatchesTerminalWarehouse, catalogProducts]);
 
    const isProductWarehouseBlockedForSale = useCallback(
       (product: Product) => {
@@ -1180,13 +1602,43 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       [productMatchesTerminalWarehouse, productWarehouseBlockedById]
    );
    const getScopedProductStock = useCallback((product: Product) => {
+      if (defaultSalesWarehouseId) {
+         const directDefaultStock = getWarehouseScopedNumber(product.stockBalances || {}, defaultSalesWarehouseId, warehouses, Number.NaN);
+         if (Number.isFinite(directDefaultStock)) return directDefaultStock;
+      }
+      const defaultWarehouse = activeTerminalConfig?.inventoryScope?.defaultWarehouse;
+      for (const defaultWarehouseCandidate of [
+         defaultWarehouse?.id,
+         defaultWarehouse?.code,
+         defaultWarehouse?.name,
+         (defaultWarehouse as any)?.erpWarehouseId,
+         (defaultWarehouse as any)?.inventoryLocalId,
+         (defaultWarehouse as any)?.sourceWarehouseId,
+      ]) {
+         const directDefaultStock = getWarehouseScopedNumber(product.stockBalances || {}, defaultWarehouseCandidate, warehouses, Number.NaN);
+         if (Number.isFinite(directDefaultStock)) return directDefaultStock;
+      }
       const stockEntries = Object.entries(product.stockBalances || {});
       const matchedEntry = stockEntries.find(([warehouseId]) => effectiveWarehouseKeys.has(normalizeScopeKey(warehouseId)));
       if (matchedEntry) {
          return Number(matchedEntry[1] ?? 0);
       }
+      for (const warehouseKey of effectiveWarehouseKeys) {
+         const scopedValue = getWarehouseScopedNumber(product.stockBalances || {}, warehouseKey, warehouses, Number.NaN);
+         if (Number.isFinite(scopedValue)) return scopedValue;
+      }
       return Number(product.stock ?? 0);
-   }, [effectiveWarehouseKeys, normalizeScopeKey]);
+   }, [
+      activeTerminalConfig?.inventoryScope?.defaultWarehouse,
+      defaultSalesWarehouseId,
+      effectiveWarehouseKeys,
+      normalizeScopeKey,
+      warehouses,
+   ]);
+   const isProductOutOfStock = useCallback((product: Product) => {
+      const trackInventory = product.operationalFlags?.trackInventory ?? config.features.stockTracking;
+      return Boolean(trackInventory && getScopedProductStock(product) <= 0);
+   }, [config.features.stockTracking, getScopedProductStock]);
    const effectiveAllowedCategorySet = useMemo(() => {
       const configuredCategories = new Set(
          (activeTerminalConfig?.catalog?.allowedCategories || [])
@@ -1196,7 +1648,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (configuredCategories.size === 0) return configuredCategories;
 
       const localSellableCategories = new Set(
-         (products || [])
+         (catalogProducts || [])
             .filter((product) => product && product.is_sellable !== false)
             .map((product) => canonicalizeCategory(product.category))
             .filter(Boolean)
@@ -1204,18 +1656,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const matchedCategories = Array.from(configuredCategories).filter((category) => localSellableCategories.has(category));
       return matchedCategories.length > 0 ? configuredCategories : new Set<string>();
-   }, [activeTerminalConfig?.catalog?.allowedCategories, canonicalizeCategory, products]);
+   }, [activeTerminalConfig?.catalog?.allowedCategories, canonicalizeCategory, catalogProducts]);
 
-   const isRetailMode = activeTerminalConfig?.ux?.viewMode === 'RETAIL';
+   const isRetailMode = isRetailViewMode(
+      activeTerminalConfig?.ux?.viewMode ||
+      (activeTerminalConfigRaw?.ux as Record<string, unknown> | undefined)?.viewMode ||
+      (activeTerminalConfigRaw?.ux as Record<string, unknown> | undefined)?.mode ||
+      (activeTerminalConfigRaw?.operational as Record<string, unknown> | undefined)?.viewMode
+   );
    const operationalVertical = String(activeTerminalConfig?.operational?.vertical_negocio || '');
    const isRestaurantMode =
       operationalVertical === 'RESTAURANT' ||
       operationalVertical === 'RESTAURANTE' ||
       config.vertical === 'RESTAURANT';
-   const canReceiveConsignments = Boolean(
-      activeTerminalConfig?.operational?.recibir_consignaciones ??
-      activeTerminalConfig?.operational?.receiveConsignments
-   );
+   const canReceiveConsignments = resolveConsignmentDownloadEnabled(activeTerminalConfig?.operational);
    const showTableMapButton = Boolean(activeTerminalConfig?.operational?.usa_mesas);
    const hideTableExtras = isRestaurantMode && !!activeTable;
    const restaurantActionGridClass = !isRestaurantMode
@@ -1242,7 +1696,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
    // --- DETECT KIOSK / SELF CHECKOUT ---
-   const isKioskMode = activeTerminalConfig?.deviceRole?.role === 'SELF_CHECKOUT';
+   const isKioskMode = resolveDeviceRoleValue([
+      activeTerminalConfigRaw?.deviceRole,
+      activeTerminalConfigRaw?.role,
+      activeTerminalConfigRaw?.roleCode,
+      activeTerminalConfigRaw?.role_code,
+      activeTerminalConfigRaw?.deviceRoleCode,
+      activeTerminalConfigRaw?.device_role_code,
+      (activeTerminalConfigRaw?.ux as Record<string, unknown> | undefined)?.mode,
+      (activeTerminalConfigRaw?.deviceRole as Record<string, unknown> | undefined)?.role_code,
+      (activeTerminalConfigRaw?.deviceRole as Record<string, unknown> | undefined)?.device_role_code,
+   ], DeviceRole.STANDARD_POS) === DeviceRole.SELF_CHECKOUT;
 
    // --- AUTO-HYDRATION FOR TABLES ---
    // --- SMART TABLE HYDRATION ---
@@ -1320,7 +1784,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
 
    const canChangeTariff = hasPermission('POS_CHANGE_TARIFF');
+   const canCheckout = hasPermission('POS_CHECKOUT');
    const canSellWithOpenZ = hasPermission('POS_ALLOW_SALES_WITH_OPEN_Z');
+   const canCloseXReport = hasPermission('POS_CLOSE_X');
+   const canCloseZReport = hasPermission('POS_CLOSE_Z');
+   const canRegisterCashMovement = hasPermission('CASH_IN_OUT' as Permission);
 
    const usesSupermarketLayout = useMemo(
       () => Boolean(!isMobile && isRetailMode),
@@ -1374,7 +1842,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!desiredTariffId) return;
 
       const isCurrentAllowed = allowedTariffs.some((tariff) => tariff.id === activeTariffId);
-      if (!activeTariffId || !isCurrentAllowed || activeTariffId !== desiredTariffId) {
+      if (!activeTariffId || !isCurrentAllowed) {
          setActiveTariffId(desiredTariffId);
       }
    }, [activeTariffId, allowedTariffs, desiredTariffId]);
@@ -1418,18 +1886,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // FILTER: Only pending transactions (after latest Z close for this terminal)
    const terminalTransactions = useMemo(() => {
       const normalize = (value?: string | null) => (value || '').trim().toLowerCase();
-      const terminalKey = normalize(terminalId);
-      const isDefaultTerminal = terminalKey === 't1';
+      const terminalAliases = new Set(
+         [
+            terminalId,
+            activeTerminalConfig?.erpTerminalId,
+            activeTerminalConfig?.erpBinding?.terminalId,
+            activeTerminalConfig?.erpBinding?.terminalName,
+         ]
+            .map(value => normalize(value))
+            .filter(Boolean)
+      );
+      const isDefaultTerminal = terminalAliases.has('t1');
+      const matchesTerminal = (...values: Array<string | null | undefined>) => {
+         const normalizedValues = values.map(value => normalize(value)).filter(Boolean);
+         return normalizedValues.some(value => terminalAliases.has(value)) || (isDefaultTerminal && normalizedValues.length === 0);
+      };
 
       const latestCloseTs = (zReports || [])
-         .filter(r => normalize(r.terminalId) === terminalKey || (!r.terminalId && isDefaultTerminal))
+         .filter(r => matchesTerminal(r.terminalId, (r as any).source_terminal_id))
          .map(r => new Date(r.closedAt).getTime())
          .filter((value) => Number.isFinite(value))
          .reduce((max, value) => value > max ? value : max, 0);
 
       return transactions
          .filter(t => {
-            const belongsToTerminal = normalize(t.terminalId) === terminalKey || (!t.terminalId && isDefaultTerminal);
+            const belongsToTerminal = matchesTerminal(t.terminalId, (t as any).source_terminal_id);
             if (!belongsToTerminal) return false;
             if (t.zReportId) return false;
 
@@ -1438,7 +1919,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return latestCloseTs <= 0 || txTime > latestCloseTs;
          })
          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-   }, [transactions, terminalId, zReports]);
+   }, [activeTerminalConfig, transactions, terminalId, zReports]);
 
    const canProceedWithOperationalSession = useCallback((): boolean => {
       if (!activeTerminalConfig || terminalTransactions.length === 0) return true;
@@ -1462,11 +1943,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [errorToast, setErrorToast] = useState<string | null>(null);
 
    const ensureSalesWithOpenZPermission = useCallback((): boolean => {
-      if (canSellWithOpenZ) return true;
-      setErrorToast('Tu rol no permite vender con cierre Z abierto. Activa el permiso en Equipo y Roles.');
+      const sessionStartDate = terminalTransactions[0]?.date;
+      const hasExpiredOperationalSession = Boolean(
+         activeTerminalConfig &&
+         sessionStartDate &&
+         isSessionExpired(sessionStartDate, activeTerminalConfig)
+      );
+      if (!hasExpiredOperationalSession || canSellWithOpenZ) return true;
+      setErrorToast('No puede facturar. Tiene una jornada anterior pendiente de cierre Z para esta caja.');
       window.setTimeout(() => setErrorToast(null), 3500);
       return false;
-   }, [canSellWithOpenZ]);
+   }, [activeTerminalConfig, canSellWithOpenZ, terminalTransactions]);
 
    const activeTariff = useMemo(() => (config.tariffs || []).find(t => t.id === activeTariffId), [config.tariffs, activeTariffId]);
 
@@ -1621,6 +2108,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const buildParkedTicketName = useCallback(() => {
       if (activeTable) {
+         if (activeBarTabName) return activeBarTabName;
          return `Mesa: ${activeTableContext.compactLabel || activeTable.nombre || activeTable.name}`;
       }
 
@@ -1629,7 +2117,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       return `Ticket #${(Array.isArray(parkedTickets) ? parkedTickets : []).length + 1}`;
-   }, [activeTable, activeTableContext.compactLabel, selectedCustomer, parkedTickets]);
+   }, [activeTable, activeBarTabName, activeTableContext.compactLabel, selectedCustomer, parkedTickets]);
 
    const closeParkAliasModal = useCallback(() => {
       setShowParkAliasModal(false);
@@ -1704,11 +2192,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const commitments = await db.get('inventoryCommitments') as any[] || [];
       const map: Record<string, number> = {};
       (commitments || []).forEach(row => {
-         if (defaultSalesWarehouseId && row.warehouseId && row.warehouseId !== defaultSalesWarehouseId) return;
+         const rowWarehouseKey = normalizeScopeKey(row.warehouseId);
+         if (rowWarehouseKey && effectiveWarehouseKeys.size > 0 && !effectiveWarehouseKeys.has(rowWarehouseKey)) return;
          map[row.productId] = (map[row.productId] || 0) + Math.max(0, Number(row.qtyCommitted || 0));
       });
       setCommittedByProduct(map);
-   }, [defaultSalesWarehouseId]);
+   }, [effectiveWarehouseKeys, normalizeScopeKey]);
 
    const reloadReservations = useCallback(async () => {
       const loaded = await db.get('reservations') as Reservation[] || [];
@@ -2246,9 +2735,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return resolveActiveTariffPrice(p, activeTariffTokens, productPriceIndex);
    }, [activeTariffTokens, productPriceIndex, productTariffPriceById]);
 
-   const productHasActiveTariff = useCallback((p: Product) => getTariffPrice(p) !== null, [getTariffPrice]);
+   const productHasBasePrice = useCallback((p: Product) => {
+      const price = Number(p?.price);
+      return Number.isFinite(price) && price >= 0;
+   }, []);
 
-   const getProductPrice = useCallback((p: Product) => getTariffPrice(p) ?? 0, [getTariffPrice]);
+   const productHasActiveTariff = useCallback((p: Product) => getTariffPrice(p) !== null || productHasBasePrice(p), [getTariffPrice, productHasBasePrice]);
+
+   const getProductPrice = useCallback((p: Product) => {
+      const tariffPrice = getTariffPrice(p);
+      if (tariffPrice !== null) return tariffPrice;
+      const basePrice = Number(p?.price);
+      return Number.isFinite(basePrice) && basePrice >= 0 ? basePrice : 0;
+   }, [getTariffPrice]);
 
    const productCodeIndex = useMemo(() => {
       const index = new Map<string, { product: Product; price: number; modifiers: string[]; selectedVariant?: ProductVariant; variantInfo?: string }>();
@@ -2338,7 +2837,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return quantities;
    }, [cart]);
 
-   const canAddItemToCart = useCallback((product: Product, quantityToAdd: number = 1): boolean => {
+   const canAddItemToCart = useCallback((product: Product, quantityToAdd: number = 1, options?: { skipStockValidation?: boolean }): boolean => {
       // 0. Sellable check
       if (product.is_sellable === false) {
          setErrorToast(`Artículo no disponible para la venta (Insumo)`);
@@ -2368,7 +2867,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // 2. Stock validation
       const trackInventory = product.operationalFlags?.trackInventory ?? config.features.stockTracking;
-      if (trackInventory) {
+      if (trackInventory && !options?.skipStockValidation) {
          const consumptionMode = resolveInventoryConsumptionMode(product);
          if (consumptionMode === 'COMPONENTS' && quantityToAdd > 0) {
             const componentDeductions = calculateInventoryDeductions(product, quantityToAdd, products);
@@ -2386,6 +2885,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
 
                const currentStock = getScopedProductStock(component);
+               const componentAllowsNegative = component.operationalFlags?.allowNegativeStock ?? false;
+               const terminalAllowsNegative = activeTerminalConfig?.workflow?.inventory?.allowNegativeStock ?? false;
+               if (componentAllowsNegative || terminalAllowsNegative) continue;
                const committedQty = committedByProduct[componentId] || 0;
                const inCartQty = cartInventoryDemandByProduct[componentId] || 0;
                const availableStock = Math.max(0, currentStock - committedQty);
@@ -2404,8 +2906,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const productAllowsNegative = product.operationalFlags?.allowNegativeStock ?? false;
          const terminalAllowsNegative = activeTerminalConfig?.workflow?.inventory?.allowNegativeStock ?? false;
 
-         // If negative stock is NOT allowed (at either level), check availability
-         if (!productAllowsNegative || !terminalAllowsNegative) {
+         // If negative stock is not allowed by the product nor the terminal, check availability.
+         if (!productAllowsNegative && !terminalAllowsNegative) {
             const currentStock = getScopedProductStock(product);
             const committedQty = committedByProduct[product.id] || 0;
             const availableStock = Math.max(0, currentStock - committedQty);
@@ -2428,7 +2930,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig'], consignmentPatch?: Pick<CartItem, 'consignmentId' | 'consignmentDocumentNo' | 'consignmentLineId'>) => {
       if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
       if (quantity > 0 && !ensureSalesWithOpenZPermission()) return;
-      if (!canAddItemToCart(product, quantity)) return;
+      if (!canAddItemToCart(product, quantity, { skipStockValidation: Boolean(consignmentPatch?.consignmentLineId) })) return;
 
       // TRACEABILITY INTERCEPTION
       const usesLots = product.operationalFlags?.usesLots;
@@ -2562,7 +3064,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setConsignmentError(null);
       try {
          const detail = await consignmentSyncService.getConsignment(String(consignment.id));
-         setSelectedConsignment(detail);
+         const detailLines = getConsignmentLines(detail);
+         const summaryLines = getConsignmentLines(consignment);
+         setSelectedConsignment({
+            ...consignment,
+            ...detail,
+            customerName: getConsignmentCustomerName(detail) || getConsignmentCustomerName(consignment),
+            customer_name: getConsignmentCustomerName(detail) || getConsignmentCustomerName(consignment),
+            lines: detailLines.length > 0 ? detailLines : summaryLines,
+            items: detailLines.length > 0 ? detailLines : summaryLines,
+         });
       } catch (error) {
          const message = error instanceof Error ? error.message : 'No se pudo cargar la consignación.';
          setConsignmentError(message);
@@ -2571,10 +3082,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    }, []);
 
-   const handleAddConsignmentLine = useCallback((consignment: ErpConsignment, line: ErpConsignmentLine) => {
-      const product = consignmentSyncService.findMatchingProduct(line, products);
+   const refreshProductsForConsignmentMatch = useCallback(async (): Promise<Product[]> => {
+      setConsignmentError('PENDING_CATALOG_SYNC: Actualizando catálogo POS para vincular artículos ERP...');
+      try {
+         await syncManager.pullCatalog('products', true, { ignoreThrottle: true });
+      } catch (error) {
+         throw new Error(error instanceof Error ? error.message : 'No se pudo actualizar el catálogo de productos.');
+      }
+      const freshProducts = await db.get('products');
+      return Array.isArray(freshProducts) ? freshProducts as Product[] : products;
+   }, [products]);
+
+   const handleAddConsignmentLine = useCallback(async (consignment: ErpConsignment, line: ErpConsignmentLine) => {
+      let productIndexes = consignmentSyncService.buildProductIndexes(products);
+      let product = consignmentSyncService.findMatchingProduct(line, productIndexes);
       if (!product) {
-         setConsignmentError(`No hay producto local vinculado para ${getConsignmentLineProductName(line)}.`);
+         try {
+            const freshProducts = await refreshProductsForConsignmentMatch();
+            productIndexes = consignmentSyncService.buildProductIndexes(freshProducts);
+            product = consignmentSyncService.findMatchingProduct(line, productIndexes);
+         } catch (error) {
+            const message = error instanceof Error ? error.message : 'No se pudo actualizar el catálogo POS.';
+            setConsignmentError(message);
+            return;
+         }
+      }
+
+      if (!product) {
+         setConsignmentError(consignmentSyncService.describeProductNotFound(line, productIndexes));
          return;
       }
 
@@ -2594,16 +3129,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       );
       setSuccessToast(`Consignación ${getConsignmentDocumentNo(consignment)} agregada al ticket.`);
       setTimeout(() => setSuccessToast(null), 2500);
-   }, [addToCart, getProductPrice, products]);
+   }, [addToCart, getProductPrice, products, refreshProductsForConsignmentMatch]);
 
-   const handleAddAllConsignmentLines = useCallback((consignment: ErpConsignment) => {
+   const handleAddAllConsignmentLines = useCallback(async (consignment: ErpConsignment) => {
       const lines = getConsignmentLines(consignment);
       let added = 0;
-      let skipped = 0;
+      let productSource = products;
+      let productIndexes = consignmentSyncService.buildProductIndexes(productSource);
+      const missingBeforeRefresh = lines.some(line => !consignmentSyncService.findMatchingProduct(line, productIndexes));
+      if (missingBeforeRefresh) {
+         try {
+            productSource = await refreshProductsForConsignmentMatch();
+            productIndexes = consignmentSyncService.buildProductIndexes(productSource);
+         } catch (error) {
+            const message = error instanceof Error ? error.message : 'No se pudo actualizar el catálogo POS.';
+            setConsignmentError(message);
+            return;
+         }
+      }
+
+      const missingNames: string[] = [];
       lines.forEach((line) => {
-         const product = consignmentSyncService.findMatchingProduct(line, products);
+         const product = consignmentSyncService.findMatchingProduct(line, productIndexes);
          if (!product) {
-            skipped += 1;
+            missingNames.push(consignmentSyncService.describeProductNotFound(line, productIndexes));
             return;
          }
          addToCart(
@@ -2621,15 +3170,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          added += 1;
       });
 
+      if (missingNames.length > 0) {
+         setConsignmentError(`${missingNames.length} línea(s) bloqueada(s). ${missingNames.slice(0, 3).join(' || ')}`);
+      }
       if (added > 0) {
          setSuccessToast(`${added} línea(s) de consignación agregada(s).`);
          setTimeout(() => setSuccessToast(null), 2500);
          setShowConsignmentModal(false);
       }
-      if (skipped > 0) {
-         setConsignmentError(`${skipped} línea(s) no tienen producto local vinculado.`);
+      if (added > 0 && missingNames.length === 0) {
+         setConsignmentError(null);
       }
-   }, [addToCart, getProductPrice, products]);
+   }, [addToCart, getProductPrice, products, refreshProductsForConsignmentMatch]);
 
    const handleProductClickRef = useRef(handleProductClick);
    const quickActionDataRef = useRef(quickActionData);
@@ -2678,7 +3230,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const handleProductCardContextMenu = useCallback((product: Product, event: React.MouseEvent<HTMLDivElement>) => {
       event.preventDefault();
       const now = Date.now();
-      if (now - lastProductTouchAtRef.current < 900) return;
+      // Android emits contextmenu during a long touch before touchend. Open
+      // the quick actions here instead of discarding that gesture.
+      if (now - lastProductTouchAtRef.current < 900) {
+         if (quickActionTouchTimerRef.current) {
+            window.clearTimeout(quickActionTouchTimerRef.current);
+            quickActionTouchTimerRef.current = null;
+         }
+         quickActionOpenedAtRef.current = now;
+         lastTouchContextMenuAtRef.current = now;
+         setQuickActionData({ product, x: event.clientX, y: event.clientY });
+         return;
+      }
       if (now - lastTouchContextMenuAtRef.current < 900) return;
       quickActionOpenedAtRef.current = now;
       setQuickActionData({ product, x: event.clientX, y: event.clientY });
@@ -2743,6 +3306,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             typeof (p as any).sku === 'string' ? (p as any).sku.trim() : String((p as any).sku || '').trim(),
             typeof (p as any).item_code === 'string' ? (p as any).item_code.trim() : String((p as any).item_code || '').trim(),
             typeof (p as any).code === 'string' ? (p as any).code.trim() : String((p as any).code || '').trim(),
+            typeof (p as any).reference === 'string' ? (p as any).reference.trim() : String((p as any).reference || '').trim(),
+            typeof (p as any).referencia === 'string' ? (p as any).referencia.trim() : String((p as any).referencia || '').trim(),
+            typeof (p as any).external_reference === 'string' ? (p as any).external_reference.trim() : String((p as any).external_reference || '').trim(),
          ].filter(Boolean);
 
          // B. Check Parent (ID, SKU, Barcode, item_code, code)
@@ -2750,8 +3316,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return { product: p, quantity, price: getProductPrice(p), modifiers: [] };
          }
       }
+
       return null;
    }, [getProductPrice, productCodeIndex, productHasActiveTariff, products]);
+
+   const submitProductTextSearchRef = useRef<((rawValue: string, focusTarget?: React.RefObject<HTMLInputElement>) => boolean) | null>(null);
 
    const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'Enter') {
@@ -2763,9 +3332,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             setErrorToast(null);
             // Ensure focus stays on search bar
             searchInputRef.current?.focus();
-         } else if (rawValue.trim()) {
-            setErrorToast("Código no encontrado");
-            setTimeout(() => setErrorToast(null), 2000);
+         } else {
+            if (submitProductTextSearchRef.current?.(rawValue, searchInputRef)) {
+               return;
+            }
+
+            if (rawValue.trim()) {
+               setErrorToast("Código no encontrado");
+               setTimeout(() => setErrorToast(null), 2000);
+            }
          }
       }
    }, [searchTerm, findProductByAnyCode, addToCart, isReturnMode]);
@@ -2890,6 +3465,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       () => getEffectiveFiscalComplianceConfig(config, activeTerminalConfig),
       [config, activeTerminalConfig]
    );
+   const isFiscalModeDisabled = fiscalCompliance.mode === 'NONE';
    const fiscalCartGrossTotal = useMemo(
       () => (cart || []).reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0),
       [cart]
@@ -2920,6 +3496,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const checkFiscalStatus = async () => {
          const type = requiredSaleFiscalType;
+         if (isFiscalModeDisabled) {
+            setStatus(null);
+            setFiscalStatus({
+               type,
+               hasNCF: true,
+               localBuffer: null,
+               isUsingPool: false,
+               isTerminalBlock: false,
+               remaining: 0,
+               total: 0
+            });
+            return;
+         }
+
          const [buffers, allocations, ranges] = await Promise.all([
             db.get('localFiscalBuffer'),
             db.get('fiscalAllocations'),
@@ -3018,12 +3608,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return () => {
          cancelled = true;
       };
-   }, [requiredSaleFiscalType, terminalId]);
+   }, [isFiscalModeDisabled, requiredSaleFiscalType, terminalId]);
 
    const fiscalReserveAlert = useMemo(() => {
+      if (isFiscalModeDisabled) return null;
       if (!fiscalStatus.hasNCF) return null;
       return getFiscalReserveAlert(fiscalStatus.remaining || 0, fiscalStatus.total || 0, fiscalCompliance);
-   }, [fiscalCompliance, fiscalStatus.hasNCF, fiscalStatus.remaining, fiscalStatus.total]);
+   }, [fiscalCompliance, fiscalStatus.hasNCF, fiscalStatus.remaining, fiscalStatus.total, isFiscalModeDisabled]);
 
    const shouldShowFiscalReserveAlert = Boolean(
       fiscalReserveAlert &&
@@ -3034,20 +3625,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const salesCatalogProducts = useMemo(() => {
       const nonSeedBusinessKeys = new Set<string>();
 
-      for (const product of products) {
+      for (const product of catalogProducts) {
          if (!product || typeof product !== 'object' || Array.isArray(product)) continue;
          if (isSeedCatalogProduct(product)) continue;
          productBusinessKeys(product).forEach((key) => nonSeedBusinessKeys.add(key));
       }
 
-      return products.filter((product) => {
+      return catalogProducts.filter((product) => {
          if (!product || typeof product !== 'object' || Array.isArray(product)) return false;
          if (!isSeedCatalogProduct(product)) return true;
 
          const businessKeys = productBusinessKeys(product);
          return !businessKeys.some((key) => nonSeedBusinessKeys.has(key));
       });
-   }, [products]);
+   }, [catalogProducts]);
 
    const dedupedSalesCatalogProducts = useMemo(() => {
       type RankedProductEntry = { product: Product; score: number; keys: Set<string> };
@@ -3088,6 +3679,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             (product as any).sku,
             (product as any).item_code,
             (product as any).code,
+            (product as any).description,
+            (product as any).descripcion,
+            (product as any).reference,
+            (product as any).referencia,
+            (product as any).external_reference,
+            ...productReferenceCandidates(product),
          ];
          const variantCodes = Array.isArray((product as any).variants)
             ? (product as any).variants.flatMap((variant: any) => [variant?.sku, variant?.barcode])
@@ -3112,17 +3709,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const normalizedCategoryFilter = categoryFilter === 'ALL'
          ? 'ALL'
          : canonicalizeCategory(categoryFilter);
-      const normalizedSearch = deferredSearchTerm.trim().toLowerCase();
+      const normalizedSearch = normalizeSearchToken(searchTerm);
 
       const filtered = salesCatalogProductEntries.filter((entry) => {
          const matchSearch = !normalizedSearch
             || entry.searchText.includes(normalizedSearch);
 
-         const matchCat = normalizedCategoryFilter === 'ALL' || entry.normalizedCategory === normalizedCategoryFilter;
+         const matchCat = Boolean(normalizedSearch) || normalizedCategoryFilter === 'ALL' || entry.normalizedCategory === normalizedCategoryFilter;
          const matchAllowedCat = effectiveAllowedCategorySet.size === 0 || effectiveAllowedCategorySet.has(entry.normalizedCategory);
 
-         // Tarifa activa de la caja debe existir en datos ERP; almacén en grid no tiene que coincidir con la terminal (la venta se bloquea en canAddItemToCart).
-         return matchSearch && matchCat && matchAllowedCat && entry.isSellable && entry.hasActiveTariff && entry.hasErpWarehouse;
+         // La grilla no debe quedar vacía mientras llegan bloques de stock/precios; el bloqueo duro ocurre al agregar al carrito.
+         return matchSearch && matchCat && matchAllowedCat && entry.isSellable && entry.hasActiveTariff;
       });
 
       // Defensive: Ensure unique IDs to prevent React key warnings
@@ -3132,7 +3729,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             seenIds.add(p.id);
             return true;
          });
-   }, [salesCatalogProductEntries, categoryFilter, deferredSearchTerm, canonicalizeCategory, effectiveAllowedCategorySet]);
+   }, [salesCatalogProductEntries, categoryFilter, searchTerm, canonicalizeCategory, effectiveAllowedCategorySet]);
+
+   const submitProductTextSearch = useCallback((rawValue: string, focusTarget?: React.RefObject<HTMLInputElement>): boolean => {
+      const normalizedTextSearch = normalizeSearchToken(rawValue);
+      if (normalizedTextSearch) {
+         setSearchTerm(rawValue.trim());
+      }
+      const textMatch = normalizedTextSearch
+         ? salesCatalogProductEntries.find((entry) => {
+            const allowedCategory = effectiveAllowedCategorySet.size === 0 || effectiveAllowedCategorySet.has(entry.normalizedCategory);
+            return entry.searchText.includes(normalizedTextSearch) && allowedCategory && entry.isSellable && entry.hasActiveTariff;
+         })
+         : null;
+
+      if (textMatch?.product || filteredProducts.length > 0) {
+         setErrorToast(null);
+         focusTarget?.current?.focus();
+         return true;
+      }
+
+      return Boolean(normalizedTextSearch);
+   }, [salesCatalogProductEntries, effectiveAllowedCategorySet, filteredProducts, handleProductClick]);
+
+   submitProductTextSearchRef.current = submitProductTextSearch;
 
    const handleRetailSearchSubmit = useCallback((rawTerm?: string) => {
       const trimmed = (rawTerm ?? searchTerm ?? '').trim();
@@ -3150,11 +3770,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return;
       }
 
-      if (filteredProducts.length === 1) {
-         handleProductClick(filteredProducts[0]);
-         setSearchTerm('');
-         setErrorToast(null);
-         retailSearchInputRef.current?.focus();
+      if (submitProductTextSearch(trimmed, retailSearchInputRef)) {
          return;
       }
 
@@ -3164,7 +3780,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       retailSearchInputRef.current?.focus();
-   }, [searchTerm, findProductByAnyCode, addToCart, isReturnMode, filteredProducts, handleProductClick]);
+   }, [searchTerm, findProductByAnyCode, addToCart, isReturnMode, filteredProducts, submitProductTextSearch]);
 
    const categoryOptions = useMemo(() => {
       const allowedCategoryOptions = Array.from(effectiveAllowedCategorySet)
@@ -3174,7 +3790,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }))
          .filter((category) => category.id && category.label);
       const availableProducts = salesCatalogProductEntries.filter((entry) => {
-         if (!entry.isSellable || !entry.hasActiveTariff || !entry.hasErpWarehouse) return false;
+         if (!entry.isSellable || !entry.hasActiveTariff) return false;
          if (effectiveAllowedCategorySet.size > 0) {
             if (!effectiveAllowedCategorySet.has(entry.normalizedCategory)) return false;
          }
@@ -3247,6 +3863,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
    const hasClearableFreshItems = useMemo(
       () => cart.some(item => !isKitchenDispatchedCartItem(item)),
+      [cart]
+   );
+   const hasSubtotalizedCart = useMemo(
+      () => cart.some(item => Boolean(item.subtotalizedAt)),
       [cart]
    );
 
@@ -3378,22 +3998,38 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const reservationBalanceDue = isRecoveredUberOrder
       ? 0
       : Math.max(0, cartTotal - reservationAdvanceApplied);
+   const activeParkedTicket = activeTable?.currentOrderId
+      ? parkedTickets.find(ticket => ticket.id === activeTable.currentOrderId)
+      : undefined;
+   const activePaymentFraction = activeParkedTicket?.paymentFraction;
+   const isCurrentPaymentFraction = isPaymentFractionPlanCurrent(activePaymentFraction, cartTotal);
+   const nextPaymentFractionPart = isCurrentPaymentFraction
+      ? activePaymentFraction?.parts.find(part => part.status === 'PENDING')
+      : undefined;
+   const pendingPaymentFractionCount = isCurrentPaymentFraction
+      ? activePaymentFraction?.parts.filter(part => part.status === 'PENDING').length || 0
+      : 0;
+   const isIntermediateFractionPayment = Boolean(nextPaymentFractionPart && pendingPaymentFractionCount > 1);
    const amountDueNow = activeRecoveredReservation
       ? (isRecoveredUberOrder ? 0 : reservationBalanceDue)
-      : cartTotal;
-   const checkoutActionLabel = !fiscalStatus.hasNCF
+      : nextPaymentFractionPart?.amount ?? cartTotal;
+   const canCheckoutWithFiscalPolicy = isFiscalModeDisabled || fiscalStatus.hasNCF;
+   const checkoutActionLabel = !canCheckoutWithFiscalPolicy
       ? 'Sin Secuencia'
       : isRecoveredUberOrder
          ? 'FACTURAR UBER'
          : activeRecoveredReservation
             ? 'COBRAR SALDO'
-            : 'COBRAR';
+            : nextPaymentFractionPart
+               ? `COBRAR CUOTA ${nextPaymentFractionPart.index} DE ${activePaymentFraction?.count}`
+               : 'COBRAR';
    const editableRecoveredReservation = isRecoveredUberOrder ? null : activeRecoveredReservation;
    const isEditingRecoveredReservation = !!editableRecoveredReservation;
 
    useEffect(() => {
       const orderId = activeTable?.currentOrderId;
       if (!orderId) return;
+      if (closedTableOrderIdsRef.current.has(String(orderId))) return;
       if (cart.length === 0) return;
 
       const existing = parkedTickets.find(ticket => ticket.id === orderId);
@@ -3410,17 +4046,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const syncedTicket: ParkedTicket = {
          id: orderId,
-         name: existing?.name || `Mesa: ${activeTableContext.compactLabel || activeTable.nombre || activeTable.name || orderId}`,
+         name: existing?.name || activeBarTabName || `Mesa: ${activeTableContext.compactLabel || activeTable.nombre || activeTable.name || orderId}`,
          alias: existing?.alias,
          items: [...cart],
          total: cartTotal,
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
+         customerSnapshot: selectedCustomer ? {
+            name: selectedCustomer.name,
+            taxId: selectedCustomer.taxId,
+            address: selectedCustomer.address,
+            phone: selectedCustomer.phone,
+            email: selectedCustomer.email
+         } : undefined,
          timestamp: existing?.timestamp || new Date().toISOString(),
          tableId: activeTable.id,
          orderNumber: readCartOrderNumber(cart) || existing?.orderNumber,
          tableDisplayLabel: activeTableContext.compactLabel || existing?.tableDisplayLabel,
          tableRoomLabel: activeTableContext.roomLabel || existing?.tableRoomLabel,
+         barTabId: existing?.barTabId || activeBarTabId || undefined,
+         barTabName: existing?.barTabName || activeBarTabName || undefined,
       };
 
       const nextTickets = [...parkedTickets.filter(ticket => ticket.id !== orderId), syncedTicket];
@@ -3430,6 +4075,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       const flushTicketSync = () => {
+         if (closedTableOrderIdsRef.current.has(String(orderId))) {
+            ticketAutoSyncFlushRef.current = null;
+            ticketAutoSyncTimeoutRef.current = null;
+            return;
+         }
          onUpdateParkedTickets(nextTickets);
          void Promise.resolve(onTableOrderSaved?.(activeTable, syncedTicket));
          ticketAutoSyncFlushRef.current = null;
@@ -3445,7 +4095,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             ticketAutoSyncTimeoutRef.current = null;
          }
          if (ticketAutoSyncFlushRef.current === flushTicketSync) {
-            flushTicketSync();
+            if (!closedTableOrderIdsRef.current.has(String(orderId))) {
+               flushTicketSync();
+            } else {
+               ticketAutoSyncFlushRef.current = null;
+            }
          }
       };
    }, [
@@ -3455,6 +4109,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       activeTableContext.roomLabel,
       activeTable?.nombre,
       activeTable?.name,
+      activeBarTabId,
+      activeBarTabName,
       cart,
       cartTotal,
       parkedTickets,
@@ -3602,8 +4258,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
 
+   const syncOrderToConfiguredKds = useCallback(async (orderId: string, payload: Record<string, unknown>) => {
+      if (!orderId) return;
+      const configuredAreas = await db.get('productionAreas' as any).catch(() => []) as any;
+      const productionAreas: ProductionAreaConfig[] = Array.isArray(configuredAreas) ? configuredAreas : [];
+      const targets = Array.from(new Set(
+         productionAreas
+            .filter(area => {
+               const mode = normalizeProductionOutputMode(area.modo_salida);
+               return mode === 'KDS' || mode === 'AMBOS';
+            })
+            .map(area => resolveKdsBaseUrl(area, config))
+            .filter((url): url is string => Boolean(url))
+      ));
+
+      await Promise.all(targets.map(async (baseUrl) => {
+         await postJsonWithTimeout(`${baseUrl}/api/ordenes/${encodeURIComponent(orderId)}`, payload);
+      }));
+   }, [config]);
+
    const updateCartItem = async (updatedItem: CartItem | null, cartIdToDelete?: string) => {
       if (blockRecoveredUberOrderMutation('editar el pedido')) return;
+      if (hasSubtotalizedCart) {
+         alert('Este documento ya fue subtotalizado. No se pueden borrar ni editar artículos; realiza una NC con autorización.');
+         return;
+      }
 
       let newCart: CartItem[] = [];
 
@@ -3664,21 +4343,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             onUpdateParkedTickets(updatedTickets);
          }
 
-         // Update KDS
-         try {
-            fetch(`http://localhost:8001/api/ordenes/${ticketId}`, {
-               method: 'PUT',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ items: newCart, total, status: 'OCCUPIED' })
-            });
-         } catch (e) {
-            console.error("Auto-sync delete failed:", e);
-         }
+         void syncOrderToConfiguredKds(String(ticketId || ''), { items: newCart, total, status: 'OCCUPIED' })
+            .catch(error => console.error('Auto-sync KDS failed:', error));
       }
    };
 
    const handleClearFreshCartItems = async () => {
       if (blockRecoveredUberOrderMutation('limpiar los artículos nuevos del ticket')) return;
+      if (hasSubtotalizedCart) {
+         alert('Este documento ya fue subtotalizado. No se pueden borrar artículos; realiza una NC con autorización.');
+         return;
+      }
       if (cart.length === 0) return;
 
       const freshItems = cart.filter(item => !isKitchenDispatchedCartItem(item));
@@ -3721,11 +4396,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             await Promise.resolve(onUpdateParkedTickets(updatedTickets));
 
             try {
-               fetch(`http://localhost:8001/api/ordenes/${ticketId}`, {
-                  method: 'PUT',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ items: dispatchedItems, total, status: 'OCCUPIED' })
-               });
+               await syncOrderToConfiguredKds(String(ticketId), { items: dispatchedItems, total, status: 'OCCUPIED' });
             } catch (e) {
                console.error('Auto-sync clear failed:', e);
             }
@@ -3838,8 +4509,59 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       };
 
       try {
+         const fractionPlan = activeParkedTicket?.paymentFraction;
+         const currentFractionPart = isPaymentFractionPlanCurrent(fractionPlan, cartTotal)
+            ? fractionPlan?.parts.find(part => part.status === 'PENDING')
+            : undefined;
+         const pendingFractionParts = fractionPlan?.parts.filter(part => part.status === 'PENDING') || [];
+
+         if (currentFractionPart && pendingFractionParts.length > 1) {
+            const paidAt = new Date().toISOString();
+            const nextPlan = {
+               ...fractionPlan!,
+               parts: fractionPlan!.parts.map(part => part.index === currentFractionPart.index ? {
+                  ...part,
+                  status: 'PAID' as const,
+                  payments,
+                  voluntaryTip: voluntaryTip || 0,
+                  paidAt
+               } : part)
+            };
+            const nextTickets = parkedTickets.map(ticket => ticket.id === activeParkedTicket?.id ? {
+               ...ticket,
+               paymentFraction: nextPlan
+            } : ticket);
+            await Promise.resolve(onUpdateParkedTickets(nextTickets));
+
+            return {
+               id: `fraction-${activeParkedTicket?.id}-${currentFractionPart.index}-${Date.now()}`,
+               documentType: 'TICKET',
+               date: paidAt,
+               items: [],
+               total: currentFractionPart.amount,
+               payments,
+               userId: currentUser.id,
+               userName: currentUser.name,
+               terminalId: activeTerminalId,
+               status: 'PENDING',
+               customerId: effectiveSelectedCustomer?.id,
+               customerName: effectiveSelectedCustomer?.name,
+               observations: `Cuota ${currentFractionPart.index} de ${fractionPlan?.count}`
+            };
+         }
+
+         if (currentFractionPart && pendingFractionParts.length === 1) {
+            const priorParts = fractionPlan?.parts.filter(part => part.status === 'PAID') || [];
+            payments = [
+               ...priorParts.flatMap(part => part.payments || []),
+               ...payments
+            ];
+            voluntaryTip = priorParts.reduce((sum, part) => sum + Number(part.voluntaryTip || 0), 0) + Number(voluntaryTip || 0);
+         }
+
          const terminalId = activeTerminalId || 't1';
          const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, activeTerminalConfig);
+         const isFiscalModeDisabledForCheckout = fiscalCompliance.mode === 'NONE';
          const uberRecoveredOrder = isUberRecoveredReservation(activeRecoveredReservation) ? activeRecoveredReservation : null;
          const customerForCheckout = uberRecoveredOrder ? null : effectiveSelectedCustomer;
          const couponAssignedTo = redeemedCoupon?.assignedTo?.trim();
@@ -3862,8 +4584,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (hasSales && !ensureSalesWithOpenZPermission()) return null;
          const productsById = new Map(products.map(product => [product.id, product] as const));
          const isRefundOnly = hasReturns && !hasSales;
-         const refundSeriesId = activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND';
-         const assignedSequenceId = activeTerminalConfig?.documentAssignments?.['TICKET']!;
+         const refundSeriesId = resolveTerminalDocumentSeriesId(activeTerminalConfig, 'REFUND') || 'REFUND';
+         const assignedSequenceId = resolveTerminalDocumentSeriesId(activeTerminalConfig, 'TICKET')!;
          const normalizedRefundItems = processedCart
             .filter(i => i.quantity < 0)
             .map(item => ({ ...item, quantity: Math.abs(item.quantity) }));
@@ -3871,7 +4593,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          normalizedRefundItems.forEach(item => sellableConditions.set(item.cartId, 'SELLABLE'));
 
          // --- FISCAL COMPLIANCE CHECK (DGII RNC VALIDATION) ---
-         const isCreditFiscalDocument = !isRefundOnly && fiscalStatus && (fiscalStatus.type === 'B01' || fiscalStatus.type === 'E31');
+         const isCreditFiscalDocument = !isFiscalModeDisabledForCheckout && !isRefundOnly && fiscalStatus && (fiscalStatus.type === 'B01' || fiscalStatus.type === 'E31');
          if (isCreditFiscalDocument) {
             const buyerTaxDigits = String(customerForCheckout?.taxId || '').replace(/\D/g, '');
             const hasValidBuyerTaxId = buyerTaxDigits.length === 9 || buyerTaxDigits.length === 11;
@@ -3924,7 +4646,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          let finalNcf: string | undefined;
          let finalNcfType: FiscalDocumentCode | undefined;
 
-         if (isRefundOnly) {
+         if (isFiscalModeDisabledForCheckout) {
+            finalNcf = undefined;
+            finalNcfType = undefined;
+         } else if (isRefundOnly) {
             try {
                finalNcf = await withTimeout(
                   db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50),
@@ -4020,7 +4745,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
                let refundNcf: string | undefined;
 
-               if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+               if (!isFiscalModeDisabledForCheckout && Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
                   try {
                      refundNcf = await withTimeout(
                         db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50),
@@ -4052,11 +4777,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         customerId: customerForCheckout?.id,
                         customerName: customerForCheckout?.name,
                         ncf: finalNcf,
-                        ncfType: fiscalStatus.type,
-                        legacyNcf: fiscalStatus.type.startsWith('E') ? undefined : finalNcf,
-                        electronicNcf: fiscalStatus.type.startsWith('E') ? finalNcf : undefined,
+                        ncfType: finalNcfType,
+                        legacyNcf: finalNcfType?.startsWith('E') ? undefined : finalNcf,
+                        electronicNcf: finalNcfType?.startsWith('E') ? finalNcf : undefined,
                         fiscalMode: fiscalCompliance.mode,
-                        fiscalProvider: fiscalStatus.type.startsWith('E') ? getDefaultFiscalProvider(config, activeTerminalConfig) : 'NONE',
+                        fiscalProvider: finalNcfType?.startsWith('E') ? getDefaultFiscalProvider(config, activeTerminalConfig) : 'NONE',
                         taxAmount: saleTaxAmount,
                         netAmount: saleNetAmount,
                         pendingBalance: creditAmount || undefined,
@@ -4307,31 +5032,49 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                // --- CRITICAL: Ticket Closing Logic ---
                if (activeTable) {
                   try {
-                     // 1. Free table in the main API so status/currentOrderId are reset.
-                     const controller = new AbortController();
-                     const timeoutId = window.setTimeout(() => controller.abort(), 4000);
-                     try {
-                        const releaseRes = await fetch('/api/mesas/liberar', {
-                           method: 'POST',
-                           headers: { 'Content-Type': 'application/json' },
-                           body: JSON.stringify({ tableId: activeTable.id }),
-                           signal: controller.signal
-                        });
-                        if (!releaseRes.ok) {
-                           throw new Error(`HTTP ${releaseRes.status}`);
-                        }
-                        const releaseData = await releaseRes.json().catch(() => null);
-                        if (releaseData && releaseData.success === false) {
-                           throw new Error(releaseData.message || 'No se pudo liberar la mesa');
-                        }
-                     } finally {
-                        window.clearTimeout(timeoutId);
+                     const closedOrderId = String(activeTable.currentOrderId || '').trim();
+                     const activeTableId = String(activeTable.id ?? '').trim();
+                     const activeBarTabId = String((activeTable as any).activeBarTabId || (activeTable as any).barTabId || '').trim();
+                     [closedOrderId, activeBarTabId].filter(Boolean).forEach(id => closedTableOrderIdsRef.current.add(id));
+                     if (ticketAutoSyncTimeoutRef.current) {
+                        window.clearTimeout(ticketAutoSyncTimeoutRef.current);
+                        ticketAutoSyncTimeoutRef.current = null;
                      }
+                     ticketAutoSyncFlushRef.current = null;
+                     const remaining = (Array.isArray(parkedTickets) ? parkedTickets : []).filter(p => {
+                        const ticketId = String(p.id || '').trim();
+                        const ticketBarTabId = String((p as any).barTabId || '').trim();
+                        const isClosedOrder = closedOrderId && ticketId === closedOrderId;
+                        const isClosedBarTab = activeBarTabId && (ticketId === activeBarTabId || ticketBarTabId === activeBarTabId);
+                        return !isClosedOrder && !isClosedBarTab;
+                     });
+                     await Promise.resolve(onUpdateParkedTickets(remaining));
 
-                     // 2. Remove from Parked Tickets (Local Persistence)
-                     if (activeTable.currentOrderId) {
-                        const remaining = parkedTickets.filter(p => p.id !== activeTable.currentOrderId);
-                        onUpdateParkedTickets(remaining);
+                     const hasOtherTableAccounts = remaining.some(ticket => (
+                        String(ticket.tableId ?? '') === activeTableId
+                     ));
+                     await Promise.resolve(onTableOrderClosed?.(activeTable, activeTable.currentOrderId, remaining));
+                     if (!hasOtherTableAccounts) {
+                        // 1. Free table in the main API so status/currentOrderId are reset.
+                        const controller = new AbortController();
+                        const timeoutId = window.setTimeout(() => controller.abort(), 4000);
+                        try {
+                           const releaseRes = await fetch(resolveOperationalApiUrl('/api/mesas/liberar'), {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ tableId: activeTable.id }),
+                              signal: controller.signal
+                           });
+                           if (!releaseRes.ok) {
+                              throw new Error(`HTTP ${releaseRes.status}`);
+                           }
+                           const releaseData = await releaseRes.json().catch(() => null);
+                           if (releaseData && releaseData.success === false) {
+                              throw new Error(releaseData.message || 'No se pudo liberar la mesa');
+                           }
+                        } finally {
+                           window.clearTimeout(timeoutId);
+                        }
                      }
                   } catch (e) {
                      console.error("Failed to free table:", e);
@@ -4352,6 +5095,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                setIsReturnMode(false);
                setRefundAuthorizedBy(null);
                setActiveRecoveredReservation(null);
+               if (activeTable && onOpenTableMap) {
+                  onOpenTableMap();
+               }
                return txn;
             }
          } catch (error: any) {
@@ -4372,6 +5118,36 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const baseName = activeTable?.name || activeTable?.nombre || 'Mesa';
       const now = Date.now();
       const splitGroups = [newTicketItems, ...extraNewTickets].filter(items => items.length > 0);
+      const customerSnapshot = selectedCustomer ? {
+         name: selectedCustomer.name,
+         taxId: selectedCustomer.taxId,
+         address: selectedCustomer.address,
+         phone: selectedCustomer.phone,
+         email: selectedCustomer.email
+      } : undefined;
+      const originalOrderId = activeTable?.currentOrderId;
+      const existingOriginal = originalOrderId
+         ? parkedTickets.find(ticket => ticket.id === originalOrderId)
+         : undefined;
+      const remainingTotal = remainingItems.reduce((acc, item) => acc + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
+      const remainingTicket: ParkedTicket | null = originalOrderId && remainingItems.length > 0 ? {
+         ...(existingOriginal || {}),
+         id: originalOrderId,
+         name: existingOriginal?.name || `${baseName} - Cuenta 1/${splitCount}`,
+         alias: existingOriginal?.alias,
+         tableId: activeTable?.id || existingOriginal?.tableId,
+         items: remainingItems,
+         total: remainingTotal,
+         customerId: selectedCustomer?.id || existingOriginal?.customerId,
+         customerName: selectedCustomer?.name || existingOriginal?.customerName,
+         customerSnapshot: customerSnapshot || existingOriginal?.customerSnapshot,
+         timestamp: existingOriginal?.timestamp || new Date().toISOString(),
+         orderNumber: readCartOrderNumber(remainingItems) || existingOriginal?.orderNumber,
+         tableDisplayLabel: activeTableContext.compactLabel || existingOriginal?.tableDisplayLabel,
+         tableRoomLabel: activeTableContext.roomLabel || existingOriginal?.tableRoomLabel,
+         barTabId: existingOriginal?.barTabId || activeBarTabId || undefined,
+         barTabName: existingOriginal?.barTabName || activeBarTabName || undefined,
+      } : null;
       const newTickets: ParkedTicket[] = splitGroups.map((items, index) => ({
          id: `split-${now}-${index + 2}`,
          tableId: activeTable?.id || 'manual',
@@ -4379,20 +5155,51 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          alias: `${baseName} - Cuenta ${index + 2}/${splitCount}`,
          items,
          total: items.reduce((acc, item) => acc + (Number(item.price || 0) * Number(item.quantity || 0)), 0),
+         customerId: selectedCustomer?.id,
+         customerName: selectedCustomer?.name,
+         customerSnapshot,
+         tableDisplayLabel: activeTableContext.compactLabel || undefined,
+         tableRoomLabel: activeTableContext.roomLabel || undefined,
+         barTabId: activeBarTabId || undefined,
+         barTabName: activeBarTabName || undefined,
          timestamp: new Date().toISOString()
       }));
 
-      onUpdateParkedTickets([...parkedTickets, ...newTickets]);
+      const nextTickets = [
+         ...parkedTickets.filter(ticket => ticket.id !== originalOrderId),
+         ...(remainingTicket ? [remainingTicket] : []),
+         ...newTickets
+      ];
+      onUpdateParkedTickets(nextTickets);
+      if (activeTable && remainingTicket) {
+         void Promise.resolve(onTableOrderSaved?.(activeTable, remainingTicket));
+      }
       setShowSplitModal(false);
       setSuccessToast(`Cuenta dividida en ${splitCount}: cuentas guardadas en Tickets en Espera`);
    };
 
-   const proceedToCheckout = () => {
+   const proceedToCheckout = async () => {
       const hasSaleLines = cart.some(item => Number(item.quantity || 0) > 0);
       if (hasSaleLines && !ensureSalesWithOpenZPermission()) return;
+      if (activePaymentFraction && !isCurrentPaymentFraction) {
+         alert('El total de la cuenta cambió después de fraccionarla. Vuelva a usar Fraccionar antes de cobrar.');
+         return;
+      }
+      if (!canCheckout) {
+         const authorized = await requestApproval({
+            permission: 'POS_CHECKOUT',
+            actionDescription: 'Autorizar Cobro / Finalizar Venta',
+            context: { originalValue: amountDueNow }
+         });
+         if (!authorized) {
+            setErrorToast('Tu rol no permite cobrar. Solicita intervención de supervisor.');
+            window.setTimeout(() => setErrorToast(null), 3500);
+            return;
+         }
+      }
 
       const threshold = activeTerminalConfig?.operational?.fiscalThreshold || 0;
-      if (threshold > 0 && cartTotal > threshold && !selectedCustomer) {
+      if (!isFiscalModeDisabled && threshold > 0 && cartTotal > threshold && !selectedCustomer) {
          alert(`ATENCIÓN: El monto de la venta (${baseCurrency.symbol}${cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) excede el umbral fiscal permitido para facturas de consumo (${baseCurrency.symbol}${threshold.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}).\n\nEs obligatorio identificar al cliente y emitir una Factura de Crédito Fiscal (B01).`);
          onOpenCustomers();
          return;
@@ -4466,6 +5273,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          let sentKdsCount = 0;
          let queuedKdsCount = 0;
          const dispatchedCartIds = new Set<string>();
+         const queuedCartIds = new Set<string>();
+         const sentCartIds = new Set<string>();
          const activeTableRoom = activeTable?.roomId ? rooms?.find(room => room.id === activeTable.roomId) : undefined;
          const kdsTablePayload = activeTable ? {
             id: activeTable.id,
@@ -4478,23 +5287,36 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          // 2. Print and/or send to KDS per configured area.
          for (const [areaId, areaData] of Object.entries(areas)) {
-            const mode = normalizeProductionMode(areaData.area.modo_salida);
-            const shouldPrint = mode === 'PRINTER' || mode === 'AMBOS';
-            const shouldSendKds = mode === 'KDS' || mode === 'AMBOS';
+            const { mode, shouldPrint, shouldSendKds } = resolveProductionOutputTargets(areaData.area.modo_salida);
 
             if (shouldPrint) {
-               const printed = await printComanda(config, {
-                  items: areaData.items,
-                  table: activeTable
-                     ? ({ ...activeTable, tableDisplayLabel: activeTableContext.compactLabel } as any)
-                     : undefined,
-                  orderNumber,
-                  customerName: selectedCustomer?.name,
-                  areaTitle: areaData.title,
-                  productionAreaId: areaId,
-                  printerId: areaData.area.printer_id || areaData.area.printerId
-               });
-               if (printed) printedCount += 1;
+               try {
+                  const printed = await printComanda(config, {
+                     items: areaData.items,
+                     table: activeTable
+                        ? ({ ...activeTable, tableDisplayLabel: activeTableContext.compactLabel } as any)
+                        : undefined,
+                     orderNumber,
+                     customerName: selectedCustomer?.name,
+                     areaTitle: areaData.title,
+                     productionAreaId: areaId,
+                     printerId: areaData.area.printer_id || areaData.area.printerId
+                  });
+                  if (printed) {
+                     printedCount += 1;
+                  } else {
+                     console.warn('[PRODUCTION] La impresora no confirmó la comanda; se continuará con las demás salidas.', {
+                        areaId,
+                        mode,
+                     });
+                  }
+               } catch (printError) {
+                  console.error('[PRODUCTION] Falló la impresión de comanda; se continuará con KDS.', {
+                     areaId,
+                     mode,
+                     error: printError,
+                  });
+               }
             }
 
             if (shouldSendKds) {
@@ -4512,6 +5334,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   orderNumber,
                   date: new Date().toISOString(),
                   terminalId: activeTerminalId,
+                  sourceTerminal: {
+                     id: activeTerminalId,
+                     code: activeTerminalConfig?.stationNumber || activeTerminalConfig?.erpBinding?.stationNumber || terminalDisplayLabel,
+                     name: activeTerminalConfig?.terminalName || activeTerminalConfig?.erpBinding?.terminalName || terminalDisplayLabel,
+                  },
                   userName: currentUser.name,
                   customerName: selectedCustomer?.name || 'Cliente General',
                   table: kdsTablePayload,
@@ -4519,6 +5346,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      id: areaId,
                      name: areaData.title,
                      targetTerminalId: areaData.area.target_terminal_id || null,
+                     targetTerminalName: areaData.area.target_terminal_name || areaData.title,
                      warningMinutes,
                      criticalMinutes,
                   },
@@ -4532,10 +5360,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                if (!kdsBaseUrl) {
                   queuedKdsCount += 1;
+                  areaData.items.forEach(item => queuedCartIds.add(getCartDispatchKey(item)));
                   await queuePendingKdsDispatch({
                      reason: 'KDS_HOST_NOT_CONFIGURED',
+                     orderId,
                      areaId,
                      areaName: areaData.title,
+                     cartIds: areaData.items.map(getCartDispatchKey),
                      payload: kdsPayload,
                   });
                } else {
@@ -4547,6 +5378,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         displayId: displayOrderRef,
                         orderNumber,
                         terminalId: activeTerminalId,
+                        sourceTerminal: kdsPayload.sourceTerminal,
                         userName: currentUser.name,
                         customerName: selectedCustomer?.name || 'Cliente General',
                         table: kdsTablePayload,
@@ -4556,14 +5388,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      const endpoint = `${kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(orderId)}`;
                      await postJsonWithTimeout(endpoint, kdsPayload);
                      sentKdsCount += 1;
+                     areaData.items.forEach(item => sentCartIds.add(getCartDispatchKey(item)));
                   } catch (kdsError: any) {
                      queuedKdsCount += 1;
+                     areaData.items.forEach(item => queuedCartIds.add(getCartDispatchKey(item)));
                      console.warn('[KDS] No se pudo enviar comanda al KDS LAN:', kdsError);
                      await queuePendingKdsDispatch({
                         reason: kdsError?.message || 'KDS_UNREACHABLE',
                         kdsBaseUrl,
+                        orderId,
                         areaId,
                         areaName: areaData.title,
+                        cartIds: areaData.items.map(getCartDispatchKey),
                         payload: kdsPayload,
                      });
                   }
@@ -4591,7 +5427,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                ...(activeTableContext.compactLabel ? { tableDisplayLabel: activeTableContext.compactLabel } : {}),
                ...(activeTableContext.roomLabel ? { tableRoomLabel: activeTableContext.roomLabel } : {}),
                dispatched: true,
-               kdsStatus: 'ENVIADO',
+               kdsStatus: queuedCartIds.has(key) && !sentCartIds.has(key) ? 'PENDIENTE' : 'ENVIADO',
+               ...(queuedCartIds.has(key) && !sentCartIds.has(key) ? { kdsQueuedAt: new Date().toISOString() } : {}),
                kdsOrderId: dispatchMeta?.orderId,
                kdsAreaId: dispatchMeta?.areaId,
                kdsItemIds: dispatchMeta?.itemIds,
@@ -4708,7 +5545,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const handlePrintPrecuenta = async () => {
       if (cart.length === 0) return;
-      setSuccessToast('Generando Precuenta...');
+      setSuccessToast('Generando subtotal...');
       try {
          const printed = await printPrecuenta(config, {
             items: processedCart.filter(item => Number(item.quantity || 0) > 0),
@@ -4724,7 +5561,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          });
 
          if (printed) {
-            setSuccessToast('Precuenta enviada a impresora');
+            const subtotalizedAt = new Date().toISOString();
+            const nextCart = cart.map(item => ({
+               ...item,
+               subtotalizedAt: item.subtotalizedAt || subtotalizedAt,
+               subtotalizedBy: item.subtotalizedBy || currentUser?.id || currentUser?.name || 'POS'
+            }));
+            onUpdateCart(nextCart);
+            setSuccessToast('Subtotal enviado a impresora. Documento bloqueado para edición.');
             return;
          }
 
@@ -4770,8 +5614,28 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const tableToRelease = activeTable;
 
       if (tableToRelease.currentOrderId) {
-         const remaining = parkedTickets.filter(p => p.id !== tableToRelease.currentOrderId);
+         const releasedOrderId = String(tableToRelease.currentOrderId);
+         const releasedTableId = String(tableToRelease.id ?? '');
+         const remaining = parkedTickets.filter(p => {
+            const isReleasedOrder = String(p.id) === releasedOrderId;
+            return !isReleasedOrder;
+         });
          await Promise.resolve(onUpdateParkedTickets(remaining));
+         await Promise.resolve(onTableOrderClosed?.(tableToRelease, tableToRelease.currentOrderId, remaining));
+         if (remaining.some(ticket => String(ticket.tableId ?? '') === releasedTableId)) {
+            onUpdateCart([]);
+            onSelectCustomer(null);
+            setActiveRecoveredReservation(null);
+            if (onClearActiveTable) onClearActiveTable();
+            if (!options.silent) {
+               setSuccessToast(tableToRelease.shape === 'BAR'
+                  ? 'Minuta liberada. La barra sigue abierta.'
+                  : 'Cuenta liberada. La mesa conserva cuentas pendientes.');
+            }
+            return true;
+         }
+      } else {
+         await Promise.resolve(onTableOrderClosed?.(tableToRelease, undefined, parkedTickets));
       }
 
       onUpdateCart([]);
@@ -4786,7 +5650,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const controller = new AbortController();
          const timeoutId = window.setTimeout(() => controller.abort(), 2500);
          try {
-            const releaseRes = await fetch('/api/mesas/liberar', {
+            const releaseRes = await fetch(resolveOperationalApiUrl('/api/mesas/liberar'), {
                method: 'POST',
                headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ tableId: tableToRelease.id }),
@@ -4825,11 +5689,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          total: ticketTotal,
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
+         customerSnapshot: selectedCustomer ? {
+            name: selectedCustomer.name,
+            taxId: selectedCustomer.taxId,
+            address: selectedCustomer.address,
+            phone: selectedCustomer.phone,
+            email: selectedCustomer.email
+         } : undefined,
          timestamp: existingParked?.timestamp || new Date().toISOString(),
          tableId: activeTable?.id || existingParked?.tableId,
          orderNumber: readCartOrderNumber(ticketItems) || existingParked?.orderNumber,
          tableDisplayLabel: activeTableContext.compactLabel || existingParked?.tableDisplayLabel,
          tableRoomLabel: activeTableContext.roomLabel || existingParked?.tableRoomLabel,
+         barTabId: existingParked?.barTabId || activeBarTabId || undefined,
+         barTabName: existingParked?.barTabName || activeBarTabName || undefined,
       };
 
       // Remove existing if updating same ID
@@ -4842,15 +5715,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          try {
             const total = ticketItems.reduce((sum, i) => sum + (i.price * i.quantity), 0);
 
-            // Sync with KDS backend
-            await fetch(`http://localhost:8001/api/ordenes/${newParked.id}`, {
-               method: 'PUT',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({
-                  items: ticketItems,
-                  total: total,
-                  status: 'OCCUPIED'
-               })
+            await syncOrderToConfiguredKds(newParked.id, {
+               items: ticketItems,
+               total,
+               status: 'OCCUPIED'
             });
 
             if (onClearActiveTable) onClearActiveTable();
@@ -4880,17 +5748,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const tableName = activeTable.nombre || activeTable.name || 'Mesa';
       const tableOrder: ParkedTicket = {
          id: parkedTicketId,
-         name: existingParked?.name || `Mesa: ${activeTableContext.compactLabel || tableName}`,
+         name: existingParked?.name || activeBarTabName || `Mesa: ${activeTableContext.compactLabel || tableName}`,
          alias: existingParked?.alias,
          items: [...cart],
          total: cartTotal,
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
+         customerSnapshot: selectedCustomer ? {
+            name: selectedCustomer.name,
+            taxId: selectedCustomer.taxId,
+            address: selectedCustomer.address,
+            phone: selectedCustomer.phone,
+            email: selectedCustomer.email
+         } : undefined,
          timestamp: existingParked?.timestamp || new Date().toISOString(),
          tableId: activeTable.id,
          orderNumber: readCartOrderNumber(cart) || existingParked?.orderNumber,
          tableDisplayLabel: activeTableContext.compactLabel || existingParked?.tableDisplayLabel,
          tableRoomLabel: activeTableContext.roomLabel || existingParked?.tableRoomLabel,
+         barTabId: existingParked?.barTabId || activeBarTabId || undefined,
+         barTabName: existingParked?.barTabName || activeBarTabName || undefined,
       };
 
       const updatedTickets = [
@@ -4907,14 +5784,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       void (async () => {
          try {
-            await fetch(`http://localhost:8001/api/ordenes/${tableOrder.id}`, {
-               method: 'PUT',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({
-                  items: tableOrder.items,
-                  total: tableOrder.total,
-                  status: 'OCCUPIED'
-               })
+            await syncOrderToConfiguredKds(tableOrder.id, {
+               items: tableOrder.items,
+               total: tableOrder.total,
+               status: 'OCCUPIED'
             });
          } catch (error) {
             console.warn('No se pudo sincronizar la mesa con cocina al volver al mapa:', error);
@@ -5015,7 +5888,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, activeTerminalConfig);
       const creditNoteFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
-      const creditNoteNcf = await db.getNextNCF(creditNoteFiscalType, terminalId, 50);
+      const creditNoteNcf = fiscalCompliance.mode === 'NONE'
+         ? undefined
+         : await db.getNextNCF(creditNoteFiscalType, terminalId, 50);
 
       // 2. Create Refund Transaction
       const refundTxn = await transactionService.createTransaction({
@@ -5040,7 +5915,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          affectedNCF: originalTransaction.ncf,
          affectedInvoiceNumber: originalTransaction.displayId || originalTransaction.id,
          ncf: creditNoteNcf,
-         ncfType: creditNoteFiscalType,
+         ncfType: creditNoteNcf ? creditNoteFiscalType : undefined,
          refundReason: 'Smart QR Return',
          isTaxIncluded: originalTransaction.isTaxIncluded
       });
@@ -5091,7 +5966,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (blockRecoveredUberOrderMutation('aplicar cupones')) return;
             setShowCouponModal(true);
             break;
-         case 'PARK_LIST': setShowParkedList((prev: any) => !prev); break;
+         case 'PARK_LIST':
+            if (activeTable) {
+               setShowParkedList(false);
+               break;
+            }
+            setShowParkedList((prev: any) => !prev);
+            break;
          case 'RESERVATION': openReservationModal(); break;
          case 'RECOVER_RESERVATION': openRecoverReservationModal(); break;
          case 'RETURN':
@@ -5108,14 +5989,44 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             setIsReturnMode(!isReturnMode);
             break;
          case 'Z_REPORT':
+            if (!canCloseZReport) {
+               alert('No tienes permiso para realizar Cierre Z.');
+               return;
+            }
             triggerSafetyGate('Cierre Z', onOpenZReport || onOpenFinance);
             break;
          case 'LOGOUT':
             triggerSafetyGate('Cerrar Sesión', onLogout);
             break;
+         case 'EXIT_APP':
+            if (onExitApplication) {
+               onExitApplication();
+            } else {
+               triggerSafetyGate('Cerrar Sesión', onLogout);
+            }
+            break;
          case 'SETTINGS': if (onOpenSettings) onOpenSettings(); break;
+         case 'ATTENDANCE': onOpenAttendance(); break;
          case 'TRACKING': if (onOpenInventoryTracking) onOpenInventoryTracking(); break;
          case 'DRAWER': handleOpenDrawer(); break;
+         case 'CASH_IN':
+            if (!canRegisterCashMovement) {
+               alert('No tienes permiso para registrar entradas de efectivo.');
+               break;
+            }
+            setCashMovementModalType('IN');
+            setCashMovementAmount('');
+            setCashMovementReason('');
+            break;
+         case 'CASH_OUT':
+            if (!canRegisterCashMovement) {
+               alert('No tienes permiso para registrar salidas de efectivo.');
+               break;
+            }
+            setCashMovementModalType('OUT');
+            setCashMovementAmount('');
+            setCashMovementReason('');
+            break;
          case 'SAVE': openParkAliasModal(); break;
          case 'TABLES':
             if (!showTableMapButton) break;
@@ -5130,6 +6041,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
+   const closeCashMovementModal = () => {
+      setCashMovementModalType(null);
+      setCashMovementAmount('');
+      setCashMovementReason('');
+      setIsSavingCashMovement(false);
+   };
+
+   const confirmCashMovement = async () => {
+      if (!cashMovementModalType || !onRegisterCashMovement) return;
+      const amount = Number(cashMovementAmount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+         alert('Ingresa un monto válido.');
+         return;
+      }
+      setIsSavingCashMovement(true);
+      try {
+         await onRegisterCashMovement(cashMovementModalType, amount, cashMovementReason.trim() || 'Movimiento General');
+         setSuccessToast(`${cashMovementModalType === 'IN' ? 'Entrada' : 'Salida'} de efectivo registrada`);
+         closeCashMovementModal();
+      } catch (error: any) {
+         alert(`No se pudo registrar el movimiento: ${error?.message || 'Error desconocido'}`);
+         setIsSavingCashMovement(false);
+      }
+   };
+
    return (
       <div
          ref={posRootRef}
@@ -5141,6 +6077,85 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                <div className="bg-red-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border-2 border-red-400">
                   <AlertTriangle size={24} className="animate-pulse" />
                   <span>{errorToast}</span>
+               </div>
+            </div>
+         )}
+
+         {cashMovementModalType && (
+            <div className="fixed inset-0 z-[130] flex items-start justify-center overflow-y-auto bg-black/50 px-4 pb-8 pt-[7vh] backdrop-blur-sm sm:items-center sm:pt-4">
+               <div className="w-full max-w-md rounded-[2rem] bg-white p-6 shadow-2xl animate-in zoom-in-95 slide-in-from-bottom-6 duration-300">
+                  <div className="mb-5 flex items-center justify-between">
+                     <div>
+                        <p className={`text-[10px] font-black uppercase tracking-[0.22em] ${cashMovementModalType === 'IN' ? 'text-emerald-500' : 'text-red-500'}`}>
+                           Caja y efectivo
+                        </p>
+                        <h2 className="text-2xl font-black text-slate-900">
+                           {cashMovementModalType === 'IN' ? 'Entrada de efectivo' : 'Salida de efectivo'}
+                        </h2>
+                     </div>
+                     <button type="button" onClick={closeCashMovementModal} className="rounded-full bg-slate-100 p-2 text-slate-500 hover:bg-slate-200">
+                        <X size={20} />
+                     </button>
+                  </div>
+
+                  <label className="mb-4 block">
+                     <span className="mb-2 block text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">Monto</span>
+                     <div className="flex items-center rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <span className="mr-2 text-xl font-black text-slate-400">{config.currencySymbol}</span>
+                        <input
+                           autoFocus
+                           type="number"
+                           min="0"
+                           step="0.01"
+                           value={cashMovementAmount}
+                           onChange={(event) => setCashMovementAmount(event.target.value)}
+                           className="w-full bg-transparent text-4xl font-black text-slate-900 outline-none"
+                           placeholder="0.00"
+                        />
+                     </div>
+                  </label>
+
+                  <div className="mb-5 flex flex-wrap gap-2">
+                     {(cashMovementModalType === 'IN'
+                        ? ['Fondo inicial', 'Cambio', 'Aporte caja', 'Otro ingreso']
+                        : ['Gasto', 'Pago proveedor', 'Retiro', 'Otro egreso']
+                     ).map((reason) => (
+                        <button
+                           key={reason}
+                           type="button"
+                           onClick={() => setCashMovementReason(reason)}
+                           className={`rounded-full border px-3 py-2 text-xs font-black transition-all ${cashMovementReason === reason
+                              ? cashMovementModalType === 'IN'
+                                 ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                                 : 'border-red-500 bg-red-50 text-red-700'
+                              : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
+                              }`}
+                        >
+                           {reason}
+                        </button>
+                     ))}
+                  </div>
+
+                  <label className="mb-6 block">
+                     <span className="mb-2 block text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">Razón / nota</span>
+                     <input
+                        type="text"
+                        value={cashMovementReason}
+                        onChange={(event) => setCashMovementReason(event.target.value)}
+                        className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:border-slate-400"
+                        placeholder="Ej: compra de hielo, cambio inicial..."
+                     />
+                  </label>
+
+                  <button
+                     type="button"
+                     disabled={isSavingCashMovement}
+                     onClick={confirmCashMovement}
+                     className={`flex w-full items-center justify-center gap-2 rounded-2xl py-4 text-lg font-black text-white shadow-lg transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-60 ${cashMovementModalType === 'IN' ? 'bg-emerald-600 shadow-emerald-100 hover:bg-emerald-700' : 'bg-red-600 shadow-red-100 hover:bg-red-700'}`}
+                  >
+                     {cashMovementModalType === 'IN' ? <Plus size={22} /> : <Minus size={22} />}
+                     {isSavingCashMovement ? 'Guardando...' : `Confirmar ${cashMovementModalType === 'IN' ? 'entrada' : 'salida'}`}
+                  </button>
                </div>
             </div>
          )}
@@ -5286,15 +6301,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
 
 
-               <div className="w-full md:flex-1 flex flex-wrap md:flex-nowrap items-center gap-2 md:gap-4 md:min-w-0">
-                  <div className="relative shrink-0 ml-auto md:ml-0 order-1" ref={tariffSelectorRef}>
+               <div className="w-full md:flex-1 flex flex-nowrap items-center gap-2 md:gap-3 md:min-w-0">
+                  <div className="relative shrink-0 ml-auto order-2 md:order-3" ref={tariffSelectorRef}>
                      <button
                         type="button"
                         onClick={() => {
                            if (!canChangeTariff) return;
                            setShowTariffSelector(!showTariffSelector);
                         }}
-                        className={`flex items-center justify-between gap-2 md:gap-3 min-w-[134px] sm:min-w-[156px] px-3 md:px-5 py-2.5 md:py-3 rounded-2xl border-2 transition-all ${showTariffSelector ? 'border-purple-500 bg-purple-50' : 'bg-purple-50/80 border-purple-100'} ${canChangeTariff ? 'hover:border-purple-300' : 'opacity-75 cursor-not-allowed'}`}
+                        className={`flex h-12 items-center justify-between gap-2 md:gap-3 min-w-[150px] md:min-w-[180px] px-3 md:px-4 rounded-2xl border-2 transition-all ${showTariffSelector ? 'border-purple-500 bg-purple-50' : 'bg-purple-50/80 border-purple-100'} ${canChangeTariff ? 'hover:border-purple-300' : 'opacity-75 cursor-not-allowed'}`}
                         disabled={!canChangeTariff}
                         title={canChangeTariff ? 'Cambiar tarifa activa' : 'Tu rol no tiene permiso para cambiar la tarifa'}
                      >
@@ -5342,16 +6357,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      )}
                   </div>
 
-                  <div className="relative order-3 md:order-none w-full md:flex-1 group min-w-0 md:min-w-[220px]">
+                  <div className="relative order-1 md:order-2 flex-1 group min-w-[140px] md:min-w-[220px] max-w-[620px]">
                      <Search className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                      <input
                         ref={searchInputRef}
                         type="text"
+                        inputMode="search"
+                        enterKeyHint="search"
+                        autoComplete="off"
                         placeholder="Buscar..."
                         value={searchTerm}
+                        onInput={(e) => setSearchTerm(e.currentTarget.value)}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         onKeyDown={handleSearchKeyDown}
-                        className="w-full pl-10 md:pl-12 pr-10 md:pr-4 py-2.5 md:py-3 bg-gray-100 rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
+                        className="w-full h-12 pl-10 md:pl-12 pr-10 md:pr-12 py-0 bg-gray-100 rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
                      />
                      <button onClick={() => setIsScannerOpen(true)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
                   </div>
@@ -5363,7 +6382,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            setShowConsignmentModal(true);
                            setConsignmentError(null);
                         }}
-                        className="order-4 md:order-none inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-cyan-100 bg-cyan-50 text-cyan-700 shadow-sm transition-all hover:border-cyan-200 hover:bg-cyan-100"
+                        className="order-3 md:order-4 inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-cyan-100 bg-cyan-50 text-cyan-700 shadow-sm transition-all hover:border-cyan-200 hover:bg-cyan-100"
                         title="Buscar consignaciones ERP"
                      >
                         <Package size={19} />
@@ -5384,7 +6403,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   />
 
                   {/* MOBILE SETTINGS BUTTON */}
-                  <button onClick={() => onOpenSettings()} className="md:hidden order-2 p-3 bg-gray-100 rounded-xl text-gray-600 hover:bg-gray-200 shrink-0">
+                  <button onClick={() => onOpenSettings()} className="md:hidden order-4 h-12 w-12 bg-gray-100 rounded-2xl text-gray-600 hover:bg-gray-200 shrink-0 flex items-center justify-center">
                      <Settings size={20} />
                   </button>
                </div>
@@ -5395,13 +6414,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                {categoryOptions.map((categoryOption, idx) => {
                   const selectedCategoryKey = categoryFilter === 'ALL' ? 'ALL' : canonicalizeCategory(categoryFilter);
                   const isActiveCategory = selectedCategoryKey === categoryOption.id;
+                  const categoryTone = [
+                     { idle: 'bg-indigo-100 border-indigo-200 text-indigo-800 hover:bg-indigo-200', active: 'bg-indigo-600 border-indigo-600 text-white shadow-indigo-200' },
+                     { idle: 'bg-emerald-100 border-emerald-200 text-emerald-800 hover:bg-emerald-200', active: 'bg-emerald-600 border-emerald-600 text-white shadow-emerald-200' },
+                     { idle: 'bg-rose-100 border-rose-200 text-rose-800 hover:bg-rose-200', active: 'bg-rose-600 border-rose-600 text-white shadow-rose-200' },
+                     { idle: 'bg-orange-100 border-orange-200 text-orange-800 hover:bg-orange-200', active: 'bg-orange-600 border-orange-600 text-white shadow-orange-200' },
+                     { idle: 'bg-sky-100 border-sky-200 text-sky-800 hover:bg-sky-200', active: 'bg-sky-600 border-sky-600 text-white shadow-sky-200' },
+                     { idle: 'bg-amber-100 border-amber-200 text-amber-900 hover:bg-amber-200', active: 'bg-amber-500 border-amber-500 text-slate-950 shadow-amber-200' },
+                  ][idx % 6];
                   return (
                   <button
                      key={categoryOption.id || `cat-${idx}`}
                      onClick={() => setCategoryFilter(categoryOption.id)}
-                     className={`px-6 py-2.5 rounded-full text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap shadow-sm border ${isActiveCategory
-                        ? 'bg-blue-600 border-blue-500 text-white shadow-blue-200 scale-105'
-                        : 'bg-white border-gray-200 text-gray-400 hover:border-blue-300 hover:text-blue-600'
+                     className={`h-[48px] min-w-[116px] px-6 rounded-xl text-[12px] font-black uppercase tracking-[0.1em] transition-all whitespace-nowrap border shadow-sm active:scale-95 ${isActiveCategory
+                        ? `${categoryTone.active} shadow-lg -translate-y-0.5`
+                        : `${categoryTone.idle} hover:-translate-y-0.5 hover:shadow-md`
                         }`}
                   >
                      {categoryOption.label}
@@ -5427,6 +6454,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         isProductWarehouseBlockedForSale={isProductWarehouseBlockedForSale}
                         getTerminalWarehouseName={getTerminalWarehouseName}
                         getProductPrice={getProductPrice}
+                        isProductOutOfStock={isProductOutOfStock}
                         hasPromotionForProduct={hasPromotionForProduct}
                         onProductClick={handleProductCardClick}
                         onOpenPromotion={openProductPromotionSheet}
@@ -5456,17 +6484,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             {!isMobile && isRestaurantMode && (
                <div
                   ref={desktopActionGridRef}
-                  className="flex-none border-t border-gray-200 bg-white px-4 py-3 shadow-[0_-8px_24px_rgba(15,23,42,0.06)]"
+                  className="flex-none border-t border-slate-200 bg-white px-3 py-3 shadow-[0_-8px_24px_rgba(15,23,42,0.06)]"
                >
-                  <div className="grid grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)] gap-4">
-                     <div className="grid grid-cols-[64px_repeat(5,minmax(0,1fr))] gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
-                        <div className="flex items-center justify-center rounded-lg bg-white text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">
+                  <div className="mx-auto grid max-w-[1180px] grid-cols-3 gap-3">
+                     <div className="rounded-2xl border border-blue-200 bg-blue-50/50 p-2 shadow-sm">
+                        <div className="mb-2 rounded-xl bg-blue-600 py-2 text-center text-[10px] font-black uppercase tracking-[0.22em] text-white shadow-sm shadow-blue-600/25">
                            Venta
                         </div>
+                        <div className="grid grid-cols-2 gap-2">
                         <button
                            type="button"
                            onClick={() => handleGridAction('DISCOUNT')}
-                           className={`flex h-12 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-black uppercase tracking-wide transition-all active:scale-95 ${globalDiscount.value > 0 ? 'border-red-200 bg-red-50 text-red-600' : 'border-red-100 bg-red-50 text-red-500 hover:bg-red-100'}`}
+                           className={`flex h-12 items-center justify-center gap-2 rounded-xl border px-3 text-xs font-black uppercase tracking-wide shadow-sm transition-all active:scale-95 ${globalDiscount.value > 0 ? 'border-rose-500 bg-rose-600 text-white shadow-rose-600/25 hover:bg-rose-700' : 'border-blue-500 bg-blue-600 text-white shadow-blue-600/25 hover:bg-blue-700'}`}
                         >
                            <Percent size={16} />
                            <span>Desc %</span>
@@ -5474,7 +6503,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <button
                            type="button"
                            onClick={() => handleGridAction('COUPON')}
-                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-cyan-100 bg-cyan-50 px-3 text-xs font-black uppercase tracking-wide text-cyan-700 transition-all hover:bg-cyan-100 active:scale-95"
+                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-blue-500 bg-blue-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-blue-600/25 transition-all hover:bg-blue-700 active:scale-95"
                         >
                            <Tag size={16} />
                            <span>Cupones</span>
@@ -5482,7 +6511,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <button
                            type="button"
                            onClick={() => handleGridAction('loyalty_card')}
-                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 text-xs font-black uppercase tracking-wide text-blue-700 transition-all hover:bg-blue-100 active:scale-95"
+                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-blue-500 bg-blue-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-blue-600/25 transition-all hover:bg-blue-700 active:scale-95"
                         >
                            <CreditCard size={16} />
                            <span>Tarjeta</span>
@@ -5490,29 +6519,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <button
                            type="button"
                            onClick={() => handleGridAction('SAVE')}
-                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-black uppercase tracking-wide text-slate-700 transition-all hover:bg-slate-100 active:scale-95"
+                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
                         >
                            <Save size={16} />
                            <span>Guardar</span>
                         </button>
-                        <button
-                           type="button"
-                           onClick={onLogout}
-                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-red-100 bg-red-50 px-3 text-xs font-black uppercase tracking-wide text-red-700 transition-all hover:bg-red-100 active:scale-95"
-                        >
-                           <LogOut size={16} />
-                           <span>Salir</span>
-                        </button>
+                        </div>
                      </div>
 
-                     <div className="grid grid-cols-[64px_repeat(3,minmax(0,1fr))] gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
-                        <div className="flex items-center justify-center rounded-lg bg-white text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">
-                           Cuenta
+                     <div className="rounded-2xl border border-orange-200 bg-orange-50/60 p-2 shadow-sm">
+                        <div className="mb-2 rounded-xl bg-orange-500 py-2 text-center text-[10px] font-black uppercase tracking-[0.22em] text-white shadow-sm shadow-orange-500/25">
+                           Comanda
                         </div>
+                        <div className="grid grid-cols-2 gap-2">
                         <button
                            type="button"
                            onClick={() => { void handleBackToMap(); }}
-                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-black uppercase tracking-wide text-slate-700 transition-all hover:bg-slate-100 active:scale-95"
+                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
                         >
                            <Layout size={16} />
                            <span>Mesas</span>
@@ -5521,7 +6544,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            type="button"
                            onClick={handlePrintPrecuenta}
                            disabled={cart.length === 0}
-                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 text-xs font-black uppercase tracking-wide text-blue-700 transition-all hover:bg-blue-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                            <Printer size={16} />
                            <span>Sub-total</span>
@@ -5530,11 +6553,68 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            type="button"
                            onClick={handleDispatchCommand}
                            disabled={cart.length === 0}
-                           className="flex h-12 items-center justify-center gap-2 rounded-lg border border-orange-100 bg-orange-50 px-3 text-xs font-black uppercase tracking-wide text-orange-600 transition-all hover:bg-orange-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                            <ChefHat size={16} />
                            <span>Cocina</span>
                         </button>
+                        <button
+                           type="button"
+                           onClick={onOpenHistory}
+                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
+                        >
+                           <History size={16} />
+                           <span>Tickets</span>
+                        </button>
+                        </div>
+                     </div>
+
+                     <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-2 shadow-sm">
+                        <div className="mb-2 rounded-xl bg-emerald-600 py-2 text-center text-[10px] font-black uppercase tracking-[0.22em] text-white shadow-sm shadow-emerald-600/25">
+                           Caja
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                        <button
+                           type="button"
+                           onClick={() => handleGridAction('DRAWER')}
+                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-600/25 transition-all hover:bg-emerald-700 active:scale-95"
+                        >
+                           <Box size={16} />
+                           <span>Cajón</span>
+                        </button>
+                        {canCloseZReport && (
+                           <button
+                              type="button"
+                              onClick={() => handleGridAction('Z_REPORT')}
+                              className="flex h-12 items-center justify-center gap-2 rounded-xl border border-red-500 bg-red-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-red-600/25 transition-all hover:bg-red-700 active:scale-95"
+                           >
+                              <Lock size={16} />
+                              <span>Cierre Z</span>
+                           </button>
+                        )}
+                        <button
+                           type="button"
+                           onClick={() => onOpenSettings()}
+                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-600/25 transition-all hover:bg-emerald-700 active:scale-95"
+                        >
+                           <Settings size={16} />
+                           <span>Ajustes</span>
+                        </button>
+                        <button
+                           type="button"
+                           onClick={() => {
+                              if (!canCloseXReport) {
+                                 alert('No tienes permiso para realizar Cierre X.');
+                                 return;
+                              }
+                              onOpenFinance('X_REPORT');
+                           }}
+                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-600/25 transition-all hover:bg-emerald-700 active:scale-95"
+                        >
+                           <ClipboardCheck size={16} />
+                           <span>Cierre X</span>
+                        </button>
+                        </div>
                      </div>
                   </div>
                </div>
@@ -5545,21 +6625,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          <div className={`w-full ${isRetailMode ? '' : 'md:w-96'} h-full min-h-0 bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden md:flex' : 'flex'}`}>
 
             {/* MOBILE HEADER */}
-            < div className="md:hidden p-4 border-b border-gray-100 bg-white flex flex-col gap-3 shrink-0" >
+            < div className="md:hidden px-4 py-3 border-b border-gray-100 bg-white flex flex-col gap-3 shrink-0" >
                <div className="flex justify-between items-start">
                   <div className="flex items-center gap-3">
                      {renderTicketBrand(true)}
-                     <button onClick={() => setMobileView('PRODUCTS')} className="p-2 -ml-2 text-gray-400 hover:text-blue-600 transition-colors">
+                     <button onClick={() => setMobileView('PRODUCTS')} className="h-10 w-10 -ml-2 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors flex items-center justify-center">
                         <ArrowLeft size={24} />
                      </button>
                      <h2 className="font-black text-gray-800 text-lg leading-tight">
                         {activeTable ? (
-                           <div className="flex flex-col">
-                              <span className="text-[10px] text-gray-400 -mb-1 font-bold uppercase">
-                                 {activeTableContext.roomLabel || 'Mesa Activa'}
-                              </span>
-                              <span>{activeTableContext.compactLabel || activeTable.nombre || activeTable.name}</span>
-                           </div>
+                           <span>{activeBarTabName || activeTableContext.compactLabel || activeTable.nombre || activeTable.name}</span>
                         ) : 'Ticket Actual'}
                      </h2>
                   </div>
@@ -5568,27 +6643,29 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <button
                            onClick={handleClearFreshCartItems}
                            disabled={!hasClearableFreshItems}
-                           className="p-2 text-gray-400 hover:text-red-600 disabled:opacity-40 disabled:hover:text-gray-400"
+                           className="h-10 w-10 rounded-xl bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-40 disabled:hover:text-red-600 flex items-center justify-center"
                            title={hasClearableFreshItems ? 'Borrar artículos nuevos' : 'No hay artículos nuevos para borrar'}
                         >
                            <Trash2 size={20} />
                         </button>
                      )}
-                     <button onClick={openParkAliasModal} className="p-2 text-gray-400 hover:text-blue-600" title="Guardar Ticket">
+                     <button onClick={openParkAliasModal} className="h-10 w-10 rounded-xl bg-blue-600 text-white shadow-sm shadow-blue-600/25 hover:bg-blue-700 flex items-center justify-center" title="Guardar Ticket">
                         <Save size={20} />
                      </button>
-                     <button onClick={() => setShowParkedList(!showParkedList)} className="p-2 text-gray-400 hover:text-orange-600 relative" title="Recuperar Ticket">
-                        <Inbox size={20} />
-                        {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && (
-                           <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white"></span>
-                        )}
-                     </button>
+                     {!activeTable && (
+                        <button onClick={() => setShowParkedList(!showParkedList)} className="h-10 w-10 rounded-xl bg-orange-500 text-white shadow-sm shadow-orange-500/25 hover:bg-orange-600 relative flex items-center justify-center" title="Recuperar Ticket">
+                           <Inbox size={20} />
+                           {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && (
+                              <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white"></span>
+                           )}
+                        </button>
+                     )}
                      <div className="relative group">
-                        <button className="p-2 text-gray-400 hover:text-gray-600"><MoreVertical size={20} /></button>
+                        <button className="h-10 w-10 rounded-xl bg-emerald-600 text-white shadow-sm shadow-emerald-600/25 hover:bg-emerald-700 flex items-center justify-center"><MoreVertical size={20} /></button>
                         <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-xl border border-gray-100 hidden group-hover:block z-50">
                            <button onClick={onOpenHistory} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><History size={16} /> Historial</button>
-                           <button onClick={onOpenFinance} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><ClipboardCheck size={16} /> Cierre X</button>
-                           <button onClick={onOpenZReport || onOpenFinance} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><Lock size={16} /> Cierre Z</button>
+                           {canCloseXReport && <button onClick={() => onOpenFinance('X_REPORT')} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><ClipboardCheck size={16} /> Cierre X</button>}
+                           {canCloseZReport && <button onClick={onOpenZReport || (() => onOpenFinance())} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><Lock size={16} /> Cierre Z</button>}
                            <button onClick={() => onOpenSettings()} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><Settings size={16} /> Ajustes</button>
                            <button onClick={onLogout} className="w-full px-4 py-3 text-left text-sm font-bold text-red-600 hover:bg-red-50 flex items-center gap-2 border-t border-gray-50"><LogOut size={16} /> Salir</button>
                         </div>
@@ -5652,13 +6729,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <input
                            ref={retailSearchInputRef}
                            type="text"
+                           inputMode="search"
+                           enterKeyHint="search"
+                           autoComplete="off"
                            placeholder="Escanear o buscar..."
                            value={searchTerm}
-                           onFocus={() => {
-                              if (window.matchMedia('(pointer: coarse)').matches) {
-                                 setShowVirtualKeyboard(true);
-                              }
-                           }}
+                           onInput={(e) => setSearchTerm(e.currentTarget.value)}
                            onChange={(e) => setSearchTerm(e.target.value)}
                            onKeyDown={(e) => {
                               if (e.key === 'Enter') {
@@ -5709,7 +6785,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              {product.name}
                                           </p>
                                           <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                                             <p className="text-[10px] text-gray-400 font-mono">{product.barcode || 'Sin Código'}</p>
+                                             <p className="text-[10px] text-gray-400 font-mono">SKU: {(product as any).sku || product.id || '---'}</p>
+                                             <p className="text-[10px] text-gray-400 font-mono">Barra: {product.barcode || '---'}</p>
                                              {whBlocked && (
                                                 <span className="inline-flex items-center gap-0.5 rounded bg-amber-600 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-white">
                                                    <MapPin size={8} strokeWidth={3} />
@@ -5810,31 +6887,33 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <div className="flex min-w-0 items-center gap-2">
                         <Layout size={18} className="shrink-0 text-blue-600" />
                         <span className="truncate text-xl font-black tracking-tight text-slate-900">
-                           {activeTableContext.compactLabel || activeTable.nombre || activeTable.name}
+                           {activeBarTabName || activeTableContext.compactLabel || activeTable.nombre || activeTable.name}
                         </span>
                      </div>
 
-                     <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 shadow-sm transition-all hover:shadow-md">
-                        <button
-                           onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
-                           className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
-                           title="Reducir comensales"
-                        >
-                           <Minus size={10} strokeWidth={3} />
-                        </button>
+                     <div className="flex shrink-0 items-center gap-2">
+                        <div className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 shadow-sm transition-all hover:shadow-md">
+                           <button
+                              onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
+                              className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                              title="Reducir comensales"
+                           >
+                              <Minus size={10} strokeWidth={3} />
+                           </button>
 
-                        <div className="flex items-center gap-1 px-1">
-                           <Users size={12} className="text-blue-500" />
-                           <span className="min-w-[1rem] text-center text-xs font-black text-slate-700">{activeTable.guests || 1}</span>
+                           <div className="flex items-center gap-1 px-1">
+                              <Users size={12} className="text-blue-500" />
+                              <span className="min-w-[1rem] text-center text-xs font-black text-slate-700">{activeTable.guests || 1}</span>
+                           </div>
+
+                           <button
+                              onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
+                              className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-500"
+                              title="Aumentar comensales"
+                           >
+                              <Plus size={10} strokeWidth={3} />
+                           </button>
                         </div>
-
-                        <button
-                           onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
-                           className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-500"
-                           title="Aumentar comensales"
-                        >
-                           <Plus size={10} strokeWidth={3} />
-                        </button>
                      </div>
                   </div>
                )}
@@ -5919,10 +6998,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                )}
 
-               <div className={`mt-1 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase ${fiscalStatus.hasNCF ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100 animate-pulse'}`}>
-                  <Landmark size={12} />
-                  <span>Status Fiscal: {fiscalStatus.type} {fiscalStatus.hasNCF ? (fiscalStatus.isTerminalBlock ? 'Bloque Terminal' : (fiscalStatus.isUsingPool ? 'Reservado en Pool' : 'Lote Global Activo')) : 'Agotado'}</span>
-               </div>
+               {!isFiscalModeDisabled && (
+                  <div className={`mt-1 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase ${canCheckoutWithFiscalPolicy ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100 animate-pulse'}`}>
+                     <Landmark size={12} />
+                     <span>Status Fiscal: {`${fiscalStatus.type} ${fiscalStatus.hasNCF ? (fiscalStatus.isTerminalBlock ? 'Bloque Terminal' : (fiscalStatus.isUsingPool ? 'Reservado en Pool' : 'Lote Global Activo')) : 'Agotado'}`}</span>
+                  </div>
+               )}
             </div >
 
             {/* --- CART ITEMS LIST & TAB VIEWS --- */}
@@ -5974,7 +7055,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               hasCartItems={cart.length > 0}
                               globalDiscountValue={globalDiscount.value}
                               showLogout={false}
+                              allowWaitList={!activeTable}
                            />
+                        </div>
+                     ) : processedCart.length === 0 ? (
+                        <div className="flex h-full min-h-[320px] items-center justify-center">
+                           <div className="flex flex-col items-center text-center select-none">
+                              <div className="mb-4 flex h-28 w-28 items-center justify-center rounded-full bg-slate-50 text-slate-300 shadow-inner">
+                                 <ShoppingBag size={46} strokeWidth={1.4} />
+                              </div>
+                              <p className="text-sm font-black text-slate-300">Carrito vacío</p>
+                              <p className="mt-1 text-[11px] font-semibold text-slate-300">Selecciona productos para comenzar</p>
+                           </div>
                         </div>
                      ) : (
                         processedCart.map((item, idx) => {
@@ -5984,7 +7076,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         const lineTaxSummary = getCartItemTaxSummary(item);
                         const isActiveCartItem = activeCartItemId === item.cartId;
                         const isReturnedToKds = isKdsReturnedCartItem(item);
-                        const isDispatchedToKds = Boolean(item.dispatched);
+                        const isSubtotalizedItem = Boolean(item.subtotalizedAt);
+                        const isDispatchedToKds = Boolean(item.dispatched) || isSubtotalizedItem;
+                        const lockedMutationMessage = isSubtotalizedItem
+                           ? 'Documento subtotalizado: usa Devolver para corregirlo.'
+                           : 'Este artículo ya fue enviado al KDS. Usa Devolver para cancelar la preparación.';
+                        const lockedReturnTitle = isSubtotalizedItem
+                           ? 'Documento subtotalizado: usa Devolver para corregir'
+                           : isReturnedToKds ? 'Artículo ya devuelto en KDS' : 'Devolver en KDS';
 
                         // MOBILE CARD DESIGN
                         if (isMobile) {
@@ -6038,13 +7137,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           <div className="flex items-center justify-between mt-2">
                                              <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1">
                                                 <button
+                                                   type="button"
                                                    onClick={(e) => {
                                                       e.stopPropagation();
                                                       if (isDispatchedToKds) {
-                                                         alert('Este artículo ya fue enviado al KDS. Usa Devolver para cancelar la preparación.');
+                                                         alert(lockedMutationMessage);
                                                          return;
                                                       }
-                                                      updateCartItem({ ...item, quantity: item.quantity - 1 });
+                                                      updateCartItem({ ...item, cartId: item.cartId, quantity: item.quantity - 1 });
                                                    }}
                                                    disabled={isDispatchedToKds}
                                                    className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-all hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
@@ -6053,13 +7153,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 </button>
                                                 <span className="min-w-[20px] text-center text-xs font-black text-slate-800">{item.quantity}</span>
                                                 <button
+                                                   type="button"
                                                    onClick={(e) => {
                                                       e.stopPropagation();
                                                       if (isDispatchedToKds) {
-                                                         alert('Para agregar más cantidad a un artículo ya enviado al KDS, agrega una línea nueva desde el catálogo.');
+                                                         alert(isSubtotalizedItem ? lockedMutationMessage : 'Para agregar más cantidad a un artículo ya enviado al KDS, agrega una línea nueva desde el catálogo.');
                                                          return;
                                                       }
-                                                      updateCartItem({ ...item, quantity: item.quantity + 1 });
+                                                      updateCartItem({ ...item, cartId: item.cartId, quantity: item.quantity + 1 });
                                                    }}
                                                    disabled={isDispatchedToKds}
                                                    className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
@@ -6071,10 +7172,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           </div>
                                           <div className="mt-3 grid grid-cols-2 gap-2 border-t border-gray-100 pt-3">
                                              <button
-                                                onClick={(e) => {
-                                                   e.stopPropagation();
-                                                   setEditingItem(item);
-                                                }}
+                                                  onClick={(e) => {
+                                                     e.stopPropagation();
+                                                     if (isSubtotalizedItem) {
+                                                        alert(lockedMutationMessage);
+                                                        return;
+                                                     }
+                                                     setEditingItem(item);
+                                                  }}
                                                 className="inline-flex items-center justify-center rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-blue-700 shadow-sm transition-all hover:bg-blue-100"
                                                 title="Editar artículo"
                                              >
@@ -6084,11 +7189,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 <button
                                                    onClick={(e) => {
                                                       e.stopPropagation();
+                                                      if (isSubtotalizedItem && !item.dispatched) {
+                                                         handleGridAction('RETURN');
+                                                         return;
+                                                      }
                                                       handleReturnDispatchedCartItem(item);
                                                    }}
                                                    disabled={isReturnedToKds}
                                                    className="inline-flex items-center justify-center rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-700 shadow-sm transition-all hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
-                                                   title={isReturnedToKds ? 'Artículo ya devuelto en KDS' : 'Devolver en KDS'}
+                                                   title={lockedReturnTitle}
                                                 >
                                                    <Undo2 size={13} strokeWidth={2.4} />
                                                 </button>
@@ -6181,13 +7290,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        ) : (
                                           <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 p-1">
                                              <button
+                                                type="button"
                                                 onClick={(e) => {
                                                    e.stopPropagation();
                                                    if (isDispatchedToKds) {
-                                                      alert('Este artículo ya fue enviado al KDS. Usa Devolver para cancelar la preparación.');
+                                                      alert(lockedMutationMessage);
                                                       return;
                                                    }
-                                                   updateCartItem({ ...item, quantity: item.quantity - 1 }, item.cartId);
+                                                   updateCartItem({ ...item, quantity: item.quantity - 1 });
                                                 }}
                                                 disabled={isDispatchedToKds}
                                                 className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
@@ -6196,13 +7306,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 <Minus size={13} strokeWidth={3} />
                                              </button>
                                              <button
+                                                type="button"
                                                 onClick={(e) => {
                                                    e.stopPropagation();
                                                    if (isDispatchedToKds) {
-                                                      alert('Para agregar más cantidad a un artículo ya enviado al KDS, agrega una línea nueva desde el catálogo.');
+                                                      alert(isSubtotalizedItem ? lockedMutationMessage : 'Para agregar más cantidad a un artículo ya enviado al KDS, agrega una línea nueva desde el catálogo.');
                                                       return;
                                                    }
-                                                   updateCartItem({ ...item, quantity: item.quantity + 1 }, item.cartId);
+                                                   updateCartItem({ ...item, quantity: item.quantity + 1 });
                                                 }}
                                                 disabled={isDispatchedToKds}
                                                 className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
@@ -6211,10 +7322,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 <Plus size={13} strokeWidth={3} />
                                              </button>
                                              <button
-                                                onClick={(e) => {
-                                                   e.stopPropagation();
-                                                   setEditingItem(item);
-                                                }}
+                                               onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  if (isSubtotalizedItem) {
+                                                     alert(lockedMutationMessage);
+                                                     return;
+                                                  }
+                                                  setEditingItem(item);
+                                               }}
                                                 className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-700 shadow-sm transition-colors hover:bg-blue-100"
                                                 title="Editar artículo"
                                              >
@@ -6224,11 +7339,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 <button
                                                    onClick={(e) => {
                                                       e.stopPropagation();
+                                                      if (isSubtotalizedItem && !item.dispatched) {
+                                                         handleGridAction('RETURN');
+                                                         return;
+                                                      }
                                                       handleReturnDispatchedCartItem(item);
                                                    }}
                                                    disabled={isReturnedToKds}
                                                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 text-amber-700 shadow-sm transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
-                                                   title={isReturnedToKds ? 'Artículo ya devuelto en KDS' : 'Devolver en KDS'}
+                                                   title={lockedReturnTitle}
                                                 >
                                                    <Undo2 size={12} />
                                                 </button>
@@ -6362,7 +7481,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               </button>
                               <button
                                  onClick={() => {
-                                    if (cart.length > 0 && fiscalStatus.hasNCF) {
+                                    if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
                                        const validation = validateTerminalDocument(config, terminalId, 'TICKET');
                                        if (!validation.isValid) {
                                           alert(validation.error);
@@ -6370,12 +7489,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        }
                                        if (!canProceedWithOperationalSession()) return;
                                        proceedToCheckout();
-                                    } else if (!fiscalStatus.hasNCF) {
+                                    } else if (!canCheckoutWithFiscalPolicy) {
                                        alert("No hay secuencias fiscales disponibles.");
                                     }
                                  }}
-                                 disabled={cart.length === 0 || !fiscalStatus.hasNCF}
-                                 className={`h-14 min-w-[228px] px-6 rounded-2xl font-black text-lg shadow-xl hover:scale-[1.05] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 shrink-0 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
+                                 disabled={cart.length === 0 || !canCheckoutWithFiscalPolicy}
+                                 className={`h-14 min-w-[228px] px-6 rounded-2xl font-black text-lg shadow-xl hover:scale-[1.05] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 shrink-0 ${!canCheckoutWithFiscalPolicy ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
                               >
                                  <span>{checkoutActionLabel}</span>
                                  <ArrowRight size={24} />
@@ -6393,6 +7512,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               hasCartItems={cart.length > 0}
                               globalDiscountValue={globalDiscount.value}
                               showLogout={false}
+                              allowWaitList={!activeTable}
                            />
                         </div>
 
@@ -6433,8 +7553,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            </div>
                         ) : (
                            <>
+                              {activeTable && activeTableAccounts.length > 1 && (
+                                 <div className="flex w-full justify-center pb-2">
+                                    {renderTableAccountNavigator()}
+                                 </div>
+                              )}
+
                               {/* --- BLOQUE DE TOTALES --- */}
-                              <div className="space-y-1.5 pt-1 border-t border-dashed border-gray-200 mt-2">
+                              <div className="space-y-1.5 pt-3 border-t border-dashed border-gray-200">
                                  <div className="flex justify-between items-center text-xs font-bold text-gray-500">
                                     <span>SUBTOTAL</span>
                                     <span>{formatCurrency(cartSubtotal, baseCurrency.symbol)}</span>
@@ -6480,19 +7606,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
 
-                               <div className={`grid ${isRestaurantMode ? 'grid-cols-1' : restaurantActionGridClass} items-center gap-3 pt-5 px-1`}>
+                               <div className={`grid ${isRestaurantMode ? 'grid-cols-2' : 'grid-cols-2'} items-center gap-3 pt-5 px-1`}>
                                  {!isRestaurantMode ? (
                                     <>
                                        <button
                                           onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
-                                          className="w-[112px] px-3 py-3.5 rounded-2xl font-black text-base border-2 border-red-100 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
+                                          className="h-16 w-full px-3 rounded-2xl font-black text-[13px] uppercase tracking-[0.14em] border-2 border-red-100 bg-red-50 text-red-600 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
                                        >
                                           <LogOut size={20} />
                                           <span>Salir</span>
                                        </button>
                                        <button
                                           onClick={() => {
-                                             if (cart.length > 0 && fiscalStatus.hasNCF) {
+                                             if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
                                                 const validation = validateTerminalDocument(config, terminalId, 'TICKET');
                                                 if (!validation.isValid) {
                                                    alert(validation.error);
@@ -6500,19 +7626,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 }
                                                 if (!canProceedWithOperationalSession()) return;
                                                 proceedToCheckout();
-                                             } else if (!fiscalStatus.hasNCF) {
+                                             } else if (!canCheckoutWithFiscalPolicy) {
                                                 alert("No hay secuencias fiscales disponibles.");
                                              }
                                           }}
-                                          disabled={cart.length === 0 || !fiscalStatus.hasNCF}
-                                          className={`w-full max-w-[188px] justify-self-end py-3.5 rounded-2xl font-black text-lg shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
+                                          disabled={cart.length === 0 || !canCheckoutWithFiscalPolicy}
+                                          className={`h-16 w-full rounded-2xl font-black text-[13px] uppercase tracking-[0.14em] shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 ${!canCheckoutWithFiscalPolicy ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-slate-100'}`}
                                        >
-                                          <span>{checkoutActionLabel}</span>
                                           <ArrowRight size={24} />
+                                          <span>{checkoutActionLabel}</span>
                                        </button>
                                     </>
                                  ) : (
                                     <>
+                                       <button
+                                          onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
+                                          className="h-16 w-full px-3 rounded-2xl font-black text-[13px] uppercase tracking-[0.14em] border-2 border-red-100 bg-red-50 text-red-600 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
+                                       >
+                                          <LogOut size={20} />
+                                          <span>Salir</span>
+                                       </button>
                                        <button
                                           onClick={() => {
                                              if (cart.length > 0) {
@@ -6521,7 +7654,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              }
                                           }}
                                           disabled={cart.length === 0}
-                                          className="min-w-0 h-20 flex flex-col items-center justify-center gap-2 rounded-3xl font-black text-[11px] uppercase bg-slate-900 text-white hover:bg-black shadow-sm hover:shadow-md transition-all active:scale-95 disabled:bg-slate-200 disabled:text-slate-500 disabled:opacity-100 disabled:cursor-not-allowed"
+                                          className="h-16 w-full flex items-center justify-center gap-2.5 rounded-2xl font-black text-[13px] uppercase tracking-[0.14em] bg-slate-900 text-white hover:bg-black shadow-xl hover:shadow-md transition-all active:scale-95 disabled:bg-slate-200 disabled:text-slate-400 disabled:opacity-100 disabled:cursor-not-allowed"
                                        >
                                           <ArrowRight size={24} />
                                           <span>Cobrar</span>
@@ -6545,19 +7678,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   className="md:hidden fixed left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5"
                   style={mobileFooterStyle}
                >
-                  <div className="flex justify-between items-center mb-4 px-2">
-                     <div className="flex gap-4">
+                  {activeTable && activeTableAccounts.length > 1 && (
+                     <div className="flex w-full justify-center pb-3">
+                        {renderTableAccountNavigator()}
+                     </div>
+                  )}
+                  <div className="flex justify-between items-center mb-4 px-2 gap-3">
+                     <div className="flex gap-2 overflow-x-auto overflow-y-hidden no-scrollbar pr-1">
                         <button onClick={() => {
                            if (blockRecoveredUberOrderMutation('aplicar descuentos')) return;
                            setShowGlobalDiscount(true);
-                        }} className="flex flex-col items-center gap-1 text-gray-400 hover:text-pink-500">
+                        }} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-blue-600 px-2 text-white shadow-sm shadow-blue-600/25 active:scale-95">
                            <Percent size={18} />
                            <span className="text-[9px] font-bold uppercase">Desc.</span>
                         </button>
                         <button onClick={() => {
                            if (blockRecoveredUberOrderMutation('aplicar cupones')) return;
                            setShowCouponModal(true);
-                        }} className="flex flex-col items-center gap-1 text-gray-400 hover:text-cyan-500">
+                        }} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-blue-600 px-2 text-white shadow-sm shadow-blue-600/25 active:scale-95">
                            <QrCode size={18} />
                            <span className="text-[9px] font-bold uppercase">Cupón</span>
                         </button>
@@ -6565,40 +7703,42 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <button onClick={() => {
                               setShowConsignmentModal(true);
                               setConsignmentError(null);
-                           }} className="flex flex-col items-center gap-1 text-gray-400 hover:text-cyan-700">
+                           }} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-emerald-600 px-2 text-white shadow-sm shadow-emerald-600/25 active:scale-95">
                               <Package size={18} />
                               <span className="text-[9px] font-bold uppercase">Cons.</span>
                            </button>
                         )}
                         {!hideTableExtras && (
                            <>
-                              <button onClick={openParkAliasModal} className="flex flex-col items-center gap-1 text-gray-400 hover:text-blue-500">
+                              <button onClick={openParkAliasModal} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-orange-500 px-2 text-white shadow-sm shadow-orange-500/25 active:scale-95">
                                  <Save size={18} />
                                  <span className="text-[9px] font-bold uppercase">Grd.</span>
                               </button>
-                              <button onClick={() => setShowParkedList(!showParkedList)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-orange-500 relative">
-                                 <Inbox size={18} />
-                                 <span className="text-[9px] font-bold uppercase">Esp.</span>
-                                 {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
-                              </button>
-                              <button onClick={openReservationModal} className="flex flex-col items-center gap-1 text-gray-400 hover:text-amber-600">
+                              {!activeTable && (
+                                 <button onClick={() => setShowParkedList(!showParkedList)} className="relative flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-orange-500 px-2 text-white shadow-sm shadow-orange-500/25 active:scale-95">
+                                    <Inbox size={18} />
+                                    <span className="text-[9px] font-bold uppercase">Esp.</span>
+                                    {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
+                                 </button>
+                              )}
+                              <button onClick={openReservationModal} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-orange-500 px-2 text-white shadow-sm shadow-orange-500/25 active:scale-95">
                                  <StickyNote size={18} />
                                  <span className="text-[9px] font-bold uppercase">Res.</span>
                               </button>
-                              <button onClick={openRecoverReservationModal} className="flex flex-col items-center gap-1 text-gray-400 hover:text-teal-600">
+                              <button onClick={openRecoverReservationModal} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-blue-600 px-2 text-white shadow-sm shadow-blue-600/25 active:scale-95">
                                  <QrCode size={18} />
                                  <span className="text-[9px] font-bold uppercase">Rec.</span>
                               </button>
                            </>
                         )}
                         {activeTerminalConfig?.operational?.usa_modulos_cocina && (
-                           <button onClick={handleDispatchCommand} className="flex flex-col items-center gap-1 text-gray-400 hover:text-orange-600">
+                           <button onClick={handleDispatchCommand} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-orange-500 px-2 text-white shadow-sm shadow-orange-500/25 active:scale-95">
                               <ChefHat size={18} />
                               <span className="text-[9px] font-bold uppercase">March.</span>
                            </button>
                         )}
                         {!hideTableExtras && (
-                           <button onClick={() => onOpenInventoryTracking()} className="flex flex-col items-center gap-1 text-gray-400 hover:text-indigo-500">
+                           <button onClick={() => onOpenInventoryTracking()} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-emerald-600 px-2 text-white shadow-sm shadow-emerald-600/25 active:scale-95">
                               <Package size={18} />
                               <span className="text-[9px] font-bold uppercase">Rast.</span>
                            </button>
@@ -6616,12 +7756,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                      <button
                         onClick={() => {
-                           if (cart.length > 0 && fiscalStatus.hasNCF) {
+                           if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
                               if (!canProceedWithOperationalSession()) return;
                               proceedToCheckout();
                            }
                         }}
-                        disabled={cart.length === 0 || !fiscalStatus.hasNCF}
+                        disabled={cart.length === 0 || !canCheckoutWithFiscalPolicy}
                         className="bg-blue-600 text-white px-8 py-4 rounded-2xl font-black text-lg shadow-lg shadow-blue-200 active:scale-95 transition-all flex items-center gap-2"
                      >
                         <span>{isRecoveredUberOrder ? 'FACTURAR UBER' : activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR'}</span>
@@ -6652,7 +7792,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                onConfirm={handleSplitConfirm}
             />
          )}
-         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} />}
+         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={nextPaymentFractionPart && cartTotal > 0 ? cartTax * (amountDueNow / cartTotal) : cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} salesUsers={salesUsers} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={!isKdsReturnedCartItem(editingItem)} canVoidItem={!editingItem.dispatched} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, selectedVariant, variantInfo) => { addToCart(p, 1, pr, m, undefined, selectedVariant, variantInfo); setSelectedProductForVariants(null); }} />}
@@ -6795,13 +7935,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                    {quantity} x {baseCurrency.symbol}{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                                 </p>
                                                 <p className={`mt-1 text-[10px] font-black uppercase tracking-wide ${product ? 'text-emerald-600' : 'text-amber-600'}`}>
-                                                   {product ? `Vinculado: ${product.name}` : 'Sin producto local vinculado'}
+                                                   {product ? `Vinculado: ${product.name}` : 'Requiere actualización de catálogo'}
                                                 </p>
                                              </div>
                                              <button
                                                 type="button"
                                                 onClick={() => handleAddConsignmentLine(selectedConsignment, line)}
-                                                disabled={!product}
                                                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-100 bg-cyan-50 px-4 py-2.5 text-xs font-black uppercase tracking-wide text-cyan-700 transition-all hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
                                              >
                                                 <Plus size={14} />
@@ -7243,7 +8382,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          {/* List of Parked Tickets */}
          {
-            showParkedList && (
+            showParkedList && !activeTable && (
                <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in zoom-in-95">
                   <div className="bg-white rounded-[2.5rem] w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95">
                      <div className="p-6 border-b bg-gray-50 flex justify-between items-center">
@@ -7384,7 +8523,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   }}
                   onAdvancedEdit={(p) => {
                      setQuickActionData(null);
-                     onOpenSettings('CATALOG', { productId: p.id });
+                     onOpenSettings('CATALOG', { productId: p.id, tab: 'OPERATIVE' });
                   }}
                   onViewHistory={(p) => {
                      setQuickActionData(null);

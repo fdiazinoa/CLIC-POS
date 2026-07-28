@@ -1,6 +1,14 @@
+import { Preferences } from '@capacitor/preferences';
+
 export interface TerminalCredentials {
     terminalId?: string | null;
+    erpTerminalId?: string | null;
+    terminalCode?: string | null;
+    terminalName?: string | null;
     deviceId?: string | null;
+    tenantId?: string | null;
+    erpTenantId?: string | null;
+    cloudAdminTenantId?: string | null;
     deviceToken?: string | null;
     deviceTokenSource?: string | null;
     deviceTokenUpdatedAt?: string | null;
@@ -8,6 +16,9 @@ export interface TerminalCredentials {
     syncToken?: string | null;
     syncTokenExpiresAt?: string | null;
     syncTokenUpdatedAt?: string | null;
+    authStatus?: string | null;
+    lastAuthError?: string | null;
+    lastReauthAttemptAt?: string | null;
 }
 
 const CREDENTIALS_KEY = 'clic_terminal_credentials_v1';
@@ -16,15 +27,6 @@ const getStorage = (): Storage | null => {
     try {
         if (typeof localStorage === 'undefined') return null;
         return localStorage;
-    } catch {
-        return null;
-    }
-};
-
-const getPreferencesPlugin = (): any | null => {
-    try {
-        if (typeof window === 'undefined') return null;
-        return (window as any).Capacitor?.Plugins?.Preferences || null;
     } catch {
         return null;
     }
@@ -66,7 +68,13 @@ const compactCredentials = (credentials: TerminalCredentials): TerminalCredentia
 
 const buildFromLegacyKeys = (storage: Storage): TerminalCredentials => compactCredentials({
     terminalId: cleanString(storage.getItem('clic_erp_sync_terminal_id') || storage.getItem('CLIC_POS_TERMINAL_ID') || storage.getItem('active_terminal_id')),
+    erpTerminalId: cleanString(storage.getItem('clic_erp_sync_terminal_id') || storage.getItem('CLIC_POS_TERMINAL_ID') || storage.getItem('active_terminal_id')),
+    terminalCode: cleanString(storage.getItem('clic_erp_sync_terminal_code')),
+    terminalName: cleanString(storage.getItem('clic_erp_sync_terminal_name')),
     deviceId: cleanString(storage.getItem('CLIC_POS_DEVICE_ID') || storage.getItem('pos_device_id') || storage.getItem('clic_pos_device_id')),
+    tenantId: cleanString(storage.getItem('clic_erp_sync_tenant_id') || storage.getItem('active_tenant_id') || storage.getItem('clic_tenant_id')),
+    erpTenantId: cleanString(storage.getItem('clic_erp_sync_tenant_id') || storage.getItem('active_tenant_id')),
+    cloudAdminTenantId: cleanString(storage.getItem('cloud_admin_tenant_id') || storage.getItem('clic_cloud_admin_tenant_id') || storage.getItem('clic_tenant_id')),
     deviceToken: cleanToken(storage.getItem('CLIC_POS_DEVICE_TOKEN') || storage.getItem('POS_DEVICE_TOKEN') || storage.getItem('pos_device_token') || storage.getItem('clic_erp_device_token') || storage.getItem('terminalToken') || storage.getItem('activationToken')),
     deviceTokenSource: cleanString(storage.getItem('CLIC_POS_DEVICE_TOKEN_SOURCE')),
     deviceTokenUpdatedAt: cleanString(storage.getItem('CLIC_POS_DEVICE_TOKEN_UPDATED_AT')),
@@ -74,6 +82,9 @@ const buildFromLegacyKeys = (storage: Storage): TerminalCredentials => compactCr
     syncToken: cleanToken(storage.getItem('clic_erp_sync_token') || storage.getItem('clic_erp_sync_auth_token') || storage.getItem('CLIC_ERP_SYNC_TOKEN') || storage.getItem('syncAuthToken') || storage.getItem('sync_auth_token') || storage.getItem('erp_sync_token')),
     syncTokenExpiresAt: cleanString(storage.getItem('clic_erp_sync_token_expires_at')),
     syncTokenUpdatedAt: cleanString(storage.getItem('clic_erp_sync_token_updated_at')),
+    authStatus: cleanString(storage.getItem('clic_sync_auth_status')),
+    lastAuthError: cleanString(storage.getItem('clic_sync_last_auth_error')),
+    lastReauthAttemptAt: cleanString(storage.getItem('clic_sync_last_reauth_attempt_at')),
 });
 
 const mergeCredentials = (...entries: TerminalCredentials[]): TerminalCredentials => {
@@ -95,8 +106,25 @@ const writeLegacyMirrors = (credentials: TerminalCredentials): void => {
         if (credentials.terminalId) {
             storage.setItem('clic_erp_sync_terminal_id', credentials.terminalId);
         }
+        if (credentials.erpTerminalId) {
+            storage.setItem('clic_erp_sync_terminal_id', credentials.erpTerminalId);
+        }
+        if (credentials.terminalCode) {
+            storage.setItem('clic_erp_sync_terminal_code', credentials.terminalCode);
+        }
+        if (credentials.terminalName) {
+            storage.setItem('clic_erp_sync_terminal_name', credentials.terminalName);
+        }
         if (credentials.deviceId) {
             storage.setItem('CLIC_POS_DEVICE_ID', credentials.deviceId);
+        }
+        if (credentials.tenantId || credentials.erpTenantId) {
+            const tenantId = credentials.erpTenantId || credentials.tenantId || '';
+            storage.setItem('clic_erp_sync_tenant_id', tenantId);
+        }
+        if (credentials.cloudAdminTenantId) {
+            storage.setItem('cloud_admin_tenant_id', credentials.cloudAdminTenantId);
+            storage.setItem('clic_cloud_admin_tenant_id', credentials.cloudAdminTenantId);
         }
         if (credentials.deviceToken) {
             storage.setItem('CLIC_POS_DEVICE_TOKEN', credentials.deviceToken);
@@ -113,6 +141,15 @@ const writeLegacyMirrors = (credentials: TerminalCredentials): void => {
                 storage.setItem('clic_erp_sync_token_expires_at', credentials.syncTokenExpiresAt);
             }
         }
+        if (credentials.authStatus) {
+            storage.setItem('clic_sync_auth_status', credentials.authStatus);
+        }
+        if (credentials.lastAuthError) {
+            storage.setItem('clic_sync_last_auth_error', credentials.lastAuthError);
+        }
+        if (credentials.lastReauthAttemptAt) {
+            storage.setItem('clic_sync_last_reauth_attempt_at', credentials.lastReauthAttemptAt);
+        }
     } catch {
         // Credential mirrors are best-effort; the canonical payload is also persisted below.
     }
@@ -127,10 +164,8 @@ export const readTerminalCredentialsSync = (): TerminalCredentials => {
 
 export const readTerminalCredentials = async (): Promise<TerminalCredentials> => {
     const local = readTerminalCredentialsSync();
-    const preferences = getPreferencesPlugin();
-    if (!preferences?.get) return local;
     try {
-        const result = await preferences.get({ key: CREDENTIALS_KEY });
+        const result = await Preferences.get({ key: CREDENTIALS_KEY });
         const fromPreferences = readJson(result?.value || null);
         return mergeCredentials(fromPreferences, local);
     } catch {
@@ -150,13 +185,10 @@ export const saveTerminalCredentials = async (patch: TerminalCredentials): Promi
         // A storage quota error must not erase the terminal binding.
     }
 
-    const preferences = getPreferencesPlugin();
-    if (preferences?.set) {
-        try {
-            await preferences.set({ key: CREDENTIALS_KEY, value: JSON.stringify(next) });
-        } catch {
-            // Native Preferences is optional in some builds.
-        }
+    try {
+        await Preferences.set({ key: CREDENTIALS_KEY, value: JSON.stringify(next) });
+    } catch {
+        // Native Preferences is optional in some builds.
     }
 
     return next;
