@@ -1762,7 +1762,7 @@ const AppContent: React.FC = () => {
 
     const installAndroidPrinterShim = (): boolean => {
       const runtimeWindow = window as any;
-      if (runtimeWindow.ClicPOSNativePrinter || !runtimeWindow.AndroidPrinter) {
+      if (!runtimeWindow.AndroidPrinter) {
         return Boolean(runtimeWindow.ClicPOSNativePrinter);
       }
 
@@ -1792,6 +1792,7 @@ const AppContent: React.FC = () => {
       };
 
       runtimeWindow.ClicPOSNativePrinter = {
+        ...(runtimeWindow.ClicPOSNativePrinter || {}),
         platform: 'android',
         validateDgiiRnc: (payload: unknown) => call('validateDgiiRnc', payload),
         printEscPos: (payload: unknown) => call('printEscPos', payload),
@@ -1805,6 +1806,13 @@ const AppContent: React.FC = () => {
         pairPrinter: (payload: unknown) => call('pairPrinter', payload),
         connectPrinter: (payload: unknown) => call('connectPrinter', payload),
         bindPrinter: (payload: unknown) => call('bindPrinter', payload),
+        startKdsServer: (payload: unknown) => call('startKdsServer', payload),
+        stopKdsServer: (payload: unknown) => call('stopKdsServer', payload),
+        getKdsServerStatus: (payload: unknown) => call('getKdsServerStatus', payload),
+        startMasterServer: (payload: unknown) => call('startMasterServer', payload),
+        updateMasterServerConfig: (payload: unknown) => call('updateMasterServerConfig', payload),
+        stopMasterServer: (payload: unknown) => call('stopMasterServer', payload),
+        getMasterServerStatus: (payload: unknown) => call('getMasterServerStatus', payload),
         getDeviceProfile: () => Promise.resolve(parseResult(runtimeWindow.AndroidPrinter.getDeviceProfile?.())),
         getDeviceInfo: () => Promise.resolve(parseResult(runtimeWindow.AndroidPrinter.getDeviceInfo?.()))
       };
