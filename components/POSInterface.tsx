@@ -5966,7 +5966,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (blockRecoveredUberOrderMutation('aplicar cupones')) return;
             setShowCouponModal(true);
             break;
-         case 'PARK_LIST': setShowParkedList((prev: any) => !prev); break;
+         case 'PARK_LIST':
+            if (activeTable) {
+               setShowParkedList(false);
+               break;
+            }
+            setShowParkedList((prev: any) => !prev);
+            break;
          case 'RESERVATION': openReservationModal(); break;
          case 'RECOVER_RESERVATION': openRecoverReservationModal(); break;
          case 'RETURN':
@@ -6646,12 +6652,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <button onClick={openParkAliasModal} className="h-10 w-10 rounded-xl bg-blue-600 text-white shadow-sm shadow-blue-600/25 hover:bg-blue-700 flex items-center justify-center" title="Guardar Ticket">
                         <Save size={20} />
                      </button>
-                     <button onClick={() => setShowParkedList(!showParkedList)} className="h-10 w-10 rounded-xl bg-orange-500 text-white shadow-sm shadow-orange-500/25 hover:bg-orange-600 relative flex items-center justify-center" title="Recuperar Ticket">
-                        <Inbox size={20} />
-                        {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && (
-                           <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white"></span>
-                        )}
-                     </button>
+                     {!activeTable && (
+                        <button onClick={() => setShowParkedList(!showParkedList)} className="h-10 w-10 rounded-xl bg-orange-500 text-white shadow-sm shadow-orange-500/25 hover:bg-orange-600 relative flex items-center justify-center" title="Recuperar Ticket">
+                           <Inbox size={20} />
+                           {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && (
+                              <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white"></span>
+                           )}
+                        </button>
+                     )}
                      <div className="relative group">
                         <button className="h-10 w-10 rounded-xl bg-emerald-600 text-white shadow-sm shadow-emerald-600/25 hover:bg-emerald-700 flex items-center justify-center"><MoreVertical size={20} /></button>
                         <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-xl border border-gray-100 hidden group-hover:block z-50">
@@ -7047,6 +7055,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               hasCartItems={cart.length > 0}
                               globalDiscountValue={globalDiscount.value}
                               showLogout={false}
+                              allowWaitList={!activeTable}
                            />
                         </div>
                      ) : processedCart.length === 0 ? (
@@ -7503,6 +7512,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               hasCartItems={cart.length > 0}
                               globalDiscountValue={globalDiscount.value}
                               showLogout={false}
+                              allowWaitList={!activeTable}
                            />
                         </div>
 
@@ -7704,11 +7714,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  <Save size={18} />
                                  <span className="text-[9px] font-bold uppercase">Grd.</span>
                               </button>
-                              <button onClick={() => setShowParkedList(!showParkedList)} className="relative flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-orange-500 px-2 text-white shadow-sm shadow-orange-500/25 active:scale-95">
-                                 <Inbox size={18} />
-                                 <span className="text-[9px] font-bold uppercase">Esp.</span>
-                                 {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
-                              </button>
+                              {!activeTable && (
+                                 <button onClick={() => setShowParkedList(!showParkedList)} className="relative flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-orange-500 px-2 text-white shadow-sm shadow-orange-500/25 active:scale-95">
+                                    <Inbox size={18} />
+                                    <span className="text-[9px] font-bold uppercase">Esp.</span>
+                                    {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
+                                 </button>
+                              )}
                               <button onClick={openReservationModal} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-orange-500 px-2 text-white shadow-sm shadow-orange-500/25 active:scale-95">
                                  <StickyNote size={18} />
                                  <span className="text-[9px] font-bold uppercase">Res.</span>
@@ -8370,7 +8382,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          {/* List of Parked Tickets */}
          {
-            showParkedList && (
+            showParkedList && !activeTable && (
                <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in zoom-in-95">
                   <div className="bg-white rounded-[2.5rem] w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95">
                      <div className="p-6 border-b bg-gray-50 flex justify-between items-center">

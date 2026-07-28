@@ -15,6 +15,7 @@ interface ActionGridProps {
     hasCartItems: boolean;
     orientation?: 'horizontal' | 'vertical';
     showLogout?: boolean;
+    allowWaitList?: boolean;
 }
 
 const ActionGrid: React.FC<ActionGridProps> = ({
@@ -26,6 +27,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
     hasCartItems,
     orientation = 'horizontal',
     showLogout = true,
+    allowWaitList = true,
 }) => {
     const isHorizontal = orientation === 'horizontal';
     const shouldRenderLogout = showLogout && isHorizontal;
@@ -100,7 +102,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
                 {renderButton('RECOVER_RESERVATION', 'Rec. Res.', <RotateCcw />, 'sales')}
 
                 {/* WAIT GROUP (Orange) */}
-                {renderButton('PARK_LIST', 'Espera', <Inbox />, 'wait', false, parkedTicketsCount > 0 ? parkedTicketsCount : false)}
+                {allowWaitList && renderButton('PARK_LIST', 'Espera', <Inbox />, 'wait', false, parkedTicketsCount > 0 ? parkedTicketsCount : false)}
                 {renderButton('RESERVATION', 'Reserva', <StickyNote />, 'wait')}
                 {renderButton('SAVE', 'Guardar', <Save />, 'wait')}
 
