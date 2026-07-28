@@ -18,3 +18,10 @@ test('el servidor Master Android permite POST y protege terminales ocupadas', ()
   assert.match(serverSource, /"TERMINAL_OCCUPIED"/);
   assert.match(serverSource, /writeResponse\(\s*socket,\s*409,/);
 });
+
+test('el servidor Master Android conserva el contrato ORDER_TAKER', () => {
+  assert.match(serverSource, /\.put\("terminal_type", terminalType\)/);
+  assert.match(serverSource, /\.put\("master_terminal_id"/);
+  assert.match(serverSource, /\.put\("capabilities"/);
+  assert.match(serverSource, /\.put\("restrictions"/);
+});

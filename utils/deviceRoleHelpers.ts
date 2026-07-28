@@ -15,6 +15,8 @@ const normalizeRoleKey = (value: unknown): string => {
             data.device_role ??
             data.deviceRoleCode ??
             data.device_role_code ??
+            data.terminalType ??
+            data.terminal_type ??
             data.roleCode ??
             data.role_code ??
             data.value ??
@@ -94,6 +96,15 @@ const normalizeKnownDeviceRole = (normalized: string): DeviceRole | null => {
         case 'MONITOR_EN_COCINA':
             return DeviceRole.KITCHEN_DISPLAY;
 
+        case 'ORDER_TAKER':
+        case 'ORDERTAKER':
+        case 'ORDER_TAKING':
+        case 'TOMA_PEDIDOS':
+        case 'TOMA_DE_PEDIDOS':
+        case 'WAITER_STATION':
+        case 'MOBILE_ORDER':
+            return DeviceRole.ORDER_TAKER;
+
         case 'STANDARD_POS':
         case 'STANDARDPOS':
         case 'POS_TERMINAL':
@@ -148,6 +159,28 @@ export function getDefaultRoleConfig(role: DeviceRole): DeviceRoleConfig {
             hardwareConfig: {
                 disablePrinter: false,
                 disableCashDrawer: false,
+                disableScanner: false
+            }
+        },
+
+        [DeviceRole.ORDER_TAKER]: {
+            role: DeviceRole.ORDER_TAKER,
+            authLevel: AuthLevel.USER_REQUIRED,
+            defaultRoute: '/tables',
+            allowedModules: ['sales', 'auth'],
+            uiSettings: {
+                fullscreenForced: false,
+                touchTargetSize: 48,
+                navigationLocked: false,
+                escapeHatch: {
+                    enabled: false,
+                    gesture: '',
+                    requirePin: false
+                }
+            },
+            hardwareConfig: {
+                disablePrinter: true,
+                disableCashDrawer: true,
                 disableScanner: false
             }
         },
@@ -256,6 +289,11 @@ export function getRoleDisplayInfo(role: DeviceRole) {
             icon: '🖥️',
             label: 'POS Estándar',
             description: 'Punto de venta completo con todas las funcionalidades'
+        },
+        [DeviceRole.ORDER_TAKER]: {
+            icon: '📝',
+            label: 'Toma de pedidos',
+            description: 'Registra pedidos conectándose siempre a una caja maestra'
         },
         [DeviceRole.SELF_CHECKOUT]: {
             icon: '🛒',

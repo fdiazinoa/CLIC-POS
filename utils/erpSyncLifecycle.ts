@@ -8,6 +8,7 @@ import { applyTerminalConfigSnapshot, mergeTerminalConfigSnapshots } from './ter
 import { db } from './db';
 import { DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS } from '../constants';
 import { getDefaultRoleConfig, normalizeDeviceRoleValue, resolveDeviceRoleValue } from './deviceRoleHelpers';
+import { resolveOrderTakerContract } from './orderTakerPolicy';
 import {
     DEVICE_SUPERSEDED_MESSAGE,
     dispatchDeviceRevoked,
@@ -2022,8 +2023,31 @@ const applyErpConfigPushToLocalTerminal = async ({
         existingSnapshot,
         snapshot as TerminalConfigSnapshot
     ) || (snapshot as TerminalConfigSnapshot);
+    const terminalTypeContract = resolveOrderTakerContract({
+        ...incomingConfig,
+        ...incomingResolved,
+        ...incomingIdentity,
+        ...incomingTerminal,
+        terminalType: incomingDeviceRole.role,
+        config: {
+            ...incomingConfig,
+            ...incomingResolved,
+            ...incomingIdentity,
+            ...incomingTerminal,
+        },
+    });
     const nextTerminalConfig: TerminalConfig = {
         ...currentConfig,
+        terminalType: String(incomingDeviceRole.role || terminalTypeContract.terminalType),
+        terminal_type: String(incomingDeviceRole.role || terminalTypeContract.terminalType),
+        masterTerminalId: terminalTypeContract.masterTerminalId || currentConfig.masterTerminalId,
+        master_terminal_id: terminalTypeContract.masterTerminalId || currentConfig.master_terminal_id,
+        capabilities: terminalTypeContract.capabilities.length > 0
+            ? terminalTypeContract.capabilities
+            : currentConfig.capabilities,
+        restrictions: terminalTypeContract.restrictions.length > 0
+            ? terminalTypeContract.restrictions
+            : currentConfig.restrictions,
         deviceRole: buildCompatibleDeviceRoleConfig(currentConfig.deviceRole, incomingDeviceRole),
         operational: nextOperational,
         catalog: nextCatalog,

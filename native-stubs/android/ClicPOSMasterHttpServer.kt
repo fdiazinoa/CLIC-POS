@@ -208,6 +208,25 @@ object ClicPOSMasterHttpServer {
                 terminalConfig.optString("stationNumber"),
                 terminalId
             )
+            val terminalType = firstNonBlank(
+                terminal.optString("terminalType"),
+                terminal.optString("terminal_type"),
+                terminalConfig.optString("terminalType"),
+                terminalConfig.optString("terminal_type"),
+                "STANDARD_POS"
+            )
+            val masterTerminalId = firstNonBlank(
+                terminal.optString("masterTerminalId"),
+                terminal.optString("master_terminal_id"),
+                terminalConfig.optString("masterTerminalId"),
+                terminalConfig.optString("master_terminal_id")
+            )
+            val capabilities = terminal.optJSONArray("capabilities")
+                ?: terminalConfig.optJSONArray("capabilities")
+                ?: JSONArray()
+            val restrictions = terminal.optJSONArray("restrictions")
+                ?: terminalConfig.optJSONArray("restrictions")
+                ?: JSONArray()
 
             result.put(
                 JSONObject()
@@ -222,6 +241,12 @@ object ClicPOSMasterHttpServer {
                     ))
                     .put("occupied", currentDeviceId.isNotBlank() && currentDeviceId != deviceId)
                     .put("currentDeviceId", if (currentDeviceId.isBlank()) JSONObject.NULL else currentDeviceId)
+                    .put("terminal_type", terminalType)
+                    .put("terminalType", terminalType)
+                    .put("master_terminal_id", if (masterTerminalId.isBlank()) JSONObject.NULL else masterTerminalId)
+                    .put("masterTerminalId", if (masterTerminalId.isBlank()) JSONObject.NULL else masterTerminalId)
+                    .put("capabilities", JSONArray(capabilities.toString()))
+                    .put("restrictions", JSONArray(restrictions.toString()))
                     .put("config", JSONObject(terminalConfig.toString()))
             )
         }
@@ -321,6 +346,19 @@ object ClicPOSMasterHttpServer {
             terminalConfig.optString("stationNumber"),
             terminalId
         )
+        val terminalType = firstNonBlank(
+            boundTerminal.optString("terminalType"),
+            boundTerminal.optString("terminal_type"),
+            terminalConfig.optString("terminalType"),
+            terminalConfig.optString("terminal_type"),
+            "STANDARD_POS"
+        )
+        val masterTerminalId = firstNonBlank(
+            boundTerminal.optString("masterTerminalId"),
+            boundTerminal.optString("master_terminal_id"),
+            terminalConfig.optString("masterTerminalId"),
+            terminalConfig.optString("master_terminal_id")
+        )
 
         writeResponse(
             socket,
@@ -332,6 +370,10 @@ object ClicPOSMasterHttpServer {
                 .put("terminal_id", terminalId)
                 .put("erp_terminal_id", erpTerminalId)
                 .put("terminal_name", terminalName)
+                .put("terminal_type", terminalType)
+                .put("master_terminal_id", if (masterTerminalId.isBlank()) JSONObject.NULL else masterTerminalId)
+                .put("capabilities", terminalConfig.optJSONArray("capabilities") ?: JSONArray())
+                .put("restrictions", terminalConfig.optJSONArray("restrictions") ?: JSONArray())
                 .put("config", JSONObject(configSnapshot.toString()))
                 .put("users", JSONArray(usersSnapshot.toString()))
                 .toString()

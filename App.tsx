@@ -4211,11 +4211,13 @@ const AppContent: React.FC = () => {
     if (!role) return;
 
     const roleDefaultView: Partial<Record<DeviceRole, ViewState>> = {
+      [DeviceRole.ORDER_TAKER]: 'TABLE_MAP',
       [DeviceRole.SELF_CHECKOUT]: 'KIOSK_WELCOME',
       [DeviceRole.PRICE_CHECKER]: 'CHECKER_SCAN',
       [DeviceRole.KITCHEN_DISPLAY]: 'KITCHEN_ORDERS',
     };
     const roleAllowedViews: Partial<Record<DeviceRole, ViewState[]>> = {
+      [DeviceRole.ORDER_TAKER]: ['LOGIN', 'TABLE_MAP', 'POS'],
       [DeviceRole.SELF_CHECKOUT]: ['KIOSK_WELCOME', 'KIOSK_BROWSER', 'KIOSK_PAYMENT'],
       [DeviceRole.PRICE_CHECKER]: ['CHECKER_SCAN'],
       [DeviceRole.KITCHEN_DISPLAY]: ['KITCHEN_ORDERS'],
@@ -10515,6 +10517,7 @@ const AppContent: React.FC = () => {
           </KitchenDisplayLayout>
         );
 
+      case DeviceRole.ORDER_TAKER:
       case DeviceRole.STANDARD_POS:
       default:
         return (

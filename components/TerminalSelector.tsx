@@ -29,6 +29,12 @@ import {
 } from '../services/sync/erpRegisterResponse';
 import { saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
 import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../services/sync/SyncProfile';
+import {
+  isTerminalAllowedForBinding,
+  ORDER_TAKER_TERMINAL_TYPE,
+  resolveOrderTakerContract,
+  type PosTerminalType,
+} from '../utils/orderTakerPolicy';
 
 interface TerminalCard {
   id: string;
@@ -38,6 +44,12 @@ interface TerminalCard {
   occupied: boolean;
   currentDeviceId?: string;
   config: TerminalConfig;
+  terminalType?: string;
+  terminal_type?: string;
+  masterTerminalId?: string;
+  master_terminal_id?: string;
+  capabilities?: string[];
+  restrictions?: string[];
 }
 
 interface DeviceAuthorizationIssue {
@@ -245,6 +257,7 @@ interface TerminalSelectorProps {
   currentConfig: BusinessConfig;
   deviceId: string;
   bindingMode: 'MASTER' | 'SLAVE';
+  expectedTerminalType?: PosTerminalType | null;
   integrationMode: 'LOCAL_ONLY' | 'ERP_DIRECT';
   tenantId?: string;
   erpBaseUrl?: string;
@@ -750,6 +763,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   currentConfig,
   deviceId,
   bindingMode,
+  expectedTerminalType,
   integrationMode,
   tenantId: initialTenantId,
   erpBaseUrl: initialErpBaseUrl,
@@ -875,6 +889,16 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
       }
 
       const rawTerminals = Array.isArray(data.terminals) ? data.terminals : [];
+      const masterTerminalIds = new Set(
+        (Array.isArray(currentConfig.terminals) ? currentConfig.terminals : [])
+          .filter((entry) => entry?.config?.isPrimaryNode)
+          .flatMap((entry) => [
+            String(entry?.id || '').trim(),
+            String(entry?.config?.erpTerminalId || '').trim(),
+            String(entry?.config?.erpBinding?.terminalId || '').trim(),
+          ])
+          .filter(Boolean)
+      );
       const visibleRawTerminals = rawTerminals.filter((terminal: any) => {
         const config = terminal?.config && typeof terminal.config === 'object' ? terminal.config : {};
         const metadata = config?.metadata && typeof config.metadata === 'object'
@@ -902,8 +926,14 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
         return !archived;
       });
-      const deduped = dedupeTerminalCards(visibleRawTerminals, { deviceId });
+      const compatibleTerminals = visibleRawTerminals.filter((terminal) =>
+        isTerminalAllowedForBinding(terminal, expectedTerminalType, masterTerminalIds)
+      );
+      const deduped = dedupeTerminalCards(compatibleTerminals, { deviceId });
       setTerminals(deduped.terminals);
+      if (expectedTerminalType === ORDER_TAKER_TERMINAL_TYPE && deduped.terminals.length === 0) {
+        setError('La Maestra no devolvió terminales de Toma de pedidos disponibles. Créala primero en el ERP y sincroniza la Maestra.');
+      }
       if (deduped.duplicatesRemoved > 0) {
         setError(`El ERP/Cloud-Admin devolvió ${deduped.duplicatesRemoved} terminal duplicada(s). El POS ocultó las fantasma y usará una sola caja operativa.`);
       }
@@ -1006,7 +1036,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [apiBase, bindingMode, currentConfig, deviceId, erpBaseUrl, expectsErpDirect, initialTenantId, shouldBlockAlreadyBound, useErpDirectMasterAndroid, usesErpDirect]);
+  }, [apiBase, bindingMode, currentConfig, deviceId, erpBaseUrl, expectedTerminalType, expectsErpDirect, initialTenantId, shouldBlockAlreadyBound, useErpDirectMasterAndroid, usesErpDirect]);
 
   useEffect(() => {
     void fetchTerminals();
@@ -1059,6 +1089,10 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         device_id: deviceId,
         app_version: resolveAppVersion(),
         binding_mode: bindingMode,
+        terminal_type: resolveOrderTakerContract(terminal).terminalType,
+        master_terminal_id: resolveOrderTakerContract(terminal).masterTerminalId,
+        capabilities: resolveOrderTakerContract(terminal).capabilities,
+        restrictions: resolveOrderTakerContract(terminal).restrictions,
         force_transfer: false,
       };
       const pairingDiagnosticBase = {
@@ -1401,6 +1435,13 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           at: new Date().toISOString(),
         }));
         const canonicalTerminalId = resolvedErpTerminalId || resolvedTerminalId;
+        const selectedContract = resolveOrderTakerContract(terminal);
+        localStorage.setItem('clic_pos_terminal_type', selectedContract.terminalType);
+        if (selectedContract.masterTerminalId) {
+          localStorage.setItem('clic_pos_master_terminal_id', selectedContract.masterTerminalId);
+        } else {
+          localStorage.removeItem('clic_pos_master_terminal_id');
+        }
         console.info('canonical_terminal_selected', {
           terminalId: canonicalTerminalId,
           erpTerminalId: resolvedErpTerminalId || null,

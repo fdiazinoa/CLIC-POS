@@ -1,10 +1,15 @@
 import React, { useState } from 'react';
-import { ChevronRight, Lock, Server, Smartphone, Wifi } from 'lucide-react';
+import { ChevronRight, ClipboardList, Lock, Server, Smartphone, Wifi } from 'lucide-react';
 import { BusinessConfig, Product, User as UserType } from '../types';
 import TerminalSelector from './TerminalSelector';
 import { buildMasterUrlCandidates, buildMasterUrlFromHost, normalizeMasterHost } from '../utils/cloudMasterRegistry';
 import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../services/sync/SyncProfile';
 import type { RuntimeTerminalRecoveryState } from '../services/setup/erpTerminalSetup';
+import {
+  ORDER_TAKER_TERMINAL_TYPE,
+  STANDARD_POS_TERMINAL_TYPE,
+  type PosTerminalType,
+} from '../utils/orderTakerPolicy';
 
 interface PairingResult {
   tenantId?: string;
@@ -86,10 +91,14 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   const [masterAdmins, setMasterAdmins] = useState<UserType[]>([]);
   const [localIps, setLocalIps] = useState<string[]>([]);
   const [bindingMode, setBindingMode] = useState<'MASTER' | 'SLAVE'>(initialBindingMode || 'MASTER');
+  const [expectedTerminalType, setExpectedTerminalType] = useState<PosTerminalType | null>(
+    initialBindingMode === 'SLAVE' ? STANDARD_POS_TERMINAL_TYPE : null
+  );
 
   React.useEffect(() => {
     if (initialBindingMode) {
       setBindingMode(initialBindingMode);
+      setExpectedTerminalType(initialBindingMode === 'SLAVE' ? STANDARD_POS_TERMINAL_TYPE : null);
     }
   }, [initialBindingMode]);
 
@@ -129,8 +138,16 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
     throw lastError || new Error('No se pudo conectar a la Maestra');
   };
 
-  const handleModeSelect = (mode: 'MASTER' | 'SLAVE') => {
-    setBindingMode(mode);
+  const handleModeSelect = (mode: 'MASTER' | 'SLAVE' | 'ORDER_TAKER') => {
+    const nextBindingMode = mode === 'ORDER_TAKER' ? 'SLAVE' : mode;
+    setBindingMode(nextBindingMode);
+    setExpectedTerminalType(
+      mode === 'ORDER_TAKER'
+        ? ORDER_TAKER_TERMINAL_TYPE
+        : mode === 'SLAVE'
+          ? STANDARD_POS_TERMINAL_TYPE
+          : null
+    );
     setError(null);
     if (mode === 'MASTER') {
       setMasterIp('');
@@ -273,6 +290,23 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                   </div>
                 </div>
               </button>
+
+              <button
+                onClick={() => handleModeSelect('ORDER_TAKER')}
+                className="w-full rounded-[1.6rem] border-2 border-slate-100 bg-slate-50 p-5 text-left transition hover:border-cyan-500 hover:bg-white sm:rounded-[2rem] sm:p-6"
+              >
+                <div className="flex items-start gap-4 sm:items-center">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-cyan-600 shadow-sm sm:h-12 sm:w-12">
+                    <ClipboardList size={24} />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="font-black text-slate-900">Toma de pedidos</h3>
+                    <p className="mt-1 text-xs font-medium leading-relaxed text-slate-400">
+                      Registra pedidos y mesas conectado siempre a una caja maestra. No cobra ni trabaja sin conexión.
+                    </p>
+                  </div>
+                </div>
+              </button>
             </div>
           )}
 
@@ -372,6 +406,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
               currentConfig={config}
               deviceId={deviceId}
               bindingMode={bindingMode}
+              expectedTerminalType={expectedTerminalType}
               integrationMode={integrationMode}
               tenantId={tenantId}
               erpBaseUrl={erpBaseUrl}

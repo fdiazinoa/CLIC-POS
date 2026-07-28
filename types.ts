@@ -122,6 +122,7 @@ export interface SyncConfig {
 // --- DEVICE ROLE TYPES ---
 export enum DeviceRole {
   STANDARD_POS = 'STANDARD_POS',
+  ORDER_TAKER = 'ORDER_TAKER',
   SELF_CHECKOUT = 'SELF_CHECKOUT',
   PRICE_CHECKER = 'PRICE_CHECKER',
   HANDHELD_INVENTORY = 'HANDHELD_INVENTORY',
@@ -618,6 +619,14 @@ export interface TerminalConfig {
   governedByMaster?: boolean; // NEW: If true, this terminal follows the configuration defined by the Master
   startWithAgenda?: boolean; // NEW: Boot directly into Agenda view
   deviceRole?: DeviceRoleConfig; // NEW: Configuración de rol de dispositivo
+  terminalType?: 'STANDARD_POS' | 'ORDER_TAKER' | string;
+  terminal_type?: 'STANDARD_POS' | 'ORDER_TAKER' | string;
+  masterTerminalId?: string;
+  master_terminal_id?: string;
+  capabilities?: string[];
+  restrictions?: string[];
+  productionCenterId?: string;
+  production_center_id?: string;
 
   fiscal: {
     enabled?: boolean;

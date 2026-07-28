@@ -1707,6 +1707,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       (activeTerminalConfigRaw?.deviceRole as Record<string, unknown> | undefined)?.role_code,
       (activeTerminalConfigRaw?.deviceRole as Record<string, unknown> | undefined)?.device_role_code,
    ], DeviceRole.STANDARD_POS) === DeviceRole.SELF_CHECKOUT;
+   const isOrderTakerMode = resolveDeviceRoleValue([
+      activeTerminalConfigRaw?.deviceRole,
+      activeTerminalConfigRaw?.terminalType,
+      activeTerminalConfigRaw?.terminal_type,
+      activeTerminalConfigRaw?.role,
+      activeTerminalConfigRaw?.roleCode,
+      activeTerminalConfigRaw?.role_code,
+   ], DeviceRole.STANDARD_POS) === DeviceRole.ORDER_TAKER;
 
    // --- AUTO-HYDRATION FOR TABLES ---
    // --- SMART TABLE HYDRATION ---
@@ -4013,8 +4021,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const amountDueNow = activeRecoveredReservation
       ? (isRecoveredUberOrder ? 0 : reservationBalanceDue)
       : nextPaymentFractionPart?.amount ?? cartTotal;
-   const canCheckoutWithFiscalPolicy = isFiscalModeDisabled || fiscalStatus.hasNCF;
-   const checkoutActionLabel = !canCheckoutWithFiscalPolicy
+   const canCheckoutWithFiscalPolicy = isOrderTakerMode || isFiscalModeDisabled || fiscalStatus.hasNCF;
+   const checkoutActionLabel = isOrderTakerMode
+      ? 'GUARDAR PEDIDO'
+      : !canCheckoutWithFiscalPolicy
       ? 'Sin Secuencia'
       : isRecoveredUberOrder
          ? 'FACTURAR UBER'
@@ -5179,6 +5189,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const proceedToCheckout = async () => {
+      if (isOrderTakerMode) {
+         await handleSendAndExit();
+         return;
+      }
       const hasSaleLines = cart.some(item => Number(item.quantity || 0) > 0);
       if (hasSaleLines && !ensureSalesWithOpenZPermission()) return;
       if (activePaymentFraction && !isCurrentPaymentFraction) {
@@ -7657,7 +7671,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           className="h-16 w-full flex items-center justify-center gap-2.5 rounded-2xl font-black text-[13px] uppercase tracking-[0.14em] bg-slate-900 text-white hover:bg-black shadow-xl hover:shadow-md transition-all active:scale-95 disabled:bg-slate-200 disabled:text-slate-400 disabled:opacity-100 disabled:cursor-not-allowed"
                                        >
                                           <ArrowRight size={24} />
-                                          <span>Cobrar</span>
+                                          <span>{isOrderTakerMode ? 'Guardar pedido' : 'Cobrar'}</span>
                                        </button>
                                     </>
                                  )}
@@ -7764,7 +7778,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         disabled={cart.length === 0 || !canCheckoutWithFiscalPolicy}
                         className="bg-blue-600 text-white px-8 py-4 rounded-2xl font-black text-lg shadow-lg shadow-blue-200 active:scale-95 transition-all flex items-center gap-2"
                      >
-                        <span>{isRecoveredUberOrder ? 'FACTURAR UBER' : activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR'}</span>
+                        <span>{isOrderTakerMode ? 'GUARDAR PEDIDO' : isRecoveredUberOrder ? 'FACTURAR UBER' : activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR'}</span>
                         <ArrowRight size={20} />
                      </button>
                   </div>

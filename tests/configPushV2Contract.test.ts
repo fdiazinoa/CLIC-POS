@@ -344,6 +344,55 @@ test('applies RETAIL to RESTAURANT terminal_config, persists it and refreshes ru
     assert.equal(resolvePosSalesStartView(configReloadedAfterRestart, reloadedTerminal.config), 'TABLE_MAP');
 });
 
+test('persists ORDER_TAKER contract from CONFIG_PUSH_V2 across restart', async () => {
+    const { localTerminalId } = resetHarness();
+    const { result, acks } = await runEvent({
+        id: 'order-taker-contract',
+        scopes: ['terminal_config'],
+        versions: { terminal_config: 12 },
+        domains: {
+            terminal_config: {
+                terminal: {
+                    terminal_id: terminalId,
+                    terminal_type: 'ORDER_TAKER',
+                    master_terminal_id: 'master-terminal-001',
+                    capabilities: ['TABLES', 'ORDERS', 'KDS_SEND'],
+                    restrictions: ['NO_OFFLINE', 'NO_PAYMENTS', 'NO_FISCAL_DOCUMENTS', 'NO_CASH_SESSION', 'NO_Z_CLOSE'],
+                    config: {
+                        terminal_type: 'ORDER_TAKER',
+                        master_terminal_id: 'master-terminal-001',
+                        capabilities: ['TABLES', 'ORDERS', 'KDS_SEND'],
+                        restrictions: ['NO_OFFLINE', 'NO_PAYMENTS', 'NO_FISCAL_DOCUMENTS', 'NO_CASH_SESSION', 'NO_Z_CLOSE'],
+                    },
+                },
+                resolved: {
+                    terminal: {
+                        terminal_type: 'ORDER_TAKER',
+                        master_terminal_id: 'master-terminal-001',
+                    },
+                },
+            },
+        },
+    });
+
+    assert.equal(result?.applied, 1);
+    assert.equal(acks[0].status, 'APPLIED');
+
+    const persisted = clone(collections.get('config')) as any;
+    const terminal = persisted.terminals.find((entry: any) => entry.id === localTerminalId);
+    assert.equal(terminal.config.deviceRole.role, 'ORDER_TAKER');
+    assert.equal(terminal.config.terminal_type, 'ORDER_TAKER');
+    assert.equal(terminal.config.master_terminal_id, 'master-terminal-001');
+    assert.deepEqual(terminal.config.capabilities, ['TABLES', 'ORDERS', 'KDS_SEND']);
+    assert.ok(terminal.config.restrictions.includes('NO_OFFLINE'));
+    assert.ok(terminal.config.restrictions.includes('NO_PAYMENTS'));
+
+    const reloaded = clone(collections.get('config')) as any;
+    const reloadedTerminal = reloaded.terminals.find((entry: any) => entry.id === localTerminalId);
+    assert.equal(reloadedTerminal.config.deviceRole.role, 'ORDER_TAKER');
+    assert.equal(reloadedTerminal.config.master_terminal_id, 'master-terminal-001');
+});
+
 test('same terminal_config version hash is idempotent and does not download or reapply', async () => {
     resetHarness();
     const input = {

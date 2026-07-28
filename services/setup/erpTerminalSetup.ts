@@ -7,6 +7,7 @@ import {
 import type { SyncProfile } from '../sync/SyncProfile';
 import { supabase } from '../../utils/supabase';
 import { requestJson } from '../network/httpClient';
+import { resolveOrderTakerContract } from '../../utils/orderTakerPolicy';
 
 export interface RuntimeTerminalCard {
   id: string;
@@ -16,6 +17,12 @@ export interface RuntimeTerminalCard {
   occupied: boolean;
   currentDeviceId?: string;
   config: TerminalConfig;
+  terminalType?: string;
+  terminal_type?: string;
+  masterTerminalId?: string;
+  master_terminal_id?: string;
+  capabilities?: string[];
+  restrictions?: string[];
 }
 
 export interface RuntimeTerminalListResponse {
@@ -1004,13 +1011,28 @@ const resolveErpTerminalDeviceRole = (terminal: any) => {
 
 const applyErpTerminalDeviceRole = (terminalConfig: TerminalConfig, erpTerminal: any): TerminalConfig => {
   const role = resolveErpTerminalDeviceRole(erpTerminal);
-  if (!role) return terminalConfig;
+  const orderTakerContract = resolveOrderTakerContract(erpTerminal);
+  if (!role) return {
+    ...terminalConfig,
+    terminalType: orderTakerContract.terminalType,
+    terminal_type: orderTakerContract.terminalType,
+    masterTerminalId: orderTakerContract.masterTerminalId,
+    master_terminal_id: orderTakerContract.masterTerminalId,
+    capabilities: orderTakerContract.capabilities,
+    restrictions: orderTakerContract.restrictions,
+  };
 
   const defaults = getDefaultRoleConfig(role);
   const currentDeviceRole = terminalConfig.deviceRole || defaults;
 
   return {
     ...terminalConfig,
+    terminalType: role,
+    terminal_type: role,
+    masterTerminalId: orderTakerContract.masterTerminalId,
+    master_terminal_id: orderTakerContract.masterTerminalId,
+    capabilities: orderTakerContract.capabilities,
+    restrictions: orderTakerContract.restrictions,
     deviceRole: {
       ...defaults,
       ...currentDeviceRole,
@@ -1214,6 +1236,7 @@ export const listTerminalsFromErp = async (input: {
       asString(terminal.company_name) ||
       'ERP';
     const currentDeviceId = asString(terminal.device_id) || undefined;
+    const orderTakerContract = resolveOrderTakerContract(terminal);
 
     return {
       id: terminalId,
@@ -1222,6 +1245,12 @@ export const listTerminalsFromErp = async (input: {
       location,
       occupied: Boolean(currentDeviceId && currentDeviceId !== input.posDeviceId),
       currentDeviceId: currentDeviceId || undefined,
+      terminalType: orderTakerContract.terminalType,
+      terminal_type: orderTakerContract.terminalType,
+      masterTerminalId: orderTakerContract.masterTerminalId,
+      master_terminal_id: orderTakerContract.masterTerminalId,
+      capabilities: orderTakerContract.capabilities,
+      restrictions: orderTakerContract.restrictions,
       config:
         Array.isArray(input.currentConfig?.terminals) && input.currentConfig.terminals.length > 0
           ? {

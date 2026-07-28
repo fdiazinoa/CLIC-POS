@@ -37,6 +37,7 @@ import {
 } from './documentSeriesIdentity';
 import { getDefaultRoleConfig, resolveDeviceRoleValue } from './deviceRoleHelpers';
 import { resolveTariffId, resolveWarehouseId } from './masterIdentity';
+import { resolveOrderTakerContract } from './orderTakerPolicy';
 
 const asObject = (value: unknown): Record<string, any> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -2212,6 +2213,17 @@ export const applyTerminalConfigSnapshot = (
       : fallbackAuthLevel ||
         (!deviceRoleChanged ? terminalTemplate.deviceRole?.authLevel : undefined) ||
         deviceRoleDefaults.authLevel;
+  const terminalTypeContract = resolveOrderTakerContract({
+    ...effectiveFallbackConfig,
+    ...effectiveResolved,
+    ...resolvedIdentity,
+    terminalType: effectiveDeviceRole,
+    config: {
+      ...effectiveFallbackConfig,
+      ...effectiveResolved,
+      ...resolvedIdentity,
+    },
+  });
 
   const effectiveDocumentSeries = mergeDocumentSeriesCollection(
     (
@@ -2251,6 +2263,16 @@ export const applyTerminalConfigSnapshot = (
 
   const nextTerminalConfig: TerminalConfig = {
     ...terminalTemplate,
+    terminalType: effectiveDeviceRole,
+    terminal_type: effectiveDeviceRole,
+    masterTerminalId: terminalTypeContract.masterTerminalId || terminalTemplate.masterTerminalId,
+    master_terminal_id: terminalTypeContract.masterTerminalId || terminalTemplate.master_terminal_id,
+    capabilities: terminalTypeContract.capabilities.length > 0
+      ? terminalTypeContract.capabilities
+      : terminalTemplate.capabilities,
+    restrictions: terminalTypeContract.restrictions.length > 0
+      ? terminalTypeContract.restrictions
+      : terminalTemplate.restrictions,
     currentDeviceId: posDeviceId || terminalTemplate.currentDeviceId,
     isPrimaryNode: bindingMode ? bindingMode === 'MASTER' : terminalTemplate.isPrimaryNode,
     governedByMaster: bindingMode ? bindingMode === 'SLAVE' : terminalTemplate.governedByMaster,

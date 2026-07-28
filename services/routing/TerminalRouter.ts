@@ -187,6 +187,7 @@ class TerminalRouter {
         // Define flow sequences for different roles
         const flows: Record<DeviceRole, string[]> = {
             [DeviceRole.STANDARD_POS]: [],  // No restrictions
+            [DeviceRole.ORDER_TAKER]: [],  // Tables and orders are freely navigable
             [DeviceRole.SELF_CHECKOUT]: [
                 'KIOSK_WELCOME',
                 'KIOSK_BROWSER',
