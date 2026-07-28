@@ -40,6 +40,19 @@ test('la caja cliente conserva compatibilidad con pos_master_ip', () => {
   );
 });
 
+test('la caja cliente corrige HTTPS persistido para una IP privada del Master', () => {
+  const storage = createStorage({
+    clic_pos_terminal_setup_mode: 'CLIENT',
+    CLIC_POS_MASTER_URL: 'https://192.168.1.21:3001/api/'
+  });
+
+  assert.equal(resolveMasterOperationalBaseUrl(storage), 'http://192.168.1.21:3001');
+  assert.equal(
+    resolveOperationalApiUrl('/api/config', storage),
+    'http://192.168.1.21:3001/api/config'
+  );
+});
+
 test('Master y ERP directo mantienen las rutas relativas actuales', () => {
   const masterStorage = createStorage({
     clic_pos_terminal_setup_mode: 'SERVER_LOCAL',
