@@ -26,6 +26,7 @@ import {
 import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from 'framer-motion';
 import TableOptionsModal from './TableOptionsModal';
 import SplitTicketModal from './SplitTicketModal';
+import TableMoveConfirmationModal from './TableMoveConfirmationModal';
 import { createPaymentFractionPlan } from '../utils/paymentFractions';
 import { getRenderableFloorTables } from '../utils/tableLayout';
 import { hasPendingKdsDispatch } from '../utils/kdsPresentation';
@@ -103,6 +104,11 @@ interface TableTransferSelection {
     mode: TableTransferMode;
     step: 'SOURCE' | 'TARGET';
     sourceTableId?: string;
+}
+
+interface PendingTableMove {
+    sourceTableId: string;
+    targetTableId: string;
 }
 
 interface TableNoticeState {
@@ -404,6 +410,7 @@ const TableMap: React.FC<TableMapProps> = ({
     const [splitTicketForModal, setSplitTicketForModal] = useState<ParkedTicket | null>(null);
     const [selectedAccountTable, setSelectedAccountTable] = useState<Table | null>(null);
     const [transferSelection, setTransferSelection] = useState<TableTransferSelection | null>(null);
+    const [pendingTableMove, setPendingTableMove] = useState<PendingTableMove | null>(null);
     const [subtotalPickOpen, setSubtotalPickOpen] = useState(false);
     const [fractionPickOpen, setFractionPickOpen] = useState(false);
     const [splitPickOpen, setSplitPickOpen] = useState(false);
@@ -1080,11 +1087,6 @@ const TableMap: React.FC<TableMapProps> = ({
                 setTransferSelection(null);
                 return true;
             }
-            if (transferSelection.mode === 'MOVE') {
-                setSelectedTable(table);
-                setTransferSelection(null);
-                return true;
-            }
             setTransferSelection({
                 ...transferSelection,
                 step: 'TARGET',
@@ -1098,9 +1100,29 @@ const TableMap: React.FC<TableMapProps> = ({
             return true;
         }
 
+        if (transferSelection.mode === 'MOVE') {
+            if (table.id === transferSelection.sourceTableId) {
+                alert('Seleccione una mesa destino distinta.');
+                return true;
+            }
+            const targetTicket = resolveTicketForTable(table);
+            const targetIsOccupied = Boolean(targetTicket?.items?.length)
+                || getVisualTableState(table).status !== 'FREE';
+            if (targetIsOccupied) {
+                alert('Seleccione una mesa destino libre.');
+                return true;
+            }
+            setPendingTableMove({
+                sourceTableId: transferSelection.sourceTableId,
+                targetTableId: table.id
+            });
+            setTransferSelection(null);
+            return true;
+        }
+
         void completeTableTransfer(transferSelection.sourceTableId, table.id, transferSelection.mode);
         return true;
-    }, [completeTableTransfer, resolveTicketForTable, transferSelection]);
+    }, [completeTableTransfer, getVisualTableState, resolveTicketForTable, transferSelection]);
 
     const handleTableAction = useCallback(async (table: Table) => {
         const tableTickets = getTableTickets(table);
@@ -1427,6 +1449,24 @@ const TableMap: React.FC<TableMapProps> = ({
     const splitTicketItems = useMemo(
         () => splitTicketForModal ? ensureCartIds(splitTicketForModal.items) : [],
         [splitTicketForModal]
+    );
+    const pendingMoveSource = useMemo(
+        () => pendingTableMove
+            ? safeTables.find(table => table.id === pendingTableMove.sourceTableId)
+            : undefined,
+        [pendingTableMove, safeTables]
+    );
+    const pendingMoveTarget = useMemo(
+        () => pendingTableMove
+            ? safeTables.find(table => table.id === pendingTableMove.targetTableId)
+            : undefined,
+        [pendingTableMove, safeTables]
+    );
+    const pendingMoveItems = useMemo(
+        () => pendingMoveSource
+            ? ensureCartIds(resolveTicketForTable(pendingMoveSource)?.items || [])
+            : [],
+        [pendingMoveSource, resolveTicketForTable]
     );
 
     return (
@@ -1771,6 +1811,34 @@ const TableMap: React.FC<TableMapProps> = ({
                         </m.div>
                     )}
                 </AnimatePresence>
+
+                {pendingTableMove && pendingMoveSource && pendingMoveTarget && (
+                    <TableMoveConfirmationModal
+                        sourceLabel={getTableRoomLabel(pendingMoveSource)}
+                        targetLabel={getTableRoomLabel(pendingMoveTarget)}
+                        items={pendingMoveItems}
+                        onClose={() => setPendingTableMove(null)}
+                        onMoveAll={() => {
+                            const selection = pendingTableMove;
+                            setPendingTableMove(null);
+                            void completeTableTransfer(
+                                selection.sourceTableId,
+                                selection.targetTableId,
+                                'MOVE'
+                            );
+                        }}
+                        onMovePartial={(items) => {
+                            const selection = pendingTableMove;
+                            setPendingTableMove(null);
+                            void completeTableTransfer(
+                                selection.sourceTableId,
+                                selection.targetTableId,
+                                'MOVE',
+                                items
+                            );
+                        }}
+                    />
+                )}
 
                 {selectedTable && (
                     <TableOptionsModal
