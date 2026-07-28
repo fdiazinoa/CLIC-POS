@@ -771,7 +771,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   const [authorizationIssue, setAuthorizationIssue] = useState<DeviceAuthorizationIssue | null>(null);
   const [isRetryingAuthorization, setIsRetryingAuthorization] = useState(false);
   const [bindingProgress, setBindingProgress] = useState<TerminalBindingProgressState>(() => createInitialProgressState());
-  const [masterIpInput, setMasterIpInput] = useState(masterIp);
+  const [masterIpInput, setMasterIpInput] = useState(() => normalizeMasterHost(masterIp));
   const [erpBaseUrl, setErpBaseUrl] = useState<string | null>(() => normalizeBaseUrl(initialErpBaseUrl) || resolveErpBaseUrl());
   const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
   const expectsErpDirect = bindingMode === 'MASTER' && integrationMode === 'ERP_DIRECT';
@@ -795,7 +795,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   }, [initialErpBaseUrl]);
 
   useEffect(() => {
-    setMasterIpInput(masterIp);
+    setMasterIpInput(normalizeMasterHost(masterIp));
   }, [masterIp]);
 
   const apiBase = useMemo(() => {

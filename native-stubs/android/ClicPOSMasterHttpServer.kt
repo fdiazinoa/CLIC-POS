@@ -8,6 +8,7 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.Collections
 import java.util.concurrent.Executors
@@ -145,6 +146,22 @@ object ClicPOSMasterHttpServer {
                         writeResponse(client, 200, configSnapshot.toString())
                     method == "GET" && path == "/api/users" ->
                         writeResponse(client, 200, usersSnapshot.toString())
+                    method == "GET" && path == "/api/setup/terminals" ->
+                        writeResponse(client, 200, buildTerminalListResponse(parts.getOrNull(1) ?: path).toString())
+                    method == "POST" && path == "/api/setup/bind-terminal" ->
+                        handleTerminalBinding(client, body)
+                    method == "GET" && path.startsWith("/api/setup/initial-config/") ->
+                        writeResponse(
+                            client,
+                            200,
+                            buildInitialConfigResponse(
+                                URLDecoder.decode(
+                                    path.removePrefix("/api/setup/initial-config/"),
+                                    StandardCharsets.UTF_8.name()
+                                ),
+                                parts.getOrNull(1) ?: path
+                            ).toString()
+                        )
                     method == "PUT" && path == "/api/config" -> {
                         configSnapshot = if (body.isBlank()) JSONObject() else JSONObject(body)
                         writeResponse(client, 200, configSnapshot.toString())
@@ -163,6 +180,193 @@ object ClicPOSMasterHttpServer {
         }
     }
 
+    private fun buildTerminalListResponse(rawTarget: String): JSONObject {
+        val query = parseQuery(rawTarget)
+        val deviceId = query.optString("pos_device_id")
+        val tenantId = query.optString("tenant_id").ifBlank { "default-tenant" }
+        val terminals = configSnapshot.optJSONArray("terminals") ?: JSONArray()
+        val result = JSONArray()
+
+        for (index in 0 until terminals.length()) {
+            val terminal = terminals.optJSONObject(index) ?: continue
+            val terminalId = terminal.optString("id").trim()
+            if (terminalId.isBlank()) continue
+
+            val terminalConfig = terminal.optJSONObject("config") ?: JSONObject()
+            val currentDeviceId = terminalConfig.optString("currentDeviceId").trim()
+            val erpTerminalId = firstNonBlank(
+                terminal.optString("erpTerminalId"),
+                terminalConfig.optString("erpTerminalId"),
+                terminalConfig.optString("erp_terminal_id"),
+                terminalId
+            )
+            val terminalName = firstNonBlank(
+                terminal.optString("name"),
+                terminalConfig.optString("terminalName"),
+                terminalConfig.optString("terminal_name"),
+                terminalConfig.optString("stationName"),
+                terminalConfig.optString("stationNumber"),
+                terminalId
+            )
+
+            result.put(
+                JSONObject()
+                    .put("id", terminalId)
+                    .put("erpTerminalId", erpTerminalId)
+                    .put("name", terminalName)
+                    .put("location", firstNonBlank(
+                        terminal.optString("location"),
+                        terminalConfig.optString("storeName"),
+                        terminalConfig.optString("store_name"),
+                        "Caja Maestra"
+                    ))
+                    .put("occupied", currentDeviceId.isNotBlank() && currentDeviceId != deviceId)
+                    .put("currentDeviceId", if (currentDeviceId.isBlank()) JSONObject.NULL else currentDeviceId)
+                    .put("config", JSONObject(terminalConfig.toString()))
+            )
+        }
+
+        return JSONObject()
+            .put("tenant_id", tenantId)
+            .put("source", "ANDROID_MASTER")
+            .put("terminals", result)
+    }
+
+    private fun handleTerminalBinding(socket: Socket, body: String) {
+        val payload = if (body.isBlank()) JSONObject() else JSONObject(body)
+        val selectedTerminalId = firstNonBlank(
+            payload.optString("terminal_id"),
+            payload.optString("erp_terminal_id")
+        )
+        val deviceId = firstNonBlank(
+            payload.optString("pos_device_id"),
+            payload.optString("device_id")
+        )
+        val tenantId = firstNonBlank(
+            payload.optString("tenant_id"),
+            payload.optString("tenantId"),
+            "default-tenant"
+        )
+        val forceTransfer = payload.optBoolean("force_transfer", false)
+        val terminals = configSnapshot.optJSONArray("terminals") ?: JSONArray()
+        var selectedTerminal: JSONObject? = null
+
+        for (index in 0 until terminals.length()) {
+            val terminal = terminals.optJSONObject(index) ?: continue
+            val config = terminal.optJSONObject("config") ?: JSONObject().also {
+                terminal.put("config", it)
+            }
+            val id = terminal.optString("id").trim()
+            val erpId = firstNonBlank(
+                terminal.optString("erpTerminalId"),
+                config.optString("erpTerminalId"),
+                config.optString("erp_terminal_id")
+            )
+
+            if (id != selectedTerminalId && erpId != selectedTerminalId) continue
+
+            val currentDeviceId = config.optString("currentDeviceId").trim()
+            if (currentDeviceId.isNotBlank() && currentDeviceId != deviceId && !forceTransfer) {
+                writeResponse(
+                    socket,
+                    409,
+                    JSONObject()
+                        .put("success", false)
+                        .put("code", "TERMINAL_OCCUPIED")
+                        .put("message", "La terminal ya está ocupada por otro equipo.")
+                        .put("current_device_id", currentDeviceId)
+                        .toString()
+                )
+                return
+            }
+
+            config
+                .put("currentDeviceId", deviceId)
+                .put("lastPairingDate", java.time.Instant.now().toString())
+                .put("isPrimaryNode", false)
+                .put("governedByMaster", true)
+            val syncConfig = config.optJSONObject("syncConfig") ?: JSONObject()
+            syncConfig.put("mode", "SLAVE").put("isEnabled", true)
+            config.put("syncConfig", syncConfig)
+            selectedTerminal = terminal
+            break
+        }
+
+        val boundTerminal = selectedTerminal
+        if (boundTerminal == null) {
+            writeResponse(
+                socket,
+                404,
+                JSONObject()
+                    .put("success", false)
+                    .put("message", "La terminal seleccionada no existe en la Maestra.")
+                    .toString()
+            )
+            return
+        }
+
+        configSnapshot = JSONObject(configSnapshot.toString())
+        val terminalConfig = boundTerminal.optJSONObject("config") ?: JSONObject()
+        val terminalId = boundTerminal.optString("id")
+        val erpTerminalId = firstNonBlank(
+            boundTerminal.optString("erpTerminalId"),
+            terminalConfig.optString("erpTerminalId"),
+            terminalConfig.optString("erp_terminal_id"),
+            terminalId
+        )
+        val terminalName = firstNonBlank(
+            boundTerminal.optString("name"),
+            terminalConfig.optString("terminalName"),
+            terminalConfig.optString("stationName"),
+            terminalConfig.optString("stationNumber"),
+            terminalId
+        )
+
+        writeResponse(
+            socket,
+            200,
+            JSONObject()
+                .put("success", true)
+                .put("source", "ANDROID_MASTER")
+                .put("tenant_id", tenantId)
+                .put("terminal_id", terminalId)
+                .put("erp_terminal_id", erpTerminalId)
+                .put("terminal_name", terminalName)
+                .put("config", JSONObject(configSnapshot.toString()))
+                .put("users", JSONArray(usersSnapshot.toString()))
+                .toString()
+        )
+    }
+
+    private fun buildInitialConfigResponse(terminalId: String, rawTarget: String): JSONObject {
+        val query = parseQuery(rawTarget)
+        return JSONObject()
+            .put("success", true)
+            .put("source", "ANDROID_MASTER")
+            .put("tenant_id", query.optString("tenant_id").ifBlank { "default-tenant" })
+            .put("terminal_id", query.optString("local_terminal_id").ifBlank { terminalId })
+            .put("erp_terminal_id", terminalId)
+            .put("config", JSONObject(configSnapshot.toString()))
+            .put("rooms", configSnapshot.optJSONArray("rooms") ?: JSONArray())
+            .put("tables", configSnapshot.optJSONArray("tables") ?: JSONArray())
+    }
+
+    private fun parseQuery(rawTarget: String): JSONObject {
+        val result = JSONObject()
+        val query = rawTarget.substringAfter('?', "")
+        if (query.isBlank()) return result
+
+        query.split('&').forEach { pair ->
+            val key = URLDecoder.decode(pair.substringBefore('='), StandardCharsets.UTF_8.name())
+            val value = URLDecoder.decode(pair.substringAfter('=', ""), StandardCharsets.UTF_8.name())
+            if (key.isNotBlank()) result.put(key, value)
+        }
+        return result
+    }
+
+    private fun firstNonBlank(vararg values: String): String =
+        values.firstOrNull { it.isNotBlank() } ?: ""
+
     private fun readAsciiLine(input: java.io.InputStream): String {
         val output = ByteArrayOutputStream()
         while (true) {
@@ -178,6 +382,8 @@ object ClicPOSMasterHttpServer {
             val statusText = when (status) {
                 200 -> "OK"
                 204 -> "No Content"
+                400 -> "Bad Request"
+                409 -> "Conflict"
                 404 -> "Not Found"
                 else -> "Internal Server Error"
             }
@@ -186,7 +392,7 @@ object ClicPOSMasterHttpServer {
                 append("HTTP/1.1 $status $statusText\r\n")
                 append("Content-Type: application/json; charset=utf-8\r\n")
                 append("Access-Control-Allow-Origin: *\r\n")
-                append("Access-Control-Allow-Methods: GET, PUT, OPTIONS\r\n")
+                append("Access-Control-Allow-Methods: GET, POST, PUT, OPTIONS\r\n")
                 append("Access-Control-Allow-Headers: Content-Type, X-Active-Terminal-Id, X-Device-Id\r\n")
                 append("Connection: close\r\n")
                 append("Content-Length: ${bytes.size}\r\n\r\n")
