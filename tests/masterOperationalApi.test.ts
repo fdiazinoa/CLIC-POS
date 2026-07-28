@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  canUseLocalOperationalTableStore,
   isClientTerminalMode,
   resolveMasterOperationalBaseUrl,
   resolveOperationalApiUrl
@@ -18,6 +19,7 @@ test('la caja cliente dirige las operaciones de mesas a la Master vinculada', ()
   });
 
   assert.equal(isClientTerminalMode(storage), true);
+  assert.equal(canUseLocalOperationalTableStore(storage), false);
   assert.equal(resolveMasterOperationalBaseUrl(storage), 'http://192.168.1.20:3001');
   assert.equal(
     resolveOperationalApiUrl('/api/mesas?terminal_id=POS-002', storage),
@@ -31,6 +33,7 @@ test('la caja cliente conserva compatibilidad con pos_master_ip', () => {
   });
 
   assert.equal(isClientTerminalMode(storage), true);
+  assert.equal(canUseLocalOperationalTableStore(storage), false);
   assert.equal(
     resolveOperationalApiUrl('/api/mesas/abrir', storage),
     'http://192.168.1.21:3001/api/mesas/abrir'
@@ -49,4 +52,6 @@ test('Master y ERP directo mantienen las rutas relativas actuales', () => {
 
   assert.equal(resolveOperationalApiUrl('/api/mesas', masterStorage), '/api/mesas');
   assert.equal(resolveOperationalApiUrl('/api/mesas', erpStorage), '/api/mesas');
+  assert.equal(canUseLocalOperationalTableStore(masterStorage), true);
+  assert.equal(canUseLocalOperationalTableStore(erpStorage), true);
 });

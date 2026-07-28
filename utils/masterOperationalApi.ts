@@ -33,6 +33,10 @@ export const isClientTerminalMode = (storage: StorageReader | null = getStorage(
   return Boolean(String(storage.getItem(MASTER_IP_KEY) || '').trim());
 };
 
+export const canUseLocalOperationalTableStore = (
+  storage: StorageReader | null = getStorage()
+): boolean => !isClientTerminalMode(storage);
+
 export const resolveMasterOperationalBaseUrl = (
   storage: StorageReader | null = getStorage()
 ): string => {

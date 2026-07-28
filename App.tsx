@@ -67,7 +67,11 @@ import { resolveDeviceRoleValue } from './utils/deviceRoleHelpers';
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from './utils/posSaleActivity';
 import { canEnterReducedSyncMode, resolveReducedSyncAfterMinutes } from './utils/syncInactivityPolicy';
 import { validateRefundItems } from './utils/refundAvailability';
-import { isClientTerminalMode, resolveOperationalApiUrl } from './utils/masterOperationalApi';
+import {
+  canUseLocalOperationalTableStore,
+  isClientTerminalMode,
+  resolveOperationalApiUrl
+} from './utils/masterOperationalApi';
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
@@ -3366,6 +3370,9 @@ const AppContent: React.FC = () => {
   const [productStocks, setProductStocks] = useState<ProductStock[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [tables, setTables] = useState<Table[]>([]);
+  const [clientMasterTablesStatus, setClientMasterTablesStatus] = useState<'CHECKING' | 'ONLINE' | 'OFFLINE'>(() =>
+    isClientTerminalMode() ? 'CHECKING' : 'ONLINE'
+  );
   const [collections, setCollections] = useState<Collection[]>([]);
   const [activeRoomId, setActiveRoomId] = useState<string>('');
   const [activeRoomId2, setActiveRoomId2] = useState<string>(''); // For backward compatibility if needed
@@ -3379,7 +3386,6 @@ const AppContent: React.FC = () => {
     roomIds: new Set(persistedFloorPlanMirror.rooms.map(room => String(room.id))),
     tableIds: new Set(persistedFloorPlanMirror.tables.map(table => String(table.id)))
   } : null);
-  const clientFloorPlanCacheSignatureRef = useRef('');
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [settingsInitialView, setSettingsInitialView] = useState<string | undefined>();
   const [settingsInitialData, setSettingsInitialData] = useState<any>();
@@ -3911,12 +3917,18 @@ const AppContent: React.FC = () => {
   }, []);
 
   const fetchTables = async () => {
+    const isClientRuntime = isClientTerminalMode();
     try {
-      const isClientRuntime = isClientTerminalMode();
+      if (isClientRuntime && clientMasterTablesStatus !== 'ONLINE') {
+        setClientMasterTablesStatus('CHECKING');
+      }
       const terminalId = getCurrentTerminal()?.id;
       const query = terminalId ? `?terminal_id=${encodeURIComponent(terminalId)}` : '';
       const endpoint = resolveOperationalApiUrl(`/api/mesas${query}`);
       const res = await fetch(endpoint);
+      if (!res.ok) {
+        throw new Error(`Master respondió HTTP ${res.status}`);
+      }
       if (res.ok) {
         const contentType = res.headers.get('content-type') || '';
         if (!contentType.toLowerCase().includes('application/json')) {
@@ -3961,6 +3973,7 @@ const AppContent: React.FC = () => {
 
         // Backward compatibility: some endpoints may return only Table[].
         if (Array.isArray(data)) {
+          if (isClientRuntime) setClientMasterTablesStatus('ONLINE');
           setTables(previousTables => {
             if (data.length === 0 && previousTables.length > 0) {
               console.warn('Se ignoró una respuesta vacía de mesas para preservar el layout local.');
@@ -3974,16 +3987,8 @@ const AppContent: React.FC = () => {
         const nextTables = Array.isArray(data?.tables) ? data.tables : [];
         const nextRooms = Array.isArray(data?.rooms) ? data.rooms : [];
 
-        if (isClientRuntime && nextRooms.length > 0 && nextTables.length > 0) {
-          const cacheSignature = JSON.stringify({ rooms: nextRooms, tables: nextTables });
-          if (cacheSignature !== clientFloorPlanCacheSignatureRef.current) {
-            await Promise.all([
-              db.save('rooms', nextRooms),
-              db.save('tables', nextTables)
-            ]);
-            writeFloorPlanMirror(nextRooms, nextTables);
-            clientFloorPlanCacheSignatureRef.current = cacheSignature;
-          }
+        if (isClientRuntime) {
+          setClientMasterTablesStatus('ONLINE');
           locallySavedFloorPlanRef.current = {
             roomIds: new Set(nextRooms.map((room: Room) => String(room.id))),
             tableIds: new Set(nextTables.map((table: Table) => String(table.id)))
@@ -4032,7 +4037,16 @@ const AppContent: React.FC = () => {
         }
       }
     } catch (e) {
-      console.warn("Failed to fetch tables from Master/API, falling back to local DB:", e);
+      console.warn("Failed to fetch tables from Master/API:", e);
+      if (isClientRuntime) {
+        setClientMasterTablesStatus('OFFLINE');
+        console.error('[TABLE_LAYOUT_CLIENT_BLOCKED]', {
+          masterUrl: localStorage.getItem('CLIC_POS_MASTER_URL') || localStorage.getItem('pos_master_ip'),
+          reason: e instanceof Error ? e.message : String(e)
+        });
+        return;
+      }
+      console.warn('Using local rooms/tables because this terminal owns its operational database.');
       try {
         const [localRooms, localTables] = await Promise.all([
           db.get('rooms') as Promise<Room[]>,
@@ -4953,12 +4967,13 @@ const AppContent: React.FC = () => {
           setInternalSequences(data.internalSequences || []);
           setReceptions(data.receptions || []);
           setProductStocks(data.productStocks || []);
-          const hydratedRooms = persistedFloorPlanMirror?.rooms?.length
-            ? persistedFloorPlanMirror.rooms
-            : (data.rooms || []);
-          const hydratedTables = persistedFloorPlanMirror?.tables?.length
-            ? persistedFloorPlanMirror.tables
-            : (data.tables || []);
+          const canHydrateTablesLocally = canUseLocalOperationalTableStore();
+          const hydratedRooms = canHydrateTablesLocally
+            ? (persistedFloorPlanMirror?.rooms?.length ? persistedFloorPlanMirror.rooms : (data.rooms || []))
+            : [];
+          const hydratedTables = canHydrateTablesLocally
+            ? (persistedFloorPlanMirror?.tables?.length ? persistedFloorPlanMirror.tables : (data.tables || []))
+            : [];
           setRooms(hydratedRooms);
           setTables(hydratedTables);
           setCollections(data.collections || []);
@@ -5374,7 +5389,7 @@ const AppContent: React.FC = () => {
     // IMPORTANT: avoid overriding local edits while designing layout
     if ((config.vertical === 'RESTAURANT' || usesTables) && currentView !== 'TABLE_DESIGNER') {
       fetchTables();
-      const interval = setInterval(fetchTables, 10000); // Poll every 10s
+      const interval = setInterval(fetchTables, isClientTerminalMode() ? 3000 : 10000);
       return () => clearInterval(interval);
     }
   }, [config.vertical, config.terminals, deviceId, currentView]);
@@ -6343,10 +6358,10 @@ const AppContent: React.FC = () => {
       if (Array.isArray(freshData.internalSequences)) setInternalSequences(freshData.internalSequences);
       if (Array.isArray(freshData.receptions)) setReceptions(freshData.receptions);
       if (Array.isArray(freshData.productStocks)) setProductStocks(freshData.productStocks);
-      if (Array.isArray(freshData.rooms) && freshData.rooms.length > 0 && !locallySavedFloorPlanRef.current) {
+      if (canUseLocalOperationalTableStore() && Array.isArray(freshData.rooms) && freshData.rooms.length > 0 && !locallySavedFloorPlanRef.current) {
         setRooms(freshData.rooms);
       }
-      if (Array.isArray(freshData.tables) && freshData.tables.length > 0 && !locallySavedFloorPlanRef.current) {
+      if (canUseLocalOperationalTableStore() && Array.isArray(freshData.tables) && freshData.tables.length > 0 && !locallySavedFloorPlanRef.current) {
         setTables(freshData.tables);
       }
       if (Array.isArray(freshData.collections)) setCollections(freshData.collections);
@@ -7707,6 +7722,10 @@ const AppContent: React.FC = () => {
   };
 
   const handleSaveFloorPlan = async (newRooms: Room[], newTables: Table[]) => {
+    if (isClientTerminalMode()) {
+      alert('El layout solo puede modificarse desde la caja Master.');
+      return;
+    }
     console.log('💾 Saving Floor Plan:', { rooms: newRooms.length, tables: newTables.length });
     const normalizedRooms = newRooms.map(normalizeRoomForLayout);
     const normalizedTablesInput = newTables.map(normalizeTableForLayout);
@@ -8904,7 +8923,6 @@ const AppContent: React.FC = () => {
             /admin|gerente|super/i.test(activeRole.name)
           )
         );
-
         return (
           <div className="h-screen bg-slate-950 overflow-hidden relative">
             <button
@@ -9021,7 +9039,9 @@ const AppContent: React.FC = () => {
                 onRefreshTables={fetchTables}
                 onUpdateTables={async (nextTables) => {
                   setTables(nextTables);
-                  await db.save('tables', nextTables);
+                  if (canUseLocalOperationalTableStore()) {
+                    await db.save('tables', nextTables);
+                  }
                 }}
                 onUpdateParkedTickets={handleUpdateParkedTickets}
                 currencySymbol={config.currencySymbol}
@@ -9056,7 +9076,7 @@ const AppContent: React.FC = () => {
                   }
                 }}
                 onParkedOrderSplitResult={handleParkedOrderSplitFromMap}
-                onOpenTableLayoutDesigner={() => handleViewChange('TABLE_DESIGNER')}
+                onOpenTableLayoutDesigner={isClientTerminalMode() ? undefined : () => handleViewChange('TABLE_DESIGNER')}
               />
             </div>
           </div>
@@ -10488,6 +10508,13 @@ const AppContent: React.FC = () => {
     }
   };
 
+  const blockClientRestaurantOperations = (
+    isClientTerminalMode()
+    && clientMasterTablesStatus !== 'ONLINE'
+    && (currentView === 'TABLE_MAP' || currentView === 'POS')
+    && (config.vertical === 'RESTAURANT' || isRestaurantTerminal(getCurrentTerminal()))
+  );
+
   return (
     <ErrorBoundary componentName="App Root">
       <>
@@ -10637,6 +10664,30 @@ const AppContent: React.FC = () => {
             {renderWithLayout()}
           </React.Suspense>
         </div>
+        {blockClientRestaurantOperations && (
+          <div className="fixed inset-0 z-[100100] flex items-center justify-center bg-slate-950/80 p-6 backdrop-blur-sm">
+            <div className="w-full max-w-lg rounded-2xl border border-amber-300/30 bg-slate-900 p-6 text-center text-white shadow-2xl">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-amber-400/15 text-amber-300">
+                <RefreshCw size={28} className={clientMasterTablesStatus === 'CHECKING' ? 'animate-spin' : ''} />
+              </div>
+              <h2 className="mt-4 text-xl font-black">
+                {clientMasterTablesStatus === 'CHECKING' ? 'Conectando con la caja Master' : 'Caja Master no disponible'}
+              </h2>
+              <p className="mt-2 text-sm font-semibold leading-6 text-slate-300">
+                Las operaciones del restaurante están bloqueadas para evitar trabajar con salas, mesas o cuentas desactualizadas.
+              </p>
+              <button
+                type="button"
+                onClick={() => void fetchTables()}
+                disabled={clientMasterTablesStatus === 'CHECKING'}
+                className="mt-5 inline-flex min-h-12 items-center justify-center gap-2 rounded-lg bg-amber-400 px-5 py-3 text-sm font-black text-slate-950 disabled:cursor-wait disabled:opacity-60"
+              >
+                <RefreshCw size={18} />
+                Reintentar conexión
+              </button>
+            </div>
+          </div>
+        )}
         <GlobalVirtualKeyboard />
       </>
     </ErrorBoundary>
