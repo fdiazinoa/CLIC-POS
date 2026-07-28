@@ -180,11 +180,14 @@ const BarTabsModal: React.FC<{
 
                     {allowCreate && <div className="rounded-3xl border border-blue-100 bg-blue-50 p-5">
                             <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">{accountMode ? 'Nueva cuenta' : 'Nueva minuta'}</p>
+                        <label className="mt-4 block text-xs font-bold text-slate-600">
+                            Nombre opcional
+                        </label>
                         <input
                             value={tabName}
                             onChange={(event) => setTabName(event.target.value)}
                             placeholder={nextName}
-                            className="mt-4 w-full rounded-2xl border border-blue-100 bg-white px-4 py-4 text-lg font-black text-slate-900 outline-none focus:border-blue-500"
+                            className="mt-2 w-full rounded-2xl border border-blue-100 bg-white px-4 py-4 text-lg font-black text-slate-900 outline-none focus:border-blue-500"
                         />
                         <button
                             type="button"
@@ -1128,7 +1131,17 @@ const TableMap: React.FC<TableMapProps> = ({
 
         if (isRestaurantMode) {
             if (onUpdateParkedTickets && onUpdateTables) {
-                setSelectedAccountTable(table);
+                const ticket = await createTableAccount(table);
+                setSelectedAccountTable(null);
+                onTableClick({
+                    ...table,
+                    status: 'OCCUPIED',
+                    currentOrderId: ticket.id,
+                    currentOrderTotal: 0,
+                    timeSeated: ticket.timestamp,
+                    waiterId: table.waiterId || currentUser.id,
+                    waiterName: table.waiterName || currentUser.name
+                });
                 return;
             }
             if (onOpenTable) {
@@ -1166,7 +1179,7 @@ const TableMap: React.FC<TableMapProps> = ({
         }
 
         setSelectedTable(table);
-    }, [currentUser.id, currentUser.name, getTableTickets, isRestaurantMode, onOpenTable, onRefreshTables, onTableClick]);
+    }, [createTableAccount, currentUser.id, currentUser.name, getTableTickets, isRestaurantMode, onOpenTable, onRefreshTables, onTableClick, onUpdateParkedTickets, onUpdateTables]);
 
     const handleNodeSelect = useCallback(
         (model: SmartTableModel) => {

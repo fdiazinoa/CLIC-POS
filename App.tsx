@@ -293,8 +293,64 @@ const TIMER_JITTER_MAX_MS = 5_000;
 const ACTIVE_CART_DRAFT_STORAGE_KEY = 'clic_pos_active_cart_draft_v1';
 const PARKED_TICKETS_STORAGE_KEY = 'clic_pos_parked_tickets_mirror_v1';
 const CASH_MOVEMENTS_STORAGE_KEY = 'clic_pos_cash_movements_mirror_v1';
+const FLOOR_PLAN_STORAGE_KEY = 'clic_pos_floor_plan_mirror_v1';
 const ACTIVE_USER_SESSION_STORAGE_KEY = 'clic_pos_active_user_session_v1';
 const FORCE_LOGIN_AFTER_EXIT_STORAGE_KEY = 'clic_pos_force_login_after_exit_v1';
+
+type FloorPlanMirror = {
+  rooms: Room[];
+  tables: Table[];
+  savedAt: string;
+  tenantId?: string;
+  terminalId?: string;
+};
+
+const readFloorPlanMirror = (): FloorPlanMirror | null => {
+  try {
+    const raw = window.localStorage.getItem(FLOOR_PLAN_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<FloorPlanMirror>;
+    if (!Array.isArray(parsed.rooms) || parsed.rooms.length === 0) return null;
+    if (!Array.isArray(parsed.tables) || parsed.tables.length === 0) return null;
+    const activeTenantId = String(window.localStorage.getItem('active_tenant_id') || '').trim();
+    const activeTerminalId = String(
+      window.localStorage.getItem('active_terminal_id')
+      || window.localStorage.getItem('CLIC_POS_TERMINAL_ID')
+      || ''
+    ).trim();
+    if (parsed.tenantId && activeTenantId && parsed.tenantId !== activeTenantId) return null;
+    if (parsed.terminalId && activeTerminalId && parsed.terminalId !== activeTerminalId) return null;
+    return {
+      rooms: parsed.rooms as Room[],
+      tables: parsed.tables as Table[],
+      savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : '',
+      tenantId: parsed.tenantId,
+      terminalId: parsed.terminalId
+    };
+  } catch {
+    return null;
+  }
+};
+
+const writeFloorPlanMirror = (rooms: Room[], tables: Table[]): void => {
+  if (!Array.isArray(rooms) || rooms.length === 0) return;
+  if (!Array.isArray(tables) || tables.length === 0) return;
+  try {
+    window.localStorage.setItem(FLOOR_PLAN_STORAGE_KEY, JSON.stringify({
+      rooms,
+      tables,
+      savedAt: new Date().toISOString(),
+      tenantId: String(window.localStorage.getItem('active_tenant_id') || '').trim() || undefined,
+      terminalId: String(
+        window.localStorage.getItem('active_terminal_id')
+        || window.localStorage.getItem('CLIC_POS_TERMINAL_ID')
+        || ''
+      ).trim() || undefined
+    } satisfies FloorPlanMirror));
+  } catch (error) {
+    console.warn('No se pudo actualizar el respaldo local del layout:', error);
+  }
+};
 
 const isTableManagedCartSnapshot = (snapshot: Pick<SafeExitSnapshot, 'activeTable'>): boolean =>
   Boolean(snapshot.activeTable?.id || snapshot.activeTable?.currentOrderId);
@@ -3313,11 +3369,15 @@ const AppContent: React.FC = () => {
   const [activeRoomId, setActiveRoomId] = useState<string>('');
   const [activeRoomId2, setActiveRoomId2] = useState<string>(''); // For backward compatibility if needed
   const [supplierProductPrices, setSupplierProductPrices] = useState<any[]>([]);
+  const persistedFloorPlanMirror = useMemo(() => readFloorPlanMirror(), []);
   const defaultRoomBootstrapRef = useRef(false);
   const locallySavedFloorPlanRef = useRef<{
     roomIds: Set<string>;
     tableIds: Set<string>;
-  } | null>(null);
+  } | null>(persistedFloorPlanMirror ? {
+    roomIds: new Set(persistedFloorPlanMirror.rooms.map(room => String(room.id))),
+    tableIds: new Set(persistedFloorPlanMirror.tables.map(table => String(table.id)))
+  } : null);
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [settingsInitialView, setSettingsInitialView] = useState<string | undefined>();
   const [settingsInitialData, setSettingsInitialData] = useState<any>();
@@ -3331,6 +3391,7 @@ const AppContent: React.FC = () => {
       defaultRoomBootstrapRef.current = false;
       return;
     }
+    if (!isDataLoaded) return;
 
     if (rooms.length === 0) {
       if (defaultRoomBootstrapRef.current) return;
@@ -3355,7 +3416,9 @@ const AppContent: React.FC = () => {
 
       void (async () => {
         await db.save('rooms', [defaultRoom]);
-        await db.save('tables', repairedTables);
+        if (repairedTables.length > 0) {
+          await db.save('tables', repairedTables);
+        }
       })().catch(error => console.error('No se pudo crear la sala predeterminada:', error));
       return;
     }
@@ -3378,7 +3441,7 @@ const AppContent: React.FC = () => {
         await db.save('tables', repairedTables);
       })().catch(error => console.error('No se pudieron reparar las mesas del plano:', error));
     }
-  }, [activeRoomId, currentView, rooms, tables]);
+  }, [activeRoomId, currentView, isDataLoaded, rooms, tables]);
 
   const safeExitSnapshotRef = useRef<SafeExitSnapshot>({
     currentView,
@@ -3871,7 +3934,17 @@ const AppContent: React.FC = () => {
             const remoteTable = incomingById.get(String(localTable.id));
             if (!remoteTable) return localTable;
             incomingById.delete(String(localTable.id));
-            return { ...localTable, ...remoteTable };
+            if (!localFloorPlan) return { ...localTable, ...remoteTable };
+            return {
+              ...remoteTable,
+              ...localTable,
+              status: remoteTable.status ?? localTable.status,
+              currentOrderId: remoteTable.currentOrderId,
+              currentOrderTotal: remoteTable.currentOrderTotal,
+              timeSeated: remoteTable.timeSeated,
+              waiterId: remoteTable.waiterId,
+              waiterName: remoteTable.waiterName
+            };
           });
 
           incomingById.forEach(table => merged.push(table));
@@ -3915,7 +3988,7 @@ const AppContent: React.FC = () => {
               const remoteRoom = incomingById.get(String(localRoom.id));
               if (!remoteRoom) return localRoom;
               incomingById.delete(String(localRoom.id));
-              return { ...localRoom, ...remoteRoom };
+              return { ...remoteRoom, ...localRoom };
             });
             incomingById.forEach(room => merged.push(room));
             return merged;
@@ -3936,13 +4009,26 @@ const AppContent: React.FC = () => {
         ]);
         const nextRooms = Array.isArray(localRooms) ? localRooms : [];
         const nextTables = Array.isArray(localTables) ? localTables : [];
-        setTables(reconcileTablesWithParkedTickets(nextTables, parkedTickets));
+        setTables(previousTables => {
+          if (nextTables.length > 0) {
+            return reconcileTablesWithParkedTickets(nextTables, parkedTickets);
+          }
+          if (previousTables.length > 0) return previousTables;
+          return reconcileTablesWithParkedTickets(persistedFloorPlanMirror?.tables || [], parkedTickets);
+        });
         if (nextRooms.length > 0) {
           setRooms(nextRooms);
           setActiveRoomId(prev =>
             prev && nextRooms.some((room: Room) => room.id === prev)
               ? prev
               : (nextRooms[0]?.id || '')
+          );
+        } else if (persistedFloorPlanMirror?.rooms?.length) {
+          setRooms(persistedFloorPlanMirror.rooms);
+          setActiveRoomId(prev =>
+            prev && persistedFloorPlanMirror.rooms.some(room => room.id === prev)
+              ? prev
+              : persistedFloorPlanMirror.rooms[0].id
           );
         }
       } catch (fallbackError) {
@@ -4836,10 +4922,16 @@ const AppContent: React.FC = () => {
           setInternalSequences(data.internalSequences || []);
           setReceptions(data.receptions || []);
           setProductStocks(data.productStocks || []);
-          setRooms(data.rooms || []);
-          setTables(data.tables || []);
+          const hydratedRooms = persistedFloorPlanMirror?.rooms?.length
+            ? persistedFloorPlanMirror.rooms
+            : (data.rooms || []);
+          const hydratedTables = persistedFloorPlanMirror?.tables?.length
+            ? persistedFloorPlanMirror.tables
+            : (data.tables || []);
+          setRooms(hydratedRooms);
+          setTables(hydratedTables);
           setCollections(data.collections || []);
-          if (data.rooms && data.rooms.length > 0) setActiveRoomId(data.rooms[0].id);
+          if (hydratedRooms.length > 0) setActiveRoomId(hydratedRooms[0].id);
           setSupplierProductPrices(data.supplierProductPrices || []);
 
           // Transactions/history are intentionally deferred in db.init to avoid startup lockups.
@@ -6220,8 +6312,12 @@ const AppContent: React.FC = () => {
       if (Array.isArray(freshData.internalSequences)) setInternalSequences(freshData.internalSequences);
       if (Array.isArray(freshData.receptions)) setReceptions(freshData.receptions);
       if (Array.isArray(freshData.productStocks)) setProductStocks(freshData.productStocks);
-      if (Array.isArray(freshData.rooms)) setRooms(freshData.rooms);
-      if (Array.isArray(freshData.tables)) setTables(freshData.tables);
+      if (Array.isArray(freshData.rooms) && freshData.rooms.length > 0 && !locallySavedFloorPlanRef.current) {
+        setRooms(freshData.rooms);
+      }
+      if (Array.isArray(freshData.tables) && freshData.tables.length > 0 && !locallySavedFloorPlanRef.current) {
+        setTables(freshData.tables);
+      }
       if (Array.isArray(freshData.collections)) setCollections(freshData.collections);
       if (Array.isArray(freshData.supplierProductPrices)) setSupplierProductPrices(freshData.supplierProductPrices);
 
@@ -7583,6 +7679,28 @@ const AppContent: React.FC = () => {
     console.log('💾 Saving Floor Plan:', { rooms: newRooms.length, tables: newTables.length });
     const normalizedRooms = newRooms.map(normalizeRoomForLayout);
     const normalizedTablesInput = newTables.map(normalizeTableForLayout);
+    const [existingDbRoomsRaw, existingDbTablesRaw] = await Promise.all([
+      db.get('rooms') as Promise<Room[]>,
+      db.get('tables') as Promise<Table[]>
+    ]);
+    const existingDbRooms = Array.isArray(existingDbRoomsRaw) ? existingDbRoomsRaw : [];
+    const existingDbTables = Array.isArray(existingDbTablesRaw) ? existingDbTablesRaw : [];
+
+    if (normalizedRooms.length === 0) {
+      alert('El layout no se guardó porque debe existir al menos una sala.');
+      if (existingDbRooms.length > 0) setRooms(existingDbRooms);
+      if (existingDbTables.length > 0) setTables(existingDbTables);
+      return;
+    }
+
+    if (normalizedTablesInput.length === 0 && existingDbTables.length > 0) {
+      console.warn('Se bloqueó un autoguardado vacío para proteger el layout existente.');
+      alert('El layout quedó vacío inesperadamente. Se restauró la última versión guardada para evitar perder las mesas.');
+      setRooms(existingDbRooms.length > 0 ? existingDbRooms : normalizedRooms);
+      setTables(existingDbTables);
+      return;
+    }
+
     locallySavedFloorPlanRef.current = {
       roomIds: new Set(normalizedRooms.map(room => String(room.id))),
       tableIds: new Set(normalizedTablesInput.map(table => String(table.id)))
@@ -7594,7 +7712,6 @@ const AppContent: React.FC = () => {
 
     // 2. Save Tables (Merge operational state AND Delete removed tables)
     // First, fetch all existing tables from DB to identify deletions
-    const existingDbTables = await db.get('tables') as Table[] || [];
     const newTableIds = new Set(normalizedTablesInput.map(t => t.id));
 
     // Identify tables to delete (present in DB but not in new layout)
@@ -7625,6 +7742,7 @@ const AppContent: React.FC = () => {
 
     await db.save('tables', mergedTables);
     setTables(mergedTables);
+    writeFloorPlanMirror(normalizedRooms, mergedTables);
     try {
       await syncFloorPlanToServer(normalizedRooms, mergedTables);
       await fetchTables();
