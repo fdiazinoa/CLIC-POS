@@ -112,8 +112,8 @@ export interface NativePrinterBridge {
   startKdsServer?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
   stopKdsServer?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
   getKdsServerStatus?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
-  startMasterServer?: (payload?: { port?: number; config?: unknown }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
-  updateMasterServerConfig?: (payload?: { config?: unknown }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
+  startMasterServer?: (payload?: { port?: number; config?: unknown; users?: unknown[] }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
+  updateMasterServerConfig?: (payload?: { config?: unknown; users?: unknown[] }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
   stopMasterServer?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
   getMasterServerStatus?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
 

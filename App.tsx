@@ -1676,6 +1676,7 @@ const AppContent: React.FC = () => {
   const settingsPreloadStartedRef = useRef(false);
   const [recoverySequencePrompt, setRecoverySequencePrompt] = useState<RecoverySequencePromptState | null>(null);
   const [recoverySequenceInput, setRecoverySequenceInput] = useState('');
+  const [users, setUsers] = useState<User[]>([]);
 
   // --- SECURITY BOOTSTRAP STATE ---
   const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
@@ -2545,7 +2546,7 @@ const AppContent: React.FC = () => {
         return;
       }
 
-      Promise.resolve(nativeBridge.startMasterServer({ port: 3001, config }))
+      Promise.resolve(nativeBridge.startMasterServer({ port: 3001, config, users }))
         .then((status: any) => {
           if (disposed) return;
           console.info('[MASTER_LAN] Native server ensured', {
@@ -2570,7 +2571,7 @@ const AppContent: React.FC = () => {
       window.removeEventListener('online', ensureMasterServer);
       document.removeEventListener('visibilitychange', ensureMasterServer);
     };
-  }, [config, getCurrentTerminal]);
+  }, [config, getCurrentTerminal, users]);
 
   const navigateToUserLogin = React.useCallback(() => {
     clearActiveUserSession();
@@ -3368,7 +3369,6 @@ const AppContent: React.FC = () => {
   };
 
   // --- DATA STORES ---
-  const [users, setUsers] = useState<User[]>([]);
 
   useEffect(() => {
     if (!isDataLoaded || currentUser || !Array.isArray(users) || users.length === 0) return;

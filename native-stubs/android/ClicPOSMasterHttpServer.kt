@@ -20,9 +20,16 @@ object ClicPOSMasterHttpServer {
     private var serverSocket: ServerSocket? = null
     private var activePort = DEFAULT_PORT
     @Volatile private var configSnapshot = JSONObject()
+    @Volatile private var usersSnapshot = JSONArray()
 
-    fun start(context: Context, requestedPort: Int = DEFAULT_PORT, config: JSONObject? = null): JSONObject {
+    fun start(
+        context: Context,
+        requestedPort: Int = DEFAULT_PORT,
+        config: JSONObject? = null,
+        users: JSONArray? = null
+    ): JSONObject {
         config?.let { configSnapshot = JSONObject(it.toString()) }
+        users?.let { usersSnapshot = JSONArray(it.toString()) }
         activePort = requestedPort.takeIf { it in 1..65535 } ?: DEFAULT_PORT
 
         if (running.get()) return status(context)
@@ -56,8 +63,9 @@ object ClicPOSMasterHttpServer {
         }
     }
 
-    fun updateConfig(config: JSONObject): JSONObject {
+    fun updateConfig(config: JSONObject, users: JSONArray? = null): JSONObject {
         configSnapshot = JSONObject(config.toString())
+        users?.let { usersSnapshot = JSONArray(it.toString()) }
         return JSONObject()
             .put("status", "success")
             .put("success", true)
@@ -135,6 +143,8 @@ object ClicPOSMasterHttpServer {
                             .toString())
                     method == "GET" && path == "/api/config" ->
                         writeResponse(client, 200, configSnapshot.toString())
+                    method == "GET" && path == "/api/users" ->
+                        writeResponse(client, 200, usersSnapshot.toString())
                     method == "PUT" && path == "/api/config" -> {
                         configSnapshot = if (body.isBlank()) JSONObject() else JSONObject(body)
                         writeResponse(client, 200, configSnapshot.toString())
