@@ -218,7 +218,8 @@ server.get('/api/mesas', (req, res) => {
         }
 
         const tables = db.prepare("SELECT * FROM tables").all();
-        const parkedTicketsIndex = indexParkedTicketsForTables(getOpenParkedTickets());
+        const parkedTickets = getOpenParkedTickets();
+        const parkedTicketsIndex = indexParkedTicketsForTables(parkedTickets);
 
         // Format for frontend (parse JSON 'data' field)
         const formattedRooms = rooms.map((r: any) => ({
@@ -242,9 +243,26 @@ server.get('/api/mesas', (req, res) => {
             };
         });
 
-        res.json({ rooms: formattedRooms, tables: formattedTables });
+        res.json({ rooms: formattedRooms, tables: formattedTables, parkedTickets });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
+    }
+});
+
+server.put('/api/mesas/parked-tickets', (req, res) => {
+    const parkedTickets = Array.isArray(req.body?.parkedTickets) ? req.body.parkedTickets : null;
+    if (!parkedTickets) {
+        return res.status(400).json({ success: false, message: 'parkedTickets must be an array' });
+    }
+
+    try {
+        saveSetting('parkedTickets', parkedTickets);
+        res.json({
+            success: true,
+            parkedTickets: getOpenParkedTickets()
+        });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 

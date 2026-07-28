@@ -3935,9 +3935,10 @@ const AppContent: React.FC = () => {
           throw new Error('API de mesas no disponible en este entorno.');
         }
         const data = await res.json();
+        const responseParkedTickets = Array.isArray(data?.parkedTickets) ? data.parkedTickets : [];
         const mergeRemoteTables = (incomingTables: Table[], previousTables: Table[]) => {
           if (isClientRuntime) {
-            return reconcileTablesWithParkedTickets(incomingTables, parkedTickets);
+            return reconcileTablesWithParkedTickets(incomingTables, responseParkedTickets);
           }
 
           const localFloorPlan = locallySavedFloorPlanRef.current;
@@ -3986,9 +3987,11 @@ const AppContent: React.FC = () => {
 
         const nextTables = Array.isArray(data?.tables) ? data.tables : [];
         const nextRooms = Array.isArray(data?.rooms) ? data.rooms : [];
+        const nextParkedTickets = responseParkedTickets;
 
         if (isClientRuntime) {
           setClientMasterTablesStatus('ONLINE');
+          setParkedTickets(nextParkedTickets);
           locallySavedFloorPlanRef.current = {
             roomIds: new Set(nextRooms.map((room: Room) => String(room.id))),
             tableIds: new Set(nextTables.map((table: Table) => String(table.id)))
@@ -4110,7 +4113,9 @@ const AppContent: React.FC = () => {
         const updated = { ...baseUpdate, currentOrderId: data.orden_id };
         setTables(prev => {
           const next = prev.map(t => t.id === updated.id ? updated : t);
-          db.save('tables', next).catch(error => console.error('Failed to persist tables:', error));
+          if (canUseLocalOperationalTableStore()) {
+            db.save('tables', next).catch(error => console.error('Failed to persist tables:', error));
+          }
           return next;
         });
         return updated;
@@ -4120,6 +4125,10 @@ const AppContent: React.FC = () => {
       return null;
     } catch (error) {
       console.warn('Table service not available, opening table locally:', error);
+      if (isClientTerminalMode()) {
+        setClientMasterTablesStatus('OFFLINE');
+        return null;
+      }
     }
 
     const localOrderId = table.currentOrderId || `ORD-${Date.now()}`;
@@ -4957,10 +4966,15 @@ const AppContent: React.FC = () => {
           setXReports(Array.isArray(data.xReports) ? data.xReports : []);
           setPurchaseOrders(data.purchaseOrders || []);
           setSuppliers(data.suppliers || []);
-          const mirroredParkedTickets = readArrayMirrorFromLocalStorage<ParkedTicket>(PARKED_TICKETS_STORAGE_KEY);
-          const restoredParkedTickets = mergeById(Array.isArray(data.parkedTickets) ? data.parkedTickets : [], mirroredParkedTickets);
+          const canHydrateOperationalTicketsLocally = canUseLocalOperationalTableStore();
+          const mirroredParkedTickets = canHydrateOperationalTicketsLocally
+            ? readArrayMirrorFromLocalStorage<ParkedTicket>(PARKED_TICKETS_STORAGE_KEY)
+            : [];
+          const restoredParkedTickets = canHydrateOperationalTicketsLocally
+            ? mergeById(Array.isArray(data.parkedTickets) ? data.parkedTickets : [], mirroredParkedTickets)
+            : [];
           setParkedTickets(restoredParkedTickets);
-          if (restoredParkedTickets.length > (Array.isArray(data.parkedTickets) ? data.parkedTickets.length : 0)) {
+          if (canHydrateOperationalTicketsLocally && restoredParkedTickets.length > (Array.isArray(data.parkedTickets) ? data.parkedTickets.length : 0)) {
             void db.save('parkedTickets', restoredParkedTickets).catch((error) => console.warn('No se pudo restaurar tickets en espera desde espejo local:', error));
           }
           setTransfers(data.transfers || []);
@@ -6347,10 +6361,15 @@ const AppContent: React.FC = () => {
       if (Array.isArray(freshData.purchaseOrders)) setPurchaseOrders(freshData.purchaseOrders);
       if (Array.isArray(freshData.suppliers)) setSuppliers(freshData.suppliers);
       if (Array.isArray(freshData.parkedTickets)) {
-        const mirroredParkedTickets = readArrayMirrorFromLocalStorage<ParkedTicket>(PARKED_TICKETS_STORAGE_KEY);
-        const restoredParkedTickets = mergeById(freshData.parkedTickets, mirroredParkedTickets);
+        const canHydrateOperationalTicketsLocally = canUseLocalOperationalTableStore();
+        const mirroredParkedTickets = canHydrateOperationalTicketsLocally
+          ? readArrayMirrorFromLocalStorage<ParkedTicket>(PARKED_TICKETS_STORAGE_KEY)
+          : [];
+        const restoredParkedTickets = canHydrateOperationalTicketsLocally
+          ? mergeById(freshData.parkedTickets, mirroredParkedTickets)
+          : [];
         setParkedTickets(restoredParkedTickets);
-        if (restoredParkedTickets.length > freshData.parkedTickets.length) {
+        if (canHydrateOperationalTicketsLocally && restoredParkedTickets.length > freshData.parkedTickets.length) {
           await db.save('parkedTickets', restoredParkedTickets);
         }
       }
@@ -6605,6 +6624,21 @@ const AppContent: React.FC = () => {
   // --- PERSISTENCE HANDLER FOR PARKED TICKETS ---
   const handleUpdateParkedTickets = async (tickets: ParkedTicket[]) => {
     const validTickets = Array.isArray(tickets) ? tickets : [];
+    if (isClientTerminalMode()) {
+      const response = await fetch(resolveOperationalApiUrl('/api/mesas/parked-tickets'), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parkedTickets: validTickets })
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok || result?.success === false) {
+        throw new Error(result?.message || `Master respondió HTTP ${response.status}`);
+      }
+      const sharedTickets = Array.isArray(result?.parkedTickets) ? result.parkedTickets : validTickets;
+      setParkedTickets(sharedTickets);
+      await fetchTables();
+      return;
+    }
     writeCriticalCollectionsMirror(validTickets, cashMovements);
     setParkedTickets(validTickets);
     const nextTicketIds = new Set(
@@ -7405,6 +7439,10 @@ const AppContent: React.FC = () => {
     const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
     const terminalId = currentTerminal?.id || 'T1';
     txn.terminalId = terminalId;
+    txn.terminalName = currentTerminal?.config?.terminalName
+      || currentTerminal?.config?.erpBinding?.terminalName
+      || currentTerminal?.config?.stationNumber
+      || terminalId;
 
     // Add sync status
     txn.syncStatus = 'PENDING';
@@ -8971,7 +9009,7 @@ const AppContent: React.FC = () => {
                     let activeParkedTickets = parkedTickets || [];
                     let parked = activeParkedTickets.find(p => p.id === table.currentOrderId)
                       || (!isBarTableContext ? activeParkedTickets.find(p => String(p.tableId) === String(table.id)) : undefined);
-                    if (!parked) {
+                    if (!parked && canUseLocalOperationalTableStore()) {
                       const persistedTickets = await db.get('parkedTickets') as ParkedTicket[] | null;
                       if (Array.isArray(persistedTickets)) {
                         activeParkedTickets = persistedTickets;
@@ -9005,7 +9043,7 @@ const AppContent: React.FC = () => {
                     let parked = !isBarTableContext
                       ? activeParkedTickets.find(p => String(p.tableId) === String(table.id))
                       : undefined;
-                    if (!parked) {
+                    if (!parked && canUseLocalOperationalTableStore()) {
                       const persistedTickets = await db.get('parkedTickets') as ParkedTicket[] | null;
                       if (Array.isArray(persistedTickets)) {
                         activeParkedTickets = persistedTickets;

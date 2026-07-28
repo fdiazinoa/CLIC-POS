@@ -45,7 +45,10 @@ const GlobalVirtualKeyboard: React.FC = () => {
   const activeFieldRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
-    const isTouchRuntime = Capacitor.isNativePlatform() || window.matchMedia('(pointer: coarse)').matches;
+    // Android/iOS must use the native keyboard. The POS keyboard remains only
+    // as a browser fallback for touch kiosks without a system IME.
+    if (Capacitor.isNativePlatform()) return;
+    const isTouchRuntime = window.matchMedia('(pointer: coarse)').matches;
     if (!isTouchRuntime) return;
 
     const handleFocusIn = (event: FocusEvent) => {
