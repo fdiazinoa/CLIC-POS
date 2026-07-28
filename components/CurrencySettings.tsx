@@ -35,9 +35,7 @@ const COMMON_CURRENCIES = [
 ];
 
 const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateConfig, onClose }) => {
-  const initialCurrencies = config?.currencies || [
-    { code: 'DOP', name: 'Peso Dominicano', symbol: 'RD$', rate: 1, isEnabled: true, isBase: true }
-  ];
+  const initialCurrencies = Array.isArray(config?.currencies) ? config.currencies : [];
 
   const [currencies, setCurrencies] = useState<CurrencyConfig[]>(initialCurrencies);
   const [selectedCode, setSelectedCode] = useState<string>('');
@@ -49,12 +47,18 @@ const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateCon
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [loadingAudit, setLoadingAudit] = useState(false);
 
-  const baseCurrency = currencies.find(c => c.isBase) || currencies[0];
+  const baseCurrency = currencies.find(c => c.isBase) || currencies[0] || {
+    code: '',
+    name: 'Sin moneda configurada',
+    symbol: '',
+    rate: 1,
+    isEnabled: false,
+    isBase: true,
+  };
 
   useEffect(() => {
     if (!selectedCode || !currencies.find(c => c.code === selectedCode)) {
-      const secondary = currencies.find(c => !c.isBase);
-      setSelectedCode(secondary ? secondary.code : baseCurrency.code);
+      setSelectedCode(baseCurrency.code);
     }
   }, [currencies, selectedCode, baseCurrency]);
 
@@ -244,6 +248,10 @@ const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateCon
 
   const handleSave = () => {
     if (config && onUpdateConfig) {
+      if (currencies.length === 0) {
+        alert("No hay monedas configuradas. En POS+ERP las monedas deben venir desde ERP.");
+        return;
+      }
       onUpdateConfig({ ...config, currencies, currencySymbol: baseCurrency.symbol });
       alert("Configuración guardada.");
       onClose();
@@ -310,11 +318,15 @@ const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateCon
             </div>
 
             <div className="flex-1 overflow-y-auto space-y-3 pr-2 no-scrollbar">
-              {currencies.filter(c => !c.isBase).map(currency => (
+              {currencies.filter(c => c.isEnabled !== false).map(currency => (
                 <div key={currency.code} onClick={() => setSelectedCode(currency.code)} className={`group p-4 rounded-2xl border-2 cursor-pointer transition-all flex items-center justify-between ${selectedCode === currency.code ? 'bg-white border-emerald-500 shadow-md ring-4 ring-emerald-50' : 'bg-white border-transparent hover:border-gray-200'}`}>
                   <div className="flex items-center gap-3">
                     <span className="text-2xl">{FLAGS[currency.code] || '🏳️'}</span>
-                    <div><p className="font-bold text-gray-800">{currency.code}</p><p className="text-xs text-gray-400">{currency.name}</p></div>
+                    <div>
+                      <p className="font-bold text-gray-800">{currency.code}</p>
+                      <p className="text-xs text-gray-400">{currency.name}</p>
+                      {currency.isBase && <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-amber-500">Moneda base</p>}
+                    </div>
                   </div>
                   <div className="text-right"><p className={`font-mono font-bold ${selectedCode === currency.code ? 'text-emerald-600' : 'text-gray-600'}`}>{currency.rate.toFixed(2)}</p></div>
                 </div>

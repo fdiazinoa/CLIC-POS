@@ -12,6 +12,60 @@ import {
     resolveProductActiveWarehouseIds,
 } from '../utils/masterIdentity';
 
+const normalizeStockLookupKey = (value: unknown): string => String(value || '').trim().toLowerCase();
+
+const buildProductStockLookupKeys = (product: Product): Set<string> => {
+    const record = product as any;
+    return new Set([
+        product.id,
+        record.productId,
+        record.product_id,
+        record.erpProductId,
+        record.erp_product_id,
+        record.operationalProductId,
+        record.operational_product_id,
+        record.sourceItemId,
+        record.source_item_id,
+        record.itemId,
+        record.item_id,
+        record.code,
+        record.itemCode,
+        record.item_code,
+        record.sku,
+        record.barcode,
+        record.reference,
+        record.referenceCode,
+        record.reference_code,
+    ].map(normalizeStockLookupKey).filter(Boolean));
+};
+
+const stockRowProductMatches = (stock: ProductStock, productKeys: Set<string>): boolean => {
+    const record = stock as any;
+    return [
+        stock.productId,
+        record.product_id,
+        record.erpProductId,
+        record.erp_product_id,
+        record.operationalProductId,
+        record.operational_product_id,
+        record.sourceItemId,
+        record.source_item_id,
+        record.itemId,
+        record.item_id,
+        record.code,
+        record.itemCode,
+        record.item_code,
+        record.sku,
+        record.barcode,
+        record.reference,
+        record.referenceCode,
+        record.reference_code,
+    ].some(value => {
+        const key = normalizeStockLookupKey(value);
+        return key && productKeys.has(key);
+    });
+};
+
 interface QuickActionsProps {
     product: Product;
     position: { x: number; y: number };
@@ -70,13 +124,66 @@ const ProductQuickActions: React.FC<QuickActionsProps> = ({
         if (activeModal === 'STOCK') {
             const loadStocks = async () => {
                 const stocks = (await db.get('productStocks') || []) as ProductStock[];
-                setProductStocks(stocks.filter(s => s.productId === product.id));
+                const productKeys = buildProductStockLookupKeys(product);
+                setProductStocks(stocks.filter(s => stockRowProductMatches(s, productKeys)));
             };
             loadStocks();
         }
-    }, [activeModal, product.id]);
+    }, [activeModal, product]);
 
     if (!isAuthorized) return null;
+
+    const stockDisplayRows = (() => {
+        const rows = new Map<string, { key: string; name: string; code: string; quantity: number }>();
+        const putRow = (key: unknown, row: { name: string; code?: string; quantity: unknown }, replace = false) => {
+            const normalizedKey = normalizeStockLookupKey(key);
+            if (!normalizedKey) return;
+            if (!replace && rows.has(normalizedKey)) return;
+            rows.set(normalizedKey, {
+                key: String(key || normalizedKey),
+                name: row.name,
+                code: String(row.code || key || ''),
+                quantity: Number(row.quantity || 0),
+            });
+        };
+
+        if (warehouses.length > 0) {
+            warehouses.forEach((warehouse) => {
+                const warehouseKeys = [
+                    warehouse.id,
+                    warehouse.code,
+                    warehouse.name,
+                    (warehouse as any).erpWarehouseId,
+                    (warehouse as any).warehouseId,
+                    (warehouse as any).inventoryLocalId,
+                    (warehouse as any).sourceWarehouseId,
+                ].map(normalizeStockLookupKey).filter(Boolean);
+                const stock = productStocks.find((entry) => warehouseKeys.includes(normalizeStockLookupKey(entry.warehouseId)));
+                const qty = stock ? stock.quantity : getWarehouseScopedNumber(product.stockBalances || {}, warehouse.id, warehouses, 0);
+                putRow(warehouse.id, { name: warehouse.name, code: warehouse.code, quantity: qty }, true);
+            });
+            return Array.from(rows.values());
+        }
+
+        productStocks.forEach((stock, index) => {
+            const warehouseId = String(stock.warehouseId || `almacen-${index + 1}`);
+            putRow(warehouseId, {
+                name: `Almacén ${rows.size + 1}`,
+                code: warehouseId,
+                quantity: stock.quantity,
+            });
+        });
+
+        Object.entries(product.stockBalances || {}).forEach(([warehouseId, quantity]) => {
+            putRow(warehouseId, {
+                name: `Almacén ${rows.size + 1}`,
+                code: warehouseId,
+                quantity,
+            });
+        });
+
+        return Array.from(rows.values());
+    })();
 
     const handleSavePrice = async () => {
         const newPrice = parseFloat(tempPrice);
@@ -295,24 +402,25 @@ const ProductQuickActions: React.FC<QuickActionsProps> = ({
                             <button onClick={() => setActiveModal('NONE')} className="p-2 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-full transition-colors"><X size={20} /></button>
                         </div>
                         <div className="space-y-3">
-                            {warehouses.map(wh => {
-                                const stock = productStocks.find(s => s.warehouseId === wh.id);
-                                const qty = stock ? stock.quantity : getWarehouseScopedNumber(product.stockBalances || {}, wh.id, warehouses, 0);
-                                return (
-                                    <div key={wh.id} className="flex items-center justify-between p-4 bg-gray-50 dark:bg-slate-900 rounded-2xl">
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-2 h-2 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]" />
-                                            <div>
-                                                <p className="font-bold text-gray-800 dark:text-slate-200">{wh.name}</p>
-                                                <p className="text-[10px] text-gray-400 uppercase tracking-widest">{wh.code}</p>
-                                            </div>
+                            {stockDisplayRows.map((row) => (
+                                <div key={row.key} className="flex items-center justify-between p-4 bg-gray-50 dark:bg-slate-900 rounded-2xl">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-2 h-2 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]" />
+                                        <div>
+                                            <p className="font-bold text-gray-800 dark:text-slate-200">{row.name}</p>
+                                            <p className="text-[10px] text-gray-400 uppercase tracking-widest">{row.code}</p>
                                         </div>
-                                        <span className={`text-xl font-black ${qty > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                                            {qty}
-                                        </span>
                                     </div>
-                                );
-                            })}
+                                    <span className={`text-xl font-black ${row.quantity > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                                        {row.quantity}
+                                    </span>
+                                </div>
+                            ))}
+                            {stockDisplayRows.length === 0 && (
+                                <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm font-bold text-amber-700">
+                                    No hay existencias registradas para este artículo en esta caja.
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>

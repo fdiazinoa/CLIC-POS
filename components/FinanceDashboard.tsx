@@ -1,8 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
    ArrowLeft, Wallet, ArrowUpRight, ArrowDownLeft, Plus, Minus,
    TrendingUp, TrendingDown, DollarSign, CreditCard, Smartphone,
-   Banknote, X, FileText, Lock, ClipboardCheck
+   Banknote, X, FileText, Lock, ClipboardCheck, Printer
 } from 'lucide-react';
 import { Transaction, CashMovement, BusinessConfig, User, RoleDefinition, XReport } from '../types';
 
@@ -15,9 +15,11 @@ interface FinanceDashboardProps {
    roles: RoleDefinition[];
    /** false desactiva el bloque Reporte X (gobernado desde ERP `session.allowPartialXReport`). */
    allowPartialXReport?: boolean;
+   initialCashMovementType?: 'IN' | 'OUT' | 'X_REPORT';
    onClose: () => void;
    onRegisterMovement: (type: 'IN' | 'OUT', amount: number, reason: string) => void;
    onCloseXReport?: (cashCounted: number, notes?: string) => Promise<void> | void;
+   onPrintXReport?: (report: XReport) => Promise<void> | void;
    onOpenZReport: () => void;
 }
 
@@ -195,18 +197,34 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
    currentUser,
    roles,
    allowPartialXReport = true,
+   initialCashMovementType,
    onClose,
    onRegisterMovement,
    onCloseXReport,
+   onPrintXReport,
    onOpenZReport
 }) => {
    const [activeModal, setActiveModal] = useState<'IN' | 'OUT' | null>(null);
    const [showXCloseModal, setShowXCloseModal] = useState(false);
+   const [isGeneratingXReport, setIsGeneratingXReport] = useState(false);
+
+   useEffect(() => {
+      if (initialCashMovementType) {
+         if (initialCashMovementType === 'X_REPORT') {
+            setActiveModal(null);
+            setShowXCloseModal(false);
+         } else {
+            setShowXCloseModal(false);
+            setActiveModal(initialCashMovementType);
+         }
+      }
+   }, [initialCashMovementType]);
 
    // Permission checker
    const hasPermission = (permission: string): boolean => {
       if (!currentUser) return false;
-      const userRole = roles.find(r => r.id === currentUser.role);
+      const roleId = currentUser.roleId || currentUser.role;
+      const userRole = roles.find(r => r.id === roleId) || roles.find(r => r.id === currentUser.role);
       if (!userRole) return false;
       if (userRole.permissions.includes('ALL')) return true;
       return userRole.permissions.includes(permission as any);
@@ -235,6 +253,17 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
    const hasCashierActivity = openTransactions.length > 0 || cashMovements.length > 0;
    const canViewXReport = hasPermission('POS_VIEW_X_REPORT') || hasPermission('POS_CLOSE_X');
    const canCloseXReport = hasPermission('POS_CLOSE_X') && allowPartialXReport && hasCashierActivity && Boolean(onCloseXReport);
+   const canCloseZReport = hasPermission('POS_CLOSE_Z');
+
+   const handleGenerateXReport = async () => {
+      if (!canCloseXReport || !onCloseXReport) return;
+      setIsGeneratingXReport(true);
+      try {
+         await onCloseXReport(expectedCashInDrawer, 'Cierre X / resumen automatico');
+      } finally {
+         setIsGeneratingXReport(false);
+      }
+   };
 
    return (
       <div className="h-screen w-full bg-gray-50 flex flex-col overflow-hidden">
@@ -291,6 +320,40 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
                   </div>
                )}
 
+               <div className="bg-white p-6 rounded-3xl shadow-sm border border-blue-100">
+                  <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">
+                     <ClipboardCheck size={20} className="text-blue-500" /> Desglose para Cierre X
+                  </h3>
+                  <div className="space-y-3">
+                     <div className="flex items-center justify-between rounded-2xl bg-gray-50 px-4 py-3">
+                        <span className="text-sm font-bold text-gray-600">Ventas abiertas</span>
+                        <span className="font-black text-gray-900">{config.currencySymbol}{totalSales.toFixed(2)}</span>
+                     </div>
+                     <div className="flex items-center justify-between rounded-2xl bg-emerald-50 px-4 py-3">
+                        <span className="text-sm font-bold text-emerald-700">Efectivo ventas</span>
+                        <span className="font-black text-emerald-700">{config.currencySymbol}{cashSalesTotal.toFixed(2)}</span>
+                     </div>
+                     <div className="flex items-center justify-between rounded-2xl bg-gray-50 px-4 py-3">
+                        <span className="text-sm font-bold text-gray-600">Tarjetas</span>
+                        <span className="font-black text-gray-900">{config.currencySymbol}{(totalsByMethod['CARD'] || 0).toFixed(2)}</span>
+                     </div>
+                     <div className="grid grid-cols-2 gap-3">
+                        <div className="rounded-2xl bg-emerald-50 px-4 py-3">
+                           <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Entradas</p>
+                           <p className="mt-1 text-lg font-black text-emerald-700">{config.currencySymbol}{cashIn.toFixed(2)}</p>
+                        </div>
+                        <div className="rounded-2xl bg-red-50 px-4 py-3">
+                           <p className="text-[10px] font-black uppercase tracking-widest text-red-500">Salidas</p>
+                           <p className="mt-1 text-lg font-black text-red-700">{config.currencySymbol}{cashOut.toFixed(2)}</p>
+                        </div>
+                     </div>
+                     <div className="flex items-center justify-between rounded-2xl bg-blue-600 px-4 py-3 text-white">
+                        <span className="text-sm font-black uppercase tracking-wide">Efectivo esperado</span>
+                        <span className="text-xl font-black">{config.currencySymbol}{expectedCashInDrawer.toFixed(2)}</span>
+                     </div>
+                  </div>
+               </div>
+
                <div className="flex-1 bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col overflow-hidden">
                   <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">
                      <FileText size={20} className="text-gray-400" /> Movimientos del Día
@@ -335,17 +398,17 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
                         <div className="min-w-0 flex-1">
                            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Arqueo parcial</p>
                            <h3 className="mt-1 text-xl font-black text-gray-900">Cierre X</h3>
-                           <p className="mt-1 text-xs font-bold text-gray-500">Cuenta la caja sin limpiar ventas ni movimientos.</p>
+                           <p className="mt-1 text-xs font-bold text-gray-500">Emite resumen por medios de pago sin limpiar ventas ni movimientos.</p>
                         </div>
                      </div>
 
                      <button
-                        onClick={() => setShowXCloseModal(true)}
-                        disabled={!canCloseXReport}
+                        onClick={() => void handleGenerateXReport()}
+                        disabled={!canCloseXReport || isGeneratingXReport}
                         className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-4 text-sm font-black uppercase tracking-wide text-white shadow-lg shadow-blue-100 transition-all active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500 disabled:shadow-none"
                      >
                         <ClipboardCheck size={18} />
-                        Hacer Cierre X
+                        {isGeneratingXReport ? 'Generando X...' : 'Hacer Cierre X'}
                      </button>
 
                      {!canCloseXReport && (
@@ -363,9 +426,21 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
                            <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-gray-400">Últimos X</p>
                            <div className="space-y-2">
                               {recentXReports.map(report => (
-                                 <div key={report.id} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 text-xs shadow-sm">
-                                    <span className="font-black text-gray-800">{report.sequenceNumber}</span>
-                                    <span className="font-bold text-gray-400">{new Date(report.closedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                 <div key={report.id} className="flex items-center justify-between gap-2 rounded-xl bg-white px-3 py-2 text-xs shadow-sm">
+                                    <div className="min-w-0">
+                                       <p className="font-black text-gray-800">{report.sequenceNumber}</p>
+                                       <p className="font-bold text-gray-400">{new Date(report.closedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                                    </div>
+                                    {onPrintXReport && (
+                                       <button
+                                          type="button"
+                                          onClick={() => onPrintXReport(report)}
+                                          className="flex shrink-0 items-center gap-1 rounded-lg bg-blue-50 px-3 py-2 font-black uppercase tracking-wide text-blue-600 hover:bg-blue-100"
+                                       >
+                                          <Printer size={14} />
+                                          Imprimir
+                                       </button>
+                                    )}
                                  </div>
                               ))}
                            </div>
@@ -427,6 +502,7 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
                )}
 
                {/* Z-Report Action */}
+               {canCloseZReport && (
                <div className="mt-auto">
                   <div className="bg-orange-50 border border-orange-100 p-4 rounded-2xl mb-4 flex gap-3 items-start">
                      <Lock size={20} className="text-orange-500 mt-1 shrink-0" />
@@ -446,6 +522,7 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
                      <ArrowUpRight size={20} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
                   </button>
                </div>
+               )}
 
             </div>
 

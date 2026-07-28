@@ -1,9 +1,10 @@
 
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
     ListTree, Plus, Edit2, Trash2, Save, X, ChevronRight, Check, FolderOpen, Tag, Layers, Grid, ArrowLeft
 } from 'lucide-react';
 import { BusinessConfig, ClassificationItem } from '../types';
+import { db } from '../utils/db';
 
 interface ClassificationManagerProps {
     config: BusinessConfig;
@@ -22,13 +23,98 @@ const CLASSIFICATION_TYPES: { id: ClassificationType; label: string; icon: any; 
     { id: 'POS_CATEGORIES', label: 'Categorías POS', icon: Grid, prop: 'posCategories' }
 ];
 
+const normalizeClassificationItem = (entry: unknown, fallbackPrefix = 'POS-CAT'): ClassificationItem | null => {
+    if (typeof entry === 'string') {
+        const name = entry.trim();
+        return name ? { id: name, name, code: name } : null;
+    }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+    const record = entry as Record<string, unknown>;
+    const name = String(
+        record.name ||
+        record.nombre ||
+        record.label ||
+        record.description ||
+        record.descripcion ||
+        record.code ||
+        record.id ||
+        ''
+    ).trim();
+    if (!name) return null;
+    const id = String(record.id || record.code || name).trim() || `${fallbackPrefix}-${name}`;
+    const code = String(record.code || id || name).trim();
+    return {
+        id,
+        name,
+        code,
+        parentId: typeof record.parentId === 'string'
+            ? record.parentId
+            : typeof record.parent_id === 'string'
+                ? record.parent_id
+                : undefined,
+    };
+};
+
 const ClassificationManager: React.FC<ClassificationManagerProps> = ({ config, onUpdateConfig, onClose }) => {
     const [activeType, setActiveType] = useState<ClassificationType>('DEPARTMENTS');
     const [editingItem, setEditingItem] = useState<ClassificationItem | null>(null);
     const [isCreating, setIsCreating] = useState(false);
+    const [localPosCategories, setLocalPosCategories] = useState<ClassificationItem[]>([]);
 
     const activeDef = CLASSIFICATION_TYPES.find(t => t.id === activeType)!;
-    const items: ClassificationItem[] = (config[activeDef.prop] as ClassificationItem[]) || [];
+    const posCategoryItems = useMemo(() => {
+        const byName = new Map<string, ClassificationItem>();
+        const addItem = (entry: unknown) => {
+            const item = normalizeClassificationItem(entry);
+            if (!item) return;
+            const key = item.name.trim().toLowerCase();
+            if (!byName.has(key)) byName.set(key, item);
+        };
+        ((config.posCategories || []) as ClassificationItem[]).forEach(addItem);
+        localPosCategories.forEach(addItem);
+        return Array.from(byName.values()).sort((left, right) => left.name.localeCompare(right.name));
+    }, [config.posCategories, localPosCategories]);
+    const items: ClassificationItem[] = activeType === 'POS_CATEGORIES'
+        ? posCategoryItems
+        : ((config[activeDef.prop] as ClassificationItem[]) || []);
+
+    useEffect(() => {
+        let cancelled = false;
+        const loadLocalPosCategories = async () => {
+            try {
+                const [rawCategories, rawProductCategories, rawProductGroups, rawCollections] = await Promise.all([
+                    db.get('categories' as any).catch(() => []),
+                    db.get('productCategories' as any).catch(() => []),
+                    db.get('productGroups' as any).catch(() => []),
+                    db.get('collections' as any).catch(() => []),
+                ]);
+                if (cancelled) return;
+                const nextItems = [
+                    ...(Array.isArray(rawCategories) ? rawCategories : []),
+                    ...(Array.isArray(rawProductCategories) ? rawProductCategories : []),
+                    ...(Array.isArray(rawProductGroups) ? rawProductGroups : []),
+                    ...(Array.isArray(rawCollections) ? rawCollections : []),
+                ]
+                    .map((entry) => normalizeClassificationItem(entry))
+                    .filter(Boolean) as ClassificationItem[];
+                setLocalPosCategories(nextItems);
+            } catch (error) {
+                console.warn('[ClassificationManager] No se pudieron cargar categorías POS locales:', error);
+            }
+        };
+        const handleCategoriesUpdated = () => {
+            void loadLocalPosCategories();
+        };
+
+        void loadLocalPosCategories();
+        window.addEventListener('categoriesUpdated', handleCategoriesUpdated);
+        window.addEventListener('productGroupsUpdated', handleCategoriesUpdated);
+        return () => {
+            cancelled = true;
+            window.removeEventListener('categoriesUpdated', handleCategoriesUpdated);
+            window.removeEventListener('productGroupsUpdated', handleCategoriesUpdated);
+        };
+    }, []);
 
     // Derived state for parent selectors
     const departments = config.departments || [];
@@ -102,7 +188,9 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({ config, o
                             <type.icon size={16} />
                             {type.label}
                             <span className="ml-auto text-[10px] bg-gray-100 px-2 py-0.5 rounded-full text-gray-400">
-                                {(config[type.prop] as any[])?.length || 0}
+                                {type.id === 'POS_CATEGORIES'
+                                    ? posCategoryItems.length
+                                    : ((config[type.prop] as any[])?.length || 0)}
                             </span>
                         </button>
                     ))}

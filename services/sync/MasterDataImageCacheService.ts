@@ -27,6 +27,18 @@ type CollectionConfig = {
 };
 
 const asString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+const firstString = (...values: unknown[]): string => {
+  for (const value of values) {
+    const normalized = asString(value);
+    if (normalized) return normalized;
+  }
+  return '';
+};
+
+const firstValue = (...values: unknown[]): unknown => (
+  values.find((value) => asString(value) || typeof value === 'number' || typeof value === 'boolean')
+);
+
 const isLocalOnlyImageRef = (value: string): boolean =>
   /^file:\/\//i.test(value) ||
   /^content:\/\//i.test(value) ||
@@ -229,7 +241,21 @@ class MasterDataImageCacheService {
 
   private buildIdentityKeys(collection: ImageBackedCollection, item: SyncImageEntity): string[] {
     const id = asString(item.id);
-    const taxId = asString(item.taxId).replace(/\W/g, '');
+    const taxId = firstString(
+      item.taxId,
+      item.tax_id,
+      item.rnc,
+      item.cedula,
+      item.identification,
+      item.identificacion,
+      item.document,
+      item.documento,
+      item.fiscal_id,
+      item.fiscalId,
+      item.metadata?.taxId,
+      item.metadata?.tax_id,
+      item.metadata?.rnc
+    ).replace(/\W/g, '');
     const email = asString(item.email).toLowerCase();
     const phone = asString(item.phone).replace(/\D/g, '');
 
@@ -293,6 +319,98 @@ class MasterDataImageCacheService {
     return undefined;
   }
 
+  private normalizeIncomingEntityFields(collection: ImageBackedCollection, item: SyncImageEntity): SyncImageEntity {
+    if (collection !== 'customers') {
+      return item;
+    }
+
+    const metadata = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+      ? item.metadata as Record<string, unknown>
+      : {};
+    const billing = item.billing && typeof item.billing === 'object' && !Array.isArray(item.billing)
+      ? item.billing as Record<string, unknown>
+      : {};
+    const fiscal = item.fiscal && typeof item.fiscal === 'object' && !Array.isArray(item.fiscal)
+      ? item.fiscal as Record<string, unknown>
+      : {};
+    const primaryAddress = Array.isArray(item.addresses) && item.addresses[0] && typeof item.addresses[0] === 'object'
+      ? item.addresses[0] as unknown as Record<string, unknown>
+      : {};
+
+    const taxId = firstString(
+      item.taxId,
+      item.tax_id,
+      item.rnc,
+      item.cedula,
+      item.cedula_rnc,
+      item.cedulaRnc,
+      item.identification,
+      item.identificacion,
+      item.document,
+      item.documento,
+      item.document_number,
+      item.documentNumber,
+      item.fiscal_id,
+      item.fiscalId,
+      item.nif,
+      billing.taxId,
+      billing.tax_id,
+      billing.rnc,
+      fiscal.taxId,
+      fiscal.tax_id,
+      fiscal.rnc,
+      metadata.taxId,
+      metadata.tax_id,
+      metadata.rnc
+    );
+
+    const address = firstString(
+      item.address,
+      item.direccion,
+      item.dirección,
+      item.billingAddress,
+      item.billing_address,
+      item.shippingAddress,
+      item.shipping_address,
+      item.streetAddress,
+      item.street_address,
+      item.address_line_1,
+      item.addressLine1,
+      item.domicilio,
+      billing.address,
+      billing.direccion,
+      billing.billing_address,
+      fiscal.address,
+      fiscal.direccion,
+      metadata.address,
+      metadata.direccion,
+      primaryAddress.address,
+      primaryAddress.direccion,
+      primaryAddress.street,
+      primaryAddress.line1
+    );
+
+    return {
+      ...item,
+      taxId: taxId || item.taxId,
+      address: address || item.address,
+      phone: firstString(item.phone, item.telefono, item.tel, item.mobile, item.celular, metadata.phone, metadata.telefono) || item.phone,
+      email: firstString(item.email, item.correo, item.email_address, item.emailAddress, metadata.email, metadata.correo) || item.email,
+      requiresFiscalInvoice: firstValue(
+        item.requiresFiscalInvoice,
+        item.requires_fiscal_invoice,
+        item.requiere_comprobante,
+        item.requiereComprobante,
+        item.use_fiscal_invoice,
+        item.useFiscalInvoice,
+        fiscal.requiresFiscalInvoice,
+        fiscal.requires_fiscal_invoice,
+        metadata.requiresFiscalInvoice,
+        metadata.requires_fiscal_invoice
+      ) as any,
+    };
+  }
+
   private applyMirrorFields(collection: ImageBackedCollection, entity: SyncImageEntity, state: ImageState): SyncImageEntity {
     const config = COLLECTION_CONFIG[collection];
     const next: SyncImageEntity = {
@@ -329,7 +447,7 @@ class MasterDataImageCacheService {
     const imageUrl = this.resolveRemoteImageUrl(collection, item);
     const imageVersion = this.resolveRemoteImageVersion(collection, item, imageUrl);
 
-    let normalized: SyncImageEntity = { ...item };
+    let normalized: SyncImageEntity = this.normalizeIncomingEntityFields(collection, { ...item });
 
     if (localEntity) {
       normalized = this.applyMirrorFields(collection, normalized, {

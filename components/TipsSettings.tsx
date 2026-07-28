@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { 
   Coins, Save, ToggleLeft, ToggleRight, DollarSign, 
-  Users, AlertCircle, Sparkles, Smartphone, Check
+  Users, AlertCircle, Sparkles, Smartphone, Check, ArrowLeft, X
 } from 'lucide-react';
 import { BusinessConfig, TipConfiguration } from '../types';
 
@@ -13,8 +13,9 @@ interface TipsSettingsProps {
 
 // Default if undefined
 const DEFAULT_TIPS: TipConfiguration = {
-  enabled: true,
+  enabled: false,
   defaultOptions: [10, 15, 20],
+  fixedAmountOptions: [100, 200, 500, 1000],
   allowCustomTip: true,
   serviceCharge: {
     enabled: false,
@@ -43,6 +44,16 @@ const TipsSettings: React.FC<TipsSettingsProps> = ({ config, onUpdateConfig, onC
     setTipsConfig({ ...tipsConfig, defaultOptions: newOpts });
   };
 
+  const fixedAmountOptions = (tipsConfig.fixedAmountOptions && tipsConfig.fixedAmountOptions.length > 0)
+    ? tipsConfig.fixedAmountOptions
+    : DEFAULT_TIPS.fixedAmountOptions || [];
+
+  const handleFixedAmountChange = (index: number, val: string) => {
+    const next = [...fixedAmountOptions];
+    next[index] = Math.max(0, parseFloat(val) || 0);
+    setTipsConfig({ ...tipsConfig, fixedAmountOptions: next });
+  };
+
   // --- UI HELPERS ---
   const Toggle: React.FC<{ label: string; checked: boolean; onChange: (v: boolean) => void }> = ({ label, checked, onChange }) => (
     <div 
@@ -65,19 +76,39 @@ const TipsSettings: React.FC<TipsSettingsProps> = ({ config, onUpdateConfig, onC
     <div className="flex flex-col h-full bg-gray-50 animate-in fade-in">
       
       {/* Header */}
-      <div className="bg-white px-8 py-6 border-b border-gray-200 flex justify-between items-center shrink-0">
-        <div>
-          <h1 className="text-2xl font-black text-gray-800 flex items-center gap-2">
-             <Coins className="text-amber-500" /> Configuración de Propinas
-          </h1>
-          <p className="text-sm text-gray-500">Administra sugerencias y cargos por servicio.</p>
+      <div className="bg-white px-4 sm:px-8 py-4 sm:py-6 border-b border-gray-200 flex justify-between items-center gap-3 shrink-0">
+        <div className="flex items-center gap-3 min-w-0">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-12 w-12 shrink-0 rounded-2xl border border-slate-200 bg-slate-50 text-slate-600 flex items-center justify-center hover:bg-slate-100 active:scale-95"
+            aria-label="Volver a ajustes"
+          >
+            <ArrowLeft size={22} />
+          </button>
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-black text-gray-800 flex items-center gap-2 truncate">
+               <Coins className="text-amber-500 shrink-0" /> Configuración de Propinas
+            </h1>
+            <p className="text-sm text-gray-500 truncate">Administra sugerencias y cargos por servicio.</p>
+          </div>
         </div>
-        <button 
-          onClick={handleSave}
-          className="px-6 py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-gray-800 shadow-lg transition-all flex items-center gap-2"
-        >
-          <Save size={20} /> Guardar
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={handleSave}
+            className="px-4 sm:px-6 py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-gray-800 shadow-lg transition-all flex items-center gap-2"
+          >
+            <Save size={20} /> <span className="hidden sm:inline">Guardar</span>
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-12 w-12 rounded-2xl bg-gray-100 text-gray-500 flex items-center justify-center hover:bg-gray-200 active:scale-95"
+            aria-label="Salir de propinas"
+          >
+            <X size={22} />
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-hidden flex flex-col lg:flex-row">
@@ -125,6 +156,23 @@ const TipsSettings: React.FC<TipsSettingsProps> = ({ config, onUpdateConfig, onC
                         checked={tipsConfig.allowCustomTip} 
                         onChange={(v) => setTipsConfig({...tipsConfig, allowCustomTip: v})} 
                      />
+
+                     <div className="mt-6">
+                        <p className="text-sm font-bold text-gray-500 uppercase tracking-widest mb-3">Montos rápidos manuales</p>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                           {fixedAmountOptions.map((amount, idx) => (
+                              <div key={idx} className="relative">
+                                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">$</span>
+                                 <input
+                                    type="number"
+                                    value={amount}
+                                    onChange={(e) => handleFixedAmountChange(idx, e.target.value)}
+                                    className="w-full pl-7 pr-3 py-3 rounded-xl border-2 border-amber-100 bg-white font-black text-gray-800 outline-none focus:border-amber-400"
+                                 />
+                              </div>
+                           ))}
+                        </div>
+                     </div>
                   </div>
                </div>
             </section>

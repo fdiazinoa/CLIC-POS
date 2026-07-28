@@ -1,14 +1,15 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import {
-    Square, Circle, Save, Trash2, Plus,
-    Layout, Grid, Armchair, Ban, Settings, Wine
+    Trash2, Plus, Layout, Grid, Settings
 } from 'lucide-react';
-import { Table, Room, TableShape } from '../types';
+import { Table, Room, TableShape, ParkedTicket } from '../types';
+import { getRenderableFloorTables } from '../utils/tableLayout';
 
 interface TableLayoutDesignerProps {
     rooms: Room[];
     currentRoomId: string;
     tables: Table[];
+    parkedTickets?: ParkedTicket[];
     onSave: (tables: Table[]) => void;
     onUpdateTables: (tables: Table[]) => void;
     onCreateRoom?: (name: string) => void;
@@ -20,8 +21,75 @@ const GRID_SIZE = 20; // px
 const CANVAS_WIDTH = 800;
 const CANVAS_HEIGHT = 600;
 
+const TableShapeVisual: React.FC<{ shape: TableShape; compact?: boolean }> = ({ shape, compact = false }) => {
+    const frameClass = compact ? 'w-7 h-6' : 'w-10 h-8';
+    const common = `${frameClass} relative shrink-0 pointer-events-none`;
+
+    if (shape === 'OBSTACLE') {
+        return (
+            <div className={`${common} flex items-center`} aria-hidden="true">
+                <div className="h-2 w-full rounded-sm bg-slate-700 shadow-sm" />
+            </div>
+        );
+    }
+
+    if (shape === 'BAR') {
+        return (
+            <div className={common} aria-hidden="true">
+                <div className="absolute inset-x-0 top-0 h-[55%] rounded-md border-2 border-amber-500 bg-amber-100" />
+                <div className="absolute bottom-0 left-[12%] h-[28%] aspect-square rounded-full border border-amber-600 bg-white" />
+                <div className="absolute bottom-0 left-1/2 -translate-x-1/2 h-[28%] aspect-square rounded-full border border-amber-600 bg-white" />
+                <div className="absolute bottom-0 right-[12%] h-[28%] aspect-square rounded-full border border-amber-600 bg-white" />
+            </div>
+        );
+    }
+
+    if (shape === 'BOOTH') {
+        return (
+            <div className={common} aria-hidden="true">
+                <div className="absolute inset-x-[8%] top-[4%] h-[32%] rounded-md border-2 border-indigo-500 bg-indigo-200" />
+                <div className="absolute bottom-[5%] left-[8%] h-[62%] w-[20%] rounded-md border-2 border-indigo-500 bg-indigo-100" />
+                <div className="absolute bottom-[5%] right-[8%] h-[62%] w-[20%] rounded-md border-2 border-indigo-500 bg-indigo-100" />
+                <div className="absolute bottom-[8%] left-[31%] h-[42%] w-[38%] rounded-sm border border-indigo-400 bg-white" />
+            </div>
+        );
+    }
+
+    if (shape === 'CHAISE_LONGUE') {
+        return (
+            <div className={common} aria-hidden="true">
+                <div className="absolute inset-y-[14%] inset-x-[3%] rounded-[40%] border-2 border-cyan-500 bg-cyan-100 shadow-sm" />
+                <div className="absolute left-[8%] top-[18%] h-[64%] w-[28%] rounded-[45%] border border-cyan-600 bg-white" />
+                <div className="absolute left-[40%] right-[10%] top-1/2 h-px bg-cyan-400" />
+            </div>
+        );
+    }
+
+    if (shape === 'CIRCLE') {
+        return (
+            <div className={common} aria-hidden="true">
+                <div className="absolute left-1/2 top-1/2 h-[58%] aspect-square -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-slate-500 bg-white" />
+                <div className="absolute left-1/2 top-0 h-[20%] aspect-square -translate-x-1/2 rounded-full bg-slate-400" />
+                <div className="absolute bottom-0 left-1/2 h-[20%] aspect-square -translate-x-1/2 rounded-full bg-slate-400" />
+                <div className="absolute left-0 top-1/2 h-[20%] aspect-square -translate-y-1/2 rounded-full bg-slate-400" />
+                <div className="absolute right-0 top-1/2 h-[20%] aspect-square -translate-y-1/2 rounded-full bg-slate-400" />
+            </div>
+        );
+    }
+
+    return (
+        <div className={common} aria-hidden="true">
+            <div className="absolute left-1/2 top-1/2 h-[55%] w-[48%] -translate-x-1/2 -translate-y-1/2 rounded-sm border-2 border-slate-500 bg-white" />
+            <div className="absolute left-1/2 top-0 h-[18%] w-[34%] -translate-x-1/2 rounded-sm bg-slate-400" />
+            <div className="absolute bottom-0 left-1/2 h-[18%] w-[34%] -translate-x-1/2 rounded-sm bg-slate-400" />
+            <div className="absolute left-0 top-1/2 h-[38%] w-[16%] -translate-y-1/2 rounded-sm bg-slate-400" />
+            <div className="absolute right-0 top-1/2 h-[38%] w-[16%] -translate-y-1/2 rounded-sm bg-slate-400" />
+        </div>
+    );
+};
+
 const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
-    rooms, currentRoomId, tables, onSave, onUpdateTables, onCreateRoom, onChangeRoom, onUpdateRoom
+    rooms, currentRoomId, tables, parkedTickets = [], onUpdateTables, onCreateRoom, onChangeRoom, onUpdateRoom
 }) => {
     const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
     const [showRoomSettings, setShowRoomSettings] = useState(false);
@@ -50,7 +118,8 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
             CIRCLE: 'Mesa',
             OBSTACLE: 'Muro',
             BAR: 'Barra',
-            BOOTH: 'Sofa'
+            BOOTH: 'Sofa',
+            CHAISE_LONGUE: 'Chaise longue'
         };
         return table.name?.trim() || table.nombre?.trim() || fallbackByShape[table.shape] || 'Mesa';
     };
@@ -78,9 +147,11 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
         return `${namePrefix} ${nextNumber}`;
     };
     const currentRoom = rooms.find(r => r.id === currentRoomId);
+    const usesWhiteBackground = currentRoom?.data?.backgroundStyle === 'WHITE';
+    const renderableTables = useMemo(() => getRenderableFloorTables(tables), [tables]);
     const currentRoomTables = useMemo(
-        () => tables.filter(t => t.roomId === currentRoomId),
-        [tables, currentRoomId]
+        () => renderableTables.filter(t => t.roomId === currentRoomId),
+        [renderableTables, currentRoomId]
     );
 
     useEffect(() => {
@@ -117,13 +188,16 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
 
     // Add new table
     const handleAddTable = (shape: TableShape) => {
+        if (!currentRoomId || !rooms.some(room => room.id === currentRoomId)) return;
+
         const isObstacle = shape === 'OBSTACLE';
         const elementConfig: Record<TableShape, { baseName: string; width: number; height: number; capacity: number }> = {
             SQUARE: { baseName: 'Mesa', width: 100, height: 100, capacity: 1 },
             CIRCLE: { baseName: 'Mesa', width: 100, height: 100, capacity: 1 },
             OBSTACLE: { baseName: 'Muro', width: 120, height: 20, capacity: 0 },
             BAR: { baseName: 'Barra', width: 180, height: 60, capacity: 1 },
-            BOOTH: { baseName: 'Sofa', width: 160, height: 90, capacity: 4 }
+            BOOTH: { baseName: 'Sofa', width: 160, height: 90, capacity: 4 },
+            CHAISE_LONGUE: { baseName: 'Chaise longue', width: 180, height: 70, capacity: 1 }
         };
         const config = elementConfig[shape];
         const elementName = getNextElementName(shape, config.baseName);
@@ -176,6 +250,21 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
     };
 
     const deleteTable = (id: string) => {
+        const table = tables.find(candidate => String(candidate.id) === String(id));
+        if (!table) return;
+        const hasAssociatedOrders = Boolean(
+            table.currentOrderId
+            || Number(table.currentOrderTotal || 0) > 0
+            || parkedTickets.some(ticket =>
+                String(ticket.tableId ?? '') === String(table.id)
+                && (ticket.items || []).some(item => Number(item.quantity || 0) > 0)
+            )
+        );
+        if (hasAssociatedOrders) {
+            alert('No se puede eliminar esta mesa porque tiene pedidos asociados. Finalice o mueva las cuentas antes de editar el layout.');
+            return;
+        }
+        if (!window.confirm(`¿Eliminar ${getTableLabel(table)} del layout?`)) return;
         onUpdateTables(tables.filter(t => t.id !== id));
         setSelectedTableId(null);
     };
@@ -218,8 +307,8 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
     return (
         <div className="flex flex-col h-full min-h-[calc(100vh-1px)] bg-slate-950 overflow-hidden">
             {/* Toolbar */}
-            <div className="bg-white/95 backdrop-blur border-b border-slate-200 px-4 py-3 flex justify-between items-center shrink-0 shadow-sm">
-                <div className="flex items-center gap-4">
+            <div className="bg-white/95 backdrop-blur border-b border-slate-200 px-4 py-3 flex justify-between items-center gap-4 shrink-0 shadow-sm overflow-x-auto">
+                <div className="flex items-center gap-4 shrink-0">
                     <h2 className="font-black text-slate-800 flex items-center gap-2"><Layout size={20} /> Diseñador de Sala</h2>
 
                     <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
@@ -232,7 +321,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                                 {getRoomLabel(room)}
                             </button>
                         ))}
-                        <button onClick={() => onCreateRoom?.("Nueva Sala")} className="px-3 py-1.5 text-xs font-bold text-blue-600 hover:bg-blue-50 rounded-md">
+                        <button onClick={() => onCreateRoom?.(`Sala ${rooms.length + 1}`)} className="px-3 py-1.5 text-xs font-bold text-blue-600 hover:bg-blue-50 rounded-md">
                             <Plus size={14} />
                         </button>
                     </div>
@@ -247,25 +336,24 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
 
                 </div>
 
-                <div className="flex gap-2">
+                <div className="flex gap-2 shrink-0">
                     <button onClick={() => handleAddTable('SQUARE')} className="flex items-center gap-2 px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold text-slate-700" title="Mesa Cuadrada">
-                        <Square size={16} /> Cuadrada
+                        <TableShapeVisual shape="SQUARE" compact /> Cuadrada
                     </button>
                     <button onClick={() => handleAddTable('CIRCLE')} className="flex items-center gap-2 px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold text-slate-700" title="Mesa Redonda">
-                        <Circle size={16} /> Redonda
+                        <TableShapeVisual shape="CIRCLE" compact /> Redonda
                     </button>
                     <button onClick={() => handleAddTable('OBSTACLE')} className="flex items-center gap-2 px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold text-slate-700" title="Obstáculo (Muro)">
-                        <Ban size={16} /> Muro
+                        <TableShapeVisual shape="OBSTACLE" compact /> Muro
                     </button>
                     <button onClick={() => handleAddTable('BAR')} className="flex items-center gap-2 px-3 py-2 bg-amber-50 hover:bg-amber-100 rounded-lg text-xs font-bold text-amber-700" title="Barra">
-                        <Wine size={16} /> Barra
+                        <TableShapeVisual shape="BAR" compact /> Barra
                     </button>
                     <button onClick={() => handleAddTable('BOOTH')} className="flex items-center gap-2 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 rounded-lg text-xs font-bold text-indigo-700" title="Sofa / Booth">
-                        <Armchair size={16} /> Sofa
+                        <TableShapeVisual shape="BOOTH" compact /> Sofa
                     </button>
-                    <div className="w-px h-8 bg-slate-200 mx-2"></div>
-                    <button onClick={() => onSave(tables)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-lg shadow-blue-200">
-                        <Save size={16} /> Guardar Distribución
+                    <button onClick={() => handleAddTable('CHAISE_LONGUE')} className="flex items-center gap-2 px-3 py-2 bg-cyan-50 hover:bg-cyan-100 rounded-lg text-xs font-bold text-cyan-700" title="Chaise longue para playa o piscina">
+                        <TableShapeVisual shape="CHAISE_LONGUE" compact /> Chaise longue
                     </button>
                 </div>
             </div>
@@ -274,7 +362,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                 {/* Canvas Area */}
                 <div
                     ref={canvasHostRef}
-                    className="flex-1 bg-gradient-to-br from-[#06172b] via-[#081124] to-[#101023] overflow-auto flex items-start justify-start relative"
+                    className={`flex-1 overflow-auto flex items-start justify-start relative ${usesWhiteBackground ? 'bg-slate-100' : 'bg-gradient-to-br from-[#06172b] via-[#081124] to-[#101023]'}`}
                 >
                     <div
                         className="absolute inset-0 pointer-events-none opacity-45"
@@ -292,7 +380,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                         onPointerMove={handleCanvasPointerMove}
                         onPointerUp={handleCanvasPointerEnd}
                         onPointerCancel={handleCanvasPointerEnd}
-                        className="bg-white/95 shadow-2xl relative select-none overflow-hidden touch-none"
+                        className={`shadow-2xl relative select-none overflow-hidden touch-none ${usesWhiteBackground ? 'bg-white' : 'bg-slate-50'}`}
                         style={{
                             width: canvasSize.width,
                             height: canvasSize.height,
@@ -311,8 +399,8 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                                 onPointerDown={(e) => handlePointerDown(e, table.id)}
                                 className={`absolute cursor-move flex flex-col items-center justify-center transition-shadow group
                        ${selectedTableId === table.id ? 'ring-2 ring-blue-500 z-10 shadow-xl' : 'hover:ring-2 hover:ring-blue-300 z-0'}
-                       ${table.shape === 'CIRCLE' || table.shape === 'BAR' ? 'rounded-full' : table.shape === 'BOOTH' ? 'rounded-2xl' : 'rounded-lg'}
-                       ${table.shape === 'OBSTACLE' ? 'bg-slate-800 text-white rounded-sm' : table.shape === 'BAR' ? 'bg-amber-50 border-2 border-amber-300 text-amber-800' : table.shape === 'BOOTH' ? 'bg-indigo-50 border-2 border-indigo-300 text-indigo-800' : 'bg-white border-2 border-slate-300 text-slate-700'}
+                       ${table.shape === 'CIRCLE' || table.shape === 'BAR' ? 'rounded-full' : table.shape === 'BOOTH' ? 'rounded-2xl' : table.shape === 'CHAISE_LONGUE' ? 'rounded-[2rem]' : 'rounded-lg'}
+                       ${table.shape === 'OBSTACLE' ? 'bg-slate-800 text-white rounded-sm' : table.shape === 'BAR' ? 'bg-amber-50 border-2 border-amber-300 text-amber-800' : table.shape === 'BOOTH' ? 'bg-indigo-50 border-2 border-indigo-300 text-indigo-800' : table.shape === 'CHAISE_LONGUE' ? 'bg-cyan-50 border-2 border-cyan-300 text-cyan-800' : 'bg-white border-2 border-slate-300 text-slate-700'}
                     `}
                                 style={{
                                     left: table.posX,
@@ -324,11 +412,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                             >
                                 {table.shape !== 'OBSTACLE' && (
                                     <>
-                                        {table.shape === 'BAR' ? (
-                                            <Wine size={16} className="mb-0.5 opacity-40" />
-                                        ) : (
-                                            <Armchair size={16} className="mb-0.5 opacity-30" />
-                                        )}
+                                        <TableShapeVisual shape={table.shape} />
                                         <span className="text-[10px] font-black leading-tight pointer-events-none whitespace-nowrap overflow-hidden text-ellipsis max-w-[90%] text-center">
                                             {getTableLabel(table)}
                                         </span>
@@ -509,6 +593,32 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                                         }}
                                         className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500"
                                     />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Fondo del mapa</label>
+                                <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => currentRoom && onUpdateRoom?.({
+                                            ...currentRoom,
+                                            data: { ...(currentRoom.data || {}), backgroundStyle: 'DARK' }
+                                        })}
+                                        className={`rounded-lg px-3 py-2 text-sm font-bold ${!usesWhiteBackground ? 'bg-slate-900 text-white shadow' : 'text-slate-500 hover:bg-white'}`}
+                                    >
+                                        Oscuro
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => currentRoom && onUpdateRoom?.({
+                                            ...currentRoom,
+                                            data: { ...(currentRoom.data || {}), backgroundStyle: 'WHITE' }
+                                        })}
+                                        className={`rounded-lg px-3 py-2 text-sm font-bold ${usesWhiteBackground ? 'bg-white text-slate-900 shadow' : 'text-slate-500 hover:bg-white'}`}
+                                    >
+                                        Blanco
+                                    </button>
                                 </div>
                             </div>
 

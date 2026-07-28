@@ -7,9 +7,12 @@ import {
     CheckCircle2,
     Timer,
     Copy,
+    Monitor,
     Wifi,
-    WifiOff
+    WifiOff,
+    RefreshCw
 } from 'lucide-react';
+import { formatKdsIdentityLabel } from '../../utils/kdsPresentation';
 
 interface KDSItem {
     id: string;
@@ -29,6 +32,11 @@ interface KDSOrder {
     userName: string;
     customerId: string;
     customerName: string;
+    sourceTerminal?: {
+        id?: string;
+        code?: string;
+        name?: string;
+    } | null;
     table?: {
         id?: string;
         name?: string;
@@ -65,6 +73,22 @@ interface KDSNetworkInfo {
 const DEFAULT_KDS_PORT = '8001';
 const DEFAULT_WARNING_MINUTES = 10;
 const DEFAULT_CRITICAL_MINUTES = 20;
+const KDS_REQUEST_TIMEOUT_MS = 4500;
+const KDS_NETWORK_WATCHDOG_MS = 15000;
+
+const fetchWithTimeout = async (url: string, options?: RequestInit): Promise<Response> => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), KDS_REQUEST_TIMEOUT_MS);
+    try {
+        return await fetch(url, {
+            ...options,
+            cache: 'no-store',
+            signal: controller.signal
+        });
+    } finally {
+        window.clearTimeout(timeout);
+    }
+};
 
 const getOrderSignature = (order: KDSOrder): string => {
     const itemSignature = (order.items || [])
@@ -96,6 +120,38 @@ const resolveKdsPort = (): string => {
         return /^\d{2,5}$/.test(candidate) ? candidate : DEFAULT_KDS_PORT;
     } catch {
         return DEFAULT_KDS_PORT;
+    }
+};
+
+const resolveKdsLocalBaseUrl = (): string => `http://localhost:${resolveKdsPort()}`;
+
+const resolveKitchenTerminalIdentity = () => {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        const name = params.get('terminalName')
+            || window.localStorage.getItem('CLIC_POS_TERMINAL_NAME')
+            || window.localStorage.getItem('clic_erp_sync_terminal_name')
+            || window.localStorage.getItem('terminalName')
+            || window.localStorage.getItem('kdsTerminalName')
+            || '';
+        const id = params.get('terminalId')
+            || window.localStorage.getItem('CLIC_POS_TERMINAL_ID')
+            || window.localStorage.getItem('terminalId')
+            || window.localStorage.getItem('kdsTerminalId')
+            || '';
+        const explicitCode = params.get('terminalCode')
+            || window.localStorage.getItem('CLIC_POS_TERMINAL_CODE')
+            || window.localStorage.getItem('terminalCode')
+            || window.localStorage.getItem('kdsTerminalCode')
+            || '';
+        const technicalId = /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(id) || id.length > 18;
+        return {
+            name: name.trim() || 'Terminal cocina',
+            id: id.trim(),
+            code: explicitCode.trim() || (technicalId ? '' : id.trim())
+        };
+    } catch {
+        return { name: 'Terminal cocina', id: '', code: '' };
     }
 };
 
@@ -157,9 +213,15 @@ const KitchenDisplay: React.FC = () => {
         serverRunning: false
     });
     const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+    const [connectionState, setConnectionState] = useState<'connecting' | 'online' | 'offline'>('connecting');
+    const [connectionMessage, setConnectionMessage] = useState('Iniciando servicio de cocina...');
+    const terminalIdentity = useMemo(() => resolveKitchenTerminalIdentity(), []);
     const audioContextRef = useRef<AudioContext | null>(null);
+    const networkInfoRef = useRef(networkInfo);
     const knownOrderSignaturesRef = useRef<Set<string>>(new Set());
     const didPrimeOrdersRef = useRef(false);
+    const fetchInFlightRef = useRef(false);
+    const reconnectInFlightRef = useRef(false);
 
     const ensureAudioContext = useCallback(() => {
         const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
@@ -218,46 +280,124 @@ const KitchenDisplay: React.FC = () => {
         };
     }, [ensureAudioContext]);
 
+    const fetchOrders = useCallback(async (): Promise<boolean> => {
+        if (fetchInFlightRef.current) return false;
+        fetchInFlightRef.current = true;
+        try {
+            const response = await fetchWithTimeout(`${resolveKdsLocalBaseUrl()}/api/cocina/ordenes-activas`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            const data = await response.json();
+            const nextOrders = Array.isArray(data) ? data : [];
+            const nextSignatures = new Set(nextOrders.map(getOrderSignature));
+            const hasNewOrder = didPrimeOrdersRef.current
+                && nextOrders.some((order) => !knownOrderSignaturesRef.current.has(getOrderSignature(order)));
+            knownOrderSignaturesRef.current = nextSignatures;
+            didPrimeOrdersRef.current = true;
+            setOrders(nextOrders);
+            if (networkInfoRef.current.host && networkInfoRef.current.serverRunning) {
+                setConnectionState('online');
+                setConnectionMessage('Servicio KDS conectado');
+            } else {
+                setConnectionState('offline');
+                setConnectionMessage('Servicio local activo, pero la red no tiene una IP disponible');
+            }
+            if (hasNewOrder) playKitchenAlert();
+            return true;
+        } catch (error) {
+            setConnectionState('offline');
+            setConnectionMessage(error instanceof Error && error.name === 'AbortError'
+                ? 'El servicio KDS no respondió a tiempo'
+                : 'Sin comunicación con el servicio KDS');
+            console.warn('[KDS] No se pudieron consultar las órdenes:', error);
+            return false;
+        } finally {
+            fetchInFlightRef.current = false;
+            setLoading(false);
+        }
+    }, [playKitchenAlert]);
+
+    const reconnectKds = useCallback(async (forceRestart = false) => {
+        if (reconnectInFlightRef.current) return;
+        reconnectInFlightRef.current = true;
+        setConnectionState('connecting');
+        setConnectionMessage('Reconectando servicio KDS...');
+        try {
+            const nativeBridge = (window as any).ClicPOSNativePrinter;
+            if (forceRestart && typeof nativeBridge?.stopKdsServer === 'function') {
+                await nativeBridge.stopKdsServer({});
+            }
+
+            const info = await resolveKdsNetworkInfo();
+            networkInfoRef.current = info;
+            setNetworkInfo(info);
+            const ordersAvailable = await fetchOrders();
+            if (!info.serverRunning || !info.host || !ordersAvailable) {
+                setConnectionState('offline');
+                setConnectionMessage(info.message || (!info.host
+                    ? 'Conecta Ethernet o Wi-Fi y pulsa reconectar'
+                    : 'El servicio KDS todavía no está disponible'));
+                return;
+            }
+
+            setConnectionState('online');
+            setConnectionMessage('Servicio KDS conectado');
+            console.info('[KDS] Conexión renovada', {
+                url: info.url,
+                ips: info.ips,
+                forced: forceRestart
+            });
+        } catch (error) {
+            setConnectionState('offline');
+            setConnectionMessage('No fue posible reconectar el servicio KDS');
+            console.warn('[KDS] Falló la reconexión:', error);
+        } finally {
+            reconnectInFlightRef.current = false;
+        }
+    }, [fetchOrders]);
+
     useEffect(() => {
-        let mounted = true;
-        resolveKdsNetworkInfo().then((info) => {
-            if (mounted) setNetworkInfo(info);
+        const handleOnline = () => void reconnectKds(true);
+        const handleOffline = () => {
+            const offlineInfo = {
+                ...networkInfoRef.current,
+                host: null,
+                url: null,
+                ips: [],
+                serverRunning: false
+            };
+            networkInfoRef.current = offlineInfo;
+            setNetworkInfo(offlineInfo);
+            setConnectionState('offline');
+            setConnectionMessage('Red desconectada. Esperando reconexión...');
+        };
+        const handleResume = () => {
+            if (!document.hidden) void reconnectKds(true);
+        };
+
+        void reconnectKds(false);
+        const orderPolling = window.setInterval(() => void fetchOrders(), 5000);
+        const networkWatchdog = window.setInterval(() => void reconnectKds(false), KDS_NETWORK_WATCHDOG_MS);
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+        document.addEventListener('visibilitychange', handleResume);
+
+        const appPlugin = (window as any).Capacitor?.Plugins?.App;
+        const resumeListener = appPlugin?.addListener?.('resume', () => void reconnectKds(true));
+        const stateListener = appPlugin?.addListener?.('appStateChange', (state: { isActive?: boolean }) => {
+            if (state?.isActive) void reconnectKds(true);
         });
 
         return () => {
-            mounted = false;
+            window.clearInterval(orderPolling);
+            window.clearInterval(networkWatchdog);
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('offline', handleOffline);
+            document.removeEventListener('visibilitychange', handleResume);
+            resumeListener?.remove?.();
+            stateListener?.remove?.();
         };
-    }, []);
-
-    // Poll for updates every 5 seconds
-    useEffect(() => {
-        const fetchOrders = async () => {
-            try {
-                const response = await fetch('http://localhost:8001/api/cocina/ordenes-activas');
-                if (response.ok) {
-                    const data = await response.json();
-                    const nextOrders = Array.isArray(data) ? data : [];
-                    const nextSignatures = new Set(nextOrders.map(getOrderSignature));
-                    const hasNewOrder = didPrimeOrdersRef.current
-                        && nextOrders.some((order) => !knownOrderSignaturesRef.current.has(getOrderSignature(order)));
-                    knownOrderSignaturesRef.current = nextSignatures;
-                    didPrimeOrdersRef.current = true;
-                    setOrders(nextOrders);
-                    if (hasNewOrder) {
-                        playKitchenAlert();
-                    }
-                }
-            } catch (error) {
-                console.error("Error fetching KDS orders:", error);
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        fetchOrders();
-        const interval = setInterval(fetchOrders, 5000);
-        return () => clearInterval(interval);
-    }, []);
+    }, [fetchOrders, reconnectKds]);
 
     const handleCopyEndpoint = async () => {
         if (!networkInfo.url) return;
@@ -278,7 +418,7 @@ const KitchenDisplay: React.FC = () => {
             const payload = type === 'item'
                 ? { item_id: id, nuevo_estado: newStatus }
                 : { orden_id: id, nuevo_estado: newStatus };
-            const response = await fetch('http://localhost:8001/api/cocina/cambiar-estado', {
+            const response = await fetchWithTimeout(`${resolveKdsLocalBaseUrl()}/api/cocina/cambiar-estado`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -337,11 +477,30 @@ const KitchenDisplay: React.FC = () => {
                     <span className="text-3xl leading-none">👨‍🍳</span>
                     <div className="min-w-0">
                         <div className="text-xl font-black tracking-tight leading-none">Display de Cocina</div>
-                        <div className="text-xs text-gray-400 font-semibold mt-1">Órdenes en tiempo real</div>
+                        <div className="text-xs text-gray-400 font-semibold mt-1">
+                            {formatKdsIdentityLabel(terminalIdentity.code, terminalIdentity.name)} · Órdenes en tiempo real
+                        </div>
                     </div>
                 </div>
 
                 <div className="flex items-center gap-5">
+                    <button
+                        type="button"
+                        onClick={() => void reconnectKds(true)}
+                        disabled={connectionState === 'connecting'}
+                        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-colors disabled:cursor-wait ${
+                            connectionState === 'online'
+                                ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                                : connectionState === 'connecting'
+                                    ? 'border-blue-400/30 bg-blue-500/10 text-blue-300'
+                                    : 'border-amber-400/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20'
+                        }`}
+                        title={`${connectionMessage}. Reconectar servicio`}
+                        aria-label="Reconectar servicio de cocina"
+                    >
+                        <RefreshCw size={20} className={connectionState === 'connecting' ? 'animate-spin' : ''} />
+                    </button>
+
                     <button
                         type="button"
                         onClick={handleCopyEndpoint}
@@ -355,10 +514,16 @@ const KitchenDisplay: React.FC = () => {
                         {networkInfo.url && networkInfo.serverRunning ? <Wifi size={18} className="text-cyan-300" /> : <WifiOff size={18} className="text-amber-300" />}
                         <div className="min-w-0">
                             <div className="text-[9px] font-black uppercase tracking-[0.2em] text-gray-400">
-                                {networkInfo.serverRunning ? 'Ruta KDS activa' : 'Servidor KDS'}
+                                {connectionState === 'connecting'
+                                    ? 'Reconectando'
+                                    : connectionState === 'online' && networkInfo.serverRunning
+                                        ? 'Ruta KDS activa'
+                                        : 'Servidor KDS sin conexión'}
                             </div>
                             <div className="max-w-[260px] truncate text-xs font-black">
-                                {networkInfo.url || networkInfo.message || `IP no detectada · puerto ${networkInfo.port}`}
+                                {connectionState === 'online'
+                                    ? networkInfo.url
+                                    : connectionMessage || networkInfo.message || `IP no detectada · puerto ${networkInfo.port}`}
                             </div>
                             {networkInfo.ips.length > 1 && (
                                 <div className="max-w-[260px] truncate text-[9px] font-bold text-gray-400">
@@ -519,17 +684,47 @@ const TicketCard: React.FC<{
     const tableLabel = resolveTableLabel(order);
     const visibleOrderNumber = resolveVisibleOrderNumber(order);
     const headerTitle = tableLabel || (visibleOrderNumber ? `Orden ${visibleOrderNumber}` : 'Venta directa');
-    const severityColors = {
-        normal: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400',
-        warning: 'border-amber-500/30 bg-amber-500/10 text-amber-400',
-        critical: 'border-red-500 bg-red-500/10 text-white animate-pulse-slow'
+    const sourceTerminalLabel = formatKdsIdentityLabel(order.sourceTerminal?.code, order.sourceTerminal?.name);
+    const productionAreaLabel = String(order.area?.name || order.area?.nombre || '').trim();
+    const severityStyles = {
+        normal: {
+            card: 'border-emerald-500/30 bg-gray-900 text-gray-100',
+            header: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400',
+            body: 'bg-gray-900',
+            itemName: 'text-gray-200',
+            qty: 'text-blue-500',
+            modifier: 'text-red-300',
+            footer: 'bg-gray-800/50',
+            button: 'bg-gray-100 text-gray-900 hover:bg-white'
+        },
+        warning: {
+            card: 'border-amber-500 bg-amber-300 text-amber-950 shadow-amber-500/30',
+            header: 'bg-amber-500 text-amber-950 border-b border-amber-600/40',
+            body: 'bg-amber-300',
+            itemName: 'text-amber-950',
+            qty: 'text-amber-950',
+            modifier: 'text-red-800',
+            footer: 'bg-amber-400/60 border-t border-amber-600/30',
+            button: 'bg-amber-950 text-amber-50 hover:bg-amber-900'
+        },
+        critical: {
+            card: 'border-red-700 bg-red-600 text-white shadow-red-500/40 animate-pulse-slow',
+            header: 'bg-red-800 text-white border-b border-red-950/30',
+            body: 'bg-red-600',
+            itemName: 'text-white',
+            qty: 'text-white',
+            modifier: 'text-red-50',
+            footer: 'bg-red-800/70 border-t border-red-950/30',
+            button: 'bg-white text-red-700 hover:bg-red-50'
+        }
     };
+    const activeSeverityStyles = severityStyles[severity];
 
     return (
-        <div className={`w-80 h-full flex flex-col bg-gray-900 rounded-[2rem] border-2 shadow-2xl transition-all duration-500 ${severityColors[severity].split(' ')[0]}`}>
+        <div className={`w-80 h-full flex flex-col rounded-[2rem] border-2 shadow-2xl transition-all duration-500 ${activeSeverityStyles.card}`}>
 
             {/* Card Header */}
-            <div className={`p-4 rounded-t-[1.8rem] flex flex-col gap-2 ${severityColors[severity]}`}>
+            <div className={`p-4 rounded-t-[1.8rem] flex flex-col gap-2 ${activeSeverityStyles.header}`}>
                 <div className="flex items-center justify-between">
                     <span className="text-2xl font-black tracking-tighter truncate pr-3"># {headerTitle}</span>
                     <div
@@ -543,10 +738,20 @@ const TicketCard: React.FC<{
                     <span className="flex items-center gap-1"><Users size={10} /> {order.userName}</span>
                     <span>{visibleOrderNumber ? `Orden: ${visibleOrderNumber}` : `Ref: ${String(order.id).slice(-4)}`}</span>
                 </div>
+                {(productionAreaLabel || order.sourceTerminal) && (
+                    <div className="flex items-center justify-between gap-3 text-[10px] font-black uppercase tracking-wide opacity-90">
+                        <span className="truncate">{productionAreaLabel ? `Centro: ${productionAreaLabel}` : 'Centro de producción'}</span>
+                        {order.sourceTerminal && (
+                            <span className="flex max-w-[48%] items-center gap-1 truncate" title={sourceTerminalLabel}>
+                                <Monitor size={11} className="shrink-0" /> {sourceTerminalLabel}
+                            </span>
+                        )}
+                    </div>
+                )}
             </div>
 
             {/* Items List */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className={`flex-1 overflow-y-auto p-4 space-y-4 ${activeSeverityStyles.body}`}>
                 {order.items.map((item) => {
                     const isReturned = item.estado_cocina === 'DEVUELTO';
                     const isReady = item.estado_cocina === 'LISTO';
@@ -560,10 +765,10 @@ const TicketCard: React.FC<{
                             className={`transition-all ${isReturned ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'} ${isReady || isReturned ? 'grayscale line-through' : ''}`}
                         >
                             <div className="flex items-start gap-3">
-                                <span className={`text-2xl font-black leading-tight ${isReturned ? 'text-red-400' : 'text-blue-500'}`}>{item.cantidad}x</span>
+                                <span className={`text-2xl font-black leading-tight ${isReturned ? 'text-red-200' : activeSeverityStyles.qty}`}>{item.cantidad}x</span>
                                 <div className="flex-1">
                                     <div className="flex items-start justify-between gap-2">
-                                        <p className="text-xl font-bold leading-tight text-gray-200">{item.nombre}</p>
+                                        <p className={`text-xl font-bold leading-tight ${activeSeverityStyles.itemName}`}>{item.nombre}</p>
                                         {isReturned && (
                                             <span className="rounded-full bg-red-500/20 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-red-200">
                                                 Devuelto
@@ -573,7 +778,7 @@ const TicketCard: React.FC<{
                                     {item.modificadores && item.modificadores.length > 0 && (
                                         <ul className="mt-1 space-y-0.5">
                                             {item.modificadores.map((mod, i) => (
-                                                <li key={i} className="text-red-300 text-sm font-bold uppercase flex items-center gap-1">
+                                                <li key={i} className={`${activeSeverityStyles.modifier} text-sm font-bold uppercase flex items-center gap-1`}>
                                                     <span className="text-xs">↳</span> {mod}
                                                 </li>
                                             ))}
@@ -587,10 +792,10 @@ const TicketCard: React.FC<{
             </div>
 
             {/* Card Footer */}
-            <div className="p-4 bg-gray-800/50 rounded-b-[1.8rem]">
+            <div className={`p-4 rounded-b-[1.8rem] ${activeSeverityStyles.footer}`}>
                 <button
                     onClick={() => onStatusChange(order.id, 'LISTO', 'order')}
-                    className="w-full py-4 bg-gray-100 text-gray-900 rounded-2xl font-black text-lg hover:bg-white active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-xl"
+                    className={`w-full py-4 rounded-2xl font-black text-lg active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-xl ${activeSeverityStyles.button}`}
                 >
                     <CheckCircle2 size={24} /> MARCHAR / LISTO
                 </button>

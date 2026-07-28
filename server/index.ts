@@ -218,7 +218,8 @@ server.get('/api/mesas', (req, res) => {
         }
 
         const tables = db.prepare("SELECT * FROM tables").all();
-        const parkedTicketsIndex = indexParkedTicketsForTables(getOpenParkedTickets());
+        const parkedTickets = getOpenParkedTickets();
+        const parkedTicketsIndex = indexParkedTicketsForTables(parkedTickets);
 
         // Format for frontend (parse JSON 'data' field)
         const formattedRooms = rooms.map((r: any) => ({
@@ -242,9 +243,26 @@ server.get('/api/mesas', (req, res) => {
             };
         });
 
-        res.json({ rooms: formattedRooms, tables: formattedTables });
+        res.json({ rooms: formattedRooms, tables: formattedTables, parkedTickets });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
+    }
+});
+
+server.put('/api/mesas/parked-tickets', (req, res) => {
+    const parkedTickets = Array.isArray(req.body?.parkedTickets) ? req.body.parkedTickets : null;
+    if (!parkedTickets) {
+        return res.status(400).json({ success: false, message: 'parkedTickets must be an array' });
+    }
+
+    try {
+        saveSetting('parkedTickets', parkedTickets);
+        res.json({
+            success: true,
+            parkedTickets: getOpenParkedTickets()
+        });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 
@@ -399,16 +417,34 @@ server.post('/api/mesas/unir', (req, res) => {
 server.post('/api/mesas/liberar', (req, res) => {
     const { tableId } = req.body;
     try {
-        db.prepare(`
-            UPDATE tables 
-            SET status = 'FREE', 
-                currentOrderId = NULL, 
-                currentOrderTotal = 0, 
-                timeSeated = NULL, 
-                waiterName = NULL,
-                waiterId = NULL
-            WHERE id = ?
-        `).run(tableId);
+        const table = db.prepare('SELECT * FROM tables WHERE id = ?').get(tableId) as any;
+        const currentOrderId = String(table?.currentOrderId || '').trim();
+        const tableShape = String(table?.shape || '').trim().toUpperCase();
+        const rawParkedTickets = getSetting('parkedTickets');
+        const parkedTickets = Array.isArray(rawParkedTickets) ? rawParkedTickets : [];
+        const nextParkedTickets = parkedTickets.filter((ticket: any) => {
+            const ticketId = String(ticket?.id || '').trim();
+            const ticketTableId = String(ticket?.tableId ?? '').trim();
+            const ticketBarTabId = String(ticket?.barTabId || '').trim();
+            const isClosedOrder = currentOrderId && (ticketId === currentOrderId || ticketBarTabId === currentOrderId);
+            const isSameTable = tableShape !== 'BAR' && String(tableId || '').trim() && ticketTableId === String(tableId).trim();
+            return !isClosedOrder && !isSameTable;
+        });
+
+        const releaseTable = db.transaction(() => {
+            saveSetting('parkedTickets', nextParkedTickets);
+            db.prepare(`
+                UPDATE tables
+                SET status = 'FREE',
+                    currentOrderId = NULL,
+                    currentOrderTotal = 0,
+                    timeSeated = NULL,
+                    waiterName = NULL,
+                    waiterId = NULL
+                WHERE id = ?
+            `).run(tableId);
+        });
+        releaseTable();
         res.json({ success: true });
     } catch (error: any) {
         res.status(500).json({ error: error.message });

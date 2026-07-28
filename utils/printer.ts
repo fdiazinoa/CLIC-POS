@@ -1,6 +1,6 @@
 import { Transaction, BusinessConfig, Reservation, CartItem, Table } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
-import { buildEscPosComandaPayload, buildEscPosReservationPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload } from '../services/printer/EscPosFormatter';
+import { buildEscPosComandaPayload, buildEscPosReservationPayload, buildEscPosSubtotalPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload } from '../services/printer/EscPosFormatter';
 import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRuntime';
 import { dbAdapter } from '../services/db';
 import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, formatTaxLineLabel } from './fiscalBreakdown';
@@ -879,7 +879,7 @@ export const printPrecuenta = async (
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Pre-Cuenta</title>
+            <title>Subtotal</title>
             <style>
                 @page { size: 80mm auto; margin: 0; }
                 body {
@@ -925,7 +925,7 @@ export const printPrecuenta = async (
             
             <div class="text-center">
                 <div class="warning-title">NO VÁLIDO COMO FACTURA FISCAL</div>
-                <div class="doc-title">PRE-CUENTA</div>
+                <div class="doc-title">SUBTOTAL</div>
             </div>
 
             <div class="divider"></div>
@@ -961,7 +961,7 @@ export const printPrecuenta = async (
             <div class="divider"></div>
 
             <div class="totals-section">
-                <div class="total-row">
+                <div class="total-row font-bold">
                     <span>SUBTOTAL</span>
                     <span>${currencySymbol}${params.subtotal.toFixed(2)}</span>
                 </div>
@@ -998,14 +998,29 @@ export const printPrecuenta = async (
 
     const silentHtml = receiptHtml.replace(/<script>[\s\S]*?window\.onload[\s\S]*?<\/script>/, '');
     let printedSilently = false;
+    const escPosBase64 = buildEscPosSubtotalPayload(config, params);
+
+    if (escPosBase64) {
+        printedSilently = await PrintRouterService.routeAndPrintEscPos({
+            config,
+            escPosBase64,
+            role: 'TICKET',
+            terminalId: params.terminalId,
+            jobType: 'SUBTOTAL',
+            referenceId: `SUBTOTAL-${Date.now()}`,
+            copies: 1,
+        });
+    }
+
+    if (printedSilently) return true;
 
     printedSilently = await PrintRouterService.routeAndPrintHtml({
         config,
         html: silentHtml,
         role: 'TICKET',
         terminalId: params.terminalId,
-        jobType: 'PRECUENTA',
-        referenceId: `PRECUENTA-${Date.now()}`,
+        jobType: 'SUBTOTAL',
+        referenceId: `SUBTOTAL-${Date.now()}`,
         copies: 1,
     });
 

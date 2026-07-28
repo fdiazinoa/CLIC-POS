@@ -96,6 +96,10 @@ class AndroidPrinterBridge(context: Context) {
                     startKdsServer: function (payload) { return call('startKdsServer', payload); },
                     stopKdsServer: function (payload) { return call('stopKdsServer', payload); },
                     getKdsServerStatus: function (payload) { return call('getKdsServerStatus', payload); },
+                    startMasterServer: function (payload) { return call('startMasterServer', payload); },
+                    updateMasterServerConfig: function (payload) { return call('updateMasterServerConfig', payload); },
+                    stopMasterServer: function (payload) { return call('stopMasterServer', payload); },
+                    getMasterServerStatus: function (payload) { return call('getMasterServerStatus', payload); },
                     discoverFingerprintReaders: function (payload) { return call('discoverFingerprintReaders', payload); },
                     scanFingerprintReaders: function (payload) { return call('scanFingerprintReaders', payload); },
                     testFingerprintReader: function (payload) { return call('testFingerprintReader', payload); }
@@ -496,6 +500,37 @@ class AndroidPrinterBridge(context: Context) {
     @JavascriptInterface
     fun getKdsServerStatus(payloadJson: String?): String {
         return ClicPOSKdsHttpServer.status(appContext).toString()
+    }
+
+    @JavascriptInterface
+    fun startMasterServer(payloadJson: String?): String {
+        val payload = runCatching {
+            if (payloadJson.isNullOrBlank()) JSONObject() else JSONObject(payloadJson)
+        }.getOrDefault(JSONObject())
+        val port = payload.optInt("port", 3001)
+        val config = payload.optJSONObject("config")
+        val users = payload.optJSONArray("users")
+        return ClicPOSMasterHttpServer.start(appContext, port, config, users).toString()
+    }
+
+    @JavascriptInterface
+    fun updateMasterServerConfig(payloadJson: String?): String {
+        val payload = runCatching {
+            if (payloadJson.isNullOrBlank()) JSONObject() else JSONObject(payloadJson)
+        }.getOrDefault(JSONObject())
+        val config = payload.optJSONObject("config") ?: JSONObject()
+        val users = payload.optJSONArray("users")
+        return ClicPOSMasterHttpServer.updateConfig(config, users).toString()
+    }
+
+    @JavascriptInterface
+    fun stopMasterServer(payloadJson: String?): String {
+        return ClicPOSMasterHttpServer.stop().toString()
+    }
+
+    @JavascriptInterface
+    fun getMasterServerStatus(payloadJson: String?): String {
+        return ClicPOSMasterHttpServer.status(appContext).toString()
     }
 
     @JavascriptInterface

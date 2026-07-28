@@ -8,6 +8,8 @@ import SyncProgressModal from './SyncProgressModal';
 import { db } from '../utils/db';
 import { loadSyncProfile, resolveSyncTarget, SyncProfile, ResolvedSyncTarget } from '../services/sync/SyncProfile';
 import { posCloudStagingService } from '../services/sync/PosCloudStagingService';
+import { resetDeviceIdentityBySupport } from '../utils/deviceRevocation';
+import { getConfigPushV2Diagnostics, triggerErpSyncOutbox } from '../utils/erpSyncLifecycle';
 
 interface SyncSettingsProps {
     config: BusinessConfig;
@@ -41,6 +43,18 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const [syncTarget, setSyncTarget] = useState<ResolvedSyncTarget>(() => resolveSyncTarget());
     const [diagnosticCounts, setDiagnosticCounts] = useState<Record<string, number>>({});
     const [isSendingSnapshot, setIsSendingSnapshot] = useState(false);
+    const [configPushDiagnostics, setConfigPushDiagnostics] = useState<{
+        baseCurrency: string;
+        enabledCurrencies: string[];
+        versionHash: string | null;
+        configVersion: number;
+        appliedAt: string | null;
+    } | null>(null);
+    const [isRetryingConfigPush, setIsRetryingConfigPush] = useState(false);
+    const [configPushRetryResult, setConfigPushRetryResult] = useState<{
+        type: 'success' | 'error';
+        message: string;
+    } | null>(null);
 
     const resolveDocumentStatus = (raw: any): 'SYNCED' | 'PENDING' | 'ERROR' => {
         const status = String(raw?.syncStatus || raw?.cloudSyncStatus || '').toUpperCase();
@@ -87,6 +101,34 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         return 'SYNCED';
     };
 
+    const resolveTerminalDisplayName = (terminalId: any): string => {
+        const rawId = String(terminalId || '').trim();
+        if (!rawId || rawId === '-') return '-';
+        const normalized = normalizeDocumentRef(rawId);
+        const terminal = (config.terminals || []).find((candidate: any) => {
+            const terminalConfig: any = candidate?.config || {};
+            const refs = [
+                candidate?.id,
+                terminalConfig?.terminalName,
+                terminalConfig?.terminalCode,
+                terminalConfig?.stationNumber,
+                terminalConfig?.erpTerminalId,
+                terminalConfig?.erpBinding?.terminalId,
+                terminalConfig?.erpBinding?.terminalName,
+                terminalConfig?.erpBinding?.terminalCode,
+            ].map(normalizeDocumentRef).filter(Boolean);
+            return refs.includes(normalized);
+        });
+        const terminalConfig: any = terminal?.config || {};
+        return String(
+            terminalConfig?.terminalName ||
+            terminalConfig?.erpBinding?.terminalName ||
+            terminalConfig?.terminalCode ||
+            terminalConfig?.stationNumber ||
+            rawId
+        ).trim();
+    };
+
     const loadStatus = async () => {
         try {
             const statuses = await syncManager.getSyncStatus();
@@ -96,6 +138,26 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
             const target = resolveSyncTarget(profile);
             setSyncProfile(profile);
             setSyncTarget(target);
+            const persistedValue = await db.get('config');
+            const persistedConfig = persistedValue && !Array.isArray(persistedValue)
+                ? persistedValue as unknown as BusinessConfig
+                : null;
+            const effectiveConfig = persistedConfig || config;
+            const enabledCurrencies = (effectiveConfig.currencies || [])
+                .filter((currency) => currency.isEnabled)
+                .map((currency) => currency.code);
+            const baseCurrency = (effectiveConfig.currencies || [])
+                .find((currency) => currency.isBase)?.code
+                || enabledCurrencies[0]
+                || 'DOP';
+            const configPushState = getConfigPushV2Diagnostics();
+            setConfigPushDiagnostics({
+                baseCurrency,
+                enabledCurrencies,
+                versionHash: configPushState.versionHash,
+                configVersion: Number(configPushState.domainVersions.config || 0),
+                appliedAt: configPushState.appliedAt,
+            });
 
             // Get connection status
             const connStatus = syncManager.getSyncConnectionStatus();
@@ -183,6 +245,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     collection: 'transactions',
                     id: t.displayId || t.id,
                     terminalId: t.terminalId || '-',
+                    terminalLabel: resolveTerminalDisplayName(t.terminalId || t.source_terminal_id || '-'),
                     type: 'VENTA',
                     date: t.date || t.createdAt,
                     status: resolveDocumentStatus(t),
@@ -195,6 +258,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     collection: 'reservations',
                     id: r.code || r.id,
                     terminalId: r.terminalId || '-',
+                    terminalLabel: resolveTerminalDisplayName(r.terminalId || r.source_terminal_id || '-'),
                     type: 'RESERVA',
                     date: r.createdAt,
                     status: resolveDocumentStatus(r),
@@ -241,6 +305,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                         collection: 'inventoryLedger',
                         id,
                         terminalId: first.terminalId || '-',
+                        terminalLabel: resolveTerminalDisplayName(first.terminalId || first.source_terminal_id || '-'),
                         type: 'INVENTARIO',
                         date: latest.createdAt || latest.timestamp || first.createdAt || first.timestamp,
                         status: aggregateDocumentStatus(group),
@@ -261,6 +326,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     collection: 'zReports',
                     id: z.sequenceNumber || z.id,
                     terminalId: z.terminalId || '-',
+                    terminalLabel: resolveTerminalDisplayName(z.terminalId || z.source_terminal_id || '-'),
                     type: 'CIERRE_Z',
                     date: z.closedAt,
                     status: resolveDocumentStatus(z),
@@ -398,6 +464,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const handleSync = async () => {
         setIsSyncing(true);
         try {
+            await triggerErpSyncOutbox('manual_sync');
             // Master should also use syncAllCatalogs to PULL operations (Z-Reports, etc.)
             // while PUSHING catalogs.
             await syncManager.syncAllCatalogs();
@@ -417,6 +484,34 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         }
     };
 
+    const handleRetryConfigPush = async () => {
+        setIsRetryingConfigPush(true);
+        setConfigPushRetryResult(null);
+        try {
+            const result = await triggerErpSyncOutbox('manual_sync');
+            await loadStatus();
+            if (!result) {
+                throw new Error('La terminal no tiene una identidad ERP activa para consultar configuración.');
+            }
+            if (result.failed > 0) {
+                throw new Error(`${result.failed} evento(s) de configuración terminaron con error.`);
+            }
+            setConfigPushRetryResult({
+                type: 'success',
+                message: result.applied > 0
+                    ? `Configuración aplicada correctamente (${result.applied} evento(s)).`
+                    : 'Sin cambios pendientes. La configuración local ya está actualizada.',
+            });
+        } catch (error) {
+            setConfigPushRetryResult({
+                type: 'error',
+                message: error instanceof Error ? error.message : 'No se pudo sincronizar la configuración.',
+            });
+        } finally {
+            setIsRetryingConfigPush(false);
+        }
+    };
+
     const handleRetryDocument = async (item: any) => {
         const feedbackKey = item?.key || `${item?.collection || 'document'}:${item?.id || item?.raw?.id || Date.now()}`;
         try {
@@ -431,7 +526,14 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                         syncStatus: 'PENDING',
                         syncError: undefined,
                         cloudSyncStatus: undefined,
-                        cloudSyncError: undefined
+                        cloudSyncError: undefined,
+                        erpSyncStatus: undefined,
+                        erpSyncResponse: undefined,
+                        erpSyncedAt: undefined,
+                        syncRetryAfter: undefined,
+                        syncStartedAt: undefined,
+                        syncBlockedReason: undefined,
+                        syncBlockedAt: undefined
                     })
                 ));
             } else {
@@ -441,6 +543,15 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     syncError: undefined,
                     cloudSyncStatus: undefined,
                     cloudSyncError: undefined,
+                    syncResponse: undefined,
+                    syncedAt: undefined,
+                    erpSyncStatus: undefined,
+                    erpSyncResponse: undefined,
+                    erpSyncedAt: undefined,
+                    syncRetryAfter: undefined,
+                    syncStartedAt: undefined,
+                    syncBlockedReason: undefined,
+                    syncBlockedAt: undefined,
                     _forceSyncReplay: item.collection === 'transactions' ? true : item.raw?._forceSyncReplay
                 });
             }
@@ -498,9 +609,10 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         setIsRetryingErpForward(true);
         try {
             if (syncManager.isUsingErpOperationalTarget()) {
+                const requeued = await backgroundSyncManager.requeueBlockedOperationalDocuments();
                 await backgroundSyncManager.triggerSyncAndWait();
                 await loadStatus();
-                alert('✅ Reintento ejecutado. Revisa el monitor para confirmar si quedaron documentos pendientes o con error.');
+                alert(`✅ Reintento ejecutado. Documentos reencolados: ${requeued}. Revisa el monitor para confirmar si quedaron pendientes o con error.`);
                 return;
             }
 
@@ -823,10 +935,10 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                 <div className="mt-10 pt-6 border-t border-blue-100">
                                     <button
                                         onClick={async () => {
-                                            if (confirm('⚠️ ¿Deseas REALIZAR UN RESET TOTAL de la red en esta terminal?\n\nAl hacerlo:\n- Se borrará la IP de la Maestra guardada.\n- Se reseteará la configuración local (se restaurarán valores por defecto).\n- Regresarás a la pantalla de vinculación para elegir si eres Maestra o Esclava.')) {
+                                            if (confirm('⚠️ SOPORTE: ¿Deseas resetear la identidad física de este dispositivo?\n\nAl hacerlo:\n- Se generará un nuevo device_id DEV-*.\n- Cloud-Admin deberá reautorizar este equipo.\n- Se borrará la IP de la Maestra guardada.\n- Se reseteará la configuración local.\n\nNo uses esta opción para limpiar solo la BD local.')) {
                                                 try {
-                                                    // 1. Clear LocalStorage identifiers
-                                                    localStorage.removeItem('pos_device_id');
+                                                    // 1. Explicit support-only identity reset
+                                                    await resetDeviceIdentityBySupport();
                                                     localStorage.removeItem('pos_master_ip');
                                                     localStorage.removeItem('CLIC_POS_MASTER_URL');
                                                     localStorage.removeItem('pos_sync_status');
@@ -834,7 +946,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                     // 2. Wipe Local DB Config to avoid stale Slave/Master role mismatch
                                                     await db.deleteDocument('config', 'config' as any); // Delete whole config document
 
-                                                    console.log("🧺 Terminal Unbound & Local Config Wiped.");
+                                                    console.log("🧺 Terminal identity reset by support & local config wiped.");
                                                     window.location.reload();
                                                 } catch (err) {
                                                     console.error("Error during reset:", err);
@@ -845,7 +957,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                         className="w-full py-3 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 border border-red-100"
                                     >
                                         <Monitor size={18} />
-                                        Desvincular y Resetear Identidad de Terminal
+                                        Resetear identidad del dispositivo (Soporte)
                                     </button>
                                 </div>
                             </div>
@@ -899,6 +1011,59 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                             </div>
                                         ))}
                                     </div>
+                                </div>
+
+                                <div className="rounded-2xl border border-blue-200 bg-white p-5 shadow-sm">
+                                    <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                                        <div>
+                                            <h3 className="text-sm font-black uppercase tracking-widest text-slate-700">
+                                                Configuración recibida del ERP
+                                            </h3>
+                                            <p className="mt-1 text-sm font-semibold text-slate-500">
+                                                Estado local confirmado después del último CONFIG_PUSH_V2.
+                                            </p>
+                                        </div>
+                                        <button
+                                            onClick={handleRetryConfigPush}
+                                            disabled={isRetryingConfigPush}
+                                            className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            <RotateCcw size={15} className={isRetryingConfigPush ? 'animate-spin' : ''} />
+                                            Reintentar sincronización de configuración
+                                        </button>
+                                    </div>
+                                    <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                                        {[
+                                            ['Moneda base', configPushDiagnostics?.baseCurrency || 'N/D'],
+                                            ['Monedas habilitadas', configPushDiagnostics?.enabledCurrencies.join(', ') || 'N/D'],
+                                            ['Versión terminal_config', configPushDiagnostics?.configVersion || 'N/D'],
+                                            ['Última aplicación', configPushDiagnostics?.appliedAt
+                                                ? new Date(configPushDiagnostics.appliedAt).toLocaleString()
+                                                : 'N/D'],
+                                        ].map(([label, value]) => (
+                                            <div key={label} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                                                <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">{label}</div>
+                                                <div className="mt-1 break-words text-sm font-black text-slate-800">{value}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                                        <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                                            Último hash CONFIG_PUSH_V2
+                                        </div>
+                                        <div className="mt-1 break-all font-mono text-xs font-bold text-slate-700">
+                                            {configPushDiagnostics?.versionHash || 'N/D'}
+                                        </div>
+                                    </div>
+                                    {configPushRetryResult && (
+                                        <div className={`mt-3 rounded-xl border px-4 py-3 text-sm font-bold ${
+                                            configPushRetryResult.type === 'success'
+                                                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                                                : 'border-red-200 bg-red-50 text-red-800'
+                                        }`}>
+                                            {configPushRetryResult.message}
+                                        </div>
+                                    )}
                                 </div>
 
                                 {isMaster && erpForwardStatus && (
@@ -1011,7 +1176,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                     </td>
                                                     <td className="py-4 px-6 text-center">
                                                         <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gray-100 text-gray-600 font-bold text-xs">
-                                                            <Monitor size={12} /> {item.terminalId}
+                                                            <Monitor size={12} /> {item.terminalLabel || item.terminalId}
                                                         </div>
                                                     </td>
                                                     <td className="py-4 px-6 text-center">

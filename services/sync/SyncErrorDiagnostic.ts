@@ -14,7 +14,7 @@ export type SyncDiagnosticOperation =
     | 'PUSH_MASTERS'
     | 'REGISTER_TERMINAL';
 
-export type TerminalBindingStatus = 'UNBOUND' | 'BINDING' | 'BOUND' | 'BOUND_AUTH_MISMATCH' | 'BINDING_ERROR' | 'TOKEN_INVALID';
+export type TerminalBindingStatus = 'UNBOUND' | 'BINDING' | 'BOUND' | 'NEEDS_REAUTH' | 'BOUND_AUTH_MISMATCH' | 'BINDING_ERROR' | 'TOKEN_INVALID';
 export type CatalogSyncStatus = 'IDLE' | 'SYNCING' | 'SYNCED' | 'ERROR' | 'AUTH_ERROR' | 'FISCAL_CONFIG_MISSING' | 'ERP_MASTER_PULL_FAILED';
 export type SalesPushStatus = 'DISABLED' | 'LOCKED_UNTIL_ERP_READY' | 'LOCKED_AUTH_REQUIRED' | 'LOCKED_FISCAL_CONFIG_REQUIRED' | 'LOCKED_MASTER_SYNC_REQUIRED' | 'ENABLED';
 
@@ -178,7 +178,7 @@ const truncateBody = (value: unknown): string | null => {
 
 const resolveBindingStatus = (): TerminalBindingStatus => {
     const explicit = safeLocalStorageGet(TERMINAL_BINDING_STATUS_KEY) as TerminalBindingStatus | null;
-    if (explicit && ['UNBOUND', 'BINDING', 'BOUND', 'BOUND_AUTH_MISMATCH', 'BINDING_ERROR', 'TOKEN_INVALID'].includes(explicit)) return explicit;
+    if (explicit && ['UNBOUND', 'BINDING', 'BOUND', 'NEEDS_REAUTH', 'BOUND_AUTH_MISMATCH', 'BINDING_ERROR', 'TOKEN_INVALID'].includes(explicit)) return explicit;
     return safeLocalStorageGet('clic_erp_sync_terminal_id') || safeLocalStorageGet('active_terminal_id')
         ? 'BOUND'
         : 'UNBOUND';
@@ -248,6 +248,25 @@ export const isStaleLocalhostSyncMessage = (message: string | null | undefined):
         || normalized.includes('::1');
 };
 
+export const isRecoverableNetworkConnectivityMessage = (message: string | null | undefined): boolean => {
+    if (!message) return false;
+    const normalized = message.trim().toLowerCase();
+    return normalized.includes('unable to resolve host')
+        || normalized.includes('no address associated with hostname')
+        || /failed to connect to\s+\S+(?:\/[0-9a-f.:]+)?:\d+/i.test(message)
+        || normalized.includes('failed to fetch')
+        || normalized.includes('network request failed')
+        || normalized.includes('networkerror')
+        || normalized.includes('connect timed out')
+        || normalized.includes('connection timed out')
+        || normalized.includes('network is unreachable')
+        || normalized.includes('err_internet_disconnected')
+        || normalized.includes('err_name_not_resolved')
+        || normalized.includes('browser offline')
+        || normalized.includes('dns')
+        || normalized.includes('temporary failure in name resolution');
+};
+
 const isRecoverableOperationCollectionDiagnostic = (
     diagnostic: SyncErrorDiagnostic | null | undefined,
 ): boolean => {
@@ -297,7 +316,40 @@ export const isRecoverableStaleSyncDiagnostic = (
         }
     }
 
+    if (
+        isRecoverableNetworkConnectivityMessage(diagnostic?.errorMessage)
+        || isRecoverableNetworkConnectivityMessage(diagnostic?.fetchDiagnostic?.errorMessage)
+        || diagnostic?.networkOnline === false
+        || diagnostic?.fetchDiagnostic?.networkOnline === false
+    ) {
+        const bound = hasActiveTerminalBinding();
+        const catalogSynced = resolveCatalogStatus() === 'SYNCED';
+        const safeToStayOffline = bound || catalogSynced;
+
+        if (safeToStayOffline) {
+            return true;
+        }
+    }
+
     return false;
+};
+
+export const isTerminalAuthorizationLossDiagnostic = (
+    diagnostic: Pick<SyncErrorDiagnostic, 'backendCode' | 'httpStatus' | 'responseBody' | 'errorMessage'> | null | undefined,
+): boolean => {
+    if (!diagnostic) return false;
+    const details = [
+        diagnostic.backendCode,
+        diagnostic.responseBody,
+        diagnostic.errorMessage,
+    ].map((value) => String(value || '').toUpperCase()).join(' ');
+
+    const syncTokenWasRejected = /SYNC_TOKEN_(?:INVALID|REJECTED)|INVALID OR MISSING SYNC TOKEN/.test(details);
+    const deviceAuthorizationWasRejected = /DEVICE_TOKEN_INVALID|DEVICE_SUPERSEDED|TAKEOVER_REQUIRED|DEVICE_NOT_AUTHORIZED|BOUND_AUTH_MISMATCH|WAITING_CLOUD_ADMIN_REAUTHORIZATION/.test(details);
+
+    // Background retries can lose the original HTTP status after the ERP error
+    // has been normalized. The backend code remains authoritative.
+    return syncTokenWasRejected || deviceAuthorizationWasRejected;
 };
 
 export const clearStaleSyncErrorDiagnosticIfRecovered = (): boolean => {

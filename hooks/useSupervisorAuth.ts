@@ -61,7 +61,7 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig }
 
     const handleAuthorize = (supervisor: User) => {
         if (pendingRequest) {
-            logAction(pendingRequest.params.context?.ticketId ? currentUser! : supervisor, supervisor, pendingRequest.params);
+            logAction(currentUser || supervisor, supervisor, pendingRequest.params);
             pendingRequest.resolve(true);
             setPendingRequest(null);
             setIsModalOpen(false);
@@ -81,6 +81,7 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig }
             id: `LOG-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
             timestamp: new Date().toISOString(),
             actionType: params.permission,
+            actionDescription: params.actionDescription,
             cashierId: cashier.id,
             supervisorId: supervisor.id,
             terminalId: 'current-terminal', // In a real app, pass this from context
@@ -89,6 +90,12 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig }
             originalValue: params.context?.originalValue,
             newValue: params.context?.newValue,
             reason: params.context?.reason,
+            details: [
+                params.actionDescription,
+                params.context?.reason,
+                params.context?.ticketId ? `Ticket: ${params.context.ticketId}` : '',
+                params.context?.itemId ? `Item: ${params.context.itemId}` : ''
+            ].filter(Boolean).join(' | '),
             hash: 'simulated-hash'
         };
 

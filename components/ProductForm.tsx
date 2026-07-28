@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useMemo, useEffect } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
 import {
   X, Save, Barcode, DollarSign, Box, Plus, Trash2,
@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { calculateOptimalInventoryLevels, InventoryCalculation } from '../utils/inventoryEngine';
 import {
-  Product, ProductAttribute, ProductVariant, BusinessConfig, Tariff, TariffPrice, TaxDefinition, Warehouse, ProductOperationalFlags, InventoryLedgerEntry, ProductStock, StockTransfer, Season, Supplier
+  Product, ProductAttribute, ProductVariant, ProductFractionRule, ModifierGroup, ComboGroup, BusinessConfig, Tariff, TariffPrice, TaxDefinition, Warehouse, ProductOperationalFlags, InventoryLedgerEntry, ProductStock, StockTransfer, Season, Supplier
 } from '../types';
 import ProfitCalculator from './ProfitCalculator';
 import RecipeManager from './RecipeManager';
@@ -63,6 +63,682 @@ interface ProductFormProps {
   allProducts?: Product[]; // For recipe search
 }
 
+type RestaurantSuggestionApplyMode = 'append' | 'fill' | 'replace';
+type RestaurantSuggestionApplyScope = {
+  productType: boolean;
+  productionArea: boolean;
+  modifierGroups: boolean;
+  comboGroups: boolean;
+  fractions: boolean;
+  notePresets: boolean;
+};
+type RestaurantSuggestionTemplate = {
+  id: string;
+  name: string;
+  product_type?: string;
+  production_area_id?: string;
+  modifier_groups: ModifierGroup[];
+  combo_groups: ComboGroup[];
+  fraction_rule?: ProductFractionRule;
+  note_presets: string[];
+};
+
+const trimString = (value: unknown): string => {
+  if (typeof value === 'string') return value.trim();
+  if (value == null) return '';
+  return String(value).trim();
+};
+
+const toTextList = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (item && typeof item === 'object') {
+          return trimString(
+            (item as any).name ??
+            (item as any).label ??
+            (item as any).title ??
+            (item as any).text ??
+            (item as any).value ??
+            (item as any).note ??
+            ''
+          );
+        }
+        return trimString(item);
+      })
+      .filter(Boolean);
+  }
+  if (typeof value === 'string') {
+    return value
+      .split('\n')
+      .map((item) => trimString(item))
+      .concat(value.split(',').map((item) => trimString(item)))
+      .filter(Boolean);
+  }
+  return [];
+};
+
+const asParsedObjectOrArray = (value: unknown): unknown => {
+  if (typeof value !== 'string') return value;
+  const text = value.trim();
+  if (!text) return value;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return value;
+  }
+};
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+
+const hasTemplateShapeLikeSignals = (candidate: Record<string, unknown>): boolean => {
+  const keys = Object.keys(candidate);
+  const templateSignals = [
+    'product_type',
+    'productType',
+    'production_area_id',
+    'productionAreaId',
+    'production_area',
+    'modifier_groups',
+    'modifierGroups',
+    'modifiers',
+    'combo_groups',
+    'comboGroups',
+    'combos',
+    'fraction_rule',
+    'fractionRule',
+    'fraction',
+    'note_presets',
+    'notePresets',
+    'note',
+    'notas',
+    'notas_rapidas',
+    'note_presets_data',
+    'template',
+    'templates',
+    'template_list',
+    'templateList',
+    'templateMap',
+    'template_map',
+    'template_data',
+    'restaurantConfig',
+    'restaurant_config',
+    'restaurantConfigTemplates',
+    'restaurantConfigTemplatesData',
+    'restaurantSuggestionTemplate',
+    'restaurantSuggestionTemplates',
+    'selectedTemplateId',
+    'selected_template_id',
+    'selectedTemplate',
+    'comanda_templates',
+    'comandaTemplates',
+    'comandaTemplate',
+    'comandaConfig',
+    'comanda_config',
+    'sugerencia',
+    'suggestions',
+    'suggested',
+    'selection_type',
+    'selectionType',
+    'fraction_mode',
+    'fractionMode',
+    'pricing_rule',
+    'pricingRule',
+    'max_parts',
+    'max',
+    'require_equal_parts',
+    'partes_iguales',
+  ];
+  if (keys.some((key) => templateSignals.includes(key))) return true;
+
+  const nestedTemplate = candidate.template;
+  if (nestedTemplate && typeof nestedTemplate === 'object' && nestedTemplate !== null) {
+    const nestedKeys = Object.keys(nestedTemplate as Record<string, unknown>);
+    const nestedSignals = ['product_type', 'modifier_groups', 'combo_groups', 'fraction_rule', 'note_presets'];
+    if (nestedKeys.some((key) => nestedSignals.includes(key))) return true;
+  }
+
+  return false;
+};
+
+const collectTemplateCandidates = (
+  value: unknown,
+  callback: (candidate: Record<string, unknown>) => void,
+  seen = new WeakSet<object>(),
+  depth = 0,
+  parentKey?: string,
+): void => {
+  const normalized = asParsedObjectOrArray(value);
+  if (depth > 5) return;
+  const record = asRecord(normalized);
+  if (!record && !Array.isArray(normalized)) return;
+
+  const directArray = asModifierArray(normalized);
+  if (directArray.length > 0) {
+    directArray.forEach((candidate) => {
+      if (candidate && typeof candidate === 'object') callback(candidate as Record<string, unknown>);
+    });
+    return;
+  }
+
+  if (!record) return;
+  if (seen.has(record)) return;
+  seen.add(record);
+
+  if (hasTemplateShapeLikeSignals(record)) {
+    if (parentKey && !record.id) {
+      callback({ ...record, id: parentKey });
+      return;
+    }
+    callback(record);
+    return;
+  }
+
+  for (const [nestedKey, nested] of Object.entries(record)) {
+    if (nested == null) continue;
+    if (Array.isArray(nested)) {
+      for (const item of nested) {
+        if (item && typeof item === 'object') {
+          collectTemplateCandidates(item, callback, seen, depth + 1, nestedKey);
+        }
+      }
+      continue;
+    }
+    if (typeof nested === 'object') {
+      collectTemplateCandidates(nested, callback, seen, depth + 1, nestedKey);
+    }
+  }
+};
+
+const toNumberOrFallback = (value: unknown, fallback = 0) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+};
+
+const asModifierArray = (value: unknown): any[] => {
+  if (!Array.isArray(value)) {
+    const asRecordValue = asRecord(value);
+    if (asRecordValue) {
+      return Object.values(asRecordValue).filter(Boolean);
+    }
+    return [];
+  }
+  return value.filter(Boolean);
+};
+
+const asTemplateEnvelope = (value: unknown, fallback: Record<string, unknown>): Record<string, unknown> => {
+  if (!value || typeof value !== 'object') return fallback;
+  const record = value as Record<string, unknown>;
+  const envelope = (record as any).template || (record as any).config || (record as any).data || (record as any).settings;
+  const mergedEnvelope = envelope && typeof envelope === 'object'
+    ? { ...fallback, ...(record as Record<string, unknown>), ...(envelope as Record<string, unknown>) }
+    : fallback;
+  return mergedEnvelope;
+};
+
+const parseRestaurantSuggestionModifier = (candidate: any, index: number) => {
+  if (!candidate || typeof candidate !== 'object') return null;
+  const parsedPrice = toNumberOrFallback(
+    (candidate as any).price ??
+      (candidate as any).price_delta ??
+      (candidate as any).precio ??
+      (candidate as any).costo ??
+      0,
+    0
+  );
+  const trimmedName = trimString(
+    (candidate as any).name ??
+      (candidate as any).label ??
+      (candidate as any).nombre ??
+      (candidate as any).code ??
+      (candidate as any).key ??
+      (candidate as any).descripcion
+  );
+  if (!trimmedName) return null;
+
+  return {
+    id: trimString((candidate as any).id) || trimString((candidate as any).modifier_id) || `mod_${Date.now()}_${index}`,
+    product_id: trimString((candidate as any).product_id || (candidate as any).productId || (candidate as any).producto_id) || undefined,
+    name: trimmedName,
+    price: parsedPrice,
+    price_delta: parsedPrice,
+    modifier_type: trimString((candidate as any).modifier_type || (candidate as any).type || (candidate as any).tipo_modificador || 'ADD') || 'ADD',
+    affects_price: (candidate as any).affects_price !== false && (candidate as any).afecta_precio !== false,
+    sort_order: toNumberOrFallback((candidate as any).sort_order, index + 1),
+    required: (candidate as any).required !== false && (candidate as any).obligatorio !== false,
+    active: (candidate as any).active !== false && (candidate as any).habilitado !== false,
+  };
+};
+
+const parseRestaurantSuggestionGroupModifiers = (groupCandidate: any, index: number): ModifierGroup | null => {
+  if (!groupCandidate || typeof groupCandidate !== 'object') return null;
+  const rawModifiers = asModifierArray(
+    (groupCandidate as any).modifiers ||
+    (groupCandidate as any).items ||
+    (groupCandidate as any).opciones ||
+    (groupCandidate as any).options ||
+    (groupCandidate as any).modifierList ||
+    (groupCandidate as any).modifier_items
+  );
+  const modifiers = rawModifiers
+    .map((mod, modIndex) => parseRestaurantSuggestionModifier(mod, modIndex))
+    .filter(Boolean) as ModifierGroup['modifiers'];
+
+  if (modifiers.length === 0) return null;
+
+  return {
+    id: trimString((groupCandidate as any).id) || trimString((groupCandidate as any).group_id) || `modgrp_${Date.now()}_${index}`,
+    name: trimString((groupCandidate as any).name) || trimString((groupCandidate as any).label) || `Grupo de modificadores ${index + 1}`,
+    selection_type: trimString(
+      (groupCandidate as any).selection_type ||
+      (groupCandidate as any).selectionType ||
+      (groupCandidate as any).tipo_seleccion ||
+      (groupCandidate as any).seleccion ||
+      'MULTIPLE'
+    ) || 'MULTIPLE',
+    required: (groupCandidate as any).required !== false && (groupCandidate as any).obligatorio !== false,
+    min_select: toNumberOrFallback(
+      (groupCandidate as any).min_select ??
+      (groupCandidate as any).minSelect ??
+      (groupCandidate as any).min ??
+      (groupCandidate as any).minimo,
+      0
+    ),
+    max_select:
+      (groupCandidate as any).max_select === null || (groupCandidate as any).maxSelect === null
+        ? null
+        : toNumberOrFallback((groupCandidate as any).max_select ?? (groupCandidate as any).maxSelect ?? (groupCandidate as any).max ?? (groupCandidate as any).maximo, 0),
+    free_quantity: toNumberOrFallback(
+      (groupCandidate as any).free_quantity ??
+      (groupCandidate as any).freeQuantity ??
+      (groupCandidate as any).gratis ??
+      (groupCandidate as any).free,
+      0
+    ),
+    sort_order: toNumberOrFallback((groupCandidate as any).sort_order, index + 1),
+    modifiers,
+  };
+};
+
+const parseRestaurantSuggestionComboGroup = (candidate: any, index: number): ComboGroup | null => {
+  if (!candidate || typeof candidate !== 'object') return null;
+  const items = asModifierArray((candidate as any).items)
+    .map((item: any, itemIndex: number) => {
+      if (!item || typeof item !== 'object') return null;
+      const itemName = trimString(
+        (item as any).name ??
+        (item as any).label ??
+        (item as any).text ??
+        (item as any).nombre
+      );
+      return {
+        id: trimString((item as any).id) || `comboitem_${Date.now()}_${index}_${itemIndex}`,
+        product_id: trimString((item as any).product_id || (item as any).productId) || '',
+        name: itemName || `Opción ${itemIndex + 1}`,
+        price_delta: toNumberOrFallback((item as any).price_delta ?? (item as any).price ?? (item as any).price_override ?? 0, 0),
+        active: (item as any).active !== false,
+        sort_order: toNumberOrFallback((item as any).sort_order, itemIndex + 1),
+      };
+    })
+    .filter(Boolean) as ComboGroup['items'];
+
+  if (items.length === 0) return null;
+
+  return {
+    id: trimString((candidate as any).id) || trimString((candidate as any).group_id) || `combogrp_${Date.now()}_${index}`,
+    name: trimString((candidate as any).name) || trimString((candidate as any).label) || `Grupo de combo ${index + 1}`,
+    required: (candidate as any).required !== false && (candidate as any).obligatorio !== false,
+    min_select: toNumberOrFallback((candidate as any).min_select ?? (candidate as any).minSelect ?? 0, 0),
+    max_select:
+      (candidate as any).max_select === null || (candidate as any).maxSelect === null
+        ? null
+        : toNumberOrFallback((candidate as any).max_select ?? (candidate as any).maxSelect ?? (candidate as any).maximo ?? 1, 1),
+    sort_order: toNumberOrFallback((candidate as any).sort_order, index + 1),
+    items,
+  };
+};
+
+const parseRestaurantSuggestionFractionRule = (candidate: any): ProductFractionRule | undefined => {
+  if (!candidate || typeof candidate !== 'object') return undefined;
+  if ((candidate as any).enabled === false) return undefined;
+  const rawOptions = asModifierArray(
+    (candidate as any).options ||
+    (candidate as any).options_list ||
+    (candidate as any).opciones ||
+    (candidate as any).mitades ||
+    (candidate as any).parts ||
+    (candidate as any).partes
+  );
+  const options = rawOptions
+    .map((option: any, index: number) => {
+      if (!option || typeof option !== 'object') return null;
+      return {
+        id: trimString(option.id) || option.option_product_id || option.product_id || `fraction_option_${Date.now()}_${index}`,
+        option_product_id: trimString(option.option_product_id || option.product_id) || undefined,
+        product_id: trimString(option.product_id || option.option_product_id) || undefined,
+        name: trimString(option.name) || `Opción ${index + 1}`,
+        price: toNumberOrFallback(option.price, 0),
+        price_override: option.price_override != null ? toNumberOrFallback(option.price_override, 0) : undefined,
+        active: option.active !== false,
+      };
+    })
+    .filter(Boolean) as ProductFractionRule['options'];
+
+  return {
+    id: trimString((candidate as any).id) || undefined,
+    fraction_mode: trimString(
+      (candidate as any).fraction_mode ||
+      (candidate as any).fractionMode ||
+      (candidate as any).mode ||
+      (candidate as any).tipo_fraccion
+    ) || 'HALF',
+    pricing_rule: trimString(
+      (candidate as any).pricing_rule ||
+      (candidate as any).pricingRule ||
+      (candidate as any).pricing ||
+      (candidate as any).regla_precio
+    ) || 'HIGHEST_PRICE',
+    max_parts: toNumberOrFallback((candidate as any).max_parts ?? (candidate as any).maxParts ?? (candidate as any).partes ?? (candidate as any).maximo ?? 2, 2),
+    require_equal_parts: (candidate as any).require_equal_parts !== false && (candidate as any).partes_iguales !== false,
+    options: options.length > 0 ? options : undefined,
+  };
+};
+
+const normalizeRestaurantSuggestionTemplate = (candidate: any, fallbackId: string, fallbackName: string): RestaurantSuggestionTemplate | null => {
+  if (!candidate || typeof candidate !== 'object') return null;
+
+  const rawModifierGroups = asModifierArray(
+    (candidate as any).modifier_groups ||
+      (candidate as any).modifierGroups ||
+      (candidate as any).modifiers_groups ||
+      (candidate as any).modificadores_grupos ||
+      (candidate as any).grupos_modificadores ||
+      (candidate as any).groups
+  ).map((group, index) => parseRestaurantSuggestionGroupModifiers(group, index)).filter(Boolean) as ModifierGroup[];
+
+  const rawComboGroups = asModifierArray(
+    (candidate as any).combo_groups ||
+      (candidate as any).comboGroups ||
+      (candidate as any).combos ||
+      (candidate as any).combo ||
+      (candidate as any).grupos_combo ||
+      (candidate as any).combo_groups_data ||
+      (candidate as any).combo_list ||
+      (candidate as any).combos_data
+  ).map((group, index) => parseRestaurantSuggestionComboGroup(group, index)).filter(Boolean) as ComboGroup[];
+
+  const legacyAvailableModifiers = asModifierArray(
+    (candidate as any).availableModifiers ||
+    (candidate as any).available_modifiers ||
+    (candidate as any).suggestedModifiers ||
+    (candidate as any).suggested_modifiers ||
+    (candidate as any).modifiers ||
+    (candidate as any).modificadores ||
+    (candidate as any).sugeridos
+  );
+  const legacyGroups = rawModifierGroups.length > 0
+    ? rawModifierGroups
+    : legacyAvailableModifiers.length > 0
+      ? [{
+          id: `erp_legacy_modgrp_${fallbackId}`,
+          name: 'Modificadores sugeridos',
+          selection_type: 'MULTIPLE',
+          required: false,
+          min_select: 0,
+          max_select: null,
+          free_quantity: 0,
+          sort_order: 1,
+          modifiers: legacyAvailableModifiers
+            .map((modifier, index) => parseRestaurantSuggestionModifier(modifier, index))
+            .filter(Boolean) as ModifierGroup['modifiers'],
+        }]
+      : [];
+
+  const resolvedCandidate = asTemplateEnvelope(candidate, candidate as Record<string, unknown>);
+
+  const template: RestaurantSuggestionTemplate = {
+    id: trimString((resolvedCandidate as any).id)
+      || trimString((candidate as any).templateId)
+      || trimString((candidate as any).template_id)
+      || trimString((candidate as any).id)
+      || fallbackId,
+    name: trimString((resolvedCandidate as any).name)
+      || trimString((resolvedCandidate as any).label)
+      || trimString((candidate as any).template_name)
+      || trimString((candidate as any).templateName)
+      || fallbackName,
+    product_type: trimString((resolvedCandidate as any).product_type || (resolvedCandidate as any).productType || (resolvedCandidate as any).type) || undefined,
+    production_area_id: trimString(
+      (resolvedCandidate as any).production_area_id ||
+      (resolvedCandidate as any).productionAreaId ||
+      (resolvedCandidate as any).production_area ||
+      (resolvedCandidate as any).kitchen_area_id ||
+      (resolvedCandidate as any).kitchen_area ||
+      (resolvedCandidate as any).areaId ||
+      (resolvedCandidate as any).productionArea ||
+      (resolvedCandidate as any).production_area_code ||
+      (resolvedCandidate as any).production_area_key ||
+      (resolvedCandidate as any).centro_produccion_id ||
+      (resolvedCandidate as any).centroProduccionId
+    ) || undefined,
+    modifier_groups: legacyGroups,
+    combo_groups: rawComboGroups,
+    fraction_rule: parseRestaurantSuggestionFractionRule(
+      (resolvedCandidate as any).fraction_rule ||
+      (resolvedCandidate as any).fractionRule ||
+      (resolvedCandidate as any).fraction ||
+      (resolvedCandidate as any).fracciones ||
+      (resolvedCandidate as any).fraction_rule_data ||
+      (resolvedCandidate as any).fraction_data
+    ),
+    note_presets: toTextList(
+      (resolvedCandidate as any).note_presets ||
+        (resolvedCandidate as any).notePresets ||
+        (resolvedCandidate as any).notas ||
+        (resolvedCandidate as any).notas_rapidas ||
+        (resolvedCandidate as any).note_presets_data ||
+        (resolvedCandidate as any).quick_notes ||
+        (resolvedCandidate as any).note
+    ),
+  };
+
+  const hasTemplateContent =
+    trimString(template.product_type).length > 0 ||
+    trimString(template.production_area_id).length > 0 ||
+    template.modifier_groups.length > 0 ||
+    template.combo_groups.length > 0 ||
+    Boolean(template.fraction_rule) ||
+    template.note_presets.length > 0;
+  return hasTemplateContent ? template : null;
+};
+
+const RESTAURANT_TEMPLATE_DEFAULT_IDS = [
+  'pizzeria',
+  'fast_food',
+  'casual',
+  'cafeteria_bar',
+  'heladeria_postres',
+  'dark_kitchen',
+];
+
+const extractRestaurantSuggestionTemplates = (product: Partial<Product>): RestaurantSuggestionTemplate[] => {
+  const candidates: any[] = [];
+  const pushCandidate = (value: unknown) => {
+    if (!value) return;
+    const normalized = asParsedObjectOrArray(value);
+    if (Array.isArray(normalized)) {
+      normalized.forEach(pushCandidate);
+      return;
+    }
+    if (normalized && typeof normalized === 'object') {
+      candidates.push(normalized);
+    }
+  };
+
+  const source = (product as any) || {};
+  const restaurant = source.restaurant || {};
+  const restaurantConfig = source.restaurantConfig || {};
+
+  pushCandidate(source.restaurantSuggestionTemplates);
+  pushCandidate(source.restaurantSuggestionTemplatesData);
+  pushCandidate(source.restaurantSuggestionTemplate);
+  pushCandidate(source.restaurantSuggestion);
+  pushCandidate(source.suggestionTemplate);
+  pushCandidate(source.suggestionTemplates);
+  pushCandidate(source.restaurantSuggestionTemplateData);
+  pushCandidate(source.restaurantSuggestionTemplate);
+  pushCandidate(source.restaurantTemplate);
+  pushCandidate(source.restaurant_template);
+  pushCandidate(source.restaurantSuggestions);
+  pushCandidate(source.restaurant_suggestions);
+  pushCandidate(source.restaurantConfigTemplates);
+  pushCandidate(source.restaurant_config_templates);
+  pushCandidate(source.suggestedRestaurantConfig);
+  pushCandidate(source.suggestedConfig);
+  pushCandidate(source.suggested_template);
+  pushCandidate(source.restaurant_suggested_template);
+  pushCandidate(source.suggestedComandaConfig);
+  pushCandidate(source.comandaConfig);
+  pushCandidate(source.comanda_config);
+  pushCandidate(source.comanda_templates);
+  pushCandidate(source.comandaTemplates);
+  pushCandidate(source.comandaTemplate);
+  pushCandidate(source.terminalComandaConfig);
+  pushCandidate(source.terminal_comanda_config);
+  pushCandidate(source.comanda_template_map);
+  pushCandidate(source.comanda_template_map_data);
+  pushCandidate(source.comandaTemplateMap);
+  pushCandidate(source.restaurantTemplatesMap);
+  pushCandidate(source.restaurant_templates_map);
+  pushCandidate(source.restaurantTemplates);
+  pushCandidate(source.restaurant_templates);
+  pushCandidate(source.suggestionTemplateMap);
+  pushCandidate(source.suggestionMap);
+  pushCandidate(source.suggestion_template_map);
+  pushCandidate(source.templates);
+  pushCandidate(source.template_map);
+  pushCandidate(source.templateMapData);
+  pushCandidate(source.templateMap);
+  pushCandidate(source.template);
+  pushCandidate(source.templateData);
+  pushCandidate(source.template_data);
+  pushCandidate(source.metadata);
+  pushCandidate(source.restaurantConfig);
+  pushCandidate(source.restaurant_config);
+  pushCandidate(restaurantConfig);
+  pushCandidate(restaurantConfig?.metadata);
+  pushCandidate(source?.restaurantConfig?.templates);
+  pushCandidate(source?.restaurantConfig?.template_list);
+  pushCandidate(source?.restaurantConfig?.templateList);
+  pushCandidate(source?.restaurantConfig?.comanda_templates);
+  pushCandidate(source?.restaurantConfig?.restaurantSuggestionTemplates);
+  pushCandidate(source?.restaurant_config?.templates);
+  pushCandidate(restaurant?.suggestedTemplates);
+  pushCandidate(restaurant?.restaurantSuggestionTemplates);
+  pushCandidate(restaurant?.suggestedTemplates);
+  pushCandidate(restaurant?.suggestedTemplate);
+  pushCandidate(restaurant?.suggestedConfig);
+  pushCandidate(restaurant?.suggestionTemplates);
+  pushCandidate(restaurant?.sugerencias);
+  pushCandidate(restaurant?.sugerir);
+  pushCandidate(restaurant?.comanda_suggestions);
+  pushCandidate(restaurant?.modifier_groups);
+  pushCandidate(restaurant?.modifierGroups);
+  pushCandidate(source?.restaurantSuggestionTemplates?.templates);
+  pushCandidate(source?.restaurantSuggestionTemplatesData?.templates);
+  pushCandidate(source?.restaurantSuggestionTemplate?.templates);
+  pushCandidate(source?.restaurantConfigTemplates?.templates);
+  pushCandidate(source?.restaurantConfigTemplatesData?.templates);
+  pushCandidate(source?.suggestionTemplates?.templates);
+  pushCandidate(source?.restaurant?.suggestedTemplates?.templates);
+  pushCandidate(restaurant?.suggested_templates);
+  pushCandidate(restaurant?.suggested_templates?.templates);
+  pushCandidate(restaurant?.template_list);
+  pushCandidate(restaurant?.templateList);
+  pushCandidate(restaurant?.templates);
+  pushCandidate(restaurant?.template_map);
+  pushCandidate(restaurant?.templateMap);
+  pushCandidate(source?.metadata?.restaurantSuggestionTemplates);
+  pushCandidate(source?.metadata?.restaurantSuggestionTemplate);
+  pushCandidate(source?.metadata?.restaurantTemplates);
+  pushCandidate(source?.metadata?.comanda_templates);
+  pushCandidate(source?.metadata?.templates);
+  pushCandidate(source?.metadata?.template_list);
+
+  collectTemplateCandidates(source?.restaurantSuggestionTemplates, pushCandidate);
+  collectTemplateCandidates(source?.restaurantSuggestionTemplate, pushCandidate);
+  collectTemplateCandidates(source?.restaurantSuggestionTemplatesData, pushCandidate);
+  collectTemplateCandidates(source?.restaurantSuggestionTemplate, pushCandidate);
+  collectTemplateCandidates(source?.restaurantSuggestion, pushCandidate);
+  collectTemplateCandidates(source?.restaurantTemplate, pushCandidate);
+  collectTemplateCandidates(source?.restaurant_template, pushCandidate);
+  collectTemplateCandidates(source?.restaurantSuggestions, pushCandidate);
+  collectTemplateCandidates(source?.restaurant_suggestions, pushCandidate);
+  collectTemplateCandidates(source?.sugerencias, pushCandidate);
+  collectTemplateCandidates(source?.sugerir, pushCandidate);
+  collectTemplateCandidates(source?.restaurantSuggestionTemplateData, pushCandidate);
+  collectTemplateCandidates(source?.restaurantConfigTemplates, pushCandidate);
+  collectTemplateCandidates(source?.restaurantConfigTemplatesData, pushCandidate);
+  collectTemplateCandidates(source?.restaurantSuggestionTemplatesData, pushCandidate);
+  collectTemplateCandidates(source?.comandaTemplates, pushCandidate);
+  collectTemplateCandidates(source?.comandaTemplate, pushCandidate);
+  collectTemplateCandidates(source?.comanda_config, pushCandidate);
+  collectTemplateCandidates(source?.comanda_templates, pushCandidate);
+  collectTemplateCandidates(source?.restaurantConfig?.templates, pushCandidate);
+  collectTemplateCandidates(source?.restaurantConfig?.template_data, pushCandidate);
+  collectTemplateCandidates(source?.restaurantConfig?.restaurantSuggestionTemplates, pushCandidate);
+  collectTemplateCandidates(source?.restaurantConfigTemplatesData, pushCandidate);
+  collectTemplateCandidates(source?.suggestionTemplates, pushCandidate);
+  collectTemplateCandidates(source?.restaurant?.restaurantSuggestionTemplates, pushCandidate);
+  collectTemplateCandidates(source?.restaurant?.suggestedTemplates, pushCandidate);
+  collectTemplateCandidates(source?.restaurant?.templates, pushCandidate);
+  collectTemplateCandidates(source?.restaurant, pushCandidate);
+  collectTemplateCandidates(source?.restaurantConfig, pushCandidate);
+  collectTemplateCandidates(source?.metadata, pushCandidate);
+  collectTemplateCandidates(source?.suggestionMap, pushCandidate);
+  collectTemplateCandidates(source?.templateMap, pushCandidate);
+  collectTemplateCandidates(source?.templates, pushCandidate);
+
+  const normalized = candidates
+    .map((candidate, index) => normalizeRestaurantSuggestionTemplate(candidate, `template_${index + 1}`, `Plantilla ${index + 1}`))
+    .filter(Boolean) as RestaurantSuggestionTemplate[];
+
+  if (normalized.length > 0) return normalized;
+
+  const legacyOnlyModifierSource = asModifierArray(
+    source.availableModifiers ||
+    source.available_modifiers ||
+    source.modifiers ||
+    source.modificadores ||
+    source.suggestedModifiers ||
+    source.sugeridos
+  );
+  return legacyOnlyModifierSource.length > 0
+    ? [
+        {
+          id: 'legacy-modifiers-only',
+          name: 'Modificadores sugeridos',
+          modifier_groups: [{
+            id: `legacy_suggestion_group`,
+            name: 'Modificadores sugeridos',
+            selection_type: 'MULTIPLE',
+            required: false,
+            min_select: 0,
+            max_select: null,
+            free_quantity: 0,
+            sort_order: 1,
+            modifiers: legacyOnlyModifierSource
+              .map((modifier, index) => parseRestaurantSuggestionModifier(modifier, index))
+              .filter(Boolean) as ModifierGroup['modifiers'],
+          }],
+          combo_groups: [],
+          note_presets: [],
+        },
+      ]
+    : [];
+};
+
 type ProductTab = 'GENERAL' | 'CLASSIFICATION' | 'LABELS' | 'OPERATIVE' | 'TAXES' | 'PRICING' | 'VARIANTS' | 'MODIFIERS' | 'LOGISTICS' | 'STOCKS' | 'KARDEX' | 'RECIPE';
 
 const DEFAULT_OPERATIONAL_FLAGS: ProductOperationalFlags = {
@@ -85,6 +761,28 @@ const VARIANT_TEMPLATES = [
   { name: 'Calzado US', attr: 'Número', opts: ['7', '8', '9', '10', '11'] },
   { name: 'Capacidad', attr: 'Memoria', opts: ['64GB', '128GB', '256GB'] }
 ];
+
+const normalizeCategoryOption = (entry: unknown): { id: string; name: string } | null => {
+  if (typeof entry === 'string') {
+    const name = entry.trim();
+    return name ? { id: name, name } : null;
+  }
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+  const record = entry as Record<string, unknown>;
+  const name = String(
+    record.name ||
+    record.nombre ||
+    record.label ||
+    record.description ||
+    record.descripcion ||
+    record.code ||
+    record.id ||
+    ''
+  ).trim();
+  if (!name) return null;
+  const id = String(record.id || record.code || name).trim();
+  return { id: id || name, name };
+};
 
 const buildStockSyncMarker = (product?: Partial<Product> | null): string => {
   if (!product) return 'NO_STOCK';
@@ -170,11 +868,23 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   // --- STATE ---
   const [showProfitCalc, setShowProfitCalc] = useState<string | null>(null);
   const [showTemplateMenu, setShowTemplateMenu] = useState(false);
+  const [showRestaurantSuggestionModal, setShowRestaurantSuggestionModal] = useState(false);
+  const [selectedRestaurantSuggestionTemplateId, setSelectedRestaurantSuggestionTemplateId] = useState<string>('');
+  const [restaurantSuggestionMode, setRestaurantSuggestionMode] = useState<RestaurantSuggestionApplyMode>('append');
+  const [restaurantSuggestionScope, setRestaurantSuggestionScope] = useState<RestaurantSuggestionApplyScope>({
+    productType: true,
+    productionArea: true,
+    modifierGroups: true,
+    comboGroups: true,
+    fractions: true,
+    notePresets: true,
+  });
   const [isLabelModalOpen, setIsLabelModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isPastingImage, setIsPastingImage] = useState(false);
   const [pendingOption, setPendingOption] = useState<Record<string, string>>({});
   const [inventoryDebugCopyStatus, setInventoryDebugCopyStatus] = useState<'IDLE' | 'COPIED' | 'ERROR'>('IDLE');
+  const [erpCategoryOptions, setErpCategoryOptions] = useState<Array<{ id: string; name: string }>>([]);
 
   // Kardex Filter State
   const [kardexTerminal, setKardexTerminal] = useState<string>('ALL');
@@ -190,6 +900,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
     return {
       ...product,
+      operationalFlags: {
+        ...DEFAULT_OPERATIONAL_FLAGS,
+        ...(product.operationalFlags || {}),
+      },
       tariffs: canonicalizeTariffEntries(product.tariffs || [], availableTariffs),
       stockBalances: normalizedStockBalances,
       warehouseSettings: normalizedWarehouseSettings,
@@ -203,6 +917,17 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       ),
     };
   }
+
+  const updateOperationalFlag = (field: keyof ProductOperationalFlags, value: boolean) => {
+    setFormData(prev => ({
+      ...prev,
+      operationalFlags: {
+        ...DEFAULT_OPERATIONAL_FLAGS,
+        ...(prev.operationalFlags || {}),
+        [field]: value,
+      },
+    }));
+  };
 
   const [formData, setFormData] = useState<Product>(() => {
     const base = initialData || {
@@ -218,6 +943,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       activeInWarehouses: warehouses.map(w => w.id),
       price: 0,
       barcode: '',
+      barcode_2: '',
+      barcode_3: '',
+      reference: '',
       appliedTaxIds: config.taxes?.[0] ? [config.taxes[0].id] : [],
       cost: 0,
       description: '',
@@ -233,11 +961,37 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     return normalizeProductActivationState(normalizeRestaurantProductConfig(base));
   });
 
+  useEffect(() => {
+    setActiveTab(initialTab || 'GENERAL');
+  }, [initialTab, initialData?.id]);
+
   const [warehouseSettings, setWarehouseSettings] = useState<Record<string, { min: number, max: number }>>(
     () => canonicalizeWarehouseRecord(initialData?.warehouseSettings || {}, warehouses)
   );
 
   const normalizedFormTariffs = useMemo(() => canonicalizeTariffEntries(formData.tariffs || [], availableTariffs), [formData.tariffs, availableTariffs]);
+  const categoryOptions = useMemo(() => {
+    const byName = new Map<string, { id: string; name: string }>();
+    const addOption = (entry: unknown) => {
+      const option = normalizeCategoryOption(entry);
+      if (!option) return;
+      const key = option.name.trim().toLowerCase();
+      if (!byName.has(key)) byName.set(key, option);
+    };
+
+    (config.posCategories || []).forEach(addOption);
+    (config as any).categories?.forEach?.(addOption);
+    (config.productGroups || []).forEach(addOption);
+    (config as any).productCategories?.forEach?.(addOption);
+    (config.terminals || []).forEach((terminal: any) => {
+      (terminal?.config?.catalog?.allowedCategories || []).forEach(addOption);
+      (terminal?.config?.catalog?.allowed_categories || []).forEach(addOption);
+    });
+    allProducts.forEach((product) => addOption(product?.category));
+    erpCategoryOptions.forEach(addOption);
+
+    return Array.from(byName.values()).sort((left, right) => left.name.localeCompare(right.name));
+  }, [allProducts, config, erpCategoryOptions]);
   const normalizedWarehouseSettings = useMemo(
     () => canonicalizeWarehouseRecord(warehouseSettings, warehouses),
     [warehouseSettings, warehouses]
@@ -249,6 +1003,43 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     }, warehouses),
     [formData.activeInWarehouses, normalizedWarehouseSettings, warehouses]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadCategories = async () => {
+      try {
+        const [rawCategories, rawProductCategories, rawProductGroups, rawCollections] = await Promise.all([
+          db.get('categories' as any).catch(() => []),
+          db.get('productCategories' as any).catch(() => []),
+          db.get('productGroups' as any).catch(() => []),
+          db.get('collections' as any).catch(() => []),
+        ]);
+        if (cancelled) return;
+        const normalized = [
+          ...(Array.isArray(rawCategories) ? rawCategories : []),
+          ...(Array.isArray(rawProductCategories) ? rawProductCategories : []),
+          ...(Array.isArray(rawProductGroups) ? rawProductGroups : []),
+          ...(Array.isArray(rawCollections) ? rawCollections : []),
+        ]
+          .map(normalizeCategoryOption)
+          .filter(Boolean) as Array<{ id: string; name: string }>;
+        setErpCategoryOptions(normalized);
+      } catch (error) {
+        console.warn('No se pudieron cargar clasificaciones ERP locales:', error);
+      }
+    };
+
+    const handleCategoriesUpdated = () => {
+      void loadCategories();
+    };
+
+    void loadCategories();
+    window.addEventListener('categoriesUpdated', handleCategoriesUpdated);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('categoriesUpdated', handleCategoriesUpdated);
+    };
+  }, []);
 
 
   // Kardex Ledger Data (Fetched from DB)
@@ -265,6 +1056,25 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     () => localStorage.getItem('active_terminal_id') || localStorage.getItem('CLIC_POS_TERMINAL_ID') || '',
     []
   );
+  const defaultTariffId = useMemo(() => {
+    const terminal = activeTerminalId
+      ? config.terminals?.find((entry) => entry.id === activeTerminalId)
+      : config.terminals?.[0];
+    return String(
+      terminal?.config?.pricing?.defaultTariffId ||
+      availableTariffs.find((tariff) => tariff.id === 'trf-gen')?.id ||
+      availableTariffs.find((tariff) => /general|pvp/i.test(`${tariff.name || ''} ${(tariff as any).code || ''}`))?.id ||
+      availableTariffs[0]?.id ||
+      ''
+    ).trim();
+  }, [activeTerminalId, availableTariffs, config.terminals]);
+  const isDefaultPriceTariff = useCallback((tariff: Tariff): boolean => {
+    return (
+      tariffMatchesIdentifier(tariff, defaultTariffId) ||
+      tariffMatchesIdentifier(tariff, 'trf-gen') ||
+      /general|pvp/i.test(`${tariff.name || ''} ${(tariff as any).code || ''}`)
+    );
+  }, [defaultTariffId]);
   const inventoryCursorMap = useMemo(() => {
     if (!activeTerminalId) return null;
     const raw = localStorage.getItem(`clic_pos_terminal_manifest_cursor_map:${activeTerminalId}`);
@@ -982,12 +1792,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     if (isPresent) {
       setFormData(prev => ({ ...prev, tariffs: prev.tariffs.filter(t => !tariffMatchesIdentifier(t, tariffId)) }));
     } else {
-      const tariff = availableTariffs.find(t => t.id === tariffId);
+      const tariff = availableTariffs.find(t => tariffMatchesIdentifier(t, tariffId));
       setFormData(prev => ({
         ...prev,
         tariffs: [...prev.tariffs, {
           tariffId: tariffId,
+          tariffCode: (tariff as any)?.code,
           name: tariff?.name,
+          currency: tariff?.currency,
           price: prev.price,
           costBase: prev.cost,
           margin: prev.cost > 0 ? ((prev.price / (1 + config.taxRate)) - prev.cost) / prev.cost * 100 : 30
@@ -1058,10 +1870,22 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     );
     const restaurantConfig = resolveRestaurantProductConfig(formData);
     const productionAreaId = String(restaurantConfig.production_area_id || '').trim();
+    const normalizedTariffsForSave = canonicalizeTariffEntries(formData.tariffs || [], availableTariffs);
+    const defaultTariffForSave = normalizedTariffsForSave.find((entry) =>
+      tariffMatchesIdentifier(entry, defaultTariffId) ||
+      tariffMatchesIdentifier(entry, 'trf-gen') ||
+      /general|pvp/i.test(`${entry.name || ''} ${(entry as any).tariffCode || ''}`)
+    ) || normalizedTariffsForSave[0];
+    const defaultTariffPrice = Number(defaultTariffForSave?.price);
+    const resolvedBasePrice = Number.isFinite(defaultTariffPrice) && defaultTariffPrice > 0
+      ? defaultTariffPrice
+      : formData.price;
+
     const updatedProduct = normalizeRestaurantProductConfig({
       ...formData,
+      price: resolvedBasePrice,
       production_area_id: productionAreaId || undefined,
-      tariffs: canonicalizeTariffEntries(formData.tariffs || [], availableTariffs),
+      tariffs: normalizedTariffsForSave,
       stockBalances: canonicalizeWarehouseRecord(formData.stockBalances || {}, warehouses),
       activeInWarehouses: activeWarehouses,
       warehouseSettings: finalWarehouseSettings,
@@ -1105,6 +1929,11 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const restaurantComboGroups = resolvedRestaurantFormConfig.combo_groups || [];
   const restaurantFractionRule = resolvedRestaurantFormConfig.fraction_rule;
   const restaurantNotePresets = resolvedRestaurantFormConfig.note_presets || [];
+  const restaurantSuggestionTemplates = useMemo(() => extractRestaurantSuggestionTemplates(formData), [formData]);
+  const selectedRestaurantSuggestionTemplate = useMemo(
+    () => restaurantSuggestionTemplates.find(template => template.id === selectedRestaurantSuggestionTemplateId) || restaurantSuggestionTemplates[0] || null,
+    [restaurantSuggestionTemplates, selectedRestaurantSuggestionTemplateId],
+  );
   const selectableRestaurantProducts = useMemo(() => (
     (allProducts || [])
       .filter(product => product.id !== formData.id && product.is_sellable !== false)
@@ -1113,6 +1942,140 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
   const updateRestaurantProduct = (updates: Partial<Product>) => {
     setFormData(prev => normalizeRestaurantProductConfig({ ...prev, ...updates }));
+  };
+
+  const openRestaurantSuggestionModal = () => {
+    if (restaurantSuggestionTemplates.length === 0) {
+      alert('No hay sugerencias de comanda para este artículo.');
+      return;
+    }
+    const defaultTemplateId = RESTAURANT_TEMPLATE_DEFAULT_IDS.find((templateId) =>
+      restaurantSuggestionTemplates.some((template) => trimString(template.id).toLowerCase() === templateId)
+    );
+    const firstTemplate = restaurantSuggestionTemplates.find((template) => trimString(template.id).toLowerCase() === defaultTemplateId) || restaurantSuggestionTemplates[0];
+    setSelectedRestaurantSuggestionTemplateId(firstTemplate.id);
+    setRestaurantSuggestionMode('append');
+    setRestaurantSuggestionScope({
+      productType: true,
+      productionArea: true,
+      modifierGroups: true,
+      comboGroups: true,
+      fractions: true,
+      notePresets: true,
+    });
+    setShowRestaurantSuggestionModal(true);
+  };
+
+  const hasScalarSuggestionValue = (value?: string) => trimString(value).length > 0 && trimString(value).toLowerCase() !== 'simple';
+
+  const itemSignature = (item: unknown, fallback = '') => {
+    if (!item || typeof item !== 'object') return fallback;
+    const candidate = item as Record<string, any>;
+    return trimString(candidate.id) || trimString(candidate.product_id || candidate.productId) || trimString(candidate.name) || fallback;
+  };
+
+  const mergeRestaurantSuggestionList = <T,>(current: T[], incoming: T[], mode: RestaurantSuggestionApplyMode): T[] => {
+    if (mode === 'replace') return incoming;
+    if (mode === 'fill' && current.length > 0) return current;
+    if (incoming.length === 0) return current;
+    if (mode !== 'append') return incoming;
+
+    const seen = new Set((current || []).map((item, index) => {
+      const key = itemSignature(item, `current_${index}`);
+      return key.trim().toLowerCase();
+    }));
+    const merged = [...(current || [])];
+
+    for (const item of incoming) {
+      const key = itemSignature(item, `incoming_${Date.now()}`).trim().toLowerCase();
+      if (!key || !seen.has(key)) {
+        merged.push(item);
+        if (key) seen.add(key);
+      }
+    }
+
+    return merged;
+  };
+
+  const applyRestaurantSuggestionTemplate = () => {
+    if (!selectedRestaurantSuggestionTemplate) {
+      alert('No hay una plantilla de comanda seleccionada.');
+      return;
+    }
+
+    const current = resolvedRestaurantFormConfig;
+    const updates: Partial<Product> = {};
+
+    if (restaurantSuggestionScope.productType) {
+      const incomingType = selectedRestaurantSuggestionTemplate.product_type;
+      if (trimString(incomingType).length > 0 && (restaurantSuggestionMode === 'replace' || !hasScalarSuggestionValue(current.product_type))) {
+        updates.product_type = incomingType;
+      }
+      if (restaurantSuggestionMode === 'append' && !hasScalarSuggestionValue(current.product_type)) {
+        updates.product_type = incomingType;
+      }
+      if (restaurantSuggestionMode === 'fill' && hasScalarSuggestionValue(current.product_type) === false && incomingType) {
+        updates.product_type = incomingType;
+      }
+    }
+
+    if (restaurantSuggestionScope.productionArea) {
+      const incomingProductionArea = selectedRestaurantSuggestionTemplate.production_area_id;
+      if (restaurantSuggestionMode === 'replace') {
+        updates.production_area_id = incomingProductionArea || undefined;
+      } else if (!trimString(current.production_area_id).length && trimString(incomingProductionArea).length) {
+        updates.production_area_id = incomingProductionArea;
+      }
+    }
+
+    if (restaurantSuggestionScope.modifierGroups) {
+      if (restaurantSuggestionMode === 'replace') {
+        updates.modifier_groups = selectedRestaurantSuggestionTemplate.modifier_groups;
+      } else if (restaurantSuggestionMode === 'fill') {
+        updates.modifier_groups = current.modifier_groups.length > 0
+          ? current.modifier_groups
+          : selectedRestaurantSuggestionTemplate.modifier_groups;
+      } else {
+        updates.modifier_groups = mergeRestaurantSuggestionList(current.modifier_groups, selectedRestaurantSuggestionTemplate.modifier_groups, restaurantSuggestionMode);
+      }
+    }
+
+    if (restaurantSuggestionScope.comboGroups) {
+      if (restaurantSuggestionMode === 'replace') {
+        updates.combo_groups = selectedRestaurantSuggestionTemplate.combo_groups;
+      } else if (restaurantSuggestionMode === 'fill') {
+        updates.combo_groups = current.combo_groups.length > 0
+          ? current.combo_groups
+          : selectedRestaurantSuggestionTemplate.combo_groups;
+      } else {
+        updates.combo_groups = mergeRestaurantSuggestionList(current.combo_groups, selectedRestaurantSuggestionTemplate.combo_groups, restaurantSuggestionMode);
+      }
+    }
+
+    if (restaurantSuggestionScope.fractions) {
+      if (restaurantSuggestionMode === 'replace') {
+        updates.fraction_rule = selectedRestaurantSuggestionTemplate.fraction_rule;
+      } else if (!current.fraction_rule && selectedRestaurantSuggestionTemplate.fraction_rule) {
+        updates.fraction_rule = selectedRestaurantSuggestionTemplate.fraction_rule;
+      }
+    }
+
+    if (restaurantSuggestionScope.notePresets) {
+      if (restaurantSuggestionMode === 'replace') {
+        updates.note_presets = selectedRestaurantSuggestionTemplate.note_presets;
+      } else if (restaurantSuggestionMode === 'fill') {
+        updates.note_presets = current.note_presets.length > 0 ? current.note_presets : selectedRestaurantSuggestionTemplate.note_presets;
+      } else {
+        const merged = Array.from(new Set([
+          ...(current.note_presets || []),
+          ...selectedRestaurantSuggestionTemplate.note_presets,
+        ]));
+        updates.note_presets = merged;
+      }
+    }
+
+    updateRestaurantProduct(updates);
+    setShowRestaurantSuggestionModal(false);
   };
 
   const addRestaurantModifierGroup = () => {
@@ -1191,6 +2154,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
           product_id: undefined,
         }
     );
+  };
+
+  const handleSuggestModifiers = () => {
+    openRestaurantSuggestionModal();
   };
 
   const deleteRestaurantModifier = (groupId: string, modifierId: string) => {
@@ -1710,8 +2677,24 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Código Barra / SKU</label>
+                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Código de Barra</label>
                         <input type="text" value={formData.barcode || ''} onChange={e => setFormData({ ...formData, barcode: e.target.value })} onPaste={(e) => e.stopPropagation()} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-mono text-sm select-text" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">SKU</label>
+                        <input type="text" value={(formData as any).sku || ''} onChange={e => setFormData({ ...formData, sku: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-mono text-sm select-text" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Código de Barra 2</label>
+                        <input type="text" value={(formData as any).barcode_2 || (formData as any).barcode2 || ''} onChange={e => setFormData({ ...formData, barcode_2: e.target.value, barcode2: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-mono text-sm select-text" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Código de Barra 3</label>
+                        <input type="text" value={(formData as any).barcode_3 || (formData as any).barcode3 || ''} onChange={e => setFormData({ ...formData, barcode_3: e.target.value, barcode3: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-mono text-sm select-text" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Referencia</label>
+                        <input type="text" value={(formData as any).reference || (formData as any).referenceCode || (formData as any).reference_code || ''} onChange={e => setFormData({ ...formData, reference: e.target.value, referenceCode: e.target.value, reference_code: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-mono text-sm select-text" />
                       </div>
                       <div>
                         <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Costo Unitario (CPP)</label>
@@ -2046,54 +3029,6 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                   </p>
                 </div>
 
-                <div className="bg-slate-950 text-slate-100 p-4 rounded-2xl border border-slate-800 space-y-3">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex items-center gap-2">
-                      <ShieldAlert size={16} className="text-amber-300" />
-                      <p className="text-xs font-black uppercase tracking-[0.24em] text-amber-200">Diagnóstico de inventario</p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={handleSelectInventoryDebug}
-                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-800 px-4 py-2 text-[11px] font-black uppercase tracking-[0.18em] text-slate-100 transition-all hover:bg-slate-700"
-                      >
-                        <ClipboardList size={14} />
-                        Seleccionar todo
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleCopyInventoryDebug}
-                        className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-[11px] font-black uppercase tracking-[0.18em] transition-all ${
-                          inventoryDebugCopyStatus === 'COPIED'
-                            ? 'bg-emerald-500 text-white'
-                            : inventoryDebugCopyStatus === 'ERROR'
-                              ? 'bg-red-500 text-white'
-                              : 'bg-amber-300 text-slate-950 hover:bg-amber-200'
-                        }`}
-                      >
-                        {inventoryDebugCopyStatus === 'COPIED' ? <Check size={14} /> : <Copy size={14} />}
-                        {inventoryDebugCopyStatus === 'COPIED'
-                          ? 'Copiado'
-                          : inventoryDebugCopyStatus === 'ERROR'
-                            ? 'No copió'
-                            : 'Copiar JSON'}
-                      </button>
-                    </div>
-                  </div>
-                  <p className="text-xs text-slate-300">
-                    Esta sección es temporal para validar qué quedó guardado localmente en la caja para este artículo. Si el emulador no comparte el portapapeles, usa Seleccionar todo y copia desde el menú contextual.
-                  </p>
-                  <textarea
-                    ref={inventoryDebugTextareaRef}
-                    key={inventoryDebugJson}
-                    spellCheck={false}
-                    defaultValue={inventoryDebugJson}
-                    onFocus={(event) => event.currentTarget.setSelectionRange(0, 0)}
-                    className="h-80 w-full resize-none overflow-auto rounded-xl border border-slate-800 bg-black/40 p-3 font-mono text-[11px] leading-5 text-emerald-300 outline-none selection:bg-emerald-200 selection:text-slate-950"
-                    style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
-                  />
-                </div>
               </div>
             </div>
           )}
@@ -2152,12 +3087,12 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                                   value={tariffData.price}
                                   onChange={(e) => {
                                     const newPrice = parseFloat(e.target.value) || 0;
-                                    const isGeneralTariff = tariff.id === 'trf-gen';
+                                    const isGeneralTariff = isDefaultPriceTariff(tariff);
 
                                     setFormData({
                                       ...formData,
                                       price: isGeneralTariff ? newPrice : formData.price,
-                                      tariffs: formData.tariffs.map(t => t.tariffId === tariff.id ? { ...t, price: newPrice } : t)
+                                      tariffs: formData.tariffs.map(t => tariffMatchesIdentifier(t, tariff.id) || tariffMatchesIdentifier(t, (tariff as any).code) ? { ...t, price: newPrice } : t)
                                     });
                                   }}
                                   className="w-32 pl-8 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-xl font-black text-purple-700 outline-none focus:ring-2 focus:ring-purple-200"
@@ -2198,17 +3133,17 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                   onChange={(v: boolean) => setFormData({ ...formData, is_sellable: v })}
                   icon={ShoppingCart}
                 />
-                <OperationalSwitch label="¿Es Producto Pesado?" description="Activa lectura de Balanza y etiquetas." checked={formData.operationalFlags?.isWeighted} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, isWeighted: v } })} icon={Scale} />
-                <OperationalSwitch label="Controlar Stock" description="Valida existencias y descuenta del almacén." checked={formData.operationalFlags?.trackInventory} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, trackInventory: v } })} icon={Box} />
-                <OperationalSwitch label="Generar Etiqueta al Recibir" description="Imprime ticket al entrar mercancía." checked={formData.operationalFlags?.autoPrintLabel} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, autoPrintLabel: v } })} icon={Zap} />
-                <OperationalSwitch label="Solicitar Precio en Caja" description="Precio Abierto al momento de marcar." checked={formData.operationalFlags?.promptPrice} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, promptPrice: v } })} icon={DollarSign} />
-                <OperationalSwitch label="Venta Solo Enteros" description="Bloquea decimales en la cantidad." checked={formData.operationalFlags?.integersOnly} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, integersOnly: v } })} icon={Ban} />
-                <OperationalSwitch label="Verificación Edad (+18)" description="Validación obligatoria de cédula." checked={formData.operationalFlags?.ageRestricted} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, ageRestricted: v } })} icon={ShieldCheck} />
-                <OperationalSwitch label="Permitir Venta Negativa" description="Vende aunque no haya stock." checked={formData.operationalFlags?.allowNegativeStock} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, allowNegativeStock: v } })} icon={AlertCircle} />
-                <OperationalSwitch label="Excluir de Promociones" description="Ignora cupones y descuentos globales." checked={formData.operationalFlags?.excludeFromPromotions} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, excludeFromPromotions: v } })} icon={Tag} />
-                <OperationalSwitch label="Excluir de Puntos" description="Este producto no genera puntos de lealtad." checked={formData.operationalFlags?.excludeFromLoyalty} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, excludeFromLoyalty: v } })} icon={Award} />
-                <OperationalSwitch label="Usa Lotes / Vencimiento" description="Trazabilidad por lote y fecha de expiración." checked={formData.operationalFlags?.usesLots} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, usesLots: v } })} icon={Calendar} />
-                <OperationalSwitch label="Usa Números de Serie" description="Trazabilidad por código único por unidad." checked={formData.operationalFlags?.usesSerial} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, usesSerial: v } })} icon={ScanBarcode} />
+                <OperationalSwitch label="¿Es Producto Pesado?" description="Activa lectura de Balanza y etiquetas." checked={formData.operationalFlags?.isWeighted} onChange={(v: boolean) => updateOperationalFlag('isWeighted', v)} icon={Scale} />
+                <OperationalSwitch label="Controlar Stock" description="Valida existencias y descuenta del almacén." checked={formData.operationalFlags?.trackInventory} onChange={(v: boolean) => updateOperationalFlag('trackInventory', v)} icon={Box} />
+                <OperationalSwitch label="Generar Etiqueta al Recibir" description="Imprime ticket al entrar mercancía." checked={formData.operationalFlags?.autoPrintLabel} onChange={(v: boolean) => updateOperationalFlag('autoPrintLabel', v)} icon={Zap} />
+                <OperationalSwitch label="Solicitar Precio en Caja" description="Precio Abierto al momento de marcar." checked={formData.operationalFlags?.promptPrice} onChange={(v: boolean) => updateOperationalFlag('promptPrice', v)} icon={DollarSign} />
+                <OperationalSwitch label="Venta Solo Enteros" description="Bloquea decimales en la cantidad." checked={formData.operationalFlags?.integersOnly} onChange={(v: boolean) => updateOperationalFlag('integersOnly', v)} icon={Ban} />
+                <OperationalSwitch label="Verificación Edad (+18)" description="Validación obligatoria de cédula." checked={formData.operationalFlags?.ageRestricted} onChange={(v: boolean) => updateOperationalFlag('ageRestricted', v)} icon={ShieldCheck} />
+                <OperationalSwitch label="Permitir Venta Negativa" description="Vende aunque no haya stock." checked={formData.operationalFlags?.allowNegativeStock} onChange={(v: boolean) => updateOperationalFlag('allowNegativeStock', v)} icon={AlertCircle} />
+                <OperationalSwitch label="Excluir de Promociones" description="Ignora cupones y descuentos globales." checked={formData.operationalFlags?.excludeFromPromotions} onChange={(v: boolean) => updateOperationalFlag('excludeFromPromotions', v)} icon={Tag} />
+                <OperationalSwitch label="Excluir de Puntos" description="Este producto no genera puntos de lealtad." checked={formData.operationalFlags?.excludeFromLoyalty} onChange={(v: boolean) => updateOperationalFlag('excludeFromLoyalty', v)} icon={Award} />
+                <OperationalSwitch label="Usa Lotes / Vencimiento" description="Trazabilidad por lote y fecha de expiración." checked={formData.operationalFlags?.usesLots} onChange={(v: boolean) => updateOperationalFlag('usesLots', v)} icon={Calendar} />
+                <OperationalSwitch label="Usa Números de Serie" description="Trazabilidad por código único por unidad." checked={formData.operationalFlags?.usesSerial} onChange={(v: boolean) => updateOperationalFlag('usesSerial', v)} icon={ScanBarcode} />
               </div>
 
               {/* ROUTING SECTION */}
@@ -2250,6 +3185,12 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                     <h3 className="text-xl font-black text-slate-800">Restaurante y Comandas</h3>
                     <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Modificadores, combos, mitades y notas rápidas locales</p>
                   </div>
+                  <button
+                    onClick={handleSuggestModifiers}
+                    className="rounded-2xl border-2 border-emerald-100 bg-emerald-50 p-3 text-sm font-black text-emerald-700 hover:bg-emerald-100 flex items-center justify-center gap-2"
+                  >
+                    <Sparkles size={16} /> Sugerir configuración
+                  </button>
                   <select
                     value={resolvedRestaurantFormConfig.product_type || (formData.type === 'COMBO' ? 'COMBO' : 'SIMPLE')}
                     onChange={e => updateRestaurantProduct({ product_type: e.target.value })}
@@ -2515,23 +3456,24 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       <div className="space-y-4">
                         <div>
                           <label className="block text-xs font-bold text-gray-700 mb-2">Categoría POS</label>
-                          {/* We use a datalist to allow both standardized selection and free text if needed, or just strict Select */}
                           <div className="relative">
-                            <input
-                              list="pos-categories-list"
-                              type="text"
+                            <select
                               value={formData.category}
                               onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                              className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-medium"
-                              placeholder="Ej: Bebidas"
-                            />
-                            <datalist id="pos-categories-list">
-                              {config.posCategories?.map(c => (
-                                <option key={c.id} value={c.name} />
+                              disabled={categoryOptions.length === 0}
+                              className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-medium outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                            >
+                              <option value="">-- Seleccione Categoría POS --</option>
+                              {categoryOptions.map(c => (
+                                <option key={c.id} value={c.name}>{c.name}</option>
                               ))}
-                            </datalist>
+                            </select>
                           </div>
-                          <p className="text-[10px] text-gray-400 mt-1 pl-1">Seleccione de la lista o escriba una nueva.</p>
+                          <p className="text-[10px] text-gray-400 mt-1 pl-1">
+                            {categoryOptions.length > 0
+                              ? 'Seleccione una categoría sincronizada/configurada. No se permite escribir categorías libres.'
+                              : 'No hay categorías POS sincronizadas todavía.'}
+                          </p>
                         </div>
                         <div>
                           <label className="block text-xs font-bold text-gray-700 mb-2">Marca</label>
@@ -2930,6 +3872,130 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
           </div>
         </div >
 
+        {showRestaurantSuggestionModal && (
+          <div className="fixed inset-0 z-[170] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in">
+            <div className="w-full max-w-3xl rounded-[2rem] bg-white border border-gray-100 p-6 shadow-2xl space-y-5">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-black text-slate-800">Sugerir configuración de comanda</h3>
+                  <p className="text-xs text-slate-500 font-bold mt-1 uppercase tracking-widest">Plantilla del ERP</p>
+                </div>
+                <button onClick={() => setShowRestaurantSuggestionModal(false)} className="p-2 rounded-full hover:bg-gray-100">
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-xs font-black text-gray-500">Plantilla</label>
+                <select
+                  value={selectedRestaurantSuggestionTemplate?.id || ''}
+                  onChange={(e) => setSelectedRestaurantSuggestionTemplateId(e.target.value)}
+                  className="w-full rounded-xl bg-gray-50 px-3 py-3 text-sm font-bold outline-none border-2 border-transparent focus:border-blue-200"
+                >
+                  {restaurantSuggestionTemplates.map(template => (
+                    <option key={template.id} value={template.id}>{template.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-xs font-black text-gray-500">Modo de aplicación</label>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                  {[
+                    { value: 'append', label: 'Agregar sin borrar', description: 'Agrega lo faltante sin reemplazar lo existente' },
+                    { value: 'fill', label: 'Completar solo vacíos', description: 'Solo completa campos vacíos' },
+                    { value: 'replace', label: 'Reemplazar configuración', description: 'Reemplaza los bloques seleccionados' },
+                  ].map(option => (
+                    <label key={option.value} className="rounded-xl border-2 border-gray-100 bg-gray-50 p-3 cursor-pointer">
+                      <div className="flex items-center gap-2 text-xs font-black text-slate-700">
+                        <input
+                          type="radio"
+                          name="restaurantSuggestionMode"
+                          checked={restaurantSuggestionMode === option.value}
+                          onChange={() => setRestaurantSuggestionMode(option.value as RestaurantSuggestionApplyMode)}
+                        />
+                        {option.label}
+                      </div>
+                      <p className="mt-1 text-[11px] text-gray-500">{option.description}</p>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-xs font-black text-gray-500">Qué aplicar</label>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                  <label className="flex items-center gap-2 text-xs font-black text-gray-600">
+                    <input
+                      type="checkbox"
+                      checked={restaurantSuggestionScope.productType}
+                      onChange={(e) => setRestaurantSuggestionScope(prev => ({ ...prev, productType: e.target.checked }))}
+                    />
+                    Tipo de producto
+                  </label>
+                  <label className="flex items-center gap-2 text-xs font-black text-gray-600">
+                    <input
+                      type="checkbox"
+                      checked={restaurantSuggestionScope.productionArea}
+                      onChange={(e) => setRestaurantSuggestionScope(prev => ({ ...prev, productionArea: e.target.checked }))}
+                    />
+                    Centro de producción
+                  </label>
+                  <label className="flex items-center gap-2 text-xs font-black text-gray-600">
+                    <input
+                      type="checkbox"
+                      checked={restaurantSuggestionScope.modifierGroups}
+                      onChange={(e) => setRestaurantSuggestionScope(prev => ({ ...prev, modifierGroups: e.target.checked }))}
+                    />
+                    Modificadores
+                  </label>
+                  <label className="flex items-center gap-2 text-xs font-black text-gray-600">
+                    <input
+                      type="checkbox"
+                      checked={restaurantSuggestionScope.fractions}
+                      onChange={(e) => setRestaurantSuggestionScope(prev => ({ ...prev, fractions: e.target.checked }))}
+                    />
+                    Fracciones
+                  </label>
+                  <label className="flex items-center gap-2 text-xs font-black text-gray-600">
+                    <input
+                      type="checkbox"
+                      checked={restaurantSuggestionScope.comboGroups}
+                      onChange={(e) => setRestaurantSuggestionScope(prev => ({ ...prev, comboGroups: e.target.checked }))}
+                    />
+                    Combos
+                  </label>
+                  <label className="flex items-center gap-2 text-xs font-black text-gray-600">
+                    <input
+                      type="checkbox"
+                      checked={restaurantSuggestionScope.notePresets}
+                      onChange={(e) => setRestaurantSuggestionScope(prev => ({ ...prev, notePresets: e.target.checked }))}
+                    />
+                    Notas
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-3 border-t">
+                <button
+                  type="button"
+                  onClick={() => setShowRestaurantSuggestionModal(false)}
+                  className="px-4 py-2 rounded-xl border-2 border-gray-200 font-black text-xs text-gray-500"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={applyRestaurantSuggestionTemplate}
+                  className="px-4 py-2 rounded-xl bg-blue-600 text-white font-black text-xs"
+                >
+                  Aplicar sugerencia
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* PROFIT CALCULATOR MODAL */}
         {
           showProfitCalc && (
@@ -2943,7 +4009,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
               onApply={(values) => {
                 setFormData(prev => ({
                   ...prev,
-                  tariffs: prev.tariffs.map(t => t.tariffId === showProfitCalc ? { ...t, price: values.price, margin: values.margin, costBase: values.cost } : t)
+                  tariffs: prev.tariffs.map(t => tariffMatchesIdentifier(t, showProfitCalc) ? { ...t, price: values.price, margin: values.margin, costBase: values.cost } : t)
                 }));
                 setShowProfitCalc(null);
               }}
