@@ -13,12 +13,22 @@ const normalizeBaseUrl = (value: string | null): string => {
   const normalized = String(value || '').trim().replace(/\/+$/, '');
   if (!normalized) return '';
 
-  if (/^https?:\/\//i.test(normalized)) {
-    return normalized.replace(/\/api$/i, '');
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(normalized) ? normalized : `http://${normalized}`);
+    const host = parsed.hostname;
+    const isPrivateLanHost =
+      host === 'localhost'
+      || host === '127.0.0.1'
+      || /^10\./.test(host)
+      || /^192\.168\./.test(host)
+      || /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
+    const protocol = isPrivateLanHost ? 'http:' : parsed.protocol;
+    const port = parsed.port || '3001';
+    return `${protocol}//${host}:${port}${parsed.pathname.replace(/\/api$/i, '').replace(/\/+$/, '')}`;
+  } catch {
+    const hostWithPort = normalized.includes(':') ? normalized : `${normalized}:3001`;
+    return `http://${hostWithPort}`.replace(/\/api$/i, '');
   }
-
-  const hostWithPort = normalized.includes(':') ? normalized : `${normalized}:3001`;
-  return `http://${hostWithPort}`.replace(/\/api$/i, '');
 };
 
 export const isClientTerminalMode = (storage: StorageReader | null = getStorage()): boolean => {

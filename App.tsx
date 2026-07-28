@@ -1333,8 +1333,10 @@ const resolveReachableMasterBinding = async (host: string): Promise<{ host: stri
   if (!normalizedHost) return null;
 
   for (const baseUrl of buildMasterUrlCandidates(normalizedHost)) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 3500);
     try {
-      const response = await fetch(`${baseUrl}/api/sync/ping`);
+      const response = await fetch(`${baseUrl}/api/sync/ping`, { signal: controller.signal });
       if (!response.ok) continue;
 
       return {
@@ -1343,13 +1345,12 @@ const resolveReachableMasterBinding = async (host: string): Promise<{ host: stri
       };
     } catch {
       // try next candidate
+    } finally {
+      window.clearTimeout(timeoutId);
     }
   }
 
-  return {
-    host: normalizedHost,
-    baseUrl: buildMasterUrlFromHost(normalizedHost),
-  };
+  return null;
 };
 
 const isSeedSetupBusinessConfig = (config: BusinessConfig | null | undefined): boolean => {
@@ -2521,6 +2522,55 @@ const AppContent: React.FC = () => {
       stateListener?.remove?.();
     };
   }, [getCurrentDeviceRoleRaw]);
+
+  useEffect(() => {
+    if (!isNativeAndroidRuntime()) return;
+
+    let disposed = false;
+    const ensureMasterServer = () => {
+      if (disposed) return;
+      const nativeBridge = (window as any).ClicPOSNativePrinter;
+      const currentTerminal = getCurrentTerminal();
+      const shouldServeAsMaster = isNativeStandaloneTerminalRuntime(currentTerminal);
+
+      if (!shouldServeAsMaster) {
+        if (typeof nativeBridge?.stopMasterServer === 'function') {
+          void Promise.resolve(nativeBridge.stopMasterServer({ port: 3001 }));
+        }
+        return;
+      }
+
+      if (typeof nativeBridge?.startMasterServer !== 'function') {
+        console.error('[MASTER_LAN] Native Master server bridge is unavailable.');
+        return;
+      }
+
+      Promise.resolve(nativeBridge.startMasterServer({ port: 3001, config }))
+        .then((status: any) => {
+          if (disposed) return;
+          console.info('[MASTER_LAN] Native server ensured', {
+            running: Boolean(status?.running || status?.success),
+            port: status?.port || 3001,
+            localIp: status?.localIp || null,
+            localIps: status?.localIps || [],
+            error: status?.message || null,
+          });
+        })
+        .catch((error: unknown) => console.error('[MASTER_LAN] Could not ensure native server:', error));
+    };
+
+    ensureMasterServer();
+    const watchdog = window.setInterval(ensureMasterServer, 30000);
+    window.addEventListener('online', ensureMasterServer);
+    document.addEventListener('visibilitychange', ensureMasterServer);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(watchdog);
+      window.removeEventListener('online', ensureMasterServer);
+      document.removeEventListener('visibilitychange', ensureMasterServer);
+    };
+  }, [config, getCurrentTerminal]);
 
   const navigateToUserLogin = React.useCallback(() => {
     clearActiveUserSession();
@@ -5798,6 +5848,12 @@ const AppContent: React.FC = () => {
       const reachableMasterBinding = normalizedResolvedMasterIp
         ? await resolveReachableMasterBinding(normalizedResolvedMasterIp)
         : null;
+      if (normalizedResolvedMasterIp && !reachableMasterBinding) {
+        throw new Error(
+          `MASTER_UNREACHABLE: No se pudo conectar por HTTP a ${normalizedResolvedMasterIp}:3001. `
+          + 'Confirme que la caja Master esté abierta y que ambos equipos estén en la misma red.'
+        );
+      }
       const finalResolvedMasterIp = reachableMasterBinding?.host || normalizedResolvedMasterIp;
       const finalResolvedMasterUrl = reachableMasterBinding?.baseUrl || (finalResolvedMasterIp ? buildMasterUrlFromHost(finalResolvedMasterIp) : '');
       const resolvedErpBaseUrl =
