@@ -510,7 +510,10 @@ class AndroidPrinterBridge(context: Context) {
         val port = payload.optInt("port", 3001)
         val config = payload.optJSONObject("config")
         val users = payload.optJSONArray("users")
-        return ClicPOSMasterHttpServer.start(appContext, port, config, users).toString()
+        val rooms = payload.optJSONArray("rooms")
+        val tables = payload.optJSONArray("tables")
+        val parkedTickets = payload.optJSONArray("parkedTickets")
+        return ClicPOSMasterHttpServer.start(appContext, port, config, users, rooms, tables, parkedTickets).toString()
     }
 
     @JavascriptInterface
@@ -520,7 +523,10 @@ class AndroidPrinterBridge(context: Context) {
         }.getOrDefault(JSONObject())
         val config = payload.optJSONObject("config") ?: JSONObject()
         val users = payload.optJSONArray("users")
-        return ClicPOSMasterHttpServer.updateConfig(config, users).toString()
+        val rooms = payload.optJSONArray("rooms")
+        val tables = payload.optJSONArray("tables")
+        val parkedTickets = payload.optJSONArray("parkedTickets")
+        return ClicPOSMasterHttpServer.updateConfig(config, users, rooms, tables, parkedTickets).toString()
     }
 
     @JavascriptInterface
