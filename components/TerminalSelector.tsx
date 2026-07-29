@@ -35,6 +35,7 @@ import {
   resolveOrderTakerContract,
   type PosTerminalType,
 } from '../utils/orderTakerPolicy';
+import { requestJson, type RequestJsonResult } from '../services/network/httpClient';
 
 interface TerminalCard {
   id: string;
@@ -665,6 +666,30 @@ const getSetupApiBase = (masterIp?: string): string => {
   return `${buildMasterUrlFromHost(normalized)}/api/setup`;
 };
 
+const requestMasterSetup = <T,>(
+  url: string,
+  options: {
+    method?: 'GET' | 'POST';
+    body?: Record<string, unknown>;
+    headers?: Record<string, string>;
+    stage: 'LIST_TERMINALS' | 'BIND_TERMINAL' | 'INITIAL_CONFIG';
+  }
+): Promise<RequestJsonResult<T>> => requestJson<T>({
+  url,
+  method: options.method || 'GET',
+  headers: {
+    Accept: 'application/json',
+    ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+    ...(options.headers || {}),
+  },
+  body: options.body ? JSON.stringify(options.body) : undefined,
+  timeoutMs: 12000,
+  diagnosticContext: {
+    scope: 'MASTER_TERMINAL_SETUP',
+    stage: options.stage,
+  },
+});
+
 const resolveReachableMasterBinding = async (masterIp?: string) => {
   const normalizedHost = normalizeMasterHost(masterIp || '');
   if (!normalizedHost) return null;
@@ -1021,12 +1046,18 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         });
         persistListMeta(data);
       } else {
-        const response = await fetch(`${apiBase}/terminals?${params.toString()}`);
+        const response = await requestMasterSetup<TerminalSelectorResponse>(
+          `${apiBase}/terminals?${params.toString()}`,
+          { stage: 'LIST_TERMINALS' }
+        );
         if (!response.ok) {
           throw new Error(`No se pudieron cargar las terminales (${response.status}).`);
         }
 
-        const data = (await response.json()) as TerminalSelectorResponse;
+        const data = response.data;
+        if (!data) {
+          throw new Error('La Maestra devolvió una respuesta vacía al listar terminales.');
+        }
         persistListMeta(data);
       }
     } catch (err) {
@@ -1181,10 +1212,10 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           });
         }
       } else {
-        const response = await fetch(`${apiBase}/bind-terminal`, {
+        const response = await requestMasterSetup<BindTerminalResponse>(`${apiBase}/bind-terminal`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(bindTerminalRequestBody),
+          body: bindTerminalRequestBody,
+          stage: 'BIND_TERMINAL',
         });
 
         if (response.status === 409) {
@@ -1203,11 +1234,11 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         }
 
         if (!response.ok) {
-          const detail = await response.text().catch(() => '');
+          const detail = response.text;
           throw new Error(detail || `No se pudo vincular la terminal (${response.status}).`);
         }
 
-        data = (await response.json()) as BindTerminalResponse;
+        data = response.data;
       }
 
         if (!data) {
@@ -1337,21 +1368,25 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             },
           };
         } else {
-          const initialConfigResponse = await fetch(
+          const initialConfigResponse = await requestMasterSetup<InitialConfigResponse>(
             `${apiBase}/initial-config/${encodeURIComponent(data.erp_terminal_id || terminal.erpTerminalId || data.terminal_id || terminal.id)}?${initialConfigParams.toString()}`,
             {
               headers: {
                 'X-Device-Id': deviceId,
               },
+              stage: 'INITIAL_CONFIG',
             }
           );
 
           if (!initialConfigResponse.ok) {
-            const detail = await initialConfigResponse.text().catch(() => '');
+            const detail = initialConfigResponse.text;
             throw new Error(detail || `No se pudo cargar la configuración inicial (${initialConfigResponse.status}).`);
           }
 
-          initialConfigData = (await initialConfigResponse.json()) as InitialConfigResponse;
+          if (!initialConfigResponse.data) {
+            throw new Error('La Maestra devolvió una configuración inicial vacía.');
+          }
+          initialConfigData = initialConfigResponse.data;
         }
 
         if (data.tenant_id) {

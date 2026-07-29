@@ -6,6 +6,10 @@ const serverSource = readFileSync(
   new URL('../native-stubs/android/ClicPOSMasterHttpServer.kt', import.meta.url),
   'utf8',
 );
+const terminalSelectorSource = readFileSync(
+  new URL('../components/TerminalSelector.tsx', import.meta.url),
+  'utf8',
+);
 
 test('el servidor Master Android expone el contrato completo de activacion cliente', () => {
   assert.match(serverSource, /path == "\/api\/setup\/terminals"/);
@@ -24,4 +28,16 @@ test('el servidor Master Android conserva el contrato ORDER_TAKER', () => {
   assert.match(serverSource, /\.put\("master_terminal_id"/);
   assert.match(serverSource, /\.put\("capabilities"/);
   assert.match(serverSource, /\.put\("restrictions"/);
+});
+
+test('la activacion cliente usa transporte nativo con timeout para todo el handshake', () => {
+  assert.match(terminalSelectorSource, /requestMasterSetup<TerminalSelectorResponse>/);
+  assert.match(terminalSelectorSource, /stage: 'BIND_TERMINAL'/);
+  assert.match(terminalSelectorSource, /stage: 'INITIAL_CONFIG'/);
+  assert.match(terminalSelectorSource, /timeoutMs: 12000/);
+});
+
+test('el servidor Master Android acepta preflight de red privada y ambos headers de device', () => {
+  assert.match(serverSource, /Access-Control-Allow-Private-Network: true/);
+  assert.match(serverSource, /X-Device-Id, X-POS-Device-Id/);
 });
