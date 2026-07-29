@@ -11,13 +11,17 @@ import java.net.Socket
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.Collections
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 object ClicPOSMasterHttpServer {
     private const val DEFAULT_PORT = 3001
     private const val PREFS_NAME = "clic_pos_master_bindings"
     private const val PREFS_BINDINGS_KEY = "terminal_device_bindings"
+    private const val PREFS_RESTAURANT_KEY = "restaurant_state"
     private val running = AtomicBoolean(false)
     private val executor = Executors.newCachedThreadPool()
     private var serverSocket: ServerSocket? = null
@@ -28,6 +32,11 @@ object ClicPOSMasterHttpServer {
     @Volatile private var roomsSnapshot = JSONArray()
     @Volatile private var tablesSnapshot = JSONArray()
     @Volatile private var parkedTicketsSnapshot = JSONArray()
+    @Volatile private var catalogSnapshots = JSONObject()
+    private val restaurantRevision = AtomicLong(0)
+    private val syncTokens = ConcurrentHashMap<String, String>()
+    private val catalogVersions = ConcurrentHashMap<String, Long>()
+    @Volatile private var restaurantStateLoaded = false
 
     fun start(
         context: Context,
@@ -36,12 +45,21 @@ object ClicPOSMasterHttpServer {
         users: JSONArray? = null,
         rooms: JSONArray? = null,
         tables: JSONArray? = null,
-        parkedTickets: JSONArray? = null
+        parkedTickets: JSONArray? = null,
+        catalogs: JSONObject? = null,
+        acknowledgedRestaurantRevision: Long = 0
     ): JSONObject {
         appContext = context.applicationContext
+        restoreRestaurantSnapshot()
         config?.let { configSnapshot = applyPersistedBindings(JSONObject(it.toString())) }
         users?.let { usersSnapshot = JSONArray(it.toString()) }
-        updateRestaurantSnapshot(rooms, tables, parkedTickets)
+        catalogs?.let { updateCatalogSnapshots(it) }
+        updateRestaurantSnapshotFromWebView(
+            rooms,
+            tables,
+            parkedTickets,
+            acknowledgedRestaurantRevision
+        )
         activePort = requestedPort.takeIf { it in 1..65535 } ?: DEFAULT_PORT
 
         if (running.get()) return status(context)
@@ -80,11 +98,19 @@ object ClicPOSMasterHttpServer {
         users: JSONArray? = null,
         rooms: JSONArray? = null,
         tables: JSONArray? = null,
-        parkedTickets: JSONArray? = null
+        parkedTickets: JSONArray? = null,
+        catalogs: JSONObject? = null,
+        acknowledgedRestaurantRevision: Long = 0
     ): JSONObject {
         configSnapshot = applyPersistedBindings(JSONObject(config.toString()))
         users?.let { usersSnapshot = JSONArray(it.toString()) }
-        updateRestaurantSnapshot(rooms, tables, parkedTickets)
+        catalogs?.let { updateCatalogSnapshots(it) }
+        updateRestaurantSnapshotFromWebView(
+            rooms,
+            tables,
+            parkedTickets,
+            acknowledgedRestaurantRevision
+        )
         return JSONObject()
             .put("status", "success")
             .put("success", true)
@@ -129,13 +155,19 @@ object ClicPOSMasterHttpServer {
                 val method = parts.getOrNull(0)?.uppercase() ?: "GET"
                 val path = (parts.getOrNull(1) ?: "/").substringBefore("?")
                 var contentLength = 0
+                val headers = mutableMapOf<String, String>()
 
                 while (true) {
                     val line = readAsciiLine(input)
                     if (line.isBlank()) break
                     val separator = line.indexOf(':')
-                    if (separator > 0 && line.substring(0, separator).trim().equals("content-length", true)) {
-                        contentLength = line.substring(separator + 1).trim().toIntOrNull() ?: 0
+                    if (separator > 0) {
+                        val headerName = line.substring(0, separator).trim().lowercase()
+                        val headerValue = line.substring(separator + 1).trim()
+                        headers[headerName] = headerValue
+                        if (headerName == "content-length") {
+                            contentLength = headerValue.toIntOrNull() ?: 0
+                        }
                     }
                 }
 
@@ -160,6 +192,16 @@ object ClicPOSMasterHttpServer {
                             .put("status", "ONLINE")
                             .put("runtime", "ANDROID_MASTER")
                             .toString())
+                    method == "POST" && path == "/api/sync/auth" ->
+                        handleSyncAuth(client, body)
+                    method == "GET" && path == "/api/sync/config" ->
+                        handleSyncConfig(client, headers)
+                    method == "GET" && path.startsWith("/api/sync/collections/") && path.endsWith("/metadata") ->
+                        handleSyncCollectionMetadata(client, path, headers)
+                    method == "GET" && path.startsWith("/api/sync/collections/") && path.endsWith("/data") ->
+                        handleSyncCollectionData(client, path, parts.getOrNull(1) ?: path, headers)
+                    method == "GET" && path.startsWith("/api/sync/delta/") ->
+                        handleSyncCollectionDelta(client, path, parts.getOrNull(1) ?: path, headers)
                     method == "GET" && path == "/api/config" ->
                         writeResponse(client, 200, configSnapshot.toString())
                     method == "GET" && path == "/api/users" ->
@@ -434,10 +476,229 @@ object ClicPOSMasterHttpServer {
         parkedTickets?.let { parkedTicketsSnapshot = JSONArray(it.toString()) }
     }
 
+    /**
+     * A WebView snapshot may only replace native state after it has observed the
+     * latest client revision. This prevents an unrelated React render from
+     * restoring stale tickets immediately after a client changes a table.
+     */
+    private fun updateRestaurantSnapshotFromWebView(
+        rooms: JSONArray? = null,
+        tables: JSONArray? = null,
+        parkedTickets: JSONArray? = null,
+        acknowledgedRevision: Long = 0
+    ) {
+        if (acknowledgedRevision < restaurantRevision.get()) return
+        val changed =
+            (rooms != null && rooms.toString() != roomsSnapshot.toString()) ||
+            (tables != null && tables.toString() != tablesSnapshot.toString()) ||
+            (parkedTickets != null && parkedTickets.toString() != parkedTicketsSnapshot.toString())
+        updateRestaurantSnapshot(rooms, tables, parkedTickets)
+        if (changed) restaurantRevision.incrementAndGet()
+        persistRestaurantSnapshot()
+    }
+
+    private fun updateCatalogSnapshots(catalogs: JSONObject) {
+        val previous = catalogSnapshots
+        val next = JSONObject(catalogs.toString())
+        val keys = next.keys()
+        while (keys.hasNext()) {
+            val collection = keys.next()
+            val nextItems = next.optJSONArray(collection) ?: JSONArray()
+            val previousItems = previous.optJSONArray(collection)
+            if (previousItems == null || previousItems.toString() != nextItems.toString()) {
+                val now = System.currentTimeMillis()
+                val priorVersion = catalogVersions[collection] ?: 0
+                catalogVersions[collection] = maxOf(now, priorVersion + 1)
+            }
+        }
+        catalogSnapshots = next
+    }
+
+    private fun applyClientRestaurantMutation(
+        rooms: JSONArray? = null,
+        tables: JSONArray? = null,
+        parkedTickets: JSONArray? = null
+    ) {
+        updateRestaurantSnapshot(rooms, tables, parkedTickets)
+        restaurantRevision.incrementAndGet()
+        persistRestaurantSnapshot()
+    }
+
+    private fun restoreRestaurantSnapshot() {
+        if (restaurantStateLoaded) return
+        restaurantStateLoaded = true
+        val context = appContext ?: return
+        val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(PREFS_RESTAURANT_KEY, null)
+        val persisted = runCatching {
+            if (raw.isNullOrBlank()) null else JSONObject(raw)
+        }.getOrNull() ?: return
+
+        roomsSnapshot = persisted.optJSONArray("rooms") ?: JSONArray()
+        tablesSnapshot = persisted.optJSONArray("tables") ?: JSONArray()
+        parkedTicketsSnapshot = persisted.optJSONArray("parkedTickets") ?: JSONArray()
+        restaurantRevision.set(persisted.optLong("revision", 0))
+    }
+
+    private fun persistRestaurantSnapshot() {
+        val context = appContext ?: return
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(PREFS_RESTAURANT_KEY, buildRestaurantSnapshot().toString())
+            .apply()
+    }
+
+    private fun handleSyncAuth(socket: Socket, body: String) {
+        val payload = runCatching {
+            if (body.isBlank()) JSONObject() else JSONObject(body)
+        }.getOrElse {
+            writeResponse(socket, 400, JSONObject()
+                .put("success", false)
+                .put("message", "Solicitud de autenticación inválida")
+                .toString())
+            return
+        }
+        val terminalId = firstNonBlank(
+            payload.optString("terminalId"),
+            payload.optString("terminal_id")
+        )
+        val deviceId = firstNonBlank(
+            payload.optString("deviceToken"),
+            payload.optString("device_id")
+        )
+        if (terminalId.isBlank() || deviceId.isBlank()) {
+            writeResponse(socket, 400, JSONObject()
+                .put("success", false)
+                .put("message", "terminalId y deviceToken son requeridos")
+                .toString())
+            return
+        }
+
+        val token = "sync_${UUID.randomUUID()}"
+        syncTokens[token] = terminalId
+        writeResponse(socket, 200, JSONObject()
+            .put("success", true)
+            .put("token", token)
+            .put("terminalId", terminalId)
+            .put("expiresIn", 86400000)
+            .toString())
+    }
+
+    private fun handleSyncConfig(
+        socket: Socket,
+        headers: Map<String, String>
+    ) {
+        if (!authorizeSyncRequest(socket, headers)) return
+        writeResponse(socket, 200, JSONObject()
+            .put("success", true)
+            .put("config", JSONObject(configSnapshot.toString()))
+            .toString())
+    }
+
+    private fun handleSyncCollectionMetadata(
+        socket: Socket,
+        path: String,
+        headers: Map<String, String>
+    ) {
+        if (!authorizeSyncRequest(socket, headers)) return
+        val collection = path
+            .removePrefix("/api/sync/collections/")
+            .removeSuffix("/metadata")
+            .trim('/')
+        val items = getSyncCollection(collection)
+        val version = collectionVersion(collection, items)
+        writeResponse(socket, 200, JSONObject()
+            .put("success", true)
+            .put("metadata", JSONObject()
+                .put("collection", collection)
+                .put("version", version)
+                .put("fullSyncVersion", version)
+                .put("itemCount", items.length())
+                .put("lastUpdated", java.time.Instant.now().toString()))
+            .toString())
+    }
+
+    private fun handleSyncCollectionData(
+        socket: Socket,
+        path: String,
+        rawTarget: String,
+        headers: Map<String, String>
+    ) {
+        if (!authorizeSyncRequest(socket, headers)) return
+        val collection = path
+            .removePrefix("/api/sync/collections/")
+            .removeSuffix("/data")
+            .trim('/')
+        val items = getSyncCollection(collection)
+        val version = collectionVersion(collection, items)
+        val sinceVersion = parseQuery(rawTarget).optLong("sinceVersion", 0)
+        writeResponse(socket, 200, JSONObject()
+            .put("success", true)
+            .put("items", if (sinceVersion >= version && version > 0) JSONArray() else items)
+            .put("version", version)
+            .put("itemCount", items.length())
+            .put("upToDate", sinceVersion >= version && version > 0)
+            .put("lastUpdated", java.time.Instant.now().toString())
+            .toString())
+    }
+
+    private fun handleSyncCollectionDelta(
+        socket: Socket,
+        path: String,
+        rawTarget: String,
+        headers: Map<String, String>
+    ) {
+        if (!authorizeSyncRequest(socket, headers)) return
+        val collection = path.removePrefix("/api/sync/delta/").trim('/')
+        val items = getSyncCollection(collection)
+        val version = collectionVersion(collection, items)
+        val sinceVersion = parseQuery(rawTarget).optLong("sinceVersion", 0)
+        val changed = sinceVersion < version || version == 0L
+        writeResponse(socket, 200, JSONObject()
+            .put("success", true)
+            .put("items", if (changed) items else JSONArray())
+            .put("serverTime", java.time.Instant.now().toString())
+            .put("isFullDownload", changed)
+            .put("latestVersion", version)
+            .toString())
+    }
+
+    private fun authorizeSyncRequest(
+        socket: Socket,
+        headers: Map<String, String>
+    ): Boolean {
+        val token = headers["x-sync-token"].orEmpty()
+        if (token.isNotBlank() && syncTokens.containsKey(token)) return true
+        writeResponse(socket, 401, JSONObject()
+            .put("success", false)
+            .put("message", "Invalid or missing sync token")
+            .toString())
+        return false
+    }
+
+    private fun getSyncCollection(collection: String): JSONArray = when (collection) {
+        "users" -> JSONArray(usersSnapshot.toString())
+        "rooms" -> JSONArray(roomsSnapshot.toString())
+        "tables" -> JSONArray(tablesSnapshot.toString())
+        "parkedTickets" -> JSONArray(parkedTicketsSnapshot.toString())
+        else -> catalogSnapshots.optJSONArray(collection)?.let { JSONArray(it.toString()) } ?: JSONArray()
+    }
+
+    private fun collectionVersion(collection: String, items: JSONArray): Long {
+        if (collection == "rooms" || collection == "tables" || collection == "parkedTickets") {
+            return restaurantRevision.get().coerceAtLeast(1)
+        }
+        return catalogVersions[collection]
+            ?: (items.toString().hashCode().toLong() and 0x7fffffffL).coerceAtLeast(1)
+    }
+
     private fun buildRestaurantSnapshot(): JSONObject = JSONObject()
         .put("rooms", JSONArray(roomsSnapshot.toString()))
         .put("tables", JSONArray(tablesSnapshot.toString()))
         .put("parkedTickets", JSONArray(parkedTicketsSnapshot.toString()))
+        .put("revision", restaurantRevision.get())
+
+    fun getRestaurantState(): JSONObject = buildRestaurantSnapshot()
 
     private fun handleParkedTicketsUpdate(socket: Socket, body: String) {
         val payload = runCatching { if (body.isBlank()) JSONObject() else JSONObject(body) }
@@ -457,11 +718,78 @@ object ClicPOSMasterHttpServer {
             return
         }
 
-        updateRestaurantSnapshot(parkedTickets = tickets)
+        val reconciledTables = reconcileTablesWithParkedTickets(tablesSnapshot, tickets)
+        applyClientRestaurantMutation(tables = reconciledTables, parkedTickets = tickets)
         writeResponse(socket, 200, JSONObject()
             .put("success", true)
             .put("parkedTickets", JSONArray(parkedTicketsSnapshot.toString()))
             .toString())
+    }
+
+    private fun reconcileTablesWithParkedTickets(
+        sourceTables: JSONArray,
+        tickets: JSONArray
+    ): JSONArray {
+        val activeByOrderId = mutableMapOf<String, JSONObject>()
+        val activeByTableId = mutableMapOf<String, JSONObject>()
+        for (index in 0 until tickets.length()) {
+            val ticket = tickets.optJSONObject(index) ?: continue
+            val items = ticket.optJSONArray("items") ?: JSONArray()
+            var hasItems = false
+            for (itemIndex in 0 until items.length()) {
+                if ((items.optJSONObject(itemIndex)?.optDouble("quantity", 0.0) ?: 0.0) > 0) {
+                    hasItems = true
+                    break
+                }
+            }
+            if (!hasItems) continue
+            ticket.optString("id").takeIf { it.isNotBlank() }?.let { activeByOrderId[it] = ticket }
+            ticket.optString("tableId").takeIf { it.isNotBlank() }?.let { activeByTableId[it] = ticket }
+        }
+
+        val reconciled = JSONArray(sourceTables.toString())
+        for (index in 0 until reconciled.length()) {
+            val table = reconciled.optJSONObject(index) ?: continue
+            val tableId = table.optString("id")
+            val currentOrderId = table.optString("currentOrderId")
+            val orderTicket = activeByOrderId[currentOrderId]
+            val orderTicketTableId = orderTicket?.optString("tableId").orEmpty()
+            val ticket = if (
+                orderTicket != null &&
+                (orderTicketTableId.isBlank() || orderTicketTableId == tableId)
+            ) {
+                orderTicket
+            } else {
+                activeByTableId[tableId]
+            }
+            if (ticket == null) {
+                table
+                    .put("status", "FREE")
+                    .put("currentOrderId", JSONObject.NULL)
+                    .put("currentOrderTotal", 0)
+                    .put("timeSeated", JSONObject.NULL)
+                continue
+            }
+
+            var total = ticket.optDouble("total", Double.NaN)
+            if (total.isNaN()) {
+                total = 0.0
+                val items = ticket.optJSONArray("items") ?: JSONArray()
+                for (itemIndex in 0 until items.length()) {
+                    val item = items.optJSONObject(itemIndex) ?: continue
+                    total += item.optDouble("price", 0.0) * item.optDouble("quantity", 0.0)
+                }
+            }
+            table
+                .put("status", "OCCUPIED")
+                .put("currentOrderId", ticket.optString("id"))
+                .put("currentOrderTotal", total)
+                .put("timeSeated", firstNonBlank(
+                    table.optString("timeSeated"),
+                    ticket.optString("timestamp")
+                ))
+        }
+        return reconciled
     }
 
     private fun handleOpenTable(socket: Socket, body: String) {
@@ -511,7 +839,7 @@ object ClicPOSMasterHttpServer {
             return
         }
 
-        updateRestaurantSnapshot(tables = updatedTables)
+        applyClientRestaurantMutation(tables = updatedTables)
         writeResponse(socket, 200, JSONObject()
             .put("status", "success")
             .put("orden_id", orderId)
@@ -569,7 +897,7 @@ object ClicPOSMasterHttpServer {
             val belongsToOrder = orderId.isNotBlank() && ticket.optString("id") == orderId
             if (!belongsToTable && !belongsToOrder) remainingTickets.put(ticket)
         }
-        updateRestaurantSnapshot(tables = updatedTables, parkedTickets = remainingTickets)
+        applyClientRestaurantMutation(tables = updatedTables, parkedTickets = remainingTickets)
         writeResponse(socket, 200, JSONObject().put("success", true).toString())
     }
 
@@ -654,6 +982,7 @@ object ClicPOSMasterHttpServer {
                 200 -> "OK"
                 204 -> "No Content"
                 400 -> "Bad Request"
+                401 -> "Unauthorized"
                 409 -> "Conflict"
                 404 -> "Not Found"
                 else -> "Internal Server Error"
@@ -664,7 +993,7 @@ object ClicPOSMasterHttpServer {
                 append("Content-Type: application/json; charset=utf-8\r\n")
                 append("Access-Control-Allow-Origin: *\r\n")
                 append("Access-Control-Allow-Methods: GET, POST, PUT, OPTIONS\r\n")
-                append("Access-Control-Allow-Headers: Content-Type, X-Active-Terminal-Id, X-Device-Id, X-POS-Device-Id\r\n")
+                append("Access-Control-Allow-Headers: Content-Type, X-Active-Terminal-Id, X-Device-Id, X-POS-Device-Id, X-Sync-Token\r\n")
                 append("Access-Control-Allow-Private-Network: true\r\n")
                 append("Access-Control-Max-Age: 600\r\n")
                 append("Connection: close\r\n")
