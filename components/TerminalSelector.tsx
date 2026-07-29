@@ -36,7 +36,6 @@ import {
   type PosTerminalType,
 } from '../utils/orderTakerPolicy';
 import { requestJson, type RequestJsonResult } from '../services/network/httpClient';
-import { supabase } from '../utils/supabase';
 
 interface TerminalCard {
   id: string;
@@ -721,49 +720,6 @@ const buildMasterClaimUrl = (
   return `${apiBase}/claim-terminal?${params.toString()}`;
 };
 
-const authorizeTerminalTakeoverFromErp = async (input: {
-  erpBaseUrl: string;
-  terminal: TerminalCard;
-  deviceId: string;
-}): Promise<void> => {
-  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-  const accessToken = sessionData.session?.access_token;
-  if (sessionError || !accessToken) {
-    throw new Error(
-      'La sesión de administrador expiró. Inicia sesión nuevamente para autorizar y liberar el equipo anterior.'
-    );
-  }
-
-  const baseUrl = input.erpBaseUrl.trim().replace(/\/+$/, '');
-  const response = await requestJson<{ status?: string; message?: string }>({
-    url: `${baseUrl}/api/setup/bind-terminal`,
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      terminal_id: input.terminal.erpTerminalId || input.terminal.id,
-      new_device_id: input.deviceId,
-      device_name: input.terminal.name,
-    }),
-    timeoutMs: 12000,
-    diagnosticContext: {
-      scope: 'ERP_TERMINAL_TAKEOVER',
-      stage: 'AUTHORIZE_AND_RELEASE',
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      response.data?.message
-      || response.text
-      || `El ERP no pudo liberar el equipo anterior (${response.status}).`
-    );
-  }
-};
-
 const resolveReachableMasterBinding = async (masterIp?: string) => {
   const normalizedHost = normalizeMasterHost(masterIp || '');
   if (!normalizedHost) return null;
@@ -1287,17 +1243,9 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         }
       } else {
         if (forceTransfer) {
-          if (!erpBaseUrl) {
-            throw new Error('No encontramos la URL del ERP para autorizar el cambio de equipo.');
-          }
           updateBindingProgress({
             stepId: 'claim',
-            message: 'Autorizando este equipo y liberando el device anterior en el ERP...',
-          });
-          await authorizeTerminalTakeoverFromErp({
-            erpBaseUrl,
-            terminal,
-            deviceId,
+            message: 'Autorizando este equipo y liberando el cliente anterior en la Maestra local...',
           });
         }
 
@@ -2037,20 +1985,20 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                 </div>
                 <div className="min-w-0">
                   <p className="text-[10px] font-black uppercase tracking-[0.26em] text-amber-500 sm:text-[11px] sm:tracking-[0.3em]">
-                    Pendiente de autorización
+                    Terminal local ocupada
                   </p>
                   <h4 className="mt-2 text-lg font-black leading-tight tracking-tight text-slate-900 sm:text-xl md:text-2xl">
-                    Pendiente de autorización en Cloud-Admin
+                    Esta terminal está vinculada a otro equipo
                   </h4>
                   <p className="mt-2.5 text-sm font-medium leading-relaxed text-slate-500 sm:text-[15px]">
-                    Cloud-Admin debe autorizar este device para{' '}
-                    <span className="font-black text-slate-800">{pendingTerminal.name}</span>. El POS reintentará la conexión automáticamente.
+                    La Maestra local tiene <span className="font-black text-slate-800">{pendingTerminal.name}</span>{' '}
+                    asociada a otro dispositivo cliente.
                   </p>
                 </div>
               </div>
 
               <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50/70 px-4 py-3.5 text-sm font-medium leading-relaxed text-amber-900 sm:mt-5 sm:px-5">
-                El POS mantendrá la terminal ERP original. No se generará otra caja ni se usará código manual de vinculación.
+                No se creará otra terminal ni se cambiará el ERP. Puedes reintentar o reasignar esta terminal local al equipo actual.
               </div>
 
               <div className="mt-4 grid gap-2 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-600">
@@ -2084,16 +2032,16 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
               <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3.5">
                 <p className="text-[10px] font-black uppercase tracking-[0.28em] text-blue-500">
-                  Esperando aprobación
+                  Asociación administrada por la Maestra
                 </p>
                 <p className="mt-2 text-xs font-semibold leading-relaxed text-blue-700">
                   {isRetryingAuthorization
-                    ? 'Reintentando autenticación contra Cloud-Admin/ERP...'
-                    : 'Autoriza este device en Cloud-Admin y el POS continuará al detectar la autorización.'}
+                    ? 'Consultando nuevamente la asociación en la Maestra local...'
+                    : 'La reasignación solo cambia qué equipo cliente utiliza esta terminal dentro de la red local.'}
                 </p>
               </div>
               <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3.5 text-xs font-semibold leading-relaxed text-amber-900">
-                Autorizar este equipo revocará el acceso del device anterior. Esta acción requiere una sesión de administrador activa.
+                Autorizar este equipo liberará el cliente anterior. La acción ya está protegida por el PIN administrador de la Maestra.
               </div>
             </div>
 

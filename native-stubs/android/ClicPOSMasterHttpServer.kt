@@ -16,10 +16,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object ClicPOSMasterHttpServer {
     private const val DEFAULT_PORT = 3001
+    private const val PREFS_NAME = "clic_pos_master_bindings"
+    private const val PREFS_BINDINGS_KEY = "terminal_device_bindings"
     private val running = AtomicBoolean(false)
     private val executor = Executors.newCachedThreadPool()
     private var serverSocket: ServerSocket? = null
     private var activePort = DEFAULT_PORT
+    @Volatile private var appContext: Context? = null
     @Volatile private var configSnapshot = JSONObject()
     @Volatile private var usersSnapshot = JSONArray()
 
@@ -29,7 +32,8 @@ object ClicPOSMasterHttpServer {
         config: JSONObject? = null,
         users: JSONArray? = null
     ): JSONObject {
-        config?.let { configSnapshot = JSONObject(it.toString()) }
+        appContext = context.applicationContext
+        config?.let { configSnapshot = applyPersistedBindings(JSONObject(it.toString())) }
         users?.let { usersSnapshot = JSONArray(it.toString()) }
         activePort = requestedPort.takeIf { it in 1..65535 } ?: DEFAULT_PORT
 
@@ -65,7 +69,7 @@ object ClicPOSMasterHttpServer {
     }
 
     fun updateConfig(config: JSONObject, users: JSONArray? = null): JSONObject {
-        configSnapshot = JSONObject(config.toString())
+        configSnapshot = applyPersistedBindings(JSONObject(config.toString()))
         users?.let { usersSnapshot = JSONArray(it.toString()) }
         return JSONObject()
             .put("status", "success")
@@ -324,6 +328,7 @@ object ClicPOSMasterHttpServer {
             val syncConfig = config.optJSONObject("syncConfig") ?: JSONObject()
             syncConfig.put("mode", "SLAVE").put("isEnabled", true)
             config.put("syncConfig", syncConfig)
+            persistTerminalBinding(id, deviceId)
             selectedTerminal = terminal
             break
         }
@@ -390,6 +395,42 @@ object ClicPOSMasterHttpServer {
         }
 
         writeResponse(socket, 200, response.toString())
+    }
+
+    private fun applyPersistedBindings(snapshot: JSONObject): JSONObject {
+        val bindings = readPersistedBindings()
+        val terminals = snapshot.optJSONArray("terminals") ?: return snapshot
+        for (index in 0 until terminals.length()) {
+            val terminal = terminals.optJSONObject(index) ?: continue
+            val terminalId = terminal.optString("id").trim()
+            val persistedDeviceId = bindings.optString(terminalId).trim()
+            if (terminalId.isBlank() || persistedDeviceId.isBlank()) continue
+            val config = terminal.optJSONObject("config") ?: JSONObject().also {
+                terminal.put("config", it)
+            }
+            config
+                .put("currentDeviceId", persistedDeviceId)
+                .put("governedByMaster", true)
+        }
+        return snapshot
+    }
+
+    private fun readPersistedBindings(): JSONObject {
+        val context = appContext ?: return JSONObject()
+        val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(PREFS_BINDINGS_KEY, null)
+        return runCatching { if (raw.isNullOrBlank()) JSONObject() else JSONObject(raw) }
+            .getOrDefault(JSONObject())
+    }
+
+    private fun persistTerminalBinding(terminalId: String, deviceId: String) {
+        val context = appContext ?: return
+        val bindings = readPersistedBindings()
+        bindings.put(terminalId, deviceId)
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(PREFS_BINDINGS_KEY, bindings.toString())
+            .apply()
     }
 
     private fun buildInitialConfigResponse(terminalId: String, rawTarget: String): JSONObject {

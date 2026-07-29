@@ -48,11 +48,12 @@ test('la activacion cliente cierra el progreso cuando la terminal esta ocupada',
   assert.match(terminalSelectorSource, /message: 'La terminal está ocupada por otro equipo\.'/);
 });
 
-test('la reasignacion libera el device anterior mediante el ERP antes de actualizar la Maestra', () => {
-  assert.match(terminalSelectorSource, /authorizeTerminalTakeoverFromErp/);
-  assert.match(terminalSelectorSource, /\/api\/setup\/bind-terminal/);
-  assert.match(terminalSelectorSource, /Authorization: `Bearer \$\{accessToken\}`/);
+test('la reasignacion de una cliente se resuelve exclusivamente en la Maestra local', () => {
+  assert.doesNotMatch(terminalSelectorSource, /authorizeTerminalTakeoverFromErp/);
+  assert.doesNotMatch(terminalSelectorSource, /ERP_TERMINAL_TAKEOVER/);
   assert.match(terminalSelectorSource, /force_transfer: forceTransfer/);
+  assert.match(serverSource, /persistTerminalBinding\(id, deviceId\)/);
+  assert.match(serverSource, /applyPersistedBindings/);
   assert.match(terminalSelectorSource, /Autorizar este equipo y liberar el anterior/);
 });
 
