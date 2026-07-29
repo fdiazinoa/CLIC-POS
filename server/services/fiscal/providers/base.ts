@@ -1,4 +1,4 @@
-export type FiscalProviderId = 'POLARIS';
+export type FiscalProviderId = 'POLARIS' | 'DIGIFACT';
 export type ElectronicDocumentCode = 'E31' | 'E32' | 'E34' | 'E44' | 'E45';
 export type FiscalCredentialSource = 'env' | 'sqlite' | 'supabase';
 
@@ -67,6 +67,14 @@ export interface FiscalIssueOptions {
     modificationCode?: number;
     unitCodeGoods?: number;
     unitCodeServices?: number;
+    apiBaseUrl?: string;
+    testUrl?: string;
+    issueUrl?: string;
+    statusUrl?: string;
+    establishmentCode?: string;
+    branchCode?: string;
+    branchName?: string;
+    cashierCode?: string;
 }
 
 export interface FiscalDocumentIssueRequest {
@@ -92,6 +100,7 @@ export interface FiscalProviderTestRequest {
     companyInfo?: FiscalCompanyInfo;
     credentialKey?: string;
     authToken?: string;
+    options?: Pick<FiscalIssueOptions, 'apiBaseUrl' | 'testUrl' | 'issueUrl' | 'statusUrl'>;
 }
 
 export interface FiscalDocumentIssueResult {
@@ -122,6 +131,7 @@ export interface FiscalStatusRequest {
     companyRnc?: string;
     credentialKey?: string;
     authToken?: string;
+    options?: Pick<FiscalIssueOptions, 'apiBaseUrl' | 'testUrl' | 'issueUrl' | 'statusUrl'>;
 }
 
 export interface FiscalProvider {

@@ -155,6 +155,47 @@ server.use('/api/sync/terminals', terminalConfigRoutes);
 server.use('/api/fiscal', fiscalRoutes);
 
 // --- Mesas & Salas Endpoints ---
+const getOpenParkedTickets = (): any[] => {
+    try {
+        const parkedTicketsBlob = db.prepare("SELECT value FROM settings WHERE key = 'parkedTickets'").get() as any;
+        const parsed = parkedTicketsBlob ? JSON.parse(parkedTicketsBlob.value || '[]') : [];
+        return Array.isArray(parsed)
+            ? parsed.filter((ticket: any) =>
+                Array.isArray(ticket?.items) &&
+                ticket.items.some((item: any) => Number(item?.quantity || 0) > 0)
+            )
+            : [];
+    } catch (error) {
+        console.warn('No se pudieron leer tickets parqueados para mesas:', error);
+        return [];
+    }
+};
+
+const getParkedTicketTotal = (ticket: any): number => {
+    if (!ticket) return 0;
+    if (typeof ticket.total === 'number') return Number(ticket.total || 0);
+    return (Array.isArray(ticket.items) ? ticket.items : []).reduce(
+        (sum: number, item: any) => sum + (Number(item?.price || 0) * Number(item?.quantity || 0)),
+        0
+    );
+};
+
+const indexParkedTicketsForTables = (tickets: any[]) => {
+    const byOrderId = new Map<string, any>();
+    const byTableId = new Map<string, any>();
+
+    tickets.forEach(ticket => {
+        if (ticket?.id !== undefined && ticket?.id !== null) {
+            byOrderId.set(String(ticket.id), ticket);
+        }
+        if (ticket?.tableId !== undefined && ticket?.tableId !== null) {
+            byTableId.set(String(ticket.tableId), ticket);
+        }
+    });
+
+    return { byOrderId, byTableId };
+};
+
 server.get('/api/mesas', (req, res) => {
     const { terminal_id } = req.query;
     try {
@@ -177,6 +218,8 @@ server.get('/api/mesas', (req, res) => {
         }
 
         const tables = db.prepare("SELECT * FROM tables").all();
+        const parkedTickets = getOpenParkedTickets();
+        const parkedTicketsIndex = indexParkedTicketsForTables(parkedTickets);
 
         // Format for frontend (parse JSON 'data' field)
         const formattedRooms = rooms.map((r: any) => ({
@@ -186,14 +229,40 @@ server.get('/api/mesas', (req, res) => {
             data: r.data ? JSON.parse(r.data) : {}
         }));
 
-        const formattedTables = tables.map((t: any) => ({
-            ...t,
-            data: t.data ? JSON.parse(t.data) : {}
-        }));
+        const formattedTables = tables.map((t: any) => {
+            const linkedTicket = (t.currentOrderId ? parkedTicketsIndex.byOrderId.get(String(t.currentOrderId)) : undefined)
+                || parkedTicketsIndex.byTableId.get(String(t.id));
+            const linkedTotal = getParkedTicketTotal(linkedTicket);
 
-        res.json({ rooms: formattedRooms, tables: formattedTables });
+            return {
+                ...t,
+                status: linkedTicket ? 'OCCUPIED' : t.status,
+                currentOrderId: linkedTicket ? linkedTicket.id : (t.currentOrderId || null),
+                currentOrderTotal: linkedTicket ? linkedTotal : t.currentOrderTotal,
+                data: t.data ? JSON.parse(t.data) : {}
+            };
+        });
+
+        res.json({ rooms: formattedRooms, tables: formattedTables, parkedTickets });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
+    }
+});
+
+server.put('/api/mesas/parked-tickets', (req, res) => {
+    const parkedTickets = Array.isArray(req.body?.parkedTickets) ? req.body.parkedTickets : null;
+    if (!parkedTickets) {
+        return res.status(400).json({ success: false, message: 'parkedTickets must be an array' });
+    }
+
+    try {
+        saveSetting('parkedTickets', parkedTickets);
+        res.json({
+            success: true,
+            parkedTickets: getOpenParkedTickets()
+        });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 
@@ -266,7 +335,7 @@ server.post('/api/mesas/abrir', (req, res) => {
             db.prepare(`
                 UPDATE tables
                 SET currentOrderId = ?,
-                    status = 'OCCUPIED',
+                    status = 'FREE',
                     currentOrderTotal = 0,
                     timeSeated = ?,
                     waiterName = ?,
@@ -293,8 +362,7 @@ server.get('/api/tables', (req, res) => {
         // Note: In a real SQL environment, 'orders' would be a table. Here 'parkedTickets' is a JSON blob in settings.
 
         const allTables = db.prepare(`SELECT * FROM tables`).all() as any[];
-        const parkedTicketsBlob = db.prepare(`SELECT value FROM settings WHERE key = 'parkedTickets'`).get() as any;
-        const parkedTickets = parkedTicketsBlob ? JSON.parse(parkedTicketsBlob.value) : [];
+        const parkedTicketsIndex = indexParkedTicketsForTables(getOpenParkedTickets());
 
         // We manually join because SQLite JSON support varies by version/compilation and simple array join is efficient enough for cache
 
@@ -305,24 +373,22 @@ server.get('/api/tables', (req, res) => {
 
             // Dynamic Status Lookup
             // User Request: LEFT JOIN with orders where status='OPEN'
-            const associatedOrder = parkedTickets.find((p: any) => p.id === t.currentOrderId);
+            const associatedOrder = (t.currentOrderId ? parkedTicketsIndex.byOrderId.get(String(t.currentOrderId)) : undefined)
+                || parkedTicketsIndex.byTableId.get(String(t.id));
 
-            const dynamicStatus = associatedOrder ? 'OCCUPIED' : 'FREE';
+            const dynamicStatus = associatedOrder ? 'OCCUPIED' : (t.status || 'FREE');
 
             // Calculate total from order items if available, or fallback to stored total
-            const total = associatedOrder
-                ? (typeof associatedOrder.total === 'number'
-                    ? associatedOrder.total
-                    : associatedOrder.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0))
-                : 0;
+            const total = associatedOrder ? getParkedTicketTotal(associatedOrder) : Number(t.currentOrderTotal || 0);
 
             return {
                 ...t,
                 data,
                 // Derived fields overriding static ones
                 status: dynamicStatus,
+                currentOrderId: associatedOrder ? associatedOrder.id : (t.currentOrderId || null),
                 currentOrderTotal: total, // Real-time calculation from ticket
-                orden_activa_id: t.currentOrderId, // Alias requested
+                orden_activa_id: associatedOrder ? associatedOrder.id : (t.currentOrderId || null), // Alias requested
                 total_actual: total, // Alias requested
                 mesero_nombre: t.waiterName // Alias requested
             };
@@ -351,16 +417,34 @@ server.post('/api/mesas/unir', (req, res) => {
 server.post('/api/mesas/liberar', (req, res) => {
     const { tableId } = req.body;
     try {
-        db.prepare(`
-            UPDATE tables 
-            SET status = 'FREE', 
-                currentOrderId = NULL, 
-                currentOrderTotal = 0, 
-                timeSeated = NULL, 
-                waiterName = NULL,
-                waiterId = NULL
-            WHERE id = ?
-        `).run(tableId);
+        const table = db.prepare('SELECT * FROM tables WHERE id = ?').get(tableId) as any;
+        const currentOrderId = String(table?.currentOrderId || '').trim();
+        const tableShape = String(table?.shape || '').trim().toUpperCase();
+        const rawParkedTickets = getSetting('parkedTickets');
+        const parkedTickets = Array.isArray(rawParkedTickets) ? rawParkedTickets : [];
+        const nextParkedTickets = parkedTickets.filter((ticket: any) => {
+            const ticketId = String(ticket?.id || '').trim();
+            const ticketTableId = String(ticket?.tableId ?? '').trim();
+            const ticketBarTabId = String(ticket?.barTabId || '').trim();
+            const isClosedOrder = currentOrderId && (ticketId === currentOrderId || ticketBarTabId === currentOrderId);
+            const isSameTable = tableShape !== 'BAR' && String(tableId || '').trim() && ticketTableId === String(tableId).trim();
+            return !isClosedOrder && !isSameTable;
+        });
+
+        const releaseTable = db.transaction(() => {
+            saveSetting('parkedTickets', nextParkedTickets);
+            db.prepare(`
+                UPDATE tables
+                SET status = 'FREE',
+                    currentOrderId = NULL,
+                    currentOrderTotal = 0,
+                    timeSeated = NULL,
+                    waiterName = NULL,
+                    waiterId = NULL
+                WHERE id = ?
+            `).run(tableId);
+        });
+        releaseTable();
         res.json({ success: true });
     } catch (error: any) {
         res.status(500).json({ error: error.message });

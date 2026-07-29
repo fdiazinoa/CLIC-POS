@@ -609,6 +609,38 @@ const fetchTerminalProfileSafe = async (
   }
 };
 
+const resolveOperationalTerminalId = (terminal: any): string => {
+  const config = asObject(terminal?.config);
+  return (
+    asString(terminal?.station_number) ||
+    asString(terminal?.code) ||
+    asString(terminal?.terminal_code) ||
+    asString(terminal?.pos_code) ||
+    asString(config.station_number) ||
+    asString(terminal?.name) ||
+    asString(terminal?.id)
+  );
+};
+
+const resolveTargetErpTerminal = (
+  erpTerminals: any[],
+  terminalId: string,
+  erpTerminalId?: string | null
+) => {
+  const normalizedTerminalId = asString(terminalId);
+  const normalizedErpTerminalId = asString(erpTerminalId);
+
+  return erpTerminals.find((terminal: any) => {
+    const id = asString(terminal.id);
+    const operationalId = resolveOperationalTerminalId(terminal) || id;
+    return (
+      (normalizedErpTerminalId && id === normalizedErpTerminalId)
+      || id === normalizedTerminalId
+      || operationalId === normalizedTerminalId
+    );
+  });
+};
+
 const resolveOccupiedDeviceId = (terminal: any, terminalProfilePayload: any): string | undefined => {
   const profile = asObject(terminalProfilePayload?.profile);
   const metadata = asObject(profile.metadata);
@@ -745,7 +777,8 @@ router.get('/terminals', async (req, res) => {
       const erpTerminals = Array.isArray(resolvedContext.terminals) ? resolvedContext.terminals : [];
 
       const terminals = erpTerminals.map((terminal: any) => {
-        const terminalId = asString(terminal.id);
+        const erpTerminalId = asString(terminal.id);
+        const terminalId = resolveOperationalTerminalId(terminal) || erpTerminalId;
         const location =
           asString(terminal.store_name) ||
           asString(terminal.company_name) ||
@@ -754,6 +787,7 @@ router.get('/terminals', async (req, res) => {
 
         return {
           id: terminalId,
+          erpTerminalId,
           name: asString(terminal.name) || `Caja ${terminalId}`,
           location,
           occupied: Boolean(currentDeviceId && currentDeviceId !== posDeviceId),
@@ -778,6 +812,7 @@ router.get('/terminals', async (req, res) => {
 
       return res.json({
         tenant_id: resolvedErpTenantId,
+        tenant_name: resolvedContext.tenantName,
         erp_base_url: erpBaseUrl,
         source: 'ERP',
         terminals,
@@ -815,6 +850,7 @@ router.post('/bind-terminal', async (req, res) => {
   const tenantEmail = resolveTenantEmail(req);
   const erpBaseUrl = resolveErpBaseUrl(req);
   const terminalId = asString(body.terminal_id);
+  const erpTerminalIdFromBody = asString(body.erp_terminal_id);
   const posDeviceId = asString(body.pos_device_id);
   const bindingMode = asString(body.binding_mode).toUpperCase() === 'SLAVE' ? 'SLAVE' : 'MASTER';
   const forceTransfer = Boolean(body.force_transfer);
@@ -866,7 +902,7 @@ router.post('/bind-terminal', async (req, res) => {
     }
 
     const erpTerminals = Array.isArray(resolvedContext.terminals) ? resolvedContext.terminals : [];
-    const targetTerminal = erpTerminals.find((terminal: any) => asString(terminal.id) === terminalId);
+    const targetTerminal = resolveTargetErpTerminal(erpTerminals, terminalId, erpTerminalIdFromBody);
 
     if (!targetTerminal) {
       return res.status(404).json({
@@ -875,7 +911,16 @@ router.post('/bind-terminal', async (req, res) => {
       });
     }
 
-    const currentProfilePayload = await fetchTerminalProfileSafe(req, erpBaseUrl, resolvedErpTenantId, terminalId);
+    const targetErpTerminalId = asString(targetTerminal.id);
+    const targetOperationalTerminalId = resolveOperationalTerminalId(targetTerminal) || targetErpTerminalId;
+    const targetTerminalName = asString(targetTerminal.name) || targetOperationalTerminalId;
+
+    const currentProfilePayload = await fetchTerminalProfileSafe(
+      req,
+      erpBaseUrl,
+      resolvedErpTenantId,
+      targetErpTerminalId
+    );
     const currentProfile = asObject(currentProfilePayload?.profile);
     const currentMetadata = asObject(currentProfile.metadata);
     const occupiedDeviceId = asString(targetTerminal.device_id) || resolveOccupiedDeviceId(targetTerminal, currentProfilePayload);
@@ -887,6 +932,25 @@ router.post('/bind-terminal', async (req, res) => {
         message: 'La terminal ya está ocupada por otro equipo.',
         current_device_id: occupiedDeviceId,
       });
+    }
+
+    let takeoverPayload: any = null;
+    if (occupiedDeviceId && occupiedDeviceId !== posDeviceId && forceTransfer) {
+      takeoverPayload = await fetchErpJson(
+        req,
+        erpBaseUrl,
+        `/api/settings/terminals/${encodeURIComponent(targetErpTerminalId)}/takeover`,
+        {
+          method: 'POST',
+          tenantId: resolvedErpTenantId,
+          body: {
+            terminal_id: targetErpTerminalId,
+            device_id: posDeviceId,
+            device_name: targetTerminalName,
+            source: 'CLIC_POS_SELF_SERVICE_RECOVERY',
+          },
+        }
+      );
     }
 
     const mergedMetadata = {
@@ -906,7 +970,7 @@ router.post('/bind-terminal', async (req, res) => {
         tenant_id: resolvedErpTenantId,
         company_id: asString(targetTerminal.company_id) || resolvedCompanyId,
         store_id: asString(targetTerminal.store_id) || resolvedStoreId,
-        terminal_id: terminalId,
+        terminal_id: targetErpTerminalId,
         device_id: posDeviceId,
         profile_status: currentProfile.profile_status || 'ACTIVE',
         document_types: Array.isArray(currentProfile.document_types) ? currentProfile.document_types : [],
@@ -930,7 +994,7 @@ router.post('/bind-terminal', async (req, res) => {
     const profiles = await Promise.all(
       erpTerminals.map(async (terminal: any) => {
         const id = asString(terminal.id);
-        if (id === terminalId) {
+        if (id === targetErpTerminalId) {
           return [id, selectedProfilePayload] as const;
         }
         const profile = await fetchTerminalProfileSafe(req, erpBaseUrl, resolvedErpTenantId, id);
@@ -946,13 +1010,13 @@ router.post('/bind-terminal', async (req, res) => {
         terminals: erpTerminals,
       },
       profilesByTerminalId,
-      selectedTerminalId: terminalId,
+      selectedTerminalId: targetErpTerminalId,
       posDeviceId,
       bindingMode,
     });
 
     saveSetting('config', boundConfig);
-    persistOperationalDocumentState(boundConfig, terminalId);
+    persistOperationalDocumentState(boundConfig, targetOperationalTerminalId);
     saveSetting('active_tenant_id', resolvedErpTenantId);
     saveSetting('erp_setup_context', {
       tenantId: resolvedErpTenantId,
@@ -970,13 +1034,15 @@ router.post('/bind-terminal', async (req, res) => {
       source: 'ERP',
       transferred: Boolean(occupiedDeviceId && occupiedDeviceId !== posDeviceId),
       tenant_id: resolvedErpTenantId,
-      terminal_id: terminalId,
-      erp_terminal_id: asString(targetTerminal.id) || terminalId,
-      terminal_name: asString(targetTerminal.name) || terminalId,
+      terminal_id: targetOperationalTerminalId,
+      erp_terminal_id: targetErpTerminalId,
+      terminal_name: targetTerminalName,
       company_id: asString(targetTerminal.company_id) || resolvedCompanyId || null,
       store_id: asString(targetTerminal.store_id) || resolvedStoreId || null,
       current_device_id: posDeviceId,
-      previous_device_id: occupiedDeviceId && occupiedDeviceId !== posDeviceId ? occupiedDeviceId : null,
+      previous_device_id:
+        asString(takeoverPayload?.previous_device_id)
+        || (occupiedDeviceId && occupiedDeviceId !== posDeviceId ? occupiedDeviceId : null),
       config: boundConfig,
       users: Array.isArray(users) ? users : [],
     });

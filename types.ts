@@ -97,7 +97,17 @@ export interface BookingSalesDocument {
 
 // --- SYNC CONFIGURATION TYPES ---
 export type SyncMode = 'MASTER' | 'SLAVE';
-export type SyncStatus = 'PENDING' | 'SYNCING' | 'COMPLETED' | 'ERROR';
+export type SyncStatus =
+  | 'PENDING'
+  | 'SYNCING'
+  | 'COMPLETED'
+  | 'ERROR'
+  | 'SYNCED_CLOUD'
+  | 'SYNCED_ACTIVE'
+  | 'SYNCED_MASTER'
+  | 'RETRY_WAIT'
+  | 'BLOCKED_FUNCTIONAL'
+  | 'FAILED_FINAL';
 export type CloudSyncStatus = 'PENDING' | 'SYNCED' | 'ERROR';
 
 export interface SyncConfig {
@@ -112,6 +122,7 @@ export interface SyncConfig {
 // --- DEVICE ROLE TYPES ---
 export enum DeviceRole {
   STANDARD_POS = 'STANDARD_POS',
+  ORDER_TAKER = 'ORDER_TAKER',
   SELF_CHECKOUT = 'SELF_CHECKOUT',
   PRICE_CHECKER = 'PRICE_CHECKER',
   HANDHELD_INVENTORY = 'HANDHELD_INVENTORY',
@@ -193,16 +204,26 @@ export interface FingerprintDiscoveredDevice {
 export type NCFType = 'B01' | 'B02' | 'B04' | 'B14' | 'B15';
 export type ElectronicNCFType = 'E31' | 'E32' | 'E34' | 'E44' | 'E45';
 export type FiscalDocumentCode = NCFType | ElectronicNCFType;
-export type FiscalMode = 'LEGACY_B' | 'ECF';
-export type FiscalProviderId = 'NONE' | 'POLARIS';
+export type FiscalMode = 'NONE' | 'LEGACY_B' | 'ECF';
+export type FiscalProviderId = 'NONE' | 'POLARIS' | 'DIGIFACT';
 export type FiscalProviderEnvironment = 0 | 1 | 2 | 3;
+export type FiscalProviderDeliveryMode = 'LOCAL_DIRECT' | 'DELEGATED_ERP';
 
 export interface FiscalProviderConfig {
   id: FiscalProviderId;
   enabled: boolean;
   environment?: FiscalProviderEnvironment;
   displayName?: string;
+  deliveryMode?: FiscalProviderDeliveryMode;
+  apiBaseUrl?: string;
+  testUrl?: string;
+  issueUrl?: string;
+  statusUrl?: string;
   credentialKey?: string;
+  establishmentCode?: string;
+  branchCode?: string;
+  branchName?: string;
+  cashierCode?: string;
   tipoIngreso?: number;
   modificationCode?: number;
   unitCodeGoods?: number;
@@ -437,6 +458,7 @@ export interface ReceiptConfig {
   showForeignCurrencyTotals?: boolean;
   showSerialNumbers?: boolean; // NEW: Toggle printing serial numbers
   showLotNumbers?: boolean; // NEW: Toggle printing lot numbers
+  showOrderNumber?: boolean;
 }
 
 // Document Types for all transaction categories
@@ -471,12 +493,15 @@ export type DocumentType =
 
 export interface DocumentSeries {
   id: string;
+  code?: string;
   documentType: DocumentType;  // Functional type
   name: string;
   description: string;
   prefix: string;
   nextNumber: number;
   padding: number;
+  enabled?: boolean;
+  source?: string;
   icon: string;
   color: string;
   businessUnit?: string;  // Optional: "Tienda Norte", "Caja Express"
@@ -574,12 +599,53 @@ export interface TerminalConfig {
   erpTerminalId?: string;
   terminalName?: string;
   stationNumber?: string | null;
+  currencyCode?: string;
+  primaryCurrencyCode?: string;
+  currency?: string;
+  allowedCurrencyCodes?: string[];
+  allowed_currency_codes?: string[];
+  currencyCodes?: string[];
+  currency_codes?: string[];
+  currencies?: {
+    default?: string;
+    base?: string;
+    list: Array<CurrencyConfig & {
+      exchange_rate: number;
+      is_base: boolean;
+      enabled: boolean;
+    }>;
+  };
   isPrimaryNode?: boolean; // Rol jerárquico de la terminal
   governedByMaster?: boolean; // NEW: If true, this terminal follows the configuration defined by the Master
   startWithAgenda?: boolean; // NEW: Boot directly into Agenda view
   deviceRole?: DeviceRoleConfig; // NEW: Configuración de rol de dispositivo
+  terminalType?: 'STANDARD_POS' | 'ORDER_TAKER' | string;
+  terminal_type?: 'STANDARD_POS' | 'ORDER_TAKER' | string;
+  masterTerminalId?: string;
+  master_terminal_id?: string;
+  capabilities?: string[];
+  restrictions?: string[];
+  productionCenterId?: string;
+  production_center_id?: string;
 
   fiscal: {
+    enabled?: boolean;
+    providerId?: FiscalProviderId;
+    environment?: FiscalProviderEnvironment;
+    deliveryMode?: FiscalProviderDeliveryMode;
+    apiBaseUrl?: string;
+    testUrl?: string;
+    issueUrl?: string;
+    statusUrl?: string;
+    credentialKey?: string;
+    establishmentCode?: string;
+    branchCode?: string;
+    branchName?: string;
+    cashierCode?: string;
+    tipoIngreso?: number;
+    modificationCode?: number;
+    unitCodeGoods?: number;
+    unitCodeServices?: number;
     batchSize: number; // Deprecated but kept for compatibility
     lowBatchThreshold: number;
     // New: Configuration per NCF Type
@@ -601,6 +667,7 @@ export interface TerminalConfig {
     requirePinForDiscount: boolean;
     requireManagerForRefunds: boolean;
     autoLogoutMinutes: number;
+    reduceSyncAfterMinutes?: number;
     allowBiometrics?: boolean; // NEW: Biometric Auth Toggle
   };
   pricing: {
@@ -628,6 +695,8 @@ export interface TerminalConfig {
       forceDenominationCount: boolean;
       cashVarianceThreshold: number;
       emailZReport: boolean;
+      requireCashFundOnZ?: boolean;
+      fixedCashFundAmount?: number;
       // New fields for Force Z on Day Change
       forceZChange: boolean;
       businessStartHour: number;
@@ -666,6 +735,10 @@ export interface TerminalConfig {
     bloqueo_meseros: boolean;
     pedir_comensales: boolean;
     usa_modulos_cocina: boolean;
+    recibir_consignaciones?: boolean;
+    receiveConsignments?: boolean;
+    receive_consignments?: boolean;
+    descargar_consignaciones?: boolean;
     defaultTaxIds?: string[];
     reservationPolicy?: {
       validityDays: number;
@@ -673,9 +746,20 @@ export interface TerminalConfig {
       requireAdvance: boolean;
       minimumAdvancePercent: number;
     };
+    deliveryAlerts?: {
+      isDeliveryTerminal?: boolean;
+      showUberEatsToast?: boolean;
+      autoOpenUberEatsModal?: boolean;
+    };
     fiscalThreshold?: number;
     expandTicket?: boolean;
     showGlobalSales?: boolean;
+    orderNumbers?: {
+      enabled?: boolean;
+      nextNumber?: number;
+      prefix?: string;
+      padding?: number;
+    };
   };
   ux: {
     theme: 'LIGHT' | 'DARK';
@@ -875,8 +959,64 @@ export type RoundingRule = 'NONE' | 'ENDING_99' | 'CEILING' | 'ROUND_HALF_UP' | 
 
 export interface Modifier {
   id: string;
+  product_id?: string;
   name: string;
   price: number;
+  price_delta?: number;
+  modifier_type?: 'ADD' | 'REMOVE' | 'NOTE_PRESET' | string;
+  affects_price?: boolean;
+  sort_order?: number;
+  active?: boolean;
+}
+
+export interface ModifierGroup {
+  id: string;
+  name: string;
+  selection_type?: 'SINGLE' | 'MULTIPLE' | string;
+  required?: boolean;
+  min_select?: number;
+  max_select?: number | null;
+  free_quantity?: number;
+  sort_order?: number;
+  modifiers: Modifier[];
+}
+
+export interface ProductFractionOption {
+  id?: string;
+  option_product_id?: string;
+  product_id?: string;
+  name?: string;
+  price?: number;
+  price_override?: number | null;
+  active?: boolean;
+}
+
+export interface ProductFractionRule {
+  id?: string;
+  fraction_mode?: 'HALF' | 'QUARTER' | 'CUSTOM' | string;
+  pricing_rule?: 'HIGHEST_PRICE' | 'AVERAGE_PRICE' | 'SUM_PARTS' | 'BASE_PLUS_DIFF' | string;
+  max_parts?: number;
+  require_equal_parts?: boolean;
+  options?: ProductFractionOption[];
+}
+
+export interface ComboGroupItem {
+  id?: string;
+  product_id?: string;
+  name?: string;
+  price_delta?: number;
+  active?: boolean;
+  sort_order?: number;
+}
+
+export interface ComboGroup {
+  id: string;
+  name: string;
+  required?: boolean;
+  min_select?: number;
+  max_select?: number | null;
+  sort_order?: number;
+  items: ComboGroupItem[];
 }
 
 export interface ProductGroup {
@@ -903,6 +1043,7 @@ export interface Season {
 export interface TipConfiguration {
   enabled: boolean;
   defaultOptions: [number, number, number];
+  fixedAmountOptions?: number[];
   allowCustomTip: boolean;
   serviceCharge: {
     enabled: boolean;
@@ -985,6 +1126,17 @@ export interface ClassificationItem {
 
 export interface BusinessConfig {
   vertical: VerticalType;
+  business_config?: {
+    vertical_negocio?: VerticalType;
+    businessVertical?: VerticalType;
+    usa_mesas?: boolean;
+    useTables?: boolean;
+    pantalla_inicio?: 'VENTA_DIRECTA' | 'MAPA_MESAS';
+    rooms?: Room[];
+    tables?: Table[];
+    [key: string]: unknown;
+  };
+  businessConfig?: BusinessConfig['business_config'];
   subVertical: SubVertical;
   currencySymbol: string;
   taxRate: number;
@@ -1037,6 +1189,10 @@ export interface BusinessConfig {
     bloqueo_meseros: boolean;
     pedir_comensales: boolean;
     usa_modulos_cocina: boolean;
+    recibir_consignaciones?: boolean;
+    receiveConsignments?: boolean;
+    receive_consignments?: boolean;
+    descargar_consignaciones?: boolean;
     reservationPolicy?: {
       validityDays: number;
       printCopies: number;
@@ -1133,7 +1289,7 @@ export interface Customer {
   applyChainedTax?: boolean;
   addresses?: CustomerAddress[];
   creditDays?: number;
-  defaultNcfType?: NCFType;
+  defaultNcfType?: FiscalDocumentCode;
   wallet?: Wallet;
   cards?: LoyaltyCard[];
   loyalty?: LoyaltyCard; // Deprecated, kept for backward compatibility during migration
@@ -1187,7 +1343,7 @@ export interface ProductOperationalFlags {
   usesSerial: boolean;
 }
 
-export type ProductType = 'MATERIA_PRIMA' | 'PRODUCTO_TERMINADO' | 'RECETA' | 'KIT' | 'PRODUCT' | 'SERVICE';
+export type ProductType = 'MATERIA_PRIMA' | 'PRODUCTO_TERMINADO' | 'RECETA' | 'KIT' | 'PRODUCT' | 'SERVICE' | 'SIMPLE' | 'COMBO' | 'FRACTIONABLE';
 export type KitInventoryMode = 'FINISHED_GOOD' | 'COMPONENT_CONSUMPTION';
 
 export interface RecipeDetail {
@@ -1233,6 +1389,30 @@ export interface Product {
   minStock?: number;
   warehouseSettings?: Record<string, { min: number, max: number }>;
   availableModifiers?: Modifier[];
+  modifier_groups?: ModifierGroup[];
+  modifierGroups?: ModifierGroup[];
+  fraction_rule?: ProductFractionRule;
+  fractionRule?: ProductFractionRule;
+  combo_groups?: ComboGroup[];
+  comboGroups?: ComboGroup[];
+  note_presets?: string[];
+  notePresets?: string[];
+  product_type?: 'SIMPLE' | 'COMBO' | 'FRACTIONABLE' | 'SERVICE' | string;
+  restaurant?: {
+    product_type?: 'SIMPLE' | 'COMBO' | 'FRACTIONABLE' | 'SERVICE' | string;
+    production_area_id?: string;
+    productType?: string;
+    productionAreaId?: string;
+    modifier_groups?: ModifierGroup[];
+    modifierGroups?: ModifierGroup[];
+    fraction_rule?: ProductFractionRule;
+    fractionRule?: ProductFractionRule;
+    combo_groups?: ComboGroup[];
+    comboGroups?: ComboGroup[];
+    note_presets?: string[];
+    notePresets?: string[];
+    [key: string]: any;
+  };
   description?: string;
   departmentId?: string;
   sectionId?: string;
@@ -1244,6 +1424,8 @@ export interface Product {
   updatedAt?: string;
   hasActivePromotion?: boolean; // UI Flag for badges
   returnReason?: string; // For items with qty < 0
+  subtotalizedAt?: string;
+  subtotalizedBy?: string;
   primarySupplierId?: string; // NEW: Preferred supplier for lead time calculation
   production_area_id?: string; // NEW: For command routing
 
@@ -1301,7 +1483,7 @@ export interface InventoryTracking {
 }
 
 // --- FLOOR PLAN TYPES ---
-export type TableShape = 'SQUARE' | 'CIRCLE' | 'OBSTACLE';
+export type TableShape = 'SQUARE' | 'CIRCLE' | 'OBSTACLE' | 'BAR' | 'BOOTH' | 'CHAISE_LONGUE';
 
 export interface Room {
   id: string;
@@ -1321,11 +1503,17 @@ export interface Room {
     height?: number;
     gridConfig?: any;
     backgroundImage?: string;
+    backgroundStyle?: 'DARK' | 'WHITE';
   };
 }
 
 export interface Table {
   id: string;
+  code?: string;
+  label?: string;
+  room_id?: string;
+  sort_order?: number;
+  active?: boolean;
   roomId: string;
   nombre: string;
   name?: string;
@@ -1346,6 +1534,8 @@ export interface Table {
   waiterId?: string;
   timeSeated?: string;
   guests?: number;
+  barTabId?: string;
+  barTabName?: string;
 }
 
 /**
@@ -1370,7 +1560,22 @@ export interface Table {
 export interface CartItem extends Product {
   quantity: number;
   cartId: string;
+  createdAt?: string;
   modifiers?: string[];
+  restaurantConfig?: {
+    modifierGroups?: Record<string, string[]>;
+    comboGroups?: Record<string, string[]>;
+    fractions?: Array<{ id: string; name: string; price: number; ratio: number }>;
+    selected_modifiers?: any[];
+    selected_fraction_parts?: any[];
+    selected_combo_items?: any[];
+    product_type?: string;
+    production_area_id?: string;
+    note?: string;
+  };
+  selected_modifiers?: any[];
+  selected_fraction_parts?: any[];
+  selected_combo_items?: any[];
   note?: string;
   originalPrice?: number; // Optional: track original product price for auditing
   discountAmount?: number;
@@ -1391,6 +1596,19 @@ export interface CartItem extends Product {
   variantInfo?: string; // NEW: Human readable variant detail
   variantSku?: string; // NEW: Variant SKU for inventory/receipts
   dispatched?: boolean; // NEW: Track if item was sent to kitchen
+  orderNumber?: string;
+  tableDisplayLabel?: string;
+  tableRoomLabel?: string;
+  kdsStatus?: 'ENVIADO' | 'DEVUELTO' | 'RETURN_PENDING' | string;
+  kdsOrderId?: string;
+  kdsAreaId?: string;
+  kdsItemIds?: string[];
+  kdsReturnedAt?: string;
+  kdsOriginalPrice?: number;
+  voidedByKdsReturn?: boolean;
+  consignmentId?: string;
+  consignmentDocumentNo?: string;
+  consignmentLineId?: string;
 }
 
 export interface Transaction {
@@ -1414,6 +1632,7 @@ export interface Transaction {
 
   // Transaction Data
   date: string;
+  updatedAt?: string;
   items: CartItem[];
   total: number;
   payments: any[];
@@ -1422,6 +1641,7 @@ export interface Transaction {
   userId: string;
   userName: string;
   terminalId?: string;
+  terminalName?: string;
 
   // Status
   status: 'PENDING' | 'COMPLETED' | 'REFUNDED' | 'PARTIAL_REFUND';
@@ -1462,6 +1682,7 @@ export interface Transaction {
   fiscalSyncedAt?: string;
   fiscalReferenceId?: string;
   fiscalResponseMessage?: string;
+  fiscalCorrectionAudit?: FiscalCorrectionAuditEntry[];
   affectedNCF?: string;             // NCF de la factura afectada (para Notas de Crédito B04)
   affectedInvoiceNumber?: string;   // No. de factura afectada (displayId para búsquedas)
   affectedInvoiceDate?: string;
@@ -1500,6 +1721,11 @@ export interface Transaction {
   refundReason?: string;
   syncStatus?: SyncStatus;
   syncError?: string;
+  syncResponse?: any;
+  syncedAt?: string;
+  erpSyncStatus?: 'APPLIED' | 'SKIPPED_ALREADY_APPLIED' | 'ERROR';
+  erpSyncResponse?: any;
+  erpSyncedAt?: string;
   zReportId?: string; // ID of the Z-Report that closed this transaction
   zReportSequence?: string; // Human readable sequence number of the Z-Report (e.g. "Z-000123")
 
@@ -1510,6 +1736,9 @@ export interface Transaction {
   // Restaurant fields
   serviceChargeAmount?: number;     // Propina Legal (10%)
   voluntaryTipAmount?: number;      // Propina Voluntaria
+  orderNumber?: string;
+  tableDisplayLabel?: string;
+  tableRoomLabel?: string;
   marketplaceSourceChannel?: 'UBER_EATS';
   marketplaceSourceOrderId?: string;
   marketplaceSourceStoreId?: string;
@@ -1520,6 +1749,43 @@ export interface Transaction {
   erpConfirmationStatus?: 'PENDING' | 'SYNCED' | 'ERROR';
   erpConfirmationError?: string;
   erpConfirmedAt?: string;
+  consignmentId?: string;
+  consignmentDocumentNo?: string;
+  consignmentLineId?: string;
+  consignmentSyncStatus?: 'PENDING' | 'SYNCED' | 'ERROR';
+  consignmentSyncError?: string;
+  consignmentSyncedAt?: string;
+  consignmentSyncResponse?: any;
+}
+
+export interface FiscalDocumentCorrectionSnapshot {
+  fiscalCode?: FiscalDocumentCode | null;
+  ncf?: string;
+  customerId?: string;
+  customerName?: string;
+  customerTaxId?: string;
+  netAmount?: number;
+  taxAmount?: number;
+  total?: number;
+  fiscalSyncStatus?: CloudSyncStatus;
+  fiscalSyncError?: string;
+}
+
+export interface FiscalCorrectionAuditEntry {
+  id: string;
+  correctedAt: string;
+  correctedById?: string;
+  correctedByName?: string;
+  reason: string;
+  old: FiscalDocumentCorrectionSnapshot;
+  next: FiscalDocumentCorrectionSnapshot;
+}
+
+export interface FiscalDocumentCorrectionInput {
+  fiscalCode: FiscalDocumentCode;
+  customerId?: string;
+  reason: string;
+  recalculateTaxes: boolean;
 }
 
 export type ViewState =
@@ -1531,6 +1797,7 @@ export type ViewState =
   | 'WIZARD'
   | 'LOGIN'
   | 'POS'
+  | 'ATTENDANCE'
   | 'SETTINGS'
   | 'SETTINGS_SYNC'
   | 'CUSTOMERS'
@@ -1641,7 +1908,18 @@ export interface StockTransfer {
   syncSource?: 'LOCAL' | 'ERP_SNAPSHOT';
 }
 
-export type PromotionType = 'DISCOUNT' | 'BOGO' | 'HAPPY_HOUR' | 'CONDITIONAL_TARGET' | 'BUNDLE';
+export type PromotionType =
+  | 'DISCOUNT'
+  | 'BOGO'
+  | 'HAPPY_HOUR'
+  | 'CONDITIONAL_TARGET'
+  | 'BUNDLE'
+  | 'TIERED_QUANTITY'
+  | 'MIX_AND_MATCH'
+  | 'GIFT_WITH_PURCHASE'
+  | 'PAYMENT_METHOD_DISCOUNT'
+  | 'PREPAID_PACKAGE'
+  | 'NEXT_PURCHASE_COUPON';
 export type PromotionTargetType = 'ALL' | 'PRODUCT' | 'CATEGORY' | 'GROUP' | 'SEASON';
 export type PromotionBenefitType = 'DISCOUNT_PERCENT' | 'FIXED_PRICE' | 'CASHBACK' | 'POINTS_MULTIPLIER';
 
@@ -1655,6 +1933,8 @@ export interface Promotion {
   name: string;
   type: PromotionType;
   priority: number;
+  trigger_config?: Record<string, any>;
+  triggerConfig?: Record<string, any>;
 
   // Trigger
   trigger?: {
@@ -1809,8 +2089,37 @@ export interface ParkedTicket {
   total?: number;
   customerId?: string;
   customerName?: string;
+  customerSnapshot?: {
+    name?: string;
+    taxId?: string;
+    address?: string;
+    phone?: string;
+    email?: string;
+  };
   timestamp: string;
   tableId?: string | number;
+  orderNumber?: string;
+  tableDisplayLabel?: string;
+  tableRoomLabel?: string;
+  barTabId?: string;
+  barTabName?: string;
+  paymentFraction?: PaymentFractionPlan;
+}
+
+export interface PaymentFractionPart {
+  index: number;
+  amount: number;
+  status: 'PENDING' | 'PAID';
+  payments?: PaymentEntry[];
+  voluntaryTip?: number;
+  paidAt?: string;
+}
+
+export interface PaymentFractionPlan {
+  originalTotal: number;
+  count: number;
+  createdAt: string;
+  parts: PaymentFractionPart[];
 }
 
 export type ReservationStatus = 'ACTIVE' | 'INVOICED' | 'EXPIRED' | 'CANCELLED';
@@ -2078,6 +2387,7 @@ export type Permission =
   | 'POS_CREDIT_OVERRIDE'
   | 'POS_PAY_CREDIT'
   | 'POS_ALLOW_ZERO_PRICE'
+  | 'POS_ALLOW_SALES_WITH_OPEN_Z'
   // --- POS CORE ---
   | 'SALE'
   | 'POS_VOID_ITEM'
@@ -2089,11 +2399,15 @@ export type Permission =
   | 'POS_RETURNS'
   | 'POS_REPRINT_RECEIPT'
   | 'POS_NEW_SALE'
+  | 'POS_CHECKOUT'
   | 'POS_CHANGE_TARIFF'
+  | 'POS_VIEW_X_REPORT'
+  | 'POS_CLOSE_X'
   | 'POS_CLOSE_Z'
   | 'POS_REPEAT_Z_REPORT'
   | 'POS_VIEW_ACTIVE_CASH'
   | 'POS_MANAGE_PARKED'
+  | 'TABLE_CONTROL_CENTER'
 
   // --- CATALOG ---
   | 'CATALOG_VIEW'
@@ -2132,6 +2446,7 @@ export interface AuditLogEntry {
   id: string;
   timestamp: string;
   actionType: Permission;
+  actionDescription?: string;
   cashierId: string;
   supervisorId: string;
   terminalId: string;
@@ -2140,6 +2455,7 @@ export interface AuditLogEntry {
   originalValue?: number;
   newValue?: number;
   reason?: string;
+  details?: string;
   hash: string;
 }
 
@@ -2239,6 +2555,16 @@ export interface ZReportDenominationLine {
 
 export type ZReportDenominationBreakdown = Record<string, ZReportDenominationLine[]>;
 
+export interface ZReportCashMovementLine {
+  id: string;
+  type: 'IN' | 'OUT';
+  amount: number;
+  reason: string;
+  timestamp: string;
+  userName?: string;
+  currencyCode?: string;
+}
+
 export interface ZReport {
   id: string;
   terminalId: string;
@@ -2269,6 +2595,11 @@ export interface ZReport {
   cashSales: number;
   cashIn: number;
   cashOut: number;
+  cashMovementDetails?: ZReportCashMovementLine[];
+  requireCashFundOnZ?: boolean;
+  fixedCashFundAmount?: number;
+  cashToLeaveInDrawer?: number;
+  cashToWithdraw?: number;
 
   // Metadata
   transactionCount: number;
@@ -2281,6 +2612,11 @@ export interface ZReport {
   stats?: ZReportStats;
   syncStatus?: SyncStatus;
   syncError?: string;
+}
+
+export interface XReport extends ZReport {
+  reportType: 'X';
+  source_x_report_id?: string;
 }
 // --- ANALYTICS & ADVANCED REPORTING ---
 export type AnalyticsCategory =

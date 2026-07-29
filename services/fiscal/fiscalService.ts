@@ -1,5 +1,5 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
-import { CompanyInfo, FiscalProviderId, Transaction } from '../../types';
+import { CompanyInfo, FiscalProviderDeliveryMode, FiscalProviderId, Transaction } from '../../types';
 import { buildMasterUrlFromHost, resolveMasterEndpointFromCloud } from '../../utils/cloudMasterRegistry';
 import { db } from '../../utils/db';
 
@@ -58,12 +58,24 @@ interface IssueFiscalDocumentInput {
     modificationCode?: number;
     unitCodeGoods?: number;
     unitCodeServices?: number;
+    deliveryMode?: FiscalProviderDeliveryMode;
+    apiBaseUrl?: string;
+    testUrl?: string;
+    issueUrl?: string;
+    statusUrl?: string;
+    establishmentCode?: string;
+    branchCode?: string;
+    branchName?: string;
+    cashierCode?: string;
 }
 
 const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
 const FISCAL_BACKEND_BASE_KEY = 'CLIC_POS_FISCAL_BASE_URL';
 const LOCAL_FISCAL_CREDENTIAL_COLLECTION = 'fiscalCredentials';
 const POLARIS_API_BASE = 'https://api.polarisedi.com';
+const DIGIFACT_TEST_BASE_URL = 'https://testnucdo.digifact.com/api';
+const DIGIFACT_PROD_BASE_URL = 'https://nucdo.digifact.com/api';
+const DIGIFACT_ISSUE_FORMAT = 'JSON';
 
 interface LocalFiscalCredentialRecord {
     id: string;
@@ -95,6 +107,26 @@ const normalizeBaseUrl = (value?: string | null): string | null => {
 
 const uniqueStrings = (values: Array<string | null | undefined>) =>
     Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+
+const cleanString = (value: unknown): string =>
+    typeof value === 'string' ? value.trim() : '';
+
+const normalizeTaxId = (value: unknown): string =>
+    String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+const sanitizeNumber = (value: unknown): number => {
+    const parsed = Number(value || 0);
+    return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const round2 = (value: number): number =>
+    Math.round((value + Number.EPSILON) * 100) / 100;
+
+const normalizePercentRate = (value: unknown, fallback = 18): number => {
+    const parsed = sanitizeNumber(value);
+    if (parsed <= 0) return fallback;
+    return parsed <= 1 ? round2(parsed * 100) : round2(parsed);
+};
 
 const normalizeCredentialKey = (value?: string | null) =>
     String(value || '').trim().replace(/[^A-Za-z0-9]/g, '').toUpperCase();
@@ -265,7 +297,10 @@ const resolveCloudMasterBase = async (): Promise<string | null> => {
     return null;
 };
 
-const buildFiscalEndpointCandidates = async (path: string): Promise<string[]> => {
+const buildFiscalEndpointCandidates = async (
+    path: string,
+    options?: { localOnly?: boolean }
+): Promise<string[]> => {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const fiscalPath = `/api/fiscal${normalizedPath}`;
     const env = (import.meta as any)?.env || {};
@@ -281,26 +316,63 @@ const buildFiscalEndpointCandidates = async (path: string): Promise<string[]> =>
     const runtimeMasterBase = normalizeBaseUrl(buildMasterUrlFromHost(window.location.hostname));
     const cloudMasterBase = await resolveCloudMasterBase();
 
+    const erpCandidates = options?.localOnly
+        ? []
+        : uniqueStrings([
+            persistedErpBase ? `${persistedErpBase}${fiscalPath}` : null,
+        ]);
+    const localCandidates = uniqueStrings([
+        !options?.localOnly && pinnedFiscalBase ? `${pinnedFiscalBase}${fiscalPath}` : null,
+        persistedMasterBase ? `${persistedMasterBase}${fiscalPath}` : null,
+        cloudMasterBase ? `${cloudMasterBase}${fiscalPath}` : null,
+        runtimeMasterBase ? `${runtimeMasterBase}${fiscalPath}` : null,
+    ]);
+
     if (isNativeAndroidRuntime()) {
         return uniqueStrings([
-            pinnedFiscalBase ? `${pinnedFiscalBase}${fiscalPath}` : null,
-            persistedMasterBase ? `${persistedMasterBase}${fiscalPath}` : null,
-            cloudMasterBase ? `${cloudMasterBase}${fiscalPath}` : null,
-            runtimeMasterBase ? `${runtimeMasterBase}${fiscalPath}` : null,
+            ...localCandidates,
             `${buildMasterUrlFromHost('127.0.0.1')}${fiscalPath}`,
             `${buildMasterUrlFromHost('10.0.2.2')}${fiscalPath}`,
             `${buildMasterUrlFromHost('10.0.3.2')}${fiscalPath}`,
-            persistedErpBase ? `${persistedErpBase}${fiscalPath}` : null,
+            ...erpCandidates,
         ]);
     }
 
     return uniqueStrings([
         fiscalPath,
-        pinnedFiscalBase ? `${pinnedFiscalBase}${fiscalPath}` : null,
-        persistedMasterBase ? `${persistedMasterBase}${fiscalPath}` : null,
-        cloudMasterBase ? `${cloudMasterBase}${fiscalPath}` : null,
-        runtimeMasterBase ? `${runtimeMasterBase}${fiscalPath}` : null,
+        ...localCandidates,
+        ...erpCandidates,
+    ]);
+};
+
+const buildDelegatedFiscalEndpointCandidates = async (path: string): Promise<string[]> => {
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    const fiscalPath = `/api/fiscal${normalizedPath}`;
+    const env = (import.meta as any)?.env || {};
+    const persistedErpBase =
+        normalizeBaseUrl(localStorage.getItem('CLIC_ERP_BASE_URL'))
+        || normalizeBaseUrl(localStorage.getItem('erp_base_url'))
+        || normalizeBaseUrl(env.VITE_ERP_BASE_URL)
+        || normalizeBaseUrl(env.VITE_ERP_SYNC_API_URL)
+        || normalizeBaseUrl(env.VITE_SYNC_API_URL);
+    const pinnedFiscalBase = normalizeBaseUrl(localStorage.getItem(FISCAL_BACKEND_BASE_KEY));
+    const endpoints = uniqueStrings([
         persistedErpBase ? `${persistedErpBase}${fiscalPath}` : null,
+        pinnedFiscalBase ? `${pinnedFiscalBase}${fiscalPath}` : null,
+    ]);
+
+    if (endpoints.length > 0) return endpoints;
+
+    if (isNativeAndroidRuntime()) {
+        return uniqueStrings([
+            pinnedFiscalBase ? `${pinnedFiscalBase}${fiscalPath}` : null,
+            `${buildMasterUrlFromHost('127.0.0.1')}${fiscalPath}`
+        ]);
+    }
+
+    return uniqueStrings([
+        fiscalPath,
+        pinnedFiscalBase ? `${pinnedFiscalBase}${fiscalPath}` : null
     ]);
 };
 
@@ -346,6 +418,617 @@ const extractFiscalMessage = (payload: any): string => {
     }
 
     return '';
+};
+
+const joinProviderMessages = (values: unknown[]): string => {
+    const messages = values
+        .flatMap((value) => {
+            if (Array.isArray(value)) {
+                return value.map(item => typeof item === 'string' ? item : JSON.stringify(item));
+            }
+            if (typeof value === 'string') return [value];
+            if (value && typeof value === 'object') return [JSON.stringify(value)];
+            return [];
+        })
+        .map(value => value.trim())
+        .filter(Boolean);
+
+    return Array.from(new Set(messages)).join(': ');
+};
+
+type DirectDigifactCredential = {
+    token?: string;
+    authToken?: string;
+    environment?: string | number;
+    Environment?: string | number;
+    username?: string;
+    Username?: string;
+    user?: string;
+    password?: string;
+    Password?: string;
+    taxId?: string;
+    rnc?: string;
+    establishmentCode?: string;
+    establishment_code?: string;
+    branchCode?: string;
+    branch_code?: string;
+    digifactEstablishmentCode?: string;
+    digifactBranchCode?: string;
+    cashierCode?: string;
+    cashier_code?: string;
+    posCode?: string;
+    pos_code?: string;
+    pointOfSaleCode?: string;
+    point_of_sale_code?: string;
+    terminalCode?: string;
+    terminal_code?: string;
+    caja?: string;
+    cajaCode?: string;
+    caja_code?: string;
+    digifactCashierCode?: string;
+    autoAssignSequence?: boolean | string | number;
+    autogestionNuc?: boolean | string | number;
+    useSequenceAssignment?: boolean | string | number;
+    assignSequence?: boolean | string | number;
+};
+
+const parseDirectDigifactCredential = (authToken: string): DirectDigifactCredential => {
+    const raw = authToken.trim();
+    if (!raw) return {};
+    if (raw.startsWith('{')) {
+        try {
+            return JSON.parse(raw) as DirectDigifactCredential;
+        } catch {
+            return { token: raw };
+        }
+    }
+    return { token: raw };
+};
+
+const resolveDirectDigifactBaseUrl = (input: Pick<IssueFiscalDocumentInput, 'environment' | 'apiBaseUrl' | 'testUrl'>) => {
+    const explicit = normalizeBaseUrl(input.apiBaseUrl || input.testUrl || null);
+    if (explicit) return explicit.replace(/\/+$/, '');
+    return Number(input.environment) === 1 ? DIGIFACT_PROD_BASE_URL : DIGIFACT_TEST_BASE_URL;
+};
+
+const isDirectDigifactTestCredential = (credential?: DirectDigifactCredential): boolean => {
+    const username = cleanString(credential?.Username || credential?.username || credential?.user).toUpperCase();
+    const environment = cleanString(credential?.Environment || credential?.environment).toUpperCase();
+    return username.startsWith('TEST')
+        || username.includes('.TEST')
+        || ['0', '2', '3', 'TEST', 'SANDBOX', 'PRUEBA', 'PRUEBAS'].includes(environment);
+};
+
+const isDirectDigifactTestTarget = (
+    input: Pick<IssueFiscalDocumentInput, 'environment' | 'apiBaseUrl' | 'testUrl' | 'issueUrl'>,
+    credential?: DirectDigifactCredential
+): boolean => {
+    const baseUrl = resolveDirectDigifactBaseUrl(input).toLowerCase();
+    const issueUrl = cleanString(input.issueUrl).toLowerCase();
+    const testUrl = cleanString(input.testUrl).toLowerCase();
+    return Number(input.environment) !== 1
+        || baseUrl.includes('testnucdo')
+        || issueUrl.includes('testnucdo')
+        || testUrl.includes('testnucdo')
+        || isDirectDigifactTestCredential(credential);
+};
+
+const appendDigifactPath = (baseOrUrl: string, fallbackPath: string): string => {
+    const clean = baseOrUrl.replace(/\/+$/, '');
+    if (clean.toLowerCase().endsWith(fallbackPath.toLowerCase())) return clean;
+    return `${clean}${fallbackPath}`;
+};
+
+const resolveDirectDigifactIssueUrl = (
+    input: Pick<IssueFiscalDocumentInput, 'environment' | 'apiBaseUrl' | 'testUrl' | 'issueUrl'>,
+    credential?: DirectDigifactCredential
+): string => {
+    if (isDirectDigifactTestTarget(input, credential)) {
+        return `${DIGIFACT_TEST_BASE_URL}/v2/transform/nuc_json`;
+    }
+    const baseUrl = resolveDirectDigifactBaseUrl(input);
+    return appendDigifactPath(normalizeBaseUrl(input.issueUrl || null) || baseUrl, '/v2/transform/nuc_json');
+};
+
+const resolveDirectDigifactUsername = (credential: DirectDigifactCredential, taxId: string): string | undefined => {
+    const rawUsername = cleanString(credential.Username || credential.username || credential.user);
+    if (!rawUsername) return undefined;
+    if (rawUsername.includes('.')) return rawUsername;
+    return `DO.${taxId}.${rawUsername}`;
+};
+
+const resolveDirectDigifactQueryUsername = (username?: string): string | undefined => {
+    if (!username) return undefined;
+    return username;
+};
+
+const extractDirectDigifactToken = (payload: any): string => {
+    const candidates = [
+        payload?.token,
+        payload?.Token,
+        payload?.accessToken,
+        payload?.AccessToken,
+        payload?.data,
+        payload?.Data,
+        payload?.responseData,
+        payload?.responseData1
+    ];
+    for (const candidate of candidates) {
+        if (candidate != null && String(candidate).trim()) return String(candidate).trim();
+    }
+    return '';
+};
+
+const extractDirectDigifactMessage = (payload: any): string => {
+    return joinProviderMessages([
+        extractFiscalMessage(payload),
+        payload?.description,
+        payload?.Description,
+        payload?.descripcion,
+        payload?.infoDetails,
+        payload?.error,
+        payload?.errors
+    ]);
+};
+
+const resolveDirectDigifactAuth = async (
+    input: Pick<IssueFiscalDocumentInput, 'environment' | 'companyInfo' | 'credentialKey' | 'apiBaseUrl' | 'testUrl'>,
+    authToken: string
+): Promise<{ authorization: string; username?: string; taxId: string; source: 'token' | 'login' }> => {
+    const credential = parseDirectDigifactCredential(authToken);
+    const taxId = normalizeTaxId(credential.taxId || credential.rnc || input.companyInfo.rnc || input.credentialKey);
+    const inlineToken = cleanString(credential.token || credential.authToken);
+    const username = resolveDirectDigifactUsername(credential, taxId);
+    const password = cleanString(credential.Password || credential.password);
+
+    if (!taxId) {
+        throw new Error('DigiFact requiere RNC/TAXID para emitir desde el POS.');
+    }
+
+    if (inlineToken && !password) {
+        return {
+            authorization: inlineToken,
+            username: resolveDirectDigifactQueryUsername(username),
+            taxId,
+            source: 'token'
+        };
+    }
+
+    if (!username || !password) {
+        throw new Error('Para DigiFact local guarda un token vigente o credenciales JSON: {"taxId":"132752155","username":"TESTUSERTIK","password":"...","establishmentCode":"0001","cashierCode":"1"}');
+    }
+
+    const baseUrl = resolveDirectDigifactBaseUrl(input);
+    const loginUrl = appendDigifactPath(baseUrl, '/login/get_token');
+    const response = await CapacitorHttp.request({
+        url: loginUrl,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        data: { Username: username, Password: password },
+        connectTimeout: 10000,
+        readTimeout: 15000,
+        responseType: 'json'
+    });
+    const payload = response.data && typeof response.data === 'object' ? response.data : {};
+    const token = extractDirectDigifactToken(payload);
+    if (Number(response.status) >= 400 || !token) {
+        throw new Error(
+            `DigiFact auth HTTP ${response.status}: ${extractDirectDigifactMessage(payload) || 'Sin mensaje devuelto por DigiFact'} ` +
+            `(ambiente=${Number(input.environment) === 1 ? 'produccion' : 'test'}, taxId=${taxId}, username=${resolveDirectDigifactQueryUsername(username)}, endpoint=${loginUrl})`
+        );
+    }
+
+    return {
+        authorization: token,
+        username: resolveDirectDigifactQueryUsername(username),
+        taxId,
+        source: 'login'
+    };
+};
+
+const directDigifactDocumentCode = (documentCode: string) => documentCode.replace(/^E/, '');
+
+const directDigifactSequence = (encf: string, documentCode: string) => {
+    const digits = encf.replace(new RegExp(`^E?${directDigifactDocumentCode(documentCode)}`, 'i'), '').replace(/\D/g, '');
+    return (digits || encf.replace(/\D/g, '')).slice(-10).padStart(10, '0');
+};
+
+const mapDirectDigifactPaymentMethod = (method?: string): string => {
+    const normalized = cleanString(method).toUpperCase();
+    if (['CREDIT', 'CREDITO'].includes(normalized)) return '2';
+    if (['GIFT', 'VOUCHER', 'STORE_CREDIT', 'CREDIT_NOTE', 'VALE_NC', 'GRATIS', 'GRATUITO'].includes(normalized)) return '3';
+    return '1';
+};
+
+const mapDirectDigifactPaymentCode = (method?: string): string => {
+    const normalized = cleanString(method).toUpperCase();
+    if (['CASH', 'EFECTIVO'].includes(normalized)) return '1';
+    if (['TRANSFER', 'WIRE', 'ACH', 'CHEQUE', 'CHECK', 'DEPOSITO'].includes(normalized)) return '2';
+    if (['CARD', 'CREDIT_CARD', 'DEBIT_CARD', 'TARJETA'].includes(normalized)) return '3';
+    if (['CREDIT', 'CREDITO'].includes(normalized)) return '4';
+    if (['GIFT', 'VOUCHER', 'CERTIFICATE', 'BONO', 'REGALO'].includes(normalized)) return '5';
+    if (['BARTER', 'PERMUTA'].includes(normalized)) return '6';
+    if (['STORE_CREDIT', 'CREDIT_NOTE', 'VALE_NC', 'NOTA_CREDITO'].includes(normalized)) return '7';
+    return '8';
+};
+
+const toDirectDigifactDateTime = (value?: string): string => {
+    const date = value ? new Date(value) : new Date();
+    const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+    const pad = (number: number) => String(number).padStart(2, '0');
+    const offsetMinutes = -safeDate.getTimezoneOffset();
+    const sign = offsetMinutes >= 0 ? '+' : '-';
+    const absoluteOffset = Math.abs(offsetMinutes);
+    return `${safeDate.getFullYear()}-${pad(safeDate.getMonth() + 1)}-${pad(safeDate.getDate())}` +
+        `T${pad(safeDate.getHours())}:${pad(safeDate.getMinutes())}:${pad(safeDate.getSeconds())}` +
+        `${sign}${pad(Math.floor(absoluteOffset / 60))}:${pad(absoluteOffset % 60)}`;
+};
+
+const directDigifactInfoList = (items: Array<{ Name: string; Value: unknown }>) =>
+    items
+        .map(item => ({ Name: item.Name, Value: String(item.Value ?? '').trim() }))
+        .filter(item => item.Name && item.Value)
+        .map(item => ({ Name: item.Name, Data: null, Value: item.Value }));
+
+const directDigifactOptionalInfoList = (items: Array<{ Name: string; Value: unknown }>) => {
+    const list = directDigifactInfoList(items);
+    return list.length > 0 ? list : undefined;
+};
+
+const directDigifactPhone = (phone: unknown): string => {
+    const digits = String(phone || '').replace(/\D/g, '').slice(-10);
+    const safeDigits = digits.length === 10 ? digits : '8090000000';
+    return `${safeDigits.slice(0, 3)}-${safeDigits.slice(3, 6)}-${safeDigits.slice(6)}`;
+};
+
+const directDigifactContact = (phone: unknown, email?: unknown) => {
+    const contact: any = {
+        PhoneList: {
+            Phone: [directDigifactPhone(phone)]
+        }
+    };
+    const cleanEmail = cleanString(email).slice(0, 80);
+    if (cleanEmail.includes('@')) {
+        contact.EmailList = {
+            Email: [cleanEmail]
+        };
+    }
+    return contact;
+};
+
+const normalizeDirectDigifactBranchCode = (value: unknown): string =>
+    String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+const resolveDirectDigifactBranchCode = (input: IssueFiscalDocumentInput, credential?: DirectDigifactCredential): string => {
+    if (isDirectDigifactTestTarget(input, credential)) {
+        return '0001';
+    }
+    const code = normalizeDirectDigifactBranchCode(
+        input.establishmentCode
+        || input.branchCode
+        || (input.companyInfo as any).establishmentCode
+        || (input.companyInfo as any).branchCode
+    );
+    if (!code) {
+        throw new Error('DigiFact requiere el código de establecimiento/sucursal configurado en la terminal fiscal o en la credencial local. Agrega establishmentCode con el código exacto registrado en DigiFact/Hacienda.');
+    }
+    return code.slice(0, 20);
+};
+
+const normalizeDirectDigifactCashierCode = (value: unknown): string =>
+    String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+const resolveDirectDigifactCashierCode = (input: IssueFiscalDocumentInput, credential?: DirectDigifactCredential): string => {
+    if (isDirectDigifactTestTarget(input, credential)) {
+        return '1';
+    }
+    const code = normalizeDirectDigifactCashierCode(
+        input.cashierCode
+        || (input.companyInfo as any).cashierCode
+        || (input.companyInfo as any).posCode
+        || (input.companyInfo as any).terminalCode
+        || (input.companyInfo as any).caja
+    );
+    if (!code) {
+        throw new Error('DigiFact requiere el código de caja/punto de emisión configurado en la terminal fiscal o en la credencial local.');
+    }
+    return code.slice(0, 60);
+};
+
+const directDigifactBranchInfo = (address: unknown, branchCode: string) => {
+    const cleanAddress = cleanString(address).slice(0, 100) || 'Santo Domingo';
+    return {
+        Name: branchCode,
+        AddressInfo: {
+            Address: cleanAddress,
+            Country: 'DO'
+        }
+    };
+};
+
+const directDigifactTipoIngreso = (value?: number): string => {
+    const normalized = Math.trunc(Number(value || 1));
+    const safe = normalized >= 1 && normalized <= 6 ? normalized : 1;
+    return String(safe).padStart(2, '0');
+};
+
+const directDigifactIndicatorMontoGravado = (transaction: Transaction): string => {
+    const raw = (transaction as any).isTaxIncluded ?? (transaction as any).taxIncluded ?? true;
+    return raw === false ? '0' : '1';
+};
+
+const directDigifactFlagEnabled = (value: unknown): boolean => {
+    if (value === true) return true;
+    if (typeof value === 'number') return value === 1;
+    const normalized = cleanString(value).toUpperCase();
+    return ['1', 'TRUE', 'YES', 'SI', 'SÍ', 'Y'].includes(normalized);
+};
+
+const shouldUseDirectDigifactSequenceAssignment = (
+    input: IssueFiscalDocumentInput,
+    credential?: DirectDigifactCredential
+): boolean => {
+    if (isDirectDigifactTestTarget(input, credential)) {
+        return true;
+    }
+    return directDigifactFlagEnabled(credential?.autoAssignSequence)
+        || directDigifactFlagEnabled(credential?.autogestionNuc)
+        || directDigifactFlagEnabled(credential?.useSequenceAssignment)
+        || directDigifactFlagEnabled(credential?.assignSequence);
+};
+
+const buildDirectDigifactPayload = (
+    input: IssueFiscalDocumentInput,
+    credential?: DirectDigifactCredential
+) => {
+    const { companyInfo, transaction } = input;
+    const branchCode = resolveDirectDigifactBranchCode(input, credential);
+    const cashierCode = resolveDirectDigifactCashierCode(input, credential);
+    const documentCode = String(transaction.ncfType || '');
+    const eNCF = cleanString(transaction.electronicNcf || transaction.ncf);
+    const customer = (transaction.customerSnapshot || {}) as any;
+    const total = round2(Math.abs(sanitizeNumber(transaction.total)));
+    const taxAmount = round2(Math.abs(sanitizeNumber(transaction.taxAmount)));
+    const netAmount = round2(Math.abs(sanitizeNumber(transaction.netAmount)) || Math.max(0, total - taxAmount));
+    const taxRate = normalizePercentRate(input.taxRate, 18);
+    const useSequenceAssignment = shouldUseDirectDigifactSequenceAssignment(input, credential);
+    const sequenceInfo = useSequenceAssignment
+        ? { Name: 'AsignacionDeSecuencia', Value: '1' }
+        : { Name: 'Secuencia', Value: directDigifactSequence(eNCF, documentCode) };
+    const items = (transaction.items || []).map((item: any) => {
+        const quantity = Math.abs(sanitizeNumber(item.quantity)) || 1;
+        const unitPrice = round2(Math.abs(sanitizeNumber(item.price)));
+        const type = cleanString(item.type).toUpperCase() === 'SERVICE' ? 2 : 1;
+        const taxIndicator = (Array.isArray(item.appliedTaxIds) && item.appliedTaxIds.length > 0) || taxAmount > 0 ? 1 : 4;
+        const payloadItem: any = {
+            Type: String(type),
+            Description: (cleanString(item.name || item.id) || 'Item POS').slice(0, 80),
+            Qty: quantity,
+            Price: unitPrice,
+            Totals: { TotalItem: round2(quantity * unitPrice) },
+            AdditionalInfo: directDigifactInfoList([{ Name: 'IndicadorFacturacion', Value: String(taxIndicator) }])
+        };
+        const configuredUnitCode = Number(item.fiscalUnitCode || 0);
+        if (Number.isFinite(configuredUnitCode) && configuredUnitCode > 0) {
+            payloadItem.UnitOfMeasure = configuredUnitCode;
+        }
+        return payloadItem;
+    });
+
+    const payload: any = {
+        Version: '1.0',
+        CountryCode: 'DO',
+        Header: {
+            DocType: directDigifactDocumentCode(documentCode),
+            IssuedDateTime: toDirectDigifactDateTime(transaction.date),
+            AdditionalIssueDocInfo: directDigifactInfoList([
+                sequenceInfo,
+                { Name: 'IndicadorMontoGravado', Value: directDigifactIndicatorMontoGravado(transaction) },
+                { Name: 'TipoIngresos', Value: directDigifactTipoIngreso(input.tipoIngreso) },
+                { Name: 'TipoPago', Value: mapDirectDigifactPaymentMethod(transaction.payments?.[0]?.method) }
+            ])
+        },
+        Seller: {
+            TaxID: normalizeTaxId(companyInfo.rnc),
+            Name: cleanString(companyInfo.name).slice(0, 150),
+            Contact: directDigifactContact(companyInfo.phone, (companyInfo as any).email),
+            BranchInfo: directDigifactBranchInfo(companyInfo.address, branchCode),
+            AdditionalInfo: directDigifactInfoList([
+                { Name: 'CodigoVendedor', Value: cashierCode },
+                { Name: 'NumeroFacturaInterna', Value: cleanString(transaction.displayId || transaction.id).slice(0, 20) }
+            ])
+        },
+        Items: items,
+        Totals: {
+            QtyItems: items.length,
+            TotalTaxableAmount: taxAmount > 0 ? netAmount : 0,
+            TotalTaxes: taxAmount > 0
+                ? { TotalTax: [{ Code: 'ITBIS1', TaxableAmount: netAmount, Rate: taxRate, Amount: taxAmount }] }
+                : { TotalTax: [{ Code: 'EXENTO', TaxableAmount: netAmount, Amount: 0 }] },
+            GrandTotal: { InvoiceTotal: total }
+        },
+        Payments: [{
+            Code: mapDirectDigifactPaymentCode(transaction.payments?.[0]?.method),
+            Amount: total
+        }]
+    };
+
+    const buyerTaxId = normalizeTaxId(customer.taxId || customer.rnc || (transaction as any).customerTaxId);
+    const buyerName = cleanString(customer.name || transaction.customerName);
+    if (documentCode === 'E31' && !buyerTaxId) {
+        throw new Error('DigiFact E31 requiere Buyer.TaxID válido. Seleccione un cliente con RNC/Cédula antes de emitir Crédito Fiscal.');
+    }
+    payload.Buyer = {
+        TaxID: buyerTaxId || 'NO_APLICA',
+        Name: (buyerName || 'Consumidor final').slice(0, 150)
+    };
+
+    if (input.sequenceExpiryDate && documentCode !== 'E32' && documentCode !== 'E34') {
+        payload.Header.AdditionalIssueDocInfo.push({ Name: 'FechaVencimientoSecuencia', Data: null, Value: input.sequenceExpiryDate.slice(0, 10) });
+    }
+
+    if (documentCode === 'E34') {
+        const referenceInfo = directDigifactOptionalInfoList([
+            { Name: 'NCFModificado', Value: cleanString(transaction.affectedNCF || transaction.affectedInvoiceNumber) },
+            { Name: 'FechaNCFModificado', Value: cleanString(transaction.affectedInvoiceDate).slice(0, 10) },
+            { Name: 'CodigoModificacion', Value: String(input.modificationCode || 2) },
+            { Name: 'RazonModificacion', Value: (cleanString(transaction.refundReason) || 'Nota de crédito generada desde POS').slice(0, 90) }
+        ]);
+        if (referenceInfo) {
+            payload.AdditionalDocumentInfo = {
+                AdditionalInfo: {
+                    AditionalData: {
+                        Data: [{
+                            Name: 'INFORMACION_REFERENCIA',
+                            Info: referenceInfo
+                        }]
+                    }
+                }
+            };
+        }
+    }
+
+    return payload;
+};
+
+const extractDirectDigifactProviderId = (payload: any, fallbackENCF?: string): string | undefined => {
+    const candidates = [
+        payload?.batch,
+        payload?.Batch,
+        payload?.eNCF,
+        payload?.encf,
+        payload?.authNumber,
+        payload?.AuthNumber,
+        payload?.authorizationNumber,
+        fallbackENCF
+    ];
+    for (const candidate of candidates) {
+        if (candidate != null && String(candidate).trim()) return String(candidate).trim();
+    }
+    return undefined;
+};
+
+const isDirectDigifactFailure = (payload: any, message: string): boolean => {
+    if (payload?.success === false || payload?.ok === false) return true;
+    if (Array.isArray(payload?.infoDetails) && payload.infoDetails.length > 0) return true;
+    const code = Number(payload?.code ?? payload?.Code);
+    return (Number.isFinite(code) && code !== 1) ||
+        /rechaz|error|failed|invalid|invalido|inválido|no coincide|esquema\s+nuc|schema/i.test(message);
+};
+
+const directDigifactPayloadSequenceMode = (payload: any): string =>
+    payload?.Header?.AdditionalIssueDocInfo?.find?.((item: any) => item.Name === 'AsignacionDeSecuencia')
+        ? 'autogestion'
+        : 'local';
+
+const issueDirectDigifactDocument = async (
+    input: IssueFiscalDocumentInput,
+    authToken: string
+): Promise<FiscalIssueResponse> => {
+    const credential = parseDirectDigifactCredential(authToken);
+    const auth = await resolveDirectDigifactAuth(input, authToken);
+    const isTestTarget = isDirectDigifactTestTarget(input, credential);
+    const issueUrl = resolveDirectDigifactIssueUrl(input, credential);
+    const url = new URL(issueUrl);
+    url.searchParams.set('TAXID', auth.taxId);
+    url.searchParams.set('FORMAT', DIGIFACT_ISSUE_FORMAT);
+    if (!auth.username) {
+        throw new Error('DigiFact requiere USERNAME en la URL de emisión. Guarda la credencial con username, por ejemplo {"taxId":"132752155","username":"TESTUSERTIK","password":"..."}');
+    }
+    url.searchParams.set('USERNAME', auth.username);
+
+    const issueInput: IssueFiscalDocumentInput = {
+        ...input,
+        establishmentCode: isTestTarget ? '0001' : input.establishmentCode || credential.establishmentCode || credential.establishment_code || credential.digifactEstablishmentCode,
+        branchCode: isTestTarget ? '0001' : input.branchCode || credential.branchCode || credential.branch_code || credential.digifactBranchCode,
+        cashierCode: isTestTarget ? '1' : input.cashierCode
+            || credential.cashierCode
+            || credential.cashier_code
+            || credential.posCode
+            || credential.pos_code
+            || credential.pointOfSaleCode
+            || credential.point_of_sale_code
+            || credential.terminalCode
+            || credential.terminal_code
+            || credential.caja
+            || credential.cajaCode
+            || credential.caja_code
+            || credential.digifactCashierCode
+    };
+
+    const issuePayload = buildDirectDigifactPayload(issueInput, credential);
+    const response = await CapacitorHttp.request({
+        url: url.toString(),
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            Authorization: auth.authorization
+        },
+        data: issuePayload,
+        connectTimeout: 10000,
+        readTimeout: 30000,
+        responseType: 'json'
+    });
+    const raw = response.data && typeof response.data === 'object' ? response.data : {};
+    const providerMessage = extractDirectDigifactMessage(raw) || (Number(response.status) < 400 ? 'DigiFact procesó la emisión.' : `DigiFact HTTP ${response.status}`);
+    const sequenceMode = directDigifactPayloadSequenceMode(issuePayload);
+    const failure = Number(response.status) >= 400 || isDirectDigifactFailure(raw, providerMessage);
+
+    const diagnostic = isTestTarget
+        ? ` [DigiFact test: endpoint=oficial, establecimiento=${issuePayload?.Seller?.BranchInfo?.Name || 'N/D'}, caja=${issuePayload?.Seller?.AdditionalInfo?.find?.((item: any) => item.Name === 'CodigoVendedor')?.Value || 'N/D'}, username=${auth.username || 'N/D'}, secuencia=${sequenceMode}]`
+        : '';
+    const message = `${providerMessage}${diagnostic}`;
+    const providerTransactionId = extractDirectDigifactProviderId(raw, cleanString(input.transaction.electronicNcf || input.transaction.ncf));
+
+    return {
+        success: !failure,
+        providerId: 'DIGIFACT',
+        environment: input.environment,
+        documentCode: input.transaction.ncfType as FiscalIssueResponse['documentCode'],
+        providerTransactionId,
+        status: failure ? 'Rechazado' : 'Aceptado',
+        message,
+        pending: false,
+        raw
+    };
+};
+
+const getDirectDigifactStatus = async (
+    providerId: FiscalProviderId,
+    environment: number,
+    providerTransactionId: string,
+    companyInfo: CompanyInfo | undefined,
+    credentialKey: string | undefined,
+    authToken: string
+): Promise<FiscalStatusResponse> => {
+    const auth = await resolveDirectDigifactAuth({ environment, companyInfo: companyInfo || {} as CompanyInfo, credentialKey }, authToken);
+    const url = new URL(`${Number(environment) === 1 ? DIGIFACT_PROD_BASE_URL : DIGIFACT_TEST_BASE_URL}/SHAREDINFO`);
+    url.searchParams.set('TAXID', auth.taxId);
+    if (auth.username) url.searchParams.set('USERNAME', auth.username);
+    url.searchParams.set('DATA1', 'SHARED_GETRESULTADOENVIO');
+    url.searchParams.set('DATA2', `ENCF|${providerTransactionId}`);
+    const response = await CapacitorHttp.request({
+        url: url.toString(),
+        method: 'GET',
+        headers: { Accept: 'application/json', Authorization: auth.authorization },
+        connectTimeout: 10000,
+        readTimeout: 15000,
+        responseType: 'json'
+    });
+    const raw = response.data && typeof response.data === 'object' ? response.data : {};
+    const message = extractDirectDigifactMessage(raw) || `DigiFact status HTTP ${response.status}`;
+    const pending = /en espera|procesando|pendiente/i.test(message);
+    return {
+        success: Number(response.status) < 400 && !isDirectDigifactFailure(raw, message),
+        providerId,
+        environment,
+        providerTransactionId,
+        status: pending ? 'Pendiente' : Number(response.status) < 400 ? 'Consultado' : 'Error',
+        message,
+        pending,
+        raw
+    };
 };
 
 type FiscalHttpResponse = {
@@ -424,8 +1107,11 @@ const requestFiscalJson = async <T extends Record<string, any>>(
     path: string,
     init: RequestInit,
     invalidPayloadFactory: (status: number) => T,
+    options?: { delegatedToErp?: boolean; localOnly?: boolean }
 ): Promise<{ response: FiscalHttpResponse; payload: T }> => {
-    const endpoints = await buildFiscalEndpointCandidates(path);
+    const endpoints = options?.delegatedToErp
+        ? await buildDelegatedFiscalEndpointCandidates(path)
+        : await buildFiscalEndpointCandidates(path, { localOnly: options?.localOnly });
     let lastInvalid: { response: FiscalHttpResponse; payload: T } | null = null;
     let lastError: Error | null = null;
     const timeoutMs = isNativeAndroidRuntime() ? 2200 : 5000;
@@ -441,8 +1127,19 @@ const requestFiscalJson = async <T extends Record<string, any>>(
                 })();
 
             if (payload && typeof payload === 'object') {
+                const unsupportedLocalProvider =
+                    options?.delegatedToErp
+                    && payload.success === false
+                    && /proveedor fiscal (inv[aá]lido|no soportado)/i.test(String(payload.message || ''));
+                if (unsupportedLocalProvider) {
+                    lastInvalid = {
+                        response,
+                        payload
+                    };
+                    continue;
+                }
                 const resolvedBase = extractBaseUrlFromEndpoint(endpoint);
-                if (resolvedBase) {
+                if (resolvedBase && !options?.delegatedToErp) {
                     localStorage.setItem(FISCAL_BACKEND_BASE_KEY, resolvedBase);
                 }
                 return { response, payload };
@@ -486,6 +1183,15 @@ export const issueFiscalDocument = async (
         input.companyInfo,
         input.credentialKey
     );
+    const isLocalDirectDigiFact = input.providerId === 'DIGIFACT' && Boolean(localCredential?.record.authToken);
+    const isDelegatedProvider =
+        input.providerId === 'DIGIFACT'
+        && input.deliveryMode === 'DELEGATED_ERP'
+        && !localCredential?.record.authToken;
+
+    if (isLocalDirectDigiFact && isNativeAndroidRuntime() && localCredential?.record.authToken) {
+        return issueDirectDigifactDocument(input, localCredential.record.authToken);
+    }
 
     const { response, payload } = await requestFiscalJson<FiscalIssueResponse>(
         '/documents/issue',
@@ -508,7 +1214,16 @@ export const issueFiscalDocument = async (
                     tipoIngreso: input.tipoIngreso,
                     modificationCode: input.modificationCode,
                     unitCodeGoods: input.unitCodeGoods,
-                    unitCodeServices: input.unitCodeServices
+                    unitCodeServices: input.unitCodeServices,
+                    deliveryMode: input.deliveryMode,
+                    apiBaseUrl: input.apiBaseUrl,
+                    testUrl: input.testUrl,
+                    issueUrl: input.issueUrl,
+                    statusUrl: input.statusUrl,
+                    establishmentCode: input.establishmentCode,
+                    branchCode: input.branchCode,
+                    branchName: input.branchName,
+                    cashierCode: input.cashierCode
                 }
             })
         },
@@ -518,7 +1233,8 @@ export const issueFiscalDocument = async (
             environment: input.environment,
             documentCode: input.transaction.ncfType as FiscalIssueResponse['documentCode'],
             message: ''
-        })
+        }),
+        { delegatedToErp: isDelegatedProvider, localOnly: isLocalDirectDigiFact }
     );
 
     if (!response.ok && payload?.success !== false) {
@@ -533,9 +1249,15 @@ export const getFiscalDocumentStatus = async (
     environment: number,
     providerTransactionId: string,
     companyInfo?: CompanyInfo,
-    credentialKey?: string
+    credentialKey?: string,
+    deliveryMode?: FiscalProviderDeliveryMode
 ): Promise<FiscalStatusResponse> => {
     const localCredential = await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);
+    const isLocalDirectDigiFact = providerId === 'DIGIFACT' && Boolean(localCredential?.record.authToken);
+    const isDelegatedProvider =
+        providerId === 'DIGIFACT'
+        && deliveryMode === 'DELEGATED_ERP'
+        && !localCredential?.record.authToken;
     const params = new URLSearchParams({
         providerId,
         environment: String(environment),
@@ -543,6 +1265,17 @@ export const getFiscalDocumentStatus = async (
     });
     if (companyInfo?.rnc) params.set('companyRnc', companyInfo.rnc);
     if (credentialKey) params.set('credentialKey', credentialKey);
+
+    if (isLocalDirectDigiFact && isNativeAndroidRuntime() && localCredential?.record.authToken) {
+        return getDirectDigifactStatus(
+            providerId,
+            environment,
+            providerTransactionId,
+            companyInfo,
+            credentialKey,
+            localCredential.record.authToken
+        );
+    }
 
     const { response, payload } = await requestFiscalJson<FiscalStatusResponse>(
         `/documents/status?${params.toString()}`,
@@ -558,7 +1291,8 @@ export const getFiscalDocumentStatus = async (
             environment,
             providerTransactionId,
             message: ''
-        })
+        }),
+        { delegatedToErp: isDelegatedProvider, localOnly: isLocalDirectDigiFact }
     );
 
     if (!response.ok && payload?.success !== false) {
@@ -575,9 +1309,42 @@ export const testFiscalProviderConnection = async (
     providerId: FiscalProviderId,
     environment: number,
     companyInfo?: CompanyInfo,
-    credentialKey?: string
+    credentialKey?: string,
+    endpointOptions?: {
+        apiBaseUrl?: string;
+        testUrl?: string;
+        issueUrl?: string;
+        statusUrl?: string;
+    }
 ) => {
     const localCredential = await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);
+    if (providerId === 'DIGIFACT' && isNativeAndroidRuntime() && localCredential?.record.authToken) {
+        const auth = await resolveDirectDigifactAuth(
+            {
+                environment,
+                companyInfo: companyInfo || {} as CompanyInfo,
+                credentialKey,
+                apiBaseUrl: endpointOptions?.apiBaseUrl,
+                testUrl: endpointOptions?.testUrl
+            },
+            localCredential.record.authToken
+        );
+        return {
+            success: true,
+            message: auth.source === 'login'
+                ? 'Autenticación con DigiFact completada correctamente.'
+                : 'Token local DigiFact disponible. La validación final ocurre al emitir el NUC.',
+            providerId,
+            environment,
+            credentialSource: 'sqlite',
+            resolvedCredentialKey: localCredential.resolvedCredentialKey || credentialKey || normalizeTaxId(companyInfo?.rnc),
+            raw: {
+                source: auth.source,
+                taxId: auth.taxId,
+                username: auth.username || null
+            }
+        };
+    }
     const testDirectPolaris = async () => {
         if (providerId !== 'POLARIS' || !localCredential?.record.authToken) {
             throw new Error('No se pudo contactar el backend fiscal.');
@@ -635,7 +1402,11 @@ export const testFiscalProviderConnection = async (
                     authToken: localCredential?.record.authToken,
                     companyInfo,
                     options: {
-                        credentialKey
+                        credentialKey,
+                        apiBaseUrl: endpointOptions?.apiBaseUrl,
+                        testUrl: endpointOptions?.testUrl,
+                        issueUrl: endpointOptions?.issueUrl,
+                        statusUrl: endpointOptions?.statusUrl
                     }
                 })
             },

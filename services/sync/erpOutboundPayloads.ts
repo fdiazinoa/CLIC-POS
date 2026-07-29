@@ -13,6 +13,21 @@ import {
 } from './sourceIdentity';
 
 const DEFAULT_CURRENCY = 'DOP';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const normalizeErpUuid = (value: unknown): string | undefined => {
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    return UUID_PATTERN.test(trimmed) ? trimmed : undefined;
+};
+
+const normalizeErpUuidList = (value: unknown): string[] | undefined => {
+    if (!Array.isArray(value)) return undefined;
+    const ids = value
+        .map(normalizeErpUuid)
+        .filter(Boolean) as string[];
+    return ids.length > 0 ? ids : undefined;
+};
 
 export function coerceTransactionItemsForErp<T extends { items?: unknown }>(txn: T): T {
     const raw = txn.items;
@@ -66,6 +81,84 @@ const pickTransactionExchangeRate = (tx: Transaction): number | undefined => {
     return rates[0];
 };
 
+const sanitizeTariffRefs = (record: Record<string, any>): Record<string, any> => {
+    const next = { ...record };
+    const uuidKeys = [
+        'tariffId',
+        'tariff_id',
+        'activeTariffId',
+        'active_tariff_id',
+        'selectedTariffId',
+        'selected_tariff_id',
+        'defaultTariffId',
+        'default_tariff_id',
+        'customerDefaultTariffId',
+        'customer_default_tariff_id'
+    ];
+    for (const key of uuidKeys) {
+        if (key in next) {
+            const normalized = normalizeErpUuid(next[key]);
+            if (normalized) next[key] = normalized;
+            else delete next[key];
+        }
+    }
+
+    const listKeys = [
+        'allowedTariffIds',
+        'allowed_tariff_ids',
+        'customerAllowedTariffIds',
+        'customer_allowed_tariff_ids'
+    ];
+    for (const key of listKeys) {
+        if (key in next) {
+            const normalized = normalizeErpUuidList(next[key]);
+            if (normalized) next[key] = normalized;
+            else delete next[key];
+        }
+    }
+
+    return next;
+};
+
+const sanitizeTransactionItemForErp = (item: Record<string, any>): Record<string, any> => {
+    const {
+        attributes,
+        variants,
+        tariffs,
+        images,
+        stockBalances,
+        warehouseSettings,
+        activeInWarehouses,
+        availableModifiers,
+        modifier_groups,
+        modifierGroups,
+        fraction_rule,
+        fractionRule,
+        combo_groups,
+        comboGroups,
+        note_presets,
+        notePresets,
+        operationalFlags,
+        ...line
+    } = item;
+
+    return sanitizeTariffRefs(line);
+};
+
+const sanitizeTransactionForErp = <T extends Transaction>(transaction: T): T => {
+    const metadata = transaction && typeof (transaction as any).metadata === 'object' && !Array.isArray((transaction as any).metadata)
+        ? sanitizeTariffRefs({ ...(transaction as any).metadata })
+        : (transaction as any).metadata;
+
+    return sanitizeTariffRefs({
+        ...transaction,
+        metadata,
+        items: Array.isArray(transaction.items)
+            ? transaction.items.map((item: any) => sanitizeTransactionItemForErp(item))
+            : []
+    }) as T;
+};
+
 /** Sales, refunds, voids: stable source_transaction_id; display is reference only. */
 export function buildErpSalePayload(transaction: Transaction): Transaction & {
     transaction_date: string;
@@ -75,10 +168,21 @@ export function buildErpSalePayload(transaction: Transaction): Transaction & {
     original_source_transaction_id?: string;
     original_source_display_id?: string;
 } {
-    const base = normalizeTransactionForSync(coerceTransactionItemsForErp(transaction));
-    const isCreditNote = base.documentType === 'REFUND' || base.ncfType === 'B04';
+    const base = sanitizeTransactionForErp(normalizeTransactionForSync(coerceTransactionItemsForErp(transaction)));
+    const isFiscalDisabled = base.fiscalMode === 'NONE';
+    const fiscalFields = isFiscalDisabled
+        ? {
+              ncf: undefined,
+              ncfType: undefined,
+              legacyNcf: undefined,
+              electronicNcf: undefined,
+              fiscalProvider: 'NONE' as const,
+          }
+        : {};
+    const isCreditNote = !isFiscalDisabled && (base.documentType === 'REFUND' || base.ncfType === 'B04' || base.ncfType === 'E34');
     return {
         ...base,
+        ...fiscalFields,
         transaction_date: base.date,
         currency_code: pickTransactionCurrency(base),
         exchange_rate: pickTransactionExchangeRate(base),

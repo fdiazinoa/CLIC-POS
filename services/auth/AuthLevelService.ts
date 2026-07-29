@@ -149,6 +149,8 @@ class AuthLevelService {
         switch (roleConfig.role) {
             case DeviceRole.STANDARD_POS:
                 return '/pos';
+            case DeviceRole.ORDER_TAKER:
+                return '/tables';
             case DeviceRole.SELF_CHECKOUT:
                 return '/kiosk/welcome';
             case DeviceRole.PRICE_CHECKER:
@@ -206,6 +208,7 @@ class AuthLevelService {
 
         const labels: Record<DeviceRole, string> = {
             [DeviceRole.STANDARD_POS]: '🖥️ POS Estándar',
+            [DeviceRole.ORDER_TAKER]: '📝 Toma de pedidos',
             [DeviceRole.SELF_CHECKOUT]: '🛒 Auto-Pago',
             [DeviceRole.PRICE_CHECKER]: '🔍 Verificador de Precios',
             [DeviceRole.HANDHELD_INVENTORY]: '📱 Inventario Móvil',

@@ -2,6 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from '../utils/supabase';
 import { resolveTenantRecord } from '../utils/licenseGuard';
 import {
+    clearPersistedActivationIdentity,
+    resolveActivationTenantIdentity,
+} from '../services/setup/activationTenantIdentity';
+import {
     Rocket,
     Lock,
     Mail,
@@ -120,6 +124,15 @@ const normalizeActivationErrorMessage = (error: unknown): string => {
     }
 
     return message;
+};
+
+const requiresPasswordChange = (user: any): boolean => {
+    const metadata = user?.user_metadata || {};
+    return metadata.is_new_user === true
+        || metadata.must_change_password === true
+        || metadata.force_password_change === true
+        || metadata.password_change_required === true
+        || metadata.temporary_password === true;
 };
 
 const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplete }) => {
@@ -253,7 +266,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
 
     const signInWithDirectSupabase = async () => {
         if (!hasSupabaseConfig) {
-            throw new Error('La configuración de Supabase no está disponible en este build. Regenera el APK o el entorno con VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY.');
+            throw new Error('Este APK no incluye credenciales Supabase. Use "Elegir tipo de POS" para seleccionar POS_ONLY, POS + ERP o POS Cliente.');
         }
 
         const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
@@ -304,6 +317,10 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
 
     const handleInitialLogin = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!hasSupabaseConfig) {
+            continueToTerminalModeSelection();
+            return;
+        }
         setLoading(true);
         setError(null);
 
@@ -322,7 +339,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
 
             if (authError) throw authError;
 
-            const isNewUser = data.user?.user_metadata?.is_new_user !== false;
+            const isNewUser = requiresPasswordChange(data.user);
 
             if (isNewUser) {
                 setStep('CHANGE_PASSWORD');
@@ -334,6 +351,18 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
         } finally {
             setLoading(false);
         }
+    };
+
+    const continueToTerminalModeSelection = () => {
+        setError(null);
+        onActivationComplete({
+            id: 'local-pos-activation',
+            email: '',
+            name: 'Activación local / ERP',
+            tenantId: '',
+            slug: null,
+            activationMode: 'LOCAL_OR_ERP',
+        });
     };
 
     const handlePasswordChange = async (e: React.FormEvent) => {
@@ -353,7 +382,13 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
         try {
             const { data, error: updateError } = await supabase.auth.updateUser({
                 password: newPassword,
-                data: { is_new_user: false }
+                data: {
+                    is_new_user: false,
+                    must_change_password: false,
+                    force_password_change: false,
+                    password_change_required: false,
+                    temporary_password: false,
+                }
             });
 
             if (updateError) throw updateError;
@@ -374,16 +409,24 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
 
     const completeActivation = async (user: any, fallbackEmail?: string) => {
         const fallbackTenantId = String(user?.id || '').trim();
-        const metadataTenantId = String(
-            user?.user_metadata?.tenant_id
-            || user?.app_metadata?.tenant_id
-            || ''
-        ).trim();
-        const metadataSlug = String(
-            user?.user_metadata?.slug
-            || user?.app_metadata?.slug
-            || ''
-        ).trim();
+        const identity = resolveActivationTenantIdentity(user, fallbackEmail);
+        const metadataTenantId = identity.erpTenantId || '';
+        const metadataSlug = identity.slug || '';
+        const userMetadata = user?.user_metadata || {};
+        const resolveTenantDisplayName = () => (
+            identity.tenantName
+            || userMetadata.company_name
+            || userMetadata.business_name
+            || userMetadata.tenant_name
+            || userMetadata.organization_name
+            || userMetadata.name
+            || userMetadata.full_name
+            || user.email?.split('@')[0]
+            || 'Tenant'
+        );
+
+        // A new authenticated identity must not inherit a tenant or terminal from a previous session.
+        clearPersistedActivationIdentity(localStorage);
 
         // Backward-compatible path:
         // Some clouds already embed tenant_id in auth metadata but don't expose resolve_tenant_license RPC.
@@ -391,14 +434,21 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
             const tenantData = {
                 id: user.id,
                 email: user.email,
-                name: user.user_metadata?.full_name || user.email.split('@')[0],
+                name: resolveTenantDisplayName(),
                 tenantId: metadataTenantId,
                 slug: metadataSlug || localStorage.getItem('clic_tenant_slug') || null,
             };
 
             localStorage.setItem('clic_tenant_id', tenantData.tenantId);
             localStorage.setItem('active_tenant_id', tenantData.tenantId);
-            localStorage.setItem('clic_tenant_email', tenantData.email);
+            localStorage.setItem('clic_erp_tenant_id', tenantData.tenantId);
+            localStorage.setItem('clic_tenant_email', identity.email || tenantData.email);
+            if (identity.tenantName) {
+                localStorage.setItem('clic_tenant_name', identity.tenantName);
+            }
+            if (identity.cloudAdminTenantId) {
+                localStorage.setItem('clic_cloud_tenant_id', identity.cloudAdminTenantId);
+            }
             localStorage.removeItem('clic_tenant_unverified');
             if (tenantData.slug) {
                 localStorage.setItem('clic_tenant_slug', tenantData.slug);
@@ -417,19 +467,26 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
         if (!resolvedTenant?.id && !fallbackTenantId) {
             throw new Error(`No se pudo resolver la licencia para ${fallbackEmail || user?.email || 'este usuario'}. Solicite reprovisionar el tenant en Cloud Admin.`);
         }
-        const resolvedSlug = user?.user_metadata?.slug || resolvedTenant?.slug || localStorage.getItem('clic_tenant_slug');
+        const resolvedSlug = userMetadata.slug || resolvedTenant?.slug || localStorage.getItem('clic_tenant_slug');
 
         const tenantData = {
             id: user.id,
             email: user.email,
-            name: user.user_metadata?.full_name || user.email.split('@')[0],
+            name: resolveTenantDisplayName(),
             tenantId: resolvedTenant?.id || fallbackTenantId,
             slug: resolvedSlug || null,
         };
 
         localStorage.setItem('clic_tenant_id', tenantData.tenantId);
         localStorage.setItem('active_tenant_id', tenantData.tenantId);
-        localStorage.setItem('clic_tenant_email', tenantData.email);
+        localStorage.setItem('clic_erp_tenant_id', tenantData.tenantId);
+        localStorage.setItem('clic_tenant_email', identity.email || tenantData.email);
+        if (identity.tenantName) {
+            localStorage.setItem('clic_tenant_name', identity.tenantName);
+        }
+        if (identity.cloudAdminTenantId) {
+            localStorage.setItem('clic_cloud_tenant_id', identity.cloudAdminTenantId);
+        }
         if (!resolvedTenant?.id) {
             localStorage.setItem('clic_tenant_unverified', '1');
             console.warn('Activation completed with unverified tenant mapping. Using auth user id as fallback tenant key.');
@@ -471,7 +528,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
                                         <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-blue-500 transition-colors" size={20} />
                                         <input
                                             type="email"
-                                            required
+                                            required={hasSupabaseConfig}
                                             value={email}
                                             onChange={(e) => setEmail(e.target.value)}
                                             className="w-full bg-slate-800/50 border border-slate-700 focus:border-blue-500/50 focus:ring-4 focus:ring-blue-500/10 rounded-2xl py-4 pl-12 pr-4 text-white outline-none transition-all placeholder:text-slate-600"
@@ -486,7 +543,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
                                         <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-blue-500 transition-colors" size={20} />
                                         <input
                                             type="password"
-                                            required
+                                            required={hasSupabaseConfig}
                                             value={password}
                                             onChange={(e) => setPassword(e.target.value)}
                                             className="w-full bg-slate-800/50 border border-slate-700 focus:border-blue-500/50 focus:ring-4 focus:ring-blue-500/10 rounded-2xl py-4 pl-12 pr-4 text-white outline-none transition-all placeholder:text-slate-600"
@@ -519,7 +576,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
                                         <Loader2 className="animate-spin" size={20} />
                                     ) : (
                                         <>
-                                            Continuar <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" />
+                                            {hasSupabaseConfig ? 'Continuar' : 'Elegir tipo de POS'} <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" />
                                         </>
                                     )}
                                 </button>
@@ -531,6 +588,16 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
                                 >
                                     <Building2 size={18} /> {canProvisionInline ? 'Crear Empresa y Activar' : 'Abrir Cloud Admin'}
                                 </button>
+
+                                {!hasSupabaseConfig && (
+                                    <button
+                                        type="button"
+                                        onClick={continueToTerminalModeSelection}
+                                        className="w-full border border-emerald-500/40 hover:border-emerald-400 text-emerald-200 hover:text-white bg-emerald-500/10 hover:bg-emerald-500/20 font-bold py-3 rounded-2xl transition-colors flex items-center justify-center gap-2"
+                                    >
+                                        <ShieldCheck size={18} /> Elegir tipo de POS
+                                    </button>
+                                )}
                             </form>
                         </div>
                     )}

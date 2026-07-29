@@ -15,6 +15,8 @@ import {
    PaymentEntry,
    PaymentIntegrationDefinition,
    RefundProcessingOptions,
+   Customer,
+   FiscalDocumentCorrectionInput,
 } from '../types';
 import { validateTerminalDocument } from '../utils/validation';
 import { printIntegratedPaymentArtifacts, printTicket } from '../utils/printer';
@@ -26,9 +28,11 @@ import FiscalSyncBadge from './FiscalSyncBadge';
 import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../utils/fiscalBreakdown';
 import {
    canRetryFiscalTransaction,
+   FISCAL_DOCUMENT_LABELS,
    getFiscalDisplayCode,
    getFiscalDisplayNcf,
    getFiscalRetryActionLabel,
+   isElectronicFiscalTransaction,
    isRefundLikeTransaction
 } from '../utils/fiscal/fiscalHelpers';
 import { AzulGatewayError, azulMcmService } from '../services/payments/AzulMcmService';
@@ -40,6 +44,15 @@ import {
    buildPaymentSettlementSummary,
    resolveCurrencySymbol,
 } from '../utils/paymentSettlement';
+import {
+   getRemainingRefundQuantities,
+   hasRefundableItems,
+   validateRefundItems,
+} from '../utils/refundAvailability';
+import {
+   resolveHistoryDiscountTotal,
+   resolveHistoryTerminalName,
+} from '../utils/transactionHistoryPresentation';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -51,6 +64,8 @@ interface TicketHistoryProps {
    onClose: () => void;
    initialSelectedId?: string | null; // NEW: For Smart Scan
    onRetryFiscalDocument?: (transaction: Transaction) => Promise<string>;
+   customers?: Customer[];
+   onCorrectFiscalDocument?: (transaction: Transaction, correction: FiscalDocumentCorrectionInput) => Promise<Transaction>;
    onRefundTransaction: (
       originalTx: Transaction,
       refundedItems: CartItem[],
@@ -636,12 +651,21 @@ const TicketDetailDrawer: React.FC<{
    onRequestRefund: (tx: Transaction) => void;
    onRequestAzulRefund: (tx: Transaction) => void;
    onRetryFiscalDocument?: (tx: Transaction) => Promise<string>;
+   customers?: Customer[];
+   onCorrectFiscalDocument?: (tx: Transaction, correction: FiscalDocumentCorrectionInput) => Promise<Transaction>;
    themeText: string;
    themeBg: string;
    users: User[];
-}> = ({ tx, config, onClose, onPrint, onRequestRefund, onRequestAzulRefund, onRetryFiscalDocument, themeText, themeBg, users }) => {
+}> = ({ tx, config, onClose, onPrint, onRequestRefund, onRequestAzulRefund, onRetryFiscalDocument, customers = [], onCorrectFiscalDocument, themeText, themeBg, users }) => {
    const [isRetryingFiscal, setIsRetryingFiscal] = useState(false);
    const [retryFeedback, setRetryFeedback] = useState<string | null>(null);
+   const [isCorrectionOpen, setIsCorrectionOpen] = useState(false);
+   const [correctionFiscalCode, setCorrectionFiscalCode] = useState<'E31' | 'E32'>('E32');
+   const [correctionCustomerId, setCorrectionCustomerId] = useState('');
+   const [correctionReason, setCorrectionReason] = useState('');
+   const [shouldRecalculateTaxes, setShouldRecalculateTaxes] = useState(true);
+   const [isCorrectingFiscal, setIsCorrectingFiscal] = useState(false);
+   const [correctionFeedback, setCorrectionFeedback] = useState<string | null>(null);
 
    if (!tx) return null;
    const cashierName = tx.userName || users.find(u => u.id === tx.userId)?.name || 'Sistema';
@@ -655,11 +679,20 @@ const TicketDetailDrawer: React.FC<{
    const affectedNCF = (tx.affectedNCF || '').toString().trim();
    const terminalConfig = config.terminals?.find(t => t.id === tx.terminalId)?.config;
    const fiscalSummary = calculateTransactionFiscalSummary(tx, config, { terminalConfig });
+   const historyDiscountTotal = resolveHistoryDiscountTotal(tx);
+   const historyTerminalName = resolveHistoryTerminalName(tx, config.terminals || []);
    const canRetryFiscal = canRetryFiscalTransaction(tx) && Boolean(onRetryFiscalDocument);
    const retryActionLabel = getFiscalRetryActionLabel(tx) || 'Reintentar envío';
    const canRequestAzulRefund = !isRefundDoc && tx.status !== 'REFUNDED' && canOfferAzulRefundAction(tx, config);
    const displayNcf = getFiscalDisplayNcf(tx);
    const displayFiscalCode = getFiscalDisplayCode(tx);
+   const canCorrectFiscal = isElectronicFiscalTransaction(tx)
+      && Boolean(onCorrectFiscalDocument)
+      && (tx.fiscalSyncStatus === 'ERROR' || tx.fiscalSyncStatus === 'PENDING');
+   const sortedCustomers = [...customers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+   const selectedCorrectionCustomer = sortedCustomers.find(customer => customer.id === correctionCustomerId) || null;
+   const selectedCustomerTaxDigits = (selectedCorrectionCustomer?.taxId || '').replace(/\D/g, '');
+   const selectedCustomerHasValidTaxId = selectedCustomerTaxDigits.length === 9 || selectedCustomerTaxDigits.length === 11;
 
    const handleRetryFiscal = async () => {
       if (!tx || !onRetryFiscalDocument || !canRetryFiscal) return;
@@ -674,6 +707,47 @@ const TicketDetailDrawer: React.FC<{
          setRetryFeedback(error?.message || 'No se pudo iniciar el reintento fiscal.');
       } finally {
          setIsRetryingFiscal(false);
+      }
+   };
+
+   const openFiscalCorrection = () => {
+      const currentCode = displayFiscalCode === 'E31' || displayFiscalCode === 'E32' ? displayFiscalCode : 'E32';
+      setCorrectionFiscalCode(currentCode);
+      setCorrectionCustomerId(tx.customerId || '');
+      setCorrectionReason('');
+      setShouldRecalculateTaxes(true);
+      setCorrectionFeedback(null);
+      setIsCorrectionOpen(true);
+   };
+
+   const handleApplyFiscalCorrection = async () => {
+      if (!tx || !onCorrectFiscalDocument || !canCorrectFiscal) return;
+      const reason = correctionReason.trim();
+      if (!reason) {
+         setCorrectionFeedback('Indica el motivo de la corrección.');
+         return;
+      }
+      if (correctionFiscalCode === 'E31' && (!selectedCorrectionCustomer || !selectedCustomerHasValidTaxId)) {
+         setCorrectionFeedback('Para E31 selecciona un cliente con RNC/Cédula válido.');
+         return;
+      }
+
+      setIsCorrectingFiscal(true);
+      setCorrectionFeedback(null);
+      try {
+         await onCorrectFiscalDocument(tx, {
+            fiscalCode: correctionFiscalCode,
+            customerId: correctionCustomerId || undefined,
+            reason,
+            recalculateTaxes: shouldRecalculateTaxes
+         });
+         setIsCorrectionOpen(false);
+         setRetryFeedback('Corrección aplicada. Reintenta el envío fiscal.');
+      } catch (error: any) {
+         console.error('❌ Error correcting fiscal document:', error);
+         setCorrectionFeedback(error?.message || 'No se pudo corregir el e-CF.');
+      } finally {
+         setIsCorrectingFiscal(false);
       }
    };
 
@@ -786,6 +860,12 @@ const TicketDetailDrawer: React.FC<{
                      <span>Subtotal</span>
                      <span>{config.currencySymbol}{fiscalSummary.subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
+                  {historyDiscountTotal > 0 && (
+                     <div className="flex justify-between text-xs font-bold text-rose-600 uppercase tracking-wider">
+                        <span>Descuento</span>
+                        <span>-{config.currencySymbol}{historyDiscountTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                     </div>
+                  )}
                   {fiscalSummary.taxBreakdown.length > 0 ? (
                      fiscalSummary.taxBreakdown.map((tax) => (
                         <div key={`${tx.id}-${tax.id}`} className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
@@ -819,7 +899,7 @@ const TicketDetailDrawer: React.FC<{
                      </div>
                      <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
                         <p className="text-[10px] font-bold text-gray-400 uppercase">Terminal</p>
-                        <p className="text-xs font-bold text-gray-800">{tx.terminalId || 'N/D'}</p>
+                        <p className="text-xs font-bold text-gray-800">{historyTerminalName}</p>
                      </div>
                      <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
                         <p className="text-[10px] font-bold text-gray-400 uppercase">NCF</p>
@@ -860,16 +940,27 @@ const TicketDetailDrawer: React.FC<{
                               {tx.fiscalResponseMessage}
                            </p>
                         )}
-                        {canRetryFiscal && (
+                        {(canRetryFiscal || canCorrectFiscal) && (
                            <div className="mt-3 flex flex-wrap items-center gap-3">
-                              <button
-                                 onClick={handleRetryFiscal}
-                                 disabled={isRetryingFiscal}
-                                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                              >
-                                 <RotateCcw size={12} />
-                                 {isRetryingFiscal ? 'Procesando...' : retryActionLabel}
-                              </button>
+                              {canRetryFiscal && (
+                                 <button
+                                    onClick={handleRetryFiscal}
+                                    disabled={isRetryingFiscal}
+                                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                                 >
+                                    <RotateCcw size={12} />
+                                    {isRetryingFiscal ? 'Procesando...' : retryActionLabel}
+                                 </button>
+                              )}
+                              {canCorrectFiscal && (
+                                 <button
+                                    onClick={openFiscalCorrection}
+                                    className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-black text-amber-700 hover:bg-amber-100"
+                                 >
+                                    <FileText size={12} />
+                                    Corregir e-CF
+                                 </button>
+                              )}
                               {retryFeedback && (
                                  <p className="text-[11px] font-bold text-slate-500">{retryFeedback}</p>
                               )}
@@ -1037,12 +1128,114 @@ const TicketDetailDrawer: React.FC<{
                   </div>
                </>
             </footer>
+
+            {isCorrectionOpen && (
+               <div className="absolute inset-0 z-[120] bg-black/45 backdrop-blur-sm flex items-center justify-center p-4">
+                  <div className="w-full max-w-sm rounded-2xl bg-white shadow-2xl border border-slate-100 overflow-hidden">
+                     <div className="p-4 border-b border-slate-100 flex items-start justify-between gap-3">
+                        <div>
+                           <p className="text-[10px] font-black uppercase tracking-widest text-amber-500">Corrección fiscal</p>
+                           <h4 className="text-base font-black text-slate-900">Corregir e-CF pendiente</h4>
+                           <p className="text-[11px] font-bold text-slate-400 mt-1">{displayNcf || tx.displayId}</p>
+                        </div>
+                        <button
+                           onClick={() => setIsCorrectionOpen(false)}
+                           className="p-2 rounded-full hover:bg-slate-100 text-slate-400"
+                           disabled={isCorrectingFiscal}
+                        >
+                           <X size={18} />
+                        </button>
+                     </div>
+
+                     <div className="p-4 space-y-3">
+                        <div>
+                           <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Tipo e-CF</label>
+                           <select
+                              value={correctionFiscalCode}
+                              onChange={(event) => setCorrectionFiscalCode(event.target.value as 'E31' | 'E32')}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-800"
+                              disabled={isCorrectingFiscal}
+                           >
+                              <option value="E32">{FISCAL_DOCUMENT_LABELS.E32}</option>
+                              <option value="E31">{FISCAL_DOCUMENT_LABELS.E31}</option>
+                           </select>
+                        </div>
+
+                        <div>
+                           <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">
+                              Cliente {correctionFiscalCode === 'E31' ? '(requerido)' : '(opcional)'}
+                           </label>
+                           <select
+                              value={correctionCustomerId}
+                              onChange={(event) => setCorrectionCustomerId(event.target.value)}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-800"
+                              disabled={isCorrectingFiscal}
+                           >
+                              <option value="">Consumidor final / sin cliente</option>
+                              {sortedCustomers.map(customer => (
+                                 <option key={customer.id} value={customer.id}>
+                                    {customer.name}{customer.taxId ? ` - ${customer.taxId}` : ''}
+                                 </option>
+                              ))}
+                           </select>
+                           {correctionFiscalCode === 'E31' && correctionCustomerId && !selectedCustomerHasValidTaxId && (
+                              <p className="mt-1 text-[11px] font-bold text-red-600">El cliente seleccionado no tiene RNC/Cédula válido.</p>
+                           )}
+                        </div>
+
+                        <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600">
+                           <input
+                              type="checkbox"
+                              checked={shouldRecalculateTaxes}
+                              onChange={(event) => setShouldRecalculateTaxes(event.target.checked)}
+                              disabled={isCorrectingFiscal}
+                           />
+                           Recalcular totales fiscales e impuestos
+                        </label>
+
+                        <div>
+                           <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Motivo</label>
+                           <textarea
+                              value={correctionReason}
+                              onChange={(event) => setCorrectionReason(event.target.value)}
+                              className="w-full min-h-[84px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-800 resize-none"
+                              placeholder="Ej: Cliente sin RNC válido, corrección de tipo fiscal..."
+                              disabled={isCorrectingFiscal}
+                           />
+                        </div>
+
+                        {correctionFeedback && (
+                           <p className="rounded-xl bg-red-50 px-3 py-2 text-[11px] font-bold text-red-700">
+                              {correctionFeedback}
+                           </p>
+                        )}
+                     </div>
+
+                     <div className="p-4 border-t border-slate-100 flex justify-end gap-2">
+                        <button
+                           onClick={() => setIsCorrectionOpen(false)}
+                           disabled={isCorrectingFiscal}
+                           className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-600 disabled:opacity-60"
+                        >
+                           Cancelar
+                        </button>
+                        <button
+                           onClick={handleApplyFiscalCorrection}
+                           disabled={isCorrectingFiscal}
+                           className="rounded-xl bg-amber-500 px-4 py-2 text-xs font-black text-white shadow-lg shadow-amber-500/20 disabled:opacity-60"
+                        >
+                           {isCorrectingFiscal ? 'Guardando...' : 'Aplicar corrección'}
+                        </button>
+                     </div>
+                  </div>
+               </div>
+            )}
          </div>
       </div>
    );
 };
 
-const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, onRefundTransaction, initialSelectedId, onRetryFiscalDocument }) => {
+const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, onRefundTransaction, initialSelectedId, onRetryFiscalDocument, customers = [], onCorrectFiscalDocument }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [expandedId, setExpandedId] = useState<string | null>(null);
    const [showFilters, setShowFilters] = useState(false);
@@ -1066,6 +1259,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    const [filterCashier, setFilterCashier] = useState('');
    const [filterCustomer, setFilterCustomer] = useState('');
    const [filterNcfType, setFilterNcfType] = useState('');
+   const [filterPaymentMethod, setFilterPaymentMethod] = useState('');
 
    // Return Mode State
    const [returnModeId, setReturnModeId] = useState<string | null>(null);
@@ -1086,6 +1280,113 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    const [refundTx, setRefundTx] = useState<Transaction | null>(null);
    const [refundRequestMode, setRefundRequestMode] = useState<RefundRequestMode>('STANDARD');
    const [gatewayProgress, setGatewayProgress] = useState<GatewayProgressOverlayState | null>(null);
+   const allKnownTransactions = useMemo(
+      () => Array.from(new Map([...historyTransactions, ...transactions].map(transaction => [transaction.id, transaction])).values()),
+      [historyTransactions, transactions]
+   );
+   const refundRemainingQuantities = useMemo(
+      () => refundTx ? getRemainingRefundQuantities(refundTx, allKnownTransactions) : new Map<string, number>(),
+      [allKnownTransactions, refundTx]
+   );
+
+   const normalizeTerminalKey = (value?: unknown) => String(value || '').trim().toLowerCase();
+
+   const resolveTerminalLabel = (terminal: any, fallback?: string) => {
+      const candidates = [
+         terminal?.config?.terminalName,
+         terminal?.config?.erpBinding?.terminalName,
+         terminal?.name,
+         terminal?.config?.stationNumber,
+         fallback,
+         terminal?.id,
+      ].map(value => String(value || '').trim()).filter(Boolean);
+      return candidates[0] || 'Terminal';
+   };
+
+   const resolveTerminalAliases = (terminal: any) => [
+      terminal?.id,
+      terminal?.name,
+      terminal?.config?.terminalName,
+      terminal?.config?.stationNumber,
+      terminal?.config?.erpTerminalId,
+      terminal?.config?.erpBinding?.terminalId,
+      terminal?.config?.erpBinding?.terminalName,
+      (terminal?.config as any)?.terminalId,
+      (terminal?.config as any)?.localTerminalId,
+   ].map(value => String(value || '').trim()).filter(Boolean);
+
+   const terminalFilterOptions = useMemo(() => {
+      const options = new Map<string, { value: string; label: string; aliases: string[] }>();
+
+      (config.terminals || []).forEach((terminal: any) => {
+         const aliases = resolveTerminalAliases(terminal);
+         const value = String(terminal?.id || aliases[0] || '').trim();
+         if (!value) return;
+         options.set(value, {
+            value,
+            label: resolveTerminalLabel(terminal, value),
+            aliases: Array.from(new Set([value, ...aliases])),
+         });
+      });
+
+      [...transactions, ...historyTransactions].forEach((tx) => {
+         const value = String(tx?.terminalId || '').trim();
+         if (!value) return;
+         const matching = Array.from(options.values()).find(option =>
+            option.aliases.some(alias => normalizeTerminalKey(alias) === normalizeTerminalKey(value))
+         );
+         if (matching) {
+            matching.aliases = Array.from(new Set([...matching.aliases, value]));
+            return;
+         }
+         options.set(value, { value, label: value, aliases: [value] });
+      });
+
+      return Array.from(options.values()).sort((a, b) => a.label.localeCompare(b.label));
+   }, [config.terminals, transactions, historyTransactions]);
+
+   const terminalAliasesByValue = useMemo(() => {
+      const map = new Map<string, Set<string>>();
+      terminalFilterOptions.forEach(option => {
+         map.set(option.value, new Set(option.aliases.map(normalizeTerminalKey).filter(Boolean)));
+      });
+      return map;
+   }, [terminalFilterOptions]);
+
+   const paymentMethodOptions = useMemo(() => {
+      const defaults = [
+         { value: 'CASH', label: 'Efectivo' },
+         { value: 'CARD', label: 'Tarjeta' },
+         { value: 'TRANSFER', label: 'Transferencia' },
+         { value: 'CREDIT', label: 'Crédito' },
+         { value: 'STORE_CREDIT', label: 'Crédito a favor' },
+      ];
+      const byValue = new Map<string, { value: string; label: string }>();
+      const aliases: Record<string, string> = {
+         EFECTIVO: 'CASH',
+         CASH: 'CASH',
+         TARJETA: 'CARD',
+         CARD: 'CARD',
+         CREDIT_CARD: 'CARD',
+         TRANSFERENCIA: 'TRANSFER',
+         TRANSFER: 'TRANSFER',
+         CREDITO: 'CREDIT',
+         CRÉDITO: 'CREDIT',
+         CREDIT: 'CREDIT',
+      };
+      const addOption = (rawValue: unknown, rawLabel?: unknown) => {
+         const normalized = String(rawValue || '').trim().toUpperCase();
+         if (!normalized) return;
+         const value = aliases[normalized] || normalized;
+         if (byValue.has(value)) return;
+         byValue.set(value, { value, label: String(rawLabel || rawValue || value).trim() });
+      };
+      defaults.forEach(option => addOption(option.value, option.label));
+      (config.paymentMethods || []).forEach((method: any) => {
+         addOption(method.id || method.type || method.name || method.label, method.label || method.name || method.type || method.id);
+      });
+      return Array.from(byValue.values());
+   }, [config.paymentMethods]);
 
    const persistIntegrationAuditEvent = async (
       integration: PaymentIntegrationDefinition,
@@ -1457,7 +1758,8 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       }
 
       if (filterTerminal) {
-         data = data.filter(t => t.terminalId === filterTerminal);
+         const aliases = terminalAliasesByValue.get(filterTerminal) || new Set([normalizeTerminalKey(filterTerminal)]);
+         data = data.filter(t => aliases.has(normalizeTerminalKey(t.terminalId)));
       }
 
       if (filterCashier) {
@@ -1477,11 +1779,36 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       }
 
       if (filterNcfType && filterNcfType !== 'ALL') {
-         data = data.filter(t => t.ncf?.startsWith(filterNcfType));
+         data = data.filter(t => t.ncf?.startsWith(filterNcfType) || String(t.ncfType || '').toUpperCase() === filterNcfType);
+      }
+
+      if (filterPaymentMethod && filterPaymentMethod !== 'ALL') {
+         const expectedMethod = filterPaymentMethod.toUpperCase();
+         const paymentAliases: Record<string, string> = {
+            EFECTIVO: 'CASH',
+            TARJETA: 'CARD',
+            CREDIT_CARD: 'CARD',
+            TRANSFERENCIA: 'TRANSFER',
+            CREDITO: 'CREDIT',
+            CRÉDITO: 'CREDIT',
+         };
+         data = data.filter(t => (t.payments || []).some((payment: any) => {
+            const candidates = [
+               payment?.method,
+               payment?.methodId,
+               payment?.methodLabel,
+               payment?.type,
+               payment?.gatewayProvider
+            ].map(value => {
+               const normalized = String(value || '').trim().toUpperCase();
+               return paymentAliases[normalized] || normalized;
+            }).filter(Boolean);
+            return candidates.includes(expectedMethod);
+         }));
       }
 
       return data;
-   }, [transactions, historyTransactions, searchTerm, filterDateStart, filterDateEnd, filterTerminal, filterCashier, filterCustomer, filterNcfType]);
+   }, [transactions, historyTransactions, searchTerm, filterDateStart, filterDateEnd, filterTerminal, filterCashier, filterCustomer, filterNcfType, filterPaymentMethod, terminalAliasesByValue]);
 
    // --- KPI CALCULATIONS ---
    const kpis = useMemo(() => {
@@ -1895,6 +2222,11 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       reason: string
    ) => {
       if (!originalTx || refundItems.length === 0) return;
+      const availability = validateRefundItems(originalTx, refundItems, allKnownTransactions);
+      if ('message' in availability) {
+         alert(availability.message);
+         return;
+      }
 
       const terminalId = originalTx.terminalId || config.terminals?.[0]?.id || 'T1';
       const validation = validateTerminalDocument(config, terminalId, 'REFUND');
@@ -2017,7 +2349,9 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                         className="px-2 py-1.5 bg-gray-50 border border-gray-100 rounded-lg text-[11px] font-bold text-gray-600 outline-none hover:bg-white transition-colors"
                      >
                         <option value="">Terminal</option>
-                        {(config.terminals || []).map(t => <option key={t.id} value={t.id}>{t.id}</option>)}
+                        {terminalFilterOptions.map(option => (
+                           <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
                      </select>
                      <button
                         onClick={() => setShowFilters(!showFilters)}
@@ -2048,9 +2382,22 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                         <option value="ALL">Cualquiera</option>
                         <option value="B01">Crédito Fiscal</option>
                         <option value="B02">Consumo Final</option>
+                        <option value="B14">Regímenes Especiales</option>
+                        <option value="B15">Gubernamental</option>
                      </select>
                   </div>
-                  <button onClick={() => { setSearchTerm(''); setFilterDateStart(''); setFilterDateEnd(''); setFilterTerminal(''); setFilterCashier(''); setFilterNcfType(''); }} className="text-[10px] font-bold text-red-500 ml-auto hover:underline uppercase">Reset</button>
+                  <div className="flex items-center gap-2">
+                     <span className="text-[10px] font-bold text-gray-400 uppercase">Pago:</span>
+                     <select value={filterPaymentMethod} onChange={e => setFilterPaymentMethod(e.target.value)} className="px-2 py-1 bg-white border border-gray-200 rounded text-[11px] font-bold">
+                        <option value="ALL">Todos</option>
+                        {paymentMethodOptions.map((method) => (
+                           <option key={method.value} value={method.value}>
+                              {method.label}
+                           </option>
+                        ))}
+                     </select>
+                  </div>
+                  <button onClick={() => { setSearchTerm(''); setFilterDateStart(''); setFilterDateEnd(''); setFilterTerminal(''); setFilterCashier(''); setFilterNcfType(''); setFilterPaymentMethod(''); }} className="text-[10px] font-bold text-red-500 ml-auto hover:underline uppercase">Reset</button>
                </div>
             )}
          </header>
@@ -2083,6 +2430,11 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             onClose={() => setSelectedTxId(null)}
             onPrint={(tx) => { void handlePrintTransaction(tx); }}
             onRequestRefund={(tx) => {
+               const remaining = getRemainingRefundQuantities(tx, allKnownTransactions);
+               if (!hasRefundableItems(remaining)) {
+                  alert('Esta factura ya fue abonada completamente y no tiene saldo pendiente de devolución.');
+                  return;
+               }
                setRefundRequestMode('STANDARD');
                setRefundTx(tx);
                setIsRefundModalOpen(true);
@@ -2093,6 +2445,12 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                setIsRefundModalOpen(true);
             }}
             onRetryFiscalDocument={onRetryFiscalDocument}
+            customers={customers}
+            onCorrectFiscalDocument={onCorrectFiscalDocument ? async (tx, correction) => {
+               const corrected = await onCorrectFiscalDocument(tx, correction);
+               setHistoryTransactions(prev => prev.map(item => item.id === corrected.id ? corrected : item));
+               return corrected;
+            } : undefined}
             themeText={themeText}
             themeBg={themeBg}
             users={users}
@@ -2141,6 +2499,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             onConfirm={handleConfirmRefundFromModal}
             currencySymbol={config.currencySymbol}
             mode={refundRequestMode}
+            remainingQuantities={refundRemainingQuantities}
          />
 
          <SupervisorModal {...supervisorModalProps} users={users} />

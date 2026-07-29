@@ -5,10 +5,12 @@ import {
   FiscalDocumentCode,
   FiscalMode,
   FiscalProviderConfig,
+  FiscalProviderDeliveryMode,
   FiscalProviderEnvironment,
   FiscalProviderId,
   FiscalReserveAlertConfig,
   NCFType,
+  TerminalConfig,
   Transaction
 } from '../../types';
 
@@ -26,6 +28,18 @@ export const DEFAULT_FISCAL_PROVIDERS: FiscalProviderConfig[] = [
     enabled: true,
     environment: 0,
     displayName: 'Polaris EDI',
+    deliveryMode: 'LOCAL_DIRECT',
+    tipoIngreso: 1,
+    modificationCode: 2,
+    unitCodeGoods: 47,
+    unitCodeServices: 43
+  },
+  {
+    id: 'DIGIFACT',
+    enabled: true,
+    environment: 0,
+    displayName: 'DigiFact',
+    deliveryMode: 'LOCAL_DIRECT',
     tipoIngreso: 1,
     modificationCode: 2,
     unitCodeGoods: 47,
@@ -59,6 +73,237 @@ export const normalizeFiscalCredentialKey = (value: unknown): string =>
   typeof value === 'string'
     ? value.trim().replace(/[^A-Za-z0-9]/g, '').toUpperCase()
     : '';
+
+export const normalizeFiscalProviderId = (value: unknown): FiscalProviderId => {
+  const normalized = typeof value === 'string' ? value.trim().toUpperCase() : '';
+  if (normalized === 'POLARIS' || normalized === 'DIGIFACT' || normalized === 'NONE') {
+    return normalized;
+  }
+  return 'NONE';
+};
+
+export const normalizeFiscalMode = (value: unknown): FiscalMode => {
+  if (typeof value === 'boolean') return value ? DEFAULT_FISCAL_COMPLIANCE_CONFIG.mode : 'NONE';
+  const normalized = typeof value === 'string'
+    ? value.trim().toUpperCase().replace(/[\s-]+/g, '_')
+    : '';
+  if (normalized === 'NONE' || normalized === 'LEGACY_B' || normalized === 'ECF') return normalized;
+  if (
+    normalized === 'NO_FISCAL' ||
+    normalized === 'NON_FISCAL' ||
+    normalized === 'SIN_COMPROBANTES' ||
+    normalized === 'SIN_COMPROBANTE' ||
+    normalized === 'COMPROBANTE_NO_FISCAL' ||
+    normalized === 'DISABLED' ||
+    normalized === 'OFF'
+  ) return 'NONE';
+  if (normalized === 'LEGACY_NCF' || normalized === 'LEGACY') return 'LEGACY_B';
+  if (normalized === 'NCF' || normalized === 'B' || normalized === 'B_SERIES') return 'LEGACY_B';
+  if (normalized === 'E_CF' || normalized === 'E-CF' || normalized === 'E_COMPROBANTE' || normalized === 'E_COMPROBANTES') return 'ECF';
+  return DEFAULT_FISCAL_COMPLIANCE_CONFIG.mode;
+};
+
+export const isFiscalComplianceDisabled = (mode?: FiscalMode | null): boolean =>
+  mode === 'NONE';
+
+const normalizeFiscalEnvironment = (value: unknown): FiscalProviderEnvironment => {
+  const parsed = Number(value);
+  return parsed === 0 || parsed === 1 || parsed === 2 || parsed === 3 ? parsed : 0;
+};
+
+const normalizeOptionalNumber = (value: unknown): number | undefined => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const normalizeOptionalString = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() ? value.trim() : undefined;
+
+const normalizeFiscalEstablishmentCode = (value: unknown): string | undefined => {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) return undefined;
+  return trimmed.replace(/[^A-Za-z0-9]/g, '').toUpperCase() || undefined;
+};
+
+const normalizeFiscalCashierCode = (value: unknown): string | undefined => {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) return undefined;
+  return trimmed.replace(/[^A-Za-z0-9]/g, '').toUpperCase() || undefined;
+};
+
+const normalizeOptionalBoolean = (value: unknown): boolean | undefined => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'si', 'sí'].includes(normalized)) return true;
+    if (['false', '0', 'no'].includes(normalized)) return false;
+  }
+  return undefined;
+};
+
+export const normalizeFiscalProviderDeliveryMode = (value: unknown): FiscalProviderDeliveryMode | undefined => {
+  const normalized = typeof value === 'string'
+    ? value.trim().toUpperCase().replace(/[\s-]+/g, '_')
+    : '';
+  if (normalized === 'LOCAL_DIRECT' || normalized === 'LOCAL') return 'LOCAL_DIRECT';
+  if (normalized === 'DELEGATED_ERP' || normalized === 'ERP' || normalized === 'DELEGATED') return 'DELEGATED_ERP';
+  return undefined;
+};
+
+const getTerminalFiscalProviderConfig = (
+  terminalConfig?: TerminalConfig | null
+): FiscalProviderConfig | null => {
+  const fiscal = terminalConfig?.fiscal as (TerminalConfig['fiscal'] & Record<string, unknown>) | undefined;
+  if (!fiscal) return null;
+
+  const hasProviderField =
+    fiscal.providerId !== undefined ||
+    fiscal.provider_id !== undefined ||
+    fiscal.provider !== undefined;
+  const providerId = normalizeFiscalProviderId(
+    fiscal.providerId ?? fiscal.provider_id ?? fiscal.provider
+  );
+  const enabled = normalizeOptionalBoolean(fiscal.enabled);
+
+  if (enabled === false || (hasProviderField && providerId === 'NONE')) {
+    return { id: 'NONE', enabled: true, environment: 0, displayName: 'Sin proveedor' };
+  }
+
+  if (!hasProviderField || providerId === 'NONE') return null;
+
+  return {
+    id: providerId,
+    enabled: enabled ?? true,
+    environment: normalizeFiscalEnvironment(fiscal.environment),
+    deliveryMode: normalizeFiscalProviderDeliveryMode(
+      fiscal.deliveryMode
+      ?? fiscal.delivery_mode
+      ?? fiscal.fiscalDeliveryMode
+      ?? fiscal.fiscal_delivery_mode
+      ?? fiscal.providerMode
+      ?? fiscal.provider_mode
+    ),
+    apiBaseUrl: normalizeOptionalString(fiscal.apiBaseUrl ?? fiscal.api_base_url ?? fiscal.baseUrl ?? fiscal.base_url),
+    testUrl: normalizeOptionalString(fiscal.testUrl ?? fiscal.test_url),
+    issueUrl: normalizeOptionalString(fiscal.issueUrl ?? fiscal.issue_url),
+    statusUrl: normalizeOptionalString(fiscal.statusUrl ?? fiscal.status_url),
+    credentialKey: normalizeFiscalCredentialKey(fiscal.credentialKey ?? fiscal.credential_key) || undefined,
+    establishmentCode: normalizeFiscalEstablishmentCode(
+      fiscal.establishmentCode
+      ?? fiscal.establishment_code
+      ?? fiscal.digifactEstablishmentCode
+      ?? fiscal.digifact_establishment_code
+      ?? fiscal.sucursalCode
+      ?? fiscal.sucursal_code
+    ),
+    branchCode: normalizeFiscalEstablishmentCode(
+      fiscal.branchCode
+      ?? fiscal.branch_code
+      ?? fiscal.digifactBranchCode
+      ?? fiscal.digifact_branch_code
+      ?? fiscal.branchId
+      ?? fiscal.branch_id
+    ),
+    branchName: normalizeOptionalString(fiscal.branchName ?? fiscal.branch_name ?? fiscal.sucursalName ?? fiscal.sucursal_name),
+    cashierCode: normalizeFiscalCashierCode(
+      fiscal.cashierCode
+      ?? fiscal.cashier_code
+      ?? fiscal.digifactCashierCode
+      ?? fiscal.digifact_cashier_code
+      ?? fiscal.posCode
+      ?? fiscal.pos_code
+      ?? fiscal.pointOfSaleCode
+      ?? fiscal.point_of_sale_code
+      ?? fiscal.terminalCode
+      ?? fiscal.terminal_code
+      ?? fiscal.caja
+      ?? fiscal.cajaCode
+      ?? fiscal.caja_code
+    ),
+    tipoIngreso: normalizeOptionalNumber(fiscal.tipoIngreso ?? fiscal.tipo_ingreso),
+    modificationCode: normalizeOptionalNumber(fiscal.modificationCode ?? fiscal.modification_code),
+    unitCodeGoods: normalizeOptionalNumber(fiscal.unitCodeGoods ?? fiscal.unit_code_goods),
+    unitCodeServices: normalizeOptionalNumber(fiscal.unitCodeServices ?? fiscal.unit_code_services)
+  };
+};
+
+export const resolveFiscalProviderEstablishmentCode = (...sources: unknown[]): string | undefined => {
+  const candidateKeys = [
+    'establishmentCode',
+    'establishment_code',
+    'digifactEstablishmentCode',
+    'digifact_establishment_code',
+    'branchCode',
+    'branch_code',
+    'digifactBranchCode',
+    'digifact_branch_code',
+    'sucursalCode',
+    'sucursal_code',
+    'branchId',
+    'branch_id'
+  ];
+  const nestedKeys = ['fiscal', 'digifact', 'providerOptions', 'options', 'metadata', 'erpBinding', 'erpSnapshot'];
+
+  const visit = (source: unknown, depth = 0): string | undefined => {
+    if (!source || depth > 2 || typeof source !== 'object') return undefined;
+    const record = source as Record<string, unknown>;
+    for (const key of candidateKeys) {
+      const normalized = normalizeFiscalEstablishmentCode(record[key]);
+      if (normalized) return normalized;
+    }
+    for (const key of nestedKeys) {
+      const normalized = visit(record[key], depth + 1);
+      if (normalized) return normalized;
+    }
+    return undefined;
+  };
+
+  for (const source of sources) {
+    const normalized = visit(source);
+    if (normalized) return normalized;
+  }
+  return undefined;
+};
+
+export const resolveFiscalProviderCashierCode = (...sources: unknown[]): string | undefined => {
+  const candidateKeys = [
+    'cashierCode',
+    'cashier_code',
+    'digifactCashierCode',
+    'digifact_cashier_code',
+    'posCode',
+    'pos_code',
+    'pointOfSaleCode',
+    'point_of_sale_code',
+    'terminalCode',
+    'terminal_code',
+    'caja',
+    'cajaCode',
+    'caja_code'
+  ];
+  const nestedKeys = ['fiscal', 'digifact', 'providerOptions', 'options', 'metadata', 'erpBinding', 'erpSnapshot'];
+
+  const visit = (source: unknown, depth = 0): string | undefined => {
+    if (!source || depth > 2 || typeof source !== 'object') return undefined;
+    const record = source as Record<string, unknown>;
+    for (const key of candidateKeys) {
+      const normalized = normalizeFiscalCashierCode(record[key]);
+      if (normalized) return normalized;
+    }
+    for (const key of nestedKeys) {
+      const normalized = visit(record[key], depth + 1);
+      if (normalized) return normalized;
+    }
+    return undefined;
+  };
+
+  for (const source of sources) {
+    const normalized = visit(source);
+    if (normalized) return normalized;
+  }
+  return undefined;
+};
 
 export const FISCAL_DOCUMENT_LABELS: Record<FiscalDocumentCode, string> = {
   B01: 'Credito Fiscal',
@@ -209,17 +454,64 @@ export const getFiscalComplianceConfig = (
   const incoming = config?.fiscalCompliance;
   if (!incoming) return DEFAULT_FISCAL_COMPLIANCE_CONFIG;
 
+  const defaultProviderIds = new Set(DEFAULT_FISCAL_PROVIDERS.map(provider => provider.id));
   const mergedProviders = DEFAULT_FISCAL_PROVIDERS.map(defaultProvider => {
     const custom = (incoming.providers || []).find(provider => provider.id === defaultProvider.id);
     return custom ? { ...defaultProvider, ...custom } : defaultProvider;
-  });
+  }).concat(
+    (incoming.providers || [])
+      .filter(provider => provider?.id && !defaultProviderIds.has(provider.id))
+      .map(provider => ({
+        ...provider,
+        id: normalizeFiscalProviderId(provider.id),
+        enabled: provider.enabled ?? true
+      }))
+      .filter(provider => provider.id !== 'NONE')
+  );
 
   return {
-    mode: incoming.mode || DEFAULT_FISCAL_COMPLIANCE_CONFIG.mode,
-    defaultProvider: incoming.defaultProvider || DEFAULT_FISCAL_COMPLIANCE_CONFIG.defaultProvider,
+    mode: normalizeFiscalMode(incoming.mode),
+    defaultProvider: normalizeFiscalMode(incoming.mode) === 'NONE'
+      ? 'NONE'
+      : normalizeFiscalProviderId(incoming.defaultProvider) || DEFAULT_FISCAL_COMPLIANCE_CONFIG.defaultProvider,
     allowLegacyFallback: incoming.allowLegacyFallback ?? DEFAULT_FISCAL_COMPLIANCE_CONFIG.allowLegacyFallback,
     providers: mergedProviders,
     reserveAlert: normalizeFiscalReserveAlertConfig(incoming.reserveAlert)
+  };
+};
+
+export const getEffectiveFiscalComplianceConfig = (
+  config?: BusinessConfig | null,
+  terminalConfig?: TerminalConfig | null
+): FiscalComplianceConfig => {
+  const base = getFiscalComplianceConfig(config);
+  const terminalProvider = getTerminalFiscalProviderConfig(terminalConfig);
+
+  if (!terminalProvider) return base;
+
+  if (terminalProvider.id === 'NONE' || terminalProvider.enabled === false) {
+    return {
+      ...base,
+      mode: 'NONE',
+      defaultProvider: 'NONE'
+    };
+  }
+
+  const fallbackProvider = getFiscalProviderConfig(base, terminalProvider.id);
+  const effectiveProvider: FiscalProviderConfig = {
+    ...fallbackProvider,
+    ...terminalProvider,
+    enabled: terminalProvider.enabled ?? fallbackProvider.enabled ?? true
+  };
+  const providers = base.providers.some(provider => provider.id === effectiveProvider.id)
+    ? base.providers.map(provider => provider.id === effectiveProvider.id ? effectiveProvider : provider)
+    : [...base.providers, effectiveProvider];
+
+  return {
+    ...base,
+    mode: 'ECF',
+    defaultProvider: effectiveProvider.id,
+    providers
   };
 };
 
@@ -306,10 +598,11 @@ export const getFiscalProviderConfig = (
 
 export const getFiscalProviderCredentialKey = (
   config?: BusinessConfig | null,
-  providerId?: FiscalProviderId
+  providerId?: FiscalProviderId,
+  terminalConfig?: TerminalConfig | null
 ): string | undefined => {
   if (!providerId || providerId === 'NONE') return undefined;
-  const fiscalCompliance = getFiscalComplianceConfig(config);
+  const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, terminalConfig);
   const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
   const explicitKey = normalizeFiscalCredentialKey(providerConfig.credentialKey);
   if (explicitKey) return explicitKey;
@@ -321,5 +614,8 @@ export const getFiscalProviderCredentialKey = (
 export const shouldUseElectronicFiscalFlow = (config?: BusinessConfig | null): boolean =>
   getFiscalComplianceConfig(config).mode === 'ECF';
 
-export const getDefaultFiscalProvider = (config?: BusinessConfig | null): FiscalProviderId =>
-  getFiscalComplianceConfig(config).defaultProvider;
+export const getDefaultFiscalProvider = (
+  config?: BusinessConfig | null,
+  terminalConfig?: TerminalConfig | null
+): FiscalProviderId =>
+  getEffectiveFiscalComplianceConfig(config, terminalConfig).defaultProvider;

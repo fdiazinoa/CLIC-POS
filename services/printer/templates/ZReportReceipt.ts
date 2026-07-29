@@ -2,9 +2,28 @@ import { ZReport } from '../../../types';
 
 export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] = []): string => {
   const width = '80mm'; // Standard thermal paper width
+  const isXReport = (report as any).reportType === 'X';
+  const reportTitle = isXReport ? 'CIERRE X (ARQUEO)' : 'REPORTE DE CIERRE (Z)';
+  const totalsByMethod = report.totalsByMethod || {};
+  const cashExpected = report.cashExpected || {};
+  const cashCounted = report.cashCounted || {};
+  const cashDiscrepancy = report.cashDiscrepancy || {};
+  const cashMovementDetails = Array.isArray(report.cashMovementDetails) ? report.cashMovementDetails : [];
+  const stats = (report.stats || {}) as any;
+  const rawCurrency = String(report.baseCurrency || '').trim();
+  const currencyCode = /^[A-Z]{3}$/.test(rawCurrency) ? rawCurrency : '';
+  const currencyPrefix = currencyCode ? '' : (rawCurrency || '$');
 
-  const formatCurrency = (amount: number, currency: string) => {
-    return new Intl.NumberFormat('es-DO', { style: 'currency', currency }).format(amount);
+  const formatCurrency = (amount: number) => {
+    const value = Number(amount || 0);
+    if (currencyCode) {
+      try {
+        return new Intl.NumberFormat('es-DO', { style: 'currency', currency: currencyCode }).format(value);
+      } catch {
+        // Some legacy Z reports stored symbols instead of ISO currency codes.
+      }
+    }
+    return `${currencyPrefix}${value.toFixed(2)}`;
   };
 
   const formatDate = (isoString: string) => {
@@ -21,7 +40,7 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
     <!DOCTYPE html>
     <html>
     <head>
-      <title>Z-Report ${report.sequenceNumber}</title>
+      <title>${isXReport ? 'X-Report' : 'Z-Report'} ${report.sequenceNumber}</title>
       <style>
         @page { margin: 0; size: auto; }
         body {
@@ -52,7 +71,7 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
         <div>RNC: 123456789</div>
         <div>Tel: 809-555-0123</div>
         <br/>
-        <div class="bold" style="font-size: 14px;">REPORTE DE CIERRE (Z)</div>
+        <div class="bold" style="font-size: 14px;">${reportTitle}</div>
         <div class="bold">${report.sequenceNumber}</div>
       </div>
 
@@ -79,24 +98,24 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
       <div class="bold">RESUMEN FINANCIERO</div>
       <div class="row">
         <span>Ventas Brutas:</span>
-        <span>${formatCurrency(report.stats?.grossSales || 0, report.baseCurrency)}</span>
+        <span>${formatCurrency(stats.grossSales || 0)}</span>
       </div>
       <div class="row">
         <span>Devoluciones/NC:</span>
-        <span>- ${formatCurrency(report.stats?.returnsTotal || 0, report.baseCurrency)}</span>
+        <span>- ${formatCurrency(stats.returnsTotal || 0)}</span>
       </div>
       <div class="divider" style="margin: 2px 0; border-top: 0.5px solid #ccc;"></div>
       <div class="row">
         <span>Ventas Netas:</span>
-        <span class="bold">${formatCurrency(report.stats?.netSales || 0, report.baseCurrency)}</span>
+        <span class="bold">${formatCurrency(stats.netSales || 0)}</span>
       </div>
       <div class="row">
         <span>Recaud. Anticipos:</span>
-        <span>${formatCurrency(report.stats?.advancementsTotal || 0, report.baseCurrency)}</span>
+        <span>${formatCurrency(stats.advancementsTotal || 0)}</span>
       </div>
       <div class="row total-row">
         <span>TOTAL REBROCADO:</span>
-        <span>${formatCurrency(Object.values(report.totalsByMethod).reduce((a, b) => a + b, 0), report.baseCurrency)}</span>
+        <span>${formatCurrency(Object.values(totalsByMethod).reduce((a, b) => a + Number(b || 0), 0))}</span>
       </div>
       <div class="row">
         <span>Transacciones:</span>
@@ -107,10 +126,10 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
       <!-- PAYMENT METHODS -->
       ${!hiddenModules.includes('PAYMENTS') ? `
       <div class="section-title">MÉTODOS DE PAGO</div>
-      ${Object.entries(report.totalsByMethod).map(([method, amount]) => `
+      ${Object.entries(totalsByMethod).map(([method, amount]) => `
         <div class="row">
           <span>${method}:</span>
-          <span>${formatCurrency(amount, report.baseCurrency)}</span>
+          <span>${formatCurrency(Number(amount || 0))}</span>
         </div>
       `).join('')}
       ` : ''}
@@ -118,10 +137,10 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
       <!-- CASH DETAILS -->
       ${!hiddenModules.includes('CASH_DETAILS') ? `
       <div class="section-title">ARQUEO DE CAJA</div>
-      ${Object.keys(report.cashExpected).map(currency => {
-    const expected = report.cashExpected[currency] || 0;
-    const counted = report.cashCounted[currency] || 0;
-    const diff = report.cashDiscrepancy[currency] || 0;
+      ${Object.keys(cashExpected).map(currency => {
+    const expected = cashExpected[currency] || 0;
+    const counted = cashCounted[currency] || 0;
+    const diff = cashDiscrepancy[currency] || 0;
     return `
           <div style="margin-bottom: 5px;">
             <div class="bold" style="text-decoration: underline;">${currency}</div>
@@ -133,23 +152,37 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
   }).join('')}
       ` : ''}
 
+      ${!hiddenModules.includes('CASH_DETAILS') && cashMovementDetails.length > 0 ? `
+      <div class="section-title">ENTRADAS / SALIDAS DE EFECTIVO</div>
+      ${cashMovementDetails.map(movement => `
+        <div style="margin-bottom: 5px;">
+          <div class="row">
+            <span class="bold">${movement.type === 'IN' ? 'Entrada' : 'Salida'}</span>
+            <span>${formatCurrency(Number(movement.amount || 0))}</span>
+          </div>
+          <div style="font-size: 11px;">${movement.reason || 'Movimiento General'}</div>
+          <div style="font-size: 10px;">${movement.timestamp ? formatDate(movement.timestamp) : ''}${movement.userName ? ` · ${movement.userName}` : ''}</div>
+        </div>
+      `).join('')}
+      ` : ''}
+
       <!-- KPIS -->
       ${!hiddenModules.includes('KPIS') && report.stats ? `
         <div class="divider"></div>
         <div class="bold center">ESTADÍSTICAS DEL TURNO</div>
         <div class="row">
           <span>Ticket Promedio:</span>
-          <span>${formatCurrency(report.stats.averageTicket, report.baseCurrency)}</span>
+          <span>${formatCurrency(stats.averageTicket || 0)}</span>
         </div>
         <div class="row">
           <span>Items / Venta:</span>
-          <span>${report.stats.itemsPerSale.toFixed(1)}</span>
+          <span>${Number(stats.itemsPerSale || 0).toFixed(1)}</span>
         </div>
         <div class="row">
           <span>Prod. Estrella:</span>
-          <span>${report.stats.topProduct?.name.substring(0, 15) || 'N/A'}</span>
+          <span>${stats.topProduct?.name.substring(0, 15) || 'N/A'}</span>
         </div>
-        <div class="right" style="font-size: 10px;">(${report.stats.topProduct?.quantity || 0} unds)</div>
+        <div class="right" style="font-size: 10px;">(${stats.topProduct?.quantity || 0} unds)</div>
       ` : ''}
 
       <!-- AUDIT (New) -->
@@ -158,15 +191,15 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
         <div class="bold center">AUDITORÍA</div>
         <div class="row">
           <span>Devoluciones:</span>
-          <span>${report.stats.returnsCount} (${formatCurrency(report.stats.returnsTotal, report.baseCurrency)})</span>
+          <span>${stats.returnsCount || 0} (${formatCurrency(stats.returnsTotal || 0)})</span>
         </div>
         <div class="row">
           <span>Descuentos:</span>
-          <span>${formatCurrency(report.stats.discountsTotal || 0, report.baseCurrency)}</span>
+          <span>${formatCurrency(stats.discountsTotal || 0)}</span>
         </div>
         <div class="row">
           <span>Recaud. Anticipos:</span>
-          <span class="bold">${formatCurrency(report.stats.advancementsTotal || 0, report.baseCurrency)}</span>
+          <span class="bold">${formatCurrency(stats.advancementsTotal || 0)}</span>
         </div>
       ` : ''}
 
@@ -177,6 +210,7 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
         __________________________<br/>
         Firma del Cajero
       </div>
+      ${isXReport ? '<div class="center bold" style="font-size: 10px; margin-top: 8px;">ARQUEO PARCIAL - NO LIMPIA VENTAS</div>' : ''}
       <br/>
       <div class="center" style="font-size: 10px;">
         Generado por CLIC POS<br/>

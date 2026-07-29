@@ -28,6 +28,7 @@ import {
    getFiscalComplianceConfig,
    SUPPORTED_FISCAL_CODES
 } from '../utils/fiscal/fiscalHelpers';
+import { isFiscalDocumentSeries, resolveDocumentSeriesDisplayPrefix } from '../utils/documentSeriesIdentity';
 
 interface DocumentSettingsProps {
    onClose: () => void;
@@ -83,7 +84,18 @@ const normalizeDocumentType = (value: unknown): string => {
 };
 
 const inferDocumentType = (series: any): string => {
-   const explicitType = normalizeDocumentType(series?.documentType);
+   const documentTypeObject = series?.document_type && typeof series.document_type === 'object' ? series.document_type : null;
+   const explicitType = normalizeDocumentType(
+      series?.documentType ||
+      series?.document_type ||
+      series?.documentTypeCode ||
+      series?.document_type_code ||
+      series?.type ||
+      series?.typeCode ||
+      series?.type_code ||
+      documentTypeObject?.code ||
+      documentTypeObject?.name
+   );
    if (DOCUMENT_TYPE_SET.has(explicitType)) return explicitType;
 
    const typeFromId = normalizeDocumentType(series?.id);
@@ -109,18 +121,22 @@ const normalizeSequence = (raw: any): DocumentSeries | null => {
       normalizeDocumentType(s.id) === documentType
    );
 
-   const prefix = String(raw.prefix || fallback?.prefix || 'DOC').trim().toUpperCase();
-   const safeId = String(raw.id || `${documentType}_${prefix}`).trim();
+   const prefix = String(resolveDocumentSeriesDisplayPrefix(raw) || fallback?.prefix || 'DOC').trim().toUpperCase();
+   const safeId = String(raw.id || raw.uuid || raw.uid || raw.seriesId || raw.series_id || `${documentType}_${prefix}`).trim();
    if (!safeId) return null;
 
-   const nextNumberRaw = Number(raw.nextNumber);
-   const paddingRaw = Number(raw.padding);
+   const nextNumberRaw = Number(raw.nextNumber ?? raw.next_number ?? raw.currentNumber ?? raw.current_number ?? raw.next ?? raw.consecutive);
+   const paddingRaw = Number(raw.padding ?? raw.digits ?? raw.length ?? raw.sequenceLength ?? raw.sequence_length);
 
    return {
       id: safeId,
+      ...(raw.code ? { code: String(raw.code).trim() } : {}),
+      ...(raw.source ? { source: String(raw.source).trim() } : {}),
+      ...(raw.terminalId ? { terminalId: String(raw.terminalId).trim() } : {}),
+      ...(raw.terminal_id ? { terminalId: String(raw.terminal_id).trim() } : {}),
       documentType: documentType as DocumentSeries['documentType'],
-      name: String(raw.name || fallback?.name || `Serie ${documentType}`).trim(),
-      description: String(raw.description || fallback?.description || 'Documento interno.').trim(),
+      name: String(raw.name || raw.label || fallback?.name || `Serie ${documentType}`).trim(),
+      description: String(raw.description || raw.notes || fallback?.description || 'Documento interno.').trim(),
       prefix: prefix || 'DOC',
       nextNumber: Number.isFinite(nextNumberRaw) && nextNumberRaw > 0 ? Math.floor(nextNumberRaw) : (fallback?.nextNumber || 1),
       padding: Number.isFinite(paddingRaw) && paddingRaw >= 0 ? Math.floor(paddingRaw) : (fallback?.padding ?? 6),
@@ -135,6 +151,7 @@ const normalizeSequenceCollection = (rows: any[]): DocumentSeries[] => {
    for (const row of Array.isArray(rows) ? rows : []) {
       const normalized = normalizeSequence(row);
       if (!normalized) continue;
+      if (isFiscalDocumentSeries(normalized)) continue;
       const existing = map.get(normalized.id);
       if (!existing) {
          map.set(normalized.id, normalized);
@@ -147,6 +164,84 @@ const normalizeSequenceCollection = (rows: any[]): DocumentSeries[] => {
       });
    }
    return Array.from(map.values());
+};
+
+const normalizeId = (value: unknown): string => String(value || '').trim().toUpperCase();
+
+const findActiveTerminalConfig = (config?: BusinessConfig | null, terminalId?: string): any | null => {
+   const terminals = Array.isArray(config?.terminals) ? config!.terminals : [];
+   if (terminals.length === 0) return null;
+
+   const candidates = [
+      terminalId,
+      localStorage.getItem('active_terminal_id'),
+      localStorage.getItem('CLIC_POS_TERMINAL_ID'),
+      localStorage.getItem('clic_pos_terminal_id'),
+   ].map(normalizeId).filter(Boolean);
+
+   const match = terminals.find((terminal: any) => {
+      const ids = [
+         terminal?.id,
+         terminal?.terminalId,
+         terminal?.terminal_id,
+         terminal?.config?.erpTerminalId,
+         terminal?.config?.erp_terminal_id,
+         terminal?.config?.erpBinding?.terminalId,
+         terminal?.config?.erpBinding?.terminal_id,
+      ].map(normalizeId).filter(Boolean);
+      return candidates.some(candidate => ids.includes(candidate));
+   });
+
+   return match || terminals.find((terminal: any) =>
+      Array.isArray(terminal?.config?.documentSeries) &&
+      terminal.config.documentSeries.some((series: any) =>
+         String(series?.source || '').toUpperCase() === 'ERP_TERMINAL_CONFIG'
+      )
+   ) || terminals[0] || null;
+};
+
+const collectAssignedDocumentSeriesIds = (terminalConfig: any): Set<string> => {
+   const assignments = terminalConfig?.documentAssignments || terminalConfig?.document_assignments || {};
+   const ids = new Set<string>();
+   Object.values(assignments || {}).forEach((value) => {
+      const key = normalizeId(value);
+      if (key) ids.add(key);
+   });
+   return ids;
+};
+
+const filterSeriesForActiveTerminal = (
+   rows: DocumentSeries[],
+   activeTerminalConfig: any | null
+): DocumentSeries[] => {
+   if (!activeTerminalConfig) return rows;
+   const terminalSeries = normalizeSequenceCollection(
+      Array.isArray(activeTerminalConfig?.config?.documentSeries)
+         ? activeTerminalConfig.config.documentSeries
+         : Array.isArray(activeTerminalConfig?.documentSeries)
+            ? activeTerminalConfig.documentSeries
+            : []
+   );
+   const terminalSeriesKeys = new Set(
+      terminalSeries.flatMap((series: any) => [
+         normalizeId(series.id),
+         normalizeId(series.code),
+         normalizeId(series.prefix),
+      ]).filter(Boolean)
+   );
+   const assignedKeys = collectAssignedDocumentSeriesIds(activeTerminalConfig?.config || activeTerminalConfig);
+   const allowedKeys = new Set([...terminalSeriesKeys, ...assignedKeys]);
+   if (allowedKeys.size === 0) return rows;
+
+   return rows.filter((series: any) => {
+      const keys = [
+         series.id,
+         series.code,
+         series.prefix,
+         series.documentType,
+      ].map(normalizeId).filter(Boolean);
+      return keys.some(key => allowedKeys.has(key));
+   });
 };
 
 const extractConfig = (raw: any): BusinessConfig | null => {
@@ -235,6 +330,136 @@ const FISCAL_CREDENTIAL_SOURCE_LABELS: Record<'env' | 'sqlite' | 'supabase', str
 
 const normalizeKey = (value: unknown): string => String(value || '').trim().toUpperCase();
 
+const isDemoFiscalValue = (value: unknown): boolean => {
+   const text = String(value || '').trim().toUpperCase();
+   return Boolean(text && (
+      text.includes('DEMO') ||
+      text.includes('XXXX') ||
+      text.startsWith('FR-RECOVERED') ||
+      text.startsWith('FR1') ||
+      text.startsWith('FR2') ||
+      text.startsWith('FR3') ||
+      text.startsWith('FR4') ||
+      text.startsWith('FR5')
+   ));
+};
+
+const parseFiscalNumber = (value: unknown, prefix = ''): number => {
+   if (typeof value === 'number' && Number.isFinite(value)) return value;
+   const text = String(value || '').trim().toUpperCase();
+   if (!text) return 0;
+   const normalizedPrefix = String(prefix || '').trim().toUpperCase();
+   const numericText = normalizedPrefix && text.startsWith(normalizedPrefix)
+      ? text.slice(normalizedPrefix.length)
+      : text.replace(/\D/g, '');
+   const parsed = Number(numericText);
+   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const pickFiscalNumber = (source: any, keys: string[], prefix = ''): number => {
+   for (const key of keys) {
+      const value = parseFiscalNumber(source?.[key], prefix);
+      if (value > 0) return value;
+   }
+   return 0;
+};
+
+const pickFiscalString = (source: any, keys: string[]): string => {
+   for (const key of keys) {
+      const value = String(source?.[key] || '').trim();
+      if (value) return value;
+   }
+   return '';
+};
+
+const normalizeFiscalRangeRecord = (raw: any, index: number): FiscalRangeDGII | null => {
+   if (!raw || typeof raw !== 'object') return null;
+   const type = normalizeKey(raw.type || raw.ncfType || raw.ncf_type || raw.documentType || raw.document_type || raw.code || raw.fiscal_type || raw.receipt_type) as FiscalDocumentCode;
+   const normalizedType = NCF_TYPES.includes(type) ? type : 'B02';
+   const prefix = normalizeKey(raw.prefix || raw.seriesPrefix || raw.series_prefix || raw.ncfPrefix || raw.ncf_prefix || normalizedType);
+   const startNumber = pickFiscalNumber(raw, [
+      'startNumber', 'start_number', 'rangeStart', 'range_start', 'fromNumber', 'from_number',
+      'numberFrom', 'number_from', 'ncfStart', 'ncf_start', 'initialNumber', 'initial_number',
+      'desde', 'secuencia_desde', 'range_from'
+   ], prefix);
+   const endNumber = pickFiscalNumber(raw, [
+      'endNumber', 'end_number', 'rangeEnd', 'range_end', 'toNumber', 'to_number',
+      'numberTo', 'number_to', 'ncfEnd', 'ncf_end', 'finalNumber', 'final_number',
+      'hasta', 'secuencia_hasta', 'range_to'
+   ], prefix);
+   const currentGlobal = pickFiscalNumber(raw, [
+      'currentGlobal', 'current_global', 'currentNumber', 'current_number', 'lastNumber',
+      'last_number', 'lastUsedNumber', 'last_used_number', 'usedUntil', 'used_until',
+      'consumedUntil', 'consumed_until'
+   ], prefix);
+   const expiryDate = pickFiscalString(raw, [
+      'expiryDate', 'expiry_date', 'expirationDate', 'expiration_date', 'validUntil',
+      'valid_until', 'validTo', 'valid_to', 'expiresAt', 'expires_at', 'fecha_vencimiento'
+   ]);
+   const status = normalizeKey(raw.status);
+   const isActive = raw.isActive ?? raw.is_active ?? raw.active ?? !['INACTIVE', 'DISABLED', 'CANCELLED', 'EXPIRED'].includes(status);
+
+   if (
+      !prefix ||
+      isDemoFiscalValue(prefix) ||
+      isDemoFiscalValue(raw.id) ||
+      isDemoFiscalValue(raw.name) ||
+      isDemoFiscalValue(raw.description) ||
+      startNumber <= 0 ||
+      endNumber < startNumber
+   ) return null;
+
+   return {
+      id: String(raw.id || raw.range_id || raw.uid || `${prefix}-${startNumber}-${endNumber}-${index}`).trim(),
+      type: normalizedType,
+      prefix,
+      startNumber,
+      endNumber,
+      currentGlobal: Math.max(0, currentGlobal),
+      expiryDate: expiryDate || '2030-12-31',
+      isActive: Boolean(isActive)
+   };
+};
+
+const buildFiscalRangesFromAllocations = (allocations: FiscalAllocation[], buffers: LocalFiscalBuffer[]): FiscalRangeDGII[] => {
+   return (allocations || [])
+      .map((allocation, index) => {
+         const buffer = buffers.find(item =>
+            item.fiscalRangeId === allocation.fiscalRangeId ||
+            item.allocationId === allocation.id ||
+            item.type === allocation.ncfType
+         );
+         const prefix = normalizeKey(allocation.prefix || buffer?.prefix || allocation.ncfType);
+         const startNumber = Math.max(1, Number(allocation.reservedStart || buffer?.startNumber || 0));
+         const endNumber = Math.max(startNumber, Number(allocation.reservedEnd || buffer?.endNumber || startNumber));
+         if (
+            !prefix ||
+            !allocation.ncfType ||
+            isDemoFiscalValue(prefix) ||
+            isDemoFiscalValue(allocation.id) ||
+            isDemoFiscalValue(allocation.fiscalRangeId) ||
+            isDemoFiscalValue(buffer?.id) ||
+            endNumber < startNumber
+         ) return null;
+         return {
+            id: allocation.fiscalRangeId || `fr-allocation-${allocation.id || index}`,
+            type: allocation.ncfType,
+            prefix,
+            startNumber,
+            endNumber,
+            currentGlobal: Math.max(startNumber - 1, Number(allocation.nextNumber || buffer?.currentNumber || startNumber) - 1),
+            expiryDate: buffer?.expiryDate || '2030-12-31',
+            isActive: ['ACTIVE', 'LEGACY'].includes(allocation.status)
+         } as FiscalRangeDGII;
+      })
+      .filter(Boolean) as FiscalRangeDGII[];
+};
+
+const formatFiscalDate = (value: string): string => {
+   const date = new Date(value);
+   return Number.isNaN(date.getTime()) ? 'Sin vencimiento' : date.toLocaleDateString();
+};
+
 const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: configProp, terminalId }) => {
    const [activeSubTab, setActiveSubTab] = useState<'SERIES' | 'FISCAL_POOL'>('SERIES');
 
@@ -270,8 +495,9 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       const loadData = async () => {
          try {
             console.log('📖 DocumentSettings: Loading series data...');
-            const [rawSequences, rawFiscalRanges, rawTransactions, rawConfig, rawFiscalAllocations, rawLocalFiscalBuffers] = await Promise.all([
+            const [rawSequences, rawDocumentSeries, rawFiscalRanges, rawTransactions, rawConfig, rawFiscalAllocations, rawLocalFiscalBuffers] = await Promise.all([
                db.get('internalSequences'),
+               db.get('documentSeries' as any),
                db.get('fiscalRanges'),
                db.get('transactions'),
                db.get('config'),
@@ -283,16 +509,23 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             setTransactions(transactionsList);
 
             const localSeries = normalizeSequenceCollection(rawSequences as any[]);
+            const erpDocumentSeries = normalizeSequenceCollection(rawDocumentSeries as any[]);
             const config = pickRicherConfig(extractConfig(rawConfig), configProp) || extractConfig(rawConfig) || configProp || null;
+            const activeTerminalConfig = findActiveTerminalConfig(config, terminalId);
             const terminalSeries = normalizeSequenceCollection(
-               (config?.terminals || []).flatMap((terminal: any) =>
-                  Array.isArray(terminal?.config?.documentSeries) ? terminal.config.documentSeries : []
-               )
+               Array.isArray(activeTerminalConfig?.config?.documentSeries)
+                  ? activeTerminalConfig.config.documentSeries
+                  : []
             );
 
-            let finalSeries = normalizeSequenceCollection([...localSeries, ...terminalSeries]);
+            const authoritativeErpSeries = normalizeSequenceCollection([...localSeries, ...erpDocumentSeries, ...terminalSeries])
+               .filter((series: any) => String(series?.source || '').toUpperCase() === 'ERP_TERMINAL_CONFIG');
+            let finalSeries = authoritativeErpSeries.length > 0
+               ? authoritativeErpSeries
+               : normalizeSequenceCollection([...localSeries, ...erpDocumentSeries, ...terminalSeries]);
+            finalSeries = filterSeriesForActiveTerminal(finalSeries, activeTerminalConfig);
             if (finalSeries.length === 0) {
-               finalSeries = normalizeSequenceCollection(DEFAULT_DOCUMENT_SERIES);
+               finalSeries = filterSeriesForActiveTerminal(normalizeSequenceCollection(DEFAULT_DOCUMENT_SERIES), activeTerminalConfig);
             }
 
             const localSeriesIds = new Set(localSeries.map(s => s.id));
@@ -312,14 +545,26 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             setSeriesList(finalSeries);
             setBusinessConfig(config);
 
-            const ranges = (Array.isArray(rawFiscalRanges) ? rawFiscalRanges : []) as FiscalRangeDGII[];
+            const rawRangeList = Array.isArray(rawFiscalRanges) ? rawFiscalRanges : [];
             const allocations = (Array.isArray(rawFiscalAllocations) ? rawFiscalAllocations : []) as FiscalAllocation[];
             const buffers = (Array.isArray(rawLocalFiscalBuffers) ? rawLocalFiscalBuffers : []) as LocalFiscalBuffer[];
+            const ranges = rawRangeList
+               .map((range, index) => normalizeFiscalRangeRecord(range, index))
+               .filter(Boolean) as FiscalRangeDGII[];
+            const rangesFromAllocations = buildFiscalRangesFromAllocations(allocations, buffers);
             setFiscalAllocations(allocations);
             setLocalFiscalBuffers(buffers);
             setActiveTerminalId(localStorage.getItem('active_terminal_id') || '');
             if (ranges.length > 0) {
                setFiscalRanges(ranges);
+            } else if (rangesFromAllocations.length > 0) {
+               setFiscalRanges(rangesFromAllocations);
+               await db.save('fiscalRanges', rangesFromAllocations);
+               console.warn('🛠️ DocumentSettings: fiscalRanges no tenía autorizaciones válidas. Se reconstruyó desde fiscalAllocations/localFiscalBuffer.');
+            } else if (rawRangeList.length > 0) {
+               setFiscalRanges([]);
+               await db.save('fiscalRanges', []);
+               console.warn('🧹 DocumentSettings: se eliminaron rangos DGII demo/placeholder inválidos. No se regeneraron autorizaciones ficticias.');
             } else {
                const recoveredRanges = buildRecoveredFiscalRanges(transactionsList);
                setFiscalRanges(recoveredRanges);
@@ -348,11 +593,13 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
 
       window.addEventListener('seriesUpdated', handleSeriesUpdate);
       window.addEventListener('internalSequencesUpdated', handleSeriesUpdate);
+      window.addEventListener('documentSeriesUpdated', handleSeriesUpdate);
       window.addEventListener('fiscalRangesUpdated', handleSeriesUpdate);
 
       return () => {
          window.removeEventListener('seriesUpdated', handleSeriesUpdate);
          window.removeEventListener('internalSequencesUpdated', handleSeriesUpdate);
+         window.removeEventListener('documentSeriesUpdated', handleSeriesUpdate);
          window.removeEventListener('fiscalRangesUpdated', handleSeriesUpdate);
       };
    }, [configProp]);
@@ -364,6 +611,9 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       () => fiscalCompliance.providers.find(provider => provider.id === fiscalCompliance.defaultProvider),
       [fiscalCompliance]
    );
+   const isDelegatedDigiFactProvider =
+      fiscalCompliance.defaultProvider === 'DIGIFACT'
+      && selectedFiscalProviderConfig?.deliveryMode === 'DELEGATED_ERP';
 
    const refreshCredentialMeta = async () => {
       const requestId = ++credentialMetaRequestSeq.current;
@@ -493,9 +743,14 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                candidate.type === allocation.ncfType &&
                (!candidate.terminalId || normalizeKey(candidate.terminalId) === normalizeKey(allocation.terminalId))
             ) || null;
+            const allocationNextNumber = Math.max(
+               allocation.reservedStart,
+               Number(allocation.nextNumber || allocation.reservedStart)
+            );
+            const bufferCurrentNumber = Number(buffer?.currentNumber || 0);
             const currentNumber = buffer
-               ? Math.max(allocation.reservedStart, Number(buffer.currentNumber || allocation.nextNumber || allocation.reservedStart))
-               : Math.max(allocation.reservedStart, Number(allocation.nextNumber || allocation.reservedStart));
+               ? Math.max(allocationNextNumber, bufferCurrentNumber || allocationNextNumber)
+               : allocationNextNumber;
             const boundedCurrent = Math.min(currentNumber, allocation.reservedEnd + 1);
             const total = Math.max(0, allocation.reservedEnd - allocation.reservedStart + 1);
             const consumed = Math.max(0, boundedCurrent - allocation.reservedStart);
@@ -796,6 +1051,14 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
          return;
       }
 
+      if (isDelegatedDigiFactProvider) {
+         setFiscalFeedback({
+            kind: 'success',
+            message: 'DigiFact se valida desde ERP > Integraciones e-CF. El POS solo delega la emisión al backend ERP y no guarda token local.'
+         });
+         return;
+      }
+
       setIsTestingProvider(true);
       setFiscalFeedback(null);
       try {
@@ -805,7 +1068,13 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             fiscalCompliance.defaultProvider,
             environment,
             businessConfig?.companyInfo,
-            provider?.credentialKey
+            provider?.credentialKey,
+            {
+               apiBaseUrl: provider?.apiBaseUrl,
+               testUrl: provider?.testUrl,
+               issueUrl: provider?.issueUrl,
+               statusUrl: provider?.statusUrl
+            }
          );
          setFiscalFeedback({
             kind: result.success ? 'success' : 'error',
@@ -823,8 +1092,13 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       const requestContext = getCredentialRequestContext();
       if (!requestContext) return;
 
+      if (requestContext.providerId === 'DIGIFACT' && isDelegatedDigiFactProvider) {
+         setFiscalFeedback({ kind: 'error', message: 'DigiFact no guarda token en el POS. Administra la credencial segura desde ERP > Integraciones e-CF.' });
+         return;
+      }
+
       if (!credentialDraft.trim()) {
-         setFiscalFeedback({ kind: 'error', message: 'Ingresa el Authentication Token de Polaris.' });
+         setFiscalFeedback({ kind: 'error', message: 'Ingresa el Authentication Token del proveedor fiscal.' });
          return;
       }
 
@@ -859,6 +1133,11 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
    const handleSaveSupabaseCredential = async () => {
       const requestContext = getCredentialRequestContext();
       if (!requestContext) return;
+
+      if (requestContext.providerId === 'DIGIFACT' && isDelegatedDigiFactProvider) {
+         setFiscalFeedback({ kind: 'error', message: 'DigiFact no guarda token desde el POS. Administra la credencial segura desde ERP > Integraciones e-CF.' });
+         return;
+      }
 
       if (!credentialDraft.trim()) {
          setFiscalFeedback({ kind: 'error', message: 'Ingresa el Authentication Token que deseas enviar a Supabase.' });
@@ -895,6 +1174,11 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       const requestContext = getCredentialRequestContext();
       if (!requestContext) return;
 
+      if (requestContext.providerId === 'DIGIFACT' && isDelegatedDigiFactProvider) {
+         setFiscalFeedback({ kind: 'error', message: 'DigiFact no usa credenciales locales en el POS.' });
+         return;
+      }
+
       if (!credentialMeta?.hasLocalCredential) {
          setFiscalFeedback({ kind: 'error', message: 'No existe una credencial local para eliminar.' });
          return;
@@ -930,6 +1214,11 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
    const handleDeleteSupabaseCredential = async () => {
       const requestContext = getCredentialRequestContext();
       if (!requestContext) return;
+
+      if (requestContext.providerId === 'DIGIFACT' && isDelegatedDigiFactProvider) {
+         setFiscalFeedback({ kind: 'error', message: 'DigiFact no administra credenciales desde el POS.' });
+         return;
+      }
 
       if (!credentialMeta?.hasSupabaseCredential) {
          setFiscalFeedback({ kind: 'error', message: 'No existe una credencial en Supabase para eliminar.' });
@@ -1088,7 +1377,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                            <div className="flex gap-3">
                               <button
                                  onClick={handleTestProvider}
-                                 disabled={isTestingProvider}
+                                 disabled={isTestingProvider || fiscalCompliance.mode === 'NONE'}
                                  className="px-5 py-3 rounded-2xl border border-slate-200 font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                               >
                                  {isTestingProvider ? 'Probando proveedor...' : 'Probar Conexión'}
@@ -1103,7 +1392,18 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                            </div>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                           <button
+                              onClick={() => updateFiscalCompliance(current => ({ ...current, mode: 'NONE', defaultProvider: 'NONE' }))}
+                              className={`p-6 rounded-[2rem] border-2 transition-all text-left ${fiscalCompliance.mode === 'NONE' ? 'bg-slate-100 border-slate-700 shadow-md ring-4 ring-slate-100' : 'bg-white border-gray-100 hover:border-slate-300'}`}
+                           >
+                              <p className="text-xs font-black text-slate-600 uppercase tracking-[0.2em] mb-3">Sin comprobantes</p>
+                              <p className="text-lg font-black text-slate-900 mb-2">Documentos internos</p>
+                              <p className="text-sm text-slate-500 leading-relaxed">
+                                 Opera sin NCF, sin rangos DGII y sin bloqueo fiscal al cobrar.
+                              </p>
+                           </button>
+
                            <button
                               onClick={() => updateFiscalCompliance(current => ({ ...current, mode: 'LEGACY_B', defaultProvider: 'NONE' }))}
                               className={`p-6 rounded-[2rem] border-2 transition-all text-left ${fiscalCompliance.mode === 'LEGACY_B' ? 'bg-blue-50 border-blue-500 shadow-md ring-4 ring-blue-50' : 'bg-white border-gray-100 hover:border-blue-200'}`}
@@ -1137,6 +1437,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                            </div>
                         )}
 
+                        {fiscalCompliance.mode !== 'NONE' && (
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                            <div className="md:col-span-1">
                               <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Proveedor por Defecto</label>
@@ -1174,6 +1475,20 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                               </select>
                            </div>
 
+                           {fiscalCompliance.defaultProvider === 'DIGIFACT' && (
+                              <div className="md:col-span-1">
+                                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Modo DigiFact</label>
+                                 <select
+                                    value={selectedFiscalProviderConfig?.deliveryMode || 'LOCAL_DIRECT'}
+                                    onChange={(e) => updateSelectedProvider({ deliveryMode: e.target.value as any })}
+                                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                 >
+                                    <option value="LOCAL_DIRECT">Token local directo</option>
+                                    <option value="DELEGATED_ERP">Delegado al ERP</option>
+                                 </select>
+                              </div>
+                           )}
+
                            <label className="md:col-span-1 flex items-center gap-3 p-4 bg-slate-50 border border-slate-200 rounded-2xl">
                               <input
                                  type="checkbox"
@@ -1187,7 +1502,9 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                               </div>
                            </label>
                         </div>
+                        )}
 
+                        {fiscalCompliance.mode !== 'NONE' && (
                         <div className="rounded-[2rem] border border-amber-200 bg-amber-50/70 p-5">
                            <div className="flex items-start justify-between gap-4">
                               <div>
@@ -1241,6 +1558,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                               </label>
                            </div>
                         </div>
+                        )}
 
                         {selectedFiscalProviderConfig && fiscalCompliance.defaultProvider !== 'NONE' && (
                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -1254,6 +1572,36 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                     placeholder="Opcional. Si se deja vacío, se usará el RNC de la empresa."
                                  />
                               </div>
+                              {fiscalCompliance.defaultProvider === 'DIGIFACT' && (
+                                 <>
+                                    <div className="md:col-span-2">
+                                       <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Establecimiento / Sucursal</label>
+                                       <input
+                                          type="text"
+                                          value={selectedFiscalProviderConfig.establishmentCode || selectedFiscalProviderConfig.branchCode || ''}
+                                          onChange={(e) => updateSelectedProvider({
+                                             establishmentCode: e.target.value.toUpperCase(),
+                                             branchCode: e.target.value.toUpperCase()
+                                          })}
+                                          className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                          placeholder="Pruebas: 0001"
+                                       />
+                                    </div>
+                                    <div className="md:col-span-2">
+                                       <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Caja / Punto de Emisión</label>
+                                       <input
+                                          type="text"
+                                          value={selectedFiscalProviderConfig.cashierCode || ''}
+                                          onChange={(e) => updateSelectedProvider({ cashierCode: e.target.value.toUpperCase() })}
+                                          className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                          placeholder="Pruebas: 1"
+                                       />
+                                    </div>
+                                    <div className="md:col-span-4 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-bold text-blue-800">
+                                       En DigiFact pruebas solo está disponible el establecimiento <span className="font-mono">0001</span> / caja <span className="font-mono">1</span>. En producción deben coincidir con los códigos habilitados por DigiFact/Hacienda.
+                                    </div>
+                                 </>
+                              )}
                               <div>
                                  <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Tipo Ingreso</label>
                                  <input
@@ -1296,130 +1644,158 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                               </div>
                               <div className="md:col-span-4 p-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50">
                                  <p className="text-xs font-bold text-slate-600">
-                                    Estos defaults técnicos se envían a Polaris al emitir e-CF. Más adelante podremos sobrescribirlos por producto si un cliente necesita un catálogo fiscal más fino.
+                                    Estos defaults técnicos se envían con la venta al proveedor fiscal activo. Más adelante podremos sobrescribirlos por producto si un cliente necesita un catálogo fiscal más fino.
                                  </p>
                               </div>
-                              <div className="md:col-span-4 mt-2 p-5 rounded-[1.75rem] border border-slate-200 bg-white shadow-sm space-y-4">
-                                 <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-                                    <div>
-                                       <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Credenciales del Proveedor</p>
-                                       <p className="text-sm font-bold text-slate-700">
-                                          La precedencia activa es <span className="font-mono">SQLite -&gt; Supabase -&gt; ENV</span>. El token nunca vuelve al navegador una vez guardado.
-                                       </p>
-                                    </div>
-                                    {credentialMeta?.hasCredential ? (
-                                       <div className="px-3 py-2 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-black">
-                                          Activa desde {credentialMeta.source || 'desconocido'}
-                                       </div>
-                                    ) : (
-                                       <div className="px-3 py-2 rounded-2xl bg-amber-50 border border-amber-200 text-amber-700 text-xs font-black">
-                                          Sin credencial resuelta
-                                       </div>
-                                    )}
-                                 </div>
-
-                                 <div className="flex flex-wrap gap-2">
-                                    {(['sqlite', 'supabase', 'env'] as const).map(source => {
-                                       const isAvailable = credentialMeta?.availableSources?.includes(source);
-                                       return (
-                                          <span
-                                             key={source}
-                                             className={`px-3 py-2 rounded-2xl text-[11px] font-black border ${isAvailable ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-50 text-slate-400 border-slate-200'}`}
-                                          >
-                                             {FISCAL_CREDENTIAL_SOURCE_LABELS[source]}
-                                          </span>
-                                       );
-                                    })}
-                                 </div>
-
-                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                       <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Etiqueta</label>
-                                       <input
-                                          type="text"
-                                          value={credentialLabel}
-                                          onChange={(e) => setCredentialLabel(e.target.value)}
-                                          className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
-                                          placeholder="Ej. Polaris Demo Naco"
-                                       />
-                                    </div>
-                                    <div>
-                                       <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Authentication Token</label>
-                                       <div className="relative">
-                                          <input
-                                             type={showCredentialDraft ? 'text' : 'password'}
-                                             value={credentialDraft}
-                                             onChange={(e) => setCredentialDraft(e.target.value)}
-                                             disabled={hasLockedLocalCredential || isSavingCredential}
-                                             className={`w-full p-4 pr-14 rounded-2xl font-bold border transition-colors ${
-                                                hasLockedLocalCredential
-                                                   ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
-                                                   : 'bg-slate-50 border-slate-200 text-slate-800'
-                                             }`}
-                                             placeholder={hasLockedLocalCredential ? 'Credencial local activa. Usa Eliminar Local para reemplazarla.' : 'Pega aquí el token de Polaris'}
-                                          />
-                                          <button
-                                             type="button"
-                                             disabled={hasLockedLocalCredential}
-                                             onClick={() => setShowCredentialDraft((prev) => !prev)}
-                                             className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                                             aria-label={showCredentialDraft ? 'Ocultar token' : 'Mostrar token'}
-                                          >
-                                             {showCredentialDraft ? <EyeOff size={18} /> : <Eye size={18} />}
-                                          </button>
-                                       </div>
-                                       {hasLockedLocalCredential && (
-                                          <p className="mt-2 text-xs font-bold text-slate-500">
-                                             La credencial ya está guardada en SQLite. Usa <span className="font-black">Eliminar Local</span> para ingresar un nuevo token.
+                              {isDelegatedDigiFactProvider ? (
+                                 <div className="md:col-span-4 mt-2 p-5 rounded-[1.75rem] border border-emerald-200 bg-emerald-50 shadow-sm space-y-3">
+                                    <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                                       <div>
+                                          <p className="text-[11px] font-black text-emerald-700 uppercase tracking-[0.2em] mb-2">Credencial administrada por ERP</p>
+                                          <p className="text-sm font-bold text-emerald-900">
+                                             DigiFact se configura en ERP &gt; Integraciones e-CF. El POS no guarda token ni contraseña; solo usa la referencia de credencial y delega la emisión al backend ERP.
                                           </p>
+                                       </div>
+                                       <div className="px-3 py-2 rounded-2xl bg-white border border-emerald-200 text-emerald-700 text-xs font-black">
+                                          Delegado al ERP
+                                       </div>
+                                    </div>
+                                    <p className="text-xs font-bold text-emerald-800">
+                                       Referencia activa: <span className="font-mono">{selectedFiscalProviderConfig.credentialKey || businessConfig?.companyInfo?.rnc || 'N/D'}</span>
+                                    </p>
+                                 </div>
+                              ) : (
+                                 <div className="md:col-span-4 mt-2 p-5 rounded-[1.75rem] border border-slate-200 bg-white shadow-sm space-y-4">
+                                    <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                                       <div>
+                                          <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Credenciales del Proveedor</p>
+                                          <p className="text-sm font-bold text-slate-700">
+                                             {fiscalCompliance.defaultProvider === 'DIGIFACT'
+                                                ? 'DigiFact puede usar un token vigente o credenciales JSON para renovar token localmente. Incluye el código de establecimiento registrado en DigiFact/Hacienda. El valor nunca vuelve al navegador una vez guardado.'
+                                                : <>La precedencia activa es <span className="font-mono">SQLite -&gt; Supabase -&gt; ENV</span>. El token nunca vuelve al navegador una vez guardado.</>}
+                                          </p>
+                                       </div>
+                                       {credentialMeta?.hasCredential ? (
+                                          <div className="px-3 py-2 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-black">
+                                             Activa desde {credentialMeta.source || 'desconocido'}
+                                          </div>
+                                       ) : (
+                                          <div className="px-3 py-2 rounded-2xl bg-amber-50 border border-amber-200 text-amber-700 text-xs font-black">
+                                             Sin credencial resuelta
+                                          </div>
                                        )}
                                     </div>
-                                 </div>
 
-                                 {credentialMeta?.supportsSupabaseWrite === false && (
-                                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">
-                                       El backend todavía no tiene `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`, así que por ahora solo se puede guardar localmente.
+                                    <div className="flex flex-wrap gap-2">
+                                       {(['sqlite', 'supabase', 'env'] as const).map(source => {
+                                          const isAvailable = credentialMeta?.availableSources?.includes(source);
+                                          return (
+                                             <span
+                                                key={source}
+                                                className={`px-3 py-2 rounded-2xl text-[11px] font-black border ${isAvailable ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-50 text-slate-400 border-slate-200'}`}
+                                             >
+                                                {FISCAL_CREDENTIAL_SOURCE_LABELS[source]}
+                                             </span>
+                                          );
+                                       })}
                                     </div>
-                                 )}
 
-                                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                                    <div className="text-xs text-slate-500 space-y-1">
-                                       <p>Clave resuelta: {credentialMeta?.resolvedCredentialKey || selectedFiscalProviderConfig.credentialKey || businessConfig?.companyInfo?.rnc || 'N/D'}</p>
-                                       <p>Fuentes detectadas: {credentialMeta?.availableSources?.length ? credentialMeta.availableSources.map(source => FISCAL_CREDENTIAL_SOURCE_LABELS[source]).join(', ') : 'Ninguna'}</p>
-                                       <p>Última actualización local: {credentialMeta?.updatedAt ? new Date(credentialMeta.updatedAt).toLocaleString() : 'No registrada localmente'}</p>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                       <div>
+                                          <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Etiqueta</label>
+                                          <input
+                                             type="text"
+                                             value={credentialLabel}
+                                             onChange={(e) => setCredentialLabel(e.target.value)}
+                                             className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                             placeholder="Ej. Proveedor demo Naco"
+                                          />
+                                       </div>
+                                       <div>
+                                          <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">
+                                             {fiscalCompliance.defaultProvider === 'DIGIFACT' ? 'Token / Credenciales DigiFact' : 'Authentication Token'}
+                                          </label>
+                                          <div className="relative">
+                                             <input
+                                                type={showCredentialDraft ? 'text' : 'password'}
+                                                value={credentialDraft}
+                                                onChange={(e) => setCredentialDraft(e.target.value)}
+                                                disabled={hasLockedLocalCredential || isSavingCredential}
+                                                className={`w-full p-4 pr-14 rounded-2xl font-bold border transition-colors ${
+                                                   hasLockedLocalCredential
+                                                      ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                                                      : 'bg-slate-50 border-slate-200 text-slate-800'
+                                                }`}
+                                                placeholder={hasLockedLocalCredential ? 'Credencial local activa. Usa Eliminar Local para reemplazarla.' : fiscalCompliance.defaultProvider === 'DIGIFACT' ? 'Token o {"taxId":"132752155","username":"USER","password":"...","establishmentCode":"0001","cashierCode":"1"}' : 'Pega aquí el token del proveedor'}
+                                             />
+                                             <button
+                                                type="button"
+                                                disabled={hasLockedLocalCredential}
+                                                onClick={() => setShowCredentialDraft((prev) => !prev)}
+                                                className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                                aria-label={showCredentialDraft ? 'Ocultar token' : 'Mostrar token'}
+                                             >
+                                                {showCredentialDraft ? <EyeOff size={18} /> : <Eye size={18} />}
+                                             </button>
+                                          </div>
+                                          {hasLockedLocalCredential && (
+                                             <p className="mt-2 text-xs font-bold text-slate-500">
+                                                La credencial ya está guardada en SQLite. Usa <span className="font-black">Eliminar Local</span> para ingresar un nuevo token.
+                                             </p>
+                                          )}
+                                          {fiscalCompliance.defaultProvider === 'DIGIFACT' && !hasLockedLocalCredential && (
+                                             <p className="mt-2 text-xs font-bold text-slate-500">
+                                                Según la documentación DigiFact, el login usa <span className="font-mono">Username</span>/<span className="font-mono">Password</span>; <span className="font-mono">establishmentCode</span> y <span className="font-mono">cashierCode</span> deben coincidir con la sucursal/caja registrada en DigiFact/Hacienda.
+                                             </p>
+                                          )}
+                                       </div>
                                     </div>
-                                    <div className="flex flex-wrap gap-3">
-                                       <button
-                                          onClick={handleSaveCredential}
-                                          disabled={isSavingCredential || hasLockedLocalCredential}
-                                          className="px-5 py-3 rounded-2xl bg-emerald-600 text-white font-black shadow-lg hover:bg-emerald-700 disabled:opacity-60"
-                                       >
-                                          {isSavingCredential ? 'Guardando local...' : hasLockedLocalCredential ? 'Guardado en SQLite' : 'Guardar Local'}
-                                       </button>
-                                       <button
-                                          onClick={handleSaveSupabaseCredential}
-                                          disabled={isSavingSupabaseCredential || !credentialMeta?.supportsSupabaseWrite}
-                                          className="px-5 py-3 rounded-2xl bg-slate-900 text-white font-black shadow-lg hover:bg-slate-800 disabled:opacity-60"
-                                       >
-                                          {isSavingSupabaseCredential ? 'Guardando en Supabase...' : 'Guardar en Supabase'}
-                                       </button>
-                                       <button
-                                          onClick={handleDeleteLocalCredential}
-                                          disabled={isDeletingLocalCredential || !credentialMeta?.hasLocalCredential}
-                                          className="px-5 py-3 rounded-2xl border border-slate-200 font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                                       >
-                                          {isDeletingLocalCredential ? 'Eliminando local...' : 'Eliminar Local'}
-                                       </button>
-                                       <button
-                                          onClick={handleDeleteSupabaseCredential}
-                                          disabled={isDeletingSupabaseCredential || !credentialMeta?.hasSupabaseCredential}
-                                          className="px-5 py-3 rounded-2xl border border-slate-200 font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                                       >
-                                          {isDeletingSupabaseCredential ? 'Eliminando Supabase...' : 'Eliminar Supabase'}
-                                       </button>
+
+                                    {credentialMeta?.supportsSupabaseWrite === false && (
+                                       <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">
+                                          El backend todavía no tiene `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`, así que por ahora solo se puede guardar localmente.
+                                       </div>
+                                    )}
+
+                                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                                       <div className="text-xs text-slate-500 space-y-1">
+                                          <p>Clave resuelta: {credentialMeta?.resolvedCredentialKey || selectedFiscalProviderConfig.credentialKey || businessConfig?.companyInfo?.rnc || 'N/D'}</p>
+                                          <p>Fuentes detectadas: {credentialMeta?.availableSources?.length ? credentialMeta.availableSources.map(source => FISCAL_CREDENTIAL_SOURCE_LABELS[source]).join(', ') : 'Ninguna'}</p>
+                                          <p>Última actualización local: {credentialMeta?.updatedAt ? new Date(credentialMeta.updatedAt).toLocaleString() : 'No registrada localmente'}</p>
+                                       </div>
+                                       <div className="flex flex-wrap gap-3">
+                                          <button
+                                             onClick={handleSaveCredential}
+                                             disabled={isSavingCredential || hasLockedLocalCredential}
+                                             className="px-5 py-3 rounded-2xl bg-emerald-600 text-white font-black shadow-lg hover:bg-emerald-700 disabled:opacity-60"
+                                          >
+                                             {isSavingCredential ? 'Guardando local...' : hasLockedLocalCredential ? 'Guardado en SQLite' : 'Guardar Local'}
+                                          </button>
+                                          <button
+                                             onClick={handleSaveSupabaseCredential}
+                                             disabled={isSavingSupabaseCredential || !credentialMeta?.supportsSupabaseWrite}
+                                             className="px-5 py-3 rounded-2xl bg-slate-900 text-white font-black shadow-lg hover:bg-slate-800 disabled:opacity-60"
+                                          >
+                                             {isSavingSupabaseCredential ? 'Guardando en Supabase...' : 'Guardar en Supabase'}
+                                          </button>
+                                          <button
+                                             onClick={handleDeleteLocalCredential}
+                                             disabled={isDeletingLocalCredential || !credentialMeta?.hasLocalCredential}
+                                             className="px-5 py-3 rounded-2xl border border-slate-200 font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                                          >
+                                             {isDeletingLocalCredential ? 'Eliminando local...' : 'Eliminar Local'}
+                                          </button>
+                                          <button
+                                             onClick={handleDeleteSupabaseCredential}
+                                             disabled={isDeletingSupabaseCredential || !credentialMeta?.hasSupabaseCredential}
+                                             className="px-5 py-3 rounded-2xl border border-slate-200 font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                                          >
+                                             {isDeletingSupabaseCredential ? 'Eliminando Supabase...' : 'Eliminar Supabase'}
+                                          </button>
+                                       </div>
                                     </div>
                                  </div>
-                              </div>
+                              )}
                            </div>
                         )}
 
@@ -1496,12 +1872,42 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                            <h2 className="text-xl font-bold text-gray-800">Autorizaciones DGII Vigentes</h2>
                            <p className="text-sm text-gray-500">Administra los rangos aprobados en tu oficina virtual.</p>
                         </div>
-                        <button onClick={() => setIsAddingRange(true)} className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg hover:bg-indigo-700 flex items-center gap-2 active:scale-95 transition-all">
-                           <Plus size={20} /> Cargar Nuevo Rango
+                        <button
+                           onClick={() => fiscalCompliance.mode !== 'NONE' && setIsAddingRange(true)}
+                           disabled={fiscalCompliance.mode === 'NONE'}
+                           className={`px-6 py-2.5 rounded-xl font-bold shadow-lg flex items-center gap-2 active:scale-95 transition-all ${
+                              fiscalCompliance.mode === 'NONE'
+                                 ? 'bg-slate-200 text-slate-500 cursor-not-allowed shadow-none'
+                                 : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                           }`}
+                        >
+                           <Plus size={20} /> {fiscalCompliance.mode === 'NONE' ? 'No Fiscal' : 'Cargar Nuevo Rango'}
                         </button>
                      </div>
 
                      <div className="grid grid-cols-1 gap-4 pb-20">
+                        {fiscalCompliance.mode === 'NONE' && (
+                           <div className="bg-slate-900 text-white p-6 rounded-3xl border-2 border-slate-800 shadow-sm">
+                              <div className="flex flex-col md:flex-row justify-between gap-6">
+                                 <div className="flex items-center gap-4">
+                                    <div className="p-4 rounded-2xl bg-white/10 text-white">
+                                       <ShieldCheck size={28} />
+                                    </div>
+                                    <div>
+                                       <div className="flex items-center gap-2">
+                                          <span className="px-2 py-0.5 bg-white text-slate-900 text-[10px] font-black rounded uppercase">No Fiscal</span>
+                                          <h3 className="font-black text-lg">Modo sin comprobantes fiscales</h3>
+                                       </div>
+                                       <p className="text-xs text-slate-300 mt-1">Esta terminal emite documentos internos y no requiere lotes DGII/NCF.</p>
+                                    </div>
+                                 </div>
+                                 <div className="md:max-w-sm rounded-2xl bg-white/10 border border-white/10 px-5 py-4">
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Estado del lote</p>
+                                    <p className="mt-1 font-black">No aplica</p>
+                                 </div>
+                              </div>
+                           </div>
+                        )}
                         {fiscalRanges.map(range => {
                            const allocationDetails = allocationStatsByType.get(range.type);
                            const rawUsedInCajas = Math.max(0, range.currentGlobal - (range.startNumber - 1));
@@ -1532,7 +1938,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                                 )}
                                                  <h3 className="font-black text-gray-800 text-lg">{range.prefix}-XXXXXXX</h3>
                                               </div>
-                                          <p className="text-xs text-gray-400 flex items-center gap-1 mt-1"><Calendar size={12} /> Vence: {new Date(range.expiryDate).toLocaleDateString()}</p>
+                                          <p className="text-xs text-gray-400 flex items-center gap-1 mt-1"><Calendar size={12} /> Vence: {formatFiscalDate(range.expiryDate)}</p>
                                        </div>
                                     </div>
 

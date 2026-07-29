@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
    Users, Calendar, ShieldCheck, Clock, Check, X,
    UserPlus, ScanFace, ChevronRight, Lock,
@@ -9,13 +9,16 @@ import {
 import { User, RoleDefinition, Shift, TimeRecord, ZReportModule } from '../types';
 import { AVAILABLE_PERMISSIONS } from '../constants';
 import { biometricService } from '../services/BiometricAuthService';
+import { resolveTeamHubTabs, TeamHubMode, TeamHubTab } from '../utils/teamHubAccess';
 
 interface TeamHubProps {
    users: User[];
    roles: RoleDefinition[];
    onUpdateUsers: (users: User[]) => void;
-   onUpdateRoles: (roles: RoleDefinition[]) => void;
+   onUpdateRoles: (roles: RoleDefinition[]) => void | Promise<void>;
    onClose: () => void;
+   mode?: TeamHubMode;
+   canManageAttendance?: boolean;
 }
 
 // --- MOCK DATA FOR SHIFTS ---
@@ -97,8 +100,26 @@ const SlideUnlock: React.FC<{ onUnlock: () => void; label: string; mode: 'IN' | 
    );
 };
 
-const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdateRoles, onClose }) => {
-   const [activeTab, setActiveTab] = useState<'CLOCK' | 'USERS' | 'SCHEDULE' | 'ROLES' | 'REPORTS'>('CLOCK');
+const TeamHub: React.FC<TeamHubProps> = ({
+   users,
+   roles,
+   onUpdateUsers,
+   onUpdateRoles,
+   onClose,
+   mode = 'ADMIN',
+   canManageAttendance = false
+}) => {
+   const availableTabs = useMemo(
+      () => resolveTeamHubTabs(mode, canManageAttendance),
+      [canManageAttendance, mode]
+   );
+   const [activeTab, setActiveTab] = useState<TeamHubTab>(() => availableTabs[0]);
+
+   useEffect(() => {
+      if (!availableTabs.includes(activeTab)) {
+         setActiveTab(availableTabs[0]);
+      }
+   }, [activeTab, availableTabs]);
 
    // Clock-in State
    const [pin, setPin] = useState('');
@@ -112,6 +133,7 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
 
    // Roles State
    const [editingRole, setEditingRole] = useState<RoleDefinition | null>(null);
+   const [roleSaveStatus, setRoleSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
 
    // Users Management State
    const [isUserModalOpen, setIsUserModalOpen] = useState(false);
@@ -230,11 +252,12 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
       const newRole: RoleDefinition = {
          id: `role_${Date.now()}`,
          name: 'Nuevo Rol',
-         permissions: ['SALE'],
+         permissions: ['SALE', 'POS_CHECKOUT'],
          isSystem: false
       };
       onUpdateRoles([...roles, newRole]);
       setEditingRole(newRole);
+      setRoleSaveStatus('idle');
    };
 
    const handleUpdateRoleName = (roleId: string, newName: string) => {
@@ -243,6 +266,7 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
       if (editingRole && editingRole.id === roleId) {
          setEditingRole({ ...editingRole, name: newName });
       }
+      setRoleSaveStatus('idle');
    };
 
    const togglePermission = (roleId: string, permKey: string) => {
@@ -263,6 +287,14 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
          return role;
       });
       onUpdateRoles(updatedRoles);
+      setRoleSaveStatus('idle');
+   };
+
+   const handleSaveRoles = async () => {
+      setRoleSaveStatus('saving');
+      await Promise.resolve(onUpdateRoles(roles));
+      setRoleSaveStatus('saved');
+      window.setTimeout(() => setRoleSaveStatus('idle'), 1800);
    };
 
    const handleDeleteRole = (roleId: string) => {
@@ -305,45 +337,117 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
       return reports;
    }, [timeRecords, users]);
 
+   const exportDailyReportsToExcel = () => {
+      const escapeCell = (value: any) => String(value ?? '')
+         .replace(/&/g, '&amp;')
+         .replace(/</g, '&lt;')
+         .replace(/>/g, '&gt;')
+         .replace(/"/g, '&quot;');
+      const rows = dailyReports.map(report => `
+         <tr>
+            <td>${escapeCell(report.userName)}</td>
+            <td>${escapeCell(report.date)}</td>
+            <td>${escapeCell(report.inTime)}</td>
+            <td>${escapeCell(report.outTime)}</td>
+            <td>${escapeCell(report.totalHours)}</td>
+            <td>${escapeCell(report.status)}</td>
+         </tr>
+      `).join('');
+      const html = `
+         <html>
+            <head><meta charset="UTF-8" /></head>
+            <body>
+               <table border="1">
+                  <thead>
+                     <tr>
+                        <th>Empleado</th>
+                        <th>Fecha</th>
+                        <th>Entrada</th>
+                        <th>Salida</th>
+                        <th>Total Horas</th>
+                        <th>Estado</th>
+                     </tr>
+                  </thead>
+                  <tbody>${rows}</tbody>
+               </table>
+            </body>
+         </html>
+      `;
+      const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `reporte-horas-${new Date().toISOString().slice(0, 10)}.xls`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+   };
+
    // --- RENDER CONTENT ---
 
    return (
       <div className="h-screen w-full bg-gray-100 flex flex-col overflow-hidden animate-in fade-in">
 
          {/* Header Tabs */}
-         <div className="bg-white border-b border-gray-200 px-4 md:px-6 pt-4 md:pt-6 pb-0 shrink-0">
+         <div className="bg-white border-b border-gray-200 px-4 md:px-6 pt-4 md:pt-5 pb-0 shrink-0">
+            <div className="mb-2 flex items-center gap-3">
+               <div className={`flex h-10 w-10 items-center justify-center rounded-xl text-white ${mode === 'ATTENDANCE' ? 'bg-sky-600' : 'bg-indigo-600'}`}>
+                  {mode === 'ATTENDANCE' ? <Clock size={20} /> : <Users size={20} />}
+               </div>
+               <div className="min-w-0">
+                  <h1 className="text-lg font-black text-slate-900">
+                     {mode === 'ATTENDANCE' ? 'Asistencia' : 'Equipo y Roles'}
+                  </h1>
+                  <p className="text-xs font-semibold text-slate-500">
+                     {mode === 'ATTENDANCE'
+                        ? 'Fichaje, turnos y control de horas'
+                        : 'Usuarios, roles y permisos'}
+                  </p>
+               </div>
+            </div>
             <div className="flex items-center gap-3 md:gap-4">
                <div className="mobile-tab-scroller no-scrollbar -mx-4 px-4 md:mx-0 md:px-0 flex-1 min-w-0">
+               {availableTabs.includes('CLOCK') && (
                <button
                   onClick={() => setActiveTab('CLOCK')}
                   className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'CLOCK' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                >
                   <Clock size={18} /> Fichaje
                </button>
+               )}
+               {availableTabs.includes('USERS') && (
                <button
                   onClick={() => setActiveTab('USERS')}
                   className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'USERS' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                >
                   <Users size={18} /> Equipo
                </button>
+               )}
+               {availableTabs.includes('SCHEDULE') && (
                <button
                   onClick={() => setActiveTab('SCHEDULE')}
                   className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'SCHEDULE' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                >
                   <Calendar size={18} /> Turnos & Horarios
                </button>
+               )}
+               {availableTabs.includes('REPORTS') && (
                <button
                   onClick={() => setActiveTab('REPORTS')}
                   className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'REPORTS' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                >
                   <FileBarChart size={18} /> Reporte de Horas
                </button>
+               )}
+               {availableTabs.includes('ROLES') && (
                <button
                   onClick={() => setActiveTab('ROLES')}
                   className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'ROLES' ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                >
                   <ShieldCheck size={18} /> Roles & Permisos
                </button>
+               )}
                </div>
             <button onClick={onClose} className="mb-4 shrink-0 p-2 bg-gray-100 rounded-full text-gray-500 hover:bg-gray-200">
                <X size={20} />
@@ -604,7 +708,7 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
                   {/* ... Reports Content (Unchanged) ... */}
                   <div className="flex justify-between items-end mb-6">
                      <div><h2 className="text-2xl font-black text-gray-800 flex items-center gap-2"><FileBarChart className="text-emerald-600" /> Reporte de Jornada</h2><p className="text-gray-500 mt-1">Resumen de horas trabajadas y alertas de asistencia.</p></div>
-                     <button className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-gray-600 font-bold text-sm shadow-sm hover:bg-gray-50 flex items-center gap-2"><Download size={16} /> Exportar Excel</button>
+                     <button onClick={exportDailyReportsToExcel} className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-gray-600 font-bold text-sm shadow-sm hover:bg-gray-50 flex items-center gap-2"><Download size={16} /> Exportar Excel</button>
                   </div>
                   <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex-1 flex flex-col">
                      <div className="overflow-x-auto flex-1">
@@ -707,20 +811,30 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
                                     ) : (
                                        <h2 className="text-3xl font-black text-gray-800">{editingRole.name}</h2>
                                     )}
-                                    <p className="text-gray-500 text-sm mt-1">
+                                 <p className="text-gray-500 text-sm mt-1">
                                        {editingRole.isSystem ? 'Rol de sistema (Solo lectura parcial).' : 'Define los accesos para este perfil.'}
                                     </p>
                                  </div>
                               </div>
 
-                              {!editingRole.isSystem && (
+                              <div className="flex items-center gap-3">
                                  <button
-                                    onClick={() => handleDeleteRole(editingRole.id)}
-                                    className="px-4 py-2 border border-red-200 text-red-600 rounded-xl font-bold text-sm hover:bg-red-50 flex items-center gap-2 transition-colors"
+                                    onClick={handleSaveRoles}
+                                    disabled={roleSaveStatus === 'saving'}
+                                    className="px-5 py-3 bg-purple-600 text-white rounded-xl font-black text-sm hover:bg-purple-700 disabled:bg-gray-300 flex items-center gap-2 transition-colors shadow-md shadow-purple-100"
                                  >
-                                    <Trash2 size={16} /> Eliminar Rol
+                                    <Check size={16} />
+                                    {roleSaveStatus === 'saving' ? 'Guardando...' : roleSaveStatus === 'saved' ? 'Guardado' : 'Guardar permisos'}
                                  </button>
-                              )}
+                                 {!editingRole.isSystem && (
+                                    <button
+                                       onClick={() => handleDeleteRole(editingRole.id)}
+                                       className="px-4 py-2 border border-red-200 text-red-600 rounded-xl font-bold text-sm hover:bg-red-50 flex items-center gap-2 transition-colors"
+                                    >
+                                       <Trash2 size={16} /> Eliminar Rol
+                                    </button>
+                                 )}
+                              </div>
                            </div>
 
                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

@@ -52,7 +52,42 @@ const normalizeDocumentTypeKey = (value?: string | null): string =>
 const normalizePrefixKey = (value?: string | null): string =>
   normalizeString(value).replace(/[^A-Z0-9]+/g, '');
 
+const normalizeSeriesPadding = (value: unknown): number => {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 6;
+};
+
+const FISCAL_SERIES_PREFIXES = [
+  'B01',
+  'B02',
+  'B04',
+  'B14',
+  'B15',
+  'E31',
+  'E32',
+  'E34',
+  'E44',
+  'E45',
+];
+
+export const isFiscalDocumentSeries = (series: Partial<DocumentSeries> | null | undefined): boolean => {
+  if (!series) return false;
+  const prefix = normalizePrefixKey(series.prefix);
+  const id = normalizePrefixKey(series.id);
+  const name = normalizePrefixKey(series.name);
+  const documentType = normalizeDocumentTypeKey(series.documentType);
+
+  return FISCAL_SERIES_PREFIXES.some((fiscalPrefix) =>
+    prefix === fiscalPrefix ||
+    id === fiscalPrefix ||
+    name === fiscalPrefix ||
+    documentType === fiscalPrefix ||
+    prefix.startsWith(`${fiscalPrefix}0`)
+  );
+};
+
 const FORBIDDEN_TICKET_PREFIXES = [
+  ...FISCAL_SERIES_PREFIXES,
   'INV',
   'TR',
   'REC',
@@ -136,6 +171,7 @@ export const mergeDocumentSeriesCollection = (rows: DocumentSeries[] = []): Docu
   for (const row of rows) {
     if (!row) continue;
     const normalized = canonicalizeDocumentSeries(row);
+    if (isFiscalDocumentSeries(normalized)) continue;
     const semanticKey = getDocumentSeriesSemanticKey(normalized);
     const mapKey = semanticKey || normalizeDocumentTypeKey(normalized.id);
     if (!mapKey) continue;
@@ -145,7 +181,7 @@ export const mergeDocumentSeriesCollection = (rows: DocumentSeries[] = []): Docu
       merged.set(mapKey, {
         ...normalized,
         nextNumber: Math.max(1, Number(normalized.nextNumber) || 1),
-        padding: Math.max(1, Number(normalized.padding) || 6),
+        padding: normalizeSeriesPadding(normalized.padding),
       });
       continue;
     }
@@ -156,7 +192,7 @@ export const mergeDocumentSeriesCollection = (rows: DocumentSeries[] = []): Docu
       ...normalized,
       id: canonicalId || existing.id || normalized.id,
       nextNumber: Math.max(Number(existing.nextNumber) || 1, Number(normalized.nextNumber) || 1),
-      padding: Math.max(Number(existing.padding) || 6, Number(normalized.padding) || 6),
+      padding: normalizeSeriesPadding(normalized.padding ?? existing.padding),
     });
   }
 
@@ -177,8 +213,19 @@ export const resolveEffectiveSeriesIdForDocumentType = (
   const key = normalizeDocumentTypeKey(terminalAssignmentId);
   if (!key) return undefined;
 
-  const byId = availableSeries.find((series) => normalizeDocumentTypeKey(series.id) === key);
-  if (byId?.id && isDocumentSeriesCompatibleWithType(documentType, byId)) return byId.id;
+  const byExplicitAssignment = availableSeries.find((series) => {
+    const assignmentKeys = [
+      series.id,
+      (series as any).code,
+      (series as any).series_code,
+      (series as any).seriesCode,
+      series.prefix,
+    ].map((value) => normalizeDocumentTypeKey(value as string | null | undefined)).filter(Boolean);
+    return assignmentKeys.includes(key);
+  });
+  if (byExplicitAssignment?.id && isDocumentSeriesCompatibleWithType(documentType, byExplicitAssignment)) {
+    return byExplicitAssignment.id;
+  }
 
   const typeNorm = normalizeDocumentTypeKey(documentType);
   const sameType = availableSeries.filter(
@@ -201,7 +248,16 @@ export const resolveDocumentAssignmentId = (
   const normalizedRequestedId = normalizeDocumentTypeKey(requestedId);
 
   const exactMatch = normalizedRequestedId
-    ? availableSeries.find((series) => normalizeDocumentTypeKey(series.id) === normalizedRequestedId)
+    ? availableSeries.find((series) => {
+        const assignmentKeys = [
+          series.id,
+          (series as any).code,
+          (series as any).series_code,
+          (series as any).seriesCode,
+          series.prefix,
+        ].map((value) => normalizeDocumentTypeKey(value as string | null | undefined)).filter(Boolean);
+        return assignmentKeys.includes(normalizedRequestedId);
+      })
     : null;
   if (exactMatch?.id && isDocumentSeriesCompatibleWithType(documentType, exactMatch)) return exactMatch.id;
 
@@ -211,9 +267,12 @@ export const resolveDocumentAssignmentId = (
       isDocumentSeriesCompatibleWithType(documentType, series)
     )
     .sort((left, right) => {
+      const leftErp = normalizeString((left as any).source) === 'ERP_TERMINAL_CONFIG' ? 1 : 0;
+      const rightErp = normalizeString((right as any).source) === 'ERP_TERMINAL_CONFIG' ? 1 : 0;
+      if (leftErp !== rightErp) return rightErp - leftErp;
       const leftCanonical = getCanonicalSystemSeriesId(left.documentType, left.prefix) === left.id ? 1 : 0;
       const rightCanonical = getCanonicalSystemSeriesId(right.documentType, right.prefix) === right.id ? 1 : 0;
-      if (leftCanonical !== rightCanonical) return rightCanonical - leftCanonical;
+      if (leftCanonical !== rightCanonical) return leftCanonical - rightCanonical;
       return (Number(right.nextNumber) || 0) - (Number(left.nextNumber) || 0);
     });
 

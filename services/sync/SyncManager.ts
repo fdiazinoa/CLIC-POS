@@ -12,6 +12,7 @@ import { NetworkScanner } from './NetworkScanner';
 import { v4 as uuidv4 } from 'uuid';
 import { Capacitor } from '@capacitor/core';
 import { permissionService } from './PermissionService';
+import { isNativeAndroidRuntime, normalizeErpBaseUrl, normalizeErpSyncApiBase, resolveErpSyncApiBase } from '../../utils/erpBaseUrl';
 import { realtimeNotificationService } from './RealtimeNotificationService';
 import { productImageCacheService } from './ProductImageCacheService';
 import { masterDataImageCacheService, type ImageBackedCollection } from './MasterDataImageCacheService';
@@ -25,6 +26,7 @@ import {
 import { buildMasterUrlFromHost } from '../../utils/cloudMasterRegistry';
 import {
     looksLikeUuidString,
+    mergeDocumentSeriesCollection,
     resolveDocumentSeriesDisplayPrefix,
 } from '../../utils/documentSeriesIdentity';
 import {
@@ -42,9 +44,212 @@ import {
     productIdentityCandidates,
 } from '../../utils/productReferences';
 import { canonicalizeTariffEntries, resolveTariffId } from '../../utils/masterIdentity';
-import { ensureSyncDeviceToken } from './deviceToken';
+import { ensureSyncDeviceToken, getInvalidatedSyncDeviceTokenInfo, resolveSyncDeviceToken } from './deviceToken';
+import { normalizeRestaurantProductConfig } from '../../utils/restaurantProductConfig';
+import { protectsLocalCatalogFromCloud, syncPolicy } from './SyncProfile';
+import { isPosCloudStagingPushCollection } from './PosCloudStagingService';
+import { reportSyncErrorDiagnostic, setCatalogDiagnosticStatus } from './SyncErrorDiagnostic';
+import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked } from '../../utils/deviceRevocation';
+import { triggerErpSyncOutbox } from '../../utils/erpSyncLifecycle';
+import { isPosSaleActive } from '../../utils/posSaleActivity';
 
-export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'productPrices' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities' | 'crmOpportunities' | 'erp_sales_documents';
+export type SyncableCollection =
+    | 'products' | 'items' | 'taxes' | 'customers' | 'suppliers' | 'warehouses'
+    | 'paymentMethods' | 'priceLists' | 'productPrices' | 'categories' | 'productCategories' | 'productGroups' | 'collections'
+    | 'serviceTypes' | 'rooms' | 'tables' | 'productionAreas'
+    | 'documentSeries' | 'documentTypes' | 'fiscalRanges' | 'fiscalReceiptTypes'
+    | 'fiscalReceipts' | 'fiscalSequences' | 'internalSequences' | 'terminalFiscalConfig'
+    | 'promotions' | 'campaigns' | 'coupons' | 'discountRules' | 'promotionRules'
+    | 'promotionConditions' | 'promotionBenefits'
+    | 'pointsPrograms' | 'loyaltyPrograms' | 'pointsRules' | 'earningRules'
+    | 'redemptionRules' | 'customerPointBalances' | 'loyaltyTiers'
+    | 'users' | 'roles' | 'productStocks' | 'supplierProductPrices'
+    | 'inventoryLedger' | 'transactions' | 'payments' | 'cashClosures' | 'cashOpenings'
+    | 'zReports' | 'cashMovements' | 'cashDrawerEvents' | 'inventoryMovements'
+    | 'transfers' | 'receptions' | 'returns' | 'creditNotes'
+    | 'promotionRedemptions' | 'couponRedemptions'
+    | 'loyaltyPointMovements' | 'loyaltyPointAccruals' | 'loyaltyPointRedemptions'
+    | 'pointAdjustments' | 'issuedFiscalDocuments' | 'fiscalDocumentUsages'
+    | 'purchaseOrders' | 'activities' | 'crmOpportunities' | 'erp_sales_documents';
+
+const MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
+    'products',
+    'items',
+    'taxes',
+    'customers',
+    'suppliers',
+    'warehouses',
+    'paymentMethods',
+    'priceLists',
+    'productStocks',
+    'productPrices',
+    'supplierProductPrices',
+    'categories',
+    'productCategories',
+    'productGroups',
+    'collections',
+    'serviceTypes',
+    'rooms',
+    'tables',
+    'productionAreas',
+    'documentSeries',
+    'documentTypes',
+    'fiscalRanges',
+    'fiscalReceiptTypes',
+    'fiscalReceipts',
+    'fiscalSequences',
+    'internalSequences',
+    'terminalFiscalConfig',
+    'promotions',
+    'campaigns',
+    'coupons',
+    'discountRules',
+    'promotionRules',
+    'promotionConditions',
+    'promotionBenefits',
+    'pointsPrograms',
+    'loyaltyPrograms',
+    'pointsRules',
+    'earningRules',
+    'redemptionRules',
+    'customerPointBalances',
+    'loyaltyTiers',
+    'users',
+    'roles',
+]);
+
+const CRITICAL_MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
+    'products',
+    'taxes',
+    'warehouses',
+    'paymentMethods',
+    'categories',
+    'productCategories',
+    'productGroups',
+    'collections',
+    'documentSeries',
+    'fiscalRanges',
+    'fiscalSequences',
+    'internalSequences',
+    'terminalFiscalConfig',
+]);
+
+const FISCAL_MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
+    'documentSeries',
+    'documentTypes',
+    'fiscalRanges',
+    'fiscalReceiptTypes',
+    'fiscalReceipts',
+    'fiscalSequences',
+    'internalSequences',
+    'terminalFiscalConfig',
+]);
+
+const PROMOTION_MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
+    'promotions',
+    'campaigns',
+    'coupons',
+    'discountRules',
+    'promotionRules',
+    'promotionConditions',
+    'promotionBenefits',
+]);
+
+const LOYALTY_MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
+    'pointsPrograms',
+    'loyaltyPrograms',
+    'pointsRules',
+    'earningRules',
+    'redemptionRules',
+    'customerPointBalances',
+    'loyaltyTiers',
+]);
+
+const OPERATION_COLLECTIONS_FOR_ERP_PUSH = new Set<SyncableCollection>([
+    'transactions',
+    'payments',
+    'cashClosures',
+    'cashOpenings',
+    'zReports',
+    'cashMovements',
+    'cashDrawerEvents',
+    'inventoryLedger',
+    'inventoryMovements',
+    'transfers',
+    'receptions',
+    'returns',
+    'creditNotes',
+    'promotionRedemptions',
+    'couponRedemptions',
+    'loyaltyPointMovements',
+    'loyaltyPointAccruals',
+    'loyaltyPointRedemptions',
+    'pointAdjustments',
+    'issuedFiscalDocuments',
+    'fiscalDocumentUsages',
+    'purchaseOrders',
+    'activities',
+    'crmOpportunities',
+    'erp_sales_documents',
+]);
+
+const isErpMasterPullCollection = (collection: SyncableCollection): boolean =>
+    MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection);
+
+const isErpOperationCollection = (collection: SyncableCollection): boolean =>
+    OPERATION_COLLECTIONS_FOR_ERP_PUSH.has(collection);
+
+const isErpCriticalMasterCollection = (collection: SyncableCollection): boolean =>
+    CRITICAL_MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection);
+
+const isPaymentMethodsMissingSyncError = (error: unknown): boolean => {
+    if (!error || typeof error !== 'object') return false;
+    const value = (error as {
+        __syncCollection?: string;
+        __syncBackendCode?: string;
+        backendCode?: string;
+        code?: string;
+        message?: string;
+        collection?: string;
+        supported?: boolean;
+        critical?: boolean;
+    });
+    const normalizeCode = (code: string | undefined): string => String(code || '').toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+    const normalizedCollection = String(value.collection || value.__syncCollection || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+    const normalizedMessage = String(value.message || '').toLowerCase();
+    const backendCode = normalizeCode(value.__syncBackendCode || value.backendCode || value.code);
+    const backendCodeMatch = backendCode === 'PAYMENT_METHODS_MISSING'
+        || backendCode === 'PAYMENTMETHODS_MISSING'
+        || /PAYMENT[_\s-]?METHODS?[_\s-]?MISSING/.test((value.__syncBackendCode || value.backendCode || value.code || '').toUpperCase());
+    const collectionMatch = normalizedCollection === 'paymentmethods' || normalizedCollection === 'paymentmethod';
+    const messageMatch = /payment methods missing|faltan m[ée]todos de pago|sin medios de pago|sin m[éé]todos de pago/i.test(normalizedMessage);
+    return (
+        backendCodeMatch
+        || messageMatch
+        || (value.supported === false && value.critical === true)
+        || collectionMatch && /m[ée]todo/.test(normalizedMessage)
+    );
+};
+
+const logSkippedNonMasterPull = (
+    collection: SyncableCollection,
+    targetKind: string,
+    reason = isErpOperationCollection(collection) ? 'OPERATION_COLLECTION' : 'NOT_A_MASTER_ERP_COLLECTION'
+): void => {
+    console.warn('[SYNC_COLLECTION_SKIPPED_NOT_A_MASTER]', {
+        collection,
+        operation: 'PULL_MASTERS',
+        targetKind,
+        isMasterCollection: isErpMasterPullCollection(collection),
+        isOperationCollection: isErpOperationCollection(collection),
+        isCriticalMaster: isErpCriticalMasterCollection(collection),
+        isFiscalMaster: FISCAL_MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection),
+        isPromotionMaster: PROMOTION_MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection),
+        isLoyaltyMaster: LOYALTY_MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection),
+        skippedReason: reason,
+        userVisibleSeverity: 'warning',
+    });
+};
 
 interface SyncStatus {
     collection: string;
@@ -52,7 +257,7 @@ interface SyncStatus {
     localVersion: number;
     remoteVersion: number | null;
     lastSyncTimestamp?: string | null;
-    status: 'SYNCED' | 'PENDING' | 'ERROR';
+    status: 'SYNCED' | 'SYNCED_CLOUD' | 'PENDING' | 'ERROR';
     error?: string;
 }
 
@@ -72,6 +277,14 @@ type TerminalManifestResolvedScope =
 type TerminalManifestScope = 'terminal' | TerminalManifestMasterScope | TerminalManifestBlockScope;
 type TerminalManifestCountScope = TerminalManifestMasterScope | TerminalManifestBlockScope;
 
+type TimestampCursorCollection = 'products' | 'items';
+
+interface TimestampCollectionCursorState {
+    lastSyncedAt: string | null;
+    cursor: string | null;
+    nextCursor: string | null;
+}
+
 interface TerminalCursorMap {
     terminal?: string | null;
     items?: string | null;
@@ -87,12 +300,36 @@ interface TerminalCursorMap {
     product_prices?: string | null;
 }
 
+const TIMESTAMP_CURSOR_COLLECTIONS = new Set<SyncableCollection>(['products', 'items']);
+const TIMESTAMP_COLLECTION_CURSOR_KEY_PREFIX = 'clic_pos_collection_timestamp_cursor:';
+
+const isTimestampCursorCollection = (collection: SyncableCollection): collection is TimestampCursorCollection =>
+    TIMESTAMP_CURSOR_COLLECTIONS.has(collection);
+
+const normalizeIsoCursor = (value: unknown): string | null => {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed || Number.isNaN(Date.parse(trimmed))) return null;
+    if (!/^\d{4}-\d{2}-\d{2}T/.test(trimmed)) return null;
+    return trimmed;
+};
+
 interface TerminalManifestPayload {
     cursor_map?: TerminalCursorMap;
     changed?: Partial<Record<TerminalManifestScope, boolean>>;
     changed_blocks?: TerminalManifestScope[];
     counts?: Partial<Record<TerminalManifestCountScope, number>>;
     snapshot_at?: string | null;
+    inventory_version?: string | null;
+    price_version?: string | null;
+    domain_hashes?: Partial<Record<TerminalManifestBlockScope, string | null>>;
+    snapshot_meta?: TerminalSnapshotDiagnostics | null;
+}
+
+interface TerminalSnapshotDiagnostics {
+    snapshotSource?: 'live' | 'persistent' | string | null;
+    snapshotAgeMs?: number | null;
+    snapshotVersionHash?: string | null;
 }
 
 interface TerminalInventoryBalancePayload {
@@ -108,10 +345,14 @@ interface TerminalInventoryPayload {
     cursor?: string | null;
     balances?: TerminalInventoryBalancePayload[];
     has_changes?: boolean;
+    inventory_version?: string | null;
+    snapshot_meta?: TerminalSnapshotDiagnostics | null;
     inventory?: {
         cursor?: string | null;
         balances?: TerminalInventoryBalancePayload[];
         has_changes?: boolean;
+        inventory_version?: string | null;
+        snapshot_meta?: TerminalSnapshotDiagnostics | null;
     };
 }
 
@@ -130,10 +371,14 @@ interface TerminalProductPricesPayload {
     cursor?: string | null;
     prices?: TerminalProductPricePayload[];
     has_changes?: boolean;
+    price_version?: string | null;
+    snapshot_meta?: TerminalSnapshotDiagnostics | null;
     product_prices?: {
         cursor?: string | null;
         prices?: TerminalProductPricePayload[];
         has_changes?: boolean;
+        price_version?: string | null;
+        snapshot_meta?: TerminalSnapshotDiagnostics | null;
     };
 }
 
@@ -150,11 +395,228 @@ class SyncManager {
     private lastProductImageManifestVersion = 0;
     private productImageHashes: Map<string, string> = new Map();
     private imageSyncOnlineHandler: (() => void) | null = null;
+    private reducedSyncMode = false;
     private readonly IMAGE_SYNC_INTERVAL_MS = 180000;
     private readonly IMAGE_SYNC_BATCH_SIZE = 40;
     private terminalManifestSyncInFlight = false;
+    private readyToSellStartedAt = 0;
+    private readyToSellState: {
+        readyToSell: boolean;
+        readyToSellTimestamp: string | null;
+        readyToSellDuration: number | null;
+        currentSyncPhase: string;
+        lastSync: string | null;
+        lastSuccessfulSync: string | null;
+        failedOperations: number;
+        retryCount: number;
+        inventoryVersion: string | null;
+        priceVersion: string | null;
+        inventoryVersionMatch: boolean | null;
+        priceVersionMatch: boolean | null;
+        inventorySyncSkippedByVersion: boolean;
+        priceSyncSkippedByVersion: boolean;
+        lastVersionComparison: Record<string, unknown> | null;
+        snapshotSource: string | null;
+        snapshotAgeMs: number | null;
+        snapshotVersionHash: string | null;
+        syncTelemetry: {
+            inventory_version_hits: number;
+            inventory_version_misses: number;
+            price_version_hits: number;
+            price_version_misses: number;
+            inventory_sync_skipped: number;
+            price_sync_skipped: number;
+            bytes_saved_estimate: number;
+        };
+    } = {
+        readyToSell: false,
+        readyToSellTimestamp: null,
+        readyToSellDuration: null,
+        currentSyncPhase: 'IDLE',
+        lastSync: null,
+        lastSuccessfulSync: null,
+        failedOperations: 0,
+        retryCount: 0,
+        inventoryVersion: null,
+        priceVersion: null,
+        inventoryVersionMatch: null,
+        priceVersionMatch: null,
+        inventorySyncSkippedByVersion: false,
+        priceSyncSkippedByVersion: false,
+        lastVersionComparison: null,
+        snapshotSource: null,
+        snapshotAgeMs: null,
+        snapshotVersionHash: null,
+        syncTelemetry: {
+            inventory_version_hits: 0,
+            inventory_version_misses: 0,
+            price_version_hits: 0,
+            price_version_misses: 0,
+            inventory_sync_skipped: 0,
+            price_sync_skipped: 0,
+            bytes_saved_estimate: 0,
+        },
+    };
+
+    private getTimestampCursorState(collection: TimestampCursorCollection): TimestampCollectionCursorState {
+        const fallback: TimestampCollectionCursorState = {
+            lastSyncedAt: null,
+            cursor: null,
+            nextCursor: null,
+        };
+        try {
+            const raw = localStorage.getItem(`${TIMESTAMP_COLLECTION_CURSOR_KEY_PREFIX}${collection}`);
+            if (!raw) return fallback;
+            const parsed = JSON.parse(raw) as Partial<TimestampCollectionCursorState>;
+            const cursor = normalizeIsoCursor(parsed.nextCursor) || normalizeIsoCursor(parsed.cursor) || normalizeIsoCursor(parsed.lastSyncedAt);
+            return {
+                lastSyncedAt: normalizeIsoCursor(parsed.lastSyncedAt) || cursor,
+                cursor,
+                nextCursor: normalizeIsoCursor(parsed.nextCursor) || cursor,
+            };
+        } catch {
+            return fallback;
+        }
+    }
+
+    private saveTimestampCursorState(collection: TimestampCursorCollection, value: unknown): string | null {
+        const cursor = normalizeIsoCursor(value);
+        if (!cursor) return null;
+        const state: TimestampCollectionCursorState = {
+            lastSyncedAt: cursor,
+            cursor,
+            nextCursor: cursor,
+        };
+        localStorage.setItem(`${TIMESTAMP_COLLECTION_CURSOR_KEY_PREFIX}${collection}`, JSON.stringify(state));
+        localStorage.setItem(`sync_timestamp_${collection}`, cursor);
+        this.syncTimestamps.set(collection, cursor);
+        return cursor;
+    }
+
+    private clearTimestampCursorState(collection: TimestampCursorCollection): void {
+        localStorage.removeItem(`${TIMESTAMP_COLLECTION_CURSOR_KEY_PREFIX}${collection}`);
+    }
+    private imageSyncWorkerTimer: any = null;
+    private imageSyncWorkerQueue: Array<{
+        kind: 'products' | ImageBackedCollection;
+        items: any[];
+        reason: string;
+    }> = [];
 
     public isInitialized: boolean = false;
+
+    private publishSyncHealthUpdate(): void {
+        try {
+            localStorage.setItem('clic_pos_sync_health', JSON.stringify(this.getSyncHealthSnapshot()));
+            window.dispatchEvent(new CustomEvent('syncHealthUpdated', { detail: this.getSyncHealthSnapshot() }));
+        } catch {
+            // best-effort diagnostics only
+        }
+    }
+
+    private beginReadyToSellBootstrap(reason: string): void {
+        if (this.readyToSellStartedAt > 0 && !this.readyToSellState.readyToSell) return;
+        this.readyToSellStartedAt = Date.now();
+        this.readyToSellState = {
+            ...this.readyToSellState,
+            readyToSell: false,
+            readyToSellTimestamp: null,
+            readyToSellDuration: null,
+            currentSyncPhase: reason,
+            lastSync: new Date().toISOString(),
+        };
+        this.publishSyncHealthUpdate();
+    }
+
+    private markReadyToSell(reason: string): void {
+        if (this.readyToSellState.readyToSell) return;
+        const now = Date.now();
+        const timestamp = new Date(now).toISOString();
+        const duration = this.readyToSellStartedAt > 0 ? now - this.readyToSellStartedAt : 0;
+        this.readyToSellState = {
+            ...this.readyToSellState,
+            readyToSell: true,
+            readyToSellTimestamp: timestamp,
+            readyToSellDuration: duration,
+            currentSyncPhase: reason,
+            lastSuccessfulSync: timestamp,
+        };
+        console.info('ready_to_sell', {
+            readyToSell: true,
+            readyToSellTimestamp: timestamp,
+            readyToSellDuration: duration,
+            reason,
+        });
+        this.publishSyncHealthUpdate();
+    }
+
+    private setSyncPhase(phase: string): void {
+        this.readyToSellState = {
+            ...this.readyToSellState,
+            currentSyncPhase: phase,
+            lastSync: new Date().toISOString(),
+        };
+        this.publishSyncHealthUpdate();
+    }
+
+    public getSyncHealthSnapshot() {
+        return {
+            ...this.readyToSellState,
+            pendingImageJobs: this.imageSyncWorkerQueue.length,
+            imageSyncInProgress: this.imageSyncInProgress,
+            erpActive: apiSyncAdapter.isErpActiveOperationalTarget(),
+            tokenStatus: localStorage.getItem('clic_sync_auth_status') || 'UNKNOWN',
+            terminalId: localStorage.getItem('clic_erp_sync_terminal_id') || localStorage.getItem('active_terminal_id') || null,
+        };
+    }
+
+    private scheduleImageSyncWorker(kind: 'products' | ImageBackedCollection, items: any[], reason: string): void {
+        const safeItems = Array.isArray(items) ? items.filter(Boolean) : [];
+        if (safeItems.length === 0) return;
+        this.imageSyncWorkerQueue.push({ kind, items: safeItems, reason });
+        this.publishSyncHealthUpdate();
+
+        if (this.imageSyncWorkerTimer) return;
+        this.imageSyncWorkerTimer = window.setTimeout(() => {
+            this.imageSyncWorkerTimer = null;
+            void this.flushImageSyncWorkerQueue();
+        }, 1500);
+    }
+
+    private async flushImageSyncWorkerQueue(): Promise<void> {
+        if (this.imageSyncInProgress || this.imageSyncWorkerQueue.length === 0) return;
+        const jobs = this.imageSyncWorkerQueue.splice(0);
+        this.imageSyncInProgress = true;
+        this.setSyncPhase('P4_IMAGE_SYNC_BACKGROUND');
+        try {
+            for (const job of jobs) {
+                const startedAt = posCatalogDebugNow();
+                if (job.kind === 'products') {
+                    await productImageCacheService.syncSnapshotItems(job.items as Product[]);
+                } else {
+                    await masterDataImageCacheService.syncSnapshotItems(job.kind, job.items as any[]);
+                }
+                posCatalogDebugLog('image worker: job completed', {
+                    kind: job.kind,
+                    reason: job.reason,
+                    count: job.items.length,
+                    elapsedMs: posCatalogDebugElapsedMs(startedAt),
+                });
+            }
+        } catch (error) {
+            this.readyToSellState.failedOperations += 1;
+            console.warn('⚠️ ImageSyncWorker: background image sync failed:', error);
+        } finally {
+            this.imageSyncInProgress = false;
+            this.publishSyncHealthUpdate();
+            if (this.imageSyncWorkerQueue.length > 0) {
+                this.imageSyncWorkerTimer = window.setTimeout(() => {
+                    this.imageSyncWorkerTimer = null;
+                    void this.flushImageSyncWorkerQueue();
+                }, 3000);
+            }
+        }
+    }
 
     private resolveRuntimeWarehousesFromConfig(config: BusinessConfig | null | undefined, terminalId: string): Warehouse[] {
         if (!config || !Array.isArray(config.terminals)) {
@@ -204,24 +666,13 @@ class SyncManager {
     private resolveConfigErpBaseUrl(value: unknown): string | null {
         const raw = typeof value === 'string' ? value.trim() : '';
         if (!raw) return null;
-
-        const withProtocol = /^https?:\/\//i.test(raw) ? raw : `${window.location.protocol}//${raw}`;
-
-        try {
-            const url = new URL(withProtocol);
-            return url
-                .toString()
-                .replace(/\/api\/sync\/?$/i, '')
-                .replace(/\/api\/?$/i, '')
-                .replace(/\/+$/, '');
-        } catch {
-            return null;
-        }
+        return normalizeErpBaseUrl(raw);
     }
 
     private resolveSyncApiBase(value: unknown): string | null {
-        const normalizedBase = this.resolveConfigErpBaseUrl(value);
-        return normalizedBase ? `${normalizedBase}/api/sync` : null;
+        const raw = typeof value === 'string' ? value.trim() : '';
+        if (!raw) return null;
+        return normalizeErpSyncApiBase(raw);
     }
 
     private rehydrateOperationalTargetFromConfig(config: BusinessConfig | null, terminalId: string | null) {
@@ -287,10 +738,14 @@ class SyncManager {
             }
         }
 
-        return null;
+        return resolveErpSyncApiBase();
     }
 
     private resolveLocalSyncApiBaseCandidates(): string[] {
+        if (isNativeAndroidRuntime()) {
+            return [];
+        }
+
         const candidates = [
             'http://127.0.0.1:3001/api/sync',
             'http://localhost:3001/api/sync',
@@ -301,6 +756,39 @@ class SyncManager {
         }
 
         return Array.from(new Set(candidates.map((value) => value.trim()).filter(Boolean)));
+    }
+
+    private buildTerminalConfigEndpointCandidates(context: { erpBaseUrl: string | null }): Array<{
+        baseUrl: string;
+        mode: string;
+        includeErpBaseUrl: boolean;
+    }> {
+        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
+        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
+
+        if (!useAbsoluteEndpoint) {
+            return [{
+                baseUrl: '/api/sync',
+                mode: 'relative-local-proxy',
+                includeErpBaseUrl: true,
+            }];
+        }
+
+        const erpCandidates = syncApiBase
+            ? [{
+                baseUrl: syncApiBase,
+                mode: 'absolute-sync-api',
+                includeErpBaseUrl: false,
+            }]
+            : [];
+
+        const loopbackCandidates = this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
+            baseUrl,
+            mode: 'local-loopback-proxy',
+            includeErpBaseUrl: true,
+        }));
+
+        return [...erpCandidates, ...loopbackCandidates];
     }
 
     /**
@@ -322,6 +810,7 @@ class SyncManager {
         // Ensure a device token exists for this browser instance
         this.ensureDeviceToken();
         this.initializedLocalTerminalId = terminalId;
+        this.beginReadyToSellBootstrap('P0_INITIALIZE_SYNC_MANAGER');
         this.rehydrateOperationalTargetFromConfig(config, terminalId);
 
         // Detect Network Mode
@@ -504,11 +993,13 @@ class SyncManager {
 
         if (!this.isMaster) {
             this.attachImageSyncReconnectHandler();
-            this.syncProductImages({
-                forceManifestCheck: this.productImageHashes.size === 0 || this.lastProductImageManifestVersion === 0
-            }).catch((error) => {
-                console.warn('⚠️ Initial image sync failed:', error);
-            });
+            window.setTimeout(() => {
+                this.syncProductImages({
+                    forceManifestCheck: this.productImageHashes.size === 0 || this.lastProductImageManifestVersion === 0
+                }).catch((error) => {
+                    console.warn('⚠️ Initial background image sync failed:', error);
+                });
+            }, 12000);
         } else {
             this.detachImageSyncReconnectHandler();
         }
@@ -528,12 +1019,19 @@ class SyncManager {
             } catch (configError) {
                 console.warn('⚠️ SyncManager: Master config refresh failed during init:', configError);
             }
-            await this.initializeMasterData();
+            if (apiSyncAdapter.isErpActiveOperationalTarget()) {
+                void this.initializeMasterData().catch((error) => {
+                    console.warn('⚠️ SyncManager: ERP startup master recovery deferred/failed:', error);
+                });
+            } else {
+                await this.initializeMasterData();
+            }
         }
 
         // Subscribe to connection restoration to relaunch recovery immediately
         apiSyncAdapter.setOnConnectionRestored(async () => {
             console.log('🔄 SyncManager: Connection restored, re-triggering recovery/sync...');
+            await triggerErpSyncOutbox('connection_restored');
             if (this.isMaster) {
                 await this.initializeMasterData();
             } else {
@@ -558,15 +1056,11 @@ class SyncManager {
             this.purgeSyncedHistoricalData().catch(e => console.error('❌ SyncManager: Initial purge failed:', e));
         }
 
-        if (apiSyncAdapter.isUsingErpOperationalTarget()) {
-            try {
-                await this.syncTerminalMastersOnStartup(config);
-            } catch (error) {
+        if (apiSyncAdapter.isErpActiveOperationalTarget()) {
+            void this.syncTerminalMastersOnStartup(config).catch((error) => {
                 console.warn('⚠️ SyncManager: startup terminal manifest sync failed:', error);
-            }
-        } else {
-            this.syncTerminalMastersOnStartup(config).catch((error) => {
-                console.warn('⚠️ SyncManager: startup terminal manifest sync failed:', error);
+                this.readyToSellState.failedOperations += 1;
+                this.publishSyncHealthUpdate();
             });
         }
 
@@ -618,6 +1112,14 @@ class SyncManager {
     }
 
     private ensureDeviceToken() {
+        const syncMode = String(localStorage.getItem('clic_sync_mode') || '').trim().toUpperCase();
+        const invalidated = getInvalidatedSyncDeviceTokenInfo();
+        const existing = resolveSyncDeviceToken();
+        if (syncMode === 'POS_ERP' && (!existing.token || invalidated.invalidatedAt)) {
+            console.warn('[SyncManager] ERP terminal requires register token; skipping LOCAL_GENERATED device token');
+            return;
+        }
+
         const result = ensureSyncDeviceToken(() => `dev_${uuidv4()}`);
         if (result.created) {
             console.log('🔑 SyncManager: Generated new Device Token');
@@ -674,13 +1176,18 @@ class SyncManager {
             null;
 
         const currentTerminal = activeTerminalId && config?.terminals
-            ? config.terminals.find((terminal) => terminal.id === activeTerminalId)
+            ? config.terminals.find((terminal) =>
+                terminal.id === activeTerminalId ||
+                terminal.config?.erpTerminalId === activeTerminalId ||
+                terminal.config?.erpBinding?.terminalId === activeTerminalId
+            )
             : null;
 
         const erpTerminalId =
             currentTerminal?.config?.erpBinding?.terminalId ||
-            localStorage.getItem('clic_erp_sync_terminal_id') ||
             currentTerminal?.config?.erpTerminalId ||
+            (looksLikeUuidString(currentTerminal?.id) ? currentTerminal?.id : null) ||
+            localStorage.getItem('clic_erp_sync_terminal_id') ||
             activeTerminalId ||
             null;
         const activeTenantId =
@@ -725,8 +1232,66 @@ class SyncManager {
         return `clic_pos_terminal_manifest_cursor_map:${localTerminalId}`;
     }
 
+    private getInventoryVersionStorageKey(localTerminalId: string): string {
+        return `clic_pos_inventory_version:${localTerminalId}`;
+    }
+
+    private getPriceVersionStorageKey(localTerminalId: string): string {
+        return `clic_pos_price_version:${localTerminalId}`;
+    }
+
     private getStartupManifestSessionKey(localTerminalId: string): string {
         return `clic_pos_terminal_startup_manifest_synced:${localTerminalId}`;
+    }
+
+    private buildPosDeviceHeaders(deviceId: string | null | undefined): Record<string, string> {
+        const resolvedDeviceId = typeof deviceId === 'string' ? deviceId.trim() : '';
+        return resolvedDeviceId
+            ? {
+                'X-Device-Id': resolvedDeviceId,
+                'X-POS-Device-Id': resolvedDeviceId,
+            }
+            : {};
+    }
+
+    private async buildTerminalEndpointError(
+        response: Response,
+        fallbackMessage: string,
+        context?: { terminalId?: string | null; posDeviceId?: string | null }
+    ): Promise<Error> {
+        let payload: Record<string, any> | null = null;
+        let detail = '';
+
+        try {
+            const clonedPayload = await response.clone().json();
+            payload = clonedPayload && typeof clonedPayload === 'object' && !Array.isArray(clonedPayload)
+                ? clonedPayload
+                : null;
+        } catch {
+            // Fall back to text below.
+        }
+
+        if (payload) {
+            const code = String(payload.code || '').trim().toUpperCase();
+            if (response.status === 403 && code === 'DEVICE_SUPERSEDED') {
+                dispatchDeviceRevoked({
+                    reason: 'DEVICE_SUPERSEDED',
+                    message: String(payload.message || '').trim() || DEVICE_SUPERSEDED_MESSAGE,
+                    terminalId: context?.terminalId || payload.terminal_id || null,
+                    previousDeviceId: context?.posDeviceId || null,
+                    newDeviceId: payload.canonical_device_id || payload.new_device_id || null,
+                    payload,
+                });
+            }
+
+            detail = String(payload.message || payload.error || '').trim();
+        }
+
+        if (!detail) {
+            detail = await response.text().catch(() => '');
+        }
+
+        return new Error(detail || fallbackMessage);
     }
 
     private readStoredCatalogCursor(localTerminalId: string | null): string | null {
@@ -745,6 +1310,76 @@ class SyncManager {
         } else {
             localStorage.removeItem(key);
         }
+    }
+
+    private normalizeVersionToken(value: unknown): string | null {
+        if (typeof value === 'string') {
+            return value.trim() || null;
+        }
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            return String(value);
+        }
+        return null;
+    }
+
+    private readStoredInventoryVersion(localTerminalId: string | null): string | null {
+        if (!localTerminalId) return null;
+        return this.normalizeVersionToken(localStorage.getItem(this.getInventoryVersionStorageKey(localTerminalId)));
+    }
+
+    private readStoredPriceVersion(localTerminalId: string | null): string | null {
+        if (!localTerminalId) return null;
+        return this.normalizeVersionToken(localStorage.getItem(this.getPriceVersionStorageKey(localTerminalId)));
+    }
+
+    private persistInventoryVersion(localTerminalId: string | null, version: unknown): void {
+        if (!localTerminalId) return;
+        const normalized = this.normalizeVersionToken(version);
+        if (normalized) {
+            localStorage.setItem(this.getInventoryVersionStorageKey(localTerminalId), normalized);
+        }
+    }
+
+    private persistPriceVersion(localTerminalId: string | null, version: unknown): void {
+        if (!localTerminalId) return;
+        const normalized = this.normalizeVersionToken(version);
+        if (normalized) {
+            localStorage.setItem(this.getPriceVersionStorageKey(localTerminalId), normalized);
+        }
+    }
+
+    private incrementSyncTelemetry(metric: keyof SyncManager['readyToSellState']['syncTelemetry'], amount = 1): void {
+        this.readyToSellState = {
+            ...this.readyToSellState,
+            syncTelemetry: {
+                ...this.readyToSellState.syncTelemetry,
+                [metric]: Number(this.readyToSellState.syncTelemetry[metric] || 0) + amount,
+            },
+        };
+    }
+
+    private estimateBlockBytesSaved(count: number | null | undefined, averageBytesPerRecord: number): number {
+        const safeCount = Number(count);
+        return Number.isFinite(safeCount) && safeCount > 0
+            ? Math.round(safeCount * averageBytesPerRecord)
+            : 0;
+    }
+
+    private recordSnapshotDiagnostics(source: string, diagnostics: TerminalSnapshotDiagnostics | null | undefined): void {
+        if (!diagnostics) return;
+        this.readyToSellState = {
+            ...this.readyToSellState,
+            snapshotSource: diagnostics.snapshotSource ? String(diagnostics.snapshotSource) : this.readyToSellState.snapshotSource,
+            snapshotAgeMs: Number.isFinite(Number(diagnostics.snapshotAgeMs)) ? Number(diagnostics.snapshotAgeMs) : this.readyToSellState.snapshotAgeMs,
+            snapshotVersionHash: diagnostics.snapshotVersionHash || this.readyToSellState.snapshotVersionHash,
+        };
+        posCatalogDebugLog('snapshot awareness', {
+            source,
+            snapshotSource: diagnostics.snapshotSource || null,
+            snapshotAgeMs: diagnostics.snapshotAgeMs ?? null,
+            snapshotVersionHash: diagnostics.snapshotVersionHash || null,
+        });
+        this.publishSyncHealthUpdate();
     }
 
     private readStoredTerminalCursorMap(localTerminalId: string | null): TerminalCursorMap {
@@ -799,12 +1434,12 @@ class SyncManager {
 
     private wasStartupManifestSyncCompleted(localTerminalId: string | null): boolean {
         if (!localTerminalId) return false;
-        return sessionStorage.getItem(this.getStartupManifestSessionKey(localTerminalId)) === 'true';
+        return localStorage.getItem(this.getStartupManifestSessionKey(localTerminalId)) === 'true';
     }
 
     private markStartupManifestSyncCompleted(localTerminalId: string | null): void {
         if (!localTerminalId) return;
-        sessionStorage.setItem(this.getStartupManifestSessionKey(localTerminalId), 'true');
+        localStorage.setItem(this.getStartupManifestSessionKey(localTerminalId), 'true');
     }
 
     private catalogDeleteCandidates(item: Record<string, unknown> | null | undefined): string[] {
@@ -953,6 +1588,28 @@ class SyncManager {
         const counts = manifest.counts && typeof manifest.counts === 'object' && !Array.isArray(manifest.counts)
             ? manifest.counts as Record<string, any>
             : {};
+        const versions = manifest.versions && typeof manifest.versions === 'object' && !Array.isArray(manifest.versions)
+            ? manifest.versions as Record<string, any>
+            : {};
+        const inventoryMeta = manifest.inventory && typeof manifest.inventory === 'object' && !Array.isArray(manifest.inventory)
+            ? manifest.inventory as Record<string, any>
+            : {};
+        const productPricesMeta = manifest.product_prices && typeof manifest.product_prices === 'object' && !Array.isArray(manifest.product_prices)
+            ? manifest.product_prices as Record<string, any>
+            : {};
+        const cacheMeta = manifest.cache && typeof manifest.cache === 'object' && !Array.isArray(manifest.cache)
+            ? manifest.cache as Record<string, any>
+            : {};
+        const snapshotMeta = manifest.snapshot_meta && typeof manifest.snapshot_meta === 'object' && !Array.isArray(manifest.snapshot_meta)
+            ? manifest.snapshot_meta as Record<string, any>
+            : manifest.snapshot && typeof manifest.snapshot === 'object' && !Array.isArray(manifest.snapshot)
+                ? manifest.snapshot as Record<string, any>
+                : {};
+        const domainHashes = manifest.domain_hashes && typeof manifest.domain_hashes === 'object' && !Array.isArray(manifest.domain_hashes)
+            ? manifest.domain_hashes as Record<string, any>
+            : manifest.hashes && typeof manifest.hashes === 'object' && !Array.isArray(manifest.hashes)
+                ? manifest.hashes as Record<string, any>
+                : {};
         const normalizeScope = (scope: unknown): TerminalManifestScope | null => {
             const token = typeof scope === 'string'
                 ? scope.trim().toLowerCase().replace(/[\s-]+/g, '_')
@@ -982,6 +1639,39 @@ class SyncManager {
                 if (Number.isFinite(value)) return value;
             }
             return 0;
+        };
+        const readVersion = (...values: unknown[]): string | null => {
+            for (const value of values) {
+                const normalized = this.normalizeVersionToken(value);
+                if (normalized) return normalized;
+            }
+            return null;
+        };
+        const readHash = (...keys: string[]): string | null => {
+            for (const key of keys) {
+                const value = domainHashes[key];
+                if (typeof value === 'string' && value.trim()) return value.trim();
+            }
+            return null;
+        };
+        const diagnostics: TerminalSnapshotDiagnostics = {
+            snapshotSource: readVersion(
+                snapshotMeta.source,
+                snapshotMeta.snapshot_source,
+                cacheMeta.source,
+                cacheMeta.snapshot_source,
+                manifest.persistent_snapshot ? 'persistent' : null,
+            ),
+            snapshotAgeMs: Number.isFinite(Number(snapshotMeta.age_ms ?? snapshotMeta.snapshot_age_ms ?? cacheMeta.age_ms))
+                ? Number(snapshotMeta.age_ms ?? snapshotMeta.snapshot_age_ms ?? cacheMeta.age_ms)
+                : null,
+            snapshotVersionHash: readVersion(
+                snapshotMeta.version_hash,
+                snapshotMeta.snapshot_version_hash,
+                snapshotMeta.hash,
+                cacheMeta.version_hash,
+                cacheMeta.hash,
+            ),
         };
 
         return {
@@ -1020,7 +1710,49 @@ class SyncManager {
                 product_prices: readCount('product_prices', 'productPrices', 'prices', 'tariffs', 'tarifas'),
             },
             snapshot_at: typeof manifest.snapshot_at === 'string' ? manifest.snapshot_at.trim() || null : null,
+            inventory_version: readVersion(
+                manifest.inventory_version,
+                manifest.inventoryVersion,
+                versions.inventory,
+                versions.inventory_version,
+                inventoryMeta.version,
+                inventoryMeta.inventory_version,
+                inventoryMeta.inventoryVersion,
+            ),
+            price_version: readVersion(
+                manifest.price_version,
+                manifest.priceVersion,
+                manifest.product_prices_version,
+                manifest.productPricesVersion,
+                versions.price,
+                versions.price_version,
+                versions.product_prices,
+                versions.product_prices_version,
+                productPricesMeta.version,
+                productPricesMeta.price_version,
+                productPricesMeta.product_prices_version,
+            ),
+            domain_hashes: {
+                inventory: readHash('inventory', 'stock', 'stocks', 'stock_balances', 'inventory_stock'),
+                product_prices: readHash('product_prices', 'productPrices', 'prices', 'tariffs', 'tarifas'),
+            },
+            snapshot_meta: diagnostics.snapshotSource || diagnostics.snapshotAgeMs != null || diagnostics.snapshotVersionHash
+                ? diagnostics
+                : null,
         };
+    }
+
+    private async fetchTerminalEndpoint(endpoint: string, headers: Record<string, string>): Promise<Response> {
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), 12000);
+        try {
+            return await fetch(endpoint, {
+                headers,
+                signal: controller.signal,
+            });
+        } finally {
+            window.clearTimeout(timeoutId);
+        }
     }
 
     private async fetchTerminalManifest(context: {
@@ -1034,28 +1766,7 @@ class SyncManager {
             return null;
         }
 
-        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
-        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
-        const endpointCandidates = useAbsoluteEndpoint
-            ? [
-                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
-                    baseUrl,
-                    mode: 'local-loopback-proxy',
-                    includeErpBaseUrl: true,
-                })),
-                ...(syncApiBase
-                    ? [{
-                        baseUrl: syncApiBase,
-                        mode: 'absolute-sync-api',
-                        includeErpBaseUrl: false,
-                    }]
-                    : []),
-            ]
-            : [{
-                baseUrl: '/api/sync',
-                mode: 'relative-local-proxy',
-                includeErpBaseUrl: true,
-            }];
+        const endpointCandidates = this.buildTerminalConfigEndpointCandidates(context);
 
         let lastError: unknown = null;
 
@@ -1063,8 +1774,10 @@ class SyncManager {
             const startedAt = posCatalogDebugNow();
             const params = new URLSearchParams();
             params.set('tenant_id', context.tenantId);
+            params.set('terminal_id', context.terminalId);
             if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
             if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+            if (context.posDeviceId) params.set('device_id', context.posDeviceId);
             if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
             if (cursorMap.terminal) params.set('terminal_cursor', cursorMap.terminal);
             if (cursorMap.items) params.set('items_cursor', cursorMap.items);
@@ -1083,15 +1796,20 @@ class SyncManager {
                     endpointMode: endpointCandidate.mode,
                 });
 
-                const response = await fetch(endpoint, {
-                    headers: {
+                const response = await this.fetchTerminalEndpoint(
+                    endpoint,
+                    {
                         Accept: 'application/json',
-                    },
-                });
+                        ...this.buildPosDeviceHeaders(context.posDeviceId),
+                    }
+                );
 
                 if (!response.ok) {
-                    const detail = await response.text().catch(() => '');
-                    throw new Error(detail || `No se pudo consultar el manifest de maestros (${response.status}).`);
+                    throw await this.buildTerminalEndpointError(
+                        response,
+                        `No se pudo consultar el manifest de maestros (${response.status}).`,
+                        { terminalId: context.terminalId, posDeviceId: context.posDeviceId },
+                    );
                 }
 
                 const payload = await response.json();
@@ -1133,28 +1851,7 @@ class SyncManager {
             return null;
         }
 
-        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
-        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
-        const endpointCandidates = useAbsoluteEndpoint
-            ? [
-                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
-                    baseUrl,
-                    mode: 'local-loopback-proxy',
-                    includeErpBaseUrl: true,
-                })),
-                ...(syncApiBase
-                    ? [{
-                        baseUrl: syncApiBase,
-                        mode: 'absolute-sync-api',
-                        includeErpBaseUrl: false,
-                    }]
-                    : []),
-            ]
-            : [{
-                baseUrl: '/api/sync',
-                mode: 'relative-local-proxy',
-                includeErpBaseUrl: true,
-            }];
+        const endpointCandidates = this.buildTerminalConfigEndpointCandidates(context);
 
         let lastError: unknown = null;
 
@@ -1162,8 +1859,10 @@ class SyncManager {
             const startedAt = posCatalogDebugNow();
             const params = new URLSearchParams();
             params.set('tenant_id', context.tenantId);
+            params.set('terminal_id', context.terminalId);
             if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
             if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+            if (context.posDeviceId) params.set('device_id', context.posDeviceId);
             if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
             if (cursor) params.set('inventory_cursor', cursor);
 
@@ -1176,15 +1875,20 @@ class SyncManager {
                     inventoryCursorSent: cursor,
                 });
 
-                const response = await fetch(endpoint, {
-                    headers: {
+                const response = await this.fetchTerminalEndpoint(
+                    endpoint,
+                    {
                         Accept: 'application/json',
-                    },
-                });
+                        ...this.buildPosDeviceHeaders(context.posDeviceId),
+                    }
+                );
 
                 if (!response.ok) {
-                    const detail = await response.text().catch(() => '');
-                    throw new Error(detail || `No se pudo consultar el bloque inventory (${response.status}).`);
+                    throw await this.buildTerminalEndpointError(
+                        response,
+                        `No se pudo consultar el bloque inventory (${response.status}).`,
+                        { terminalId: context.terminalId, posDeviceId: context.posDeviceId },
+                    );
                 }
 
                 const payload = await response.json();
@@ -1194,6 +1898,32 @@ class SyncManager {
                 const inventory = root.inventory && typeof root.inventory === 'object' && !Array.isArray(root.inventory)
                     ? root.inventory as Record<string, any>
                     : {};
+                const snapshotMeta = root.snapshot_meta && typeof root.snapshot_meta === 'object' && !Array.isArray(root.snapshot_meta)
+                    ? root.snapshot_meta as Record<string, any>
+                    : inventory.snapshot_meta && typeof inventory.snapshot_meta === 'object' && !Array.isArray(inventory.snapshot_meta)
+                        ? inventory.snapshot_meta as Record<string, any>
+                        : root.snapshot && typeof root.snapshot === 'object' && !Array.isArray(root.snapshot)
+                            ? root.snapshot as Record<string, any>
+                            : {};
+                const cacheMeta = root.cache && typeof root.cache === 'object' && !Array.isArray(root.cache)
+                    ? root.cache as Record<string, any>
+                    : inventory.cache && typeof inventory.cache === 'object' && !Array.isArray(inventory.cache)
+                        ? inventory.cache as Record<string, any>
+                        : {};
+                const snapshotDiagnostics: TerminalSnapshotDiagnostics = {
+                    snapshotSource: this.normalizeVersionToken(snapshotMeta.source)
+                        || this.normalizeVersionToken(snapshotMeta.snapshot_source)
+                        || this.normalizeVersionToken(cacheMeta.source)
+                        || (root.persistent_snapshot || inventory.persistent_snapshot ? 'persistent' : null),
+                    snapshotAgeMs: Number.isFinite(Number(snapshotMeta.age_ms ?? snapshotMeta.snapshot_age_ms ?? cacheMeta.age_ms))
+                        ? Number(snapshotMeta.age_ms ?? snapshotMeta.snapshot_age_ms ?? cacheMeta.age_ms)
+                        : null,
+                    snapshotVersionHash: this.normalizeVersionToken(snapshotMeta.version_hash)
+                        || this.normalizeVersionToken(snapshotMeta.snapshot_version_hash)
+                        || this.normalizeVersionToken(snapshotMeta.hash)
+                        || this.normalizeVersionToken(cacheMeta.version_hash)
+                        || this.normalizeVersionToken(cacheMeta.hash),
+                };
                 const normalizedPayload: TerminalInventoryPayload = {
                     cursor:
                         typeof inventory.cursor === 'string'
@@ -1204,8 +1934,16 @@ class SyncManager {
                     balances:
                         Array.isArray(inventory.balances)
                             ? inventory.balances as TerminalInventoryBalancePayload[]
+                            : Array.isArray(inventory.stock_balances)
+                                ? inventory.stock_balances as TerminalInventoryBalancePayload[]
+                                : Array.isArray(inventory.stockBalances)
+                                    ? inventory.stockBalances as TerminalInventoryBalancePayload[]
                             : Array.isArray(root.balances)
                                 ? root.balances as TerminalInventoryBalancePayload[]
+                                : Array.isArray(root.stock_balances)
+                                    ? root.stock_balances as TerminalInventoryBalancePayload[]
+                                    : Array.isArray(root.stockBalances)
+                                        ? root.stockBalances as TerminalInventoryBalancePayload[]
                                 : [],
                     has_changes:
                         typeof inventory.has_changes === 'boolean'
@@ -1213,6 +1951,14 @@ class SyncManager {
                             : typeof root.has_changes === 'boolean'
                                 ? root.has_changes
                                 : true,
+                    inventory_version: this.normalizeVersionToken(root.inventory_version)
+                        || this.normalizeVersionToken(root.inventoryVersion)
+                        || this.normalizeVersionToken(inventory.inventory_version)
+                        || this.normalizeVersionToken(inventory.inventoryVersion)
+                        || this.normalizeVersionToken(inventory.version),
+                    snapshot_meta: snapshotDiagnostics.snapshotSource || snapshotDiagnostics.snapshotAgeMs != null || snapshotDiagnostics.snapshotVersionHash
+                        ? snapshotDiagnostics
+                        : null,
                 };
 
                 posCatalogDebugLog('inventory block: fetch success', {
@@ -1221,6 +1967,8 @@ class SyncManager {
                     balanceCount: normalizedPayload.balances?.length || 0,
                     hasChanges: normalizedPayload.has_changes,
                     cursor: normalizedPayload.cursor,
+                    inventoryVersion: normalizedPayload.inventory_version || null,
+                    snapshotMeta: normalizedPayload.snapshot_meta || null,
                 });
 
                 return normalizedPayload;
@@ -1253,28 +2001,7 @@ class SyncManager {
             return null;
         }
 
-        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
-        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
-        const endpointCandidates = useAbsoluteEndpoint
-            ? [
-                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
-                    baseUrl,
-                    mode: 'local-loopback-proxy',
-                    includeErpBaseUrl: true,
-                })),
-                ...(syncApiBase
-                    ? [{
-                        baseUrl: syncApiBase,
-                        mode: 'absolute-sync-api',
-                        includeErpBaseUrl: false,
-                    }]
-                    : []),
-            ]
-            : [{
-                baseUrl: '/api/sync',
-                mode: 'relative-local-proxy',
-                includeErpBaseUrl: true,
-            }];
+        const endpointCandidates = this.buildTerminalConfigEndpointCandidates(context);
 
         let lastError: unknown = null;
 
@@ -1282,8 +2009,10 @@ class SyncManager {
             const startedAt = posCatalogDebugNow();
             const params = new URLSearchParams();
             params.set('tenant_id', context.tenantId);
+            params.set('terminal_id', context.terminalId);
             if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
             if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+            if (context.posDeviceId) params.set('device_id', context.posDeviceId);
             if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
             if (cursor) params.set('product_prices_cursor', cursor);
 
@@ -1296,15 +2025,20 @@ class SyncManager {
                     productPricesCursorSent: cursor,
                 });
 
-                const response = await fetch(endpoint, {
-                    headers: {
+                const response = await this.fetchTerminalEndpoint(
+                    endpoint,
+                    {
                         Accept: 'application/json',
-                    },
-                });
+                        ...this.buildPosDeviceHeaders(context.posDeviceId),
+                    }
+                );
 
                 if (!response.ok) {
-                    const detail = await response.text().catch(() => '');
-                    throw new Error(detail || `No se pudo consultar el bloque product_prices (${response.status}).`);
+                    throw await this.buildTerminalEndpointError(
+                        response,
+                        `No se pudo consultar el bloque product_prices (${response.status}).`,
+                        { terminalId: context.terminalId, posDeviceId: context.posDeviceId },
+                    );
                 }
 
                 const payload = await response.json();
@@ -1314,6 +2048,32 @@ class SyncManager {
                 const productPrices = root.product_prices && typeof root.product_prices === 'object' && !Array.isArray(root.product_prices)
                     ? root.product_prices as Record<string, any>
                     : {};
+                const snapshotMeta = root.snapshot_meta && typeof root.snapshot_meta === 'object' && !Array.isArray(root.snapshot_meta)
+                    ? root.snapshot_meta as Record<string, any>
+                    : productPrices.snapshot_meta && typeof productPrices.snapshot_meta === 'object' && !Array.isArray(productPrices.snapshot_meta)
+                        ? productPrices.snapshot_meta as Record<string, any>
+                        : root.snapshot && typeof root.snapshot === 'object' && !Array.isArray(root.snapshot)
+                            ? root.snapshot as Record<string, any>
+                            : {};
+                const cacheMeta = root.cache && typeof root.cache === 'object' && !Array.isArray(root.cache)
+                    ? root.cache as Record<string, any>
+                    : productPrices.cache && typeof productPrices.cache === 'object' && !Array.isArray(productPrices.cache)
+                        ? productPrices.cache as Record<string, any>
+                        : {};
+                const snapshotDiagnostics: TerminalSnapshotDiagnostics = {
+                    snapshotSource: this.normalizeVersionToken(snapshotMeta.source)
+                        || this.normalizeVersionToken(snapshotMeta.snapshot_source)
+                        || this.normalizeVersionToken(cacheMeta.source)
+                        || (root.persistent_snapshot || productPrices.persistent_snapshot ? 'persistent' : null),
+                    snapshotAgeMs: Number.isFinite(Number(snapshotMeta.age_ms ?? snapshotMeta.snapshot_age_ms ?? cacheMeta.age_ms))
+                        ? Number(snapshotMeta.age_ms ?? snapshotMeta.snapshot_age_ms ?? cacheMeta.age_ms)
+                        : null,
+                    snapshotVersionHash: this.normalizeVersionToken(snapshotMeta.version_hash)
+                        || this.normalizeVersionToken(snapshotMeta.snapshot_version_hash)
+                        || this.normalizeVersionToken(snapshotMeta.hash)
+                        || this.normalizeVersionToken(cacheMeta.version_hash)
+                        || this.normalizeVersionToken(cacheMeta.hash),
+                };
                 const normalizedPayload: TerminalProductPricesPayload = {
                     cursor:
                         typeof productPrices.cursor === 'string'
@@ -1333,6 +2093,16 @@ class SyncManager {
                             : typeof root.has_changes === 'boolean'
                                 ? root.has_changes
                                 : true,
+                    price_version: this.normalizeVersionToken(root.price_version)
+                        || this.normalizeVersionToken(root.priceVersion)
+                        || this.normalizeVersionToken(root.product_prices_version)
+                        || this.normalizeVersionToken(root.productPricesVersion)
+                        || this.normalizeVersionToken(productPrices.price_version)
+                        || this.normalizeVersionToken(productPrices.product_prices_version)
+                        || this.normalizeVersionToken(productPrices.version),
+                    snapshot_meta: snapshotDiagnostics.snapshotSource || snapshotDiagnostics.snapshotAgeMs != null || snapshotDiagnostics.snapshotVersionHash
+                        ? snapshotDiagnostics
+                        : null,
                 };
 
                 posCatalogDebugLog('product prices block: fetch success', {
@@ -1341,6 +2111,8 @@ class SyncManager {
                     priceCount: normalizedPayload.prices?.length || 0,
                     hasChanges: normalizedPayload.has_changes,
                     cursor: normalizedPayload.cursor,
+                    priceVersion: normalizedPayload.price_version || null,
+                    snapshotMeta: normalizedPayload.snapshot_meta || null,
                 });
 
                 return normalizedPayload;
@@ -1380,7 +2152,35 @@ class SyncManager {
             return null;
         }
 
-        if (options?.skipIfStartupCompleted && this.wasStartupManifestSyncCompleted(localTerminalId)) {
+        if (protectsLocalCatalogFromCloud()) {
+            if (options?.markStartupCompleted) {
+                this.markStartupManifestSyncCompleted(localTerminalId);
+            }
+            console.warn('[SYNC_ROUTER] POS_CLOUD_STAGING manifest sync skipped; local catalog remains authoritative.');
+            return null;
+        }
+
+        const currentTerminalConfig = context.localTerminalId || context.terminalId
+            ? baseConfig?.terminals?.find((terminal) =>
+                terminal.id === context.localTerminalId ||
+                terminal.id === context.terminalId ||
+                terminal.config?.erpTerminalId === context.terminalId ||
+                terminal.config?.erpBinding?.terminalId === context.terminalId
+            )?.config
+            : null;
+        const preflightProductGroups = Array.isArray(baseConfig?.productGroups)
+            ? baseConfig.productGroups
+            : [];
+        const preflightTerminalAllowedCategories = Array.isArray(currentTerminalConfig?.catalog?.allowedCategories)
+            ? currentTerminalConfig.catalog.allowedCategories
+            : [];
+        const shouldBypassCompletedManifestSkipForCatalog = Boolean(
+            apiSyncAdapter.isErpActiveOperationalTarget() &&
+            preflightProductGroups.length === 0 &&
+            preflightTerminalAllowedCategories.length === 0
+        );
+
+        if (options?.skipIfStartupCompleted && this.wasStartupManifestSyncCompleted(localTerminalId) && !shouldBypassCompletedManifestSkipForCatalog) {
             return null;
         }
 
@@ -1388,22 +2188,146 @@ class SyncManager {
 
         try {
             const storedCursorMap = this.readStoredTerminalCursorMap(localTerminalId);
+            const localInventoryVersion = this.readStoredInventoryVersion(localTerminalId);
+            const localPriceVersion = this.readStoredPriceVersion(localTerminalId);
             const manifest = await this.fetchTerminalManifest(context, storedCursorMap);
             if (!manifest?.cursor_map || !manifest.changed) {
                 return null;
             }
+            this.recordSnapshotDiagnostics('manifest', manifest.snapshot_meta);
 
             const changedMasterScopes: TerminalManifestMasterScope[] = (['items', 'customers', 'suppliers', 'sellers', 'users', 'pos_users', 'roles', 'pos_roles', 'purchase_orders', 'transfers'] as TerminalManifestMasterScope[])
                 .filter((scope) => manifest.changed?.[scope]);
             const changedBlocks = Array.isArray(manifest.changed_blocks) ? manifest.changed_blocks : [];
             const inventoryChanged = Boolean(manifest.changed.inventory) || changedBlocks.includes('inventory');
             const productPricesChanged = Boolean(manifest.changed.product_prices) || changedBlocks.includes('product_prices');
-            const shouldBootstrapBlocks = Boolean(options?.markStartupCompleted || options?.bootstrapBlocks);
-            const bootstrapInventoryOnStartup = Boolean(shouldBootstrapBlocks);
-            const bootstrapProductPricesOnStartup = Boolean(shouldBootstrapBlocks);
+            const remoteInventoryVersion = this.normalizeVersionToken(manifest.inventory_version);
+            const remotePriceVersion = this.normalizeVersionToken(manifest.price_version);
+            const inventoryVersionComparable = Boolean(localInventoryVersion && remoteInventoryVersion);
+            const priceVersionComparable = Boolean(localPriceVersion && remotePriceVersion);
+            const inventoryVersionMatch = inventoryVersionComparable
+                ? localInventoryVersion === remoteInventoryVersion
+                : null;
+            const priceVersionMatch = priceVersionComparable
+                ? localPriceVersion === remotePriceVersion
+                : null;
+            const forceFullBootstrap = Boolean(
+                options?.bootstrapBlocks ||
+                (manifest as any).forceFullBootstrap ||
+                (manifest as any).force_full_bootstrap ||
+                (manifest as any).fullBootstrapRequired ||
+                (manifest as any).full_bootstrap_required
+            );
             const terminalChanged = Boolean(manifest.changed.terminal);
+            const bootstrapInventoryOnStartup = Boolean(forceFullBootstrap || !storedCursorMap.inventory);
+            const bootstrapProductPricesOnStartup = Boolean(forceFullBootstrap || !storedCursorMap.product_prices);
+            const inventorySyncSkippedByVersion = Boolean(!bootstrapInventoryOnStartup && inventoryVersionMatch === true);
+            const priceSyncSkippedByVersion = Boolean(!bootstrapProductPricesOnStartup && priceVersionMatch === true);
+            const inventoryVersionMiss = Boolean(remoteInventoryVersion && localInventoryVersion && remoteInventoryVersion !== localInventoryVersion);
+            const priceVersionMiss = Boolean(remotePriceVersion && localPriceVersion && remotePriceVersion !== localPriceVersion);
+            const persistedInternalSequences = ((await db.get('internalSequences')) as DocumentSeries[]) || [];
+            const persistedTerminalSeries = Array.isArray(currentTerminalConfig?.documentSeries)
+                ? currentTerminalConfig.documentSeries
+                : [];
+            const hasErpTerminalConfigDocumentSeries = [...persistedInternalSequences, ...persistedTerminalSeries]
+                .some((series: any) => String(series?.source || '').toUpperCase() === 'ERP_TERMINAL_CONFIG');
+            const requiresDocumentSeriesConfigFetch = Boolean(
+                apiSyncAdapter.isErpActiveOperationalTarget() &&
+                !hasErpTerminalConfigDocumentSeries
+            );
+            const persistedProductGroups = Array.isArray(baseConfig?.productGroups)
+                ? baseConfig.productGroups
+                : [];
+            const persistedTerminalAllowedCategories = Array.isArray(currentTerminalConfig?.catalog?.allowedCategories)
+                ? currentTerminalConfig.catalog.allowedCategories
+                : [];
+            const persistedDepartments = Array.isArray(baseConfig?.departments) ? baseConfig.departments : [];
+            const persistedSections = Array.isArray(baseConfig?.sections) ? baseConfig.sections : [];
+            const persistedFamilies = Array.isArray(baseConfig?.families) ? baseConfig.families : [];
+            const persistedSubfamilies = Array.isArray(baseConfig?.subfamilies) ? baseConfig.subfamilies : [];
+            const persistedBrands = Array.isArray(baseConfig?.brands) ? baseConfig.brands : [];
+            const missingCommercialClassifications =
+                persistedDepartments.length === 0 ||
+                persistedSections.length === 0 ||
+                persistedFamilies.length === 0 ||
+                persistedSubfamilies.length === 0 ||
+                persistedBrands.length === 0;
+            const requiresCatalogConfigFetch = Boolean(
+                apiSyncAdapter.isErpActiveOperationalTarget() &&
+                (
+                    (persistedProductGroups.length === 0 && persistedTerminalAllowedCategories.length === 0) ||
+                    missingCommercialClassifications
+                )
+            );
+            if (requiresDocumentSeriesConfigFetch) {
+                console.warn('POS_DOCUMENT_SERIES_CONFIG_FETCH_REQUIRED', {
+                    terminalId: context.terminalId,
+                    localTerminalId,
+                    reason: 'ERP_ACTIVE_WITHOUT_PERSISTED_TERMINAL_CONFIG_SERIES',
+                    internalSequencesCount: persistedInternalSequences.length,
+                    terminalDocumentSeriesCount: persistedTerminalSeries.length,
+                });
+            }
+            if (requiresCatalogConfigFetch) {
+                console.warn('POS_CLASSIFICATIONS_CONFIG_FETCH_REQUIRED', {
+                    terminalId: context.terminalId,
+                    localTerminalId,
+                    reason: 'ERP_ACTIVE_WITHOUT_PERSISTED_TERMINAL_CATALOG_CLASSIFICATIONS',
+                    productGroupsCount: persistedProductGroups.length,
+                    allowedCategoriesCount: persistedTerminalAllowedCategories.length,
+                    departmentsCount: persistedDepartments.length,
+                    sectionsCount: persistedSections.length,
+                    familiesCount: persistedFamilies.length,
+                    subfamiliesCount: persistedSubfamilies.length,
+                    brandsCount: persistedBrands.length,
+                });
+            }
 
-            if (!terminalChanged && changedMasterScopes.length === 0 && !inventoryChanged && !bootstrapInventoryOnStartup && !productPricesChanged && !bootstrapProductPricesOnStartup) {
+            if (inventoryVersionMatch === true) {
+                this.incrementSyncTelemetry('inventory_version_hits');
+            } else if (inventoryVersionMiss) {
+                this.incrementSyncTelemetry('inventory_version_misses');
+            }
+            if (priceVersionMatch === true) {
+                this.incrementSyncTelemetry('price_version_hits');
+            } else if (priceVersionMiss) {
+                this.incrementSyncTelemetry('price_version_misses');
+            }
+            if (inventorySyncSkippedByVersion) {
+                this.incrementSyncTelemetry('inventory_sync_skipped');
+                this.incrementSyncTelemetry('bytes_saved_estimate', this.estimateBlockBytesSaved(manifest.counts?.inventory, 180));
+            }
+            if (priceSyncSkippedByVersion) {
+                this.incrementSyncTelemetry('price_sync_skipped');
+                this.incrementSyncTelemetry('bytes_saved_estimate', this.estimateBlockBytesSaved(manifest.counts?.product_prices, 160));
+            }
+
+            this.readyToSellState = {
+                ...this.readyToSellState,
+                inventoryVersion: remoteInventoryVersion || localInventoryVersion,
+                priceVersion: remotePriceVersion || localPriceVersion,
+                inventoryVersionMatch,
+                priceVersionMatch,
+                inventorySyncSkippedByVersion,
+                priceSyncSkippedByVersion,
+                lastVersionComparison: {
+                    localTerminalId,
+                    localInventoryVersion,
+                    remoteInventoryVersion,
+                    localPriceVersion,
+                    remotePriceVersion,
+                    inventoryVersionMatch,
+                    priceVersionMatch,
+                    inventorySyncSkippedByVersion,
+                    priceSyncSkippedByVersion,
+                    inventoryHash: manifest.domain_hashes?.inventory || null,
+                    priceHash: manifest.domain_hashes?.product_prices || null,
+                    comparedAt: new Date().toISOString(),
+                },
+            };
+            this.publishSyncHealthUpdate();
+
+            if (!requiresDocumentSeriesConfigFetch && !requiresCatalogConfigFetch && !terminalChanged && changedMasterScopes.length === 0 && (!inventoryChanged || inventorySyncSkippedByVersion) && !bootstrapInventoryOnStartup && (!productPricesChanged || priceSyncSkippedByVersion) && !bootstrapProductPricesOnStartup) {
                 this.persistTerminalCursorMap(localTerminalId, manifest.cursor_map);
                 if (options?.markStartupCompleted) {
                     this.markStartupManifestSyncCompleted(localTerminalId);
@@ -1411,91 +2335,142 @@ class SyncManager {
                 return null;
             }
 
-            let refreshedConfig: BusinessConfig | null = null;
-            if (terminalChanged || changedMasterScopes.length > 0) {
-                refreshedConfig = await this.refreshTerminalResolvedConfig(undefined, {
+            const shouldRefreshTerminalConfig = terminalChanged || changedMasterScopes.length > 0 || requiresDocumentSeriesConfigFetch || requiresCatalogConfigFetch;
+            const resolvedScopes: TerminalManifestResolvedScope[] = terminalChanged
+                ? ['identity', 'terminal', 'device_role', 'role', 'pricing', 'inventory', 'documents', 'catalog', 'promotions', 'loyalty']
+                : Array.from(new Set<TerminalManifestResolvedScope>([
+                    ...(requiresDocumentSeriesConfigFetch ? ['documents' as TerminalManifestResolvedScope] : []),
+                    ...((requiresCatalogConfigFetch || changedMasterScopes.includes('items')) ? ['catalog' as TerminalManifestResolvedScope] : []),
+                ]));
+            const configTask = shouldRefreshTerminalConfig
+                ? this.refreshTerminalResolvedConfig(undefined, {
                     forceRemoteFetch: true,
                     masterScopes: changedMasterScopes,
-                    resolvedScopes: terminalChanged
-                        ? ['identity', 'terminal', 'device_role', 'role', 'pricing', 'inventory', 'documents', 'catalog', 'promotions', 'loyalty']
-                        : [],
-                });
+                    resolvedScopes,
+                    supplementalMode: 'background',
+                })
+                : Promise.resolve<BusinessConfig | null>(null);
+
+            const shouldRunInventoryTask = (inventoryChanged || bootstrapInventoryOnStartup || inventoryVersionMiss) && !inventorySyncSkippedByVersion;
+            const shouldRunProductPricesTask = (productPricesChanged || bootstrapProductPricesOnStartup || priceVersionMiss) && !priceSyncSkippedByVersion;
+            const inventoryTask = shouldRunInventoryTask
+                ? this.fetchTerminalInventoryBlock(context, storedCursorMap.inventory || null)
+                : Promise.resolve<TerminalInventoryPayload | null>(null);
+
+            const productPricesTask = shouldRunProductPricesTask
+                ? this.fetchTerminalProductPricesBlock(context, storedCursorMap.product_prices || null)
+                : Promise.resolve<TerminalProductPricesPayload | null>(null);
+
+            const [configResult, productPricesResult] = await Promise.allSettled([
+                configTask,
+                productPricesTask,
+            ]);
+
+            const refreshedConfig = configResult.status === 'fulfilled' ? configResult.value : null;
+            if (configResult.status === 'rejected') {
+                throw configResult.reason;
             }
 
-            if (inventoryChanged || bootstrapInventoryOnStartup) {
-                const inventoryPayload = await this.fetchTerminalInventoryBlock(
-                    context,
-                    inventoryChanged ? (storedCursorMap.inventory || null) : null,
-                );
-                if (inventoryPayload?.cursor) {
-                    manifest.cursor_map.inventory = inventoryPayload.cursor;
-                }
-                const inventoryBalances = Array.isArray(inventoryPayload?.balances) ? inventoryPayload.balances : [];
-                const shouldApplyInventoryPayload =
-                    inventoryBalances.length > 0 &&
-                    (Boolean(inventoryPayload?.has_changes) || bootstrapInventoryOnStartup || Boolean(options?.bootstrapBlocks));
-                let inventoryAppliedCount = 0;
-
-                if (shouldApplyInventoryPayload) {
-                    inventoryAppliedCount = await this.applyTerminalInventoryBlock(inventoryBalances);
+            if (shouldRunProductPricesTask && productPricesResult.status === 'fulfilled') {
+                const productPricesPayload = productPricesResult.value;
+                this.recordSnapshotDiagnostics('product_prices', productPricesPayload?.snapshot_meta);
+                if (productPricesPayload?.cursor) {
+                    manifest.cursor_map.product_prices = productPricesPayload.cursor;
                 }
 
-                if (apiSyncAdapter.isUsingErpOperationalTarget()) {
-                    const shouldForceDirectInventoryRefresh =
-                        bootstrapInventoryOnStartup ||
-                        Boolean(options?.bootstrapBlocks) ||
-                        inventoryAppliedCount === 0;
+                const productPrices = Array.isArray(productPricesPayload?.prices) ? productPricesPayload.prices : [];
+                const shouldApplyProductPrices =
+                    productPrices.length > 0 &&
+                    (Boolean(productPricesPayload?.has_changes) || bootstrapProductPricesOnStartup || Boolean(options?.bootstrapBlocks));
+                let productPricesAppliedCount = 0;
 
-                    if (shouldForceDirectInventoryRefresh) {
-                        const directRefreshCount = await this.refreshOperationalInventorySnapshot();
-                        if (directRefreshCount > 0) {
-                            inventoryAppliedCount = directRefreshCount;
+                if (shouldApplyProductPrices) {
+                    productPricesAppliedCount = await this.applyTerminalProductPricesBlock(productPrices);
+                    this.persistPriceVersion(localTerminalId, productPricesPayload?.price_version || remotePriceVersion);
+                } else if (productPricesPayload?.has_changes === false) {
+                    this.persistPriceVersion(localTerminalId, productPricesPayload?.price_version || remotePriceVersion);
+                }
+
+                posCatalogDebugLog('product prices block: apply completed', {
+                    productPricesChanged,
+                    bootstrapProductPricesOnStartup,
+                    forceFullBootstrap,
+                    productPricesCursorPresent: Boolean(storedCursorMap.product_prices),
+                    localPriceVersion,
+                    remotePriceVersion,
+                    priceVersionMatch,
+                    priceSyncSkippedByVersion,
+                    payloadPriceCount: productPrices.length,
+                    payloadHasChanges: productPricesPayload?.has_changes ?? null,
+                    payloadPriceVersion: productPricesPayload?.price_version || null,
+                    productPricesAppliedCount,
+                });
+            } else if (shouldRunProductPricesTask && productPricesResult.status === 'rejected') {
+                this.readyToSellState.failedOperations += 1;
+                console.warn('⚠️ SyncManager: product prices block refresh failed:', productPricesResult.reason);
+            }
+
+            if (shouldRunInventoryTask) {
+                void Promise.allSettled([inventoryTask]).then(async ([inventoryResult]) => {
+                    if (inventoryResult.status === 'rejected') {
+                        this.readyToSellState.failedOperations += 1;
+                        this.publishSyncHealthUpdate();
+                        console.warn('⚠️ SyncManager: background inventory refresh failed:', inventoryResult.reason);
+                        return;
+                    }
+
+                    const inventoryPayload = inventoryResult.value;
+                    this.recordSnapshotDiagnostics('inventory', inventoryPayload?.snapshot_meta);
+                    if (inventoryPayload?.cursor) {
+                        this.persistTerminalCursorMap(localTerminalId, {
+                            ...manifest.cursor_map,
+                            inventory: inventoryPayload.cursor,
+                        });
+                    }
+                    const inventoryBalances = Array.isArray(inventoryPayload?.balances) ? inventoryPayload.balances : [];
+                    const shouldApplyInventoryPayload =
+                        inventoryBalances.length > 0 &&
+                        (Boolean(inventoryPayload?.has_changes) || bootstrapInventoryOnStartup || Boolean(options?.bootstrapBlocks));
+                    let inventoryAppliedCount = 0;
+
+                    if (shouldApplyInventoryPayload) {
+                        inventoryAppliedCount = await this.applyTerminalInventoryBlock(inventoryBalances);
+                        this.persistInventoryVersion(localTerminalId, inventoryPayload?.inventory_version || remoteInventoryVersion);
+                    } else if (inventoryPayload?.has_changes === false) {
+                        this.persistInventoryVersion(localTerminalId, inventoryPayload?.inventory_version || remoteInventoryVersion);
+                    }
+
+                    if (apiSyncAdapter.isErpActiveOperationalTarget()) {
+                        const shouldForceDirectInventoryRefresh =
+                            Boolean(options?.bootstrapBlocks) ||
+                            inventoryAppliedCount === 0;
+
+                        if (shouldForceDirectInventoryRefresh) {
+                            const directRefreshCount = await this.refreshOperationalInventorySnapshot();
+                            if (directRefreshCount > 0) {
+                                inventoryAppliedCount = directRefreshCount;
+                            }
                         }
                     }
-                }
 
-                posCatalogDebugLog('inventory block: apply completed', {
-                    inventoryChanged,
-                    bootstrapInventoryOnStartup,
-                    payloadBalanceCount: inventoryBalances.length,
-                    payloadHasChanges: inventoryPayload?.has_changes ?? null,
-                    inventoryAppliedCount,
+                    posCatalogDebugLog('inventory block: background apply completed', {
+                        inventoryChanged,
+                        bootstrapInventoryOnStartup,
+                        forceFullBootstrap,
+                        inventoryCursorPresent: Boolean(storedCursorMap.inventory),
+                        localInventoryVersion,
+                        remoteInventoryVersion,
+                        inventoryVersionMatch,
+                        inventorySyncSkippedByVersion,
+                        payloadBalanceCount: inventoryBalances.length,
+                        payloadHasChanges: inventoryPayload?.has_changes ?? null,
+                        payloadInventoryVersion: inventoryPayload?.inventory_version || null,
+                        inventoryAppliedCount,
+                    });
                 });
             }
 
-            if (productPricesChanged || bootstrapProductPricesOnStartup) {
-                try {
-                    const productPricesPayload = await this.fetchTerminalProductPricesBlock(
-                        context,
-                        productPricesChanged ? (storedCursorMap.product_prices || null) : null,
-                    );
-                    if (productPricesPayload?.cursor) {
-                        manifest.cursor_map.product_prices = productPricesPayload.cursor;
-                    }
-
-                    const productPrices = Array.isArray(productPricesPayload?.prices) ? productPricesPayload.prices : [];
-                    const shouldApplyProductPrices =
-                        productPrices.length > 0 &&
-                        (Boolean(productPricesPayload?.has_changes) || bootstrapProductPricesOnStartup || Boolean(options?.bootstrapBlocks));
-                    let productPricesAppliedCount = 0;
-
-                    if (shouldApplyProductPrices) {
-                        productPricesAppliedCount = await this.applyTerminalProductPricesBlock(productPrices);
-                    }
-
-                    posCatalogDebugLog('product prices block: apply completed', {
-                        productPricesChanged,
-                        bootstrapProductPricesOnStartup,
-                        payloadPriceCount: productPrices.length,
-                        payloadHasChanges: productPricesPayload?.has_changes ?? null,
-                        productPricesAppliedCount,
-                    });
-                } catch (error) {
-                    console.warn('⚠️ SyncManager: product prices block refresh failed:', error);
-                }
-            }
-
-            if (!refreshedConfig && !inventoryChanged && !productPricesChanged && !bootstrapInventoryOnStartup && !bootstrapProductPricesOnStartup) {
+            if (!refreshedConfig && (!inventoryChanged || inventorySyncSkippedByVersion) && (!productPricesChanged || priceSyncSkippedByVersion) && !bootstrapInventoryOnStartup && !bootstrapProductPricesOnStartup) {
                 return null;
             }
 
@@ -1512,26 +2487,32 @@ class SyncManager {
 
     private async syncTerminalMastersOnStartup(baseConfig: BusinessConfig | null): Promise<void> {
         try {
+            this.setSyncPhase('P0_P1_STARTUP_MANIFEST');
             await this.reconcileTerminalManifest(baseConfig, {
                 skipIfStartupCompleted: true,
                 markStartupCompleted: true,
             });
+            this.markReadyToSell('P0_P1_READY');
         } catch (error) {
+            this.readyToSellState.failedOperations += 1;
+            this.publishSyncHealthUpdate();
             console.warn('⚠️ SyncManager: startup manifest sync failed:', error);
         }
     }
 
     private async refreshOperationalInventorySnapshot(): Promise<number> {
-        if (!apiSyncAdapter.isUsingErpOperationalTarget()) {
+        if (!apiSyncAdapter.isErpActiveOperationalTarget()) {
             return 0;
         }
 
-        const [rawProducts, rawWarehouses] = await Promise.all([
+        const [rawProducts, rawWarehouses, rawStocks] = await Promise.all([
             db.get('products'),
             db.get('warehouses'),
+            db.get('productStocks'),
         ]);
         const localProducts = (Array.isArray(rawProducts) ? rawProducts : []) as Product[];
         const runtimeWarehouses = (Array.isArray(rawWarehouses) ? rawWarehouses : []) as Warehouse[];
+        const existingStocks = (Array.isArray(rawStocks) ? rawStocks : []) as ProductStock[];
 
         if (localProducts.length === 0) {
             return 0;
@@ -1544,6 +2525,16 @@ class SyncManager {
 
         const now = new Date().toISOString();
         const updatedProducts = new Set<string>();
+        const nextProductsById = new Map<string, Product>(
+            localProducts
+                .filter((product) => Boolean(product?.id))
+                .map((product) => [String(product.id).trim(), product])
+        );
+        const nextStocksById = new Map<string, ProductStock>(
+            existingStocks
+                .filter((stock) => Boolean(stock?.id))
+                .map((stock) => [String(stock.id).trim(), stock])
+        );
         const nextStockKeys = new Set<string>();
 
         for (const product of localProducts) {
@@ -1581,7 +2572,7 @@ class SyncManager {
                     : product.updatedAt || now,
             };
 
-            await db.saveDocument('products', nextProduct);
+            nextProductsById.set(nextProduct.id, nextProduct);
             updatedProducts.add(nextProduct.id);
 
             for (const warehouseId of warehouseIds) {
@@ -1597,7 +2588,7 @@ class SyncManager {
                     updatedAt: now,
                 };
                 nextStockKeys.add(`${nextProduct.id}::${warehouseId}`);
-                await db.saveDocument('productStocks', nextStock);
+                nextStocksById.set(nextStock.id, nextStock);
             }
         }
 
@@ -1605,17 +2596,19 @@ class SyncManager {
             return 0;
         }
 
-        const rawStocks = await db.get('productStocks');
-        const existingStocks = (Array.isArray(rawStocks) ? rawStocks : []) as ProductStock[];
         for (const stock of existingStocks) {
             if (!updatedProducts.has(String(stock?.productId || '').trim())) continue;
             const key = `${String(stock?.productId || '').trim()}::${String(stock?.warehouseId || '').trim()}`;
             if (nextStockKeys.has(key)) continue;
             if (stock?.id) {
-                await db.deleteDocument('productStocks', stock.id);
+                nextStocksById.delete(String(stock.id).trim());
             }
         }
 
+        await Promise.all([
+            db.save('products' as any, Array.from(nextProductsById.values())),
+            db.save('productStocks' as any, Array.from(nextStocksById.values())),
+        ]);
         window.dispatchEvent(new CustomEvent('productsUpdated'));
         window.dispatchEvent(new CustomEvent('productStocksUpdated'));
         return updatedProducts.size;
@@ -1649,6 +2642,16 @@ class SyncManager {
         }
 
         const updatedProducts = new Set<string>();
+        const nextProductsById = new Map<string, Product>(
+            localProducts
+                .filter((product) => Boolean(product?.id))
+                .map((product) => [String(product.id).trim(), product])
+        );
+        const nextStocksById = new Map<string, ProductStock>(
+            existingStocks
+                .filter((stock) => Boolean(stock?.id))
+                .map((stock) => [String(stock.id).trim(), stock])
+        );
         const nextStockKeys = new Set<string>();
         const now = new Date().toISOString();
 
@@ -1662,9 +2665,23 @@ class SyncManager {
 
             const warehouseBalanceMap = canonicalizeWarehouseRecord(
                 matchedBalances.reduce<Record<string, number>>((acc, entry) => {
-                    const warehouseId = String(entry?.warehouse_id || '').trim();
+                    const warehouseId = String(
+                        entry?.warehouse_id
+                        || (entry as any)?.warehouseId
+                        || (entry as any)?.store_id
+                        || (entry as any)?.storeId
+                        || ''
+                    ).trim();
                     if (!warehouseId) return acc;
-                    acc[warehouseId] = Number(acc[warehouseId] || 0) + Number(entry?.qty_on_hand ?? 0);
+                    acc[warehouseId] = Number(acc[warehouseId] || 0) + Number(
+                        entry?.qty_on_hand
+                        ?? (entry as any)?.qtyOnHand
+                        ?? (entry as any)?.quantity
+                        ?? (entry as any)?.qty
+                        ?? (entry as any)?.stock
+                        ?? (entry as any)?.balance
+                        ?? 0
+                    );
                     return acc;
                 }, {}),
                 runtimeWarehouses,
@@ -1675,13 +2692,15 @@ class SyncManager {
                 stockBalances: warehouseBalanceMap,
                 stock: Object.values(warehouseBalanceMap).reduce((sum, quantity) => sum + Number(quantity || 0), 0),
                 updatedAt: matchedBalances.reduce((latest, entry) => {
-                    const candidate = typeof entry?.updated_at === 'string' ? entry.updated_at : '';
+                    const candidate = typeof (entry?.updated_at || (entry as any)?.updatedAt) === 'string'
+                        ? (entry.updated_at || (entry as any)?.updatedAt)
+                        : '';
                     if (!candidate) return latest;
                     return !latest || candidate > latest ? candidate : latest;
                 }, product.updatedAt || now),
             };
 
-            await db.saveDocument('products', nextProduct);
+            nextProductsById.set(nextProduct.id, nextProduct);
             updatedProducts.add(nextProduct.id);
 
             const aliasProductIds = this.collectSnapshotProductAliasIds(nextProduct);
@@ -1690,7 +2709,13 @@ class SyncManager {
             for (const warehouseId of warehouseIds) {
                 const lookupKey = this.buildSnapshotProductStockLookupKey(nextProduct.id, warehouseId);
                 const existingStock = this.resolveExistingSnapshotProductStock(nextProduct.id, warehouseId, aliasProductIds, existingStocksByProductWarehouse);
-                const matchedWarehouseBalances = matchedBalances.filter((entry) => String(entry?.warehouse_id || '').trim() === warehouseId);
+                const matchedWarehouseBalances = matchedBalances.filter((entry) => String(
+                    entry?.warehouse_id
+                    || (entry as any)?.warehouseId
+                    || (entry as any)?.store_id
+                    || (entry as any)?.storeId
+                    || ''
+                ).trim() === warehouseId);
                 const matchedBalance = matchedWarehouseBalances[matchedWarehouseBalances.length - 1];
                 const qtyPhysical = Number(warehouseBalanceMap?.[warehouseId] ?? 0);
                 const qtyCommitted = matchedWarehouseBalances.reduce((sum, entry) => {
@@ -1709,11 +2734,13 @@ class SyncManager {
                     qtyPhysical,
                     qtyCommitted,
                     qtyAvailable: qtyPhysical - qtyCommitted - qtyReserved,
-                    updatedAt: typeof matchedBalance?.updated_at === 'string' ? matchedBalance.updated_at : now,
+                    updatedAt: typeof (matchedBalance?.updated_at || (matchedBalance as any)?.updatedAt) === 'string'
+                        ? (matchedBalance.updated_at || (matchedBalance as any)?.updatedAt)
+                        : now,
                 };
 
                 nextStockKeys.add(`${nextProduct.id}::${warehouseId}`);
-                await db.saveDocument('productStocks', nextStock);
+                nextStocksById.set(nextStock.id, nextStock);
                 existingStocksByProductWarehouse.set(lookupKey, nextStock);
             }
 
@@ -1729,10 +2756,14 @@ class SyncManager {
             const key = `${String(stock?.productId || '').trim()}::${String(stock?.warehouseId || '').trim()}`;
             if (nextStockKeys.has(key)) continue;
             if (stock?.id) {
-                await db.deleteDocument('productStocks', stock.id);
+                nextStocksById.delete(String(stock.id).trim());
             }
         }
 
+        await Promise.all([
+            db.save('products' as any, Array.from(nextProductsById.values())),
+            db.save('productStocks' as any, Array.from(nextStocksById.values())),
+        ]);
         window.dispatchEvent(new CustomEvent('productsUpdated'));
         window.dispatchEvent(new CustomEvent('productStocksUpdated'));
         return updatedProducts.size;
@@ -1859,11 +2890,12 @@ class SyncManager {
                 tariffs,
                 price: Number.isFinite(Number(defaultTariff?.price)) ? Number(defaultTariff?.price) : product.price,
             };
-            await db.saveDocument('products', nextProduct);
+            localById.set(productId, nextProduct);
             updatedProducts += 1;
         }
 
         if (updatedProducts > 0) {
+            await db.save('products' as any, Array.from(localById.values()));
             window.dispatchEvent(new CustomEvent('productsUpdated'));
         }
         window.dispatchEvent(new CustomEvent('productPricesUpdated'));
@@ -2081,6 +3113,7 @@ class SyncManager {
             masterScopes?: TerminalManifestMasterScope[];
             blockScopes?: TerminalManifestBlockScope[];
             resolvedScopes?: TerminalManifestResolvedScope[];
+            supplementalMode?: 'inline' | 'background' | 'skip';
         }
     ): Promise<BusinessConfig | null> {
         if (this.isDisabled) return null;
@@ -2098,6 +3131,8 @@ class SyncManager {
         if (!context.terminalId) {
             return null;
         }
+
+        const protectLocalCatalog = protectsLocalCatalogFromCloud();
 
         const snapshotTerminalId = context.localTerminalId || context.terminalId;
         const cachedSnapshot = baseConfig.terminalSnapshots?.[snapshotTerminalId] || null;
@@ -2120,28 +3155,9 @@ class SyncManager {
         const pendingSnapshot = snapshot
             ? null
             : this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId);
+        const endpointCandidates = this.buildTerminalConfigEndpointCandidates(context);
         const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
         const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
-        const endpointCandidates = useAbsoluteEndpoint
-            ? [
-                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
-                    baseUrl,
-                    mode: 'local-loopback-proxy',
-                    includeErpBaseUrl: true,
-                })),
-                ...(syncApiBase
-                    ? [{
-                        baseUrl: syncApiBase,
-                        mode: 'absolute-sync-api',
-                        includeErpBaseUrl: false,
-                    }]
-                    : []),
-            ]
-            : [{
-                baseUrl: '/api/sync',
-                mode: 'relative-local-proxy',
-                includeErpBaseUrl: true,
-            }];
         const canFetchRemote = Boolean(
             context.terminalId &&
             context.tenantId &&
@@ -2191,8 +3207,10 @@ class SyncManager {
                 const fetchAttemptStartedAt = posCatalogDebugNow();
                 const params = new URLSearchParams();
                 if (context.tenantId) params.set('tenant_id', context.tenantId);
+                if (context.terminalId) params.set('terminal_id', context.terminalId);
                 if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
                 if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+                if (context.posDeviceId) params.set('device_id', context.posDeviceId);
                 if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
                 if (!options?.forceFullCatalog && currentCatalogCursor) params.set('catalog_cursor', currentCatalogCursor);
                 if (requestedMasterScopes) {
@@ -2218,15 +3236,35 @@ class SyncManager {
                     const response = await fetch(endpoint, {
                         headers: {
                             Accept: 'application/json',
+                            ...this.buildPosDeviceHeaders(context.posDeviceId),
                         },
                     });
                     if (!response.ok) {
-                        const detail = await response.text().catch(() => '');
-                        throw new Error(detail || `No se pudo refrescar la configuración de terminal (${response.status}).`);
+                        throw await this.buildTerminalEndpointError(
+                            response,
+                            `No se pudo refrescar la configuración de terminal (${response.status}).`,
+                            { terminalId: context.terminalId, posDeviceId: context.posDeviceId },
+                        );
                     }
 
                     const responseContentType = response.headers.get('content-type') || null;
                     payload = await response.json();
+                    const configSnapshotMeta = payload?.snapshot_meta && typeof payload.snapshot_meta === 'object' && !Array.isArray(payload.snapshot_meta)
+                        ? payload.snapshot_meta as Record<string, any>
+                        : payload?.cache && typeof payload.cache === 'object' && !Array.isArray(payload.cache)
+                            ? payload.cache as Record<string, any>
+                            : {};
+                    this.recordSnapshotDiagnostics('terminal_config', {
+                        snapshotSource: this.normalizeVersionToken(configSnapshotMeta.source)
+                            || this.normalizeVersionToken(configSnapshotMeta.snapshot_source)
+                            || (payload?.persistent_snapshot ? 'persistent' : null),
+                        snapshotAgeMs: Number.isFinite(Number(configSnapshotMeta.age_ms ?? configSnapshotMeta.snapshot_age_ms))
+                            ? Number(configSnapshotMeta.age_ms ?? configSnapshotMeta.snapshot_age_ms)
+                            : null,
+                        snapshotVersionHash: this.normalizeVersionToken(configSnapshotMeta.version_hash)
+                            || this.normalizeVersionToken(configSnapshotMeta.snapshot_version_hash)
+                            || this.normalizeVersionToken(configSnapshotMeta.hash),
+                    });
                     snapshot = extractTerminalConfigSnapshot(payload?.terminal_config ?? payload);
                     catalogDelta = payload?.catalog_delta && typeof payload.catalog_delta === 'object'
                         ? payload.catalog_delta
@@ -2310,25 +3348,33 @@ class SyncManager {
 
         try {
             const applyStartedAt = posCatalogDebugNow();
-            if (catalogDelta) {
-                await this.applyCatalogDelta(catalogDelta);
+            if (!protectLocalCatalog) {
+                if (catalogDelta) {
+                    await this.applyCatalogDelta(catalogDelta);
+                } else {
+                    await this.applySnapshotProducts(snapshot);
+                }
+                const structuredMasterData = await this.refreshTerminalStructuredMasterData(snapshot, catalogDelta, {
+                    terminalIds: [
+                        context.terminalId,
+                        snapshotTerminalId,
+                        context.localTerminalId,
+                        context.posDeviceId,
+                    ],
+                });
+                await posCatalogDebugLogDbRows('after refreshTerminalResolvedConfig product apply');
+                posCatalogDebugLog('refreshTerminalResolvedConfig: product apply success', {
+                    usedCatalogDelta: Boolean(catalogDelta),
+                    structuredMasterData,
+                    elapsedMs: posCatalogDebugElapsedMs(applyStartedAt),
+                });
             } else {
-                await this.applySnapshotProducts(snapshot);
+                posCatalogDebugLog('refreshTerminalResolvedConfig: catalog apply skipped for POS_CLOUD_STAGING', {
+                    usedCatalogDelta: Boolean(catalogDelta),
+                    requestedMasterScopes,
+                    requestedResolvedScopes,
+                });
             }
-            const structuredMasterData = await this.refreshTerminalStructuredMasterData(snapshot, catalogDelta, {
-                terminalIds: [
-                    context.terminalId,
-                    snapshotTerminalId,
-                    context.localTerminalId,
-                    context.posDeviceId,
-                ],
-            });
-            await posCatalogDebugLogDbRows('after refreshTerminalResolvedConfig product apply');
-            posCatalogDebugLog('refreshTerminalResolvedConfig: product apply success', {
-                usedCatalogDelta: Boolean(catalogDelta),
-                structuredMasterData,
-                elapsedMs: posCatalogDebugElapsedMs(applyStartedAt),
-            });
         } catch (error) {
             console.warn('⚠️ SyncManager: Could not apply snapshot products from terminal config push:', error);
             posCatalogDebugLog('refreshTerminalResolvedConfig: product apply failed', {
@@ -2337,7 +3383,15 @@ class SyncManager {
             });
         }
 
-        const applied = applyTerminalConfigSnapshot(baseConfig, {
+        const configAfterStructuredMasterDataRaw = (await db.get('config')) as unknown;
+        const configForTerminalSnapshot =
+            configAfterStructuredMasterDataRaw &&
+            !Array.isArray(configAfterStructuredMasterDataRaw) &&
+            Array.isArray((configAfterStructuredMasterDataRaw as BusinessConfig).terminals)
+                ? configAfterStructuredMasterDataRaw as BusinessConfig
+                : baseConfig;
+
+        const applied = applyTerminalConfigSnapshot(configForTerminalSnapshot, {
             terminalId: snapshotTerminalId,
             posDeviceId: context.posDeviceId || undefined,
             bindingMode: context.bindingMode,
@@ -2350,7 +3404,7 @@ class SyncManager {
         const nextRuntimeWarehouses = this.resolveRuntimeWarehousesFromConfig(nextConfig, applied.terminalId);
         const operationalDocumentState = extractTerminalOperationalDocumentState(nextConfig, applied.terminalId);
         const changed =
-            JSON.stringify(this.sanitizeConfig(baseConfig)) !==
+            JSON.stringify(this.sanitizeConfig(configForTerminalSnapshot)) !==
             JSON.stringify(this.sanitizeConfig(nextConfig));
 
         if (options?.persist !== false && changed) {
@@ -2389,7 +3443,7 @@ class SyncManager {
             this.persistCatalogCursor(snapshotTerminalId, nextCatalogCursor);
         }
 
-        if (requestedBlockScopes?.includes('inventory')) {
+        if (!protectLocalCatalog && requestedBlockScopes?.includes('inventory')) {
             const inventoryPayload = await this.fetchTerminalInventoryBlock(
                 context,
                 currentTerminalCursorMap.inventory || null,
@@ -2400,15 +3454,20 @@ class SyncManager {
                     inventory: inventoryPayload.cursor,
                 };
             }
+            this.recordSnapshotDiagnostics('refresh_config_inventory', inventoryPayload?.snapshot_meta);
             const inventoryBalances = Array.isArray(inventoryPayload?.balances) ? inventoryPayload.balances : [];
             let inventoryAppliedCount = 0;
             if (inventoryBalances.length > 0) {
                 inventoryAppliedCount = await this.applyTerminalInventoryBlock(inventoryBalances);
+                this.persistInventoryVersion(snapshotTerminalId, inventoryPayload?.inventory_version);
+            } else if (inventoryPayload?.has_changes === false) {
+                this.persistInventoryVersion(snapshotTerminalId, inventoryPayload?.inventory_version);
             }
-            if (apiSyncAdapter.isUsingErpOperationalTarget()) {
+            if (apiSyncAdapter.isErpActiveOperationalTarget()) {
                 const directRefreshCount = await this.refreshOperationalInventorySnapshot();
                 if (directRefreshCount > 0) {
                     inventoryAppliedCount = directRefreshCount;
+                    this.persistInventoryVersion(snapshotTerminalId, inventoryPayload?.inventory_version);
                 }
             }
             posCatalogDebugLog('refreshTerminalResolvedConfig: inventory block applied', {
@@ -2418,7 +3477,7 @@ class SyncManager {
             });
         }
 
-        if (requestedBlockScopes?.includes('product_prices')) {
+        if (!protectLocalCatalog && requestedBlockScopes?.includes('product_prices')) {
             const productPricesPayload = await this.fetchTerminalProductPricesBlock(
                 context,
                 currentTerminalCursorMap.product_prices || null,
@@ -2429,10 +3488,14 @@ class SyncManager {
                     product_prices: productPricesPayload.cursor,
                 };
             }
+            this.recordSnapshotDiagnostics('refresh_config_product_prices', productPricesPayload?.snapshot_meta);
             const productPrices = Array.isArray(productPricesPayload?.prices) ? productPricesPayload.prices : [];
             let productPricesAppliedCount = 0;
             if (productPrices.length > 0) {
                 productPricesAppliedCount = await this.applyTerminalProductPricesBlock(productPrices);
+                this.persistPriceVersion(snapshotTerminalId, productPricesPayload?.price_version);
+            } else if (productPricesPayload?.has_changes === false) {
+                this.persistPriceVersion(snapshotTerminalId, productPricesPayload?.price_version);
             }
             posCatalogDebugLog('refreshTerminalResolvedConfig: product prices block applied', {
                 payloadPriceCount: productPrices.length,
@@ -2445,10 +3508,22 @@ class SyncManager {
             this.persistTerminalCursorMap(snapshotTerminalId, nextTerminalCursorMap);
         }
 
-        try {
-            await this.refreshTerminalSupplementalMasterData(snapshot, catalogDelta);
-        } catch (error) {
-            console.warn('⚠️ SyncManager: Supplemental customer/supplier refresh failed after terminal config update:', error);
+        const runSupplementalMasterData = async () => {
+            try {
+                await this.refreshTerminalSupplementalMasterData(snapshot, catalogDelta);
+            } catch (error) {
+                this.readyToSellState.failedOperations += 1;
+                this.publishSyncHealthUpdate();
+                console.warn('⚠️ SyncManager: Supplemental customer/supplier refresh failed after terminal config update:', error);
+            }
+        };
+
+        if (options?.supplementalMode === 'background') {
+            window.setTimeout(() => {
+                void runSupplementalMasterData();
+            }, 1000);
+        } else if (options?.supplementalMode !== 'skip') {
+            await runSupplementalMasterData();
         }
 
         if (options?.dispatchEvent !== false && changed) {
@@ -2492,7 +3567,7 @@ class SyncManager {
                 .map((product) => [String(product.id).trim(), product]),
         );
         const localByIdentity = this.buildLocalProductIdentityLookup(localProducts);
-        const preserveOperationalInventory = apiSyncAdapter.isUsingErpOperationalTarget();
+        const preserveOperationalInventory = apiSyncAdapter.isErpActiveOperationalTarget();
         let updatedCount = 0;
         const duplicateIdsToRemove = new Set<string>();
         const traceRaw = rawItems.filter((item: unknown) => posCatalogDebugMatchesRaw(item));
@@ -2506,7 +3581,7 @@ class SyncManager {
         for (const [index, normalizedItem] of normalizedItems.entries()) {
             if (!normalizedItem?.id) continue;
             const rawItem = rawItems[index] as Record<string, unknown> | undefined;
-            let item = normalizedItem;
+            let item = normalizeRestaurantProductConfig(normalizedItem as any) as any;
             const incomingRemoteId =
                 typeof rawItem?.id === 'string'
                     ? rawItem.id.trim()
@@ -2536,7 +3611,7 @@ class SyncManager {
                 }
                 item = {
                     ...canonicalLocalProduct,
-                    ...normalizedItem,
+                    ...normalizeRestaurantProductConfig(normalizedItem as any),
                     id: canonicalLocalProduct.id,
                     sourceItemId:
                         typeof (canonicalLocalProduct as any)?.sourceItemId === 'string' && (canonicalLocalProduct as any).sourceItemId.trim()
@@ -2601,16 +3676,16 @@ class SyncManager {
                 };
             }
 
-            await db.saveDocument('products', item);
+            item = normalizeRestaurantProductConfig(item as any) as Product;
             if (!preserveOperationalInventory) {
                 await this.syncSnapshotProductStocks(item as Product, runtimeWarehouses, existingStocksByProductWarehouse);
             }
             if (posCatalogDebugMatchesRaw(rawItem || item)) {
                 posCatalogDebugLog('applySnapshotProducts: saved product', {
-                    saved: posCatalogDebugSummarizeItem(item as Record<string, unknown>),
+                    saved: posCatalogDebugSummarizeItem(item as unknown as Record<string, unknown>),
                 });
             }
-            for (const candidate of productIdentityCandidates(item as Record<string, unknown>)) {
+            for (const candidate of productIdentityCandidates(item as unknown as Record<string, unknown>)) {
                 localByIdentity.set(candidate, item as Product);
             }
             localProductsById.set(String(item.id).trim(), item as Product);
@@ -2618,21 +3693,19 @@ class SyncManager {
         }
 
         for (const duplicateId of duplicateIdsToRemove) {
-            try {
-                await db.deleteDocument('products', duplicateId as any);
-            } catch (error) {
-                console.warn(`⚠️ SyncManager: could not delete remapped duplicate product ${duplicateId}:`, error);
-            }
+            localProductsById.delete(duplicateId);
         }
 
-        const imageSyncStartedAt = posCatalogDebugNow();
-        await productImageCacheService.syncSnapshotItems(rawItems as any[]);
-        posCatalogDebugLog('applySnapshotProducts: syncSnapshotItems complete', {
-            elapsedMs: posCatalogDebugElapsedMs(imageSyncStartedAt),
+        if (updatedCount > 0 || duplicateIdsToRemove.size > 0) {
+            await db.save('products' as any, Array.from(localProductsById.values()));
+        }
+
+        this.scheduleImageSyncWorker('products', rawItems as any[], 'applySnapshotProducts');
+        posCatalogDebugLog('applySnapshotProducts: image sync scheduled', {
             normalizedCount: normalizedItems.length,
         });
         if (traceRaw.length > 0) {
-            await posCatalogDebugLogDbRows('after applySnapshotProducts syncSnapshotItems');
+            await posCatalogDebugLogDbRows('after applySnapshotProducts product apply');
         }
 
         if (updatedCount > 0) {
@@ -3141,7 +4214,7 @@ class SyncManager {
 
         const normalizedItems = await masterDataImageCacheService.normalizeIncomingItems(collection, cleanItems as any[]);
         await db.save(collection, normalizedItems);
-        await masterDataImageCacheService.syncSnapshotItems(collection, cleanItems as any[]);
+        this.scheduleImageSyncWorker(collection, cleanItems as any[], `applySnapshotImageBackedCollection:${collection}`);
         window.dispatchEvent(new CustomEvent(`${collection}Updated`));
         return normalizedItems.length;
     }
@@ -3369,6 +4442,8 @@ class SyncManager {
     ): Promise<{
         users: number;
         roles: number;
+        categories: number;
+        productGroups: number;
         purchaseOrders: number;
         transfers: number;
     }> {
@@ -3376,9 +4451,15 @@ class SyncManager {
         const results = {
             users: 0,
             roles: 0,
+            categories: 0,
+            productGroups: 0,
             purchaseOrders: 0,
             transfers: 0,
         };
+
+        const catalogClassificationResults = await this.applyTerminalCatalogClassifications(snapshot);
+        results.categories = catalogClassificationResults.categories;
+        results.productGroups = catalogClassificationResults.productGroups;
 
         const roleRows = this.collectSnapshotMasterRows(snapshot, ['pos_roles', 'roles']);
         if (roleRows !== null) {
@@ -3458,12 +4539,284 @@ class SyncManager {
         posCatalogDebugLog('refreshTerminalResolvedConfig: structured master data complete', {
             users: results.users,
             roles: results.roles,
+            categories: results.categories,
+            productGroups: results.productGroups,
             purchaseOrders: results.purchaseOrders,
             transfers: results.transfers,
             elapsedMs: posCatalogDebugElapsedMs(startedAt),
         });
 
         return results;
+    }
+
+    private async applyTerminalCatalogClassifications(snapshot: unknown): Promise<{ categories: number; productGroups: number }> {
+        const root = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
+            ? snapshot as Record<string, any>
+            : {};
+        const terminalConfig = root.terminal_config && typeof root.terminal_config === 'object' && !Array.isArray(root.terminal_config)
+            ? root.terminal_config as Record<string, any>
+            : root.terminalConfig && typeof root.terminalConfig === 'object' && !Array.isArray(root.terminalConfig)
+                ? root.terminalConfig as Record<string, any>
+                : {};
+        const resolvedSource = root.resolved || terminalConfig.resolved;
+        const resolved = resolvedSource && typeof resolvedSource === 'object' && !Array.isArray(resolvedSource)
+            ? resolvedSource as Record<string, any>
+            : {};
+        const catalogSource = resolved.catalog || root.catalog || terminalConfig.catalog;
+        const catalog = catalogSource && typeof catalogSource === 'object' && !Array.isArray(catalogSource)
+            ? catalogSource as Record<string, any>
+            : {};
+        const classificationsSource = catalog.classifications || resolved.classifications || root.classifications || terminalConfig.classifications;
+        const classifications = classificationsSource && typeof classificationsSource === 'object' && !Array.isArray(classificationsSource)
+            ? classificationsSource as Record<string, any>
+            : {};
+        const categoryRows = Array.isArray(catalog.allowed_categories)
+            ? catalog.allowed_categories
+            : Array.isArray(catalog.allowedCategories)
+                ? catalog.allowedCategories
+                : Array.isArray(catalog.categories)
+                    ? catalog.categories
+                    : Array.isArray(catalog.product_categories)
+                        ? catalog.product_categories
+                        : Array.isArray(catalog.productCategories)
+                            ? catalog.productCategories
+                            : [];
+        const productGroupRows = Array.isArray(catalog.product_groups)
+            ? catalog.product_groups
+            : Array.isArray(catalog.productGroups)
+                ? catalog.productGroups
+                : Array.isArray(catalog.groups)
+                    ? catalog.groups
+                    : [];
+        const pickRows = (...values: unknown[]): unknown[] => {
+            for (const value of values) {
+                if (Array.isArray(value)) return value;
+            }
+            return [];
+        };
+        const findFirstRowsByKey = (source: unknown, keyNames: string[], maxDepth = 5): unknown[] => {
+            const wanted = new Set(keyNames.map(key => key.toLowerCase()));
+            const visited = new Set<unknown>();
+            const queue: Array<{ value: unknown; depth: number }> = [{ value: source, depth: 0 }];
+
+            while (queue.length > 0) {
+                const { value, depth } = queue.shift()!;
+                if (!value || typeof value !== 'object' || visited.has(value) || depth > maxDepth) continue;
+                visited.add(value);
+
+                if (Array.isArray(value)) {
+                    for (const item of value) queue.push({ value: item, depth: depth + 1 });
+                    continue;
+                }
+
+                const record = value as Record<string, unknown>;
+                for (const [key, child] of Object.entries(record)) {
+                    if (wanted.has(key.toLowerCase()) && Array.isArray(child)) {
+                        return child;
+                    }
+                }
+                for (const child of Object.values(record)) {
+                    if (child && typeof child === 'object') {
+                        queue.push({ value: child, depth: depth + 1 });
+                    }
+                }
+            }
+
+            return [];
+        };
+        const pickRowsDeep = (keyNames: string[], ...values: unknown[]): unknown[] => {
+            const direct = pickRows(...values);
+            if (direct.length > 0) return direct;
+            return findFirstRowsByKey(root, keyNames);
+        };
+
+        const normalizeName = (value: unknown): string => {
+            if (typeof value === 'string') return value.trim();
+            if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+            return '';
+        };
+        const normalizeClassificationRows = (rows: unknown[], fallbackPrefix: string) => {
+            const byId = new Map<string, any>();
+            for (const [index, entry] of rows.entries()) {
+                const record = entry && typeof entry === 'object' && !Array.isArray(entry)
+                    ? entry as Record<string, any>
+                    : {};
+                const name = normalizeName(record.name || record.nombre || record.label || record.description || record.descripcion || record.code || entry);
+                if (!name) continue;
+                const id = normalizeName(record.id || record.uuid || record.code || `${fallbackPrefix}-${index + 1}`);
+                const code = normalizeName(record.code || record.codigo || id || name);
+                byId.set(id || code || name, {
+                    id: id || code || name,
+                    code: code || id || name,
+                    name,
+                    parentId: normalizeName(record.parentId || record.parent_id || record.parent || record.parentCode || record.parent_code) || undefined,
+                    source: 'ERP_TERMINAL_CONFIG',
+                    syncSource: 'ERP_SNAPSHOT',
+                    updatedAt: new Date().toISOString(),
+                });
+            }
+            return Array.from(byId.values()).sort((left, right) => String(left.name).localeCompare(String(right.name)));
+        };
+        const normalizeRefs = (value: unknown): string[] => {
+            const rawItems = Array.isArray(value) ? value : [];
+            return Array.from(new Set(rawItems.map((item) => {
+                if (typeof item === 'string') return item.trim();
+                if (typeof item === 'number' && Number.isFinite(item)) return String(item);
+                if (item && typeof item === 'object' && !Array.isArray(item)) {
+                    const record = item as Record<string, any>;
+                    return normalizeName(record.id || record.productId || record.product_id || record.itemId || record.item_id || record.sku || record.code || record.barcode);
+                }
+                return '';
+            }).filter(Boolean)));
+        };
+
+        let changed = false;
+        let categories = 0;
+        let productGroups = 0;
+        const departments = normalizeClassificationRows(
+            pickRowsDeep(
+                ['departments', 'departamentos', 'product_departments', 'productDepartments', 'item_departments', 'itemDepartments'],
+                catalog.departments,
+                catalog.departamentos,
+                classifications.departments,
+                classifications.departamentos
+            ),
+            'erp-department'
+        );
+        const sections = normalizeClassificationRows(
+            pickRowsDeep(
+                ['sections', 'secciones', 'product_sections', 'productSections', 'item_sections', 'itemSections'],
+                catalog.sections,
+                catalog.secciones,
+                classifications.sections,
+                classifications.secciones
+            ),
+            'erp-section'
+        );
+        const families = normalizeClassificationRows(
+            pickRowsDeep(
+                ['families', 'familias', 'family_list', 'familyList', 'product_families', 'productFamilies', 'item_families', 'itemFamilies'],
+                catalog.families,
+                catalog.familias,
+                catalog.product_families,
+                catalog.productFamilies,
+                classifications.families,
+                classifications.familias
+            ),
+            'erp-family'
+        );
+        const subfamilies = normalizeClassificationRows(
+            pickRowsDeep(
+                ['subfamilies', 'sub_families', 'subFamilies', 'subfamilias', 'sub_familias', 'product_subfamilies', 'productSubfamilies', 'item_subfamilies', 'itemSubfamilies'],
+                catalog.subfamilies,
+                catalog.sub_families,
+                catalog.subFamilies,
+                catalog.subfamilias,
+                catalog.product_subfamilies,
+                catalog.productSubfamilies,
+                classifications.subfamilies,
+                classifications.subfamilias
+            ),
+            'erp-subfamily'
+        );
+        const brands = normalizeClassificationRows(
+            pickRowsDeep(
+                ['brands', 'marcas', 'product_brands', 'productBrands', 'item_brands', 'itemBrands'],
+                catalog.brands,
+                catalog.marcas,
+                classifications.brands,
+                classifications.marcas
+            ),
+            'erp-brand'
+        );
+        const posCategories = normalizeClassificationRows(categoryRows, 'erp-pos-category');
+
+        for (const [index, entry] of categoryRows.entries()) {
+            const record = entry && typeof entry === 'object' && !Array.isArray(entry)
+                ? entry as Record<string, any>
+                : {};
+            const name = normalizeName(record.name || record.nombre || record.label || record.description || record.descripcion || entry);
+            if (!name) continue;
+            const code = normalizeName(record.code || record.id || name);
+            await db.saveDocument('categories' as any, {
+                id: normalizeName(record.id) || code || `erp-category-${index + 1}`,
+                code: code || name,
+                name,
+                description: normalizeName(record.description || record.descripcion) || undefined,
+                source: 'ERP_TERMINAL_CONFIG',
+                syncSource: 'ERP_SNAPSHOT',
+                updatedAt: new Date().toISOString(),
+            } as any);
+            categories += 1;
+            changed = true;
+        }
+
+        for (const [index, entry] of productGroupRows.entries()) {
+            const record = entry && typeof entry === 'object' && !Array.isArray(entry)
+                ? entry as Record<string, any>
+                : {};
+            const id = normalizeName(record.id || record.groupId || record.group_id || record.code || `erp-product-group-${index + 1}`);
+            const name = normalizeName(record.name || record.nombre || record.label || record.description || record.descripcion || record.code || id);
+            if (!id || !name) continue;
+            await db.saveDocument('productGroups' as any, {
+                id,
+                code: normalizeName(record.code) || id,
+                name,
+                color: normalizeName(record.color) || undefined,
+                description: normalizeName(record.description || record.descripcion) || undefined,
+                productIds: normalizeRefs(record.productIds ?? record.product_ids ?? record.items ?? record.products),
+                source: 'ERP_TERMINAL_CONFIG',
+                syncSource: 'ERP_SNAPSHOT',
+                updatedAt: new Date().toISOString(),
+            } as any);
+            productGroups += 1;
+            changed = true;
+        }
+
+        let nextConfigWithClassifications: Record<string, any> | null = null;
+        if (
+            departments.length > 0 ||
+            sections.length > 0 ||
+            families.length > 0 ||
+            subfamilies.length > 0 ||
+            brands.length > 0 ||
+            posCategories.length > 0
+        ) {
+            const currentConfig = ((await db.get('config')) || {}) as Record<string, any>;
+            const nextConfig = {
+                ...currentConfig,
+                departments: departments.length > 0 ? departments : currentConfig.departments,
+                sections: sections.length > 0 ? sections : currentConfig.sections,
+                families: families.length > 0 ? families : currentConfig.families,
+                subfamilies: subfamilies.length > 0 ? subfamilies : currentConfig.subfamilies,
+                brands: brands.length > 0 ? brands : currentConfig.brands,
+                posCategories: posCategories.length > 0 ? posCategories : currentConfig.posCategories,
+            };
+            await db.save('config', nextConfig);
+            nextConfigWithClassifications = nextConfig;
+            changed = true;
+        }
+
+        if (changed) {
+            window.dispatchEvent(new CustomEvent('categoriesUpdated'));
+            window.dispatchEvent(new CustomEvent('productGroupsUpdated'));
+            if (nextConfigWithClassifications) {
+                window.dispatchEvent(new CustomEvent('configUpdated', { detail: nextConfigWithClassifications }));
+            }
+            posCatalogDebugLog('POS_CLASSIFICATIONS_RESOLVED_FROM_TERMINAL_CONFIG', {
+                categories,
+                productGroups,
+                departments: departments.length,
+                sections: sections.length,
+                families: families.length,
+                subfamilies: subfamilies.length,
+                brands: brands.length,
+                posCategories: posCategories.length,
+                catalogKeys: Object.keys(catalog),
+            });
+        }
+
+        return { categories, productGroups };
     }
 
     private async refreshTerminalSupplementalMasterData(
@@ -3494,7 +4847,10 @@ class SyncManager {
 
             const snapshotRows = this.snapshotMasterRows(snapshot, collection);
 
-            if (snapshotRows !== null) {
+            // An empty array can mean that the terminal config snapshot was
+            // persisted without this master scope. It must not suppress the
+            // collection pull, especially when the manifest reports records.
+            if (snapshotRows !== null && snapshotRows.length > 0) {
                 results[collection] = await this.applySnapshotImageBackedCollection(collection, snapshotRows);
                 continue;
             }
@@ -3617,6 +4973,7 @@ class SyncManager {
     private attachImageSyncReconnectHandler() {
         if (this.imageSyncOnlineHandler) return;
         this.imageSyncOnlineHandler = () => {
+            if (this.reducedSyncMode) return;
             this.syncProductImages({ forceManifestCheck: true }).catch((error) => {
                 console.warn('⚠️ Image sync on reconnect failed:', error);
             });
@@ -3636,6 +4993,7 @@ class SyncManager {
         }
 
         this.imageSyncInterval = setInterval(() => {
+            if (this.reducedSyncMode) return;
             this.syncProductImages().catch((error) => {
                 console.warn('⚠️ Scheduled image sync failed:', error);
             });
@@ -3677,7 +5035,10 @@ class SyncManager {
                 if (!item?.id) continue;
                 const localProduct = localById.get(item.id);
                 if (!localProduct) continue;
-                if (typeof localProduct.imageUrl === 'string' && localProduct.imageUrl.trim().length > 0) {
+                const hasRemoteImageUrl = typeof localProduct.imageUrl === 'string' && localProduct.imageUrl.trim().length > 0;
+                const hasCompletedNativeImageCache = isNativeAndroidRuntime() && typeof localProduct.imageLocalPath === 'string' && localProduct.imageLocalPath.trim().length > 0;
+                const hasCompletedWebImage = !isNativeAndroidRuntime() && this.hasAnyImage(localProduct);
+                if (hasRemoteImageUrl && (hasCompletedNativeImageCache || hasCompletedWebImage)) {
                     if (item.hash) {
                         this.productImageHashes.set(item.id, item.hash);
                     }
@@ -3811,7 +5172,7 @@ class SyncManager {
                 continue;
             }
 
-            const localData = await db.get(collection);
+            const localData = await db.get(collection as any);
             const localCount = Array.isArray(localData) ? localData.length : 0;
             const isEmpty = localCount === 0;
 
@@ -3842,9 +5203,12 @@ class SyncManager {
                 this.lastRecoveryTime.set(collection, Date.now()); // Set cooldown
 
                 try {
-                    // Reset cursor so delta endpoint returns full snapshot.
-                    this.syncVersions.set(collection, 0);
-                    localStorage.setItem(`sync_version_${collection}`, '0');
+	                    // Reset cursor so delta endpoint returns full snapshot.
+	                    this.syncVersions.set(collection, 0);
+	                    localStorage.setItem(`sync_version_${collection}`, '0');
+	                    if (isTimestampCursorCollection(collection)) {
+	                        this.clearTimestampCursorState(collection);
+	                    }
 
                     const pulled = await this.pullCatalog(collection);
                     if (pulled > 0) {
@@ -3855,7 +5219,7 @@ class SyncManager {
                     const serverItems = await apiSyncAdapter.pull(collection);
                     if (serverItems && serverItems.length > localCount) {
                         console.log(`📥 Master Init: Restoring ${serverItems.length} items from Server for ${collection}`);
-                        await db.save(collection, serverItems);
+                        await db.save(collection as any, serverItems);
 
                         // Update version
                         const metadata = await apiSyncAdapter.getMetadata(collection);
@@ -3878,7 +5242,28 @@ class SyncManager {
      * For API mode, we track versions locally
      */
     private async loadSyncVersions() {
-        const collections: (SyncableCollection | 'config')[] = ['products', 'customers', 'suppliers', 'users', 'roles', 'internalSequences', 'fiscalRanges', 'config'];
+	        const collections: (SyncableCollection | 'config')[] = [
+	            'products',
+	            'items',
+	            'taxes',
+            'customers',
+            'suppliers',
+            'warehouses',
+            'paymentMethods',
+            'productPrices',
+            'categories',
+            'productCategories',
+            'productGroups',
+            'collections',
+            'users',
+            'roles',
+            'documentSeries',
+            'fiscalRanges',
+            'fiscalSequences',
+            'internalSequences',
+            'terminalFiscalConfig',
+            'config',
+        ];
 
         for (const collection of collections) {
             // Load timestamp from localStorage
@@ -3925,8 +5310,12 @@ class SyncManager {
         }
 
         try {
-            const data = await db.get(collection);
+            const data = await db.get(collection as any);
             const items = Array.isArray(data) ? data : [];
+            if (items.length === 0) {
+                console.warn(`[SYNC_CATALOG_SKIP] pushCatalog collection=${collection} skipped: local dataset empty`);
+                return;
+            }
 
             // Push to server API
             // const timestamp = new Date().toISOString();
@@ -4012,6 +5401,72 @@ class SyncManager {
         });
     }
 
+    private async mirrorDocumentSeriesToInternalSequences(items: any[]): Promise<void> {
+        const config = (await db.get('config')) as any;
+        const terminals = Array.isArray(config?.terminals) ? config.terminals : [];
+        const activeTerminalKeys = [
+            localStorage.getItem('active_terminal_id'),
+            localStorage.getItem('CLIC_POS_TERMINAL_ID'),
+            localStorage.getItem('clic_pos_terminal_id'),
+        ].map((value) => String(value || '').trim().toUpperCase()).filter(Boolean);
+        const activeTerminal = terminals.find((terminal: any) => {
+            const keys = [
+                terminal?.id,
+                terminal?.terminalId,
+                terminal?.terminal_id,
+                terminal?.config?.erpTerminalId,
+                terminal?.config?.erp_terminal_id,
+                terminal?.config?.erpBinding?.terminalId,
+                terminal?.config?.erpBinding?.terminal_id,
+            ].map((value) => String(value || '').trim().toUpperCase()).filter(Boolean);
+            return activeTerminalKeys.some((key) => keys.includes(key));
+        }) || terminals.find((terminal: any) =>
+            Array.isArray(terminal?.config?.documentSeries) &&
+            terminal.config.documentSeries.some((series: any) =>
+                String(series?.source || '').toUpperCase() === 'ERP_TERMINAL_CONFIG'
+            )
+        );
+        const terminalSeries = Array.isArray(activeTerminal?.config?.documentSeries)
+            ? activeTerminal.config.documentSeries
+            : [];
+        const hasTerminalErpSeries = terminalSeries.some((series: any) =>
+            String(series?.source || '').toUpperCase() === 'ERP_TERMINAL_CONFIG'
+        );
+        const sourceSeries = hasTerminalErpSeries ? terminalSeries : items;
+        const incomingSeries = mergeDocumentSeriesCollection((Array.isArray(sourceSeries) ? sourceSeries : []) as DocumentSeries[]);
+        if (incomingSeries.length === 0) return;
+
+        const existingSeries = ((await db.get('internalSequences')) as DocumentSeries[]) || [];
+        const incomingHasAuthoritativeErpSeries = incomingSeries.some((series: any) =>
+            String(series?.source || '').toUpperCase() === 'ERP_TERMINAL_CONFIG'
+        );
+        const mergedSeries = incomingHasAuthoritativeErpSeries
+            ? mergeDocumentSeriesCollection(incomingSeries.map((incoming: any) => {
+                const incomingKeys = [
+                    incoming.id,
+                    incoming.code,
+                    incoming.prefix,
+                ].map((value) => String(value || '').trim().toUpperCase()).filter(Boolean);
+                const localMatch = existingSeries.find((candidate: any) => {
+                    const candidateKeys = [
+                        candidate.id,
+                        candidate.code,
+                        candidate.prefix,
+                    ].map((value) => String(value || '').trim().toUpperCase()).filter(Boolean);
+                    return incomingKeys.some((key) => candidateKeys.includes(key));
+                });
+                return {
+                    ...incoming,
+                    nextNumber: Math.max(Number(incoming.nextNumber) || 1, Number(localMatch?.nextNumber) || 1),
+                };
+            }))
+            : mergeDocumentSeriesCollection([...existingSeries, ...incomingSeries]);
+        if (JSON.stringify(existingSeries) !== JSON.stringify(mergedSeries)) {
+            await db.save('internalSequences', mergedSeries);
+            window.dispatchEvent(new CustomEvent('internalSequencesUpdated'));
+        }
+    }
+
     getIsInternalSyncing() {
         return this.isInternalSyncing;
     }
@@ -4024,10 +5479,47 @@ class SyncManager {
         }
     ): Promise<number> {
         if (this.isDisabled) return 0;
+        const target = syncPolicy.resolve();
+        if (target.kind === 'POS_CLOUD_STAGING') {
+            logSkippedNonMasterPull(collection, target.kind, 'POS_CLOUD_STAGING_PULL_BLOCKED');
+            return 0;
+        }
+        if (target.kind === 'ERP_ACTIVE' && !isErpMasterPullCollection(collection)) {
+            logSkippedNonMasterPull(collection, target.kind);
+            return 0;
+        }
+        if (target.kind !== 'POS_MASTER' && isErpOperationCollection(collection)) {
+            logSkippedNonMasterPull(collection, target.kind, 'OPERATION_PULL_REQUIRES_POS_MASTER');
+            return 0;
+        }
+        if (target.kind === 'NONE' && !target.canPullMasters) {
+            logSkippedNonMasterPull(collection, target.kind, 'SYNC_TARGET_NOT_CONFIGURED');
+            return 0;
+        }
+        if (isErpMasterPullCollection(collection) && !target.canPullMasters) {
+            console.warn(
+                `[SYNC_ROUTER] pullCatalog skipped collection=${collection} channel=${target.kind} dataMaster=${target.dataMaster}. POS local remains source of truth.`
+            );
+            return 0;
+        }
+
+        // A local database reset can leave the legacy sync version behind. In
+        // that state ERP correctly reports "no changes" while SQLite has no
+        // customers to hydrate, so the empty collection must force a full pull.
+        if (!force && collection === 'customers') {
+            const localCustomers = await db.get('customers');
+            if (Array.isArray(localCustomers) && localCustomers.length === 0) {
+                force = true;
+                this.syncVersions.set(collection, 0);
+                localStorage.removeItem(`sync_version_${collection}`);
+                localStorage.removeItem(`sync_timestamp_${collection}`);
+                console.warn('[SYNC_CUSTOMERS_EMPTY_RECOVERY] forcing full customer pull');
+            }
+        }
 
         // Throttling...
         // Throttling...
-        if (this.isInternalSyncing) {
+        if (this.isInternalSyncing && !options?.ignoreThrottle) {
             // console.log(`🔒 SyncManager: Pull skipped for ${collection} (Locked: Sync in progress)`);
             return 0;
         }
@@ -4040,6 +5532,9 @@ class SyncManager {
 
         // Start critical section
         try {
+            if (collection === 'products') {
+                setCatalogDiagnosticStatus('SYNCING');
+            }
             this.isInternalSyncing = true;
             this.isInternalPulling = true; // LOCK LOCAL PUSH TRIGGERS
             this.lastSyncTime = now;
@@ -4054,13 +5549,33 @@ class SyncManager {
                 }
             }, this.WATCHDOG_TIMEOUT_MS);
 
-            const lastVersion = force ? 0 : (this.syncVersions.get(collection) || 0);
-            // const timestamp = new Date().toISOString();
-            // console.log(`[PULL_INICIO] ${timestamp} Descargando colección: ${collection} (LastVersion: ${lastVersion})`);
-            // Pull Delta from API
-            const response = await apiSyncAdapter.pullDelta(collection, lastVersion || undefined);
-            const { items, serverTime, isFullDownload, latestVersion } = response;
-            let metadataCache: any = undefined;
+	            const usesTimestampCursor = target.kind === 'ERP_ACTIVE' && isTimestampCursorCollection(collection);
+	            if (force && usesTimestampCursor) {
+	                this.clearTimestampCursorState(collection);
+	            }
+	            const timestampCursorState = usesTimestampCursor && !force
+	                ? this.getTimestampCursorState(collection)
+	                : null;
+	            const timestampCursor = timestampCursorState?.nextCursor || timestampCursorState?.cursor || timestampCursorState?.lastSyncedAt || null;
+	            const lastVersion = force ? 0 : (this.syncVersions.get(collection) || 0);
+	            // const timestamp = new Date().toISOString();
+	            // console.log(`[PULL_INICIO] ${timestamp} Descargando colección: ${collection} (LastVersion: ${lastVersion})`);
+            // A forced customer recovery must bypass the version cursor. The ERP
+            // delta endpoint can legitimately return no rows for sinceVersion=0,
+            // while the full master endpoint is the authoritative rehydration path.
+            const response = force && collection === 'customers'
+                ? {
+                    items: await apiSyncAdapter.pull(collection),
+                    serverTime: new Date().toISOString(),
+                    isFullDownload: true,
+                    latestVersion: 0,
+                }
+                : await apiSyncAdapter.pullDelta(collection, lastVersion || undefined, usesTimestampCursor ? {
+                    cursor: timestampCursor,
+                    limit: 500,
+                } : undefined);
+	            const { items, serverTime, isFullDownload, latestVersion, cursor, nextCursor, lastSyncedAt, hasMore } = response;
+	            let metadataCache: any = undefined;
 
             const getMetadataOnce = async () => {
                 if (metadataCache !== undefined) return metadataCache;
@@ -4068,10 +5583,18 @@ class SyncManager {
                 return metadataCache;
             };
 
-            console.log(`📦 SyncManager: Received ${items.length} items for ${collection} (${isFullDownload ? 'Full' : 'Delta'})`);
+	            console.log('[SYNC_CATALOG_PULL_RESULT]', {
+	                collection,
+	                type: isFullDownload ? 'full' : 'delta',
+	                cursorSent: timestampCursor,
+	                cursorReceived: nextCursor || cursor || lastSyncedAt || serverTime || null,
+	                count: items.length,
+	                hasMore: Boolean(hasMore),
+	            });
+	            console.log(`📦 SyncManager: Received ${items.length} items for ${collection} (${isFullDownload ? 'Full' : 'Delta'})`);
 
             if (items.length === 0 && !isFullDownload) {
-                const localData = await db.get(collection);
+                const localData = await db.get(collection as any);
                 const localCount = Array.isArray(localData) ? localData.length : 0;
                 const metadata = await getMetadataOnce();
                 const remoteCount = metadata?.itemCount || 0;
@@ -4091,7 +5614,7 @@ class SyncManager {
                     if (Array.isArray(fullItems) && fullItems.length > 0) {
                         let cleanItems = fullItems.map((item: any) => {
                             const { _op, ...rest } = item;
-                            if (collection === 'internalSequences') {
+                            if (collection === 'internalSequences' || collection === 'documentSeries') {
                                 return this.repairSequenceData(rest);
                             }
 
@@ -4111,7 +5634,10 @@ class SyncManager {
                             ? await this.mergeTransactionsFullSnapshot(cleanItems)
                             : cleanItems;
 
-                        await db.save(collection, safeItems);
+                        await db.save(collection as any, safeItems);
+                        if (collection === 'documentSeries') {
+                            await this.mirrorDocumentSeriesToInternalSequences(safeItems);
+                        }
 
                         if (typeof remoteVersion === 'number') {
                             this.syncVersions.set(collection, remoteVersion);
@@ -4133,7 +5659,7 @@ class SyncManager {
                         }
 
                         window.dispatchEvent(new CustomEvent(`${collection}Updated`));
-                        if (collection === 'internalSequences') {
+                        if (collection === 'internalSequences' || collection === 'documentSeries') {
                             window.dispatchEvent(new CustomEvent('seriesUpdated'));
                         }
 
@@ -4142,11 +5668,21 @@ class SyncManager {
                     }
                 }
 
-                console.log(`ℹ️  SyncManager: No updates for ${collection}`);
-                if (serverTime) {
-                    this.syncTimestamps.set(collection, serverTime);
-                    localStorage.setItem(`sync_timestamp_${collection}`, serverTime);
-                }
+	                console.log(`ℹ️  SyncManager: No updates for ${collection}`);
+	                if (usesTimestampCursor) {
+	                    const savedCursor = this.saveTimestampCursorState(collection, nextCursor || cursor || lastSyncedAt || serverTime);
+	                    console.log('[SYNC_DELTA_CURSOR_SAVED]', {
+	                        collection,
+	                        type: 'delta',
+	                        cursorReceived: savedCursor,
+	                        count: 0,
+	                        hasMore: false,
+	                    });
+	                }
+	                if (serverTime) {
+	                    this.syncTimestamps.set(collection, serverTime);
+	                    localStorage.setItem(`sync_timestamp_${collection}`, serverTime);
+	                }
                 if (typeof latestVersion === 'number') {
                     this.syncVersions.set(collection, latestVersion);
                     localStorage.setItem(`sync_version_${collection}`, latestVersion.toString());
@@ -4160,7 +5696,7 @@ class SyncManager {
                 let cleanItems = items.map((item: any) => {
                     const { _op, ...rest } = item;
                     // Add repair logic for internalSequences
-                    if (collection === 'internalSequences') {
+                    if (collection === 'internalSequences' || collection === 'documentSeries') {
                         return this.repairSequenceData(rest);
                     }
 
@@ -4173,7 +5709,7 @@ class SyncManager {
                 });
 
                 if (collection === 'products') {
-                    cleanItems = await this.enrichPulledProducts(cleanItems);
+                    cleanItems = (await this.enrichPulledProducts(cleanItems)).map((item: any) => normalizeRestaurantProductConfig(item));
                 } else if (this.isImageBackedCollection(collection)) {
                     cleanItems = await masterDataImageCacheService.normalizeIncomingItems(collection, cleanItems as any[]);
                 }
@@ -4181,7 +5717,19 @@ class SyncManager {
                 const safeItems = collection === 'transactions'
                     ? await this.mergeTransactionsFullSnapshot(cleanItems)
                     : cleanItems;
-                await db.save(collection, safeItems);
+
+                if (collection === 'products' && safeItems.length === 0) {
+                    const localProducts = await db.get('products');
+                    const localCount = Array.isArray(localProducts) ? localProducts.length : 0;
+                    if (localCount > 0) {
+                        console.warn('REMOTE_CATALOG_EMPTY_GUARD: ERP returned zero products; keeping local catalog intact.');
+                        return 0;
+                    }
+                }
+                await db.save(collection as any, safeItems);
+                if (collection === 'documentSeries') {
+                    await this.mirrorDocumentSeriesToInternalSequences(safeItems);
+                }
 
                 if (collection === 'products') {
                     await productImageCacheService.syncSnapshotItems(safeItems as Product[]);
@@ -4198,14 +5746,14 @@ class SyncManager {
                     const { _op, ...cleanItem } = item;
                     if (op === 'DELETE' || item.deletedAt || item.isActive === false) {
                         console.log(`🗑️ SyncManager: Deleting item ${item.id} from ${collection}`);
-                        await db.deleteDocument(collection, item.id);
+                        await db.deleteDocument(collection as any, item.id);
                     } else {
                         // Add repair logic for internalSequences
-                        let finalItem = collection === 'internalSequences' ? this.repairSequenceData(cleanItem) : cleanItem;
+                        let finalItem = (collection === 'internalSequences' || collection === 'documentSeries') ? this.repairSequenceData(cleanItem) : cleanItem;
 
                         if (collection === 'products') {
                             const enriched = await this.enrichPulledProducts([finalItem]);
-                            finalItem = enriched[0];
+                            finalItem = normalizeRestaurantProductConfig(enriched[0]);
                         } else if (this.isImageBackedCollection(collection)) {
                             finalItem = await masterDataImageCacheService.normalizeIncomingItem(collection, finalItem as any);
                         }
@@ -4215,7 +5763,7 @@ class SyncManager {
                             if (!finalItem.cloudSyncStatus) finalItem.cloudSyncStatus = 'PENDING';
                         }
 
-                        await db.saveDocument(collection, finalItem);
+                        await db.saveDocument(collection as any, finalItem);
                         if (collection === 'products') {
                             updatedProductsForImageSync.push(finalItem as Product);
                         } else if (this.isImageBackedCollection(collection)) {
@@ -4229,6 +5777,11 @@ class SyncManager {
                     await productImageCacheService.syncSnapshotItems(updatedProductsForImageSync);
                 } else if (this.isImageBackedCollection(collection) && updatedMasterDataForImageSync.length > 0) {
                     await masterDataImageCacheService.syncSnapshotItems(collection, updatedMasterDataForImageSync);
+                }
+
+                if (collection === 'documentSeries') {
+                    const allDocumentSeries = ((await db.get('documentSeries' as any)) as DocumentSeries[]) || [];
+                    await this.mirrorDocumentSeriesToInternalSequences(allDocumentSeries);
                 }
             }
 
@@ -4255,11 +5808,21 @@ class SyncManager {
                 console.log(`✅ SyncManager: Stock recalculation complete for ${affectedProducts.size} products.`);
             }
 
-            // Update local sync timestamp
-            if (serverTime) {
-                this.syncTimestamps.set(collection, serverTime);
-                localStorage.setItem(`sync_timestamp_${collection}`, serverTime);
-            }
+	            // Update local sync timestamp
+	            if (usesTimestampCursor) {
+	                const savedCursor = this.saveTimestampCursorState(collection, nextCursor || cursor || lastSyncedAt || serverTime);
+	                console.log('[SYNC_DELTA_CURSOR_SAVED]', {
+	                    collection,
+	                    type: isFullDownload ? 'full' : 'delta',
+	                    cursorReceived: savedCursor,
+	                    count: items.length,
+	                    hasMore: Boolean(hasMore),
+	                });
+	            }
+	            if (serverTime) {
+	                this.syncTimestamps.set(collection, serverTime);
+	                localStorage.setItem(`sync_timestamp_${collection}`, serverTime);
+	            }
 
             // Also update legacy version if available in metadata
             let newVersion = typeof latestVersion === 'number' ? latestVersion : undefined;
@@ -4275,24 +5838,39 @@ class SyncManager {
             }
 
             if (collection === 'products') {
-                try {
-                    await this.syncProductImages();
-                } catch (error) {
-                    console.warn('⚠️ Image sync side-channel failed after products pull:', error);
-                }
+               try {
+                  await this.syncProductImages();
+               } catch (error) {
+                  console.warn('⚠️ Image sync side-channel failed after products pull:', error);
+               }
+               setCatalogDiagnosticStatus('SYNCED');
+            }
+            if (collection === 'categories' || collection === 'productCategories' || collection === 'productGroups' || collection === 'collections') {
+                window.dispatchEvent(new CustomEvent('categoriesUpdated'));
             }
 
             console.log(`✅ SyncManager: Pulled ${items.length} items for ${collection}. New version: ${newVersion ?? 'unknown'}`);
 
             // Dispatch event for UI to refresh
             window.dispatchEvent(new CustomEvent(`${collection}Updated`));
-            if (collection === 'internalSequences') {
+            if (collection === 'internalSequences' || collection === 'documentSeries') {
                 window.dispatchEvent(new CustomEvent('seriesUpdated'));
             }
 
             return items.length;
         } catch (error) {
             console.error(`❌ SyncManager: Error pulling ${collection}:`, error);
+            if (collection === 'paymentMethods' && isPaymentMethodsMissingSyncError(error)) {
+                console.warn('⚠️ SyncManager: paymentMethods is unavailable in terminal configuration; continuing sync flow.');
+                return 0;
+            }
+            if (!(error && typeof error === 'object' && (error as any).__syncDiagnosticReported)) {
+                reportSyncErrorDiagnostic({
+                    operation: 'PULL_MASTERS',
+                    collection,
+                    error,
+                });
+            }
             throw error;
         } finally {
             if (this.watchdogTimer) {
@@ -4313,15 +5891,47 @@ class SyncManager {
         // Catalogs: Master PUSHES, Slaves PULL
         // Added inventoryLedger and transactions so slaves can see history from other terminals
         const isMaster = permissionService.isMasterTerminal();
-        const catalogs: SyncableCollection[] = [
+        const defaultCatalogs: SyncableCollection[] = [
             'products',
+            'taxes',
             'customers',
             'suppliers',
+            'warehouses',
+            'paymentMethods',
+            'priceLists',
+            'productPrices',
+            'categories',
+            'productCategories',
+            'productGroups',
+            'collections',
+            'serviceTypes',
+            'rooms',
+            'tables',
+            'productionAreas',
             'users',
             'roles',
+            'documentSeries',
+            'documentTypes',
             'internalSequences',
             'fiscalRanges',
-            'paymentMethods',
+            'fiscalReceiptTypes',
+            'fiscalReceipts',
+            'fiscalSequences',
+            'terminalFiscalConfig',
+            'promotions',
+            'campaigns',
+            'coupons',
+            'discountRules',
+            'promotionRules',
+            'promotionConditions',
+            'promotionBenefits',
+            'pointsPrograms',
+            'loyaltyPrograms',
+            'pointsRules',
+            'earningRules',
+            'redemptionRules',
+            'customerPointBalances',
+            'loyaltyTiers',
             'productStocks',
             ...(isMaster || permissionService.shouldShowGlobalSales() ? ['inventoryLedger' as SyncableCollection] : []),
             ...(permissionService.shouldShowGlobalSales() ? ['transactions' as SyncableCollection] : []),
@@ -4333,6 +5943,24 @@ class SyncManager {
         const operations: SyncableCollection[] = ['inventoryLedger', 'zReports'];
 
         const results: SyncStatus[] = [];
+        const target = syncPolicy.resolve();
+        let catalogs: SyncableCollection[] = target.kind === 'ERP_ACTIVE'
+            ? defaultCatalogs.filter(isErpMasterPullCollection)
+            : defaultCatalogs;
+        if (target.kind === 'ERP_ACTIVE') {
+            for (const collection of defaultCatalogs) {
+                if (!isErpMasterPullCollection(collection)) {
+                    logSkippedNonMasterPull(collection, target.kind, 'REMOVED_FROM_ERP_ACTIVE_CATALOG_PULL');
+                }
+            }
+        } else if (target.kind === 'POS_CLOUD_STAGING' && target.canPushMasters && target.dataMaster === 'POS') {
+            for (const collection of defaultCatalogs) {
+                if (!isPosCloudStagingPushCollection(collection)) {
+                    logSkippedNonMasterPull(collection, target.kind, 'POS_CLOUD_STAGING_PUSH_NOT_SUPPORTED');
+                }
+            }
+            catalogs = defaultCatalogs.filter(isPosCloudStagingPushCollection);
+        }
 
         // 0. Pull singleton config first on slaves (document assignments/terminal behavior live there).
         if (!permissionService.isMasterTerminal()) {
@@ -4349,6 +5977,11 @@ class SyncManager {
                     status: 'SYNCED'
                 });
             } catch (error: any) {
+                reportSyncErrorDiagnostic({
+                    operation: 'PULL_CONFIG',
+                    collection: 'config',
+                    error,
+                });
                 results.push({
                     collection: 'config',
                     lastSyncedAt: null,
@@ -4363,9 +5996,35 @@ class SyncManager {
         // 1. Sync Catalogs
         for (const collection of catalogs) {
             try {
-                // Always PULL to get updates from Server/Other Terminals
-                // (Master pushes changes via broadcastChange immediately)
-                await this.pullCatalog(collection);
+                if (target.canPushMasters && target.dataMaster === 'POS') {
+                    await this.pushCatalog(collection);
+                    const localData = await db.get(collection as any);
+                    const localVersion = this.syncVersions.get(collection) || 0;
+
+                    results.push({
+                        collection,
+                        lastSyncedAt: new Date().toISOString(),
+                        localVersion,
+                        remoteVersion: Array.isArray(localData) ? localData.length : null,
+                        status: 'SYNCED_CLOUD'
+                    });
+                    continue;
+                } else if (target.kind === 'POS_CLOUD_STAGING' || !target.canPullMasters) {
+                    logSkippedNonMasterPull(collection, target.kind, 'LOCAL_MASTERS_PROTECTED');
+                    const localData = await db.get(collection as any);
+                    const localVersion = this.syncVersions.get(collection) || 0;
+                    results.push({
+                        collection,
+                        lastSyncedAt: null,
+                        localVersion,
+                        remoteVersion: Array.isArray(localData) ? localData.length : null,
+                        status: 'SYNCED',
+                    });
+                    continue;
+                } else {
+                    // Pull only when the channel allows remote masters (ERP_ACTIVE or POS_MASTER).
+                    await this.pullCatalog(collection);
+                }
 
                 const metadata = await apiSyncAdapter.getMetadata(collection);
                 const localVersion = this.syncVersions.get(collection) || 0;
@@ -4378,6 +6037,22 @@ class SyncManager {
                     status: 'SYNCED'
                 });
             } catch (error: any) {
+                reportSyncErrorDiagnostic({
+                    operation: target.canPushMasters && target.dataMaster === 'POS' ? 'PUSH_MASTERS' : 'PULL_MASTERS',
+                    collection,
+                    error,
+                });
+                if (collection === 'paymentMethods' && isPaymentMethodsMissingSyncError(error)) {
+                    results.push({
+                        collection,
+                        lastSyncedAt: null,
+                        localVersion: this.syncVersions.get(collection) || 0,
+                        remoteVersion: null,
+                        status: 'SYNCED',
+                        error: error.message,
+                    });
+                    continue;
+                }
                 results.push({
                     collection,
                     lastSyncedAt: null,
@@ -4389,8 +6064,8 @@ class SyncManager {
             }
         }
 
-        // 2. Sync Operations (Master Only - PULL)
-        if (permissionService.isMasterTerminal()) {
+        // 2. Sync Operations (Master Only - PULL via local POS master)
+        if (permissionService.isMasterTerminal() && target.kind === 'POS_MASTER') {
             for (const collection of operations) {
                 try {
                     // Master pulls operations from Server to see what Slaves have sent
@@ -4407,6 +6082,11 @@ class SyncManager {
                         status: 'SYNCED'
                     });
                 } catch (error: any) {
+                    reportSyncErrorDiagnostic({
+                        operation: 'PULL_MASTERS',
+                        collection,
+                        error,
+                    });
                     results.push({
                         collection,
                         lastSyncedAt: null,
@@ -4479,19 +6159,56 @@ class SyncManager {
      * Check for catalog updates without pulling
      */
     async checkForUpdates(): Promise<string[]> {
-        const collections: SyncableCollection[] = [
+        const target = syncPolicy.resolve();
+        const defaultCollections: SyncableCollection[] = [
             'products',
+            'taxes',
             'customers',
             'suppliers',
+            'warehouses',
+            'paymentMethods',
+            'priceLists',
+            'productPrices',
+            'categories',
+            'productCategories',
+            'productGroups',
+            'collections',
+            'serviceTypes',
+            'rooms',
+            'tables',
+            'productionAreas',
             'users',
             'roles',
+            'documentSeries',
+            'documentTypes',
             'internalSequences',
             'fiscalRanges',
+            'fiscalReceiptTypes',
+            'fiscalReceipts',
+            'fiscalSequences',
+            'terminalFiscalConfig',
+            'promotions',
+            'campaigns',
+            'coupons',
+            'discountRules',
+            'promotionRules',
+            'promotionConditions',
+            'promotionBenefits',
+            'pointsPrograms',
+            'loyaltyPrograms',
+            'pointsRules',
+            'earningRules',
+            'redemptionRules',
+            'customerPointBalances',
+            'loyaltyTiers',
             'productStocks',
             'transfers',
             'receptions',
             ...(permissionService.shouldShowGlobalSales() ? ['transactions' as SyncableCollection] : [])
         ];
+        const collections = target.kind === 'ERP_ACTIVE'
+            ? defaultCollections.filter(isErpMasterPullCollection)
+            : defaultCollections;
         const updatesAvailable: string[] = [];
 
         for (const collection of collections) {
@@ -4503,7 +6220,7 @@ class SyncManager {
 
             // CRITICAL: Also check if local collection is empty. 
             // This handles the case where remote version is 0 but server has data (Slave first pull).
-            const localData = await db.get(collection);
+            const localData = await db.get(collection as any);
             const localCount = Array.isArray(localData) ? localData.length : 0;
             const isEmpty = localCount === 0;
             const hasCountDrift = remoteCount > localCount;
@@ -4518,7 +6235,7 @@ class SyncManager {
         if (!permissionService.isMasterTerminal()) {
             const localVersion = this.syncVersions.get('config') || 0;
             const hasNewConfig = await apiSyncAdapter.hasNewData('config', localVersion);
-            const localConfig = await db.get('config');
+            const localConfig = await db.get('config') as unknown as BusinessConfig | null;
             const isConfigMissing = !localConfig || Array.isArray(localConfig) || Object.keys(localConfig).length === 0;
 
             if (hasNewConfig || (isConfigMissing && localVersion === 0)) {
@@ -4534,6 +6251,13 @@ class SyncManager {
      * Used to resolve sync discrepancies by re-uploading everything
      */
     async forcePushAll(): Promise<void> {
+        const target = syncPolicy.resolve();
+        if (target.kind === 'ERP_ACTIVE') {
+            console.warn('[SYNC_ROUTER] forcePushAll redirected to forcePullAll: ERP_ACTIVE owns master data.');
+            await this.forcePullAll();
+            return;
+        }
+
         if (!permissionService.isMasterTerminal()) {
             console.warn('⚠️  Only master terminal can force push');
             throw new Error('Solo la terminal Master puede forzar la subida de datos.');
@@ -4555,27 +6279,76 @@ class SyncManager {
      */
     async forcePullAll(): Promise<void> {
         console.log('🔄 Forcing full pull of all catalogs...');
+        const target = syncPolicy.resolve();
+        if (!target.canPullMasters) {
+            console.warn(
+                `[SYNC_ROUTER] forcePullAll skipped channel=${target.kind} dataMaster=${target.dataMaster}. This terminal must not download ERP masters.`
+            );
+            window.dispatchEvent(new CustomEvent('syncStart', { detail: { modules: [] } }));
+            window.dispatchEvent(new CustomEvent('syncProgress', {
+                detail: { id: 'sync-profile', status: 'SUCCESS', message: 'Canal POS: maestros locales protegidos', count: 0 }
+            }));
+            return;
+        }
 
-        // Define modules to sync
-        const modules = [
+        // Define modules to sync. ERP_ACTIVE must pull only masters/config, never POS operations.
+        const baseModules = [
             { id: 'config', label: 'Configuración Global (Tarifas)' },
             { id: 'products', label: 'Catálogo de Productos' },
+            { id: 'taxes', label: 'Impuestos' },
             { id: 'customers', label: 'Base de Clientes' },
             { id: 'suppliers', label: 'Proveedores' },
+            { id: 'warehouses', label: 'Almacenes' },
+            { id: 'paymentMethods', label: 'Métodos de Pago' },
+            { id: 'productPrices', label: 'Precios de Productos' },
+            { id: 'productStocks', label: 'Existencias por Almacén' },
+            { id: 'priceLists', label: 'Tarifas' },
             { id: 'users', label: 'Operadores de Sistema' },
             { id: 'roles', label: 'Roles y Permisos' },
+            { id: 'documentSeries', label: 'Series Documentales' },
+            { id: 'documentTypes', label: 'Tipos de Documento' },
             { id: 'internalSequences', label: 'Secuencias de Documentos' },
             { id: 'fiscalRanges', label: 'Rangos Fiscales DGII' },
+            { id: 'fiscalSequences', label: 'Secuencias Fiscales' },
+            { id: 'terminalFiscalConfig', label: 'Configuración Fiscal de Terminal' },
+            { id: 'promotions', label: 'Promociones' },
+            { id: 'campaigns', label: 'Campañas' },
+            { id: 'coupons', label: 'Cupones' },
+            { id: 'pointsPrograms', label: 'Programas de Puntos' },
+            { id: 'loyaltyPrograms', label: 'Programas de Fidelidad' },
+            { id: 'pointsRules', label: 'Reglas de Puntos' },
         ];
+        const modules = target.kind === 'ERP_ACTIVE'
+            ? baseModules.filter(module => [
+                'config',
+                'products',
+                'taxes',
+                'customers',
+                'suppliers',
+                'warehouses',
+                'paymentMethods',
+                'priceLists',
+                'productPrices',
+                'productStocks',
+                'users',
+                'roles',
+                'documentSeries',
+                'internalSequences',
+                'documentTypes',
+                'fiscalRanges',
+                'fiscalSequences',
+                'terminalFiscalConfig',
+            ].includes(module.id))
+            : [...baseModules];
 
-        if (permissionService.isMasterTerminal()) {
+        if (permissionService.isMasterTerminal() && target.kind !== 'ERP_ACTIVE') {
             modules.push(
                 { id: 'transactions', label: 'Historial de Ventas' },
                 { id: 'zReports', label: 'Cierres de Caja (Z)' },
                 { id: 'inventoryLedger', label: 'Movimientos de Inventario' },
                 { id: 'cashMovements', label: 'Movimientos de Efectivo' }
             );
-        } else if (permissionService.shouldShowGlobalSales()) {
+        } else if (permissionService.shouldShowGlobalSales() && target.kind !== 'ERP_ACTIVE') {
             modules.push(
                 { id: 'transactions', label: 'Historial de Ventas Globales' }
             );
@@ -4613,6 +6386,12 @@ class SyncManager {
 
             } catch (error: any) {
                 console.error(`❌ Failed to restore ${module.id}:`, error);
+                if (module.id === 'paymentMethods' && isPaymentMethodsMissingSyncError(error)) {
+                    window.dispatchEvent(new CustomEvent('syncProgress', {
+                        detail: { id: module.id, status: 'SUCCESS', message: 'Sincronización no crítica: métodos de pago pendientes.' }
+                    }));
+                    continue;
+                }
                 // Update UI: Error
                 window.dispatchEvent(new CustomEvent('syncProgress', {
                     detail: { id: module.id, status: 'ERROR', message: error.message || 'Error desconocido' }
@@ -4644,7 +6423,7 @@ class SyncManager {
 
         try {
             const localVersion = this.syncVersions.get('config') || 0;
-            const localConfig = await db.get('config');
+            const localConfig = await db.get('config') as unknown as BusinessConfig | null;
             const metadata = await apiSyncAdapter.getMetadata('config');
             const remoteVersion = metadata?.version;
 
@@ -4666,6 +6445,31 @@ class SyncManager {
                 }
             } catch (snapshotError) {
                 console.warn('⚠️ SyncManager: Terminal snapshot refresh failed during pullConfig. Using global config fallback.', snapshotError);
+            }
+
+            const currentTerminalId = permissionService.getTerminalId();
+            const localTerminal = (localConfig?.terminals || []).find((terminal: any) => terminal.id === currentTerminalId);
+            const localAllowsNegativeStock = Boolean(localTerminal?.config?.workflow?.inventory?.allowNegativeStock);
+            if (currentTerminalId && localAllowsNegativeStock) {
+                finalConfig = {
+                    ...finalConfig,
+                    terminals: (finalConfig.terminals || []).map((terminal: any) => {
+                        if (terminal.id !== currentTerminalId) return terminal;
+                        return {
+                            ...terminal,
+                            config: {
+                                ...terminal.config,
+                                workflow: {
+                                    ...(terminal.config?.workflow || {}),
+                                    inventory: {
+                                        ...(terminal.config?.workflow?.inventory || {}),
+                                        allowNegativeStock: true,
+                                    },
+                                },
+                            },
+                        };
+                    }),
+                };
             }
 
             const localSanitized = this.sanitizeConfig(localConfig);
@@ -4715,7 +6519,7 @@ class SyncManager {
             const hasNew = metadata ? await apiSyncAdapter.hasNewData(collection, localVersion) : false;
 
             // Get local item count
-            const localData = await db.get(collection);
+            const localData = await db.get(collection as any);
             const itemCount = Array.isArray(localData) ? localData.length : 0;
 
             statuses.push({
@@ -4761,6 +6565,10 @@ class SyncManager {
         return apiSyncAdapter.isUsingErpOperationalTarget();
     }
 
+    isErpActiveOperationalTarget(): boolean {
+        return apiSyncAdapter.isErpActiveOperationalTarget();
+    }
+
     /**
      * Start automatic sync (for slave terminals)
      */
@@ -4771,23 +6579,8 @@ class SyncManager {
             this.stopAutoSync();
         }
 
-        this.autoSyncInterval = setInterval(async () => {
-            // Auto-sync for ALL terminals (including Master w/ LocalStorage)
-            // console.log('🔄 Auto-sync: Checking for updates...');
-            if (!permissionService.isMasterTerminal()) {
-                try {
-                    await this.pullConfig();
-                } catch (error) {
-                    console.warn('⚠️ Auto-sync: Failed to refresh config:', error);
-                }
-            }
-
-            const updates = await this.checkForUpdates();
-
-            if (updates.length > 0) {
-                console.log(`📥 Auto-sync: Found updates for ${updates.join(', ')}`);
-                await this.syncAllCatalogs();
-            }
+        this.autoSyncInterval = setInterval(() => {
+            void this.runAutomaticMasterDataSync();
         }, intervalMs);
 
         if (!permissionService.isMasterTerminal()) {
@@ -4795,6 +6588,42 @@ class SyncManager {
         }
 
         console.log(`⏰ Auto-sync started (${intervalMs / 1000}s interval)`);
+    }
+
+    private async runAutomaticMasterDataSync(): Promise<void> {
+        if (!permissionService.isMasterTerminal()) {
+            try {
+                await this.pullConfig();
+            } catch (error) {
+                console.warn('⚠️ Auto-sync: Failed to refresh config:', error);
+            }
+        }
+
+        // Configuration remains critical while idle. Only large master-data
+        // checks and image transfers are reduced.
+        if (this.reducedSyncMode) return;
+
+        const updates = await this.checkForUpdates();
+        if (updates.length > 0) {
+            console.log(`📥 Auto-sync: Found updates for ${updates.join(', ')}`);
+            await this.syncAllCatalogs();
+        }
+    }
+
+    setReducedSyncMode(reduced: boolean, reason = 'inactivity'): void {
+        if (this.reducedSyncMode === reduced) return;
+        this.reducedSyncMode = reduced;
+        console.info(`[SYNC_POLICY] Master data sync ${reduced ? 'reduced' : 'active'} (${reason}).`);
+
+        if (!reduced && navigator.onLine && !isPosSaleActive()) {
+            window.setTimeout(() => {
+                void this.runAutomaticMasterDataSync();
+            }, 0);
+        }
+    }
+
+    isReducedSyncMode(): boolean {
+        return this.reducedSyncMode;
     }
 
     /**

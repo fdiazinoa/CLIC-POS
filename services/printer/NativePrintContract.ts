@@ -45,6 +45,18 @@ export interface NativePrinterHealthResult {
   message?: string;
 }
 
+export interface NativeKdsServerStatus {
+  status?: 'running' | 'stopped' | 'error';
+  success?: boolean;
+  running?: boolean;
+  port?: number;
+  localIp?: string | null;
+  localIps?: string[];
+  url?: string | null;
+  ordersCount?: number;
+  message?: string;
+}
+
 export interface NativePrinterBridge {
   platform?: string;
   validateDgiiRnc?: (payload?: { rnc?: string }) => Promise<{
@@ -85,7 +97,25 @@ export interface NativePrinterBridge {
   print?: (payload: NativeHtmlBridgePayload) => Promise<boolean | NativePrintResult> | boolean | NativePrintResult;
 
   getDeviceProfile?: () => Promise<{ profile?: string; integratedPrinter?: boolean }> | { profile?: string; integratedPrinter?: boolean };
-  getDeviceInfo?: () => Promise<{ profile?: string; integratedPrinter?: boolean }> | { profile?: string; integratedPrinter?: boolean };
+  getDeviceInfo?: () => Promise<{
+    profile?: string;
+    integratedPrinter?: boolean;
+    localIp?: string | null;
+    localIps?: string[];
+  }> | {
+    profile?: string;
+    integratedPrinter?: boolean;
+    localIp?: string | null;
+    localIps?: string[];
+  };
+
+  startKdsServer?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
+  stopKdsServer?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
+  getKdsServerStatus?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
+  startMasterServer?: (payload?: { port?: number; config?: unknown; users?: unknown[] }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
+  updateMasterServerConfig?: (payload?: { config?: unknown; users?: unknown[] }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
+  stopMasterServer?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
+  getMasterServerStatus?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
 
   /** Enumeración de lectores biométricos USB/red (Android nativo). */
   discoverFingerprintReaders?: (payload?: { connection?: ConnectionType }) => Promise<unknown>;

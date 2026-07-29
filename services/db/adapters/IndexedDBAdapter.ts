@@ -1,7 +1,7 @@
 import { DatabaseAdapter } from '../DatabaseAdapter';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 17; // Keep aligned with deployed local schemas and avoid web downgrades
+const DB_VERSION = 18; // Keep aligned with deployed local schemas and avoid web downgrades
 const OLD_DB_KEY = 'clic_pos_db_v1';
 const OPEN_TIMEOUT_MS = 15000;
 const CURSOR_IDLE_TIMEOUT_MS = 3000;
@@ -12,7 +12,7 @@ const STORES = [
     'products', 'transactions', 'transactionHistory', 'cashMovements', 'transfers',
     'parkedTickets', 'purchaseOrders', 'suppliers', 'inventoryLedger',
     'internalSequences', 'fiscalRanges', 'fiscalAllocations',
-    'localFiscalBuffer', 'campaigns', 'coupons', 'zReports',
+    'localFiscalBuffer', 'campaigns', 'coupons', 'zReports', 'xReports',
     'receptions', 'productStocks', 'supplierProductPrices',
     'productPrices',
     'inventoryTracking', 'rooms', 'tables', 'globalSequenceCounter',

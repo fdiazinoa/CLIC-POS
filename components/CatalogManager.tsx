@@ -7,7 +7,7 @@ import {
    ChevronDown, ChevronRight, Box, AlertCircle, MapPin, Grid, Sun,
    CheckSquare, Square, MoreHorizontal, Settings2, Activity, RefreshCw
 } from 'lucide-react';
-import { Product, BusinessConfig, Tariff, Transaction, ProductVariant, Warehouse, ProductGroup, Season, Watchlist, ProductStock, StockTransfer, Supplier, Room } from '../types';
+import { Product, BusinessConfig, Tariff, Transaction, ProductVariant, Warehouse, ProductGroup, Season, Watchlist, ProductStock, StockTransfer, Supplier, Room, ProductPrice } from '../types';
 import { calculateOptimalInventoryLevels } from '../utils/inventoryEngine';
 import ProductForm from './ProductForm';
 import TariffForm from './TariffForm';
@@ -21,10 +21,11 @@ import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
 import ClassificationManager from './ClassificationManager';
 import ErrorBoundary from './ErrorBoundary';
-import { getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/masterIdentity';
+import { getWarehouseScopedNumber, isProductWarehouseActive, tariffMatchesIdentifier } from '../utils/masterIdentity';
 import {
    productIdMatchesInventoryReference,
    productIdentityCandidates,
+   productReferenceCandidates,
    resolveInventoryProductStockRow,
 } from '../utils/productReferences';
 import { resolveProductImageSrc } from '../utils/entityImage';
@@ -74,6 +75,55 @@ const hasMeaningfulConfigPayload = (config?: BusinessConfig | null) => {
       || config.productGroups?.length
       || config.seasons?.length
    );
+};
+
+const normalizeCategoryOption = (entry: unknown): { id: string; name: string } | null => {
+   if (typeof entry === 'string') {
+      const name = entry.trim();
+      return name ? { id: name, name } : null;
+   }
+   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+   const record = entry as Record<string, unknown>;
+   const name = String(
+      record.name ||
+      record.nombre ||
+      record.label ||
+      record.description ||
+      record.descripcion ||
+      record.code ||
+      record.id ||
+      ''
+   ).trim();
+   if (!name) return null;
+   const id = String(record.id || record.code || name).trim();
+   return { id: id || name, name };
+};
+
+const buildProductPriceRowsForProduct = (product: Product, tariffs: Tariff[]): ProductPrice[] => {
+   const now = new Date().toISOString();
+   return (Array.isArray(product.tariffs) ? product.tariffs : [])
+      .map((entry) => {
+         const tariff = tariffs.find((candidate) =>
+            tariffMatchesIdentifier(candidate, entry.tariffId) ||
+            tariffMatchesIdentifier(candidate, (entry as any).tariffCode) ||
+            tariffMatchesIdentifier(candidate, (entry as any).id) ||
+            tariffMatchesIdentifier(candidate, entry.name)
+         );
+         const tariffId = String(tariff?.id || entry.tariffId || (entry as any).tariffCode || (entry as any).id || entry.name || '').trim();
+         const price = Number(entry.price);
+         if (!product.id || !tariffId || !Number.isFinite(price)) return null;
+         return {
+            id: `${product.id}_${tariffId}`,
+            productId: product.id,
+            tariffId,
+            tariffCode: String((tariff as any)?.code || (entry as any)?.tariffCode || '').trim() || undefined,
+            tariffName: String(tariff?.name || entry.name || '').trim() || undefined,
+            price,
+            currency: String(tariff?.currency || (entry as any)?.currency || '').trim() || undefined,
+            updatedAt: product.updatedAt || now,
+         } as ProductPrice;
+      })
+      .filter(Boolean) as ProductPrice[];
 };
 
 const pickRicherBusinessConfig = (primary?: BusinessConfig | null, secondary?: BusinessConfig | null): BusinessConfig | null => {
@@ -129,14 +179,15 @@ const normalizeCatalogIdentityValue = (value: unknown): string => {
    return String(value).trim().toLowerCase();
 };
 
-const firstCatalogFieldValue = (product: Product | null | undefined, fields: string[]): string => {
-   if (!product) return '';
+const catalogFieldValues = (product: Product | null | undefined, fields: string[]): string[] => {
+   if (!product) return [];
    const record = product as unknown as Record<string, unknown>;
+   const values: string[] = [];
    for (const field of fields) {
       const normalized = normalizeCatalogIdentityValue(record[field]);
-      if (normalized) return normalized;
+      if (normalized) values.push(normalized);
    }
-   return '';
+   return Array.from(new Set(values));
 };
 
 const productImageVersion = (product?: Product | null): number => {
@@ -151,8 +202,15 @@ const productPositiveStockWarehouses = (product?: Product | null): number => {
       .length;
 };
 
-const catalogEditorIdentity = (product?: Product | null): string => {
-   const operationalIdentity = firstCatalogFieldValue(product, [
+const catalogEditorIdentityKeys = (product?: Product | null): string[] => {
+   if (!product) return [];
+   const keys = new Set<string>();
+   const addKey = (prefix: string, value: unknown) => {
+      const normalized = normalizeCatalogIdentityValue(value);
+      if (normalized) keys.add(`${prefix}:${normalized}`);
+   };
+
+   for (const value of catalogFieldValues(product, [
       'sourceItemId',
       'source_item_id',
       'itemId',
@@ -163,22 +221,45 @@ const catalogEditorIdentity = (product?: Product | null): string => {
       'source_product_id',
       'productId',
       'product_id',
-   ]);
-   if (operationalIdentity) return `operational:${operationalIdentity}`;
+   ])) {
+      addKey('operational', value);
+   }
 
-   const commerceIdentity = firstCatalogFieldValue(product, [
+   for (const value of catalogFieldValues(product, [
       'sku',
       'item_code',
       'code',
       'barcode',
-   ]);
-   if (commerceIdentity) return `commerce:${commerceIdentity}`;
+      'barcode_2',
+      'barcode2',
+      'barcode_3',
+      'barcode3',
+   ])) {
+      addKey('commerce', value);
+   }
 
-   const canonicalIdentity = productIdentityCandidates(product)[0];
-   const normalizedCanonical = normalizeCatalogIdentityValue(canonicalIdentity);
-   if (normalizedCanonical) return `canonical:${normalizedCanonical}`;
+   if (Array.isArray((product as any).barcodes)) {
+      for (const barcodeEntry of (product as any).barcodes) {
+         if (barcodeEntry && typeof barcodeEntry === 'object' && !Array.isArray(barcodeEntry)) {
+            addKey('commerce', (barcodeEntry as any).barcode);
+            addKey('commerce', (barcodeEntry as any).code);
+            addKey('commerce', (barcodeEntry as any).value);
+         } else {
+            addKey('commerce', barcodeEntry);
+         }
+      }
+   }
 
-   return '';
+   productReferenceCandidates(product).forEach((value) => addKey('reference', value));
+   productIdentityCandidates(product).forEach((value) => addKey('canonical', value));
+
+   const name = normalizeCatalogIdentityValue(product.name);
+   const category = normalizeCatalogIdentityValue((product as any).category);
+   if (name) addKey('namecat', `${name}::${category}`);
+
+   addKey('id', product.id);
+
+   return Array.from(keys);
 };
 
 const productCompletenessScore = (product?: Product | null): number => {
@@ -198,19 +279,29 @@ const productCompletenessScore = (product?: Product | null): number => {
 };
 
 const dedupeCatalogProducts = (items: Product[]): Product[] => {
-   const byIdentity = new Map<string, Product>();
+   type CatalogRankEntry = { product: Product; keys: Set<string> };
+   const byIdentity = new Map<string, CatalogRankEntry>();
 
    for (const product of items) {
-      const identity = catalogEditorIdentity(product);
-      if (!identity) continue;
+      const identityKeys = catalogEditorIdentityKeys(product);
+      if (identityKeys.length === 0) continue;
 
-      const key = identity;
-      const existing = byIdentity.get(key);
-      if (!existing) {
-         byIdentity.set(key, product);
+      const matchedEntries = Array.from(
+         new Set(identityKeys.map((key) => byIdentity.get(key)).filter(Boolean) as CatalogRankEntry[])
+      );
+      if (matchedEntries.length === 0) {
+         const entry = { product, keys: new Set(identityKeys) };
+         identityKeys.forEach((key) => byIdentity.set(key, entry));
          continue;
       }
 
+      const existingEntry = matchedEntries
+         .sort((left, right) => {
+            const scoreDiff = productCompletenessScore(right.product) - productCompletenessScore(left.product);
+            if (scoreDiff !== 0) return scoreDiff;
+            return productTimestamp(right.product) - productTimestamp(left.product);
+         })[0];
+      const existing = existingEntry.product;
       const existingScore = productCompletenessScore(existing);
       const incomingScore = productCompletenessScore(product);
       const existingImageVersion = productImageVersion(existing);
@@ -225,10 +316,71 @@ const dedupeCatalogProducts = (items: Product[]): Product[] => {
             )
          );
 
-      byIdentity.set(key, shouldReplace ? product : existing);
+      const winner: CatalogRankEntry = shouldReplace
+         ? { product, keys: new Set(identityKeys) }
+         : existingEntry;
+      const mergedKeys = new Set<string>(identityKeys);
+      for (const entry of matchedEntries) {
+         entry.keys.forEach((key) => mergedKeys.add(key));
+      }
+      winner.keys = mergedKeys;
+      for (const key of mergedKeys) {
+         byIdentity.set(key, winner);
+      }
    }
 
-   return Array.from(byIdentity.values());
+   return Array.from(new Set(byIdentity.values())).map((entry) => entry.product);
+};
+
+const productBarcodeValues = (product?: Product | null): string[] => {
+   if (!product) return [];
+   const values: string[] = [];
+   const addValue = (value: unknown) => {
+      const normalized = normalizeCatalogIdentityValue(value);
+      if (normalized) values.push(String(value).trim());
+   };
+
+   addValue(product.barcode);
+   addValue((product as any).barcode_2);
+   addValue((product as any).barcode2);
+   addValue((product as any).barcode_3);
+   addValue((product as any).barcode3);
+
+   if (Array.isArray((product as any).barcodes)) {
+      for (const entry of (product as any).barcodes) {
+         if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+            addValue((entry as any).barcode);
+            addValue((entry as any).code);
+            addValue((entry as any).value);
+         } else {
+            addValue(entry);
+         }
+      }
+   }
+
+   const seen = new Set<string>();
+   return values.filter((value) => {
+      const key = normalizeCatalogIdentityValue(value);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+   });
+};
+
+const productSkuValues = (product?: Product | null): string[] => {
+   if (!product) return [];
+   return [
+      (product as any).sku,
+      (product as any).item_code,
+      (product as any).code,
+   ]
+      .map((value) => (value == null ? '' : String(value).trim()))
+      .filter(Boolean);
+};
+
+const productStockTotal = (product?: Product | null): number => {
+   if (!product?.stockBalances) return Number(product?.stock || 0);
+   return Object.values(product.stockBalances).reduce((total, quantity) => total + Number(quantity || 0), 0);
 };
 
 // --- SUB-COMPONENT: STOCK ROW ---
@@ -639,17 +791,77 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    const [editingTariff, setEditingTariff] = useState<Tariff | null | 'NEW'>(null);
    const [editingGroup, setEditingGroup] = useState<ProductGroup | null | 'NEW'>(null);
    const [editingSeason, setEditingSeason] = useState<Season | null | 'NEW'>(null);
+   const [erpCategoryOptions, setErpCategoryOptions] = useState<Array<{ id: string; name: string }>>([]);
 
    const categories = useMemo(
-      () => ['ALL', ...Array.from(new Set(products.map((p) => p?.category || 'Sin categoría').filter(Boolean)))],
-      [products]
+      () => {
+         const names = new Set<string>();
+         const addOption = (entry: unknown) => {
+            const option = normalizeCategoryOption(entry);
+            if (option?.name) names.add(option.name);
+         };
+
+         products.forEach((p) => addOption(p?.category || 'Sin categoría'));
+         (config.posCategories || []).forEach(addOption);
+         (config as any).categories?.forEach?.(addOption);
+         (config.productGroups || []).forEach(addOption);
+         (config as any).productCategories?.forEach?.(addOption);
+         erpCategoryOptions.forEach(addOption);
+
+         return ['ALL', ...Array.from(names).filter(Boolean).sort((left, right) => left.localeCompare(right))];
+      },
+      [config, erpCategoryOptions, products]
    );
+
+   useEffect(() => {
+      let cancelled = false;
+      const loadCategories = async () => {
+         try {
+            const [rawCategories, rawProductCategories, rawProductGroups, rawCollections] = await Promise.all([
+               db.get('categories' as any).catch(() => []),
+               db.get('productCategories' as any).catch(() => []),
+               db.get('productGroups' as any).catch(() => []),
+               db.get('collections' as any).catch(() => []),
+            ]);
+            if (cancelled) return;
+            const normalized = [
+               ...(Array.isArray(rawCategories) ? rawCategories : []),
+               ...(Array.isArray(rawProductCategories) ? rawProductCategories : []),
+               ...(Array.isArray(rawProductGroups) ? rawProductGroups : []),
+               ...(Array.isArray(rawCollections) ? rawCollections : []),
+            ]
+               .map(normalizeCategoryOption)
+               .filter(Boolean) as Array<{ id: string; name: string }>;
+            setErpCategoryOptions(normalized);
+         } catch (error) {
+            console.warn('[CatalogManager] No se pudieron cargar clasificaciones ERP:', error);
+         }
+      };
+      const handleCategoriesUpdated = () => {
+         void loadCategories();
+      };
+
+      void loadCategories();
+      window.addEventListener('categoriesUpdated', handleCategoriesUpdated);
+      return () => {
+         cancelled = true;
+         window.removeEventListener('categoriesUpdated', handleCategoriesUpdated);
+      };
+   }, []);
    const filteredProducts = useMemo(() => {
       return products.filter(p => {
-         const normalizedName = typeof p.name === 'string' ? p.name : '';
-         const normalizedBarcode = typeof p.barcode === 'string' ? p.barcode : '';
+         const normalizedSearch = searchTerm.trim().toLowerCase();
+         const searchableText = [
+            p.name,
+            p.category,
+            ...productBarcodeValues(p),
+            ...productSkuValues(p),
+         ]
+            .map((value) => String(value || '').trim().toLowerCase())
+            .filter(Boolean)
+            .join(' ');
          const normalizedCategory = typeof p.category === 'string' ? p.category : 'Sin categoría';
-         const matchesSearch = normalizedName.toLowerCase().includes(searchTerm.toLowerCase()) || normalizedBarcode.includes(searchTerm);
+         const matchesSearch = !normalizedSearch || searchableText.includes(normalizedSearch);
          const matchesCategory = categoryFilter === 'ALL' || normalizedCategory === categoryFilter;
          return matchesSearch && matchesCategory;
       });
@@ -790,6 +1002,13 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
          // 1. Persist ONLY the modified product
          await db.saveDocument('products', savedProduct);
+         const productPriceRows = buildProductPriceRowsForProduct(savedProduct, tariffs);
+         const existingProductPrices = await db.get('productPrices' as any).catch(() => []) as ProductPrice[];
+         const nextProductPrices = [
+            ...(Array.isArray(existingProductPrices) ? existingProductPrices : []).filter((priceRow) => priceRow.productId !== savedProduct.id),
+            ...productPriceRows,
+         ];
+         await db.save('productPrices' as any, nextProductPrices);
 
          // Update local state for UI
          const currentProducts = products;
@@ -853,9 +1072,34 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
          // Broadcast change to other terminals (if master)
          syncManager.broadcastChange('products', savedProduct, exists ? 'UPDATE' : 'CREATE').catch(console.error);
+         window.dispatchEvent(new CustomEvent('productPricesUpdated'));
       } catch (error) {
          console.error('❌ CatalogManager: Error saving product', error);
          alert('No se pudo guardar el producto. Revise la consola para más detalle.');
+      }
+   }
+
+   async function handleDeleteProduct(product: Product) {
+      if (!canManage || !product?.id) return;
+      const label = product.name || product.id;
+      if (!confirm(`¿Eliminar el artículo "${label}" del catálogo local?`)) return;
+
+      try {
+         await db.deleteDocument('products' as any, product.id);
+         const updatedProductsList = products.filter((entry) => entry.id !== product.id);
+         setCatalogProducts(updatedProductsList);
+         onUpdateProducts(updatedProductsList);
+         setSelectedIds((previous) => {
+            const next = new Set(previous);
+            next.delete(product.id);
+            return next;
+         });
+         syncManager.broadcastChange('products', product, 'DELETE').catch((error) =>
+            console.warn('[CatalogManager] broadcast delete products', error)
+         );
+      } catch (error) {
+         console.error('❌ CatalogManager: Error deleting product', error);
+         alert('No se pudo eliminar el producto. Revise la consola para más detalle.');
       }
    }
 
@@ -1184,74 +1428,116 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                      )}
 
                      {filteredProducts.length === 0 ? renderEmptyState('PRODUCTS') : (
-                     <div
-                        className="grid gap-10 pb-60"
-                        style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${isLargeCatalogLayout ? '300px' : '180px'}, 1fr))` }}
-                     >
-                        {filteredProducts.map(product => {
-                           const isSelected = selectedIds.has(product.id);
-                           return (
-                              <div
-                                 key={product.id}
-                                 onClick={() => {
-                                    if (selectedIds.size > 0) toggleSelection(product.id);
-                                    else if (isLargeCatalogLayout) setEditingProduct(product);
-                                 }}
-                                 className={`bg-white rounded-[3rem] p-6 shadow-sm border-2 transition-all group flex flex-col relative h-full ${isSelected ? 'border-blue-600 bg-blue-50/10 ring-[12px] ring-blue-50' : 'border-transparent hover:shadow-[0_40px_80px_rgba(0,0,0,0.06)] hover:-translate-y-2'}`}
-                              >
-                                 {/* Selection Marker */}
-                                 {(isSelected || selectedIds.size > 0) && (
-                                    <button
-                                       onClick={(e) => { e.stopPropagation(); toggleSelection(product.id); }}
-                                       className={`absolute top-6 left-6 z-10 p-3 rounded-2xl transition-all ${isSelected ? 'bg-blue-600 text-white scale-110 shadow-xl' : 'bg-white/95 text-gray-200 border-2 border-gray-50'}`}
-                                    >
-                                       {isSelected ? <CheckSquare size={22} strokeWidth={3} /> : <Square size={22} strokeWidth={2.5} />}
-                                    </button>
-                                 )}
+                        <div className="space-y-4 pb-60">
+                           {filteredProducts.map(product => {
+                              const isSelected = selectedIds.has(product.id);
+                              const imageSrc = resolveProductImageSrc(product);
+                              const categoryLabel = typeof product.category === 'string' && product.category.trim() ? product.category : 'Sin categoría';
+                              const barcodes = productBarcodeValues(product);
+                              const skuValues = productSkuValues(product);
+                              const totalStock = productStockTotal(product);
+                              const activeTariffCount = Array.isArray(product.tariffs) ? product.tariffs.length : 0;
+                              const isSellable = product.is_sellable !== false;
+                              const primaryCode = skuValues[0] || barcodes[0] || product.id;
 
-                                 <div className="aspect-square bg-[#f8f9fa] rounded-[2.5rem] mb-8 relative overflow-hidden flex items-center justify-center p-10 group-hover:bg-[#f1f3f5] transition-colors">
-                                    {resolveProductImageSrc(product) ? (
-                                       <img src={resolveProductImageSrc(product)} alt={product.name} className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-110" />
-                                    ) : (
-                                       <ImageIcon className="text-gray-200" size={80} strokeWidth={1.5} />
-                                    )}
+                              return (
+                                 <div
+                                    key={product.id}
+                                    onClick={() => {
+                                       if (selectedIds.size > 0) toggleSelection(product.id);
+                                       else if (isLargeCatalogLayout) setEditingProduct(product);
+                                    }}
+                                    className={`group rounded-[2rem] border bg-white p-4 shadow-sm transition-all ${
+                                       isSelected
+                                          ? 'border-blue-500 ring-4 ring-blue-50'
+                                          : 'border-gray-100 hover:border-blue-100 hover:shadow-[0_18px_45px_rgba(15,23,42,0.08)]'
+                                    }`}
+                                 >
+                                    <div className="flex flex-col gap-4 md:flex-row md:items-center">
+                                       <div className="flex items-center gap-4 min-w-0 flex-1">
+                                          {canManage && (
+                                             <button
+                                                onClick={(e) => { e.stopPropagation(); toggleSelection(product.id); }}
+                                                className={`h-11 w-11 shrink-0 rounded-2xl border flex items-center justify-center transition-all ${
+                                                   isSelected
+                                                      ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-100'
+                                                      : 'bg-white border-gray-200 text-gray-300 hover:text-blue-600 hover:border-blue-200'
+                                                }`}
+                                                aria-label={isSelected ? 'Quitar selección' : 'Seleccionar artículo'}
+                                             >
+                                                {isSelected ? <CheckSquare size={20} strokeWidth={3} /> : <Square size={20} strokeWidth={2.5} />}
+                                             </button>
+                                          )}
 
-                                    {/* Action Overlays for Tablet */}
-                                    {isLargeCatalogLayout && !isSelected && selectedIds.size === 0 && (
-                                       <div className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 transition-all translate-y-2 group-hover:translate-y-0">
-                                          <button
-                                             onClick={(e) => { e.stopPropagation(); setEditingProduct(product); }}
-                                             className="p-4 bg-white text-gray-900 rounded-2xl shadow-2xl hover:text-blue-600 hover:scale-110 active:scale-95 flex items-center justify-center border border-gray-50"
-                                          >
-                                             <Edit2 size={24} strokeWidth={2.5} />
-                                          </button>
+                                          <div className="h-24 w-24 shrink-0 overflow-hidden rounded-[1.4rem] bg-gray-50 border border-gray-100 flex items-center justify-center p-3">
+                                             {imageSrc ? (
+                                                <img src={imageSrc} alt={product.name} className="h-full w-full object-contain" />
+                                             ) : (
+                                                <ImageIcon className="text-gray-200" size={38} strokeWidth={1.5} />
+                                             )}
+                                          </div>
+
+                                          <div className="min-w-0 flex-1">
+                                             <div className="mb-2 flex flex-wrap items-center gap-2">
+                                                <span className="rounded-full bg-gray-100 px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-gray-500">
+                                                   {categoryLabel}
+                                                </span>
+                                                <span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] ${
+                                                   isSellable ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
+                                                }`}>
+                                                   {isSellable ? 'Activo venta' : 'No vendible'}
+                                                </span>
+                                                {product.type && (
+                                                   <span className="rounded-full bg-blue-50 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-blue-700">
+                                                      {product.type}
+                                                   </span>
+                                                )}
+                                             </div>
+
+                                             <h3 className="truncate text-xl md:text-2xl font-black leading-tight text-gray-900 group-hover:text-blue-600">
+                                                {product.name}
+                                             </h3>
+                                             <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm font-bold text-gray-400">
+                                                <span className="font-mono">SKU: {primaryCode || '---'}</span>
+                                                <span>Barcodes: {barcodes.length > 0 ? barcodes.slice(0, 3).join(' / ') : '---'}</span>
+                                                <span>Tarifas: {activeTariffCount}</span>
+                                                <span>Stock: {totalStock.toLocaleString()}</span>
+                                             </div>
+                                          </div>
                                        </div>
-                                    )}
-                                 </div>
 
-                                 <div className="flex-1 flex flex-col px-2">
-                                    <div className="flex items-center justify-between mb-4">
-                                       <span className="text-[11px] font-black uppercase tracking-[0.15em] text-gray-400 bg-gray-100 px-4 py-1.5 rounded-full leading-none">
-                                          {typeof product.category === 'string' && product.category.trim() ? product.category : 'Sin categoría'}
-                                       </span>
-                                       <div className={`w-4 h-4 rounded-full shadow-sm ${(product.stockBalances?.[runtimeWarehouses[0]?.id || ''] || 0) > 0 ? 'bg-emerald-500 shadow-emerald-200' : 'bg-red-500 shadow-red-200'}`}></div>
+                                       <div className="flex shrink-0 items-center justify-between gap-4 md:min-w-[330px] md:justify-end">
+                                          <div className="text-left md:text-right">
+                                             <p className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-300">Precio base</p>
+                                             <p className="text-2xl font-black text-blue-600">
+                                                {config.currencySymbol}{(Number(product.price) || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                             </p>
+                                          </div>
+
+                                          {canManage && (
+                                             <div className="flex items-center gap-2">
+                                                <button
+                                                   onClick={(e) => { e.stopPropagation(); setEditingProduct(product); }}
+                                                   className="h-12 w-12 rounded-2xl border border-blue-100 bg-blue-50 text-blue-700 shadow-sm transition-all hover:bg-blue-600 hover:text-white active:scale-95 flex items-center justify-center"
+                                                   aria-label={`Editar ${product.name}`}
+                                                >
+                                                   <Edit2 size={20} strokeWidth={2.6} />
+                                                </button>
+                                                <button
+                                                   onClick={(e) => { e.stopPropagation(); handleDeleteProduct(product); }}
+                                                   className="h-12 w-12 rounded-2xl border border-red-100 bg-red-50 text-red-600 shadow-sm transition-all hover:bg-red-600 hover:text-white active:scale-95 flex items-center justify-center"
+                                                   aria-label={`Eliminar ${product.name}`}
+                                                >
+                                                   <Trash2 size={20} strokeWidth={2.6} />
+                                                </button>
+                                             </div>
+                                          )}
+                                       </div>
                                     </div>
-
-                                    <h3 className="font-black text-gray-900 leading-[1.25] mb-2 text-2xl line-clamp-2 min-h-[4rem] group-hover:text-blue-600 transition-colors">
-                                       {product.name}
-                                    </h3>
-                                    <p className="text-sm text-gray-300 font-bold mb-6 font-mono tracking-wider">SKU: {product.barcode || '---'}</p>
-
-                                    <div className="mt-auto flex justify-between items-center py-4 border-t border-gray-50">
-                                       <span className="text-3xl font-black text-blue-600 tracking-tight">
-                                       {config.currencySymbol}{ (Number(product.price) || 0).toLocaleString(undefined, { minimumFractionDigits: 2 }) }
-                                       </span>
-                                    </div>
                                  </div>
-                              </div>
-                           )
-                        })}
-                     </div>
+                              );
+                           })}
+                        </div>
                      )}
                   </div>
                )}

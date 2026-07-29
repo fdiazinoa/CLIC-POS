@@ -4,6 +4,82 @@ Registro de builds **release firmados** validados. El código fuente de referenc
 
 ---
 
+## 1.0.763 (versionCode 763) — 2026-06-06
+
+| Campo | Valor |
+|--------|--------|
+| **APK** | `Clic-Pos-1.0.763-release.apk` |
+| **Metadata** | `output-metadata-1.0.763.json` |
+| **versionCode** | 763 |
+| **versionName** | 1.0.763 |
+| **Rama de build** | `feature/pos-consignments-on-demand` |
+| **Commit build** | `db5fdafc0fd13f22001faddd99241f079cbba5a7` |
+| **Worktree usada** | `/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite` |
+| **SHA-256** | `fcd1d6132fc180c2fe52ca43aacb1b6df74316884016dc6248801144e6bfa24e` |
+| **Firma release** | Válida (`CN=CLIC POS, OU=Mobile...`) |
+| **Nota funcional** | `fix(setup): route terminal takeover through local setup proxy` |
+
+### Verificación ejecutada
+
+- `npx tsc -b` — OK
+- `npm run build` — OK
+- `npx cap sync android` — OK
+- `./gradlew clean assembleRelease` — OK
+- `apksigner verify --print-certs` — OK
+- Build timestamp: `2026-06-06 08:59:15 AST`
+
+---
+
+## 1.0.762 (versionCode 762) — 2026-06-05
+
+| Campo | Valor |
+|--------|--------|
+| **APK** | `Clic-Pos-1.0.762-release.apk` |
+| **Metadata** | `output-metadata-1.0.762.json` |
+| **versionCode** | 762 |
+| **versionName** | 1.0.762 |
+| **Rama de build** | `feature/pos-consignments-on-demand` |
+| **Commit build** | `305b049623f521d7f4ca27526c296adbe62f8948` |
+| **Worktree usada** | `/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite` |
+| **SHA-256** | `efff85a207d28077d95e7e216e7ad5b76b81d7ce60540e7dd8a14a9c4b885331` |
+| **Firma release** | Válida (`CN=CLIC POS, OU=Mobile...`) |
+| **Nota funcional** | `fix(sync): suppress erp metadata timeouts` |
+
+### Verificación ejecutada
+
+- `npx tsc -b` — OK
+- `npm run build` — OK
+- `npx cap sync android` — OK
+- `./gradlew clean assembleRelease` — OK
+- Build timestamp: `2026-06-05 19:45:55 AST`
+
+---
+
+## 1.0.755 (versionCode 755) — 2026-06-04
+
+| Campo | Valor |
+|--------|--------|
+| **APK** | `Clic-Pos-1.0.755-release.apk` |
+| **Metadata** | `output-metadata-1.0.755.json` |
+| **versionCode** | 755 |
+| **versionName** | 1.0.755 |
+| **Rama de build** | `feature/pos-consignments-on-demand` |
+| **Commit build** | `6ea2492ebff950fbf43304da27b85a0637dd61dd` |
+| **Worktree usada** | `/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite` |
+| **SHA-256** | `5fd874599a26535c5e9773b0efb31cd7e5d4e66c46579aa791a75efd822df167` |
+| **Firma release** | Válida (`CN=CLIC POS, OU=Mobile...`) |
+| **Nota funcional** | `fix(sync): defer POS cloud staging auth failures` |
+
+### Verificación ejecutada
+
+- `npx tsc -b` — OK
+- `npm run build` — OK
+- `npx cap sync android` — OK
+- `./gradlew clean assembleRelease` — OK
+- Build timestamp: `2026-06-04 18:08:19 AST`
+
+---
+
 ## 1.0.299 (versionCode 299) — 2026
 
 | Campo | Valor |

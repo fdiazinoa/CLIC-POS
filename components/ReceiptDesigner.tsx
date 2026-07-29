@@ -56,6 +56,7 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
       showForeignCurrencyTotals: config.receiptConfig?.showForeignCurrencyTotals ?? false,
       showSerialNumbers: config.receiptConfig?.showSerialNumbers ?? false,
       showLotNumbers: config.receiptConfig?.showLotNumbers ?? false,
+      showOrderNumber: config.receiptConfig?.showOrderNumber ?? false,
    });
 
    const [isSaving, setIsSaving] = useState(false);
@@ -193,6 +194,7 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                   <ToggleSwitch label="Ahorro Total" checked={localReceipt.showSavings || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showSavings: v }))} />
                   <ToggleSwitch label="Otras Monedas" checked={localReceipt.showForeignCurrencyTotals || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showForeignCurrencyTotals: v }))} />
                   <ToggleSwitch label="Código QR Factura" checked={localReceipt.showQr || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showQr: v }))} />
+                  <ToggleSwitch label="Imprimir No. Orden" checked={localReceipt.showOrderNumber || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showOrderNumber: v }))} />
                   <ToggleSwitch label="Imprimir No. Serie" checked={localReceipt.showSerialNumbers || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showSerialNumbers: v }))} />
                   <ToggleSwitch label="Imprimir Lote" checked={localReceipt.showLotNumbers || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showLotNumbers: v }))} />
                </div>
@@ -239,6 +241,9 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                         <p className="text-[12px] font-black uppercase">Factura de Crédito Fiscal</p>
                         <p className="text-[11px] font-mono font-bold">NCF: B0100000001</p>
                         <p className="text-[11px] font-mono font-bold">Ticket No.: 000452</p>
+                        {localReceipt.showOrderNumber && !localReceipt.showQr && (
+                           <p className="text-[11px] font-mono font-bold">No. Orden: 001</p>
+                        )}
                      </div>
                   </div>
 
@@ -336,6 +341,9 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                      {localReceipt.showQr && (
                         <div className="flex flex-col items-center gap-1">
                            <QrCode size={48} className="text-slate-800" />
+                           {localReceipt.showOrderNumber && (
+                              <span className="text-center text-lg font-black leading-none">NO. ORDEN<br />001</span>
+                           )}
                            <span className="text-[8px] font-bold uppercase">e-Factura Validada</span>
                         </div>
                      )}

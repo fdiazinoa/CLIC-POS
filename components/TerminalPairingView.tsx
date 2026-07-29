@@ -99,6 +99,11 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
             return 'Tiempo de espera agotado. Verifique la IP.';
         }
 
+        const detail = String(err?.message || err || '').toLowerCase();
+        if (detail.includes('ssl') || detail.includes('certificate') || detail.includes('certificado')) {
+            return `La red intentó usar SSL para ${resolvedMasterIp}. La conexión local debe usar http://${resolvedMasterIp}:3001.`;
+        }
+
         return `No se pudo conectar al Master (${resolvedMasterIp}).`;
     };
 

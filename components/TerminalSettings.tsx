@@ -49,6 +49,93 @@ const resolveTerminalDisplayName = (terminal: ConfiguredTerminal) => (
    ).trim()
 );
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+const looksLikeUuid = (value?: string | null): boolean => UUID_PATTERN.test(String(value || '').trim());
+const resolveTerminalErpIdentity = (terminal?: ConfiguredTerminal | null): string => (
+   String(
+      terminal?.config?.erpTerminalId
+      || terminal?.config?.erpBinding?.terminalId
+      || (looksLikeUuid(terminal?.id) ? terminal?.id : '')
+      || ''
+   ).trim()
+);
+
+const normalizeTerminalAlias = (value?: string | null): string =>
+   String(value || '').trim().toLowerCase();
+
+const resolveTerminalDedupeKey = (terminal: ConfiguredTerminal): string => {
+   const erpIdentity = resolveTerminalErpIdentity(terminal);
+   if (looksLikeUuid(erpIdentity)) return `erp:${erpIdentity.toLowerCase()}`;
+   const displayName = normalizeTerminalAlias(resolveTerminalDisplayName(terminal));
+   if (displayName) return `alias:${displayName}`;
+   return `id:${normalizeTerminalAlias(terminal.id)}`;
+};
+
+const terminalCompletenessScore = (terminal: ConfiguredTerminal): number => {
+   let score = 0;
+   if (looksLikeUuid(resolveTerminalErpIdentity(terminal))) score += 1000;
+   if (terminal.config?.erpSnapshot) score += 300;
+   if (terminal.config?.erpBinding) score += 250;
+   if (terminal.config?.erpTerminalId) score += 200;
+   if (Array.isArray(terminal.config?.documentSeries) && terminal.config.documentSeries.length > 0) score += 60;
+   if (terminal.config?.documentAssignments && Object.keys(terminal.config.documentAssignments).length > 0) score += 45;
+   if (terminal.config?.inventoryScope) score += 40;
+   if (terminal.config?.pricing) score += 35;
+   if (terminal.config?.fiscal) score += 30;
+   if (terminal.config?.currentDeviceId) score += 15;
+   return score;
+};
+
+const mergeTerminalRecords = (base: ConfiguredTerminal, incoming: ConfiguredTerminal): ConfiguredTerminal => {
+   const winner = terminalCompletenessScore(incoming) > terminalCompletenessScore(base) ? incoming : base;
+   const fallback = winner === incoming ? base : incoming;
+   return {
+      ...fallback,
+      ...winner,
+      id: winner.id || fallback.id,
+      config: {
+         ...DEFAULT_TERMINAL_CONFIG,
+         ...(fallback.config || {}),
+         ...(winner.config || {}),
+         erpTerminalId: resolveTerminalErpIdentity(winner) || resolveTerminalErpIdentity(fallback) || winner.config?.erpTerminalId || fallback.config?.erpTerminalId,
+         terminalName: winner.config?.terminalName || fallback.config?.terminalName || resolveTerminalDisplayName(winner) || resolveTerminalDisplayName(fallback),
+         currentDeviceId: winner.config?.currentDeviceId || fallback.config?.currentDeviceId,
+         deviceBindingToken: winner.config?.deviceBindingToken || fallback.config?.deviceBindingToken || DEFAULT_TERMINAL_CONFIG.deviceBindingToken,
+         erpBinding: winner.config?.erpBinding || fallback.config?.erpBinding,
+         erpSnapshot: winner.config?.erpSnapshot || fallback.config?.erpSnapshot,
+      },
+   };
+};
+
+const dedupeConfiguredTerminals = (items: ConfiguredTerminal[]): ConfiguredTerminal[] => {
+   const byKey = new Map<string, ConfiguredTerminal>();
+   const aliasToErpKey = new Map<string, string>();
+
+   for (const terminal of items || []) {
+      const erpIdentity = resolveTerminalErpIdentity(terminal);
+      const alias = normalizeTerminalAlias(resolveTerminalDisplayName(terminal));
+      const key = looksLikeUuid(erpIdentity)
+         ? `erp:${erpIdentity.toLowerCase()}`
+         : (aliasToErpKey.get(alias) || resolveTerminalDedupeKey(terminal));
+
+      if (looksLikeUuid(erpIdentity) && alias) {
+         aliasToErpKey.set(alias, key);
+         const aliasKey = `alias:${alias}`;
+         const aliasExisting = byKey.get(aliasKey);
+         if (aliasExisting) {
+            byKey.delete(aliasKey);
+            byKey.set(key, mergeTerminalRecords(aliasExisting, terminal));
+            continue;
+         }
+      }
+
+      const existing = byKey.get(key);
+      byKey.set(key, existing ? mergeTerminalRecords(existing, terminal) : terminal);
+   }
+
+   return Array.from(byKey.values());
+};
+
 const PRINTER_ROLES = [
    { id: 'TICKET', label: 'Ticket de Venta', icon: Receipt },
    { id: 'LABEL', label: 'Etiquetas', icon: Tag },
@@ -77,6 +164,14 @@ const DOCUMENT_ROLES = [
    { id: 'PAYMENT_OUT', label: 'Pago Realizado', description: 'Pago a proveedor', icon: CreditCard, category: 'Cuentas' }
 ];
 
+const DEVICE_ROLE_OPTIONS = [
+   { role: DeviceRole.STANDARD_POS, label: 'POS estándar', description: 'Caja de venta completa.', icon: Monitor },
+   { role: DeviceRole.KITCHEN_DISPLAY, label: 'Pantalla cocina', description: 'KDS para órdenes y preparación.', icon: Tv },
+   { role: DeviceRole.SELF_CHECKOUT, label: 'SelfCheckout', description: 'Kiosco de autoservicio.', icon: ShoppingBag },
+   { role: DeviceRole.PRICE_CHECKER, label: 'Verificador precio', description: 'Consulta de precios por código.', icon: ScanBarcode },
+   { role: DeviceRole.HANDHELD_INVENTORY, label: 'Inventario móvil', description: 'Conteo, recepción y etiquetas.', icon: Smartphone },
+];
+
 type TerminalTab = 'IDENTITY' | 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'DOCUMENTS' | 'OFFLINE' | 'INVENTORY' | 'LAN_BINDING' | 'CATALOG' | 'DEVICE_ROLE';
 
 const NCF_LABELS: Record<NCFType, string> = {
@@ -89,16 +184,25 @@ const NCF_LABELS: Record<NCFType, string> = {
 
 const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [], products = [], isAdminMode = false, currentDeviceId }) => {
    const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
-   const [terminals, setTerminals] = useState(config.terminals || []);
+   const [terminals, setTerminals] = useState(() => dedupeConfiguredTerminals(config.terminals || []));
 
    const [selectedTerminalId, setSelectedTerminalId] = useState<string>(() => {
       if (currentDeviceId) {
          const activeTerminalId = localStorage.getItem('active_terminal_id') || localStorage.getItem('CLIC_POS_TERMINAL_ID') || '';
          const currentCandidates = terminals.filter(t => t.config.currentDeviceId === currentDeviceId);
-         const current =
-            currentCandidates.find((terminal) => terminal.id === activeTerminalId || terminal.config?.erpTerminalId === activeTerminalId)
-            || currentCandidates.find((terminal) => resolveTerminalDisplayName(terminal) !== terminal.id)
-            || currentCandidates[0];
+         const current = [...currentCandidates].sort((left, right) => {
+            const leftErp = resolveTerminalErpIdentity(left);
+            const rightErp = resolveTerminalErpIdentity(right);
+            const leftScore =
+               (looksLikeUuid(leftErp) ? 100 : 0) +
+               (activeTerminalId && (left.id === activeTerminalId || leftErp === activeTerminalId) ? (looksLikeUuid(activeTerminalId) ? 80 : 15) : 0) +
+               (resolveTerminalDisplayName(left) !== left.id ? 10 : 0);
+            const rightScore =
+               (looksLikeUuid(rightErp) ? 100 : 0) +
+               (activeTerminalId && (right.id === activeTerminalId || rightErp === activeTerminalId) ? (looksLikeUuid(activeTerminalId) ? 80 : 15) : 0) +
+               (resolveTerminalDisplayName(right) !== right.id ? 10 : 0);
+            return rightScore - leftScore;
+         })[0];
          if (current) return current.id;
       }
       return terminals[0]?.id || '';
@@ -113,12 +217,17 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
 
    useEffect(() => {
       const loadSequences = async () => {
-         const seqs = (await db.get('internalSequences') || []) as DocumentSeries[];
+         const [seqsRaw, documentSeriesRaw] = await Promise.all([
+            db.get('internalSequences'),
+            db.get('documentSeries' as any)
+         ]);
+         const seqs = (Array.isArray(seqsRaw) ? seqsRaw : []) as DocumentSeries[];
+         const erpSeries = (Array.isArray(documentSeriesRaw) ? documentSeriesRaw : []) as DocumentSeries[];
          const configSeries = (config.terminals || [])
             .flatMap(t => (Array.isArray(t.config?.documentSeries) ? t.config.documentSeries : []))
             .filter((s: any) => !!s?.id && !!s?.documentType) as DocumentSeries[];
 
-         const merged = mergeDocumentSeriesCollection([...seqs, ...configSeries]);
+         const merged = mergeDocumentSeriesCollection([...seqs, ...erpSeries, ...configSeries]);
          if (merged.length !== seqs.length) {
             await db.save('internalSequences', merged);
          }
@@ -130,7 +239,11 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
       loadSequences();
       const handleSeriesUpdate = () => loadSequences();
       window.addEventListener('seriesUpdated', handleSeriesUpdate);
-      return () => window.removeEventListener('seriesUpdated', handleSeriesUpdate);
+      window.addEventListener('documentSeriesUpdated', handleSeriesUpdate);
+      return () => {
+         window.removeEventListener('seriesUpdated', handleSeriesUpdate);
+         window.removeEventListener('documentSeriesUpdated', handleSeriesUpdate);
+      };
    }, [config.terminals]);
 
    const activeTerminal = useMemo(() =>
@@ -174,6 +287,25 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
       }));
    };
 
+   const handleUpdateDeviceRole = (role: DeviceRole) => {
+      if (!activeTerminal || isReadOnly) return;
+      const currentRoleConfig = activeTerminal.config.deviceRole;
+      const defaultRoleConfig = getDefaultRoleConfig(role);
+      const nextRoleConfig = {
+         ...defaultRoleConfig,
+         apiToken: currentRoleConfig?.apiToken || defaultRoleConfig.apiToken,
+         uiSettings: {
+            ...defaultRoleConfig.uiSettings,
+            escapeHatch: {
+               ...defaultRoleConfig.uiSettings.escapeHatch,
+               adminPin: currentRoleConfig?.uiSettings?.escapeHatch?.adminPin || defaultRoleConfig.uiSettings.escapeHatch?.adminPin,
+            }
+         }
+      };
+
+      handleUpdateActiveConfig('', 'deviceRole', nextRoleConfig);
+   };
+
    const handleToggleMasterNode = (enabled: boolean) => {
       if (!activeTerminal) return;
       if (enabled) {
@@ -208,8 +340,15 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
       setIsSyncing(true);
       try {
          await syncManager.pullCatalog('internalSequences');
-         const seqs = (await db.get('internalSequences') || []) as DocumentSeries[];
-         setMasterSequences(seqs);
+         await syncManager.pullCatalog('documentSeries');
+         const [seqsRaw, documentSeriesRaw] = await Promise.all([
+            db.get('internalSequences'),
+            db.get('documentSeries' as any)
+         ]);
+         const seqs = (Array.isArray(seqsRaw) ? seqsRaw : []) as DocumentSeries[];
+         const erpSeries = (Array.isArray(documentSeriesRaw) ? documentSeriesRaw : []) as DocumentSeries[];
+         const merged = mergeDocumentSeriesCollection([...seqs, ...erpSeries]);
+         setMasterSequences(merged);
          setLastSyncTime(new Date());
       } catch (error) {
          console.error('Error syncing series:', error);
@@ -245,7 +384,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
    }, [activeTerminal]);
 
    const handleSave = () => {
-      const cleanedTerminals = terminals.map((t) => {
+      const cleanedTerminals = dedupeConfiguredTerminals(terminals).map((t) => {
          if (isPartialXReportAllowed(t.config)) return t;
          const da = { ...(t.config.documentAssignments || {}) };
          delete da.X_REPORT;
@@ -355,8 +494,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               <h3 className="text-2xl font-black text-slate-800 flex items-center gap-3"><UserCircle className="text-blue-600" /> Identidad</h3>
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                  <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase">ID de Terminal</label>
-                                    <input type="text" value={activeTerminal.id} readOnly className="w-full p-4 bg-slate-50 rounded-2xl font-bold" />
+                                    <label className="text-[10px] font-black text-slate-400 uppercase">Identificador operativo</label>
+                                    <input type="text" value={resolveTerminalDisplayName(activeTerminal)} readOnly className="w-full p-4 bg-slate-50 rounded-2xl font-bold" />
                                  </div>
                                  <div className="space-y-2">
                                     <label className="text-[10px] font-black text-slate-400 uppercase">Número Estación</label>
@@ -376,7 +515,81 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               <h3 className="text-2xl font-black text-slate-800 flex items-center gap-3"><Zap className="text-yellow-500" /> Operativa</h3>
                               <Toggle label="Terminal Principal" description="Actúa como servidor local." checked={activeTerminal.config.isPrimaryNode} onChange={handleToggleMasterNode} icon={Crown} disabled={activeTerminal.config.governedByMaster} />
                               {!activeTerminal.config.isPrimaryNode && <Toggle label="Gobernado por Maestra" checked={activeTerminal.config.governedByMaster} onChange={(v: boolean) => handleUpdateActiveConfig('', 'governedByMaster', v)} icon={ShieldCheck} />}
+                              <div className="p-6 bg-slate-50 rounded-[2rem] border border-slate-100 space-y-4">
+                                 <div className="flex items-start gap-4">
+                                    <div className="p-3 rounded-2xl bg-white text-blue-600 shadow-sm">
+                                       <Monitor size={20} />
+                                    </div>
+                                    <div>
+                                       <h4 className="text-sm font-black text-slate-800 uppercase tracking-[0.18em]">Tipo de terminal</h4>
+                                       <p className="text-xs font-medium text-slate-500 mt-1">
+                                          Define qué experiencia abre esta estación local al iniciar el POS.
+                                       </p>
+                                    </div>
+                                 </div>
+                                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                                    {DEVICE_ROLE_OPTIONS.map(option => {
+                                       const selected = (activeTerminal.config.deviceRole?.role || DeviceRole.STANDARD_POS) === option.role;
+                                       return (
+                                          <button
+                                             type="button"
+                                             key={option.role}
+                                             onClick={() => handleUpdateDeviceRole(option.role)}
+                                             disabled={isReadOnly}
+                                             className={`p-4 rounded-2xl border-2 text-left transition-all ${selected ? 'bg-blue-50 border-blue-500 text-blue-900 shadow-sm' : 'bg-white border-slate-100 text-slate-600 hover:border-slate-300'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                          >
+                                             <div className="flex items-center gap-3">
+                                                <div className={`p-2 rounded-xl ${selected ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                                   <option.icon size={18} />
+                                                </div>
+                                                <div>
+                                                   <p className="text-sm font-black">{option.label}</p>
+                                                   <p className="text-[11px] font-bold opacity-70">{option.description}</p>
+                                                </div>
+                                             </div>
+                                          </button>
+                                       );
+                                    })}
+                                 </div>
+                              </div>
                               <SettingsOperational config={activeTerminal.config} onUpdate={handleUpdateActiveConfig} isReadOnly={isReadOnly} />
+                              <div className="p-6 bg-slate-50 rounded-[2rem] border border-slate-100 space-y-4">
+                                 <div className="flex items-start gap-4">
+                                    <div className="p-3 rounded-2xl bg-white text-slate-700 shadow-sm">
+                                       <Truck size={20} />
+                                    </div>
+                                    <div>
+                                       <h4 className="text-sm font-black text-slate-800 uppercase tracking-[0.18em]">Delivery y Marketplaces</h4>
+                                       <p className="text-xs font-medium text-slate-500 mt-1">
+                                          Configura esta caja para recibir alertas automáticas de Uber Eats y abrir el modal de pedidos solo si está dedicada a delivery.
+                                       </p>
+                                    </div>
+                                 </div>
+                                 <Toggle
+                                    label="Caja asignada a Delivery"
+                                    description="Marca esta terminal como la caja operativa para pedidos de delivery y marketplaces."
+                                    checked={Boolean(activeTerminal.config.operational?.deliveryAlerts?.isDeliveryTerminal)}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('operational.deliveryAlerts', 'isDeliveryTerminal', v)}
+                                    icon={Package}
+                                    disabled={isReadOnly}
+                                 />
+                                 <Toggle
+                                    label="Toast al llegar pedido Uber Eats"
+                                    description="Muestra una alerta visual corta cuando entra una orden nueva marcada como PUSHED_TO_POS."
+                                    checked={activeTerminal.config.operational?.deliveryAlerts?.showUberEatsToast !== false}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('operational.deliveryAlerts', 'showUberEatsToast', v)}
+                                    icon={ShoppingBag}
+                                    disabled={isReadOnly}
+                                 />
+                                 <Toggle
+                                    label="Abrir modal automático de pedidos"
+                                    description="Al detectar una orden nueva, abre automáticamente la ventana de Reservas y Pedidos. Recomendado solo para la caja de delivery."
+                                    checked={Boolean(activeTerminal.config.operational?.deliveryAlerts?.autoOpenUberEatsModal)}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('operational.deliveryAlerts', 'autoOpenUberEatsModal', v)}
+                                    icon={Monitor}
+                                    disabled={isReadOnly || !activeTerminal.config.operational?.deliveryAlerts?.isDeliveryTerminal}
+                                 />
+                              </div>
                            </div>
                         )}
 
@@ -483,8 +696,29 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     icon={Coins}
                                     disabled={isReadOnly}
                                  />
+                                 <Toggle
+                                    label="Solicitar fianza en Z"
+                                    description="Pide confirmar el fondo de caja que debe quedar reservado al realizar el Cierre Z."
+                                    checked={Boolean(activeTerminal.config.workflow.session.requireCashFundOnZ)}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'requireCashFundOnZ', v)}
+                                    icon={Banknote}
+                                    disabled={isReadOnly}
+                                 />
                               </div>
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                 <label className="p-5 bg-slate-50 rounded-3xl border border-slate-100 space-y-3">
+                                    <span className="block text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Fondo fijo de caja</span>
+                                    <input
+                                       type="number"
+                                       min="0"
+                                       step="0.01"
+                                       value={activeTerminal.config.workflow.session.fixedCashFundAmount ?? 0}
+                                       onChange={(e) => handleUpdateActiveConfig('workflow.session', 'fixedCashFundAmount', Math.max(0, Number(e.target.value) || 0))}
+                                       disabled={isReadOnly || !activeTerminal.config.workflow.session.requireCashFundOnZ}
+                                       className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-lg font-black text-slate-800 outline-none focus:border-blue-500 disabled:opacity-50"
+                                    />
+                                    <p className="text-xs font-medium text-slate-500">Monto fijo que debe quedar como fondo/fianza luego de cada cierre Z.</p>
+                                 </label>
                                  <label className="p-5 bg-slate-50 rounded-3xl border border-slate-100 space-y-3">
                                     <span className="block text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Hora inicio jornada (0-23)</span>
                                     <input
@@ -509,6 +743,18 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                        className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-lg font-black text-slate-800 outline-none focus:border-blue-500 disabled:opacity-50"
                                     />
                                     <p className="text-xs font-medium text-slate-500">0 desactiva el bloqueo automático.</p>
+                                 </label>
+                                 <label className="p-5 bg-slate-50 rounded-3xl border border-slate-100 space-y-3">
+                                    <span className="block text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Sincronización reducida (minutos)</span>
+                                    <input
+                                       type="number"
+                                       min="0"
+                                       value={activeTerminal.config.security.reduceSyncAfterMinutes ?? 0}
+                                       onChange={(e) => handleUpdateActiveConfig('security', 'reduceSyncAfterMinutes', clampInteger(e.target.value, 0))}
+                                       disabled={isReadOnly}
+                                       className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-lg font-black text-slate-800 outline-none focus:border-blue-500 disabled:opacity-50"
+                                    />
+                                    <p className="text-xs font-medium text-slate-500">Pausa catálogo e imágenes por inactividad. Ventas, ACK, configuración crítica y KDS continúan activos. 0 desactiva esta función.</p>
                                  </label>
                                  <label className="md:col-span-2 p-5 bg-slate-50 rounded-3xl border border-slate-100 space-y-3">
                                     <span className="block text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Correos para reporte Z</span>

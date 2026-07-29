@@ -8,7 +8,7 @@ import {
    Globe, Calendar, Map, Navigation, CheckSquare, Clock, Landmark, ShieldCheck, Zap, Gift,
    Loader2, AlertOctagon, Printer, DollarSign, Banknote, QrCode, ArrowRightLeft
 } from 'lucide-react';
-import { Customer, BusinessConfig, CustomerTransaction, CustomerAddress, NCFType, Wallet, LoyaltyCard, Transaction, User, Collection, Activity, WalletTransaction, ServiceType } from '../types';
+import { Customer, BusinessConfig, CustomerTransaction, CustomerAddress, FiscalDocumentCode, Wallet, LoyaltyCard, Transaction, User, Collection, Activity, WalletTransaction, ServiceType } from '../types';
 import { dgiiService, DGIIResponse } from '../services/dgii/DGIIValidationService';
 import { printTicket } from '../utils/printer';
 import AccountReceivableModal from './AccountReceivableModal';
@@ -20,8 +20,11 @@ import FiscalSyncBadge from './FiscalSyncBadge';
 import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../utils/fiscalBreakdown';
 import {
    canRetryFiscalTransaction,
+   getFiscalComplianceConfig,
    getFiscalRetryActionLabel,
-   isRefundLikeTransaction
+   isRefundLikeTransaction,
+   mapElectronicFiscalCodeToLegacy,
+   mapLegacyFiscalCodeToElectronic
 } from '../utils/fiscal/fiscalHelpers';
 import { resolveCustomerImageSrc } from '../utils/entityImage';
 import {
@@ -108,6 +111,48 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    const [fiscalRetryFeedback, setFiscalRetryFeedback] = useState<string | null>(null);
    const [customerTransactions, setCustomerTransactions] = useState<Transaction[]>([]);
    const [walletMovements, setWalletMovements] = useState<WalletTransaction[]>([]);
+   const fiscalCompliance = useMemo(() => getFiscalComplianceConfig(config), [config]);
+   const isFiscalModeDisabled = fiscalCompliance.mode === 'NONE';
+   const isElectronicFiscalMode = fiscalCompliance.mode === 'ECF';
+
+   const normalizeCustomerNcfType = useCallback((value?: FiscalDocumentCode, requiresFiscalInvoice = false): FiscalDocumentCode => {
+      const fallbackLegacy = requiresFiscalInvoice ? 'B01' : 'B02';
+      const candidate = value || fallbackLegacy;
+      const legacyCode = candidate.startsWith('E')
+         ? mapElectronicFiscalCodeToLegacy(candidate as any)
+         : candidate;
+      const safeLegacyCode = ['B01', 'B02', 'B14', 'B15'].includes(legacyCode)
+         ? legacyCode
+         : fallbackLegacy;
+
+      return isElectronicFiscalMode
+         ? mapLegacyFiscalCodeToElectronic(safeLegacyCode as any)
+         : safeLegacyCode as FiscalDocumentCode;
+   }, [isElectronicFiscalMode, isFiscalModeDisabled]);
+
+   const customerNcfOptions = useMemo<Array<{ value: FiscalDocumentCode; label: string }>>(() => {
+      if (isFiscalModeDisabled) {
+         return [
+            { value: 'B02', label: 'Sin comprobantes' }
+         ];
+      }
+
+      if (isElectronicFiscalMode) {
+         return [
+            { value: 'E32', label: 'e-CF Consumo (E32)' },
+            { value: 'E31', label: 'e-CF Crédito Fiscal (E31)' },
+            { value: 'E44', label: 'e-CF Regímenes Especiales (E44)' },
+            { value: 'E45', label: 'e-CF Gubernamental (E45)' }
+         ];
+      }
+
+      return [
+         { value: 'B02', label: 'Factura de Consumo (B02)' },
+         { value: 'B01', label: 'Crédito Fiscal (B01)' },
+         { value: 'B14', label: 'Regímenes Especiales (B14)' },
+         { value: 'B15', label: 'Gubernamental (B15)' }
+      ];
+   }, [isElectronicFiscalMode]);
 
    const restoreViewportAfterClose = useCallback(() => {
       const activeElement = document.activeElement;
@@ -282,7 +327,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                      economicActivity: data.economicActivity,
                      regimeType: data.regimeType
                   },
-                  defaultNcfType: 'B01',
+                  defaultNcfType: normalizeCustomerNcfType('B01', true),
                   // Defaults
                   totalSpent: 0,
                   currentDebt: 0,
@@ -312,7 +357,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
       const timer = setTimeout(performRemoteSearch, 800); // 800ms debounce
       return () => clearTimeout(timer);
-   }, [searchTerm, customers]);
+   }, [searchTerm, customers, normalizeCustomerNcfType]);
 
    // --- HANDLERS ---
 
@@ -335,7 +380,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
          isTaxExempt: false,
          applyChainedTax: false,
          addresses: [],
-         defaultNcfType: 'B02'
+         defaultNcfType: normalizeCustomerNcfType('B02')
       });
       setEditModalTab('GENERAL');
       setIsEditModalOpen(true);
@@ -347,8 +392,21 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       setFormData({
          ...selectedCustomer,
          addresses: selectedCustomer.addresses || [],
-         defaultNcfType: selectedCustomer.defaultNcfType || (selectedCustomer.requiresFiscalInvoice ? 'B01' : 'B02')
+         defaultNcfType: normalizeCustomerNcfType(selectedCustomer.defaultNcfType, selectedCustomer.requiresFiscalInvoice)
       });
+      setEditModalTab('GENERAL');
+      setIsEditModalOpen(true);
+   };
+
+   const handleCreateFromRemoteResult = (customer: Customer) => {
+      setSelectedCustomerId(null);
+      setFormData({
+         ...customer,
+         id: undefined,
+         isTemporary: false,
+         addresses: customer.addresses || [],
+         defaultNcfType: normalizeCustomerNcfType(customer.defaultNcfType, customer.requiresFiscalInvoice)
+      } as Partial<Customer>);
       setEditModalTab('GENERAL');
       setIsEditModalOpen(true);
    };
@@ -357,11 +415,17 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       e.preventDefault();
       if (!formData.name) return;
 
+      const customerPayload = {
+         ...formData,
+         isTemporary: false,
+         defaultNcfType: normalizeCustomerNcfType(formData.defaultNcfType, formData.requiresFiscalInvoice)
+      };
+
       if (formData.id) {
-         onUpdateCustomer({ ...formData } as Customer);
+         onUpdateCustomer({ ...customerPayload } as Customer);
       } else {
          const newCustomer: Customer = {
-            ...formData as Customer,
+            ...customerPayload as Customer,
             id: Math.random().toString(36).substr(2, 9),
             createdAt: new Date().toISOString(),
             totalSpent: 0,
@@ -416,7 +480,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                economicActivity: dgiiData.economicActivity,
                regimeType: dgiiData.regimeType
             },
-            defaultNcfType: 'B01'
+            defaultNcfType: normalizeCustomerNcfType('B01', true)
          });
 
          setValidationError(null);
@@ -686,12 +750,59 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
             );
 
+         const computedBalance = txs.reduce((sum: number, tx: WalletTransaction) => {
+            const rawAmount = Number(tx.amount || 0);
+            const signedAmount = tx.type === 'PAYMENT' && rawAmount > 0 ? -rawAmount : rawAmount;
+            return sum + signedAmount;
+         }, 0);
+         const storedBalance = Number(wallet.balance || 0);
+         const shouldTrustLedgerBalance = txs.length > 0 && Math.abs(storedBalance - computedBalance) > 0.01;
+         const effectiveBalance = shouldTrustLedgerBalance
+            ? parseFloat(computedBalance.toFixed(2))
+            : parseFloat(storedBalance.toFixed(2));
+         const walletStatus = (wallet.status === 'BLOCKED' ? 'BLOCKED' : 'ACTIVE') as Wallet['status'];
+         const syncedWallet: Wallet = {
+            ...(selectedCustomer?.wallet || {}),
+            ...wallet,
+            id: String(wallet.id),
+            customerId: effectiveCustomerId,
+            balance: effectiveBalance,
+            currency: wallet.currency || selectedCustomer?.wallet?.currency || config.currencies.find(c => c.isBase)?.code || 'DOP',
+            status: walletStatus,
+            lastActivity: wallet.lastActivity || wallet.updatedAt || txs[0]?.timestamp || new Date().toISOString(),
+            transactions: selectedCustomer?.wallet?.transactions || []
+         };
+
+         if (shouldTrustLedgerBalance) {
+            await db.save('wallets' as any, (wallets || []).map((current: any) =>
+               current?.id === wallet.id ? { ...current, balance: effectiveBalance, updatedAt: syncedWallet.lastActivity } : current
+            ));
+         }
+
+         const currentCustomerWallet = selectedCustomer?.wallet;
+         const customerWalletIsStale = Boolean(
+            selectedCustomer?.id === effectiveCustomerId && (
+               !currentCustomerWallet ||
+               currentCustomerWallet.id !== syncedWallet.id ||
+               Math.abs(Number(currentCustomerWallet.balance || 0) - effectiveBalance) > 0.01 ||
+               currentCustomerWallet.status !== walletStatus
+            )
+         );
+
+         if (selectedCustomer && customerWalletIsStale) {
+            onUpdateCustomer({
+               ...selectedCustomer,
+               wallet: syncedWallet,
+               updatedAt: new Date().toISOString()
+            });
+         }
+
          setWalletMovements(txs);
       } catch (error) {
          console.error('Failed to load wallet movements:', error);
          setWalletMovements([]);
       }
-   }, [selectedCustomer?.id]);
+   }, [config.currencies, onUpdateCustomer, selectedCustomer]);
 
    // --- LOAD CUSTOMER ACTIVITIES ---
    const fetchActivities = useCallback(async () => {
@@ -991,10 +1102,6 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                         <div
                            onClick={() => {
                               setSelectedCustomerId(remoteResult.id);
-                              // If in select mode, we might want to select immediately?
-                              // But UI logic below shows details.
-                              // Hack: Since it's not in 'customers' list, selectedCustomer memo won't find it.
-                              // We need to handle this.
                               if (onSelect) onSelect(remoteResult);
                            }}
                            className="bg-blue-50 border-2 border-blue-200 rounded-2xl p-4 cursor-pointer hover:bg-blue-100 transition-all group"
@@ -1017,8 +1124,20 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                     </div>
                                  </div>
                               </div>
-                              <div className="p-2 bg-white rounded-xl text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity">
-                                 <ChevronRight size={18} />
+                              <div className="flex items-center gap-2">
+                                 <button
+                                    type="button"
+                                    onClick={(event) => {
+                                       event.stopPropagation();
+                                       handleCreateFromRemoteResult(remoteResult);
+                                    }}
+                                    className="px-3 py-2 rounded-xl bg-blue-600 text-white text-[10px] font-black uppercase tracking-wider hover:bg-blue-700 shadow-sm"
+                                 >
+                                    Guardar cliente
+                                 </button>
+                                 <div className="p-2 bg-white rounded-xl text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <ChevronRight size={18} />
+                                 </div>
                               </div>
                            </div>
                         </div>
@@ -1168,7 +1287,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                  </div>
                                  <div>
                                     <p className="text-[10px] font-black text-blue-400 uppercase tracking-widest leading-none mb-1">Comprobante Fiscal</p>
-                                    <p className="text-sm font-black text-blue-900">{selectedCustomer.defaultNcfType || 'Consumo (B02)'}</p>
+                                    <p className="text-sm font-black text-blue-900">{isFiscalModeDisabled ? 'Sin comprobantes' : (selectedCustomer.defaultNcfType || 'Consumo (B02)')}</p>
                                  </div>
                               </div>
                               <div className="flex items-center gap-3 border-l md:border-l border-blue-100 md:pl-6">
@@ -1555,10 +1674,15 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                  </div>
 
                                  {/* FISCAL SECTION (Edición destacada) */}
-                                 <div className="p-6 bg-slate-50 rounded-[2rem] border-2 border-slate-200 space-y-4">
+                                 <div className={`p-6 rounded-[2rem] border-2 space-y-4 ${isFiscalModeDisabled ? 'bg-slate-100 border-slate-200 opacity-90' : 'bg-slate-50 border-slate-200'}`}>
                                     <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
                                        <Landmark size={14} className="text-blue-500" /> Configuración de Facturación
                                     </h4>
+                                    {isFiscalModeDisabled && (
+                                       <p className="text-[11px] font-bold text-slate-500">
+                                          Esta empresa opera sin comprobantes; el tipo NCF queda deshabilitado para evitar confusión.
+                                       </p>
+                                    )}
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                        <div>
                                           <label className="block text-[10px] font-black text-slate-500 uppercase mb-1 ml-1">RNC / Cédula / Identificación</label>
@@ -1573,14 +1697,14 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                        <div>
                                           <label className="block text-[10px] font-black text-slate-500 uppercase mb-1 ml-1">Tipo de Comprobante (NCF)</label>
                                           <select
-                                             value={formData.defaultNcfType || 'B02'}
-                                             onChange={e => setFormData({ ...formData, defaultNcfType: e.target.value as NCFType })}
-                                             className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-black text-sm text-blue-700"
+                                             value={normalizeCustomerNcfType(formData.defaultNcfType, formData.requiresFiscalInvoice)}
+                                             onChange={e => setFormData({ ...formData, defaultNcfType: e.target.value as FiscalDocumentCode })}
+                                             disabled={isFiscalModeDisabled}
+                                             className={`w-full p-3 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-black text-sm ${isFiscalModeDisabled ? 'text-slate-400 cursor-not-allowed bg-slate-50' : 'text-blue-700'}`}
                                           >
-                                             <option value="B02">Factura de Consumo (B02)</option>
-                                             <option value="B01">Crédito Fiscal (B01)</option>
-                                             <option value="B14">Regímenes Especiales (B14)</option>
-                                             <option value="B15">Gubernamental (B15)</option>
+                                             {customerNcfOptions.map(option => (
+                                                <option key={option.value} value={option.value}>{option.label}</option>
+                                             ))}
                                           </select>
                                        </div>
                                     </div>
@@ -1866,6 +1990,11 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
             const fiscalSummary = calculateTransactionFiscalSummary(tx, config, { terminalConfig });
             const canRetryFiscal = canRetryFiscalTransaction(tx) && Boolean(onRetryFiscalDocument);
             const retryActionLabel = getFiscalRetryActionLabel(tx) || 'Reintentar envío';
+            const transactionCustomerName = String(
+               tx.customerName ||
+               selectedCustomer?.name ||
+               'Clientes varios'
+            ).trim();
 
             return (
                <div className="fixed inset-0 z-[100] overflow-hidden">
@@ -1902,10 +2031,14 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                               </div>
                            </div>
 
-                           <div className="grid grid-cols-2 gap-4">
+                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                               <div className="p-3 bg-white border border-gray-100 rounded-xl">
                                  <p className="text-[10px] font-bold text-gray-400 uppercase">Fecha / Hora</p>
                                  <p className="text-xs font-bold text-gray-700">{new Date(tx.date).toLocaleString()}</p>
+                              </div>
+                              <div className="p-3 bg-white border border-gray-100 rounded-xl">
+                                 <p className="text-[10px] font-bold text-gray-400 uppercase">Cliente</p>
+                                 <p className="text-xs font-bold text-gray-700 truncate">{transactionCustomerName}</p>
                               </div>
                               <div className="p-3 bg-white border border-gray-100 rounded-xl">
                                  <p className="text-[10px] font-bold text-gray-400 uppercase">Cajero</p>

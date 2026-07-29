@@ -3,7 +3,7 @@ import {
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
   RoleDefinition, ParkedTicket, PurchaseOrder, PurchaseOrderItem, Supplier, Watchlist,
   NCFType, FiscalDocumentCode, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries,
-  Campaign, Coupon, ZReport, Reception, ProductStock, InventoryTracking, Reservation, InventoryCommitment, PaymentMethodDefinition, CartItem,
+  Campaign, Coupon, ZReport, XReport, Reception, ProductStock, InventoryTracking, Reservation, InventoryCommitment, PaymentMethodDefinition, CartItem,
   ProductPrice
 } from '../types';
 import {
@@ -12,16 +12,18 @@ import {
   DEFAULT_ROLES, DEFAULT_TERMINAL_CONFIG, DEFAULT_DOCUMENT_SERIES
 } from '../constants';
 import { dbAdapter } from '../services/db';
+import { Capacitor } from '@capacitor/core';
 import { permissionService } from '../services/sync/PermissionService';
 import { mergeDocumentSeriesCollection } from './documentSeriesIdentity';
 
 const DB_KEY = 'clic_pos_db_v1';
 let initPromise: Promise<any> | null = null;
 const INVENTORY_CLOSE_LOCK_MESSAGE = 'Acción denegada: El inventario a esta fecha ya ha sido cerrado y auditado.';
-const getFiscalSequencePadding = (type: FiscalDocumentCode): number =>
-  type.startsWith('E') ? 10 : 8;
+const getFiscalSequencePadding = (_type: FiscalDocumentCode): number => 8;
 // Fiscal allocations already belong to one terminal; reserving local batches creates visible NCF gaps if buffers are reset by sync.
 const FISCAL_ISSUE_BATCH_SIZE = 1;
+const ALLOW_FULL_DEMO_SEED_STORAGE_KEY = 'clic_pos_allow_demo_seed';
+const FIRST_RUN_BOOTSTRAP_COLLECTIONS = new Set(['config', 'users', 'roles']);
 
 const getSnapshotLockDate = (snapshot: any): number => {
   const lockRef = snapshot?.lockDate || snapshot?.cutoffDate || snapshot?.closedAt || snapshot?.createdAt;
@@ -168,6 +170,7 @@ const SEED_DATA = {
     { id: 'cpn_3', campaignId: 'camp_summer_2024', code: 'VIP-CLIENT', status: 'GENERATED', createdAt: new Date().toISOString() }
   ] as Coupon[],
   zReports: [] as ZReport[],
+  xReports: [] as XReport[],
   receptions: [] as Reception[],
   productStocks: RETAIL_PRODUCTS.map(p => ({
     id: `${p.id}_wh_central`,
@@ -196,6 +199,9 @@ const SEED_DATA = {
   offline_print_queue: [] as any[],
   rooms: [] as any[],
   tables: [] as any[],
+  categories: [] as any[],
+  productCategories: [] as any[],
+  productGroups: [] as any[],
   collections: [] as any[],
   paymentMethods: [] as PaymentMethodDefinition[],
   serviceTypes: [] as any[],
@@ -223,6 +229,26 @@ const matchesDocumentSeries = (left: DocumentSeries, right: DocumentSeries): boo
   return Boolean(leftPrefix && rightPrefix && leftPrefix === rightPrefix && leftType && rightType && leftType === rightType);
 };
 
+const isDemoOrDefaultDocumentSeries = (series: Partial<DocumentSeries> | null | undefined): boolean => {
+  if (!series) return false;
+  const id = normalizeSequenceKey(series.id);
+  const name = normalizeSequenceKey(series.name);
+  const prefix = normalizeSequenceKey(series.prefix);
+  const documentType = normalizeSequenceKey(series.documentType as string);
+  const source = normalizeSequenceKey((series as any).source);
+  if (source === 'ERP_TERMINAL_CONFIG') return false;
+  if (name.includes('DEMO')) return true;
+  return DEFAULT_DOCUMENT_SERIES.some((defaultSeries) => {
+    const defaultId = normalizeSequenceKey(defaultSeries.id);
+    const defaultPrefix = normalizeSequenceKey(defaultSeries.prefix);
+    const defaultType = normalizeSequenceKey(defaultSeries.documentType);
+    return Boolean(
+      (id && id === defaultId) ||
+      (prefix && prefix === defaultPrefix && documentType && documentType === defaultType)
+    );
+  });
+};
+
 const matchesFiscalRange = (left: FiscalRangeDGII, right: FiscalRangeDGII): boolean => {
   const leftId = normalizeSequenceKey(left.id);
   const rightId = normalizeSequenceKey(right.id);
@@ -241,11 +267,61 @@ const mergeDocumentSeriesState = (
   existingSeries: DocumentSeries[],
   incomingSeries: DocumentSeries[]
 ): DocumentSeries[] => {
+  const normalizeSeriesPadding = (value: unknown): number => {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 6;
+  };
   const normalizedIncoming = (incomingSeries || []).map((incoming) => ({
     ...incoming,
     nextNumber: Math.max(1, Number(incoming?.nextNumber) || 1),
-    padding: Math.max(1, Number(incoming?.padding) || 6),
+    padding: normalizeSeriesPadding(incoming?.padding),
   }));
+  const hasAuthoritativeErpSeries = normalizedIncoming.some((incoming) =>
+    String((incoming as any)?.source || '').toUpperCase() === 'ERP_TERMINAL_CONFIG'
+  );
+
+  if (hasAuthoritativeErpSeries) {
+    const existing = existingSeries || [];
+    const authoritativeSeries = normalizedIncoming.map((incoming) => {
+      const incomingId = normalizeSequenceKey(incoming.id);
+      const incomingCode = normalizeSequenceKey((incoming as any).code);
+      const incomingType = normalizeSequenceKey((incoming as any).documentType);
+      const incomingPrefix = normalizeSequenceKey(incoming.prefix);
+      const localMatch = existing.find((candidate) => {
+        const candidateId = normalizeSequenceKey(candidate.id);
+        const candidateCode = normalizeSequenceKey((candidate as any).code);
+        const candidateType = normalizeSequenceKey((candidate as any).documentType);
+        const candidatePrefix = normalizeSequenceKey(candidate.prefix);
+        if (incomingId && candidateId && incomingId === candidateId) return true;
+        if (incomingCode && candidateCode && incomingCode === candidateCode) return true;
+        return Boolean(
+          incomingType &&
+          candidateType &&
+          incomingPrefix &&
+          candidatePrefix &&
+          incomingType === candidateType &&
+          incomingPrefix === candidatePrefix
+        );
+      });
+      return {
+        ...incoming,
+        nextNumber: Math.max(
+          Math.max(1, Number(incoming.nextNumber) || 1),
+          Math.max(1, Number(localMatch?.nextNumber) || 1)
+        ),
+      };
+    });
+
+    console.info('POS_DOCUMENT_SERIES_NORMALIZED', {
+      count: authoritativeSeries.length,
+      source: 'ERP_TERMINAL_CONFIG',
+      mode: 'AUTHORITATIVE_REPLACE_DEFAULTS',
+      codes: authoritativeSeries.map((series: any) => series.code || series.prefix || series.id),
+      purgedDefaults: existing.filter(isDemoOrDefaultDocumentSeries).length,
+    });
+
+    return mergeDocumentSeriesCollection(authoritativeSeries);
+  }
 
   return mergeDocumentSeriesCollection([...(existingSeries || []), ...normalizedIncoming]);
 };
@@ -600,6 +676,9 @@ export const db = {
         'customers',
         'warehouses',
         'products',
+        'categories',
+        'productCategories',
+        'productGroups',
         'cashMovements',
         'internalSequences',
         'zReports',
@@ -614,8 +693,24 @@ export const db = {
         'erp_sales_documents'
       ].includes(key);
 
-    const isDeferredHeavyCollection = (key: string) =>
-      ['transactions', 'transactionHistory'].includes(key);
+    const isNativeAndroidRuntime =
+      Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+
+    const ANDROID_BOOTSTRAP_COLLECTIONS = new Set([
+      'config',
+      'users',
+      'roles',
+      'internalSequences',
+      'paymentMethods',
+    ]);
+
+    const isDeferredHeavyCollection = (key: string) => {
+      if (['transactions', 'transactionHistory'].includes(key)) return true;
+      if (isNativeAndroidRuntime && !ANDROID_BOOTSTRAP_COLLECTIONS.has(key)) {
+        return true;
+      }
+      return false;
+    };
 
     const shouldCheckSeedForCollection = (key: string, value: any) => {
       if (key === 'config') return true;
@@ -623,6 +718,14 @@ export const db = {
       if (typeof value === 'number') return value !== 0;
       if (value && typeof value === 'object') return Object.keys(value).length > 0;
       return !!value;
+    };
+
+    const shouldSeedFullDemoData = () => {
+      try {
+        return window.localStorage.getItem(ALLOW_FULL_DEMO_SEED_STORAGE_KEY) === '1';
+      } catch (error) {
+        return false;
+      }
     };
 
     const _initRunner = async () => {
@@ -715,8 +818,10 @@ export const db = {
         // CRITICAL FIX: Only seed collections on first run
         // This prevents re-seeding demo data and overwriting user data
         if (isFirstRun) {
-          console.log('🌱 First run detected - seeding initial data...');
+          const allowFullDemoSeed = shouldSeedFullDemoData();
+          console.log(`🌱 First run detected - seeding ${allowFullDemoSeed ? 'full demo' : 'core bootstrap'} data...`);
           for (const [key, value] of Object.entries(SEED_DATA)) {
+            if (!allowFullDemoSeed && !FIRST_RUN_BOOTSTRAP_COLLECTIONS.has(key)) continue;
             if (!shouldCheckSeedForCollection(key, value)) continue;
             try {
               const existingCollection = await withTimeout(
@@ -769,17 +874,27 @@ export const db = {
 
       // Only return SEED_DATA on first run for master terminals without config
       if (!hasConfig && !isSlave && !isInitialized) {
-        console.log('🌱 No config found on Master (First Run): Returning SEED_DATA');
-        return SEED_DATA;
+        const allowFullDemoSeed = shouldSeedFullDemoData();
+        console.log(`🌱 No config found on Master (First Run): Returning ${allowFullDemoSeed ? 'SEED_DATA' : 'bootstrap data'}`);
+        if (allowFullDemoSeed) {
+          return SEED_DATA;
+        }
+
+        return Object.keys(SEED_DATA).reduce((acc: any, key) => {
+          acc[key] = FIRST_RUN_BOOTSTRAP_COLLECTIONS.has(key)
+            ? (SEED_DATA as any)[key]
+            : getFallbackCollectionValue(key);
+          return acc;
+        }, {});
       }
 
       // Load all data to return consistent structure (Legacy support)
       // Bounded waits prevent the whole init from hanging on one store.
       console.log('📦 Loading all collections...');
       const keys = Object.keys(SEED_DATA);
-      const results = await Promise.allSettled(keys.map(async key => {
+
+      const loadCollectionValue = async (key: string) => {
         if (isDeferredHeavyCollection(key)) {
-          // Non-blocking startup for heavy stores. They are loaded later by dedicated flows.
           console.warn(`⏭️ Skipping heavy collection during init: ${key}`);
           return getFallbackCollectionValue(key);
         }
@@ -801,7 +916,22 @@ export const db = {
           console.warn(`⚠️ Timeout/error loading ${key}. Using fallback.`, error);
           return getFallbackCollectionValue(key);
         }
-      }));
+      };
+
+      const results: Array<PromiseSettledResult<any>> = [];
+      if (isNativeAndroidRuntime) {
+        for (const key of keys) {
+          try {
+            const value = await loadCollectionValue(key);
+            results.push({ status: 'fulfilled', value });
+          } catch (reason) {
+            results.push({ status: 'rejected', reason });
+          }
+        }
+      } else {
+        const settled = await Promise.allSettled(keys.map((key) => loadCollectionValue(key)));
+        results.push(...settled);
+      }
       console.log('✅ All collections loaded (settled)');
 
       const data: any = {};
@@ -1273,7 +1403,11 @@ export const db = {
         return null;
       }
 
-      const start = historyNextNumber ?? Math.max(allocation.reservedStart, allocation.nextNumber);
+      const start = Math.max(
+        allocation.reservedStart,
+        allocation.nextNumber,
+        historyNextNumber ?? 0,
+      );
       const end = Math.min(allocation.reservedEnd, start + effectiveBatchSize - 1);
       const nextNumber = end + 1;
 
@@ -1357,6 +1491,30 @@ export const db = {
       b.type === type && (!terminalId || !b.terminalId || normalizeSequenceKey(b.terminalId) === normalizeSequenceKey(terminalId))
     );
 
+    const allocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
+    const activeAllocation = getTerminalFiscalAllocation(allocations, terminalId, type as any);
+    if (buffer && activeAllocation) {
+      const allocationNextNumber = Math.max(
+        activeAllocation.reservedStart,
+        Number(activeAllocation.nextNumber || activeAllocation.reservedStart) || activeAllocation.reservedStart,
+      );
+      const bufferCurrentNumber = Number(buffer.currentNumber || 0);
+      const bufferStartNumber = Number(buffer.startNumber || buffer.currentNumber || 0);
+      const hasDifferentAllocation =
+        Boolean(buffer.allocationId && buffer.allocationId !== activeAllocation.id) ||
+        Boolean(buffer.fiscalRangeId && activeAllocation.fiscalRangeId && buffer.fiscalRangeId !== activeAllocation.fiscalRangeId);
+      const isOutsideAllocation =
+        bufferStartNumber < activeAllocation.reservedStart ||
+        Number(buffer.endNumber || 0) > activeAllocation.reservedEnd;
+      const isBehindErpPointer = bufferCurrentNumber < allocationNextNumber;
+
+      if (hasDifferentAllocation || isOutsideAllocation || isBehindErpPointer) {
+        buffers = buffers.filter((candidate) => candidate !== buffer);
+        await dbAdapter.saveCollection('localFiscalBuffer', buffers);
+        buffer = undefined;
+      }
+    }
+
     if (buffer) {
       const maxIssuedNumber = await getMaxIssuedFiscalNumber(type, buffer.prefix || type);
       const historyNextNumber = maxIssuedNumber > 0 ? maxIssuedNumber + 1 : null;
@@ -1422,6 +1580,9 @@ export const db = {
       const existingSeries = await dbAdapter.getCollection<DocumentSeries>('internalSequences') || [];
       const mergedSeries = mergeDocumentSeriesState(existingSeries, documentSeries);
       await dbAdapter.saveCollection('internalSequences', mergedSeries);
+      if (documentSeries.some((series: any) => String(series?.source || '').toUpperCase() === 'ERP_TERMINAL_CONFIG')) {
+        await dbAdapter.saveCollection('documentSeries', mergedSeries);
+      }
     }
 
     if (fiscalRanges && fiscalRanges.length > 0) {
