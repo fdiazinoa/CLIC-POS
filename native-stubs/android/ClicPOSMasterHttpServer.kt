@@ -435,7 +435,9 @@ object ClicPOSMasterHttpServer {
                 append("Content-Type: application/json; charset=utf-8\r\n")
                 append("Access-Control-Allow-Origin: *\r\n")
                 append("Access-Control-Allow-Methods: GET, POST, PUT, OPTIONS\r\n")
-                append("Access-Control-Allow-Headers: Content-Type, X-Active-Terminal-Id, X-Device-Id\r\n")
+                append("Access-Control-Allow-Headers: Content-Type, X-Active-Terminal-Id, X-Device-Id, X-POS-Device-Id\r\n")
+                append("Access-Control-Allow-Private-Network: true\r\n")
+                append("Access-Control-Max-Age: 600\r\n")
                 append("Connection: close\r\n")
                 append("Content-Length: ${bytes.size}\r\n\r\n")
             }
