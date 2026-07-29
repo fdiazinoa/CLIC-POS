@@ -157,6 +157,9 @@ interface InitialConfigResponse {
   sync_auth_token?: string;
   tokenExpiresAt?: string;
   token_expires_at?: string;
+  config_version?: string | null;
+  etag?: string | null;
+  unchanged?: boolean;
   snapshot_meta?: {
     used_resolved?: boolean;
     used_fallback_config?: boolean;
@@ -196,6 +199,8 @@ interface BoundTerminalPayload {
   activationToken?: string;
   syncToken?: string;
   tokenExpiresAt?: string;
+  initialConfigVersion?: string | null;
+  initialConfigEtag?: string | null;
   progress?: (update: TerminalBindingProgressUpdate) => void;
 }
 
@@ -1514,6 +1519,8 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           activationToken: registerAuth.activationToken,
           syncToken: registerAuth.syncToken,
           tokenExpiresAt: registerAuth.tokenExpiresAt,
+          initialConfigVersion: initialConfigData.config_version || null,
+          initialConfigEtag: initialConfigData.etag || null,
           progress: showProgress ? updateBindingProgress : undefined,
         });
         completed = true;

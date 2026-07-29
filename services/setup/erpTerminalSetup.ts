@@ -8,6 +8,8 @@ import type { SyncProfile } from '../sync/SyncProfile';
 import { supabase } from '../../utils/supabase';
 import { requestJson } from '../network/httpClient';
 import { resolveOrderTakerContract } from '../../utils/orderTakerPolicy';
+import { db } from '../../utils/db';
+import { terminalConfigRequestCoordinator } from '../sync/TerminalConfigRequestCoordinator';
 
 export interface RuntimeTerminalCard {
   id: string;
@@ -95,6 +97,9 @@ export interface RuntimeInitialConfigResponse {
   sync_auth_token?: string;
   tokenExpiresAt?: string;
   token_expires_at?: string;
+  config_version?: string | null;
+  etag?: string | null;
+  unchanged?: boolean;
 }
 
 type BindingMode = 'MASTER' | 'SLAVE';
@@ -1580,18 +1585,46 @@ export const fetchInitialConfigFromErp = async (input: {
   erpTerminalId: string;
   posDeviceId: string;
 }): Promise<RuntimeInitialConfigResponse> => {
-  const params = new URLSearchParams({
-    tenant_id: input.tenantId,
-    terminal_id: input.erpTerminalId,
-    device_id: input.posDeviceId,
+  const result = await terminalConfigRequestCoordinator.request<Record<string, any>>({
+    baseUrl: input.erpBaseUrl,
+    terminalId: input.erpTerminalId,
+    tenantId: input.tenantId,
+    deviceId: input.posDeviceId,
+    reason: 'pairing',
+    deferPersistence: true,
   });
-  const payload = await fetchErpJson(
-    input.erpBaseUrl,
-    `/api/sync/terminals/${encodeURIComponent(input.erpTerminalId)}/config?${params.toString()}`,
-    {
-      headers: buildDeviceHeaders(input.posDeviceId),
+
+  if (result.status === 'unchanged') {
+    const localConfig = await db.get('config') as unknown as BusinessConfig | null;
+    const matchingTerminal = localConfig && !Array.isArray(localConfig)
+      ? (localConfig.terminals || []).find((terminal) => (
+        terminal.id === input.erpTerminalId
+        || terminal.config?.erpTerminalId === input.erpTerminalId
+        || terminal.config?.erpBinding?.terminalId === input.erpTerminalId
+      ))
+      : null;
+    const cachedSnapshot =
+      matchingTerminal?.config?.erpSnapshot
+      || localConfig?.terminalSnapshots?.[matchingTerminal?.id || input.erpTerminalId]
+      || null;
+    if (!localConfig || Array.isArray(localConfig) || !cachedSnapshot) {
+      terminalConfigRequestCoordinator.clear(input.erpTerminalId);
+      return fetchInitialConfigFromErp(input);
     }
-  );
+    return {
+      success: true,
+      tenant_id: input.tenantId,
+      terminal_id: matchingTerminal?.id || input.erpTerminalId,
+      erp_terminal_id: input.erpTerminalId,
+      config: localConfig,
+      terminal_config: cachedSnapshot as Record<string, any>,
+      config_version: result.configVersion,
+      etag: result.etag,
+      unchanged: true,
+    };
+  }
+
+  const payload = result.payload || {};
 
   const payloadBusinessConfig = asObject(payload?.business_config || payload?.businessConfig);
   const payloadOperational = asObject(payload?.operational);
@@ -1613,7 +1646,9 @@ export const fetchInitialConfigFromErp = async (input: {
   const runtimeAuth = extractRuntimeAuthPayload(payload, terminalConfig);
 
   return {
-    success: asString(payload?.status).toLowerCase() === 'success',
+    success:
+      payload?.success !== false
+      && (!asString(payload?.status) || asString(payload?.status).toLowerCase() === 'success'),
     tenant_id: asString(terminalConfig.tenant_id) || input.tenantId,
     terminal_id: asString(terminalConfig.terminal_id) || input.erpTerminalId,
     erp_terminal_id: input.erpTerminalId,
@@ -1628,6 +1663,9 @@ export const fetchInitialConfigFromErp = async (input: {
     activationToken: runtimeAuth.activationToken,
     syncToken: runtimeAuth.syncToken,
     tokenExpiresAt: runtimeAuth.tokenExpiresAt,
+    config_version: result.configVersion,
+    etag: result.etag,
+    unchanged: false,
   };
 };
 

@@ -81,6 +81,9 @@ const persistLightweightSyncNotice = (payload: unknown, collections: string[]) =
 class RealtimeNotificationService {
     private channel: RealtimeChannel | null = null;
     private storeId: string | null = null;
+    private terminalId: string | null = null;
+    private initializePromise: Promise<void> | null = null;
+    private initializeKey: string | null = null;
     private lightweightSyncTimer: ReturnType<typeof setTimeout> | null = null;
     private pendingCollections = new Set<string>();
 
@@ -119,17 +122,41 @@ class RealtimeNotificationService {
     }
 
     async initialize(_masterUrl: string, terminalId: string) {
-        await this.disconnect();
-
         const { isConfigured } = resolveSupabaseConfig();
         const binding = getStoredErpSyncBinding();
         const storeId = binding.storeId || null;
         if (!isConfigured || !storeId) {
+            await this.disconnect();
             console.warn('📡 RealtimeNotificationService: Supabase realtime disabled (missing config or storeId).');
             return;
         }
 
+        const key = `${storeId}:${terminalId}`;
+        if (this.channel && this.storeId === storeId && this.terminalId === terminalId) {
+            console.log(`📡 RealtimeNotificationService: Reusing store_${storeId} channel.`);
+            return;
+        }
+        if (this.initializePromise && this.initializeKey === key) {
+            return this.initializePromise;
+        }
+
+        const operation = this.connect(storeId, terminalId);
+        this.initializeKey = key;
+        this.initializePromise = operation;
+        try {
+            await operation;
+        } finally {
+            if (this.initializePromise === operation) {
+                this.initializePromise = null;
+                this.initializeKey = null;
+            }
+        }
+    }
+
+    private async connect(storeId: string, terminalId: string) {
+        await this.disconnect();
         this.storeId = storeId;
+        this.terminalId = terminalId;
         console.log(`📡 RealtimeNotificationService: Connecting to Supabase Realtime store_${storeId}...`);
 
         await ensureSupabaseSessionRestored();
@@ -251,6 +278,7 @@ class RealtimeNotificationService {
         }
         this.pendingCollections.clear();
         this.storeId = null;
+        this.terminalId = null;
     }
 }
 

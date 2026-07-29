@@ -203,6 +203,7 @@ import {
   restorePersistentDeviceIdAfterDbReset,
   type DeviceRevocationDetail
 } from './utils/deviceRevocation';
+import { terminalConfigRequestCoordinator } from './services/sync/TerminalConfigRequestCoordinator';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
 import type { RuntimeTerminalRecoveryState } from './services/setup/erpTerminalSetup';
 import { resolveCustomerImageSrc } from './utils/entityImage';
@@ -3070,10 +3071,11 @@ const AppContent: React.FC = () => {
       }
     };
 
-    const HEARTBEAT_INTERVAL_MS = 120000;
+    const HEARTBEAT_INTERVAL_MS = 60000;
     const OUTBOX_POLL_BASE_MS = 30000;
     const OUTBOX_POLL_MAX_MS = 300000;
     const MANIFEST_REFRESH_INTERVAL_MS = 300000;
+    const CONFIG_SAFETY_CHECK_INTERVAL_MS = 300000;
     const lifecycleManifestKeyParts = [
       deviceId,
       currentTerminal?.config?.erpTerminalId || currentTerminal?.id || 'unknown-terminal',
@@ -3084,7 +3086,40 @@ const AppContent: React.FC = () => {
     let lastManifestRefreshAt = Number(sessionStorage.getItem(lastManifestRefreshKey) || '0') || 0;
     let heartbeatTimeoutId: number | null = null;
     let outboxPollTimeoutId: number | null = null;
+    let configSafetyCheckTimeoutId: number | null = null;
     let outboxPollFailures = 0;
+
+    const requestConditionalTerminalConfig = async (
+      reason: 'startup' | 'connection_restored' | 'safety_check',
+    ) => {
+      const erpTerminalId =
+        currentTerminal.config?.erpTerminalId
+        || loadSyncProfile().erpTerminalId
+        || localStorage.getItem('clic_erp_sync_terminal_id')
+        || currentTerminal.id;
+      const erpBaseUrl = resolveSetupErpBaseUrl();
+      const tenantId = tenantIdentity.tenantId || localStorage.getItem('active_tenant_id');
+      if (!erpBaseUrl || !erpTerminalId || !tenantId || !navigator.onLine) return;
+
+      await terminalConfigRequestCoordinator.request<Record<string, unknown>>({
+        baseUrl: erpBaseUrl,
+        terminalId: erpTerminalId,
+        tenantId,
+        deviceId,
+        reason,
+        apply: async (payload) => {
+          const refreshedConfig = await syncManager.refreshTerminalResolvedConfig(payload, {
+            dispatchEvent: true,
+            forceRemoteFetch: false,
+            forceFullCatalog: false,
+            supplementalMode: 'background',
+          });
+          if (!refreshedConfig) {
+            throw new Error('La configuración condicional no pudo aplicarse.');
+          }
+        },
+      });
+    };
 
     const syncLifecycle = async (options?: { forceManifestRefresh?: boolean }) => {
       // Lifecycle effects can be recreated by runtime config updates. Keep one
@@ -3175,6 +3210,9 @@ const AppContent: React.FC = () => {
       if (!disposed) {
         void triggerErpSyncOutbox('online');
         void syncLifecycle();
+        void requestConditionalTerminalConfig('connection_restored').catch((error) => {
+          console.warn('[CONFIG_SYNC] connection recovery check failed; local config preserved.', error);
+        });
       }
     };
     const handleErpAppResume = () => {
@@ -3242,6 +3280,26 @@ const AppContent: React.FC = () => {
     };
 
     scheduleNextOutboxPoll();
+
+    const scheduleNextConfigSafetyCheck = () => {
+      if (disposed || isPosOnlyCloudStagingTarget()) return;
+      if (configSafetyCheckTimeoutId !== null) {
+        window.clearTimeout(configSafetyCheckTimeoutId);
+      }
+      const jitterMs = Math.round(CONFIG_SAFETY_CHECK_INTERVAL_MS * ((Math.random() * 0.4) - 0.2));
+      configSafetyCheckTimeoutId = window.setTimeout(async () => {
+        if (!disposed && navigator.onLine) {
+          try {
+            await requestConditionalTerminalConfig('safety_check');
+          } catch (error) {
+            console.warn('[CONFIG_SYNC] safety check failed; local config preserved.', error);
+          }
+        }
+        scheduleNextConfigSafetyCheck();
+      }, CONFIG_SAFETY_CHECK_INTERVAL_MS + jitterMs);
+    };
+
+    scheduleNextConfigSafetyCheck();
     window.addEventListener('online', handleErpOnline);
     document.addEventListener('visibilitychange', handleErpAppResume);
 
@@ -3253,6 +3311,15 @@ const AppContent: React.FC = () => {
       if (outboxPollTimeoutId !== null) {
         window.clearTimeout(outboxPollTimeoutId);
       }
+      if (configSafetyCheckTimeoutId !== null) {
+        window.clearTimeout(configSafetyCheckTimeoutId);
+      }
+      const erpTerminalId =
+        currentTerminal.config?.erpTerminalId
+        || loadSyncProfile().erpTerminalId
+        || localStorage.getItem('clic_erp_sync_terminal_id')
+        || currentTerminal.id;
+      terminalConfigRequestCoordinator.cancel(erpTerminalId);
       window.removeEventListener('online', handleErpOnline);
       document.removeEventListener('visibilitychange', handleErpAppResume);
     };
@@ -5815,6 +5882,8 @@ const AppContent: React.FC = () => {
       sync_auth_token?: string;
       tokenExpiresAt?: string;
       token_expires_at?: string;
+      initialConfigVersion?: string | null;
+      initialConfigEtag?: string | null;
       snapshotMeta?: {
         fullPullOnPairing?: boolean;
         resolutionError?: unknown;
@@ -6009,6 +6078,12 @@ const AppContent: React.FC = () => {
 
       setConfig(updatedConfig);
       await db.save('config', updatedConfig);
+      if (setupResult?.erpTerminalId && (setupResult.initialConfigVersion || setupResult.initialConfigEtag)) {
+        terminalConfigRequestCoordinator.commitApplied(setupResult.erpTerminalId, {
+          configVersion: setupResult.initialConfigVersion,
+          etag: setupResult.initialConfigEtag,
+        });
+      }
       const setupRooms = Array.isArray((setupResult as any)?.rooms)
         ? (setupResult as any).rooms
         : Array.isArray((updatedConfig as any).rooms)
