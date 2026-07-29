@@ -283,6 +283,7 @@ object ClicPOSMasterHttpServer {
             "default-tenant"
         )
         val forceTransfer = payload.optBoolean("force_transfer", false)
+            || payload.optString("force_transfer").equals("true", ignoreCase = true)
         val terminals = configSnapshot.optJSONArray("terminals") ?: JSONArray()
         var selectedTerminal: JSONObject? = null
 

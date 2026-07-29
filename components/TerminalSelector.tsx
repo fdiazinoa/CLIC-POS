@@ -36,6 +36,7 @@ import {
   type PosTerminalType,
 } from '../utils/orderTakerPolicy';
 import { requestJson, type RequestJsonResult } from '../services/network/httpClient';
+import { supabase } from '../utils/supabase';
 
 interface TerminalCard {
   id: string;
@@ -74,6 +75,7 @@ interface TerminalSelectorResponse {
 interface BindTerminalResponse {
   success: boolean;
   source?: string | null;
+  current_device_id?: string | null;
   tenant_id: string;
   terminal_id: string;
   erp_terminal_id?: string | null;
@@ -719,6 +721,49 @@ const buildMasterClaimUrl = (
   return `${apiBase}/claim-terminal?${params.toString()}`;
 };
 
+const authorizeTerminalTakeoverFromErp = async (input: {
+  erpBaseUrl: string;
+  terminal: TerminalCard;
+  deviceId: string;
+}): Promise<void> => {
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  const accessToken = sessionData.session?.access_token;
+  if (sessionError || !accessToken) {
+    throw new Error(
+      'La sesión de administrador expiró. Inicia sesión nuevamente para autorizar y liberar el equipo anterior.'
+    );
+  }
+
+  const baseUrl = input.erpBaseUrl.trim().replace(/\/+$/, '');
+  const response = await requestJson<{ status?: string; message?: string }>({
+    url: `${baseUrl}/api/setup/bind-terminal`,
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      terminal_id: input.terminal.erpTerminalId || input.terminal.id,
+      new_device_id: input.deviceId,
+      device_name: input.terminal.name,
+    }),
+    timeoutMs: 12000,
+    diagnosticContext: {
+      scope: 'ERP_TERMINAL_TAKEOVER',
+      stage: 'AUTHORIZE_AND_RELEASE',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      response.data?.message
+      || response.text
+      || `El ERP no pudo liberar el equipo anterior (${response.status}).`
+    );
+  }
+};
+
 const resolveReachableMasterBinding = async (masterIp?: string) => {
   const normalizedHost = normalizeMasterHost(masterIp || '');
   if (!normalizedHost) return null;
@@ -1158,7 +1203,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         master_terminal_id: resolveOrderTakerContract(terminal).masterTerminalId,
         capabilities: resolveOrderTakerContract(terminal).capabilities,
         restrictions: resolveOrderTakerContract(terminal).restrictions,
-        force_transfer: false,
+        force_transfer: forceTransfer,
       };
       const pairingDiagnosticBase = {
         selectedTerminalUuid: terminal.erpTerminalId || terminal.id,
@@ -1241,6 +1286,21 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           });
         }
       } else {
+        if (forceTransfer) {
+          if (!erpBaseUrl) {
+            throw new Error('No encontramos la URL del ERP para autorizar el cambio de equipo.');
+          }
+          updateBindingProgress({
+            stepId: 'claim',
+            message: 'Autorizando este equipo y liberando el device anterior en el ERP...',
+          });
+          await authorizeTerminalTakeoverFromErp({
+            erpBaseUrl,
+            terminal,
+            deviceId,
+          });
+        }
+
         const response = await requestMasterSetup<BindTerminalResponse>(
           buildMasterClaimUrl(apiBase, bindTerminalRequestBody),
           {
@@ -1250,13 +1310,21 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         );
 
         if (response.status === 409) {
-          setPendingTerminal(terminal);
+          keepAuthorizationModalOpen = true;
+          closeBindingProgress();
+          const currentDeviceId = response.data?.current_device_id || terminal.currentDeviceId || null;
+          const occupiedTerminal = {
+            ...terminal,
+            currentDeviceId,
+            occupied: true,
+          };
+          setPendingTerminal(occupiedTerminal);
           setAuthorizationIssue({
             code: 'TAKEOVER_REQUIRED',
-            message: 'Pendiente de autorización en Cloud-Admin.',
+            message: 'La terminal está ocupada por otro equipo.',
             httpStatus: 409,
-            terminal,
-            currentDeviceId: terminal.currentDeviceId || null,
+            terminal: occupiedTerminal,
+            currentDeviceId,
             generatedDeviceId: deviceId,
             pairingStatus: 'WAITING_CLOUD_ADMIN_REAUTHORIZATION',
           });
@@ -2024,6 +2092,9 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                     : 'Autoriza este device en Cloud-Admin y el POS continuará al detectar la autorización.'}
                 </p>
               </div>
+              <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3.5 text-xs font-semibold leading-relaxed text-amber-900">
+                Autorizar este equipo revocará el acceso del device anterior. Esta acción requiere una sesión de administrador activa.
+              </div>
             </div>
 
             <div className="border-t border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
@@ -2049,6 +2120,19 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                 >
                   {(isBinding || isRetryingAuthorization) ? <RefreshCw size={16} className="animate-spin" /> : <RefreshCw size={16} />}
                   {(isBinding || isRetryingAuthorization) ? 'Reintentando...' : 'Reintentar conexión'}
+                </button>
+                <button
+                  onClick={() => {
+                    setIsRetryingAuthorization(true);
+                    void bindTerminal(pendingTerminal, true);
+                  }}
+                  disabled={isBinding || isRetryingAuthorization}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-amber-500 px-5 py-3 text-sm font-black text-slate-950 shadow-lg shadow-amber-500/20 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                >
+                  <Lock size={16} />
+                  {(isBinding || isRetryingAuthorization)
+                    ? 'Autorizando...'
+                    : 'Autorizar este equipo y liberar el anterior'}
                 </button>
               </div>
             </div>

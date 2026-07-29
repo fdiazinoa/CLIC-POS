@@ -40,6 +40,22 @@ test('la activacion cliente usa transporte nativo con timeout para todo el hands
   assert.match(terminalSelectorSource, /Promise\.race\(\[request, hardTimeout\]\)/);
 });
 
+test('la activacion cliente cierra el progreso cuando la terminal esta ocupada', () => {
+  assert.match(
+    terminalSelectorSource,
+    /if \(response\.status === 409\) \{[\s\S]*?keepAuthorizationModalOpen = true;[\s\S]*?closeBindingProgress\(\);/
+  );
+  assert.match(terminalSelectorSource, /message: 'La terminal está ocupada por otro equipo\.'/);
+});
+
+test('la reasignacion libera el device anterior mediante el ERP antes de actualizar la Maestra', () => {
+  assert.match(terminalSelectorSource, /authorizeTerminalTakeoverFromErp/);
+  assert.match(terminalSelectorSource, /\/api\/setup\/bind-terminal/);
+  assert.match(terminalSelectorSource, /Authorization: `Bearer \$\{accessToken\}`/);
+  assert.match(terminalSelectorSource, /force_transfer: forceTransfer/);
+  assert.match(terminalSelectorSource, /Autorizar este equipo y liberar el anterior/);
+});
+
 test('el servidor Master Android acepta preflight de red privada y ambos headers de device', () => {
   assert.match(serverSource, /Access-Control-Allow-Private-Network: true/);
   assert.match(serverSource, /X-Device-Id, X-POS-Device-Id/);
