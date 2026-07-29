@@ -5947,7 +5947,24 @@ class SyncManager {
         let catalogs: SyncableCollection[] = target.kind === 'ERP_ACTIVE'
             ? defaultCatalogs.filter(isErpMasterPullCollection)
             : defaultCatalogs;
-        if (target.kind === 'ERP_ACTIVE') {
+        if (target.kind === 'POS_MASTER' && !isMaster) {
+            const androidMasterCollections = new Set<SyncableCollection>([
+                'products',
+                'customers',
+                'suppliers',
+                'warehouses',
+                'collections',
+                'rooms',
+                'tables',
+                'users',
+                'roles',
+                'internalSequences',
+                'productStocks',
+                'transfers',
+                'receptions',
+            ]);
+            catalogs = defaultCatalogs.filter(collection => androidMasterCollections.has(collection));
+        } else if (target.kind === 'ERP_ACTIVE') {
             for (const collection of defaultCatalogs) {
                 if (!isErpMasterPullCollection(collection)) {
                     logSkippedNonMasterPull(collection, target.kind, 'REMOVED_FROM_ERP_ACTIVE_CATALOG_PULL');

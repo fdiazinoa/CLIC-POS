@@ -32,6 +32,27 @@ test('la WebView entrega el snapshot operativo al servidor nativo sin sobreescri
   assert.match(bridgeSource, /payload\.optJSONArray\("rooms"\)/);
   assert.match(bridgeSource, /payload\.optJSONArray\("tables"\)/);
   assert.match(bridgeSource, /payload\.optJSONArray\("parkedTickets"\)/);
-  assert.match(appSource, /\{ port: 3001, config, users, rooms, tables, parkedTickets \}/);
-  assert.match(appSource, /const ensureMasterServerWithoutSnapshot = \(\) => ensureMasterServer\(false\);/);
+  assert.match(appSource, /restaurantRevision: masterRestaurantRevisionRef\.current/);
+  assert.match(appSource, /const ensureMasterServerWithoutSnapshot = \(\) =>/);
+  assert.match(serverSource, /acknowledgedRevision < restaurantRevision\.get\(\)/);
+  assert.match(serverSource, /PREFS_RESTAURANT_KEY/);
+  assert.match(appSource, /getMasterRestaurantState/);
+  assert.match(appSource, /db\.save\('parkedTickets', nextParkedTickets\)/);
+});
+
+test('la Master Android implementa autenticación y lectura de catálogos para clientes', () => {
+  assert.match(serverSource, /method == "POST" && path == "\/api\/sync\/auth"/);
+  assert.match(serverSource, /path\.startsWith\("\/api\/sync\/collections\/"\) && path\.endsWith\("\/data"\)/);
+  assert.match(serverSource, /path\.startsWith\("\/api\/sync\/delta\/"\)/);
+  assert.match(serverSource, /method == "GET" && path == "\/api\/sync\/config"/);
+  assert.match(serverSource, /"users" -> JSONArray\(usersSnapshot\.toString\(\)\)/);
+  assert.match(serverSource, /catalogSnapshots\.optJSONArray\(collection\)/);
+  assert.match(serverSource, /X-Sync-Token/);
+  assert.match(serverSource, /reconcileTablesWithParkedTickets\(tablesSnapshot, tickets\)/);
+});
+
+test('la Master Android se reactiva al volver al primer plano y el cliente reintenta con espera', () => {
+  assert.match(appSource, /addListener\?\.\('resume', ensureMasterServerWithoutSnapshot\)/);
+  assert.match(appSource, /attempt <= 6/);
+  assert.match(appSource, /resolveOperationalApiUrl\('\/api\/sync\/ping'\)/);
 });
