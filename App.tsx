@@ -3469,11 +3469,34 @@ const AppContent: React.FC = () => {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [activeCartDraftRestorePrompt, setActiveCartDraftRestorePrompt] = useState<ActiveCartDraft | null>(null);
+  const masterRestaurantRevisionRef = useRef(0);
+  const masterRestaurantPollInFlightRef = useRef(false);
 
   useEffect(() => {
     if (!isNativeAndroidRuntime()) return;
 
     let disposed = false;
+    const parseNativeResult = (value: unknown): any => {
+      if (typeof value !== 'string') return value;
+      try {
+        return JSON.parse(value);
+      } catch {
+        return null;
+      }
+    };
+    const catalogs = {
+      products,
+      customers,
+      warehouses,
+      users,
+      suppliers,
+      roles,
+      collections,
+      internalSequences,
+      transfers,
+      receptions,
+      productStocks,
+    };
     const ensureMasterServer = (includeOperationalSnapshot = true) => {
       if (disposed) return;
       const nativeBridge = (window as any).ClicPOSNativePrinter;
@@ -3493,7 +3516,16 @@ const AppContent: React.FC = () => {
       }
 
       const payload = includeOperationalSnapshot
-        ? { port: 3001, config, users, rooms, tables, parkedTickets }
+        ? {
+            port: 3001,
+            config,
+            users,
+            rooms,
+            tables,
+            parkedTickets,
+            catalogs,
+            restaurantRevision: masterRestaurantRevisionRef.current,
+          }
         : { port: 3001 };
       Promise.resolve(nativeBridge.startMasterServer(payload))
         .then((status: any) => {
@@ -3509,19 +3541,91 @@ const AppContent: React.FC = () => {
         .catch((error: unknown) => console.error('[MASTER_LAN] Could not ensure native server:', error));
     };
 
+    const reconcileNativeRestaurantState = async () => {
+      if (disposed || masterRestaurantPollInFlightRef.current) return;
+      const nativeBridge = (window as any).ClicPOSNativePrinter;
+      if (typeof nativeBridge?.getMasterRestaurantState !== 'function') return;
+      if (!isNativeStandaloneTerminalRuntime(getCurrentTerminal())) return;
+
+      masterRestaurantPollInFlightRef.current = true;
+      try {
+        const rawState = await Promise.resolve(nativeBridge.getMasterRestaurantState({}));
+        const state = parseNativeResult(rawState);
+        const revision = Number(state?.revision || 0);
+        if (!Number.isFinite(revision) || revision <= masterRestaurantRevisionRef.current) return;
+
+        const nextRooms = Array.isArray(state?.rooms) ? state.rooms : [];
+        const nextTables = Array.isArray(state?.tables) ? state.tables : [];
+        const nextParkedTickets = Array.isArray(state?.parkedTickets) ? state.parkedTickets : [];
+        masterRestaurantRevisionRef.current = revision;
+        setRooms(nextRooms);
+        setTables(nextTables);
+        setParkedTickets(nextParkedTickets);
+        writeCriticalCollectionsMirror(nextParkedTickets, cashMovements);
+        await Promise.all([
+          db.save('rooms', nextRooms),
+          db.save('tables', nextTables),
+          db.save('parkedTickets', nextParkedTickets),
+        ]);
+        console.info('[MASTER_LAN] Applied client restaurant mutation', {
+          revision,
+          rooms: nextRooms.length,
+          tables: nextTables.length,
+          parkedTickets: nextParkedTickets.length,
+        });
+      } catch (error) {
+        console.warn('[MASTER_LAN] Could not reconcile native restaurant state:', error);
+      } finally {
+        masterRestaurantPollInFlightRef.current = false;
+      }
+    };
+
     ensureMasterServer();
-    const ensureMasterServerWithoutSnapshot = () => ensureMasterServer(false);
+    const ensureMasterServerWithoutSnapshot = () => {
+      ensureMasterServer(false);
+      void reconcileNativeRestaurantState();
+    };
     const watchdog = window.setInterval(ensureMasterServerWithoutSnapshot, 30000);
+    const restaurantPoll = window.setInterval(() => void reconcileNativeRestaurantState(), 1000);
     window.addEventListener('online', ensureMasterServerWithoutSnapshot);
-    document.addEventListener('visibilitychange', ensureMasterServerWithoutSnapshot);
+    const handleVisibilityChange = () => {
+      if (!document.hidden) ensureMasterServerWithoutSnapshot();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    const appPlugin = (window as any).Capacitor?.Plugins?.App;
+    const resumeListener = appPlugin?.addListener?.('resume', ensureMasterServerWithoutSnapshot);
+    const stateListener = appPlugin?.addListener?.('appStateChange', (state: { isActive?: boolean }) => {
+      if (state?.isActive) ensureMasterServerWithoutSnapshot();
+    });
 
     return () => {
       disposed = true;
       window.clearInterval(watchdog);
+      window.clearInterval(restaurantPoll);
       window.removeEventListener('online', ensureMasterServerWithoutSnapshot);
-      document.removeEventListener('visibilitychange', ensureMasterServerWithoutSnapshot);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      resumeListener?.remove?.();
+      stateListener?.remove?.();
     };
-  }, [config, getCurrentTerminal, parkedTickets, rooms, tables, users]);
+  }, [
+    cashMovements,
+    collections,
+    config,
+    customers,
+    getCurrentTerminal,
+    internalSequences,
+    parkedTickets,
+    productStocks,
+    products,
+    receptions,
+    roles,
+    rooms,
+    suppliers,
+    tables,
+    transfers,
+    users,
+    warehouses,
+  ]);
 
   useEffect(() => {
     if (currentView !== 'TABLE_DESIGNER') {
@@ -4213,6 +4317,31 @@ const AppContent: React.FC = () => {
       }
     }
   };
+
+  const retryClientMasterConnection = useCallback(async () => {
+    setClientMasterTablesStatus('CHECKING');
+    const pingUrl = resolveOperationalApiUrl('/api/sync/ping');
+    for (let attempt = 1; attempt <= 6; attempt += 1) {
+      let timeout: number | undefined;
+      try {
+        const controller = new AbortController();
+        timeout = window.setTimeout(() => controller.abort(), 2500);
+        const response = await fetch(pingUrl, { signal: controller.signal });
+        if (response.ok) {
+          await fetchTables();
+          return;
+        }
+      } catch (error) {
+        if (attempt === 6) {
+          console.warn('[MASTER_LAN] Reconnection attempts exhausted:', error);
+        }
+      } finally {
+        if (timeout !== undefined) window.clearTimeout(timeout);
+      }
+      await new Promise(resolve => window.setTimeout(resolve, 750));
+    }
+    setClientMasterTablesStatus('OFFLINE');
+  }, [fetchTables]);
 
   const openTableForService = useCallback(async (table: Table): Promise<Table | null> => {
     if (!currentUser) return null;
@@ -10862,7 +10991,7 @@ const AppContent: React.FC = () => {
               </p>
               <button
                 type="button"
-                onClick={() => void fetchTables()}
+                onClick={() => void retryClientMasterConnection()}
                 disabled={clientMasterTablesStatus === 'CHECKING'}
                 className="mt-5 inline-flex min-h-12 items-center justify-center gap-2 rounded-lg bg-amber-400 px-5 py-3 text-sm font-black text-slate-950 disabled:cursor-wait disabled:opacity-60"
               >

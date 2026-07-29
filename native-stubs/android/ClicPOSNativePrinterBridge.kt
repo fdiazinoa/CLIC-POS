@@ -513,7 +513,19 @@ class AndroidPrinterBridge(context: Context) {
         val rooms = payload.optJSONArray("rooms")
         val tables = payload.optJSONArray("tables")
         val parkedTickets = payload.optJSONArray("parkedTickets")
-        return ClicPOSMasterHttpServer.start(appContext, port, config, users, rooms, tables, parkedTickets).toString()
+        val catalogs = payload.optJSONObject("catalogs")
+        val restaurantRevision = payload.optLong("restaurantRevision", 0)
+        return ClicPOSMasterHttpServer.start(
+            appContext,
+            port,
+            config,
+            users,
+            rooms,
+            tables,
+            parkedTickets,
+            catalogs,
+            restaurantRevision
+        ).toString()
     }
 
     @JavascriptInterface
@@ -526,7 +538,17 @@ class AndroidPrinterBridge(context: Context) {
         val rooms = payload.optJSONArray("rooms")
         val tables = payload.optJSONArray("tables")
         val parkedTickets = payload.optJSONArray("parkedTickets")
-        return ClicPOSMasterHttpServer.updateConfig(config, users, rooms, tables, parkedTickets).toString()
+        val catalogs = payload.optJSONObject("catalogs")
+        val restaurantRevision = payload.optLong("restaurantRevision", 0)
+        return ClicPOSMasterHttpServer.updateConfig(
+            config,
+            users,
+            rooms,
+            tables,
+            parkedTickets,
+            catalogs,
+            restaurantRevision
+        ).toString()
     }
 
     @JavascriptInterface
@@ -537,6 +559,11 @@ class AndroidPrinterBridge(context: Context) {
     @JavascriptInterface
     fun getMasterServerStatus(payloadJson: String?): String {
         return ClicPOSMasterHttpServer.status(appContext).toString()
+    }
+
+    @JavascriptInterface
+    fun getMasterRestaurantState(payloadJson: String?): String {
+        return ClicPOSMasterHttpServer.getRestaurantState().toString()
     }
 
     @JavascriptInterface
