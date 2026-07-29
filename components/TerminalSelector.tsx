@@ -74,6 +74,7 @@ interface TerminalSelectorResponse {
 interface BindTerminalResponse {
   success: boolean;
   source?: string | null;
+  current_device_id?: string | null;
   tenant_id: string;
   terminal_id: string;
   erp_terminal_id?: string | null;
@@ -84,7 +85,7 @@ interface BindTerminalResponse {
   transferred?: boolean;
   previous_device_id?: string | null;
   recovery_state?: RuntimeTerminalRecoveryState | null;
-  config: BusinessConfig;
+  config?: BusinessConfig;
   users?: UserType[];
   sync_profile?: Partial<SyncProfile>;
   syncProfile?: Partial<SyncProfile>;
@@ -674,21 +675,50 @@ const requestMasterSetup = <T,>(
     headers?: Record<string, string>;
     stage: 'LIST_TERMINALS' | 'BIND_TERMINAL' | 'INITIAL_CONFIG';
   }
-): Promise<RequestJsonResult<T>> => requestJson<T>({
-  url,
-  method: options.method || 'GET',
-  headers: {
-    Accept: 'application/json',
-    ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-    ...(options.headers || {}),
-  },
-  body: options.body ? JSON.stringify(options.body) : undefined,
-  timeoutMs: 12000,
-  diagnosticContext: {
-    scope: 'MASTER_TERMINAL_SETUP',
-    stage: options.stage,
-  },
-});
+): Promise<RequestJsonResult<T>> => {
+  const timeoutMs = 12000;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const hardTimeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`La Maestra no respondió durante ${options.stage} (${timeoutMs / 1000}s).`));
+    }, timeoutMs);
+  });
+  const request = requestJson<T>({
+    url,
+    method: options.method || 'GET',
+    headers: {
+      Accept: 'application/json',
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {}),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+    timeoutMs,
+    diagnosticContext: {
+      scope: 'MASTER_TERMINAL_SETUP',
+      stage: options.stage,
+    },
+  });
+
+  return Promise.race([request, hardTimeout]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId);
+  });
+};
+
+const buildMasterClaimUrl = (
+  apiBase: string,
+  payload: Record<string, unknown>
+): string => {
+  const params = new URLSearchParams();
+  Object.entries(payload).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return;
+    if (Array.isArray(value)) {
+      value.forEach((entry) => params.append(key, String(entry)));
+      return;
+    }
+    params.set(key, String(value));
+  });
+  return `${apiBase}/claim-terminal?${params.toString()}`;
+};
 
 const resolveReachableMasterBinding = async (masterIp?: string) => {
   const normalizedHost = normalizeMasterHost(masterIp || '');
@@ -1129,7 +1159,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         master_terminal_id: resolveOrderTakerContract(terminal).masterTerminalId,
         capabilities: resolveOrderTakerContract(terminal).capabilities,
         restrictions: resolveOrderTakerContract(terminal).restrictions,
-        force_transfer: false,
+        force_transfer: forceTransfer,
       };
       const pairingDiagnosticBase = {
         selectedTerminalUuid: terminal.erpTerminalId || terminal.id,
@@ -1212,20 +1242,37 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           });
         }
       } else {
-        const response = await requestMasterSetup<BindTerminalResponse>(`${apiBase}/bind-terminal`, {
-          method: 'POST',
-          body: bindTerminalRequestBody,
-          stage: 'BIND_TERMINAL',
-        });
+        if (forceTransfer) {
+          updateBindingProgress({
+            stepId: 'claim',
+            message: 'Autorizando este equipo y liberando el cliente anterior en la Maestra local...',
+          });
+        }
+
+        const response = await requestMasterSetup<BindTerminalResponse>(
+          buildMasterClaimUrl(apiBase, bindTerminalRequestBody),
+          {
+            method: 'GET',
+            stage: 'BIND_TERMINAL',
+          }
+        );
 
         if (response.status === 409) {
-          setPendingTerminal(terminal);
+          keepAuthorizationModalOpen = true;
+          closeBindingProgress();
+          const currentDeviceId = response.data?.current_device_id || terminal.currentDeviceId || null;
+          const occupiedTerminal = {
+            ...terminal,
+            currentDeviceId,
+            occupied: true,
+          };
+          setPendingTerminal(occupiedTerminal);
           setAuthorizationIssue({
             code: 'TAKEOVER_REQUIRED',
-            message: 'Pendiente de autorización en Cloud-Admin.',
+            message: 'La terminal está ocupada por otro equipo.',
             httpStatus: 409,
-            terminal,
-            currentDeviceId: terminal.currentDeviceId || null,
+            terminal: occupiedTerminal,
+            currentDeviceId,
             generatedDeviceId: deviceId,
             pairingStatus: 'WAITING_CLOUD_ADMIN_REAUTHORIZATION',
           });
@@ -1235,6 +1282,12 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
         if (!response.ok) {
           const detail = response.text;
+          if (response.status === 404) {
+            throw new Error(
+              'La Caja Maestra no incluye el protocolo de autorización cliente actualizado. '
+              + 'Instala este mismo APK en la Maestra y en la terminal cliente.'
+            );
+          }
           throw new Error(detail || `No se pudo vincular la terminal (${response.status}).`);
         }
 
@@ -1932,20 +1985,20 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                 </div>
                 <div className="min-w-0">
                   <p className="text-[10px] font-black uppercase tracking-[0.26em] text-amber-500 sm:text-[11px] sm:tracking-[0.3em]">
-                    Pendiente de autorización
+                    Terminal local ocupada
                   </p>
                   <h4 className="mt-2 text-lg font-black leading-tight tracking-tight text-slate-900 sm:text-xl md:text-2xl">
-                    Pendiente de autorización en Cloud-Admin
+                    Esta terminal está vinculada a otro equipo
                   </h4>
                   <p className="mt-2.5 text-sm font-medium leading-relaxed text-slate-500 sm:text-[15px]">
-                    Cloud-Admin debe autorizar este device para{' '}
-                    <span className="font-black text-slate-800">{pendingTerminal.name}</span>. El POS reintentará la conexión automáticamente.
+                    La Maestra local tiene <span className="font-black text-slate-800">{pendingTerminal.name}</span>{' '}
+                    asociada a otro dispositivo cliente.
                   </p>
                 </div>
               </div>
 
               <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50/70 px-4 py-3.5 text-sm font-medium leading-relaxed text-amber-900 sm:mt-5 sm:px-5">
-                El POS mantendrá la terminal ERP original. No se generará otra caja ni se usará código manual de vinculación.
+                No se creará otra terminal ni se cambiará el ERP. Puedes reintentar o reasignar esta terminal local al equipo actual.
               </div>
 
               <div className="mt-4 grid gap-2 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-600">
@@ -1979,13 +2032,16 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
               <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3.5">
                 <p className="text-[10px] font-black uppercase tracking-[0.28em] text-blue-500">
-                  Esperando aprobación
+                  Asociación administrada por la Maestra
                 </p>
                 <p className="mt-2 text-xs font-semibold leading-relaxed text-blue-700">
                   {isRetryingAuthorization
-                    ? 'Reintentando autenticación contra Cloud-Admin/ERP...'
-                    : 'Autoriza este device en Cloud-Admin y el POS continuará al detectar la autorización.'}
+                    ? 'Consultando nuevamente la asociación en la Maestra local...'
+                    : 'La reasignación solo cambia qué equipo cliente utiliza esta terminal dentro de la red local.'}
                 </p>
+              </div>
+              <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3.5 text-xs font-semibold leading-relaxed text-amber-900">
+                Autorizar este equipo liberará el cliente anterior. La acción ya está protegida por el PIN administrador de la Maestra.
               </div>
             </div>
 
@@ -2012,6 +2068,19 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                 >
                   {(isBinding || isRetryingAuthorization) ? <RefreshCw size={16} className="animate-spin" /> : <RefreshCw size={16} />}
                   {(isBinding || isRetryingAuthorization) ? 'Reintentando...' : 'Reintentar conexión'}
+                </button>
+                <button
+                  onClick={() => {
+                    setIsRetryingAuthorization(true);
+                    void bindTerminal(pendingTerminal, true);
+                  }}
+                  disabled={isBinding || isRetryingAuthorization}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-amber-500 px-5 py-3 text-sm font-black text-slate-950 shadow-lg shadow-amber-500/20 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                >
+                  <Lock size={16} />
+                  {(isBinding || isRetryingAuthorization)
+                    ? 'Autorizando...'
+                    : 'Autorizar este equipo y liberar el anterior'}
                 </button>
               </div>
             </div>

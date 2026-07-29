@@ -16,21 +16,32 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object ClicPOSMasterHttpServer {
     private const val DEFAULT_PORT = 3001
+    private const val PREFS_NAME = "clic_pos_master_bindings"
+    private const val PREFS_BINDINGS_KEY = "terminal_device_bindings"
     private val running = AtomicBoolean(false)
     private val executor = Executors.newCachedThreadPool()
     private var serverSocket: ServerSocket? = null
     private var activePort = DEFAULT_PORT
+    @Volatile private var appContext: Context? = null
     @Volatile private var configSnapshot = JSONObject()
     @Volatile private var usersSnapshot = JSONArray()
+    @Volatile private var roomsSnapshot = JSONArray()
+    @Volatile private var tablesSnapshot = JSONArray()
+    @Volatile private var parkedTicketsSnapshot = JSONArray()
 
     fun start(
         context: Context,
         requestedPort: Int = DEFAULT_PORT,
         config: JSONObject? = null,
-        users: JSONArray? = null
+        users: JSONArray? = null,
+        rooms: JSONArray? = null,
+        tables: JSONArray? = null,
+        parkedTickets: JSONArray? = null
     ): JSONObject {
-        config?.let { configSnapshot = JSONObject(it.toString()) }
+        appContext = context.applicationContext
+        config?.let { configSnapshot = applyPersistedBindings(JSONObject(it.toString())) }
         users?.let { usersSnapshot = JSONArray(it.toString()) }
+        updateRestaurantSnapshot(rooms, tables, parkedTickets)
         activePort = requestedPort.takeIf { it in 1..65535 } ?: DEFAULT_PORT
 
         if (running.get()) return status(context)
@@ -64,9 +75,16 @@ object ClicPOSMasterHttpServer {
         }
     }
 
-    fun updateConfig(config: JSONObject, users: JSONArray? = null): JSONObject {
-        configSnapshot = JSONObject(config.toString())
+    fun updateConfig(
+        config: JSONObject,
+        users: JSONArray? = null,
+        rooms: JSONArray? = null,
+        tables: JSONArray? = null,
+        parkedTickets: JSONArray? = null
+    ): JSONObject {
+        configSnapshot = applyPersistedBindings(JSONObject(config.toString()))
         users?.let { usersSnapshot = JSONArray(it.toString()) }
+        updateRestaurantSnapshot(rooms, tables, parkedTickets)
         return JSONObject()
             .put("status", "success")
             .put("success", true)
@@ -146,8 +164,18 @@ object ClicPOSMasterHttpServer {
                         writeResponse(client, 200, configSnapshot.toString())
                     method == "GET" && path == "/api/users" ->
                         writeResponse(client, 200, usersSnapshot.toString())
+                    method == "GET" && path == "/api/mesas" ->
+                        writeResponse(client, 200, buildRestaurantSnapshot().toString())
+                    method == "PUT" && path == "/api/mesas/parked-tickets" ->
+                        handleParkedTicketsUpdate(client, body)
+                    method == "POST" && path == "/api/mesas/abrir" ->
+                        handleOpenTable(client, body)
+                    method == "POST" && path == "/api/mesas/liberar" ->
+                        handleReleaseTable(client, body)
                     method == "GET" && path == "/api/setup/terminals" ->
                         writeResponse(client, 200, buildTerminalListResponse(parts.getOrNull(1) ?: path).toString())
+                    method == "GET" && path == "/api/setup/claim-terminal" ->
+                        handleTerminalClaim(client, parts.getOrNull(1) ?: path)
                     method == "POST" && path == "/api/setup/bind-terminal" ->
                         handleTerminalBinding(client, body)
                     method == "GET" && path.startsWith("/api/setup/initial-config/") ->
@@ -259,6 +287,14 @@ object ClicPOSMasterHttpServer {
 
     private fun handleTerminalBinding(socket: Socket, body: String) {
         val payload = if (body.isBlank()) JSONObject() else JSONObject(body)
+        bindTerminal(socket, payload, includeSnapshot = true)
+    }
+
+    private fun handleTerminalClaim(socket: Socket, rawTarget: String) {
+        bindTerminal(socket, parseQuery(rawTarget), includeSnapshot = false)
+    }
+
+    private fun bindTerminal(socket: Socket, payload: JSONObject, includeSnapshot: Boolean) {
         val selectedTerminalId = firstNonBlank(
             payload.optString("terminal_id"),
             payload.optString("erp_terminal_id")
@@ -273,6 +309,7 @@ object ClicPOSMasterHttpServer {
             "default-tenant"
         )
         val forceTransfer = payload.optBoolean("force_transfer", false)
+            || payload.optString("force_transfer").equals("true", ignoreCase = true)
         val terminals = configSnapshot.optJSONArray("terminals") ?: JSONArray()
         var selectedTerminal: JSONObject? = null
 
@@ -313,6 +350,7 @@ object ClicPOSMasterHttpServer {
             val syncConfig = config.optJSONObject("syncConfig") ?: JSONObject()
             syncConfig.put("mode", "SLAVE").put("isEnabled", true)
             config.put("syncConfig", syncConfig)
+            persistTerminalBinding(id, deviceId)
             selectedTerminal = terminal
             break
         }
@@ -360,24 +398,215 @@ object ClicPOSMasterHttpServer {
             terminalConfig.optString("master_terminal_id")
         )
 
-        writeResponse(
-            socket,
-            200,
-            JSONObject()
-                .put("success", true)
-                .put("source", "ANDROID_MASTER")
-                .put("tenant_id", tenantId)
-                .put("terminal_id", terminalId)
-                .put("erp_terminal_id", erpTerminalId)
-                .put("terminal_name", terminalName)
-                .put("terminal_type", terminalType)
-                .put("master_terminal_id", if (masterTerminalId.isBlank()) JSONObject.NULL else masterTerminalId)
-                .put("capabilities", terminalConfig.optJSONArray("capabilities") ?: JSONArray())
-                .put("restrictions", terminalConfig.optJSONArray("restrictions") ?: JSONArray())
+        val response = JSONObject()
+            .put("success", true)
+            .put("source", "ANDROID_MASTER")
+            .put("tenant_id", tenantId)
+            .put("terminal_id", terminalId)
+            .put("erp_terminal_id", erpTerminalId)
+            .put("terminal_name", terminalName)
+            .put("terminal_type", terminalType)
+            .put("master_terminal_id", if (masterTerminalId.isBlank()) JSONObject.NULL else masterTerminalId)
+            .put("capabilities", terminalConfig.optJSONArray("capabilities") ?: JSONArray())
+            .put("restrictions", terminalConfig.optJSONArray("restrictions") ?: JSONArray())
+
+        if (includeSnapshot) {
+            response
                 .put("config", JSONObject(configSnapshot.toString()))
                 .put("users", JSONArray(usersSnapshot.toString()))
-                .toString()
-        )
+        }
+
+        writeResponse(socket, 200, response.toString())
+    }
+
+    /**
+     * The Android Master owns this snapshot while it is serving LAN clients.  The
+     * WebView sends a fresh copy whenever the local restaurant state changes and
+     * clients can update parked tickets through the same Master endpoint.
+     */
+    private fun updateRestaurantSnapshot(
+        rooms: JSONArray? = null,
+        tables: JSONArray? = null,
+        parkedTickets: JSONArray? = null
+    ) {
+        rooms?.let { roomsSnapshot = JSONArray(it.toString()) }
+        tables?.let { tablesSnapshot = JSONArray(it.toString()) }
+        parkedTickets?.let { parkedTicketsSnapshot = JSONArray(it.toString()) }
+    }
+
+    private fun buildRestaurantSnapshot(): JSONObject = JSONObject()
+        .put("rooms", JSONArray(roomsSnapshot.toString()))
+        .put("tables", JSONArray(tablesSnapshot.toString()))
+        .put("parkedTickets", JSONArray(parkedTicketsSnapshot.toString()))
+
+    private fun handleParkedTicketsUpdate(socket: Socket, body: String) {
+        val payload = runCatching { if (body.isBlank()) JSONObject() else JSONObject(body) }
+            .getOrElse {
+                writeResponse(socket, 400, JSONObject()
+                    .put("success", false)
+                    .put("message", "Cuerpo de tickets inválido")
+                    .toString())
+                return
+            }
+        val tickets = payload.optJSONArray("parkedTickets")
+        if (tickets == null) {
+            writeResponse(socket, 400, JSONObject()
+                .put("success", false)
+                .put("message", "parkedTickets debe ser un arreglo")
+                .toString())
+            return
+        }
+
+        updateRestaurantSnapshot(parkedTickets = tickets)
+        writeResponse(socket, 200, JSONObject()
+            .put("success", true)
+            .put("parkedTickets", JSONArray(parkedTicketsSnapshot.toString()))
+            .toString())
+    }
+
+    private fun handleOpenTable(socket: Socket, body: String) {
+        val payload = runCatching { if (body.isBlank()) JSONObject() else JSONObject(body) }
+            .getOrElse {
+                writeResponse(socket, 400, JSONObject()
+                    .put("status", "error")
+                    .put("message", "Cuerpo de mesa inválido")
+                    .toString())
+                return
+            }
+        val tableId = payload.optString("tableId").trim()
+        if (tableId.isBlank()) {
+            writeResponse(socket, 400, JSONObject()
+                .put("status", "error")
+                .put("message", "tableId es requerido")
+                .toString())
+            return
+        }
+
+        val updatedTables = JSONArray(tablesSnapshot.toString())
+        var orderId = ""
+        var found = false
+        for (index in 0 until updatedTables.length()) {
+            val table = updatedTables.optJSONObject(index) ?: continue
+            if (table.optString("id") != tableId) continue
+            found = true
+            orderId = table.optString("currentOrderId").trim()
+            if (orderId.isBlank()) {
+                orderId = "ORD-${System.currentTimeMillis()}"
+                table
+                    .put("currentOrderId", orderId)
+                    .put("currentOrderTotal", 0)
+                    .put("timeSeated", java.time.Instant.now().toString())
+                    .put("waiterId", payload.optString("waiterId"))
+                    .put("waiterName", payload.optString("waiterName"))
+                    .put("status", "OCCUPIED")
+            }
+            break
+        }
+
+        if (!found) {
+            writeResponse(socket, 404, JSONObject()
+                .put("status", "error")
+                .put("message", "Mesa no encontrada")
+                .toString())
+            return
+        }
+
+        updateRestaurantSnapshot(tables = updatedTables)
+        writeResponse(socket, 200, JSONObject()
+            .put("status", "success")
+            .put("orden_id", orderId)
+            .toString())
+    }
+
+    private fun handleReleaseTable(socket: Socket, body: String) {
+        val payload = runCatching { if (body.isBlank()) JSONObject() else JSONObject(body) }
+            .getOrElse {
+                writeResponse(socket, 400, JSONObject()
+                    .put("success", false)
+                    .put("message", "Cuerpo de mesa inválido")
+                    .toString())
+                return
+            }
+        val tableId = payload.optString("tableId").trim()
+        if (tableId.isBlank()) {
+            writeResponse(socket, 400, JSONObject()
+                .put("success", false)
+                .put("message", "tableId es requerido")
+                .toString())
+            return
+        }
+
+        val updatedTables = JSONArray(tablesSnapshot.toString())
+        var orderId = ""
+        var found = false
+        for (index in 0 until updatedTables.length()) {
+            val table = updatedTables.optJSONObject(index) ?: continue
+            if (table.optString("id") != tableId) continue
+            found = true
+            orderId = table.optString("currentOrderId").trim()
+            table
+                .put("status", "FREE")
+                .put("currentOrderId", JSONObject.NULL)
+                .put("currentOrderTotal", 0)
+                .put("timeSeated", JSONObject.NULL)
+                .put("waiterId", JSONObject.NULL)
+                .put("waiterName", JSONObject.NULL)
+            break
+        }
+
+        if (!found) {
+            writeResponse(socket, 404, JSONObject()
+                .put("success", false)
+                .put("message", "Mesa no encontrada")
+                .toString())
+            return
+        }
+
+        val remainingTickets = JSONArray()
+        for (index in 0 until parkedTicketsSnapshot.length()) {
+            val ticket = parkedTicketsSnapshot.optJSONObject(index) ?: continue
+            val belongsToTable = ticket.optString("tableId") == tableId
+            val belongsToOrder = orderId.isNotBlank() && ticket.optString("id") == orderId
+            if (!belongsToTable && !belongsToOrder) remainingTickets.put(ticket)
+        }
+        updateRestaurantSnapshot(tables = updatedTables, parkedTickets = remainingTickets)
+        writeResponse(socket, 200, JSONObject().put("success", true).toString())
+    }
+
+    private fun applyPersistedBindings(snapshot: JSONObject): JSONObject {
+        val bindings = readPersistedBindings()
+        val terminals = snapshot.optJSONArray("terminals") ?: return snapshot
+        for (index in 0 until terminals.length()) {
+            val terminal = terminals.optJSONObject(index) ?: continue
+            val terminalId = terminal.optString("id").trim()
+            val persistedDeviceId = bindings.optString(terminalId).trim()
+            if (terminalId.isBlank() || persistedDeviceId.isBlank()) continue
+            val config = terminal.optJSONObject("config") ?: JSONObject().also {
+                terminal.put("config", it)
+            }
+            config
+                .put("currentDeviceId", persistedDeviceId)
+                .put("governedByMaster", true)
+        }
+        return snapshot
+    }
+
+    private fun readPersistedBindings(): JSONObject {
+        val context = appContext ?: return JSONObject()
+        val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(PREFS_BINDINGS_KEY, null)
+        return runCatching { if (raw.isNullOrBlank()) JSONObject() else JSONObject(raw) }
+            .getOrDefault(JSONObject())
+    }
+
+    private fun persistTerminalBinding(terminalId: String, deviceId: String) {
+        val context = appContext ?: return
+        val bindings = readPersistedBindings()
+        bindings.put(terminalId, deviceId)
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(PREFS_BINDINGS_KEY, bindings.toString())
+            .apply()
     }
 
     private fun buildInitialConfigResponse(terminalId: String, rawTarget: String): JSONObject {

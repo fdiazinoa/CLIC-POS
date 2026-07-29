@@ -13,6 +13,7 @@ const terminalSelectorSource = readFileSync(
 
 test('el servidor Master Android expone el contrato completo de activacion cliente', () => {
   assert.match(serverSource, /path == "\/api\/setup\/terminals"/);
+  assert.match(serverSource, /path == "\/api\/setup\/claim-terminal"/);
   assert.match(serverSource, /path == "\/api\/setup\/bind-terminal"/);
   assert.match(serverSource, /path\.startsWith\("\/api\/setup\/initial-config\/"\)/);
 });
@@ -32,9 +33,28 @@ test('el servidor Master Android conserva el contrato ORDER_TAKER', () => {
 
 test('la activacion cliente usa transporte nativo con timeout para todo el handshake', () => {
   assert.match(terminalSelectorSource, /requestMasterSetup<TerminalSelectorResponse>/);
+  assert.match(terminalSelectorSource, /buildMasterClaimUrl\(apiBase, bindTerminalRequestBody\)/);
   assert.match(terminalSelectorSource, /stage: 'BIND_TERMINAL'/);
   assert.match(terminalSelectorSource, /stage: 'INITIAL_CONFIG'/);
-  assert.match(terminalSelectorSource, /timeoutMs: 12000/);
+  assert.match(terminalSelectorSource, /const timeoutMs = 12000/);
+  assert.match(terminalSelectorSource, /Promise\.race\(\[request, hardTimeout\]\)/);
+});
+
+test('la activacion cliente cierra el progreso cuando la terminal esta ocupada', () => {
+  assert.match(
+    terminalSelectorSource,
+    /if \(response\.status === 409\) \{[\s\S]*?keepAuthorizationModalOpen = true;[\s\S]*?closeBindingProgress\(\);/
+  );
+  assert.match(terminalSelectorSource, /message: 'La terminal está ocupada por otro equipo\.'/);
+});
+
+test('la reasignacion de una cliente se resuelve exclusivamente en la Maestra local', () => {
+  assert.doesNotMatch(terminalSelectorSource, /authorizeTerminalTakeoverFromErp/);
+  assert.doesNotMatch(terminalSelectorSource, /ERP_TERMINAL_TAKEOVER/);
+  assert.match(terminalSelectorSource, /force_transfer: forceTransfer/);
+  assert.match(serverSource, /persistTerminalBinding\(id, deviceId\)/);
+  assert.match(serverSource, /applyPersistedBindings/);
+  assert.match(terminalSelectorSource, /Autorizar este equipo y liberar el anterior/);
 });
 
 test('el servidor Master Android acepta preflight de red privada y ambos headers de device', () => {

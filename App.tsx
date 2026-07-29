@@ -2533,55 +2533,6 @@ const AppContent: React.FC = () => {
     };
   }, [getCurrentDeviceRoleRaw]);
 
-  useEffect(() => {
-    if (!isNativeAndroidRuntime()) return;
-
-    let disposed = false;
-    const ensureMasterServer = () => {
-      if (disposed) return;
-      const nativeBridge = (window as any).ClicPOSNativePrinter;
-      const currentTerminal = getCurrentTerminal();
-      const shouldServeAsMaster = isNativeStandaloneTerminalRuntime(currentTerminal);
-
-      if (!shouldServeAsMaster) {
-        if (typeof nativeBridge?.stopMasterServer === 'function') {
-          void Promise.resolve(nativeBridge.stopMasterServer({ port: 3001 }));
-        }
-        return;
-      }
-
-      if (typeof nativeBridge?.startMasterServer !== 'function') {
-        console.error('[MASTER_LAN] Native Master server bridge is unavailable.');
-        return;
-      }
-
-      Promise.resolve(nativeBridge.startMasterServer({ port: 3001, config, users }))
-        .then((status: any) => {
-          if (disposed) return;
-          console.info('[MASTER_LAN] Native server ensured', {
-            running: Boolean(status?.running || status?.success),
-            port: status?.port || 3001,
-            localIp: status?.localIp || null,
-            localIps: status?.localIps || [],
-            error: status?.message || null,
-          });
-        })
-        .catch((error: unknown) => console.error('[MASTER_LAN] Could not ensure native server:', error));
-    };
-
-    ensureMasterServer();
-    const watchdog = window.setInterval(ensureMasterServer, 30000);
-    window.addEventListener('online', ensureMasterServer);
-    document.addEventListener('visibilitychange', ensureMasterServer);
-
-    return () => {
-      disposed = true;
-      window.clearInterval(watchdog);
-      window.removeEventListener('online', ensureMasterServer);
-      document.removeEventListener('visibilitychange', ensureMasterServer);
-    };
-  }, [config, getCurrentTerminal, users]);
-
   const navigateToUserLogin = React.useCallback(() => {
     clearActiveUserSession();
     clearSecurityState();
@@ -3518,6 +3469,59 @@ const AppContent: React.FC = () => {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [activeCartDraftRestorePrompt, setActiveCartDraftRestorePrompt] = useState<ActiveCartDraft | null>(null);
+
+  useEffect(() => {
+    if (!isNativeAndroidRuntime()) return;
+
+    let disposed = false;
+    const ensureMasterServer = (includeOperationalSnapshot = true) => {
+      if (disposed) return;
+      const nativeBridge = (window as any).ClicPOSNativePrinter;
+      const currentTerminal = getCurrentTerminal();
+      const shouldServeAsMaster = isNativeStandaloneTerminalRuntime(currentTerminal);
+
+      if (!shouldServeAsMaster) {
+        if (typeof nativeBridge?.stopMasterServer === 'function') {
+          void Promise.resolve(nativeBridge.stopMasterServer({ port: 3001 }));
+        }
+        return;
+      }
+
+      if (typeof nativeBridge?.startMasterServer !== 'function') {
+        console.error('[MASTER_LAN] Native Master server bridge is unavailable.');
+        return;
+      }
+
+      const payload = includeOperationalSnapshot
+        ? { port: 3001, config, users, rooms, tables, parkedTickets }
+        : { port: 3001 };
+      Promise.resolve(nativeBridge.startMasterServer(payload))
+        .then((status: any) => {
+          if (disposed) return;
+          console.info('[MASTER_LAN] Native server ensured', {
+            running: Boolean(status?.running || status?.success),
+            port: status?.port || 3001,
+            localIp: status?.localIp || null,
+            localIps: status?.localIps || [],
+            error: status?.message || null,
+          });
+        })
+        .catch((error: unknown) => console.error('[MASTER_LAN] Could not ensure native server:', error));
+    };
+
+    ensureMasterServer();
+    const ensureMasterServerWithoutSnapshot = () => ensureMasterServer(false);
+    const watchdog = window.setInterval(ensureMasterServerWithoutSnapshot, 30000);
+    window.addEventListener('online', ensureMasterServerWithoutSnapshot);
+    document.addEventListener('visibilitychange', ensureMasterServerWithoutSnapshot);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(watchdog);
+      window.removeEventListener('online', ensureMasterServerWithoutSnapshot);
+      document.removeEventListener('visibilitychange', ensureMasterServerWithoutSnapshot);
+    };
+  }, [config, getCurrentTerminal, parkedTickets, rooms, tables, users]);
 
   useEffect(() => {
     if (currentView !== 'TABLE_DESIGNER') {
