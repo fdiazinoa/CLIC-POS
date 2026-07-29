@@ -13,6 +13,7 @@ const terminalSelectorSource = readFileSync(
 
 test('el servidor Master Android expone el contrato completo de activacion cliente', () => {
   assert.match(serverSource, /path == "\/api\/setup\/terminals"/);
+  assert.match(serverSource, /path == "\/api\/setup\/claim-terminal"/);
   assert.match(serverSource, /path == "\/api\/setup\/bind-terminal"/);
   assert.match(serverSource, /path\.startsWith\("\/api\/setup\/initial-config\/"\)/);
 });
@@ -32,9 +33,11 @@ test('el servidor Master Android conserva el contrato ORDER_TAKER', () => {
 
 test('la activacion cliente usa transporte nativo con timeout para todo el handshake', () => {
   assert.match(terminalSelectorSource, /requestMasterSetup<TerminalSelectorResponse>/);
+  assert.match(terminalSelectorSource, /buildMasterClaimUrl\(apiBase, bindTerminalRequestBody\)/);
   assert.match(terminalSelectorSource, /stage: 'BIND_TERMINAL'/);
   assert.match(terminalSelectorSource, /stage: 'INITIAL_CONFIG'/);
-  assert.match(terminalSelectorSource, /timeoutMs: 12000/);
+  assert.match(terminalSelectorSource, /const timeoutMs = 12000/);
+  assert.match(terminalSelectorSource, /Promise\.race\(\[request, hardTimeout\]\)/);
 });
 
 test('el servidor Master Android acepta preflight de red privada y ambos headers de device', () => {

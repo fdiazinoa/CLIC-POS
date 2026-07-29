@@ -84,7 +84,7 @@ interface BindTerminalResponse {
   transferred?: boolean;
   previous_device_id?: string | null;
   recovery_state?: RuntimeTerminalRecoveryState | null;
-  config: BusinessConfig;
+  config?: BusinessConfig;
   users?: UserType[];
   sync_profile?: Partial<SyncProfile>;
   syncProfile?: Partial<SyncProfile>;
@@ -674,21 +674,50 @@ const requestMasterSetup = <T,>(
     headers?: Record<string, string>;
     stage: 'LIST_TERMINALS' | 'BIND_TERMINAL' | 'INITIAL_CONFIG';
   }
-): Promise<RequestJsonResult<T>> => requestJson<T>({
-  url,
-  method: options.method || 'GET',
-  headers: {
-    Accept: 'application/json',
-    ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-    ...(options.headers || {}),
-  },
-  body: options.body ? JSON.stringify(options.body) : undefined,
-  timeoutMs: 12000,
-  diagnosticContext: {
-    scope: 'MASTER_TERMINAL_SETUP',
-    stage: options.stage,
-  },
-});
+): Promise<RequestJsonResult<T>> => {
+  const timeoutMs = 12000;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const hardTimeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`La Maestra no respondió durante ${options.stage} (${timeoutMs / 1000}s).`));
+    }, timeoutMs);
+  });
+  const request = requestJson<T>({
+    url,
+    method: options.method || 'GET',
+    headers: {
+      Accept: 'application/json',
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {}),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+    timeoutMs,
+    diagnosticContext: {
+      scope: 'MASTER_TERMINAL_SETUP',
+      stage: options.stage,
+    },
+  });
+
+  return Promise.race([request, hardTimeout]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId);
+  });
+};
+
+const buildMasterClaimUrl = (
+  apiBase: string,
+  payload: Record<string, unknown>
+): string => {
+  const params = new URLSearchParams();
+  Object.entries(payload).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return;
+    if (Array.isArray(value)) {
+      value.forEach((entry) => params.append(key, String(entry)));
+      return;
+    }
+    params.set(key, String(value));
+  });
+  return `${apiBase}/claim-terminal?${params.toString()}`;
+};
 
 const resolveReachableMasterBinding = async (masterIp?: string) => {
   const normalizedHost = normalizeMasterHost(masterIp || '');
@@ -1212,11 +1241,13 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           });
         }
       } else {
-        const response = await requestMasterSetup<BindTerminalResponse>(`${apiBase}/bind-terminal`, {
-          method: 'POST',
-          body: bindTerminalRequestBody,
-          stage: 'BIND_TERMINAL',
-        });
+        const response = await requestMasterSetup<BindTerminalResponse>(
+          buildMasterClaimUrl(apiBase, bindTerminalRequestBody),
+          {
+            method: 'GET',
+            stage: 'BIND_TERMINAL',
+          }
+        );
 
         if (response.status === 409) {
           setPendingTerminal(terminal);
@@ -1235,6 +1266,12 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
         if (!response.ok) {
           const detail = response.text;
+          if (response.status === 404) {
+            throw new Error(
+              'La Caja Maestra no incluye el protocolo de autorización cliente actualizado. '
+              + 'Instala este mismo APK en la Maestra y en la terminal cliente.'
+            );
+          }
           throw new Error(detail || `No se pudo vincular la terminal (${response.status}).`);
         }
 

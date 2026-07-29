@@ -148,6 +148,8 @@ object ClicPOSMasterHttpServer {
                         writeResponse(client, 200, usersSnapshot.toString())
                     method == "GET" && path == "/api/setup/terminals" ->
                         writeResponse(client, 200, buildTerminalListResponse(parts.getOrNull(1) ?: path).toString())
+                    method == "GET" && path == "/api/setup/claim-terminal" ->
+                        handleTerminalClaim(client, parts.getOrNull(1) ?: path)
                     method == "POST" && path == "/api/setup/bind-terminal" ->
                         handleTerminalBinding(client, body)
                     method == "GET" && path.startsWith("/api/setup/initial-config/") ->
@@ -259,6 +261,14 @@ object ClicPOSMasterHttpServer {
 
     private fun handleTerminalBinding(socket: Socket, body: String) {
         val payload = if (body.isBlank()) JSONObject() else JSONObject(body)
+        bindTerminal(socket, payload, includeSnapshot = true)
+    }
+
+    private fun handleTerminalClaim(socket: Socket, rawTarget: String) {
+        bindTerminal(socket, parseQuery(rawTarget), includeSnapshot = false)
+    }
+
+    private fun bindTerminal(socket: Socket, payload: JSONObject, includeSnapshot: Boolean) {
         val selectedTerminalId = firstNonBlank(
             payload.optString("terminal_id"),
             payload.optString("erp_terminal_id")
@@ -360,24 +370,25 @@ object ClicPOSMasterHttpServer {
             terminalConfig.optString("master_terminal_id")
         )
 
-        writeResponse(
-            socket,
-            200,
-            JSONObject()
-                .put("success", true)
-                .put("source", "ANDROID_MASTER")
-                .put("tenant_id", tenantId)
-                .put("terminal_id", terminalId)
-                .put("erp_terminal_id", erpTerminalId)
-                .put("terminal_name", terminalName)
-                .put("terminal_type", terminalType)
-                .put("master_terminal_id", if (masterTerminalId.isBlank()) JSONObject.NULL else masterTerminalId)
-                .put("capabilities", terminalConfig.optJSONArray("capabilities") ?: JSONArray())
-                .put("restrictions", terminalConfig.optJSONArray("restrictions") ?: JSONArray())
+        val response = JSONObject()
+            .put("success", true)
+            .put("source", "ANDROID_MASTER")
+            .put("tenant_id", tenantId)
+            .put("terminal_id", terminalId)
+            .put("erp_terminal_id", erpTerminalId)
+            .put("terminal_name", terminalName)
+            .put("terminal_type", terminalType)
+            .put("master_terminal_id", if (masterTerminalId.isBlank()) JSONObject.NULL else masterTerminalId)
+            .put("capabilities", terminalConfig.optJSONArray("capabilities") ?: JSONArray())
+            .put("restrictions", terminalConfig.optJSONArray("restrictions") ?: JSONArray())
+
+        if (includeSnapshot) {
+            response
                 .put("config", JSONObject(configSnapshot.toString()))
                 .put("users", JSONArray(usersSnapshot.toString()))
-                .toString()
-        )
+        }
+
+        writeResponse(socket, 200, response.toString())
     }
 
     private fun buildInitialConfigResponse(terminalId: String, rawTarget: String): JSONObject {
