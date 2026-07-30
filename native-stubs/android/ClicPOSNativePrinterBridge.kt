@@ -567,6 +567,26 @@ class AndroidPrinterBridge(context: Context) {
     }
 
     @JavascriptInterface
+    fun acquireMasterTableLock(payloadJson: String?): String {
+        val payload = runCatching {
+            if (payloadJson.isNullOrBlank()) JSONObject() else JSONObject(payloadJson)
+        }.getOrDefault(JSONObject())
+        return ClicPOSMasterHttpServer.acquireTableEditLock(payload).apply {
+            remove("_httpStatus")
+        }.toString()
+    }
+
+    @JavascriptInterface
+    fun releaseMasterTableLock(payloadJson: String?): String {
+        val payload = runCatching {
+            if (payloadJson.isNullOrBlank()) JSONObject() else JSONObject(payloadJson)
+        }.getOrDefault(JSONObject())
+        return ClicPOSMasterHttpServer.releaseTableEditLock(payload).apply {
+            remove("_httpStatus")
+        }.toString()
+    }
+
+    @JavascriptInterface
     fun readClipboard(): String {
         return try {
             if (!clipboardManager.hasPrimaryClip()) {

@@ -4090,7 +4090,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             ticketAutoSyncTimeoutRef.current = null;
             return;
          }
-         onUpdateParkedTickets(nextTickets);
+         void Promise.resolve(onUpdateParkedTickets(nextTickets)).catch((error) => {
+            console.error('[TABLE_SYNC] No se pudo sincronizar automáticamente la mesa:', error);
+         });
          void Promise.resolve(onTableOrderSaved?.(activeTable, syncedTicket));
          ticketAutoSyncFlushRef.current = null;
          ticketAutoSyncTimeoutRef.current = null;
