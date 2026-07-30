@@ -293,6 +293,26 @@ type SafeExitSnapshot = {
   terminalId?: string;
 };
 
+type ActiveTableEditLock = {
+  tableId: string;
+  ownerId: string;
+  token: string;
+  terminalId?: string;
+  userId?: string;
+  userName?: string;
+  acquiredAt: number;
+  expiresAt: number;
+};
+
+const parseNativeBridgeJson = (value: unknown): any => {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+};
+
 const LICENSE_REFRESH_BASE_MS = 60_000;
 const TIMER_JITTER_MIN_MS = 3_000;
 const TIMER_JITTER_MAX_MS = 5_000;
@@ -1575,6 +1595,8 @@ const AppContent: React.FC = () => {
   const { clearSecurityState, setSupervisorPinValidator } = useKioskSecurityContext();
   // --- GLOBAL STATE ---
   const [activeTable, setActiveTable] = useState<Table | null>(null); // New state for selected table context
+  const [activeTableEditLock, setActiveTableEditLock] = useState<ActiveTableEditLock | null>(null);
+  const activeTableEditLockRef = useRef<ActiveTableEditLock | null>(null);
   /* original code */
   const [currentView, setCurrentView] = useState<ViewState>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1814,6 +1836,9 @@ const AppContent: React.FC = () => {
         updateMasterServerConfig: (payload: unknown) => call('updateMasterServerConfig', payload),
         stopMasterServer: (payload: unknown) => call('stopMasterServer', payload),
         getMasterServerStatus: (payload: unknown) => call('getMasterServerStatus', payload),
+        getMasterRestaurantState: (payload: unknown) => call('getMasterRestaurantState', payload),
+        acquireMasterTableLock: (payload: unknown) => call('acquireMasterTableLock', payload),
+        releaseMasterTableLock: (payload: unknown) => call('releaseMasterTableLock', payload),
         getDeviceProfile: () => Promise.resolve(parseResult(runtimeWindow.AndroidPrinter.getDeviceProfile?.())),
         getDeviceInfo: () => Promise.resolve(parseResult(runtimeWindow.AndroidPrinter.getDeviceInfo?.()))
       };
@@ -3471,19 +3496,12 @@ const AppContent: React.FC = () => {
   const [activeCartDraftRestorePrompt, setActiveCartDraftRestorePrompt] = useState<ActiveCartDraft | null>(null);
   const masterRestaurantRevisionRef = useRef(0);
   const masterRestaurantPollInFlightRef = useRef(false);
+  const parkedTicketSyncQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     if (!isNativeAndroidRuntime()) return;
 
     let disposed = false;
-    const parseNativeResult = (value: unknown): any => {
-      if (typeof value !== 'string') return value;
-      try {
-        return JSON.parse(value);
-      } catch {
-        return null;
-      }
-    };
     const catalogs = {
       products,
       customers,
@@ -3550,7 +3568,7 @@ const AppContent: React.FC = () => {
       masterRestaurantPollInFlightRef.current = true;
       try {
         const rawState = await Promise.resolve(nativeBridge.getMasterRestaurantState({}));
-        const state = parseNativeResult(rawState);
+        const state = parseNativeBridgeJson(rawState);
         const revision = Number(state?.revision || 0);
         if (!Number.isFinite(revision) || revision <= masterRestaurantRevisionRef.current) return;
 
@@ -4168,6 +4186,10 @@ const AppContent: React.FC = () => {
           throw new Error('API de mesas no disponible en este entorno.');
         }
         const data = await res.json();
+        const responseRevision = Number(data?.revision || 0);
+        if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
+          masterRestaurantRevisionRef.current = responseRevision;
+        }
         const responseParkedTickets = Array.isArray(data?.parkedTickets) ? data.parkedTickets : [];
         const mergeRemoteTables = (incomingTables: Table[], previousTables: Table[]) => {
           if (isClientRuntime) {
@@ -4317,6 +4339,136 @@ const AppContent: React.FC = () => {
       }
     }
   };
+
+  const invokeTableEditLock = useCallback(async (
+    action: 'acquire' | 'release',
+    payload: Record<string, unknown>
+  ): Promise<any> => {
+    const nativeBridge = (window as any).ClicPOSNativePrinter;
+    const currentTerminal = getCurrentTerminal();
+    const servesAsNativeMaster =
+      isNativeAndroidRuntime() &&
+      isNativeStandaloneTerminalRuntime(currentTerminal);
+    const bridgeMethod = action === 'acquire'
+      ? nativeBridge?.acquireMasterTableLock
+      : nativeBridge?.releaseMasterTableLock;
+
+    if (servesAsNativeMaster && typeof bridgeMethod === 'function') {
+      return parseNativeBridgeJson(await Promise.resolve(bridgeMethod.call(nativeBridge, payload)));
+    }
+
+    const endpoint = action === 'acquire'
+      ? '/api/mesas/bloquear'
+      : '/api/mesas/desbloquear';
+    const response = await fetch(resolveOperationalApiUrl(endpoint), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok || result?.success === false) {
+      const error = new Error(result?.message || `Master respondió HTTP ${response.status}`);
+      (error as any).code = result?.code;
+      (error as any).lock = result?.lock;
+      throw error;
+    }
+    return result;
+  }, [getCurrentTerminal]);
+
+  const releaseActiveTableEditLock = useCallback(async () => {
+    const lock = activeTableEditLockRef.current;
+    if (!lock) return;
+    await parkedTicketSyncQueueRef.current.catch((error) => {
+      console.warn('[TABLE_SYNC] La última actualización falló antes de liberar la mesa:', error);
+    });
+    activeTableEditLockRef.current = null;
+    setActiveTableEditLock(null);
+    try {
+      await invokeTableEditLock('release', {
+        tableId: lock.tableId,
+        ownerId: lock.ownerId,
+        token: lock.token,
+      });
+    } catch (error) {
+      console.warn('[TABLE_EDIT_LOCK] No se pudo confirmar liberación:', error);
+    }
+  }, [invokeTableEditLock]);
+
+  const acquireTableEditLock = useCallback(async (table: Table): Promise<boolean> => {
+    const tableId = String(table.id || '').trim();
+    if (!tableId) return false;
+    const ownerId = String(deviceId || getCurrentTerminal()?.config?.currentDeviceId || '').trim();
+    if (!ownerId) {
+      alert('No se pudo identificar este dispositivo para bloquear la mesa.');
+      return false;
+    }
+
+    const currentLock = activeTableEditLockRef.current;
+    if (currentLock && currentLock.tableId !== tableId) {
+      await releaseActiveTableEditLock();
+    }
+
+    try {
+      const result = await invokeTableEditLock('acquire', {
+        tableId,
+        ownerId,
+        terminalId: getCurrentTerminal()?.id,
+        userId: currentUser?.id,
+        userName: currentUser?.name,
+        token: currentLock?.tableId === tableId ? currentLock.token : undefined,
+      });
+      const lock = result?.lock;
+      if (!result?.success || !lock?.token) {
+        throw new Error(result?.message || 'No se pudo bloquear la mesa.');
+      }
+      activeTableEditLockRef.current = lock as ActiveTableEditLock;
+      setActiveTableEditLock(lock as ActiveTableEditLock);
+      return true;
+    } catch (error: any) {
+      const lockedBy = String(error?.lock?.userName || error?.lock?.terminalId || 'otra terminal');
+      alert(error?.code === 'TABLE_EDIT_LOCKED'
+        ? `Esta mesa está siendo digitada por ${lockedBy}. Intente nuevamente cuando vuelva al mapa de mesas.`
+        : (error?.message || 'No se pudo bloquear la mesa.'));
+      await fetchTables();
+      return false;
+    }
+  }, [
+    currentUser?.id,
+    currentUser?.name,
+    deviceId,
+    getCurrentTerminal,
+    invokeTableEditLock,
+    releaseActiveTableEditLock,
+  ]);
+
+  useEffect(() => {
+    if (!activeTableEditLock || currentView !== 'POS') return;
+    const heartbeat = window.setInterval(() => {
+      void invokeTableEditLock('acquire', {
+        tableId: activeTableEditLock.tableId,
+        ownerId: activeTableEditLock.ownerId,
+        terminalId: activeTableEditLock.terminalId || getCurrentTerminal()?.id,
+        userId: activeTableEditLock.userId || currentUser?.id,
+        userName: activeTableEditLock.userName || currentUser?.name,
+        token: activeTableEditLock.token,
+      }).then(result => {
+        if (result?.success && result?.lock?.token) {
+          activeTableEditLockRef.current = result.lock as ActiveTableEditLock;
+          setActiveTableEditLock(result.lock as ActiveTableEditLock);
+        }
+      }).catch(error => {
+        console.warn('[TABLE_EDIT_LOCK] Heartbeat falló:', error);
+      });
+    }, 15_000);
+    return () => window.clearInterval(heartbeat);
+  }, [
+    activeTableEditLock,
+    currentUser?.id,
+    currentUser?.name,
+    currentView,
+    getCurrentTerminal,
+    invokeTableEditLock,
+  ]);
 
   const retryClientMasterConnection = useCallback(async () => {
     setClientMasterTablesStatus('CHECKING');
@@ -6899,19 +7051,39 @@ const AppContent: React.FC = () => {
   const handleUpdateParkedTickets = async (tickets: ParkedTicket[]) => {
     const validTickets = Array.isArray(tickets) ? tickets : [];
     if (isClientTerminalMode()) {
-      const response = await fetch(resolveOperationalApiUrl('/api/mesas/parked-tickets'), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ parkedTickets: validTickets })
-      });
-      const result = await response.json().catch(() => null);
-      if (!response.ok || result?.success === false) {
-        throw new Error(result?.message || `Master respondió HTTP ${response.status}`);
-      }
-      const sharedTickets = Array.isArray(result?.parkedTickets) ? result.parkedTickets : validTickets;
-      setParkedTickets(sharedTickets);
-      await fetchTables();
-      return;
+      const editLock = activeTableEditLockRef.current;
+      const syncOperation = async () => {
+        const response = await fetch(resolveOperationalApiUrl('/api/mesas/parked-tickets'), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            parkedTickets: validTickets,
+            tableId: editLock?.tableId,
+            ownerId: editLock?.ownerId,
+            lockToken: editLock?.token,
+            baseRevision: masterRestaurantRevisionRef.current,
+          })
+        });
+        const result = await response.json().catch(() => null);
+        if (!response.ok || result?.success === false) {
+          throw new Error(result?.message || `Master respondió HTTP ${response.status}`);
+        }
+        const sharedTickets = Array.isArray(result?.parkedTickets) ? result.parkedTickets : validTickets;
+        const responseRevision = Number(result?.revision || 0);
+        if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
+          masterRestaurantRevisionRef.current = responseRevision;
+        }
+        setParkedTickets(sharedTickets);
+        if (Array.isArray(result?.tables)) {
+          setTables(result.tables);
+        }
+        await fetchTables();
+      };
+      const queuedSync = parkedTicketSyncQueueRef.current
+        .catch(() => undefined)
+        .then(syncOperation);
+      parkedTicketSyncQueueRef.current = queuedSync.catch(() => undefined);
+      return queuedSync;
     }
     writeCriticalCollectionsMirror(validTickets, cashMovements);
     setParkedTickets(validTickets);
@@ -9251,8 +9423,12 @@ const AppContent: React.FC = () => {
                 onChangeRoom={setActiveRoomId}
                 tables={tables}
                 parkedTickets={parkedTickets}
+                onBeforeTableOpen={acquireTableEditLock}
                 onTableClick={async (table) => {
                   console.log('Mesa seleccionada:', table.name);
+                  if (!(await acquireTableEditLock(table))) {
+                    return;
+                  }
 
                   // Cargar ítems solo de ESTA mesa: órdenes abiertas viven en parkedTickets (no heredar carrito previo).
                   let nextCart: CartItem[] = [];
@@ -9488,9 +9664,13 @@ const AppContent: React.FC = () => {
             onOpenInventoryTracking={(productId) => handleViewChange('TRACKING', { productId })}
             onOpenAudit={() => handleViewChange('INVENTORY_AUDIT')}
             onOpenTableMap={() => {
-              setViewData(null);
-              setCurrentView('TABLE_MAP');
-              fetchTables().catch((error) => console.error('Failed to refresh tables on TABLE_MAP view:', error));
+              void (async () => {
+                await releaseActiveTableEditLock();
+                setActiveTable(null);
+                setViewData(null);
+                setCurrentView('TABLE_MAP');
+                await fetchTables().catch((error) => console.error('Failed to refresh tables on TABLE_MAP view:', error));
+              })();
             }}
             onTableOrderSaved={async (table, ticket) => {
               const total = typeof ticket.total === 'number'

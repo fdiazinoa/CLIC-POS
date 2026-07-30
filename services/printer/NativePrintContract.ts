@@ -112,10 +112,13 @@ export interface NativePrinterBridge {
   startKdsServer?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
   stopKdsServer?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
   getKdsServerStatus?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
-  startMasterServer?: (payload?: { port?: number; config?: unknown; users?: unknown[]; rooms?: unknown[]; tables?: unknown[]; parkedTickets?: unknown[] }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
-  updateMasterServerConfig?: (payload?: { config?: unknown; users?: unknown[]; rooms?: unknown[]; tables?: unknown[]; parkedTickets?: unknown[] }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
+  startMasterServer?: (payload?: { port?: number; config?: unknown; users?: unknown[]; rooms?: unknown[]; tables?: unknown[]; parkedTickets?: unknown[]; catalogs?: unknown; restaurantRevision?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
+  updateMasterServerConfig?: (payload?: { config?: unknown; users?: unknown[]; rooms?: unknown[]; tables?: unknown[]; parkedTickets?: unknown[]; catalogs?: unknown; restaurantRevision?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
   stopMasterServer?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
   getMasterServerStatus?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
+  getMasterRestaurantState?: (payload?: Record<string, never>) => Promise<unknown> | unknown;
+  acquireMasterTableLock?: (payload: Record<string, unknown>) => Promise<unknown> | unknown;
+  releaseMasterTableLock?: (payload: Record<string, unknown>) => Promise<unknown> | unknown;
 
   /** Enumeración de lectores biométricos USB/red (Android nativo). */
   discoverFingerprintReaders?: (payload?: { connection?: ConnectionType }) => Promise<unknown>;

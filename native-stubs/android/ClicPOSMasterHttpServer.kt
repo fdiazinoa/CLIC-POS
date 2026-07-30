@@ -22,6 +22,7 @@ object ClicPOSMasterHttpServer {
     private const val PREFS_NAME = "clic_pos_master_bindings"
     private const val PREFS_BINDINGS_KEY = "terminal_device_bindings"
     private const val PREFS_RESTAURANT_KEY = "restaurant_state"
+    private const val TABLE_EDIT_LOCK_TTL_MS = 45_000L
     private val running = AtomicBoolean(false)
     private val executor = Executors.newCachedThreadPool()
     private var serverSocket: ServerSocket? = null
@@ -36,6 +37,7 @@ object ClicPOSMasterHttpServer {
     private val restaurantRevision = AtomicLong(0)
     private val syncTokens = ConcurrentHashMap<String, String>()
     private val catalogVersions = ConcurrentHashMap<String, Long>()
+    private val tableEditLocks = ConcurrentHashMap<String, JSONObject>()
     @Volatile private var restaurantStateLoaded = false
 
     fun start(
@@ -208,6 +210,10 @@ object ClicPOSMasterHttpServer {
                         writeResponse(client, 200, usersSnapshot.toString())
                     method == "GET" && path == "/api/mesas" ->
                         writeResponse(client, 200, buildRestaurantSnapshot().toString())
+                    method == "POST" && path == "/api/mesas/bloquear" ->
+                        writeLockResponse(client, acquireTableEditLock(parseJsonBody(body)))
+                    method == "POST" && path == "/api/mesas/desbloquear" ->
+                        writeLockResponse(client, releaseTableEditLock(parseJsonBody(body)))
                     method == "PUT" && path == "/api/mesas/parked-tickets" ->
                         handleParkedTicketsUpdate(client, body)
                     method == "POST" && path == "/api/mesas/abrir" ->
@@ -692,9 +698,131 @@ object ClicPOSMasterHttpServer {
             ?: (items.toString().hashCode().toLong() and 0x7fffffffL).coerceAtLeast(1)
     }
 
+    private fun parseJsonBody(body: String): JSONObject =
+        if (body.isBlank()) JSONObject() else JSONObject(body)
+
+    private fun cleanupExpiredTableLocks(now: Long = System.currentTimeMillis()) {
+        var removed = false
+        for ((tableId, lock) in tableEditLocks.entries) {
+            if (lock.optLong("expiresAt", 0) <= now && tableEditLocks.remove(tableId, lock)) {
+                removed = true
+            }
+        }
+        if (removed) restaurantRevision.incrementAndGet()
+    }
+
+    private fun activeTableLock(tableId: String): JSONObject? {
+        cleanupExpiredTableLocks()
+        return tableEditLocks[tableId]?.let { JSONObject(it.toString()) }
+    }
+
+    private fun publicTableLock(lock: JSONObject): JSONObject =
+        JSONObject(lock.toString()).apply { remove("token") }
+
+    @Synchronized
+    fun acquireTableEditLock(payload: JSONObject): JSONObject {
+        val tableId = payload.optString("tableId").trim()
+        val ownerId = payload.optString("ownerId").trim()
+        if (tableId.isBlank() || ownerId.isBlank()) {
+            return JSONObject()
+                .put("success", false)
+                .put("code", "TABLE_LOCK_INPUT_REQUIRED")
+                .put("message", "tableId y ownerId son requeridos")
+                .put("_httpStatus", 400)
+        }
+
+        val now = System.currentTimeMillis()
+        cleanupExpiredTableLocks(now)
+        val current = tableEditLocks[tableId]
+        if (current != null && current.optString("ownerId") != ownerId) {
+            return JSONObject()
+                .put("success", false)
+                .put("code", "TABLE_EDIT_LOCKED")
+                .put("message", "La mesa está siendo editada en otra terminal.")
+                .put("lock", publicTableLock(current))
+                .put("_httpStatus", 409)
+        }
+
+        val token = current?.optString("token")?.takeIf { it.isNotBlank() }
+            ?: UUID.randomUUID().toString()
+        val acquiredAt = current?.optLong("acquiredAt", now) ?: now
+        val lock = JSONObject()
+            .put("tableId", tableId)
+            .put("ownerId", ownerId)
+            .put("terminalId", payload.optString("terminalId"))
+            .put("userId", payload.optString("userId"))
+            .put("userName", payload.optString("userName"))
+            .put("token", token)
+            .put("acquiredAt", acquiredAt)
+            .put("expiresAt", now + TABLE_EDIT_LOCK_TTL_MS)
+        tableEditLocks[tableId] = lock
+        if (current == null) {
+            restaurantRevision.incrementAndGet()
+        }
+
+        return JSONObject()
+            .put("success", true)
+            .put("lock", JSONObject(lock.toString()))
+            .put("_httpStatus", 200)
+    }
+
+    @Synchronized
+    fun releaseTableEditLock(payload: JSONObject): JSONObject {
+        val tableId = payload.optString("tableId").trim()
+        val ownerId = payload.optString("ownerId").trim()
+        val token = payload.optString("token").trim()
+        if (tableId.isBlank()) {
+            return JSONObject()
+                .put("success", false)
+                .put("message", "tableId es requerido")
+                .put("_httpStatus", 400)
+        }
+
+        val current = activeTableLock(tableId)
+        if (current == null) {
+            return JSONObject().put("success", true).put("_httpStatus", 200)
+        }
+        val isOwner = ownerId.isNotBlank() && current.optString("ownerId") == ownerId
+        val hasToken = token.isNotBlank() && current.optString("token") == token
+        if (!isOwner || !hasToken) {
+            return JSONObject()
+                .put("success", false)
+                .put("code", "TABLE_EDIT_LOCK_OWNERSHIP_MISMATCH")
+                .put("message", "La mesa está bloqueada por otra terminal.")
+                .put("lock", publicTableLock(current))
+                .put("_httpStatus", 409)
+        }
+
+        tableEditLocks.remove(tableId)
+        restaurantRevision.incrementAndGet()
+        return JSONObject().put("success", true).put("_httpStatus", 200)
+    }
+
+    private fun writeLockResponse(socket: Socket, result: JSONObject) {
+        val status = result.optInt("_httpStatus", if (result.optBoolean("success")) 200 else 400)
+        result.remove("_httpStatus")
+        writeResponse(socket, status, result.toString())
+    }
+
+    private fun buildTablesWithEditLocks(): JSONArray {
+        cleanupExpiredTableLocks()
+        val tables = JSONArray(tablesSnapshot.toString())
+        for (index in 0 until tables.length()) {
+            val table = tables.optJSONObject(index) ?: continue
+            val tableId = table.optString("id")
+            val lock = tableEditLocks[tableId]
+            if (lock != null) {
+                table.put("editingLock", publicTableLock(lock))
+            } else {
+                table.remove("editingLock")
+            }
+        }
+        return tables
+    }
+
     private fun buildRestaurantSnapshot(): JSONObject = JSONObject()
         .put("rooms", JSONArray(roomsSnapshot.toString()))
-        .put("tables", JSONArray(tablesSnapshot.toString()))
+        .put("tables", buildTablesWithEditLocks())
         .put("parkedTickets", JSONArray(parkedTicketsSnapshot.toString()))
         .put("revision", restaurantRevision.get())
 
@@ -718,12 +846,52 @@ object ClicPOSMasterHttpServer {
             return
         }
 
-        val reconciledTables = reconcileTablesWithParkedTickets(tablesSnapshot, tickets)
-        applyClientRestaurantMutation(tables = reconciledTables, parkedTickets = tickets)
+        val tableId = payload.optString("tableId").trim()
+        val ownerId = payload.optString("ownerId").trim()
+        val lockToken = payload.optString("lockToken").trim()
+        val nextTickets = if (tableId.isNotBlank()) {
+            val lock = activeTableLock(tableId)
+            val ownsLock = lock != null &&
+                lock.optString("ownerId") == ownerId &&
+                lock.optString("token") == lockToken
+            if (!ownsLock) {
+                writeResponse(socket, 409, JSONObject()
+                    .put("success", false)
+                    .put("code", "TABLE_EDIT_LOCK_REQUIRED")
+                    .put("message", "La terminal perdió el bloqueo de edición de la mesa.")
+                    .toString())
+                return
+            }
+            mergeTicketsForTable(tableId, tickets)
+        } else {
+            JSONArray(tickets.toString())
+        }
+
+        val reconciledTables = reconcileTablesWithParkedTickets(tablesSnapshot, nextTickets)
+        applyClientRestaurantMutation(tables = reconciledTables, parkedTickets = nextTickets)
         writeResponse(socket, 200, JSONObject()
             .put("success", true)
             .put("parkedTickets", JSONArray(parkedTicketsSnapshot.toString()))
+            .put("tables", buildTablesWithEditLocks())
+            .put("revision", restaurantRevision.get())
             .toString())
+    }
+
+    private fun mergeTicketsForTable(tableId: String, incomingTickets: JSONArray): JSONArray {
+        val merged = JSONArray()
+        for (index in 0 until parkedTicketsSnapshot.length()) {
+            val ticket = parkedTicketsSnapshot.optJSONObject(index) ?: continue
+            if (ticket.optString("tableId") != tableId) {
+                merged.put(JSONObject(ticket.toString()))
+            }
+        }
+        for (index in 0 until incomingTickets.length()) {
+            val ticket = incomingTickets.optJSONObject(index) ?: continue
+            if (ticket.optString("tableId") == tableId) {
+                merged.put(JSONObject(ticket.toString()))
+            }
+        }
+        return merged
     }
 
     private fun reconcileTablesWithParkedTickets(
