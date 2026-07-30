@@ -1091,6 +1091,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const desktopActionGridRef = useRef<HTMLDivElement>(null);
    const ticketAutoSyncTimeoutRef = useRef<number | null>(null);
    const ticketAutoSyncFlushRef = useRef<(() => Promise<void>) | null>(null);
+   // El guardado automático puede dispararse varias veces antes de que React
+   // propague parkedTickets de vuelta como prop. Mantener el último snapshot
+   // evita que una pulsación posterior reconstruya la orden con datos viejos.
+   const parkedTicketsRef = useRef<ParkedTicket[]>(parkedTickets);
    const closedTableOrderIdsRef = useRef<Set<string>>(new Set());
    const activeTableHydrationRef = useRef<{ key: string; missingTicket: boolean } | null>(null);
    const kdsRetryInFlightRef = useRef(false);
@@ -1105,6 +1109,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    useEffect(() => {
       setProductPrices(Array.isArray(externalProductPrices) ? externalProductPrices : []);
    }, [externalProductPrices]);
+
+   useEffect(() => {
+      parkedTicketsRef.current = Array.isArray(parkedTickets) ? parkedTickets : [];
+   }, [parkedTickets]);
 
    useEffect(() => {
       let cancelled = false;
@@ -4135,7 +4143,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          barTabName: existing?.barTabName || activeBarTabName || undefined,
       };
 
-      const nextTickets = [...parkedTickets.filter(ticket => ticket.id !== orderId), syncedTicket];
+      const nextTickets = [
+         ...parkedTicketsRef.current.filter(ticket => ticket.id !== orderId),
+         syncedTicket
+      ];
+      // Actualizar la referencia antes de persistir: el siguiente cambio de
+      // carrito puede ocurrir antes de que el padre entregue las nuevas props.
+      parkedTicketsRef.current = nextTickets;
       const batchClientSync = isClientTerminalMode();
 
       if (ticketAutoSyncTimeoutRef.current) {
