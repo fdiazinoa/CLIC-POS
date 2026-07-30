@@ -1973,6 +1973,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showDiscountModal, setShowDiscountModal] = useState(false);
    const [showSplitModal, setShowSplitModal] = useState(false);
    const [showPaymentModal, setShowPaymentModal] = useState(false);
+   const [returnToTableMapAfterPayment, setReturnToTableMapAfterPayment] = useState(false);
    const [showTicketOptions, setShowTicketOptions] = useState(false);
    const [showParkedList, setShowParkedList] = useState(false);
    const [showParkAliasModal, setShowParkAliasModal] = useState(false);
@@ -5107,8 +5108,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                setIsReturnMode(false);
                setRefundAuthorizedBy(null);
                setActiveRecoveredReservation(null);
+               // Keep the payment modal mounted so it can show the completed-sale
+               // actions. Returning to TABLE_MAP here unmounted it before
+               // PaymentModal could render Ticket / Email / Nueva Venta.
                if (activeTable && onOpenTableMap) {
-                  onOpenTableMap();
+                  setReturnToTableMapAfterPayment(true);
                }
                return txn;
             }
@@ -5228,6 +5232,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          handlePaymentConfirm(marketplacePayment ? [marketplacePayment] : []).catch(console.error);
          return;
       }
+      setReturnToTableMapAfterPayment(false);
       setShowPaymentModal(true);
    };
 
@@ -7808,7 +7813,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                onConfirm={handleSplitConfirm}
             />
          )}
-         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={nextPaymentFractionPart && cartTotal > 0 ? cartTax * (amountDueNow / cartTotal) : cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
+         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={nextPaymentFractionPart && cartTotal > 0 ? cartTax * (amountDueNow / cartTotal) : cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => {
+            setShowPaymentModal(false);
+            if (returnToTableMapAfterPayment && onOpenTableMap) {
+               setReturnToTableMapAfterPayment(false);
+               onOpenTableMap();
+            }
+         }} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} salesUsers={salesUsers} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={!isKdsReturnedCartItem(editingItem)} canVoidItem={!editingItem.dispatched} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, selectedVariant, variantInfo) => { addToCart(p, 1, pr, m, undefined, selectedVariant, variantInfo); setSelectedProductForVariants(null); }} />}

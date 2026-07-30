@@ -1,0 +1,34 @@
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+const posSource = readFileSync(
+  new URL('../components/POSInterface.tsx', import.meta.url),
+  'utf8'
+);
+
+test('table checkout keeps the completed-sale modal mounted until the cashier closes it', () => {
+  const paymentHandler = posSource.slice(
+    posSource.indexOf('const handlePaymentConfirm'),
+    posSource.indexOf('const handleSplitConfirm')
+  );
+
+  assert.match(
+    paymentHandler,
+    /setReturnToTableMapAfterPayment\(true\);\s*}\s*return txn;/,
+    'successful table checkout must defer navigation until after the success screen'
+  );
+  assert.doesNotMatch(
+    paymentHandler,
+    /if \(activeTable && onOpenTableMap\) \{\s*onOpenTableMap\(\);/,
+    'successful table checkout must not unmount PaymentModal before it renders its result'
+  );
+});
+
+test('closing the completed-sale modal performs the deferred table navigation', () => {
+  assert.match(
+    posSource,
+    /onClose=\{\(\) => \{\s*setShowPaymentModal\(false\);\s*if \(returnToTableMapAfterPayment && onOpenTableMap\) \{\s*setReturnToTableMapAfterPayment\(false\);\s*onOpenTableMap\(\);/,
+    'the explicit modal close action must return restaurant sales to the table map'
+  );
+});
