@@ -55,6 +55,7 @@ interface TerminalBindingScreenProps {
   onPair: (terminalId: string, result?: PairingResult, options?: PairingOptions) => Promise<void>;
   onConfigUpdate?: (newConfig: BusinessConfig) => void | Promise<void>;
   onUsersUpdate?: (users: UserType[]) => void | Promise<void>;
+  onBackToModeSelection?: () => void;
   initialError?: string | null;
   initialMasterIp?: string;
 }
@@ -70,6 +71,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   onPair,
   onConfigUpdate,
   onUsersUpdate,
+  onBackToModeSelection,
   initialError,
   initialMasterIp,
 }) => {
@@ -233,6 +235,16 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
     setAdminPin('');
   };
 
+  const handleBackToModeSelection = () => {
+    setError(null);
+    setAdminPin('');
+    if (onBackToModeSelection) {
+      onBackToModeSelection();
+      return;
+    }
+    setStep('MODE_SELECT');
+  };
+
   return (
     <div className="relative min-h-screen overflow-x-hidden overflow-y-auto bg-slate-900 p-3 pb-6 sm:p-6">
       <div className="pointer-events-none absolute inset-0 opacity-10">
@@ -359,7 +371,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
               </button>
 
               <button
-                onClick={() => setStep('MODE_SELECT')}
+                onClick={handleBackToModeSelection}
                 className="w-full py-3 text-sm font-black text-slate-400 transition-colors hover:text-slate-600"
               >
                 Volver
@@ -393,7 +405,15 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
               </button>
 
               <button
-                onClick={() => setStep(masterIp ? 'SLAVE_CONNECT' : 'MODE_SELECT')}
+                onClick={() => {
+                  if (bindingMode === 'SLAVE' && masterIp) {
+                    setError(null);
+                    setAdminPin('');
+                    setStep('SLAVE_CONNECT');
+                    return;
+                  }
+                  handleBackToModeSelection();
+                }}
                 className="w-full py-3 text-sm font-black text-slate-400 transition-colors hover:text-slate-600"
               >
                 Volver

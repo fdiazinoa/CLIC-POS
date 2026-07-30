@@ -10,6 +10,11 @@ const terminalSelectorSource = readFileSync(
   new URL('../components/TerminalSelector.tsx', import.meta.url),
   'utf8',
 );
+const terminalBindingSource = readFileSync(
+  new URL('../components/TerminalBindingScreen.tsx', import.meta.url),
+  'utf8',
+);
+const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 
 test('el servidor Master Android expone el contrato completo de activacion cliente', () => {
   assert.match(serverSource, /path == "\/api\/setup\/terminals"/);
@@ -38,6 +43,21 @@ test('la activacion cliente usa transporte nativo con timeout para todo el hands
   assert.match(terminalSelectorSource, /stage: 'INITIAL_CONFIG'/);
   assert.match(terminalSelectorSource, /const timeoutMs = 12000/);
   assert.match(terminalSelectorSource, /Promise\.race\(\[request, hardTimeout\]\)/);
+});
+
+test('Master ERP lista terminales autoritativas del ERP y no acepta seeds del servidor embebido', () => {
+  assert.match(terminalSelectorSource, /if \(useErpDirectMasterAndroid \|\| usesErpDirect\)/);
+  assert.match(terminalSelectorSource, /const erpData = await listTerminalsFromErp/);
+  assert.doesNotMatch(terminalSelectorSource, /setup proxy \/terminals failed, falling back to ERP direct/);
+});
+
+test('volver desde la autorización regresa al selector canónico del modo de dispositivo', () => {
+  assert.match(terminalBindingSource, /onBackToModeSelection\?: \(\) => void/);
+  assert.match(terminalBindingSource, /const handleBackToModeSelection = \(\) =>/);
+  assert.match(terminalBindingSource, /if \(bindingMode === 'SLAVE' && masterIp\)/);
+  assert.match(appSource, /onBackToModeSelection=\{\(\) => \{/);
+  assert.match(appSource, /localStorage\.removeItem\(TERMINAL_SETUP_MODE_KEY\)/);
+  assert.match(appSource, /setCurrentView\('TERMINAL_MODE_SELECTOR'\)/);
 });
 
 test('la activacion cliente cierra el progreso cuando la terminal esta ocupada', () => {
