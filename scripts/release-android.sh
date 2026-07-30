@@ -38,6 +38,20 @@ extract_version_code_from_metadata() {
   ' "${metadata_file}"
 }
 
+extract_version_name_from_metadata() {
+  local metadata_file="$1"
+  node --input-type=module -e '
+    import fs from "node:fs";
+
+    const file = process.argv[1];
+    const json = JSON.parse(fs.readFileSync(file, "utf8"));
+    const latest = (Array.isArray(json?.elements) ? json.elements : [])
+      .filter(item => Number.isFinite(Number(item?.versionCode)) && typeof item?.versionName === "string")
+      .sort((left, right) => Number(right.versionCode) - Number(left.versionCode))[0];
+    console.log(latest ? `${Number(latest.versionCode)}|${latest.versionName}` : "0|");
+  ' "${metadata_file}"
+}
+
 update_gradle_version() {
   local gradle_file="$1"
   local version_code="$2"
@@ -76,6 +90,32 @@ resolve_next_version_code() {
   )
 
   echo $((max_version + 1))
+}
+
+resolve_latest_version_name() {
+  local max_version_code=0
+  local latest_version_name=""
+  local metadata_entry
+  local metadata_version_code
+  local metadata_version_name
+
+  while IFS= read -r metadata_file; do
+    metadata_entry="$(extract_version_name_from_metadata "${metadata_file}")"
+    metadata_version_code="${metadata_entry%%|*}"
+    metadata_version_name="${metadata_entry#*|}"
+    if [[ "${metadata_version_code}" =~ ^[0-9]+$ ]] && (( metadata_version_code > max_version_code )); then
+      max_version_code="${metadata_version_code}"
+      latest_version_name="${metadata_version_name}"
+    fi
+  done < <(
+    for worktree_dir in "${WORKSPACE_ROOT}/_worktrees/CLIC-POS"/*; do
+      [[ -d "${worktree_dir}" ]] || continue
+      find "${worktree_dir}/android/app/build/outputs/apk/release" \
+        -maxdepth 1 -type f -name 'output-metadata*.json' -print 2>/dev/null
+    done | sort -u
+  )
+
+  echo "${latest_version_name}"
 }
 
 resolve_sdk_dir() {
@@ -136,6 +176,7 @@ CANONICAL_GRADLE_FILE="${CANONICAL_BUILD_WORKTREE}/android/app/build.gradle"
 require_file "${CANONICAL_GRADLE_FILE}"
 
 NEXT_VERSION_CODE="$(resolve_next_version_code "${CANONICAL_GRADLE_FILE}")"
+LATEST_RELEASE_VERSION_NAME="$(resolve_latest_version_name)"
 SOURCE_VERSION_CODE="$(git -C "${REPO_ROOT}" show "${SOURCE_COMMIT}:android/app/build.gradle" | awk '/versionCode[[:space:]]+[0-9]+/ { print $2; exit }')"
 SOURCE_VERSION_NAME="$(git -C "${REPO_ROOT}" show "${SOURCE_COMMIT}:android/app/build.gradle" | sed -n 's/.*versionName[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
 
@@ -145,6 +186,8 @@ fi
 
 if [[ "${SOURCE_VERSION_CODE}" == "${NEXT_VERSION_CODE}" && -n "${SOURCE_VERSION_NAME}" ]]; then
   VERSION_NAME="${SOURCE_VERSION_NAME}"
+elif [[ "${LATEST_RELEASE_VERSION_NAME}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+  VERSION_NAME="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
 elif [[ "${SOURCE_VERSION_NAME}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
   VERSION_NAME="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
 else
