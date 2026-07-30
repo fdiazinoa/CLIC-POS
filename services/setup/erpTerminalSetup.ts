@@ -6,7 +6,7 @@ import {
 } from '../sync/erpRegisterResponse';
 import type { SyncProfile } from '../sync/SyncProfile';
 import { supabase } from '../../utils/supabase';
-import { requestJson } from '../network/httpClient';
+import { getNetworkEngine, requestJson } from '../network/httpClient';
 import { resolveOrderTakerContract } from '../../utils/orderTakerPolicy';
 import { db } from '../../utils/db';
 import { terminalConfigRequestCoordinator } from '../sync/TerminalConfigRequestCoordinator';
@@ -1622,63 +1622,84 @@ export const fetchInitialConfigFromErp = async (input: {
   erpTerminalId: string;
   posDeviceId: string;
 }): Promise<RuntimeInitialConfigResponse> => {
-  let result;
-  try {
-    result = await withTimeout(
-      terminalConfigRequestCoordinator.request<Record<string, any>>({
-        baseUrl: input.erpBaseUrl,
-        terminalId: input.erpTerminalId,
-        tenantId: input.tenantId,
-        deviceId: input.posDeviceId,
-        reason: 'pairing',
-        deferPersistence: true,
-      }),
-      'INITIAL_CONFIG'
-    );
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('INITIAL_CONFIG timed out')) {
-      // Pairing is an interactive flow. Do not leave the operator blocked behind
-      // the coordinator's long background retry schedule.
-      terminalConfigRequestCoordinator.cancel(input.erpTerminalId);
-      throw new Error(
-        `La descarga de configuración inicial no respondió en ${REQUEST_TIMEOUT_MS / 1000} segundos. `
-        + 'Verifica la conexión con la Caja Maestra o el ERP y pulsa Reintentar.'
-      );
-    }
-    throw error;
-  }
+  let payload: Record<string, any>;
+  let configVersion: string | null = null;
+  let etag: string | null = null;
 
-  if (result.status === 'unchanged') {
-    const localConfig = await db.get('config') as unknown as BusinessConfig | null;
-    const matchingTerminal = localConfig && !Array.isArray(localConfig)
-      ? (localConfig.terminals || []).find((terminal) => (
-        terminal.id === input.erpTerminalId
-        || terminal.config?.erpTerminalId === input.erpTerminalId
-        || terminal.config?.erpBinding?.terminalId === input.erpTerminalId
-      ))
-      : null;
-    const cachedSnapshot =
-      matchingTerminal?.config?.erpSnapshot
-      || localConfig?.terminalSnapshots?.[matchingTerminal?.id || input.erpTerminalId]
-      || null;
-    if (!localConfig || Array.isArray(localConfig) || !cachedSnapshot) {
-      terminalConfigRequestCoordinator.clear(input.erpTerminalId);
-      return fetchInitialConfigFromErp(input);
-    }
-    return {
-      success: true,
+  if (getNetworkEngine() === 'capacitor-http') {
+    const query = new URLSearchParams({
       tenant_id: input.tenantId,
-      terminal_id: matchingTerminal?.id || input.erpTerminalId,
-      erp_terminal_id: input.erpTerminalId,
-      config: localConfig,
-      terminal_config: cachedSnapshot as Record<string, any>,
-      config_version: result.configVersion,
-      etag: result.etag,
-      unchanged: true,
-    };
-  }
+      device_id: input.posDeviceId,
+    });
+    payload = asObject(await fetchErpJson(
+      input.erpBaseUrl,
+      `/api/setup/initial-config/${encodeURIComponent(input.erpTerminalId)}?${query.toString()}`,
+      {
+        headers: buildDeviceHeaders(input.posDeviceId),
+      }
+    ));
+    configVersion = asString(payload.config_version || payload.configVersion) || null;
+  } else {
+    let result;
+    try {
+      result = await withTimeout(
+        terminalConfigRequestCoordinator.request<Record<string, any>>({
+          baseUrl: input.erpBaseUrl,
+          terminalId: input.erpTerminalId,
+          tenantId: input.tenantId,
+          deviceId: input.posDeviceId,
+          reason: 'pairing',
+          deferPersistence: true,
+        }),
+        'INITIAL_CONFIG'
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('INITIAL_CONFIG timed out')) {
+        // Pairing is an interactive flow. Do not leave the operator blocked behind
+        // the coordinator's long background retry schedule.
+        terminalConfigRequestCoordinator.cancel(input.erpTerminalId);
+        throw new Error(
+          `La descarga de configuración inicial no respondió en ${REQUEST_TIMEOUT_MS / 1000} segundos. `
+          + 'Verifica la conexión con la Caja Maestra o el ERP y pulsa Reintentar.'
+        );
+      }
+      throw error;
+    }
 
-  const payload = result.payload || {};
+    if (result.status === 'unchanged') {
+      const localConfig = await db.get('config') as unknown as BusinessConfig | null;
+      const matchingTerminal = localConfig && !Array.isArray(localConfig)
+        ? (localConfig.terminals || []).find((terminal) => (
+          terminal.id === input.erpTerminalId
+          || terminal.config?.erpTerminalId === input.erpTerminalId
+          || terminal.config?.erpBinding?.terminalId === input.erpTerminalId
+        ))
+        : null;
+      const cachedSnapshot =
+        matchingTerminal?.config?.erpSnapshot
+        || localConfig?.terminalSnapshots?.[matchingTerminal?.id || input.erpTerminalId]
+        || null;
+      if (!localConfig || Array.isArray(localConfig) || !cachedSnapshot) {
+        terminalConfigRequestCoordinator.clear(input.erpTerminalId);
+        return fetchInitialConfigFromErp(input);
+      }
+      return {
+        success: true,
+        tenant_id: input.tenantId,
+        terminal_id: matchingTerminal?.id || input.erpTerminalId,
+        erp_terminal_id: input.erpTerminalId,
+        config: localConfig,
+        terminal_config: cachedSnapshot as Record<string, any>,
+        config_version: result.configVersion,
+        etag: result.etag,
+        unchanged: true,
+      };
+    }
+
+    payload = result.payload || {};
+    configVersion = result.configVersion;
+    etag = result.etag;
+  }
 
   const payloadBusinessConfig = asObject(payload?.business_config || payload?.businessConfig);
   const payloadOperational = asObject(payload?.operational);
@@ -1717,8 +1738,8 @@ export const fetchInitialConfigFromErp = async (input: {
     activationToken: runtimeAuth.activationToken,
     syncToken: runtimeAuth.syncToken,
     tokenExpiresAt: runtimeAuth.tokenExpiresAt,
-    config_version: result.configVersion,
-    etag: result.etag,
+    config_version: configVersion,
+    etag,
     unchanged: false,
   };
 };
