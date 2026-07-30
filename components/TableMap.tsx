@@ -38,6 +38,7 @@ interface TableMapProps {
     tables: Table[];
     parkedTickets?: ParkedTicket[];
     onTableClick: (table: Table) => void;
+    onBeforeTableOpen?: (table: Table) => boolean | Promise<boolean>;
     currencySymbol: string;
     currentUser: UserType;
     isAdmin?: boolean;
@@ -386,6 +387,7 @@ const TableMap: React.FC<TableMapProps> = ({
     tables,
     parkedTickets,
     onTableClick,
+    onBeforeTableOpen,
     currencySymbol,
     currentUser,
     isAdmin,
@@ -752,12 +754,14 @@ const TableMap: React.FC<TableMapProps> = ({
             const smartStatus = getSmartStatus(table, elapsedMinutes, hasDigitizedItems);
             const displayTable = hasDigitizedItems && parkedSummary ? enrichTableWithParkedTicket(table) : table;
             const isOccupiedLike = smartStatus !== 'FREE';
-            const isLocked =
+            const isBeingEdited = Boolean(displayTable.editingLock);
+            const isLocked = isBeingEdited || (
                 isOccupiedLike &&
                 Boolean(bloqueoMeseros) &&
                 Boolean(displayTable.waiterId) &&
                 displayTable.waiterId !== currentUser.id &&
-                !isAdmin;
+                !isAdmin
+            );
 
             const progress = isOccupiedLike ? clamp(elapsedMinutes / Math.max(1, expectedStayMinutes), 0, 1) : 0;
             const serviceStage = getServiceStage(progress);
@@ -1126,6 +1130,9 @@ const TableMap: React.FC<TableMapProps> = ({
     }, [completeTableTransfer, getVisualTableState, resolveTicketForTable, transferSelection]);
 
     const handleTableAction = useCallback(async (table: Table) => {
+        if (onBeforeTableOpen && !(await onBeforeTableOpen(table))) {
+            return;
+        }
         const tableTickets = getTableTickets(table);
         if (isRestaurantMode && table.shape !== 'BAR' && tableTickets.length > 0) {
             setSelectedAccountTable(table);
@@ -1202,12 +1209,15 @@ const TableMap: React.FC<TableMapProps> = ({
         }
 
         setSelectedTable(table);
-    }, [createTableAccount, currentUser.id, currentUser.name, getTableTickets, isRestaurantMode, onOpenTable, onRefreshTables, onTableClick, onUpdateParkedTickets, onUpdateTables]);
+    }, [createTableAccount, currentUser.id, currentUser.name, getTableTickets, isRestaurantMode, onBeforeTableOpen, onOpenTable, onRefreshTables, onTableClick, onUpdateParkedTickets, onUpdateTables]);
 
     const handleNodeSelect = useCallback(
         (model: SmartTableModel) => {
             if (model.isLocked) {
-                alert(`Mesa bloqueada. Atendida por: ${model.table.waiterName || 'otro mesero'}`);
+                const editingOwner = model.table.editingLock?.userName || model.table.editingLock?.terminalId;
+                alert(editingOwner
+                    ? `Mesa en digitación por ${editingOwner}. Estará disponible cuando esa terminal vuelva al mapa de mesas.`
+                    : `Mesa bloqueada. Atendida por: ${model.table.waiterName || 'otro mesero'}`);
                 return;
             }
             if (handleTransferTableClick(model.table)) return;

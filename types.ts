@@ -1536,6 +1536,14 @@ export interface Table {
   guests?: number;
   barTabId?: string;
   barTabName?: string;
+  editingLock?: {
+    ownerId: string;
+    terminalId?: string;
+    userId?: string;
+    userName?: string;
+    acquiredAt: number;
+    expiresAt: number;
+  };
 }
 
 /**
