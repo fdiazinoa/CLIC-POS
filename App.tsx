@@ -304,6 +304,20 @@ type ActiveTableEditLock = {
   expiresAt: number;
 };
 
+type ParkedTicketSyncOptions = {
+  deferRemote?: boolean;
+  reason?: 'cart_changed' | 'debounced' | 'explicit';
+};
+
+type PendingClientTableSync = {
+  id: 'current';
+  status: 'PENDING' | 'EMPTY';
+  tableId?: string;
+  queuedAt: string;
+  reason?: ParkedTicketSyncOptions['reason'];
+  parkedTickets: ParkedTicket[];
+};
+
 const parseNativeBridgeJson = (value: unknown): any => {
   if (typeof value !== 'string') return value;
   try {
@@ -322,6 +336,7 @@ const CASH_MOVEMENTS_STORAGE_KEY = 'clic_pos_cash_movements_mirror_v1';
 const FLOOR_PLAN_STORAGE_KEY = 'clic_pos_floor_plan_mirror_v1';
 const ACTIVE_USER_SESSION_STORAGE_KEY = 'clic_pos_active_user_session_v1';
 const FORCE_LOGIN_AFTER_EXIT_STORAGE_KEY = 'clic_pos_force_login_after_exit_v1';
+const PENDING_CLIENT_TABLE_SYNC_STORAGE_KEY = 'clic_pos_pending_client_table_sync_v1';
 
 type FloorPlanMirror = {
   rooms: Room[];
@@ -548,6 +563,54 @@ const writeCriticalCollectionsMirror = (parkedTickets: ParkedTicket[], cashMovem
   } catch {
     // SQLite/native adapter remains the primary durable store; this mirror is a crash/kill safety net.
   }
+};
+
+const persistPendingClientTableSync = async (pending: PendingClientTableSync): Promise<void> => {
+  try {
+    window.localStorage.setItem(PENDING_CLIENT_TABLE_SYNC_STORAGE_KEY, JSON.stringify(pending));
+  } catch {
+    // SQLite remains the durable fallback when localStorage is unavailable.
+  }
+  await db.save('pendingClientTableSync' as any, pending);
+};
+
+const readPendingClientTableSync = async (): Promise<PendingClientTableSync | null> => {
+  try {
+    const raw = window.localStorage.getItem(PENDING_CLIENT_TABLE_SYNC_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as PendingClientTableSync;
+      if (parsed?.status === 'PENDING' && Array.isArray(parsed.parkedTickets)) {
+        return parsed;
+      }
+      return null;
+    }
+  } catch {
+    // Fall through to the SQLite-backed copy.
+  }
+
+  try {
+    const persisted = await db.get('pendingClientTableSync' as any) as unknown as PendingClientTableSync | null;
+    return persisted?.status === 'PENDING' && Array.isArray(persisted.parkedTickets)
+      ? persisted
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+const clearPendingClientTableSync = async (): Promise<void> => {
+  const cleared: PendingClientTableSync = {
+    id: 'current',
+    status: 'EMPTY',
+    queuedAt: new Date().toISOString(),
+    parkedTickets: [],
+  };
+  try {
+    window.localStorage.setItem(PENDING_CLIENT_TABLE_SYNC_STORAGE_KEY, JSON.stringify(cleared));
+  } catch {
+    // ignore
+  }
+  await db.save('pendingClientTableSync' as any, cleared).catch(() => undefined);
 };
 
 const mergeById = <T extends { id?: string }>(primary: T[], fallback: T[]): T[] => {
@@ -7065,10 +7128,31 @@ const AppContent: React.FC = () => {
   };
 
   // --- PERSISTENCE HANDLER FOR PARKED TICKETS ---
-  const handleUpdateParkedTickets = async (tickets: ParkedTicket[]) => {
+  const handleUpdateParkedTickets = async (
+    tickets: ParkedTicket[],
+    options: ParkedTicketSyncOptions = { reason: 'explicit' },
+  ) => {
     const validTickets = Array.isArray(tickets) ? tickets : [];
     if (isClientTerminalMode()) {
       const editLock = activeTableEditLockRef.current;
+      const pendingSync: PendingClientTableSync = {
+        id: 'current',
+        status: 'PENDING',
+        tableId: editLock?.tableId,
+        queuedAt: new Date().toISOString(),
+        reason: options.reason || 'explicit',
+        parkedTickets: validTickets,
+      };
+      writeCriticalCollectionsMirror(validTickets, cashMovements);
+      await Promise.allSettled([
+        db.save('parkedTickets', validTickets),
+        persistPendingClientTableSync(pendingSync),
+      ]);
+
+      if (options.deferRemote) {
+        return;
+      }
+
       const syncOperation = async () => {
         const response = await fetch(resolveOperationalApiUrl('/api/mesas/parked-tickets'), {
           method: 'PUT',
@@ -7094,6 +7178,7 @@ const AppContent: React.FC = () => {
         if (Array.isArray(result?.tables)) {
           setTables(result.tables);
         }
+        await clearPendingClientTableSync();
         await fetchTables();
       };
       const queuedSync = parkedTicketSyncQueueRef.current
@@ -9453,6 +9538,14 @@ const AppContent: React.FC = () => {
                     return;
                   }
 
+                  const pendingClientSync = isClientTerminalMode()
+                    ? await readPendingClientTableSync()
+                    : null;
+                  const initialParkedTickets =
+                    pendingClientSync?.tableId === String(table.id)
+                      ? pendingClientSync.parkedTickets
+                      : (parkedTickets || []);
+
                   // Cargar ítems solo de ESTA mesa: órdenes abiertas viven en parkedTickets (no heredar carrito previo).
                   let nextCart: CartItem[] = [];
                   let nextSelectedCustomer: Customer | null = null;
@@ -9479,7 +9572,7 @@ const AppContent: React.FC = () => {
                     return null;
                   };
                   if (table.currentOrderId) {
-                    let activeParkedTickets = parkedTickets || [];
+                    let activeParkedTickets = initialParkedTickets;
                     let parked = activeParkedTickets.find(p => p.id === table.currentOrderId)
                       || (!isBarTableContext ? activeParkedTickets.find(p => String(p.tableId) === String(table.id)) : undefined);
                     if (!parked && canUseLocalOperationalTableStore()) {
@@ -9512,7 +9605,7 @@ const AppContent: React.FC = () => {
                       }
                     }
                   } else if (table.id) {
-                    let activeParkedTickets = parkedTickets || [];
+                    let activeParkedTickets = initialParkedTickets;
                     let parked = !isBarTableContext
                       ? activeParkedTickets.find(p => String(p.tableId) === String(table.id))
                       : undefined;
