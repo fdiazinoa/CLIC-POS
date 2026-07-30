@@ -2029,6 +2029,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return () => document.removeEventListener('mousedown', handlePointerDown);
    }, [showTariffSelector]);
    const [globalDiscount, setGlobalDiscount] = useState<{ type: 'PERCENT' | 'FIXED', value: number }>({ type: 'PERCENT', value: 0 });
+   const restoredParkedPricingRef = useRef<string | null>(null);
 
    useEffect(() => {
       if (!activeTable?.currentOrderId || cart.length > 0) return;
@@ -2042,6 +2043,38 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          onUpdateCart(ord.items);
       }
    }, [activeTable, parkedTickets, transactions, onUpdateCart, cart.length]);
+
+   useEffect(() => {
+      const orderId = String(activeTable?.currentOrderId || '').trim();
+      if (!orderId) {
+         restoredParkedPricingRef.current = null;
+         setGlobalDiscount({ type: 'PERCENT', value: 0 });
+         return;
+      }
+
+      const parked = parkedTickets.find(ticket => String(ticket.id) === orderId);
+      if (!parked) return;
+      const restoreKey = [
+         orderId,
+         parked.discountType || '',
+         Number(parked.discountValue || 0),
+         Number(parked.discountAmount || 0),
+      ].join(':');
+      if (restoredParkedPricingRef.current === restoreKey) return;
+
+      const restoredType = parked.discountType === 'PERCENT' ? 'PERCENT' : 'FIXED';
+      const restoredValue = Number(
+         parked.discountValue ?? parked.discountAmount ?? 0
+      );
+      setGlobalDiscount({
+         type: restoredType,
+         value: Number.isFinite(restoredValue) ? Math.max(0, restoredValue) : 0,
+      });
+      restoredParkedPricingRef.current = restoreKey;
+   }, [
+      activeTable?.currentOrderId,
+      parkedTickets,
+   ]);
 
    const [editingItem, setEditingItem] = useState<CartItem | null>(null);
    const [activeCartItemId, setActiveCartItemId] = useState<string | null>(null);
@@ -4064,8 +4097,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const sameCustomerName = (existing?.customerName || '') === (selectedCustomer?.name || '');
       const existingTotal = Number(existing?.total || 0);
       const sameFinalTotal = Math.abs(existingTotal - cartTotal) < 0.01;
+      const sameDiscount =
+         Math.abs(Number(existing?.discountAmount || 0) - discountAmount) < 0.01 &&
+         (existing?.discountType || 'PERCENT') === globalDiscount.type &&
+         Math.abs(Number(existing?.discountValue || 0) - globalDiscount.value) < 0.01;
+      const sameGuests = Number(existing?.guests || 0) === Number(activeTable?.guests || 0);
 
-      if (existingDigest === nextDigest && sameCustomer && sameCustomerName && sameFinalTotal) {
+      if (existingDigest === nextDigest && sameCustomer && sameCustomerName && sameFinalTotal && sameDiscount && sameGuests) {
          return;
       }
 
@@ -4075,6 +4113,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          alias: existing?.alias,
          items: [...cart],
          total: cartTotal,
+         discountAmount,
+         discountType: globalDiscount.type,
+         discountValue: globalDiscount.value,
+         guests: activeTable.guests,
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
          customerSnapshot: selectedCustomer ? {
@@ -4164,6 +4206,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       activeBarTabName,
       cart,
       cartTotal,
+      discountAmount,
+      globalDiscount.type,
+      globalDiscount.value,
       parkedTickets,
       selectedCustomer?.id,
       selectedCustomer?.name,
@@ -5745,7 +5790,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          name: buildParkedTicketName(),
          alias: normalizedAlias,
          items: [...ticketItems],
-         total: ticketTotal,
+         total: cartOverride ? Math.max(0, ticketTotal - discountAmount) : cartTotal,
+         discountAmount,
+         discountType: globalDiscount.type,
+         discountValue: globalDiscount.value,
+         guests: activeTable?.guests ?? existingParked?.guests,
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
          customerSnapshot: selectedCustomer ? {
@@ -5778,26 +5827,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       if (activeTable) {
          await Promise.resolve(onTableOrderSaved?.(activeTable, newParked));
-         try {
-            const total = ticketItems.reduce((sum, i) => sum + (i.price * i.quantity), 0);
-
-            await syncOrderToConfiguredKds(newParked.id, {
+         const total = ticketItems.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+         void syncOrderToConfiguredKds(newParked.id, {
                items: ticketItems,
                total,
                status: 'OCCUPIED'
-            });
+            })
+            .catch((error) => console.warn('No se pudo sincronizar la mesa con cocina en segundo plano:', error));
 
-            if (onClearActiveTable) onClearActiveTable();
-
-            // Redirect Logic
-            if (activeTerminalConfig?.tables?.autoRedirectToMap && onOpenTableMap) {
-               onOpenTableMap();
-            } else if (onOpenTableMap) {
-               onOpenTableMap();
-            }
-         } catch (e) {
-            console.error("Failed to sync table status with KDS:", e);
-         }
+         if (onClearActiveTable) onClearActiveTable();
+         if (onOpenTableMap) onOpenTableMap();
       }
 
       onUpdateCart([]); onSelectCustomer(null);
@@ -5818,6 +5857,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          alias: existingParked?.alias,
          items: [...cart],
          total: cartTotal,
+         discountAmount,
+         discountType: globalDiscount.type,
+         discountValue: globalDiscount.value,
+         guests: activeTable.guests,
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
          customerSnapshot: selectedCustomer ? {
@@ -5877,19 +5920,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       // 2. Otherwise park/save the ticket.
       if (!releasedEmptyTable) {
          await handleParkCurrentTicket();
+      } else if (onOpenTableMap) {
+         onOpenTableMap();
       }
-
-      // 3. Dispatch to kitchen if applicable
-      if (!releasedEmptyTable && activeTerminalConfig?.operational?.usa_modulos_cocina && cart.length > 0) {
-         try {
-            await handleDispatchCommand();
-         } catch (e) {
-            console.error("Failed to dispatch on exit:", e);
-         }
-      }
-
-      // 4. Navigate back to map
-      if (onOpenTableMap) onOpenTableMap();
    };
 
    const handleBackToMap = async () => {

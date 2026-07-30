@@ -55,7 +55,7 @@ object ClicPOSMasterHttpServer {
         restoreRestaurantSnapshot()
         config?.let { configSnapshot = applyPersistedBindings(JSONObject(it.toString())) }
         users?.let { usersSnapshot = JSONArray(it.toString()) }
-        catalogs?.let { updateCatalogSnapshots(it) }
+        catalogs?.let { updateCatalogSnapshots(it, acknowledgedRestaurantRevision) }
         updateRestaurantSnapshotFromWebView(
             rooms,
             tables,
@@ -106,7 +106,7 @@ object ClicPOSMasterHttpServer {
     ): JSONObject {
         configSnapshot = applyPersistedBindings(JSONObject(config.toString()))
         users?.let { usersSnapshot = JSONArray(it.toString()) }
-        catalogs?.let { updateCatalogSnapshots(it) }
+        catalogs?.let { updateCatalogSnapshots(it, acknowledgedRestaurantRevision) }
         updateRestaurantSnapshotFromWebView(
             rooms,
             tables,
@@ -216,6 +216,10 @@ object ClicPOSMasterHttpServer {
                         writeLockResponse(client, releaseTableEditLock(parseJsonBody(body)))
                     method == "PUT" && path == "/api/mesas/parked-tickets" ->
                         handleParkedTicketsUpdate(client, body)
+                    method == "PUT" && path.startsWith("/api/tables/") ->
+                        handleTableUpdate(client, path, body)
+                    method == "PUT" && path == "/api/customers" ->
+                        handleCustomerUpsert(client, body)
                     method == "POST" && path == "/api/mesas/abrir" ->
                         handleOpenTable(client, body)
                     method == "POST" && path == "/api/mesas/liberar" ->
@@ -503,7 +507,9 @@ object ClicPOSMasterHttpServer {
         persistRestaurantSnapshot()
     }
 
-    private fun updateCatalogSnapshots(catalogs: JSONObject) {
+    private fun updateCatalogSnapshots(catalogs: JSONObject, acknowledgedRevision: Long = restaurantRevision.get()) {
+        val hasInitializedCatalogs = catalogSnapshots.length() > 0
+        if (hasInitializedCatalogs && acknowledgedRevision < restaurantRevision.get()) return
         val previous = catalogSnapshots
         val next = JSONObject(catalogs.toString())
         val keys = next.keys()
@@ -824,6 +830,7 @@ object ClicPOSMasterHttpServer {
         .put("rooms", JSONArray(roomsSnapshot.toString()))
         .put("tables", buildTablesWithEditLocks())
         .put("parkedTickets", JSONArray(parkedTicketsSnapshot.toString()))
+        .put("customers", getSyncCollection("customers"))
         .put("revision", restaurantRevision.get())
 
     fun getRestaurantState(): JSONObject = buildRestaurantSnapshot()
@@ -956,8 +963,137 @@ object ClicPOSMasterHttpServer {
                     table.optString("timeSeated"),
                     ticket.optString("timestamp")
                 ))
+            val guests = ticket.optInt("guests", 0)
+            if (guests > 0) table.put("guests", guests)
         }
         return reconciled
+    }
+
+    private fun handleTableUpdate(socket: Socket, path: String, body: String) {
+        val tableId = URLDecoder.decode(
+            path.removePrefix("/api/tables/"),
+            StandardCharsets.UTF_8.name()
+        ).trim()
+        val payload = runCatching { if (body.isBlank()) JSONObject() else JSONObject(body) }
+            .getOrElse {
+                writeResponse(socket, 400, JSONObject()
+                    .put("success", false)
+                    .put("message", "Cuerpo de mesa inválido")
+                    .toString())
+                return
+            }
+        if (tableId.isBlank()) {
+            writeResponse(socket, 400, JSONObject()
+                .put("success", false)
+                .put("message", "tableId es requerido")
+                .toString())
+            return
+        }
+
+        val lock = activeTableLock(tableId)
+        if (lock != null) {
+            val ownsLock =
+                lock.optString("ownerId") == payload.optString("ownerId") &&
+                lock.optString("token") == payload.optString("lockToken")
+            if (!ownsLock) {
+                writeResponse(socket, 409, JSONObject()
+                    .put("success", false)
+                    .put("code", "TABLE_EDIT_LOCK_REQUIRED")
+                    .put("message", "La terminal perdió el bloqueo de edición de la mesa.")
+                    .toString())
+                return
+            }
+        }
+
+        val updatedTables = JSONArray(tablesSnapshot.toString())
+        var updatedTable: JSONObject? = null
+        for (index in 0 until updatedTables.length()) {
+            val table = updatedTables.optJSONObject(index) ?: continue
+            if (table.optString("id") != tableId) continue
+            val keys = payload.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                if (key !in setOf("id", "ownerId", "lockToken", "editingLock")) {
+                    table.put(key, payload.opt(key))
+                }
+            }
+            updatedTable = table
+            break
+        }
+        if (updatedTable == null) {
+            writeResponse(socket, 404, JSONObject()
+                .put("success", false)
+                .put("message", "Mesa no encontrada")
+                .toString())
+            return
+        }
+
+        val updatedTickets = JSONArray(parkedTicketsSnapshot.toString())
+        if (payload.has("guests")) {
+            for (index in 0 until updatedTickets.length()) {
+                val ticket = updatedTickets.optJSONObject(index) ?: continue
+                if (ticket.optString("tableId") == tableId) {
+                    ticket.put("guests", payload.optInt("guests", 0))
+                }
+            }
+        }
+        applyClientRestaurantMutation(tables = updatedTables, parkedTickets = updatedTickets)
+        writeResponse(socket, 200, JSONObject()
+            .put("success", true)
+            .put("table", JSONObject(updatedTable.toString()))
+            .put("tables", buildTablesWithEditLocks())
+            .put("parkedTickets", JSONArray(parkedTicketsSnapshot.toString()))
+            .put("revision", restaurantRevision.get())
+            .toString())
+    }
+
+    @Synchronized
+    private fun handleCustomerUpsert(socket: Socket, body: String) {
+        val payload = runCatching { if (body.isBlank()) JSONObject() else JSONObject(body) }
+            .getOrElse {
+                writeResponse(socket, 400, JSONObject()
+                    .put("success", false)
+                    .put("message", "Cuerpo de cliente inválido")
+                    .toString())
+                return
+            }
+        val customer = payload.optJSONObject("customer")
+        val customerId = customer?.optString("id")?.trim().orEmpty()
+        if (customer == null || customerId.isBlank() || customer.optString("name").isBlank()) {
+            writeResponse(socket, 400, JSONObject()
+                .put("success", false)
+                .put("message", "customer.id y customer.name son requeridos")
+                .toString())
+            return
+        }
+
+        val currentCustomers = getSyncCollection("customers")
+        val nextCustomers = JSONArray()
+        var replaced = false
+        for (index in 0 until currentCustomers.length()) {
+            val current = currentCustomers.optJSONObject(index) ?: continue
+            if (current.optString("id") == customerId) {
+                nextCustomers.put(JSONObject(customer.toString()))
+                replaced = true
+            } else {
+                nextCustomers.put(JSONObject(current.toString()))
+            }
+        }
+        if (!replaced) nextCustomers.put(JSONObject(customer.toString()))
+
+        val nextCatalogs = JSONObject(catalogSnapshots.toString())
+        nextCatalogs.put("customers", nextCustomers)
+        catalogSnapshots = nextCatalogs
+        val now = System.currentTimeMillis()
+        catalogVersions["customers"] = maxOf(now, (catalogVersions["customers"] ?: 0) + 1)
+        restaurantRevision.incrementAndGet()
+
+        writeResponse(socket, 200, JSONObject()
+            .put("success", true)
+            .put("customer", JSONObject(customer.toString()))
+            .put("customers", JSONArray(nextCustomers.toString()))
+            .put("revision", restaurantRevision.get())
+            .toString())
     }
 
     private fun handleOpenTable(socket: Socket, body: String) {

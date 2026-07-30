@@ -169,23 +169,21 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
     const terminalConfig = config.terminals?.find(t => t.id === transaction.terminalId)?.config;
 
     // Calculate totals and savings
-    let discountTotal = 0;
+    let lineDiscountTotal = 0;
     const isTaxIncluded = transaction.isTaxIncluded || false;
 
     transaction.items.forEach(item => {
         const originalPrice = item.originalPrice || item.price;
-        discountTotal += (originalPrice - item.price) * item.quantity;
+        lineDiscountTotal += Math.max(0, (originalPrice - item.price) * item.quantity);
     });
 
-    if (transaction.discountAmount && transaction.discountAmount > 0) {
-        discountTotal += transaction.discountAmount;
-    }
+    const discountTotal = Math.max(0, Number(transaction.discountAmount || 0));
 
     const fiscalSummary = calculateTransactionFiscalSummary(transaction, config, { terminalConfig });
     const subtotal = fiscalSummary.subtotal;
     const taxTotal = fiscalSummary.taxTotal;
     const finalTotal = fiscalSummary.total;
-    const savings = discountTotal;
+    const savings = lineDiscountTotal + discountTotal;
 
     // NCF Type Label Map
     const ncfTypeLabels: Record<string, string> = {
@@ -359,6 +357,9 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 : '';
             const originalPrice = item.originalPrice || item.price;
             const hasDiscount = originalPrice > item.price;
+            const lineDiscount = hasDiscount
+                ? Math.max(0, (originalPrice - item.price) * item.quantity)
+                : 0;
 
             const trackingHtml = [];
             if (item.trackingData && item.trackingData.length > 0) {
@@ -389,6 +390,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                                 <span class="item-meta">
                                     ${item.quantity} x ${currencySymbol}${item.price.toFixed(2)}
                                     ${hasDiscount ? `<span style="text-decoration: line-through; color: #999; margin-left: 5px;">${currencySymbol}${originalPrice.toFixed(2)}</span>` : ''}
+                                    ${lineDiscount > 0 ? `<br/><strong>Descuento artículo: -${currencySymbol}${lineDiscount.toFixed(2)}</strong>` : ''}
                                     ${item.modifiers ? `<br/>Op: ${item.modifiers.join(', ')}` : ''}
                                     ${taxLineHtml || `<br/>Impuestos: ${currencySymbol}${iTax.toFixed(2)}`}
                                     ${sellerNameHtml}
