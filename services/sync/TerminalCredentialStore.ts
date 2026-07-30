@@ -1,4 +1,5 @@
 import { Preferences } from '@capacitor/preferences';
+import type { BusinessConfig } from '../../types';
 
 export interface TerminalCredentials {
     terminalId?: string | null;
@@ -19,6 +20,11 @@ export interface TerminalCredentials {
     authStatus?: string | null;
     lastAuthError?: string | null;
     lastReauthAttemptAt?: string | null;
+    masterIp?: string | null;
+    masterUrl?: string | null;
+    setupMode?: string | null;
+    syncMode?: string | null;
+    configSnapshot?: BusinessConfig | null;
 }
 
 const CREDENTIALS_KEY = 'clic_terminal_credentials_v1';
@@ -56,6 +62,13 @@ const readJson = (value: string | null): TerminalCredentials => {
     }
 };
 
+const readConfigSnapshot = (storage: Storage): BusinessConfig | null => {
+    const raw = storage.getItem('initial_terminal_config');
+    if (!raw) return null;
+    const parsed = readJson(raw) as BusinessConfig;
+    return Array.isArray(parsed?.terminals) && parsed.terminals.length > 0 ? parsed : null;
+};
+
 const compactCredentials = (credentials: TerminalCredentials): TerminalCredentials => {
     const compacted: TerminalCredentials = {};
     Object.entries(credentials).forEach(([key, value]) => {
@@ -85,6 +98,11 @@ const buildFromLegacyKeys = (storage: Storage): TerminalCredentials => compactCr
     authStatus: cleanString(storage.getItem('clic_sync_auth_status')),
     lastAuthError: cleanString(storage.getItem('clic_sync_last_auth_error')),
     lastReauthAttemptAt: cleanString(storage.getItem('clic_sync_last_reauth_attempt_at')),
+    masterIp: cleanString(storage.getItem('pos_master_ip')),
+    masterUrl: cleanString(storage.getItem('CLIC_POS_MASTER_URL')),
+    setupMode: cleanString(storage.getItem('clic_pos_terminal_setup_mode')),
+    syncMode: cleanString(storage.getItem('clic_sync_mode')),
+    configSnapshot: readConfigSnapshot(storage),
 });
 
 const mergeCredentials = (...entries: TerminalCredentials[]): TerminalCredentials => {
@@ -149,6 +167,21 @@ const writeLegacyMirrors = (credentials: TerminalCredentials): void => {
         }
         if (credentials.lastReauthAttemptAt) {
             storage.setItem('clic_sync_last_reauth_attempt_at', credentials.lastReauthAttemptAt);
+        }
+        if (credentials.masterIp) {
+            storage.setItem('pos_master_ip', credentials.masterIp);
+        }
+        if (credentials.masterUrl) {
+            storage.setItem('CLIC_POS_MASTER_URL', credentials.masterUrl);
+        }
+        if (credentials.setupMode) {
+            storage.setItem('clic_pos_terminal_setup_mode', credentials.setupMode);
+        }
+        if (credentials.syncMode) {
+            storage.setItem('clic_sync_mode', credentials.syncMode);
+        }
+        if (credentials.configSnapshot && typeof credentials.configSnapshot === 'object') {
+            storage.setItem('initial_terminal_config', JSON.stringify(credentials.configSnapshot));
         }
     } catch {
         // Credential mirrors are best-effort; the canonical payload is also persisted below.

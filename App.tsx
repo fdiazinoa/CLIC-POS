@@ -826,6 +826,14 @@ const buildInitialTerminalConfigSnapshot = (config: BusinessConfig): BusinessCon
 
 const persistInitialTerminalConfig = (config: BusinessConfig) => {
   const key = 'initial_terminal_config';
+  const recoverySnapshot = buildInitialTerminalConfigSnapshot(config);
+  saveTerminalCredentialsSync({
+    masterIp: localStorage.getItem('pos_master_ip'),
+    masterUrl: localStorage.getItem('CLIC_POS_MASTER_URL'),
+    setupMode: localStorage.getItem('clic_pos_terminal_setup_mode'),
+    syncMode: localStorage.getItem('clic_sync_mode'),
+    configSnapshot: recoverySnapshot,
+  });
   try {
     localStorage.setItem(key, JSON.stringify(config));
     return;
@@ -834,8 +842,7 @@ const persistInitialTerminalConfig = (config: BusinessConfig) => {
   }
 
   try {
-    const snapshot = buildInitialTerminalConfigSnapshot(config);
-    localStorage.setItem(key, JSON.stringify(snapshot));
+    localStorage.setItem(key, JSON.stringify(recoverySnapshot));
   } catch (error) {
     console.warn('⚠️ No se pudo guardar initial_terminal_config liviano; se preserva config en SQLite.', error);
     localStorage.removeItem(key);
@@ -5285,6 +5292,16 @@ const AppContent: React.FC = () => {
           } catch (e: any) {
             console.error("❌ Failed to fetch config from Master (Timeout/Network):", e.name === 'AbortError' ? 'Timeout' : e.message);
           }
+        }
+
+        if (localPairedTerminal && currentConfig && !Array.isArray(currentConfig)) {
+          persistInitialTerminalConfig(currentConfig);
+          console.info('terminal_upgrade_recovery_checkpoint_refreshed', {
+            terminalId: localPairedTerminal.id,
+            deviceId: storedDeviceId,
+            masterIp: localStorage.getItem('pos_master_ip') || null,
+            setupMode: getStoredTerminalSetupMode(),
+          });
         }
 
         // CLEAN SYNC CACHE if recovering from error
