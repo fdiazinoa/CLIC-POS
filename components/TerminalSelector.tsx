@@ -1034,22 +1034,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
       if (resolvedTenantEmail) params.set('tenant_email', resolvedTenantEmail);
       if (erpBaseUrl) params.set('erp_base_url', erpBaseUrl);
 
-      if (useErpDirectMasterAndroid) {
-        const proxyBase = buildAndroidEmbeddedSetupBase();
-        try {
-          const response = await fetch(`${proxyBase}/terminals?${params.toString()}`);
-          if (response.ok) {
-            const proxyData = (await response.json()) as TerminalSelectorResponse;
-            const list = Array.isArray(proxyData.terminals) ? proxyData.terminals : [];
-            if (list.length > 0) {
-              persistListMeta(proxyData);
-              return;
-            }
-          }
-        } catch (proxyErr) {
-          console.warn('setup proxy /terminals failed, falling back to ERP direct', proxyErr);
-        }
-
+      if (useErpDirectMasterAndroid || usesErpDirect) {
         const erpData = await listTerminalsFromErp({
           currentConfig,
           posDeviceId: deviceId,
@@ -1065,16 +1050,6 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           terminals: erpData.terminals as TerminalCard[],
           source: 'ERP',
         });
-      } else if (usesErpDirect) {
-        const data = await listTerminalsFromErp({
-          currentConfig,
-          posDeviceId: deviceId,
-          tenantId: resolvedTenantId,
-          tenantSlug: resolvedTenantSlug,
-          tenantEmail: resolvedTenantEmail,
-          erpBaseUrl,
-        });
-        persistListMeta(data);
       } else {
         const response = await requestMasterSetup<TerminalSelectorResponse>(
           `${apiBase}/terminals?${params.toString()}`,

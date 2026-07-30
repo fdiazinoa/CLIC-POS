@@ -9325,6 +9325,12 @@ const AppContent: React.FC = () => {
               setUsers(newUsers);
               await db.save('users', newUsers);
             }}
+            onBackToModeSelection={() => {
+              localStorage.removeItem(TERMINAL_SETUP_MODE_KEY);
+              localStorage.removeItem(SETUP_FLOW_STAGE_KEY);
+              localStorage.removeItem(SETUP_FLOW_VERSION_KEY);
+              setCurrentView('TERMINAL_MODE_SELECTOR');
+            }}
             initialMasterIp={localStorage.getItem('pos_master_ip') || ''}
           />
         );
