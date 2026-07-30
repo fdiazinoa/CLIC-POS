@@ -1192,24 +1192,24 @@ const buildBoundConfig = (input: {
   };
 };
 
-export const listTerminalsFromErp = async (input: {
+export const materializeErpTerminalCards = (input: {
+  terminals: any[];
   currentConfig: BusinessConfig;
   posDeviceId: string;
-  tenantId?: string | null;
-  tenantSlug?: string | null;
-  tenantEmail?: string | null;
-  erpBaseUrl: string;
-}): Promise<RuntimeTerminalListResponse> => {
-  const resolvedContext = await resolveErpTerminalContext({
-    tenantId: input.tenantId,
-    tenantSlug: input.tenantSlug,
-    tenantEmail: input.tenantEmail,
-    deviceId: input.posDeviceId,
-    erpBaseUrl: input.erpBaseUrl,
+}): RuntimeTerminalCard[] => {
+  const activeTerminals = (Array.isArray(input.terminals) ? input.terminals : []).filter((terminal: any) => {
+    const config = asObject(terminal?.config);
+    const metadata = asObject(config.metadata || terminal?.metadata);
+    const terminalName = resolveTerminalName(terminal, asString(terminal?.id));
+    return !(
+      terminalName.toUpperCase().startsWith('ARCHIVED-')
+      || metadata.archived === true
+      || config.active === false
+      || terminal?.active === false
+    );
   });
-
   const rawTerminals = dedupeErpTerminals(
-    Array.isArray(resolvedContext.terminals) ? resolvedContext.terminals : [],
+    activeTerminals,
     {
       preferredIds: collectPreferredErpTerminalIds(input.currentConfig),
       posDeviceId: input.posDeviceId,
@@ -1242,6 +1242,27 @@ export const listTerminalsFromErp = async (input: {
       'ERP';
     const currentDeviceId = asString(terminal.device_id) || undefined;
     const orderTakerContract = resolveOrderTakerContract(terminal);
+    const templateConfig =
+      Array.isArray(input.currentConfig?.terminals) && input.currentConfig.terminals.length > 0
+        ? applyErpTerminalDeviceRole(createTerminalTemplate(input.currentConfig, terminalId, erpTerminalId), terminal)
+        : ({} as TerminalConfig);
+    const terminalConfig: TerminalConfig = {
+      ...templateConfig,
+      erpTerminalId,
+      terminalName: resolveTerminalName(terminal, terminalCode),
+      stationNumber: terminalCode,
+      currentDeviceId,
+      erpBinding: {
+        ...(templateConfig.erpBinding || {}),
+        terminalId: erpTerminalId,
+        terminalName: resolveTerminalName(terminal, terminalCode),
+        stationNumber: terminalCode,
+        deviceId: currentDeviceId,
+      },
+      currencyCode: primaryCurrencyCode,
+      primaryCurrencyCode,
+      currency: primaryCurrencyCode,
+    };
 
     return {
       id: terminalId,
@@ -1256,16 +1277,32 @@ export const listTerminalsFromErp = async (input: {
       master_terminal_id: orderTakerContract.masterTerminalId,
       capabilities: orderTakerContract.capabilities,
       restrictions: orderTakerContract.restrictions,
-      config:
-        Array.isArray(input.currentConfig?.terminals) && input.currentConfig.terminals.length > 0
-          ? {
-              ...applyErpTerminalDeviceRole(createTerminalTemplate(input.currentConfig, terminalId, erpTerminalId), terminal),
-              currencyCode: primaryCurrencyCode,
-              primaryCurrencyCode,
-              currency: primaryCurrencyCode,
-            }
-          : ({} as TerminalConfig),
+      config: terminalConfig,
     };
+  });
+
+  return terminals;
+};
+
+export const listTerminalsFromErp = async (input: {
+  currentConfig: BusinessConfig;
+  posDeviceId: string;
+  tenantId?: string | null;
+  tenantSlug?: string | null;
+  tenantEmail?: string | null;
+  erpBaseUrl: string;
+}): Promise<RuntimeTerminalListResponse> => {
+  const resolvedContext = await resolveErpTerminalContext({
+    tenantId: input.tenantId,
+    tenantSlug: input.tenantSlug,
+    tenantEmail: input.tenantEmail,
+    deviceId: input.posDeviceId,
+    erpBaseUrl: input.erpBaseUrl,
+  });
+  const terminals = materializeErpTerminalCards({
+    terminals: resolvedContext.terminals,
+    currentConfig: input.currentConfig,
+    posDeviceId: input.posDeviceId,
   });
 
   return {
