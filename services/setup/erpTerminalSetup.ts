@@ -1622,14 +1622,31 @@ export const fetchInitialConfigFromErp = async (input: {
   erpTerminalId: string;
   posDeviceId: string;
 }): Promise<RuntimeInitialConfigResponse> => {
-  const result = await terminalConfigRequestCoordinator.request<Record<string, any>>({
-    baseUrl: input.erpBaseUrl,
-    terminalId: input.erpTerminalId,
-    tenantId: input.tenantId,
-    deviceId: input.posDeviceId,
-    reason: 'pairing',
-    deferPersistence: true,
-  });
+  let result;
+  try {
+    result = await withTimeout(
+      terminalConfigRequestCoordinator.request<Record<string, any>>({
+        baseUrl: input.erpBaseUrl,
+        terminalId: input.erpTerminalId,
+        tenantId: input.tenantId,
+        deviceId: input.posDeviceId,
+        reason: 'pairing',
+        deferPersistence: true,
+      }),
+      'INITIAL_CONFIG'
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('INITIAL_CONFIG timed out')) {
+      // Pairing is an interactive flow. Do not leave the operator blocked behind
+      // the coordinator's long background retry schedule.
+      terminalConfigRequestCoordinator.cancel(input.erpTerminalId);
+      throw new Error(
+        `La descarga de configuración inicial no respondió en ${REQUEST_TIMEOUT_MS / 1000} segundos. `
+        + 'Verifica la conexión con la Caja Maestra o el ERP y pulsa Reintentar.'
+      );
+    }
+    throw error;
+  }
 
   if (result.status === 'unchanged') {
     const localConfig = await db.get('config') as unknown as BusinessConfig | null;
