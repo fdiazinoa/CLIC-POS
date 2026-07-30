@@ -98,7 +98,7 @@ import {
 } from '../services/sync/ConsignmentSyncService';
 import { resolveDeviceRoleValue } from '../utils/deviceRoleHelpers';
 import { normalizeProductionOutputMode, resolveProductionOutputTargets } from '../utils/productionOutputMode';
-import { resolveOperationalApiUrl } from '../utils/masterOperationalApi';
+import { isClientTerminalMode, resolveOperationalApiUrl } from '../utils/masterOperationalApi';
 
 // ... existing imports
 
@@ -117,7 +117,13 @@ export interface POSInterfaceProps {
    selectedCustomer: Customer | null;
    onSelectCustomer: (customer: Customer | null) => void;
    parkedTickets: ParkedTicket[];
-   onUpdateParkedTickets: (tickets: ParkedTicket[]) => void | Promise<void>;
+   onUpdateParkedTickets: (
+      tickets: ParkedTicket[],
+      options?: {
+         deferRemote?: boolean;
+         reason?: 'cart_changed' | 'debounced' | 'explicit';
+      },
+   ) => void | Promise<void>;
    onTableOrderSaved?: (table: Table, ticket: ParkedTicket) => void | Promise<void>;
    onSelectTableAccount?: (ticket: ParkedTicket) => void | Promise<void>;
    onTableOrderClosed?: (table: Table, closedOrderId?: string, remainingTickets?: ParkedTicket[]) => void | Promise<void>;
@@ -1084,7 +1090,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const mobileCartButtonRef = useRef<HTMLButtonElement>(null);
    const desktopActionGridRef = useRef<HTMLDivElement>(null);
    const ticketAutoSyncTimeoutRef = useRef<number | null>(null);
-   const ticketAutoSyncFlushRef = useRef<(() => void) | null>(null);
+   const ticketAutoSyncFlushRef = useRef<(() => Promise<void>) | null>(null);
    const closedTableOrderIdsRef = useRef<Set<string>>(new Set());
    const activeTableHydrationRef = useRef<{ key: string; missingTicket: boolean } | null>(null);
    const kdsRetryInFlightRef = useRef(false);
@@ -1147,6 +1153,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // --- TICKET TABS STRATEGY STATE ---
    const [rightSidebarTab, setRightSidebarTab] = useState<'CART' | 'ACTIONS'>('CART');
 
+   const cancelTicketAutoSync = () => {
+      if (ticketAutoSyncTimeoutRef.current) {
+         window.clearTimeout(ticketAutoSyncTimeoutRef.current);
+         ticketAutoSyncTimeoutRef.current = null;
+      }
+      ticketAutoSyncFlushRef.current = null;
+   };
+
    const triggerSafetyGate = (name: string, callback: () => void) => {
       const isCritical = cart.length > 0 || parkedTickets.length > 0 || (activeTable !== null && activeTable !== undefined);
       setSafetyAction({ name, callback, isCritical });
@@ -1172,7 +1186,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          ticketAutoSyncTimeoutRef.current = null;
       }
       if (ticketAutoSyncFlushRef.current) {
-         ticketAutoSyncFlushRef.current();
+         void ticketAutoSyncFlushRef.current();
          ticketAutoSyncFlushRef.current = null;
       }
    }, []);
@@ -1216,7 +1230,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const nextTicket = activeTableAccounts[nextIndex];
       if (!nextTicket) return;
 
-      ticketAutoSyncFlushRef.current?.();
+      void ticketAutoSyncFlushRef.current?.();
       activeTableHydrationRef.current = null;
       void Promise.resolve(onSelectTableAccount(nextTicket));
    }, [activeTableAccountIndex, activeTableAccounts, onSelectTableAccount]);
@@ -4080,27 +4094,51 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       };
 
       const nextTickets = [...parkedTickets.filter(ticket => ticket.id !== orderId), syncedTicket];
+      const batchClientSync = isClientTerminalMode();
 
       if (ticketAutoSyncTimeoutRef.current) {
          window.clearTimeout(ticketAutoSyncTimeoutRef.current);
       }
 
-      const flushTicketSync = () => {
+      if (batchClientSync) {
+         void Promise.resolve(onUpdateParkedTickets(nextTickets, {
+            deferRemote: true,
+            reason: 'cart_changed',
+         })).catch((error) => {
+            console.error('[TABLE_SYNC] No se pudo persistir la cola local de la mesa:', error);
+         });
+      }
+
+      const flushTicketSync = async () => {
          if (closedTableOrderIdsRef.current.has(String(orderId))) {
             ticketAutoSyncFlushRef.current = null;
             ticketAutoSyncTimeoutRef.current = null;
             return;
          }
-         void Promise.resolve(onUpdateParkedTickets(nextTickets)).catch((error) => {
+         try {
+            await Promise.resolve(onUpdateParkedTickets(nextTickets, {
+               reason: batchClientSync ? 'debounced' : 'explicit',
+            }));
+            await Promise.resolve(onTableOrderSaved?.(activeTable, syncedTicket));
+         } catch (error) {
             console.error('[TABLE_SYNC] No se pudo sincronizar automáticamente la mesa:', error);
-         });
-         void Promise.resolve(onTableOrderSaved?.(activeTable, syncedTicket));
-         ticketAutoSyncFlushRef.current = null;
-         ticketAutoSyncTimeoutRef.current = null;
+            if (batchClientSync) {
+               setErrorToast('Cambios guardados localmente. Pendiente de sincronizar.');
+               window.setTimeout(() => setErrorToast(null), 3000);
+            }
+         } finally {
+            if (ticketAutoSyncFlushRef.current === flushTicketSync) {
+               ticketAutoSyncFlushRef.current = null;
+               ticketAutoSyncTimeoutRef.current = null;
+            }
+         }
       };
 
       ticketAutoSyncFlushRef.current = flushTicketSync;
-      ticketAutoSyncTimeoutRef.current = window.setTimeout(flushTicketSync, 120);
+      ticketAutoSyncTimeoutRef.current = window.setTimeout(
+         () => void flushTicketSync(),
+         batchClientSync ? 2_000 : 120,
+      );
 
       return () => {
          if (ticketAutoSyncTimeoutRef.current) {
@@ -4108,9 +4146,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             ticketAutoSyncTimeoutRef.current = null;
          }
          if (ticketAutoSyncFlushRef.current === flushTicketSync) {
-            if (!closedTableOrderIdsRef.current.has(String(orderId))) {
-               flushTicketSync();
-            } else {
+            if (!batchClientSync && !closedTableOrderIdsRef.current.has(String(orderId))) {
+               void flushTicketSync();
+            } else if (batchClientSync) {
                ticketAutoSyncFlushRef.current = null;
             }
          }
@@ -5728,7 +5766,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // Remove existing if updating same ID
       const updatedTickets = [...(Array.isArray(parkedTickets) ? parkedTickets : []).filter(p => p.id !== newParked.id), newParked];
-      await Promise.resolve(onUpdateParkedTickets(updatedTickets));
+      cancelTicketAutoSync();
+      try {
+         await Promise.resolve(onUpdateParkedTickets(updatedTickets, { reason: 'explicit' }));
+      } catch (error) {
+         setErrorToast('No se pudo confirmar con la Master. Los cambios siguen guardados localmente.');
+         window.setTimeout(() => setErrorToast(null), 3500);
+         throw error;
+      }
       closeParkAliasModal();
 
       if (activeTable) {
@@ -5795,7 +5840,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          ...(Array.isArray(parkedTickets) ? parkedTickets : []).filter(ticket => ticket.id !== tableOrder.id),
          tableOrder
       ];
-      await Promise.resolve(onUpdateParkedTickets(updatedTickets));
+      cancelTicketAutoSync();
+      try {
+         await Promise.resolve(onUpdateParkedTickets(updatedTickets, { reason: 'explicit' }));
+      } catch (error) {
+         setErrorToast('No se pudo confirmar con la Master. La mesa permanece abierta y pendiente.');
+         window.setTimeout(() => setErrorToast(null), 3500);
+         throw error;
+      }
       await Promise.resolve(onTableOrderSaved?.(activeTable, tableOrder));
 
       onUpdateCart([]);
