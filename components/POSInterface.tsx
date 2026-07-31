@@ -4206,11 +4206,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             ticketAutoSyncTimeoutRef.current = null;
          }
          if (ticketAutoSyncFlushRef.current === flushTicketSync) {
-            if (!batchClientSync && !closedTableOrderIdsRef.current.has(String(orderId))) {
-               void flushTicketSync();
-            } else if (batchClientSync) {
-               ticketAutoSyncFlushRef.current = null;
-            }
+            ticketAutoSyncFlushRef.current = null;
          }
       };
    }, [

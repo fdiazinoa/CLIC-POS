@@ -1667,6 +1667,7 @@ const AppContent: React.FC = () => {
   const [activeTable, setActiveTable] = useState<Table | null>(null); // New state for selected table context
   const [activeTableEditLock, setActiveTableEditLock] = useState<ActiveTableEditLock | null>(null);
   const activeTableEditLockRef = useRef<ActiveTableEditLock | null>(null);
+  const closedRestaurantOrderIdsRef = useRef<Set<string>>(new Set());
   /* original code */
   const [currentView, setCurrentView] = useState<ViewState>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -7169,7 +7170,10 @@ const AppContent: React.FC = () => {
     tickets: ParkedTicket[],
     options: ParkedTicketSyncOptions = { reason: 'explicit' },
   ) => {
-    const validTickets = Array.isArray(tickets) ? tickets : [];
+    const validTickets = (Array.isArray(tickets) ? tickets : []).filter(ticket => {
+      const ticketId = String(ticket?.id || '').trim();
+      return !ticketId || !closedRestaurantOrderIdsRef.current.has(ticketId);
+    });
     if (isClientTerminalMode()) {
       const editLock = activeTableEditLockRef.current;
       const pendingSync: PendingClientTableSync = {
@@ -9997,6 +10001,13 @@ const AppContent: React.FC = () => {
             onTableOrderClosed={async (table, _closedOrderId, remainingTickets = []) => {
               await clearActiveCartDraftStorage().catch((error) => console.warn('No se pudo limpiar borrador activo tras cerrar mesa:', error));
               const closedOrderId = _closedOrderId ? String(_closedOrderId) : '';
+              if (closedOrderId) {
+                closedRestaurantOrderIdsRef.current.add(closedOrderId);
+                if (closedRestaurantOrderIdsRef.current.size > 200) {
+                  const oldestOrderId = closedRestaurantOrderIdsRef.current.values().next().value;
+                  if (oldestOrderId) closedRestaurantOrderIdsRef.current.delete(oldestOrderId);
+                }
+              }
               const tableId = String(table.id ?? '');
               const effectiveRemainingTickets = (remainingTickets || []).filter(ticket => {
                 const isClosedOrder = closedOrderId && String(ticket.id) === closedOrderId;
