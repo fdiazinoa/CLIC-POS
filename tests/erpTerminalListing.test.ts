@@ -12,7 +12,10 @@ Object.defineProperty(globalThis, 'localStorage', {
 });
 
 const { getInitialConfig } = await import('../constants');
-const { materializeErpTerminalCards } = await import('../services/setup/erpTerminalSetup');
+const {
+  materializeErpTerminalCards,
+  prioritizeMappedErpTenantContext,
+} = await import('../services/setup/erpTerminalSetup');
 
 test('keeps occupied ERP terminals visible with their own operational codes', () => {
   const currentConfig = getInitialConfig('Supermercado' as any);
@@ -99,4 +102,60 @@ test('keeps a valid Master whose display name matches another terminal code', ()
 
   assert.equal(terminals.length, 2);
   assert.deepEqual(terminals.map(terminal => terminal.id), ['erp-master-01', 'erp-slave-01']);
+});
+
+test('prioritizes the explicit Cloud-Admin tenant mapping over a stale device bootstrap', () => {
+  const ordered = prioritizeMappedErpTenantContext(
+    [{
+      tenantId: 'stale-erp-tenant',
+      tenantName: 'Tenant anterior',
+      companyId: 'stale-company',
+      storeId: 'stale-store',
+      source: 'ERP_BOOTSTRAP',
+    }],
+    {
+      tenantId: '54c8df05-d28c-40ea-9ad4-38f37412acac',
+      tenantName: 'Restaurante POS',
+      companyId: 'bb604e48-d3c1-4f40-bbc8-baa4bcfcdf38',
+      storeId: '0074089e-a648-4e98-8294-2ca350baf33e',
+      source: 'ERP_TENANT_DIRECTORY',
+    }
+  );
+
+  assert.deepEqual(ordered.map(candidate => candidate.tenantId), [
+    '54c8df05-d28c-40ea-9ad4-38f37412acac',
+    'stale-erp-tenant',
+  ]);
+});
+
+test('keeps Mast-01 visible while filtering its archived legacy row', () => {
+  const currentConfig = getInitialConfig('Restaurante' as any);
+  const terminals = materializeErpTerminalCards({
+    currentConfig,
+    posDeviceId: 'DEV-NEW-MASTER',
+    terminals: [
+      {
+        id: '461837f1-67d1-4ce6-b394-bf9e7b79dc8c',
+        terminal_code: 'POS-001',
+        terminal_name: 'Mast-01',
+        name: 'Mast-01',
+        device_id: 'DEV-3VNT5ZW5',
+        terminal_type: 'STANDARD_POS',
+        company_name: 'Restaurante POS',
+      },
+      {
+        id: '685cb867-70b6-4f63-aed4-8bc9e706377b',
+        terminal_code: 'Mast-01',
+        terminal_name: 'ARCHIVED-Mast-01',
+        name: 'ARCHIVED-Mast-01',
+        device_id: 'ARCHIVED-685cb867-70b6-4f63-aed4-8bc9e706377b',
+        terminal_type: 'STANDARD_POS',
+      },
+    ],
+  });
+
+  assert.equal(terminals.length, 1);
+  assert.equal(terminals[0].name, 'Mast-01');
+  assert.equal(terminals[0].config.stationNumber, 'POS-001');
+  assert.equal(terminals[0].occupied, true);
 });

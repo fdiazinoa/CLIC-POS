@@ -575,14 +575,29 @@ const resolveTenantDirectoryContext = async (
   };
 };
 
+type ErpTerminalContextCandidate = {
+  tenantId: string | null;
+  tenantName: string | null;
+  companyId: string | null;
+  storeId: string | null;
+  source: string;
+};
+
+export const prioritizeMappedErpTenantContext = (
+  candidates: ErpTerminalContextCandidate[],
+  mappedTenant: ErpTerminalContextCandidate | null
+): ErpTerminalContextCandidate[] => {
+  if (!mappedTenant?.tenantId) return candidates;
+  if (candidates.some(candidate => candidate.tenantId === mappedTenant.tenantId)) return candidates;
+
+  // Un tenant resuelto por el ID explícito de Cloud-Admin tiene prioridad sobre
+  // un bootstrap heredado del device. Así un device usado anteriormente en otro
+  // tenant no desvía la selección hacia la primera lista ERP no vacía.
+  return [mappedTenant, ...candidates];
+};
+
 const resolveErpTerminalContext = async (identity: ErpIdentity) => {
-  const candidates: Array<{
-    tenantId: string | null;
-    tenantName: string | null;
-    companyId: string | null;
-    storeId: string | null;
-    source: string;
-  }> = [];
+  const candidates: ErpTerminalContextCandidate[] = [];
   let lastBootstrapError: Error | null = null;
 
   try {
@@ -598,18 +613,17 @@ const resolveErpTerminalContext = async (identity: ErpIdentity) => {
     lastBootstrapError = error instanceof Error ? error : new Error(String(error));
   }
 
+  let mappedTenant: ErpTerminalContextCandidate | null = null;
   try {
-    const mappedTenant = await resolveTenantDirectoryContext(identity);
-    if (mappedTenant && !candidates.some((candidate) => candidate.tenantId === mappedTenant.tenantId)) {
-      candidates.push(mappedTenant);
-    }
+    mappedTenant = await resolveTenantDirectoryContext(identity);
   } catch (error) {
     console.warn('⚠️ ERP tenant directory lookup failed:', error);
   }
 
   let fallbackContext: any = null;
+  const orderedCandidates = prioritizeMappedErpTenantContext(candidates, mappedTenant);
 
-  for (const candidate of candidates) {
+  for (const candidate of orderedCandidates) {
     const terminals = await fetchErpTerminals(identity.erpBaseUrl, {
       tenantId: candidate.tenantId,
       companyId: candidate.companyId,
