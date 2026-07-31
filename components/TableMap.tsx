@@ -889,6 +889,16 @@ const TableMap: React.FC<TableMapProps> = ({
         )) || (parkedTickets || []).find(belongsToTable);
     }, [parkedTickets]);
 
+    const isTableMoveTargetOccupied = useCallback((table: Table): boolean => {
+        const ticket = resolveTicketForTable(table);
+        const visualStatus = getVisualTableState(table).status;
+        // Las mesas creadas por el ERP pueden no traer status. En ese contrato,
+        // ausencia de estado equivale a libre; solo OCCUPIED/RESERVED bloquean mover.
+        return Boolean(ticket?.items?.length)
+            || visualStatus === 'OCCUPIED'
+            || visualStatus === 'RESERVED';
+    }, [getVisualTableState, resolveTicketForTable]);
+
     const resetTableRuntimeState = useCallback((table: Table): Table => ({
         ...table,
         status: 'FREE',
@@ -924,7 +934,7 @@ const TableMap: React.FC<TableMapProps> = ({
         }
 
         const targetTicket = resolveTicketForTable(targetTable);
-        const targetIsOccupied = Boolean(targetTicket?.items?.length) || getVisualTableState(targetTable).status !== 'FREE';
+        const targetIsOccupied = isTableMoveTargetOccupied(targetTable);
         if (mode === 'MOVE' && targetIsOccupied) {
             alert('Para mover, seleccione una mesa destino libre. Si desea combinar cuentas use Unir mesas.');
             return;
@@ -1127,9 +1137,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 alert('Seleccione una mesa destino distinta.');
                 return true;
             }
-            const targetTicket = resolveTicketForTable(table);
-            const targetIsOccupied = Boolean(targetTicket?.items?.length)
-                || getVisualTableState(table).status !== 'FREE';
+            const targetIsOccupied = isTableMoveTargetOccupied(table);
             if (targetIsOccupied) {
                 alert('Seleccione una mesa destino libre.');
                 return true;
@@ -1144,7 +1152,7 @@ const TableMap: React.FC<TableMapProps> = ({
 
         void completeTableTransfer(transferSelection.sourceTableId, table.id, transferSelection.mode);
         return true;
-    }, [completeTableTransfer, getVisualTableState, resolveTicketForTable, transferSelection]);
+    }, [completeTableTransfer, isTableMoveTargetOccupied, resolveTicketForTable, transferSelection]);
 
     const handleTableAction = useCallback(async (table: Table) => {
         if (onBeforeTableOpen && !(await onBeforeTableOpen(table))) {

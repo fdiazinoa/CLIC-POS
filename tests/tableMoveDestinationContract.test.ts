@@ -11,3 +11,10 @@ test('mover mesa no trata una referencia de orden obsoleta como una mesa destino
   assert.match(source, /String\(ticket\.id\) === String\(table\.currentOrderId\)\s*&&\s*belongsToTable\(ticket\)/);
   assert.match(source, /currentOrderId puede quedar obsoleto después de liberar o mover una mesa/);
 });
+
+test('mover mesa acepta una mesa ERP sin status como destino libre', () => {
+  assert.match(source, /const isTableMoveTargetOccupied = useCallback/);
+  assert.match(source, /visualStatus === 'OCCUPIED'\s*\|\|\s*visualStatus === 'RESERVED'/);
+  assert.match(source, /ausencia de estado equivale a libre/);
+  assert.doesNotMatch(source, /getVisualTableState\(table\)\.status !== 'FREE'/);
+});
