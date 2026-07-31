@@ -4615,6 +4615,10 @@ const AppContent: React.FC = () => {
 
       const data = await res.json();
       if (res.ok && data.status === 'success') {
+        const responseRevision = Number(data?.revision || 0);
+        if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
+          masterRestaurantRevisionRef.current = responseRevision;
+        }
         const updated = { ...baseUpdate, currentOrderId: data.orden_id };
         setTables(prev => {
           const next = prev.map(t => t.id === updated.id ? updated : t);
@@ -7235,6 +7239,28 @@ const AppContent: React.FC = () => {
       ...validTickets.map(ticket => db.saveDocument('parkedTickets' as any, ticket as any)),
     ]);
     await db.save('parkedTickets', validTickets); // Uses 'settings' table logic or collection
+
+    // La caja maestra Android también debe confirmar el cambio en el servidor
+    // nativo antes de que el poll de estado pueda devolver el snapshot previo.
+    // Sin esta escritura atómica, la primera digitación de una mesa recién
+    // abierta podía ser reemplazada por la revisión creada al abrir la mesa.
+    if (isNativeAndroidRuntime() && isNativeStandaloneTerminalRuntime(getCurrentTerminal())) {
+      const response = await fetch(resolveOperationalApiUrl('/api/mesas/parked-tickets'), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parkedTickets: validTickets }),
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok || result?.success === false) {
+        throw new Error(result?.message || `No se pudo confirmar la orden local (HTTP ${response.status})`);
+      }
+      if (Array.isArray(result?.parkedTickets)) setParkedTickets(result.parkedTickets);
+      if (Array.isArray(result?.tables)) setTables(result.tables);
+      const responseRevision = Number(result?.revision || 0);
+      if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
+        masterRestaurantRevisionRef.current = responseRevision;
+      }
+    }
   };
 
   const handleParkedOrderSplitFromMap = useCallback(

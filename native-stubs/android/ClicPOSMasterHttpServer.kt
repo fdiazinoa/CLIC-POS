@@ -1147,6 +1147,7 @@ object ClicPOSMasterHttpServer {
         writeResponse(socket, 200, JSONObject()
             .put("status", "success")
             .put("orden_id", orderId)
+            .put("revision", restaurantRevision.get())
             .toString())
     }
 

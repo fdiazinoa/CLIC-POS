@@ -26,6 +26,7 @@ test('la Master Android permite abrir y liberar mesas desde una terminal cliente
   assert.match(serverSource, /method == "POST" && path == "\/api\/mesas\/liberar"/);
   assert.match(serverSource, /private fun handleOpenTable/);
   assert.match(serverSource, /private fun handleReleaseTable/);
+  assert.match(serverSource, /\.put\("orden_id", orderId\)\s+\.put\("revision", restaurantRevision\.get\(\)\)/);
 });
 
 test('la Master Android bloquea la digitación simultánea y limita la mutación a una mesa', () => {
@@ -53,6 +54,8 @@ test('la WebView entrega el snapshot operativo al servidor nativo sin sobreescri
   assert.match(serverSource, /PREFS_RESTAURANT_KEY/);
   assert.match(appSource, /getMasterRestaurantState/);
   assert.match(appSource, /db\.save\('parkedTickets', nextParkedTickets\)/);
+  assert.match(appSource, /resolveOperationalApiUrl\('\/api\/mesas\/parked-tickets'\)/);
+  assert.match(appSource, /No se pudo confirmar la orden local/);
 });
 
 test('el puente Android publica reconciliación, locks y sincronización serializada al frontend', () => {
