@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { Table } from '../types';
-import { getRenderableFloorTables, hasExplicitTableLayout } from '../utils/tableLayout';
+import {
+  findAvailableTablePosition,
+  getRenderableFloorTables,
+  hasExplicitTableLayout
+} from '../utils/tableLayout';
 
 const erpTable = {
   id: 'TABLE_01',
@@ -107,4 +111,32 @@ test('consolida el plano persistido y la cuadrícula Master sin superponer mesas
   assert.equal(tableThree?.status, 'OCCUPIED');
   assert.equal(tableThree?.posX, designedTables[2].posX);
   assert.equal(tableThree?.posY, designedTables[2].posY);
+});
+
+test('ubica cada mesa nueva en el primer espacio libre sin concentrarlas', () => {
+  const tables: Table[] = [];
+
+  for (let index = 0; index < 4; index += 1) {
+    const position = findAvailableTablePosition(tables, {
+      roomId: 'MAIN_DINING_ROOM',
+      width: 100,
+      height: 100
+    });
+    tables.push({
+      id: `new-${index + 1}`,
+      roomId: 'MAIN_DINING_ROOM',
+      name: `Mesa ${index + 1}`,
+      nombre: `Mesa ${index + 1}`,
+      shape: 'SQUARE',
+      width: 100,
+      height: 100,
+      rotation: 0,
+      ...position
+    });
+  }
+
+  assert.deepEqual(
+    tables.map(table => [table.posX, table.posY]),
+    [[40, 40], [160, 40], [280, 40], [400, 40]]
+  );
 });

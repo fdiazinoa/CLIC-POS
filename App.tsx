@@ -3634,6 +3634,10 @@ const AppContent: React.FC = () => {
 
     const reconcileNativeRestaurantState = async () => {
       if (disposed || masterRestaurantPollInFlightRef.current) return;
+      // El diseñador mantiene un borrador local hasta "Guardar y Volver".
+      // No permitir que un snapshot nativo anterior reponga coordenadas mientras
+      // el usuario está moviendo o agregando elementos del plano.
+      if (currentViewRef.current === 'TABLE_DESIGNER') return;
       const nativeBridge = (window as any).ClicPOSNativePrinter;
       if (typeof nativeBridge?.getMasterRestaurantState !== 'function') return;
       if (!isNativeStandaloneTerminalRuntime(getCurrentTerminal())) return;
