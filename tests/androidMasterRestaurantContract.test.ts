@@ -36,6 +36,16 @@ test('la Master Android permite abrir y liberar mesas desde una terminal cliente
   assert.match(serverSource, /\.put\("orden_id", orderId\)\s+\.put\("revision", restaurantRevision\.get\(\)\)/);
 });
 
+test('la Master Android reemplaza el layout completo en una sola mutación persistida', () => {
+  assert.match(serverSource, /method == "PUT" && path == "\/api\/mesas\/layout"/);
+  assert.match(serverSource, /private fun handleFloorPlanReplace/);
+  assert.match(serverSource, /reconcileTablesWithParkedTickets\(tables, parkedTicketsSnapshot\)/);
+  assert.match(serverSource, /applyClientRestaurantMutation\(rooms = rooms, tables = reconciledTables\)/);
+  assert.match(appSource, /resolveOperationalApiUrl\('\/api\/mesas\/layout'\)/);
+  assert.doesNotMatch(appSource, /normalizedTablesInput\.length === 0 && existingDbTables\.length > 0/);
+  assert.match(appSource, /window\.localStorage\.removeItem\(FLOOR_PLAN_STORAGE_KEY\)/);
+});
+
 test('la Master Android bloquea la digitación simultánea y limita la mutación a una mesa', () => {
   assert.match(serverSource, /TABLE_EDIT_LOCK_TTL_MS = 45_000L/);
   assert.match(serverSource, /method == "POST" && path == "\/api\/mesas\/bloquear"/);
@@ -98,6 +108,12 @@ test('la Master Android se reactiva al volver al primer plano y el cliente reint
   assert.match(appSource, /discoverLanMasterCandidates\(\{ timeoutMs: 2500 \}\)/);
   assert.match(appSource, /localStorage\.setItem\('CLIC_POS_MASTER_URL', baseUrl\)/);
   assert.match(appSource, /`\$\{baseUrl\}\/api\/sync\/ping`/);
+});
+
+test('un fallo transitorio no muestra de inmediato la Master como desconectada', () => {
+  assert.match(appSource, /clientMasterFailureCountRef\.current \+= 1/);
+  assert.match(appSource, /failureCount >= \(hadRecentSuccess \? 3 : 2\)/);
+  assert.match(appSource, /clientMasterFailureCountRef\.current = 0/);
 });
 
 test('el sondeo nativo no reemplaza el borrador mientras se edita el plano de mesas', () => {
