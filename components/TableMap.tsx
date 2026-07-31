@@ -868,8 +868,25 @@ const TableMap: React.FC<TableMapProps> = ({
     const minExpectedTicket = activeRoom?.consumo_minimo || 0;
 
     const resolveTicketForTable = useCallback((table: Table): ParkedTicket | undefined => {
-        return (parkedTickets || []).find(ticket => table.currentOrderId && String(ticket.id) === String(table.currentOrderId))
-            || (parkedTickets || []).find(ticket => String(ticket.tableId) === String(table.id));
+        const tableId = String(table.id);
+        const belongsToTable = (ticket: ParkedTicket) => {
+            const ticketTableId = String(ticket.tableId ?? '');
+            const joinedTableIds = (ticket as any).joinedTableIds;
+            const joinedTableId = (table as any).joinedTableId;
+            const joinedSourceTableId = (table as any).joinedSourceTableId;
+            return ticketTableId === tableId
+                || (Array.isArray(joinedTableIds) && joinedTableIds.some(id => String(id) === tableId))
+                || String(joinedTableId ?? '') === ticketTableId
+                || String(joinedSourceTableId ?? '') === tableId;
+        };
+
+        // currentOrderId puede quedar obsoleto después de liberar o mover una mesa.
+        // Nunca debe convertir una mesa libre en ocupada si la orden ya pertenece a otra.
+        return (parkedTickets || []).find(ticket => (
+            table.currentOrderId
+            && String(ticket.id) === String(table.currentOrderId)
+            && belongsToTable(ticket)
+        )) || (parkedTickets || []).find(belongsToTable);
     }, [parkedTickets]);
 
     const resetTableRuntimeState = useCallback((table: Table): Table => ({
