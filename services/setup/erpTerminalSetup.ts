@@ -1215,17 +1215,7 @@ export const materializeErpTerminalCards = (input: {
       posDeviceId: input.posDeviceId,
     },
   );
-  const knownIds = new Set(rawTerminals.map((terminal: any) => resolveOperationalTerminalId(terminal) || asString(terminal.id)).filter(Boolean));
-  const terminals = rawTerminals.filter((terminal: any) => {
-    const terminalId = resolveOperationalTerminalId(terminal) || asString(terminal.id);
-    const terminalName = resolveTerminalName(terminal, terminalId);
-    const isShadowTerminal =
-      terminalName &&
-      terminalName !== terminalId &&
-      knownIds.has(terminalName);
-
-    return !isShadowTerminal;
-  }).map((terminal: any) => {
+  const terminals = rawTerminals.map((terminal: any) => {
     const erpTerminalId = asString(terminal.id);
     const terminalCode = resolveOperationalTerminalId(terminal) || erpTerminalId;
     const terminalId = erpTerminalId;

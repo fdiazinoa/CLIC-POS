@@ -45,6 +45,13 @@ test('la activacion cliente usa transporte nativo con timeout para todo el hands
   assert.match(terminalSelectorSource, /Promise\.race\(\[request, hardTimeout\]\)/);
 });
 
+test('la activación cliente busca la Maestra automáticamente en el flujo visible', () => {
+  assert.match(terminalBindingSource, /resolveMasterEndpointFromCloud\(\)/);
+  assert.match(terminalBindingSource, /discoverLanMasterCandidates\(\{ timeoutMs: 2500 \}\)/);
+  assert.match(terminalBindingSource, /await applyMasterConnection\(connection, candidate\.source\)/);
+  assert.match(terminalBindingSource, /Puede ingresar la IP manualmente/);
+});
+
 test('Master ERP lista terminales autoritativas del ERP y no acepta seeds del servidor embebido', () => {
   assert.match(terminalSelectorSource, /if \(useErpDirectMasterAndroid \|\| usesErpDirect\)/);
   assert.match(terminalSelectorSource, /const erpData = await listTerminalsFromErp/);
