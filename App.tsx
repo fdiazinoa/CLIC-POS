@@ -7245,21 +7245,30 @@ const AppContent: React.FC = () => {
     // Sin esta escritura atómica, la primera digitación de una mesa recién
     // abierta podía ser reemplazada por la revisión creada al abrir la mesa.
     if (isNativeAndroidRuntime() && isNativeStandaloneTerminalRuntime(getCurrentTerminal())) {
-      const response = await fetch(resolveOperationalApiUrl('/api/mesas/parked-tickets'), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ parkedTickets: validTickets }),
-      });
-      const result = await response.json().catch(() => null);
-      if (!response.ok || result?.success === false) {
-        throw new Error(result?.message || `No se pudo confirmar la orden local (HTTP ${response.status})`);
-      }
-      if (Array.isArray(result?.parkedTickets)) setParkedTickets(result.parkedTickets);
-      if (Array.isArray(result?.tables)) setTables(result.tables);
-      const responseRevision = Number(result?.revision || 0);
-      if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
-        masterRestaurantRevisionRef.current = responseRevision;
-      }
+      // El autoguardado y el cobro pueden coincidir. Serializar también en
+      // Master evita que un snapshot anterior vuelva a insertar una orden ya cobrada.
+      const syncOperation = async () => {
+        const response = await fetch(resolveOperationalApiUrl('/api/mesas/parked-tickets'), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ parkedTickets: validTickets }),
+        });
+        const result = await response.json().catch(() => null);
+        if (!response.ok || result?.success === false) {
+          throw new Error(result?.message || `No se pudo confirmar la orden local (HTTP ${response.status})`);
+        }
+        if (Array.isArray(result?.parkedTickets)) setParkedTickets(result.parkedTickets);
+        if (Array.isArray(result?.tables)) setTables(result.tables);
+        const responseRevision = Number(result?.revision || 0);
+        if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
+          masterRestaurantRevisionRef.current = responseRevision;
+        }
+      };
+      const queuedSync = parkedTicketSyncQueueRef.current
+        .catch(() => undefined)
+        .then(syncOperation);
+      parkedTicketSyncQueueRef.current = queuedSync.catch(() => undefined);
+      return queuedSync;
     }
   };
 
