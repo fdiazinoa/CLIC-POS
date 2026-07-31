@@ -4329,7 +4329,7 @@ const AppContent: React.FC = () => {
         if (Array.isArray(data)) {
           if (isClientRuntime) setClientMasterTablesStatus('ONLINE');
           setTables(previousTables => {
-            if (data.length === 0 && previousTables.length > 0) {
+            if (!isClientRuntime && data.length === 0 && previousTables.length > 0) {
               console.warn('Se ignoró una respuesta vacía de mesas para preservar el layout local.');
               return previousTables;
             }
@@ -4360,17 +4360,22 @@ const AppContent: React.FC = () => {
         if (hasAuthoritativeParkedTickets) setParkedTickets(nextParkedTickets);
 
         setTables(previousTables => {
-          if (nextTables.length === 0 && previousTables.length > 0) {
+          if (!isClientRuntime && nextTables.length === 0 && previousTables.length > 0) {
             console.warn('Se ignoró una respuesta vacía de mesas para preservar el layout local.');
             return previousTables;
           }
           return mergeRemoteTables(nextTables, previousTables);
         });
 
-        if (nextRooms.length > 0) {
+        if (isClientRuntime) {
+          setRooms(nextRooms);
+          setActiveRoomId(prev =>
+            prev && nextRooms.some((room: Room) => room.id === prev)
+              ? prev
+              : (nextRooms[0]?.id || '')
+          );
+        } else if (nextRooms.length > 0) {
           setRooms(previousRooms => {
-            if (isClientRuntime) return nextRooms;
-
             const localFloorPlan = locallySavedFloorPlanRef.current;
             if (!localFloorPlan || previousRooms.length === 0) return nextRooms;
 
@@ -6309,6 +6314,8 @@ const AppContent: React.FC = () => {
       boundUsers?: User[];
       masterIp?: string;
       snapshotItems?: Product[];
+      rooms?: Room[];
+      tables?: Table[];
       deviceToken?: string;
       device_token?: string;
       terminalToken?: string;
@@ -6523,28 +6530,38 @@ const AppContent: React.FC = () => {
           etag: setupResult.initialConfigEtag,
         });
       }
-      const setupRooms = Array.isArray((setupResult as any)?.rooms)
-        ? (setupResult as any).rooms
+      const hasAuthoritativeRoomSnapshot = Array.isArray(setupResult?.rooms);
+      const hasAuthoritativeTableSnapshot = Array.isArray(setupResult?.tables);
+      const setupRooms = hasAuthoritativeRoomSnapshot
+        ? setupResult.rooms!
         : Array.isArray((updatedConfig as any).rooms)
           ? (updatedConfig as any).rooms
           : Array.isArray((updatedConfig as any).initialRooms)
             ? (updatedConfig as any).initialRooms
             : [];
-      const setupTables = Array.isArray((setupResult as any)?.tables)
-        ? (setupResult as any).tables
+      const setupTables = hasAuthoritativeTableSnapshot
+        ? setupResult.tables!
         : Array.isArray((updatedConfig as any).tables)
           ? (updatedConfig as any).tables
           : Array.isArray((updatedConfig as any).initialTables)
             ? (updatedConfig as any).initialTables
             : [];
-      if (setupRooms.length > 0) {
+      if (hasAuthoritativeRoomSnapshot || setupRooms.length > 0) {
         await db.save('rooms', setupRooms);
         setRooms(setupRooms);
-        setActiveRoomId(setupRooms[0]?.id || setupRooms[0]?.room_id || setupRooms[0]?.code || null);
+        setActiveRoomId(setupRooms[0]?.id || setupRooms[0]?.room_id || setupRooms[0]?.code || '');
       }
-      if (setupTables.length > 0) {
+      if (hasAuthoritativeTableSnapshot || setupTables.length > 0) {
         await db.save('tables', setupTables);
         setTables(setupTables);
+      }
+      if (hasAuthoritativeRoomSnapshot || hasAuthoritativeTableSnapshot) {
+        locallySavedFloorPlanRef.current = {
+          roomIds: new Set(setupRooms.map(room => String(room.id))),
+          tableIds: new Set(setupTables.map(table => String(table.id))),
+        };
+        localStorage.removeItem(FLOOR_PLAN_STORAGE_KEY);
+        writeFloorPlanMirror(setupRooms, setupTables);
       }
       setupResult.progress?.({
         stepId: 'apply',

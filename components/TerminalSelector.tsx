@@ -187,6 +187,8 @@ interface BoundTerminalPayload {
   users?: UserType[];
   masterIp?: string;
   snapshotItems?: Product[];
+  rooms?: any[];
+  tables?: any[];
   snapshotMeta?: {
     fullPullOnPairing?: boolean;
     resolutionError?: unknown;
@@ -1567,7 +1569,9 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           masterIp: resolvedMasterHost,
           snapshotItems: Array.isArray(initialConfigData.items)
             ? initialConfigData.items
-            : (Array.isArray(initialConfigData.terminal_config?.masters?.items) ? initialConfigData.terminal_config?.masters?.items : []),
+            : (Array.isArray(initialConfigData.terminal_config?.masters?.items) ? initialConfigData.terminal_config?.masters?.items : undefined),
+          rooms: Array.isArray(initialConfigData.rooms) ? initialConfigData.rooms : undefined,
+          tables: Array.isArray(initialConfigData.tables) ? initialConfigData.tables : undefined,
           snapshotMeta: {
             fullPullOnPairing: initialConfigData.snapshot_meta?.full_pull_on_pairing,
             resolutionError: initialConfigData.snapshot_meta?.resolution_error,

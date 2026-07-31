@@ -1261,8 +1261,9 @@ object ClicPOSMasterHttpServer {
             .put("terminal_id", query.optString("local_terminal_id").ifBlank { terminalId })
             .put("erp_terminal_id", terminalId)
             .put("config", JSONObject(configSnapshot.toString()))
-            .put("rooms", configSnapshot.optJSONArray("rooms") ?: JSONArray())
-            .put("tables", configSnapshot.optJSONArray("tables") ?: JSONArray())
+            .put("rooms", JSONArray(roomsSnapshot.toString()))
+            .put("tables", buildTablesWithEditLocks())
+            .put("items", getSyncCollection("products"))
     }
 
     private fun parseQuery(rawTarget: String): JSONObject {
