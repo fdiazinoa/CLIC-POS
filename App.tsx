@@ -4277,10 +4277,12 @@ const AppContent: React.FC = () => {
         if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
           masterRestaurantRevisionRef.current = responseRevision;
         }
-        const responseParkedTickets = Array.isArray(data?.parkedTickets) ? data.parkedTickets : [];
+        const hasAuthoritativeParkedTickets = Array.isArray(data?.parkedTickets);
+        const responseParkedTickets = hasAuthoritativeParkedTickets ? data.parkedTickets : [];
+        const ticketsForReconciliation = hasAuthoritativeParkedTickets ? responseParkedTickets : parkedTickets;
         const mergeRemoteTables = (incomingTables: Table[], previousTables: Table[]) => {
           if (isClientRuntime) {
-            return reconcileTablesWithParkedTickets(incomingTables, responseParkedTickets);
+            return reconcileTablesWithParkedTickets(incomingTables, ticketsForReconciliation);
           }
 
           const localFloorPlan = locallySavedFloorPlanRef.current;
@@ -4289,7 +4291,7 @@ const AppContent: React.FC = () => {
             : incomingTables;
 
           if (previousTables.length === 0) {
-            return reconcileTablesWithParkedTickets(allowedIncoming, parkedTickets);
+            return reconcileTablesWithParkedTickets(allowedIncoming, ticketsForReconciliation);
           }
 
           const incomingById = new Map(allowedIncoming.map(table => [String(table.id), table]));
@@ -4311,7 +4313,10 @@ const AppContent: React.FC = () => {
           });
 
           incomingById.forEach(table => merged.push(table));
-          return reconcileTablesWithParkedTickets(merged, parkedTickets);
+          // El endpoint ya entregó el snapshot atómico de mesas y órdenes.
+          // No reconciliar contra el closure anterior: después de cobrar aún
+          // podía contener la orden cerrada y volver a poner la mesa en rojo.
+          return reconcileTablesWithParkedTickets(merged, ticketsForReconciliation);
         };
 
         // Backward compatibility: some endpoints may return only Table[].
@@ -4333,7 +4338,6 @@ const AppContent: React.FC = () => {
 
         if (isClientRuntime) {
           setClientMasterTablesStatus('ONLINE');
-          setParkedTickets(nextParkedTickets);
           locallySavedFloorPlanRef.current = {
             roomIds: new Set(nextRooms.map((room: Room) => String(room.id))),
             tableIds: new Set(nextTables.map((table: Table) => String(table.id)))
@@ -4344,6 +4348,10 @@ const AppContent: React.FC = () => {
             tables: nextTables.length
           });
         }
+
+        // También en Master el snapshot remoto es autoritativo. Esto evita
+        // restaurar una cuenta ya cobrada al regresar a la pantalla de mesas.
+        if (hasAuthoritativeParkedTickets) setParkedTickets(nextParkedTickets);
 
         setTables(previousTables => {
           if (nextTables.length === 0 && previousTables.length > 0) {

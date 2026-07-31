@@ -70,6 +70,9 @@ test('el puente Android publica reconciliación, locks y sincronización seriali
   assert.match(appSource, /await releaseActiveTableEditLock\(\)/);
   assert.match(appSource, /Master evita que un snapshot anterior vuelva a insertar una orden ya cobrada/);
   assert.match(appSource, /const queuedSync = parkedTicketSyncQueueRef\.current/);
+  assert.match(appSource, /No reconciliar contra el closure anterior/);
+  assert.match(appSource, /const ticketsForReconciliation = hasAuthoritativeParkedTickets \? responseParkedTickets : parkedTickets/);
+  assert.match(appSource, /reconcileTablesWithParkedTickets\(merged, ticketsForReconciliation\)/);
 });
 
 test('la Master Android implementa autenticación y lectura de catálogos para clientes', () => {
