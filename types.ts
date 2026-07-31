@@ -2095,6 +2095,10 @@ export interface ParkedTicket {
   alias?: string;
   items: CartItem[];
   total?: number;
+  discountAmount?: number;
+  discountType?: 'PERCENT' | 'FIXED';
+  discountValue?: number;
+  guests?: number;
   customerId?: string;
   customerName?: string;
   customerSnapshot?: {

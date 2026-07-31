@@ -3560,6 +3560,7 @@ const AppContent: React.FC = () => {
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [settingsInitialView, setSettingsInitialView] = useState<string | undefined>();
   const [settingsInitialData, setSettingsInitialData] = useState<any>();
+  const tableDesignerReturnViewRef = useRef<ViewState>('SETTINGS');
   const [viewData, setViewData] = useState<any>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
@@ -3645,21 +3646,34 @@ const AppContent: React.FC = () => {
         const nextRooms = Array.isArray(state?.rooms) ? state.rooms : [];
         const nextTables = Array.isArray(state?.tables) ? state.tables : [];
         const nextParkedTickets = Array.isArray(state?.parkedTickets) ? state.parkedTickets : [];
+        const nextCustomers = Array.isArray(state?.customers) ? state.customers : customers;
+        const knownCustomerIds = new Set(customers.map(customer => String(customer.id)));
+        const customersCreatedByClients = nextCustomers.filter(
+          (customer: Customer) => !knownCustomerIds.has(String(customer.id))
+        );
         masterRestaurantRevisionRef.current = revision;
         setRooms(nextRooms);
         setTables(nextTables);
         setParkedTickets(nextParkedTickets);
+        setCustomers(nextCustomers);
         writeCriticalCollectionsMirror(nextParkedTickets, cashMovements);
         await Promise.all([
           db.save('rooms', nextRooms),
           db.save('tables', nextTables),
           db.save('parkedTickets', nextParkedTickets),
+          db.save('customers', nextCustomers),
         ]);
+        customersCreatedByClients.forEach((customer: Customer) => {
+          syncManager.broadcastChange('customers', customer, 'CREATE').catch(error => {
+            console.warn('[MASTER_LAN] No se pudo colocar cliente nuevo en la cola ERP:', error);
+          });
+        });
         console.info('[MASTER_LAN] Applied client restaurant mutation', {
           revision,
           rooms: nextRooms.length,
           tables: nextTables.length,
           parkedTickets: nextParkedTickets.length,
+          customers: nextCustomers.length,
         });
       } catch (error) {
         console.warn('[MASTER_LAN] Could not reconcile native restaurant state:', error);
@@ -4232,7 +4246,10 @@ const AppContent: React.FC = () => {
         status: 'OCCUPIED',
         currentOrderId: linkedTicket.id,
         currentOrderTotal: ticketTotal(linkedTicket),
-        timeSeated: table.timeSeated || linkedTicket.timestamp
+        timeSeated: table.timeSeated || linkedTicket.timestamp,
+        guests: Number(linkedTicket.guests || 0) > 0
+          ? Number(linkedTicket.guests)
+          : table.guests
       } as Table;
     });
   }, []);
@@ -4445,23 +4462,27 @@ const AppContent: React.FC = () => {
     return result;
   }, [getCurrentTerminal]);
 
-  const releaseActiveTableEditLock = useCallback(async () => {
+  const releaseActiveTableEditLock = useCallback(async (): Promise<boolean> => {
     const lock = activeTableEditLockRef.current;
-    if (!lock) return;
+    if (!lock) return true;
     await parkedTicketSyncQueueRef.current.catch((error) => {
       console.warn('[TABLE_SYNC] La última actualización falló antes de liberar la mesa:', error);
     });
-    activeTableEditLockRef.current = null;
-    setActiveTableEditLock(null);
-    try {
-      await invokeTableEditLock('release', {
-        tableId: lock.tableId,
-        ownerId: lock.ownerId,
-        token: lock.token,
-      });
-    } catch (error) {
-      console.warn('[TABLE_EDIT_LOCK] No se pudo confirmar liberación:', error);
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        await invokeTableEditLock('release', {
+          tableId: lock.tableId,
+          ownerId: lock.ownerId,
+          token: lock.token,
+        });
+        activeTableEditLockRef.current = null;
+        setActiveTableEditLock(null);
+        return true;
+      } catch (error) {
+        console.warn(`[TABLE_EDIT_LOCK] No se pudo confirmar liberación (intento ${attempt}/2):`, error);
+      }
     }
+    return false;
   }, [invokeTableEditLock]);
 
   const acquireTableEditLock = useCallback(async (table: Table): Promise<boolean> => {
@@ -4475,7 +4496,11 @@ const AppContent: React.FC = () => {
 
     const currentLock = activeTableEditLockRef.current;
     if (currentLock && currentLock.tableId !== tableId) {
-      await releaseActiveTableEditLock();
+      const released = await releaseActiveTableEditLock();
+      if (!released) {
+        alert('No se pudo liberar la mesa anterior. Reintente antes de abrir otra mesa.');
+        return false;
+      }
     }
 
     try {
@@ -7179,7 +7204,9 @@ const AppContent: React.FC = () => {
           setTables(result.tables);
         }
         await clearPendingClientTableSync();
-        await fetchTables();
+        void fetchTables().catch(error => {
+          console.warn('[TABLE_SYNC] No se pudo refrescar el mapa después de guardar:', error);
+        });
       };
       const queuedSync = parkedTicketSyncQueueRef.current
         .catch(() => undefined)
@@ -7249,19 +7276,74 @@ const AppContent: React.FC = () => {
     try {
       const updatedTable = { ...activeTable, guests };
       setActiveTable(updatedTable);
-      
-      // Update in server
-      await fetch(resolveOperationalApiUrl(`/api/tables/${activeTable.id}`), {
+      setTables(prev => prev.map(t => t.id === activeTable.id ? updatedTable : t));
+
+      const editLock = activeTableEditLockRef.current;
+      const response = await fetch(resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(String(activeTable.id))}`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guests })
+        body: JSON.stringify({
+          guests,
+          ownerId: editLock?.ownerId,
+          lockToken: editLock?.token,
+        })
       });
-      
-      // Update in local state list to avoid jumpy UI on refresh
-      setTables(prev => prev.map(t => t.id === activeTable.id ? updatedTable : t));
+      const result = await response.json().catch(() => null);
+      if (!response.ok || result?.success === false) {
+        throw new Error(result?.message || `Master respondió HTTP ${response.status}`);
+      }
+      if (Array.isArray(result?.tables)) setTables(result.tables);
+      if (Array.isArray(result?.parkedTickets)) setParkedTickets(result.parkedTickets);
+      const revision = Number(result?.revision || 0);
+      if (Number.isFinite(revision) && revision > masterRestaurantRevisionRef.current) {
+        masterRestaurantRevisionRef.current = revision;
+      }
+      await db.save('tables', Array.isArray(result?.tables) ? result.tables : tables.map(
+        table => table.id === activeTable.id ? updatedTable : table
+      ));
     } catch (e) {
       console.error("Failed to update guest count:", e);
+      alert('No se pudo guardar la cantidad de comensales en la Caja Master.');
     }
+  };
+
+  const handleAddCustomer = async (customer: Customer) => {
+    const mergeCustomer = (source: Customer[]) => [
+      ...source.filter(existing => String(existing.id) !== String(customer.id)),
+      customer,
+    ];
+    const localCustomers = mergeCustomer(customers);
+    setCustomers(localCustomers);
+    await db.save('customers', localCustomers);
+
+    if (isClientTerminalMode()) {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 5000);
+      try {
+        const response = await fetch(resolveOperationalApiUrl('/api/customers'), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ customer }),
+          signal: controller.signal,
+        });
+        const result = await response.json().catch(() => null);
+        if (!response.ok || result?.success === false) {
+          throw new Error(result?.message || `Master respondió HTTP ${response.status}`);
+        }
+        const sharedCustomers = Array.isArray(result?.customers) ? result.customers : localCustomers;
+        setCustomers(sharedCustomers);
+        await db.save('customers', sharedCustomers);
+        const revision = Number(result?.revision || 0);
+        if (Number.isFinite(revision) && revision > masterRestaurantRevisionRef.current) {
+          masterRestaurantRevisionRef.current = revision;
+        }
+        return;
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
+    }
+
+    syncManager.broadcastChange('customers', customer, 'CREATE').catch(console.error);
   };
 
   const handleRepairLegacyReceivables = useCallback(async (): Promise<ReceivableRepairSummary> => {
@@ -9666,7 +9748,7 @@ const AppContent: React.FC = () => {
                     await printPrecuenta(config, {
                       items: order.items,
                       subtotal: subtotal,
-                      discountTotal: 0, // Simplified for now
+                      discountTotal: Number(order.discountAmount || 0),
                       taxTotal: 0,      // Simplified for now
                       finalTotal: order.total || subtotal,
                       table: table,
@@ -9680,7 +9762,10 @@ const AppContent: React.FC = () => {
                   }
                 }}
                 onParkedOrderSplitResult={handleParkedOrderSplitFromMap}
-                onOpenTableLayoutDesigner={isClientTerminalMode() ? undefined : () => handleViewChange('TABLE_DESIGNER')}
+                onOpenTableLayoutDesigner={isClientTerminalMode() ? undefined : () => {
+                  tableDesignerReturnViewRef.current = 'TABLE_MAP';
+                  handleViewChange('TABLE_DESIGNER');
+                }}
               />
             </div>
           </div>
@@ -9701,8 +9786,16 @@ const AppContent: React.FC = () => {
                 onClick={async () => {
                   // Auto-save on exit to prevent data loss
                   await handleSaveFloorPlan(rooms, tables);
-                  setSettingsInitialView('LAYOUT');
-                  setCurrentView('SETTINGS');
+                  const returnView = tableDesignerReturnViewRef.current;
+                  if (returnView === 'TABLE_MAP') {
+                    setCurrentView('TABLE_MAP');
+                    await fetchTables().catch(error => {
+                      console.warn('No se pudo refrescar el mapa al cerrar el diseñador:', error);
+                    });
+                  } else {
+                    setSettingsInitialView('LAYOUT');
+                    setCurrentView(returnView === 'SETTINGS_SYNC' ? 'SETTINGS_SYNC' : 'SETTINGS');
+                  }
                 }}
                 className="px-6 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold transition-all border border-slate-200"
               >
@@ -9781,7 +9874,11 @@ const AppContent: React.FC = () => {
             onOpenAudit={() => handleViewChange('INVENTORY_AUDIT')}
             onOpenTableMap={() => {
               void (async () => {
-                await releaseActiveTableEditLock();
+                const released = await releaseActiveTableEditLock();
+                if (!released) {
+                  alert('No se pudo liberar la mesa en la Caja Master. Reintente para evitar que quede bloqueada.');
+                  return;
+                }
                 setActiveTable(null);
                 setViewData(null);
                 setCurrentView('TABLE_MAP');
@@ -9809,14 +9906,19 @@ const AppContent: React.FC = () => {
                 return reconciled;
               });
 
-              try {
-                await fetch(resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`), {
+              if (!isClientTerminalMode()) {
+                const editLock = activeTableEditLockRef.current;
+                void fetch(resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`), {
                   method: 'PUT',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(updatedTable)
+                  body: JSON.stringify({
+                    ...updatedTable,
+                    ownerId: editLock?.ownerId,
+                    lockToken: editLock?.token,
+                  })
+                }).catch(error => {
+                  console.warn('No se pudo persistir estado ocupado de mesa en API:', error);
                 });
-              } catch (error) {
-                console.warn('No se pudo persistir estado ocupado de mesa en API:', error);
               }
             }}
             onSelectTableAccount={(ticket) => {
@@ -9908,12 +10010,7 @@ const AppContent: React.FC = () => {
             activeTable={activeTable}
             rooms={rooms}
             onClearActiveTable={() => setActiveTable(null)}
-            onAddCustomer={async (c) => {
-              const updated = [...customers, c];
-              setCustomers(updated);
-              await db.save('customers', updated);
-              syncManager.broadcastChange('customers', c, 'CREATE').catch(console.error);
-            }}
+            onAddCustomer={handleAddCustomer}
             onUpdateConfig={handleConfigUpdate}
             onKioskPay={() => handleViewChange('KIOSK_PAYMENT' as any)}
             activeTerminalId={getCurrentTerminal()!.id}
@@ -10000,7 +10097,10 @@ const AppContent: React.FC = () => {
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
-            onOpenTableDesigner={() => setCurrentView('TABLE_DESIGNER')}
+            onOpenTableDesigner={() => {
+              tableDesignerReturnViewRef.current = 'SETTINGS';
+              setCurrentView('TABLE_DESIGNER');
+            }}
             initialView={settingsInitialView as any}
             initialData={settingsInitialData}
             isAdminMode={isAdminMode}
@@ -10067,7 +10167,10 @@ const AppContent: React.FC = () => {
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
-            onOpenTableDesigner={() => setCurrentView('TABLE_DESIGNER')}
+            onOpenTableDesigner={() => {
+              tableDesignerReturnViewRef.current = 'SETTINGS_SYNC';
+              setCurrentView('TABLE_DESIGNER');
+            }}
             isAdminMode={isAdminMode}
             initialView="SYNC"
             onClose={() => {
@@ -10091,12 +10194,7 @@ const AppContent: React.FC = () => {
             collections={collections}
             currentUser={currentUser!}
             terminalId={(config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1'}
-            onAddCustomer={async (c) => {
-              const updated = [...customers, c];
-              setCustomers(updated);
-              await db.save('customers', updated);
-              syncManager.broadcastChange('customers', c, 'CREATE').catch(console.error);
-            }}
+            onAddCustomer={handleAddCustomer}
             onUpdateCustomer={async (c) => {
               const updated = customers.map(cust => cust.id === c.id ? c : cust);
               setCustomers(updated);

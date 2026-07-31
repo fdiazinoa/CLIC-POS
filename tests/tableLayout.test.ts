@@ -46,3 +46,25 @@ test('sin plano diseñado genera una cuadrícula operativa para mesas ERP', () =
   assert.equal(rendered[0].shape, 'SQUARE');
   assert.equal(hasExplicitTableLayout(rendered[0]), true);
 });
+
+test('mantiene las mesas automáticas visibles si una de ellas recibe layout antes que las demás', () => {
+  const bootstrapTables = Array.from({ length: 12 }, (_, index) => ({
+    id: `bootstrap-${index + 1}`,
+    roomId: 'MAIN_DINING_ROOM',
+    code: `M${String(index + 1).padStart(2, '0')}`,
+    label: `Mesa ${index + 1}`,
+    nombre: `Mesa ${index + 1}`,
+    name: `Mesa ${index + 1}`,
+    posX: index === 0 ? 80 : Number.NaN,
+    posY: index === 0 ? 80 : Number.NaN,
+    width: index === 0 ? 100 : 0,
+    height: index === 0 ? 100 : 0,
+    shape: 'SQUARE' as const,
+    rotation: 0
+  }));
+
+  const rendered = getRenderableFloorTables(bootstrapTables);
+
+  assert.equal(rendered.length, 12);
+  assert.deepEqual(rendered.map(table => table.nombre), Array.from({ length: 12 }, (_, index) => `Mesa ${index + 1}`));
+});

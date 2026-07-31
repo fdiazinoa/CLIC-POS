@@ -261,7 +261,7 @@ const getItemTaxRate = (item: Transaction['items'][number], config: BusinessConf
 
 const calculateTransactionTotals = (transaction: Transaction, config: BusinessConfig) => {
   let subtotal = 0;
-  let discountTotal = 0;
+  let lineDiscountTotal = 0;
   let taxTotal = 0;
   const isTaxIncluded = transaction.isTaxIncluded || false;
 
@@ -274,7 +274,7 @@ const calculateTransactionTotals = (transaction: Transaction, config: BusinessCo
     const lineVal = item.price * item.quantity;
     const lineDiscount = (originalPrice - item.price) * item.quantity;
 
-    discountTotal += lineDiscount;
+    lineDiscountTotal += Math.max(0, lineDiscount);
     rawGrossTotal += lineVal;
 
     const itemTaxRate = getItemTaxRate(item, config);
@@ -295,8 +295,6 @@ const calculateTransactionTotals = (transaction: Transaction, config: BusinessCo
   });
 
   if (transaction.discountAmount && transaction.discountAmount > 0) {
-    discountTotal += transaction.discountAmount;
-
     if (isTaxIncluded) {
       const ratio = (rawGrossTotal - transaction.discountAmount) / (rawGrossTotal || 1);
       subtotal = rawNetTotal * ratio;
@@ -313,7 +311,9 @@ const calculateTransactionTotals = (transaction: Transaction, config: BusinessCo
 
   return {
     subtotal,
-    discountTotal,
+    lineDiscountTotal,
+    globalDiscountTotal: Math.max(0, Number(transaction.discountAmount || 0)),
+    discountTotal: lineDiscountTotal + Math.max(0, Number(transaction.discountAmount || 0)),
     taxTotal,
     total: transaction.total || (subtotal + taxTotal)
   };
@@ -424,6 +424,16 @@ export const buildEscPosTicketPayload = (
     const qtyText = `${Number(item.quantity || 0).toFixed(item.quantity % 1 === 0 ? 0 : 3)} x ${formatMoney(config.currencySymbol || '$', item.price)}`;
     const lineTotal = formatMoney(config.currencySymbol || '$', item.price * item.quantity);
     pushPair(chunks, qtyText, lineTotal, width);
+    const originalPrice = Number(item.originalPrice || item.price);
+    const lineDiscount = Math.max(0, (originalPrice - Number(item.price || 0)) * Number(item.quantity || 0));
+    if (lineDiscount > 0) {
+      pushPair(
+        chunks,
+        '  Descuento articulo',
+        `-${formatMoney(config.currencySymbol || '$', lineDiscount)}`,
+        width
+      );
+    }
 
     if (item.variantInfo) {
       pushTextLines(chunks, splitLines(`Variante: ${item.variantInfo}`, width));
@@ -448,8 +458,8 @@ export const buildEscPosTicketPayload = (
   } else if (receiptTaxTotal > 0) {
     pushPair(chunks, 'IMPUESTOS', formatMoney(config.currencySymbol || '$', receiptTaxTotal), width);
   }
-  if (totals.discountTotal > 0) {
-    pushPair(chunks, 'DESCUENTO', formatMoney(config.currencySymbol || '$', totals.discountTotal), width);
+  if (totals.globalDiscountTotal > 0) {
+    pushPair(chunks, 'DESCUENTO GENERAL', formatMoney(config.currencySymbol || '$', totals.globalDiscountTotal), width);
   }
   chunks.push(bold(true));
   pushPair(chunks, 'TOTAL', formatMoney(config.currencySymbol || '$', receiptTotal), width);
