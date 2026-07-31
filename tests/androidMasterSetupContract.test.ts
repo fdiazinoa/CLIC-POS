@@ -36,6 +36,23 @@ test('el servidor Master Android conserva el contrato ORDER_TAKER', () => {
   assert.match(serverSource, /\.put\("restrictions"/);
 });
 
+test('la Cliente recibe mesas y productos desde el snapshot operativo de la Master', () => {
+  assert.match(serverSource, /\.put\("rooms", JSONArray\(roomsSnapshot\.toString\(\)\)\)/);
+  assert.match(serverSource, /\.put\("tables", buildTablesWithEditLocks\(\)\)/);
+  assert.match(serverSource, /\.put\("items", getSyncCollection\("products"\)\)/);
+  assert.match(
+    terminalSelectorSource,
+    /rooms: Array\.isArray\(initialConfigData\.rooms\) \? initialConfigData\.rooms : undefined/,
+  );
+  assert.match(
+    terminalSelectorSource,
+    /tables: Array\.isArray\(initialConfigData\.tables\) \? initialConfigData\.tables : undefined/,
+  );
+  assert.match(appSource, /const hasAuthoritativeTableSnapshot = Array\.isArray\(setupResult\?\.tables\)/);
+  assert.match(appSource, /if \(hasAuthoritativeTableSnapshot \|\| setupTables\.length > 0\)/);
+  assert.match(appSource, /if \(!isClientRuntime && nextTables\.length === 0 && previousTables\.length > 0\)/);
+});
+
 test('la activacion cliente usa transporte nativo con timeout para todo el handshake', () => {
   assert.match(terminalSelectorSource, /requestMasterSetup<TerminalSelectorResponse>/);
   assert.match(terminalSelectorSource, /buildMasterClaimUrl\(apiBase, bindTerminalRequestBody\)/);
