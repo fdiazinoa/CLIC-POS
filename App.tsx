@@ -307,7 +307,7 @@ type ActiveTableEditLock = {
 
 type ParkedTicketSyncOptions = {
   deferRemote?: boolean;
-  reason?: 'cart_changed' | 'debounced' | 'explicit';
+  reason?: 'cart_changed' | 'debounced' | 'explicit' | 'customer_assigned';
 };
 
 type PendingClientTableSync = {
@@ -3546,6 +3546,8 @@ const AppContent: React.FC = () => {
   const [clientMasterTablesStatus, setClientMasterTablesStatus] = useState<'CHECKING' | 'ONLINE' | 'OFFLINE'>(() =>
     isClientTerminalMode() ? 'CHECKING' : 'ONLINE'
   );
+  const clientMasterFailureCountRef = useRef(0);
+  const clientMasterLastSuccessAtRef = useRef(0);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [activeRoomId, setActiveRoomId] = useState<string>('');
   const [activeRoomId2, setActiveRoomId2] = useState<string>(''); // For backward compatibility if needed
@@ -4262,6 +4264,12 @@ const AppContent: React.FC = () => {
 
   const fetchTables = async () => {
     const isClientRuntime = isClientTerminalMode();
+    const markClientMasterOnline = () => {
+      if (!isClientRuntime) return;
+      clientMasterFailureCountRef.current = 0;
+      clientMasterLastSuccessAtRef.current = Date.now();
+      setClientMasterTablesStatus('ONLINE');
+    };
     try {
       if (isClientRuntime && clientMasterTablesStatus !== 'ONLINE') {
         setClientMasterTablesStatus('CHECKING');
@@ -4327,7 +4335,7 @@ const AppContent: React.FC = () => {
 
         // Backward compatibility: some endpoints may return only Table[].
         if (Array.isArray(data)) {
-          if (isClientRuntime) setClientMasterTablesStatus('ONLINE');
+          markClientMasterOnline();
           setTables(previousTables => {
             if (!isClientRuntime && data.length === 0 && previousTables.length > 0) {
               console.warn('Se ignoró una respuesta vacía de mesas para preservar el layout local.');
@@ -4343,7 +4351,7 @@ const AppContent: React.FC = () => {
         const nextParkedTickets = responseParkedTickets;
 
         if (isClientRuntime) {
-          setClientMasterTablesStatus('ONLINE');
+          markClientMasterOnline();
           locallySavedFloorPlanRef.current = {
             roomIds: new Set(nextRooms.map((room: Room) => String(room.id))),
             tableIds: new Set(nextTables.map((table: Table) => String(table.id)))
@@ -4403,9 +4411,14 @@ const AppContent: React.FC = () => {
     } catch (e) {
       console.warn("Failed to fetch tables from Master/API:", e);
       if (isClientRuntime) {
-        setClientMasterTablesStatus('OFFLINE');
-        console.error('[TABLE_LAYOUT_CLIENT_BLOCKED]', {
+        clientMasterFailureCountRef.current += 1;
+        const failureCount = clientMasterFailureCountRef.current;
+        const hadRecentSuccess = Date.now() - clientMasterLastSuccessAtRef.current < 15_000;
+        const shouldBlock = failureCount >= (hadRecentSuccess ? 3 : 2);
+        if (shouldBlock) setClientMasterTablesStatus('OFFLINE');
+        console.error(shouldBlock ? '[TABLE_LAYOUT_CLIENT_BLOCKED]' : '[TABLE_LAYOUT_CLIENT_RETRY]', {
           masterUrl: localStorage.getItem('CLIC_POS_MASTER_URL') || localStorage.getItem('pos_master_ip'),
+          consecutiveFailures: failureCount,
           reason: e instanceof Error ? e.message : String(e)
         });
         return;
@@ -4556,7 +4569,7 @@ const AppContent: React.FC = () => {
   ]);
 
   useEffect(() => {
-    if (!activeTableEditLock || currentView !== 'POS') return;
+    if (!activeTableEditLock || (currentView !== 'POS' && currentView !== 'CUSTOMERS')) return;
     const heartbeat = window.setInterval(() => {
       void invokeTableEditLock('acquire', {
         tableId: activeTableEditLock.tableId,
@@ -4585,6 +4598,7 @@ const AppContent: React.FC = () => {
   ]);
 
   const retryClientMasterConnection = useCallback(async () => {
+    clientMasterFailureCountRef.current = 0;
     setClientMasterTablesStatus('CHECKING');
     const candidates: Array<{ host: string; source: 'STORED' | 'CLOUD' | 'LAN' }> = [];
     const appendCandidate = (value: string | null | undefined, source: 'STORED' | 'CLOUD' | 'LAN') => {
@@ -6190,6 +6204,7 @@ const AppContent: React.FC = () => {
         currentUser
         && currentView === 'POS'
         && !isPosSaleActive()
+        && !activeTableEditLockRef.current
         && resolvePosSalesStartView(incomingConfig, currentTerminal.config) === 'TABLE_MAP'
       ) {
         setCurrentView('TABLE_MAP');
@@ -8413,7 +8428,10 @@ const AppContent: React.FC = () => {
     };
   };
 
-  const syncFloorPlanToServer = async (roomsPayload: Room[], tablesPayload: Table[]) => {
+  const syncFloorPlanToServer = async (
+    roomsPayload: Room[],
+    tablesPayload: Table[]
+  ): Promise<{ rooms: Room[]; tables: Table[] } | null> => {
     const headers = { 'Content-Type': 'application/json' };
     const normalizedRoomsPayload = roomsPayload.map(normalizeRoomForLayout);
     const normalizedTablesPayload = tablesPayload.map(normalizeTableForLayout);
@@ -8434,7 +8452,32 @@ const AppContent: React.FC = () => {
       }
     };
 
-    // Pull current server snapshot to compute deletions safely
+    // Android Master replaces the complete layout in one persisted mutation.
+    // This avoids partial saves (rooms succeeded but tables failed, or vice versa)
+    // and makes an intentionally empty table list authoritative.
+    const atomicRes = await fetch(resolveOperationalApiUrl('/api/mesas/layout'), {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ rooms: normalizedRoomsPayload, tables: normalizedTablesPayload })
+    });
+    if (atomicRes.status !== 404) {
+      const atomicResult = await parseJsonOrSkipServerSync(atomicRes, 'Layout de mesas');
+      if (!atomicRes.ok || atomicResult?.success === false) {
+        throw new Error(atomicResult?.message || `Error guardando layout (HTTP ${atomicRes.status})`);
+      }
+      if (atomicResult) {
+        const responseRevision = Number(atomicResult.revision || 0);
+        if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
+          masterRestaurantRevisionRef.current = responseRevision;
+        }
+        return {
+          rooms: Array.isArray(atomicResult.rooms) ? atomicResult.rooms : normalizedRoomsPayload,
+          tables: Array.isArray(atomicResult.tables) ? atomicResult.tables : normalizedTablesPayload
+        };
+      }
+    }
+
+    // Compatibility fallback for servers that predate the atomic endpoint.
     const snapshotRes = await fetch(resolveOperationalApiUrl('/api/mesas'));
     if (!snapshotRes.ok) {
       throw new Error(`No se pudo leer estado actual de mesas (HTTP ${snapshotRes.status})`);
@@ -8487,6 +8530,7 @@ const AppContent: React.FC = () => {
         throw new Error(`Error eliminando sala ${room.id} (HTTP ${res.status})`);
       }
     }
+    return null;
   };
 
   const handleSaveFloorPlan = async (newRooms: Room[], newTables: Table[]) => {
@@ -8508,14 +8552,6 @@ const AppContent: React.FC = () => {
       alert('El layout no se guardó porque debe existir al menos una sala.');
       if (existingDbRooms.length > 0) setRooms(existingDbRooms);
       if (existingDbTables.length > 0) setTables(existingDbTables);
-      return;
-    }
-
-    if (normalizedTablesInput.length === 0 && existingDbTables.length > 0) {
-      console.warn('Se bloqueó un autoguardado vacío para proteger el layout existente.');
-      alert('El layout quedó vacío inesperadamente. Se restauró la última versión guardada para evitar perder las mesas.');
-      setRooms(existingDbRooms.length > 0 ? existingDbRooms : normalizedRooms);
-      setTables(existingDbTables);
       return;
     }
 
@@ -8560,10 +8596,18 @@ const AppContent: React.FC = () => {
 
     await db.save('tables', mergedTables);
     setTables(mergedTables);
+    window.localStorage.removeItem(FLOOR_PLAN_STORAGE_KEY);
     writeFloorPlanMirror(normalizedRooms, mergedTables);
     try {
-      await syncFloorPlanToServer(normalizedRooms, mergedTables);
-      await fetchTables();
+      const syncedLayout = await syncFloorPlanToServer(normalizedRooms, mergedTables);
+      if (syncedLayout) {
+        setRooms(syncedLayout.rooms);
+        setTables(syncedLayout.tables);
+        locallySavedFloorPlanRef.current = {
+          roomIds: new Set(syncedLayout.rooms.map(room => String(room.id))),
+          tableIds: new Set(syncedLayout.tables.map(table => String(table.id)))
+        };
+      }
       console.log('✅ Floor Plan synced to API server.');
     } catch (error: any) {
       console.error('❌ Floor Plan API sync failed:', error);
@@ -10317,7 +10361,34 @@ const AppContent: React.FC = () => {
               await db.save('customers', updated);
               syncManager.broadcastChange('customers', { id }, 'DELETE').catch(console.error);
             }}
-            onSelect={(c) => { setSelectedCustomer(c); setCurrentView('POS'); }}
+            onSelect={(c) => {
+              setSelectedCustomer(c);
+              const orderId = String(activeTable?.currentOrderId || '').trim();
+              const existingTicket = orderId
+                ? parkedTickets.find(ticket => String(ticket.id) === orderId)
+                : undefined;
+              if (existingTicket) {
+                const updatedTicket: ParkedTicket = {
+                  ...existingTicket,
+                  customerId: c.id,
+                  customerName: c.name,
+                  customerSnapshot: {
+                    name: c.name,
+                    taxId: c.taxId,
+                    address: c.address,
+                    phone: c.phone,
+                    email: c.email
+                  }
+                };
+                const updatedTickets = parkedTickets.map(ticket =>
+                  String(ticket.id) === orderId ? updatedTicket : ticket
+                );
+                setParkedTickets(updatedTickets);
+                void handleUpdateParkedTickets(updatedTickets, { reason: 'customer_assigned' })
+                  .catch(error => console.error('No se pudo guardar el cliente del ticket:', error));
+              }
+              setCurrentView('POS');
+            }}
             onClose={() => setCurrentView('POS')}
             onRetryFiscalDocument={retryFiscalDocument}
           />

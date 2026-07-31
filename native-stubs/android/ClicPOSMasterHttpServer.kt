@@ -226,6 +226,8 @@ object ClicPOSMasterHttpServer {
                         writeLockResponse(client, releaseTableEditLock(parseJsonBody(body)))
                     method == "PUT" && path == "/api/mesas/parked-tickets" ->
                         handleParkedTicketsUpdate(client, body)
+                    method == "PUT" && path == "/api/mesas/layout" ->
+                        handleFloorPlanReplace(client, body)
                     method == "PUT" && path.startsWith("/api/tables/") ->
                         handleTableUpdate(client, path, body)
                     method == "PUT" && path == "/api/customers" ->
@@ -1051,6 +1053,37 @@ object ClicPOSMasterHttpServer {
         writeResponse(socket, 200, JSONObject()
             .put("success", true)
             .put("table", JSONObject(updatedTable.toString()))
+            .put("tables", buildTablesWithEditLocks())
+            .put("parkedTickets", JSONArray(parkedTicketsSnapshot.toString()))
+            .put("revision", restaurantRevision.get())
+            .toString())
+    }
+
+    @Synchronized
+    private fun handleFloorPlanReplace(socket: Socket, body: String) {
+        val payload = runCatching { if (body.isBlank()) JSONObject() else JSONObject(body) }
+            .getOrElse {
+                writeResponse(socket, 400, JSONObject()
+                    .put("success", false)
+                    .put("message", "Cuerpo de layout inválido")
+                    .toString())
+                return
+            }
+        val rooms = payload.optJSONArray("rooms")
+        val tables = payload.optJSONArray("tables")
+        if (rooms == null || tables == null) {
+            writeResponse(socket, 400, JSONObject()
+                .put("success", false)
+                .put("message", "rooms y tables son requeridos")
+                .toString())
+            return
+        }
+
+        val reconciledTables = reconcileTablesWithParkedTickets(tables, parkedTicketsSnapshot)
+        applyClientRestaurantMutation(rooms = rooms, tables = reconciledTables)
+        writeResponse(socket, 200, JSONObject()
+            .put("success", true)
+            .put("rooms", JSONArray(roomsSnapshot.toString()))
             .put("tables", buildTablesWithEditLocks())
             .put("parkedTickets", JSONArray(parkedTicketsSnapshot.toString()))
             .put("revision", restaurantRevision.get())

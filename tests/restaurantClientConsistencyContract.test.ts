@@ -39,6 +39,14 @@ test('la Master permite persistir comensales y clientes creados por una terminal
   assert.match(appSource, /syncManager\.broadcastChange\('customers', customer, 'CREATE'\)/);
 });
 
+test('asignar un cliente persiste el ticket sin perder el lock ni la selección al volver al POS', () => {
+  assert.match(appSource, /currentView !== 'POS' && currentView !== 'CUSTOMERS'/);
+  assert.match(appSource, /reason: 'customer_assigned'/);
+  assert.match(appSource, /customerId: c\.id,[\s\S]*customerName: c\.name/);
+  assert.match(appSource, /!activeTableEditLockRef\.current/);
+  assert.match(posSource, /else if \(!selectedCustomer\) \{\s*onSelectCustomer\(null\)/);
+});
+
 test('la salida conserva las credenciales del lock hasta recibir confirmación y evita esperas redundantes', () => {
   const releaseStart = appSource.indexOf('const releaseActiveTableEditLock');
   const releaseEnd = appSource.indexOf('const acquireTableEditLock', releaseStart);

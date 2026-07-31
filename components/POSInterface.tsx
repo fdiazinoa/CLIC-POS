@@ -121,7 +121,7 @@ export interface POSInterfaceProps {
       tickets: ParkedTicket[],
       options?: {
          deferRemote?: boolean;
-         reason?: 'cart_changed' | 'debounced' | 'explicit';
+         reason?: 'cart_changed' | 'debounced' | 'explicit' | 'customer_assigned';
       },
    ) => void | Promise<void>;
    onTableOrderSaved?: (table: Table, ticket: ParkedTicket) => void | Promise<void>;
@@ -1756,7 +1756,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!orderId) {
          if (isNewTableContext) {
             onUpdateCart([]);
-            onSelectCustomer(null);
+            if (!selectedCustomer) onSelectCustomer(null);
          }
          activeTableHydrationRef.current = { key: tableKey, missingTicket: false };
          return;
@@ -1771,7 +1771,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (isNewTableContext) {
             console.warn(`Ticket ${orderId} no encontrado para la mesa activa. Se limpia el carrito para evitar heredar otra mesa.`);
             onUpdateCart([]);
-            onSelectCustomer(null);
+            if (!selectedCustomer) onSelectCustomer(null);
          }
          activeTableHydrationRef.current = { key: tableKey, missingTicket: true };
          return;
@@ -1785,7 +1785,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (ticket.customerId) {
             const customer = customers.find(c => c.id === ticket.customerId);
             if (customer) onSelectCustomer(customer);
-         } else {
+         } else if (!selectedCustomer) {
             onSelectCustomer(null);
          }
       }
@@ -1796,6 +1796,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       activeTable?.currentOrderId,
       parkedTickets,
       customers,
+      selectedCustomer?.id,
       onUpdateCart,
       onSelectCustomer
    ]);
