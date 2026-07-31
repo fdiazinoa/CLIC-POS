@@ -870,11 +870,18 @@ const normalizeTerminalDedupeValue = (value: unknown): string => (
 const resolveTerminalDedupeKey = (terminal: any): string => {
   const operationalId = resolveOperationalTerminalId(terminal);
   const terminalName = resolveTerminalName(terminal, operationalId || asString(terminal?.id));
-  return (
+  const identity = (
     normalizeTerminalDedupeValue(operationalId)
     || normalizeTerminalDedupeValue(terminalName)
     || normalizeTerminalDedupeValue(terminal?.id)
   );
+  const terminalType = normalizeTerminalDedupeValue(
+    resolveOrderTakerContract(terminal).terminalType
+  );
+
+  // El ERP puede asignar el mismo codigo operativo a una caja y a una toma de
+  // pedidos. Son terminales distintas y no deben colapsarse entre si.
+  return identity && terminalType ? `${identity}::${terminalType}` : identity;
 };
 
 const collectPreferredErpTerminalIds = (

@@ -128,7 +128,7 @@ test('prioritizes the explicit Cloud-Admin tenant mapping over a stale device bo
   ]);
 });
 
-test('keeps Mast-01 visible while filtering its archived legacy row', () => {
+test('keeps Mast-01 and Slav-01 visible when ERP reuses POS-001 across terminal types', () => {
   const currentConfig = getInitialConfig('Restaurante' as any);
   const terminals = materializeErpTerminalCards({
     currentConfig,
@@ -144,6 +144,16 @@ test('keeps Mast-01 visible while filtering its archived legacy row', () => {
         company_name: 'Restaurante POS',
       },
       {
+        id: 'efdc61ae-f485-41ea-b50e-3ca4e08123e2',
+        terminal_code: 'POS-001',
+        terminal_name: 'Slav-01',
+        name: 'Slav-01',
+        device_id: 'DEV-JJP90FCP',
+        terminal_type: 'ORDER_TAKER',
+        master_terminal_id: '461837f1-67d1-4ce6-b394-bf9e7b79dc8c',
+        company_name: 'Restaurante POS',
+      },
+      {
         id: '685cb867-70b6-4f63-aed4-8bc9e706377b',
         terminal_code: 'Mast-01',
         terminal_name: 'ARCHIVED-Mast-01',
@@ -154,8 +164,10 @@ test('keeps Mast-01 visible while filtering its archived legacy row', () => {
     ],
   });
 
-  assert.equal(terminals.length, 1);
-  assert.equal(terminals[0].name, 'Mast-01');
-  assert.equal(terminals[0].config.stationNumber, 'POS-001');
+  assert.equal(terminals.length, 2);
+  assert.deepEqual(terminals.map(terminal => terminal.name), ['Mast-01', 'Slav-01']);
+  assert.deepEqual(terminals.map(terminal => terminal.config.stationNumber), ['POS-001', 'POS-001']);
+  assert.equal(terminals[0].terminalType, 'STANDARD_POS');
+  assert.equal(terminals[1].terminalType, 'ORDER_TAKER');
   assert.equal(terminals[0].occupied, true);
 });
