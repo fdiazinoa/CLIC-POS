@@ -2,7 +2,13 @@ import React, { useState } from 'react';
 import { ChevronRight, ClipboardList, Lock, Server, Smartphone, Wifi } from 'lucide-react';
 import { BusinessConfig, Product, User as UserType } from '../types';
 import TerminalSelector from './TerminalSelector';
-import { buildMasterUrlCandidates, buildMasterUrlFromHost, normalizeMasterHost } from '../utils/cloudMasterRegistry';
+import {
+  buildMasterUrlCandidates,
+  buildMasterUrlFromHost,
+  normalizeMasterHost,
+  resolveMasterEndpointFromCloud,
+} from '../utils/cloudMasterRegistry';
+import { discoverLanMasterCandidates } from '../utils/masterLanDiscovery';
 import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../services/sync/SyncProfile';
 import type { RuntimeTerminalRecoveryState } from '../services/setup/erpTerminalSetup';
 import {
@@ -96,6 +102,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   const [expectedTerminalType, setExpectedTerminalType] = useState<PosTerminalType | null>(
     initialBindingMode === 'SLAVE' ? STANDARD_POS_TERMINAL_TYPE : null
   );
+  const automaticDiscoveryRef = React.useRef('');
 
   React.useEffect(() => {
     if (initialBindingMode) {
@@ -140,8 +147,28 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
     throw lastError || new Error('No se pudo conectar a la Maestra');
   };
 
+  const applyMasterConnection = async (
+    connection: Awaited<ReturnType<typeof resolveReachableMaster>>,
+    source: 'CLOUD' | 'LAN' | 'MANUAL'
+  ) => {
+    await onConfigUpdate?.(connection.config);
+
+    const fetchedAdmins = connection.users.filter((user: any) =>
+      user.role?.toUpperCase() === 'ADMIN' || user.role?.toUpperCase() === 'ADMINISTRADOR'
+    );
+    setMasterAdmins(fetchedAdmins);
+    await onUsersUpdate?.(connection.users);
+
+    localStorage.setItem('pos_master_ip', connection.host);
+    localStorage.setItem('CLIC_POS_MASTER_URL', connection.baseUrl || buildMasterUrlFromHost(connection.host));
+    localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', source);
+    setMasterIp(connection.host);
+    setStep('AUTH');
+  };
+
   const handleModeSelect = (mode: 'MASTER' | 'SLAVE' | 'ORDER_TAKER') => {
     const nextBindingMode = mode === 'ORDER_TAKER' ? 'SLAVE' : mode;
+    if (nextBindingMode === 'SLAVE') automaticDiscoveryRef.current = '';
     setBindingMode(nextBindingMode);
     setExpectedTerminalType(
       mode === 'ORDER_TAKER'
@@ -175,19 +202,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
 
     try {
       const connection = await resolveReachableMaster(masterIp);
-      const fetchedConfig = connection.config;
-      await onConfigUpdate?.(fetchedConfig);
-
-      const fetchedAdmins = connection.users.filter((u: any) =>
-        u.role?.toUpperCase() === 'ADMIN' || u.role?.toUpperCase() === 'ADMINISTRADOR'
-      );
-      setMasterAdmins(fetchedAdmins);
-      await onUsersUpdate?.(connection.users);
-
-      localStorage.setItem('pos_master_ip', connection.host);
-      localStorage.setItem('CLIC_POS_MASTER_URL', connection.baseUrl || buildMasterUrlFromHost(connection.host));
-      setMasterIp(connection.host);
-      setStep('AUTH');
+      await applyMasterConnection(connection, 'MANUAL');
     } catch (err) {
       console.error('Failed to connect to master during terminal activation:', err);
       const normalizedHost = normalizeMasterHost(masterIp);
@@ -204,6 +219,74 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
       setIsConnecting(false);
     }
   };
+
+  React.useEffect(() => {
+    if (step !== 'SLAVE_CONNECT' || bindingMode !== 'SLAVE') return;
+
+    const discoveryKey = `${deviceId}:${tenantId || ''}:${expectedTerminalType || ''}`;
+    if (automaticDiscoveryRef.current === discoveryKey) return;
+    automaticDiscoveryRef.current = discoveryKey;
+    let cancelled = false;
+
+    const discoverAndConnect = async () => {
+      setIsConnecting(true);
+      setError(null);
+
+      const candidates: Array<{ host: string; source: 'CLOUD' | 'LAN' }> = [];
+      const appendCandidate = (value: string | null | undefined, source: 'CLOUD' | 'LAN') => {
+        const host = normalizeMasterHost(value || '');
+        if (host && !candidates.some(candidate => candidate.host === host)) candidates.push({ host, source });
+      };
+
+      appendCandidate(masterIp, 'LAN');
+      appendCandidate(initialMasterIp, 'LAN');
+      appendCandidate(localStorage.getItem('pos_master_ip'), 'LAN');
+
+      try {
+        const cloudEndpoint = await resolveMasterEndpointFromCloud();
+        appendCandidate(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl, 'CLOUD');
+
+        for (const candidate of candidates) {
+          try {
+            const connection = await resolveReachableMaster(candidate.host);
+            if (cancelled) return;
+            await applyMasterConnection(connection, candidate.source);
+            return;
+          } catch {
+            // Continue with the next known endpoint before scanning the LAN.
+          }
+        }
+
+        const lanCandidates = await discoverLanMasterCandidates({ timeoutMs: 2500 });
+        for (const candidate of lanCandidates) {
+          try {
+            const connection = await resolveReachableMaster(candidate.host);
+            if (cancelled) return;
+            await applyMasterConnection(connection, 'LAN');
+            return;
+          } catch {
+            // A DNS-SD result can become stale while Android changes networks.
+          }
+        }
+
+        if (!cancelled) {
+          setError('No se encontró una Caja Master disponible en esta red. Puede ingresar la IP manualmente.');
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('[MASTER_DISCOVERY] Automatic pairing discovery failed:', error);
+          setError('No se pudo completar la búsqueda automática. Puede ingresar la IP manualmente.');
+        }
+      } finally {
+        if (!cancelled) setIsConnecting(false);
+      }
+    };
+
+    void discoverAndConnect();
+    return () => {
+      cancelled = true;
+    };
+  }, [bindingMode, deviceId, expectedTerminalType, step]);
 
   const handleAuth = () => {
     const allAvailableAdmins = [...adminUsers];
