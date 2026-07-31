@@ -213,10 +213,13 @@ const normalizeTerminalDedupeValue = (value: unknown): string => (
 );
 
 const resolveTerminalDedupeKey = (terminal: TerminalCard): string => (
-  normalizeTerminalDedupeValue(terminal.config?.stationNumber)
-  || normalizeTerminalDedupeValue(terminal.name)
-  || normalizeTerminalDedupeValue(terminal.id)
-  || normalizeTerminalDedupeValue(terminal.erpTerminalId)
+  [
+    normalizeTerminalDedupeValue(terminal.config?.stationNumber)
+      || normalizeTerminalDedupeValue(terminal.name)
+      || normalizeTerminalDedupeValue(terminal.id)
+      || normalizeTerminalDedupeValue(terminal.erpTerminalId),
+    normalizeTerminalDedupeValue(resolveOrderTakerContract(terminal).terminalType),
+  ].filter(Boolean).join('::')
 );
 
 const dedupeTerminalCards = (
