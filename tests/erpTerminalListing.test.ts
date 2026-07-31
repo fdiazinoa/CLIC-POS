@@ -73,3 +73,30 @@ test('filters archived ERP rows without hiding the active terminal with the same
   assert.equal(terminals.length, 1);
   assert.equal(terminals[0].id, 'active-pos-003');
 });
+
+test('keeps a valid Master whose display name matches another terminal code', () => {
+  const currentConfig = getInitialConfig('Restaurante' as any);
+  const terminals = materializeErpTerminalCards({
+    currentConfig,
+    posDeviceId: 'DEV-NEW-MASTER',
+    terminals: [
+      {
+        id: 'erp-master-01',
+        terminal_code: 'MASTER-01',
+        name: 'Slav-01',
+        device_id: '',
+        active: true,
+      },
+      {
+        id: 'erp-slave-01',
+        terminal_code: 'Slav-01',
+        name: 'Slav-01',
+        device_id: 'DEV-SLAVE-01',
+        active: true,
+      },
+    ],
+  });
+
+  assert.equal(terminals.length, 2);
+  assert.deepEqual(terminals.map(terminal => terminal.id), ['erp-master-01', 'erp-slave-01']);
+});

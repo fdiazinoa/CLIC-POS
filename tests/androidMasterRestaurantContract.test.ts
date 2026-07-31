@@ -14,7 +14,8 @@ const discoverySource = readFileSync(
   new URL('../native-stubs/android/ClicPOSMasterDiscovery.kt', import.meta.url),
   'utf8',
 );
-const pairingSource = readFileSync(new URL('../components/TerminalPairingView.tsx', import.meta.url), 'utf8');
+const pairingSource = readFileSync(new URL('../components/TerminalBindingScreen.tsx', import.meta.url), 'utf8');
+const lanDiscoverySource = readFileSync(new URL('../utils/masterLanDiscovery.ts', import.meta.url), 'utf8');
 const scannerSource = readFileSync(new URL('../services/sync/NetworkScanner.ts', import.meta.url), 'utf8');
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 
@@ -94,8 +95,9 @@ test('la Master Android implementa autenticación y lectura de catálogos para c
 
 test('la Master Android se reactiva al volver al primer plano y el cliente reintenta con espera', () => {
   assert.match(appSource, /addListener\?\.\('resume', ensureMasterServerWithoutSnapshot\)/);
-  assert.match(appSource, /attempt <= 6/);
-  assert.match(appSource, /resolveOperationalApiUrl\('\/api\/sync\/ping'\)/);
+  assert.match(appSource, /discoverLanMasterCandidates\(\{ timeoutMs: 2500 \}\)/);
+  assert.match(appSource, /localStorage\.setItem\('CLIC_POS_MASTER_URL', baseUrl\)/);
+  assert.match(appSource, /`\$\{baseUrl\}\/api\/sync\/ping`/);
 });
 
 test('la Caja Master Android se anuncia y puede identificarse automáticamente en la red local', () => {
@@ -109,10 +111,12 @@ test('la Caja Master Android se anuncia y puede identificarse automáticamente e
 });
 
 test('la terminal cliente intenta IP guardada, Cloud y descubrimiento LAN antes de pedir la IP manual', () => {
-  assert.match(pairingSource, /discoverMasterServers\(\{ timeoutMs: 2500 \}\)/);
-  assert.match(pairingSource, /NetworkScanner\.findMaster/);
-  assert.match(pairingSource, /discoveredTenantId === expectedTenantId/);
-  assert.match(pairingSource, /source: 'LAN'/);
+  assert.match(pairingSource, /resolveMasterEndpointFromCloud\(\)/);
+  assert.match(pairingSource, /discoverLanMasterCandidates\(\{ timeoutMs: 2500 \}\)/);
+  assert.match(pairingSource, /No se encontró una Caja Master disponible en esta red/);
+  assert.match(lanDiscoverySource, /discoverMasterServers\(\{ timeoutMs: options\.timeoutMs \|\| 2500 \}\)/);
+  assert.match(lanDiscoverySource, /NetworkScanner\.findMaster/);
+  assert.match(lanDiscoverySource, /discoveredTenantId === expectedTenantId/);
   assert.match(scannerSource, /\/api\/sync\/identify/);
   assert.doesNotMatch(scannerSource, /\/api\/network\/identify/);
 });

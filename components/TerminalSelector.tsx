@@ -965,20 +965,17 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           ? config.metadata
           : (terminal?.metadata && typeof terminal.metadata === 'object' ? terminal.metadata : {});
         const terminalId = String(terminal?.id || terminal?.terminal_id || terminal?.erp_terminal_id || '').trim();
-        const metadataErpTerminalId = String(metadata?.erp_terminal_id || metadata?.erpTerminalId || '').trim();
         const terminalName = String(terminal?.name || terminal?.terminalName || terminal?.terminal_name || '').trim();
         const archived =
           terminalName.toUpperCase().startsWith('ARCHIVED-')
           || metadata?.archived === true
           || config?.active === false
-          || terminal?.active === false
-          || Boolean(metadataErpTerminalId && terminalId && metadataErpTerminalId !== terminalId);
+          || terminal?.active === false;
 
         if (archived) {
           console.info('ghost_terminal_ignored', {
             terminalId,
             terminalName,
-            metadataErpTerminalId: metadataErpTerminalId || null,
             archived: metadata?.archived === true,
             active: terminal?.active ?? config?.active ?? null,
           });

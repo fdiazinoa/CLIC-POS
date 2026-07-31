@@ -164,6 +164,7 @@ import {
   publishMasterEndpointToCloud,
   resolveMasterEndpointFromCloud
 } from './utils/cloudMasterRegistry';
+import { discoverLanMasterCandidates } from './utils/masterLanDiscovery';
 import {
   clearStoredErpSyncBinding,
   bootstrapErpSyncLifecycle,
@@ -4576,26 +4577,57 @@ const AppContent: React.FC = () => {
 
   const retryClientMasterConnection = useCallback(async () => {
     setClientMasterTablesStatus('CHECKING');
-    const pingUrl = resolveOperationalApiUrl('/api/sync/ping');
-    for (let attempt = 1; attempt <= 6; attempt += 1) {
-      let timeout: number | undefined;
-      try {
-        const controller = new AbortController();
-        timeout = window.setTimeout(() => controller.abort(), 2500);
-        const response = await fetch(pingUrl, { signal: controller.signal });
-        if (response.ok) {
-          await fetchTables();
-          return;
+    const candidates: Array<{ host: string; source: 'STORED' | 'CLOUD' | 'LAN' }> = [];
+    const appendCandidate = (value: string | null | undefined, source: 'STORED' | 'CLOUD' | 'LAN') => {
+      const host = normalizeMasterHost(value || '');
+      if (host && !candidates.some(candidate => candidate.host === host)) candidates.push({ host, source });
+    };
+    appendCandidate(localStorage.getItem('CLIC_POS_MASTER_URL'), 'STORED');
+    appendCandidate(localStorage.getItem('pos_master_ip'), 'STORED');
+    const attemptedBaseUrls = new Set<string>();
+
+    const tryCandidates = async (): Promise<boolean> => {
+      for (const candidate of candidates) {
+        for (const baseUrl of buildMasterUrlCandidates(candidate.host)) {
+          if (attemptedBaseUrls.has(baseUrl)) continue;
+          attemptedBaseUrls.add(baseUrl);
+          let timeout: number | undefined;
+          try {
+            const controller = new AbortController();
+            timeout = window.setTimeout(() => controller.abort(), 2500);
+            const response = await fetch(`${baseUrl}/api/sync/ping`, { signal: controller.signal });
+            if (!response.ok) continue;
+
+            const resolvedHost = normalizeMasterHost(new URL(baseUrl).hostname);
+            localStorage.setItem('pos_master_ip', resolvedHost);
+            localStorage.setItem('CLIC_POS_MASTER_URL', baseUrl);
+            localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', candidate.source);
+            await fetchTables();
+            return true;
+          } catch {
+            // Try the next URL/host before declaring the Master offline.
+          } finally {
+            if (timeout !== undefined) window.clearTimeout(timeout);
+          }
         }
-      } catch (error) {
-        if (attempt === 6) {
-          console.warn('[MASTER_LAN] Reconnection attempts exhausted:', error);
-        }
-      } finally {
-        if (timeout !== undefined) window.clearTimeout(timeout);
       }
-      await new Promise(resolve => window.setTimeout(resolve, 750));
+      return false;
+    };
+
+    if (await tryCandidates()) return;
+
+    try {
+      const cloudEndpoint = await resolveMasterEndpointFromCloud();
+      appendCandidate(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl, 'CLOUD');
+      if (await tryCandidates()) return;
+
+      const lanCandidates = await discoverLanMasterCandidates({ timeoutMs: 2500 });
+      lanCandidates.forEach(candidate => appendCandidate(candidate.host, 'LAN'));
+      if (await tryCandidates()) return;
+    } catch (error) {
+      console.warn('[MASTER_LAN] Rediscovery failed:', error);
     }
+
     setClientMasterTablesStatus('OFFLINE');
   }, [fetchTables]);
 
