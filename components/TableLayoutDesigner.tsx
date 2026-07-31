@@ -11,7 +11,7 @@ interface TableLayoutDesignerProps {
     tables: Table[];
     parkedTickets?: ParkedTicket[];
     onSave: (tables: Table[]) => void;
-    onUpdateTables: (tables: Table[]) => void;
+    onUpdateTables: React.Dispatch<React.SetStateAction<Table[]>>;
     onCreateRoom?: (name: string) => void;
     onChangeRoom: (roomId: string) => void;
     onUpdateRoom?: (room: Room) => void;
@@ -123,12 +123,12 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
         };
         return table.name?.trim() || table.nombre?.trim() || fallbackByShape[table.shape] || 'Mesa';
     };
-    const getNextElementName = (shape: TableShape, baseName: string) => {
+    const getNextElementName = (shape: TableShape, baseName: string, roomTables: Table[] = currentRoomTables) => {
         const isTableShape = shape === 'SQUARE' || shape === 'CIRCLE';
         const namePrefix = isTableShape ? 'Mesa' : baseName;
         const usedNumbers = new Set<number>();
 
-        currentRoomTables.forEach(table => {
+        roomTables.forEach(table => {
             const label = getTableLabel(table);
             const match = label.match(new RegExp(`^${namePrefix}\\s+(\\d+)\\b`, 'i'));
             if (!match) return;
@@ -200,34 +200,36 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
             CHAISE_LONGUE: { baseName: 'Chaise longue', width: 180, height: 70, capacity: 1 }
         };
         const config = elementConfig[shape];
-        const elementName = getNextElementName(shape, config.baseName);
-        const position = findAvailableTablePosition(currentRoomTables, {
-            roomId: currentRoomId,
-            width: config.width,
-            height: config.height,
-            canvasWidth: canvasSize.width,
-            gridSize: GRID_SIZE
+        const newTableId = generateTableId();
+        onUpdateTables(currentTables => {
+            const latestRoomTables = getRenderableFloorTables(currentTables)
+                .filter(table => table.roomId === currentRoomId);
+            const elementName = getNextElementName(shape, config.baseName, latestRoomTables);
+            const position = findAvailableTablePosition(latestRoomTables, {
+                roomId: currentRoomId,
+                width: config.width,
+                height: config.height,
+                canvasWidth: canvasSize.width,
+                gridSize: GRID_SIZE
+            });
+            const newTable: Table = {
+                id: newTableId,
+                roomId: currentRoomId,
+                name: elementName,
+                nombre: elementName,
+                posX: position.posX,
+                posY: position.posY,
+                width: config.width,
+                height: config.height,
+                shape,
+                rotation: 0,
+                capacity: config.capacity,
+                consumo_minimo_mesa: 0,
+                comensales_minimos: isObstacle ? 0 : 1
+            };
+            return [...currentTables, newTable];
         });
-
-        const newTable: Table = {
-            id: generateTableId(),
-            roomId: currentRoomId,
-            name: elementName,
-            nombre: elementName,
-            posX: position.posX,
-            posY: position.posY,
-            width: config.width,
-            height: config.height,
-            shape,
-            rotation: 0,
-            capacity: config.capacity,
-            consumo_minimo_mesa: 0,
-            comensales_minimos: isObstacle ? 0 : 1
-        };
-        // Dedup: Ensure we don't just append if something weird happens, but this is a new ID.
-        // The issue 'ghost tables' might be re-renders or hydration issues.
-        onUpdateTables([...tables, newTable]);
-        setSelectedTableId(newTable.id);
+        setSelectedTableId(newTableId);
     };
 
     // Pointer Dragging Logic (desktop + touch)
@@ -253,7 +255,9 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
 
     // Update Table Prop
     const updateTable = (id: string, updates: Partial<Table>) => {
-        onUpdateTables(tables.map(t => t.id === id ? { ...t, ...updates } : t));
+        onUpdateTables(currentTables => (
+            currentTables.map(t => t.id === id ? { ...t, ...updates } : t)
+        ));
     };
 
     const deleteTable = (id: string) => {
@@ -272,7 +276,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
             return;
         }
         if (!window.confirm(`¿Eliminar ${getTableLabel(table)} del layout?`)) return;
-        onUpdateTables(tables.filter(t => t.id !== id));
+        onUpdateTables(currentTables => currentTables.filter(t => t.id !== id));
         setSelectedTableId(null);
     };
 

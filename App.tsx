@@ -9909,7 +9909,7 @@ const AppContent: React.FC = () => {
                 tables={tables}
                 parkedTickets={parkedTickets}
                 onSave={(newTables) => handleSaveFloorPlan(rooms, newTables)}
-                onUpdateTables={(newTables) => setTables(newTables)}
+                onUpdateTables={setTables}
                 onChangeRoom={(roomId) => setActiveRoomId(roomId)}
                 onCreateRoom={(name) => {
                   const newRoom: Room = { id: 'R-' + Date.now(), name, nombre: name }; // Ensure 'nombre' is set for types
