@@ -99,15 +99,15 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   const [masterAdmins, setMasterAdmins] = useState<UserType[]>([]);
   const [localIps, setLocalIps] = useState<string[]>([]);
   const [bindingMode, setBindingMode] = useState<'MASTER' | 'SLAVE'>(initialBindingMode || 'MASTER');
-  const [expectedTerminalType, setExpectedTerminalType] = useState<PosTerminalType | null>(
-    initialBindingMode === 'SLAVE' ? STANDARD_POS_TERMINAL_TYPE : null
-  );
+  // El modo persistido CLIENT agrupa cajas adicionales y tomas de pedidos.
+  // El contrato de la terminal seleccionada define el rol final.
+  const [expectedTerminalType, setExpectedTerminalType] = useState<PosTerminalType | null>(null);
   const automaticDiscoveryRef = React.useRef('');
 
   React.useEffect(() => {
     if (initialBindingMode) {
       setBindingMode(initialBindingMode);
-      setExpectedTerminalType(initialBindingMode === 'SLAVE' ? STANDARD_POS_TERMINAL_TYPE : null);
+      setExpectedTerminalType(null);
     }
   }, [initialBindingMode]);
 
