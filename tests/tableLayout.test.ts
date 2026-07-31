@@ -68,3 +68,43 @@ test('mantiene las mesas automáticas visibles si una de ellas recibe layout ant
   assert.equal(rendered.length, 12);
   assert.deepEqual(rendered.map(table => table.nombre), Array.from({ length: 12 }, (_, index) => `Mesa ${index + 1}`));
 });
+
+test('consolida el plano persistido y la cuadrícula Master sin superponer mesas equivalentes', () => {
+  const designedTables = Array.from({ length: 12 }, (_, index) => ({
+    id: `local-${index + 1}`,
+    roomId: 'MAIN_DINING_ROOM',
+    nombre: `Mesa ${index + 1}`,
+    name: `Mesa ${index + 1}`,
+    posX: 80 + ((index % 4) * 140),
+    posY: 80 + (Math.floor(index / 4) * 140),
+    width: 100,
+    height: 100,
+    shape: 'SQUARE' as const,
+    rotation: 0
+  }));
+  const masterTables = Array.from({ length: 12 }, (_, index) => ({
+    id: `TABLE_${String(index + 1).padStart(2, '0')}`,
+    roomId: 'MAIN_DINING_ROOM',
+    room_id: 'MAIN_DINING_ROOM',
+    code: `M${String(index + 1).padStart(2, '0')}`,
+    label: `Mesa ${index + 1}`,
+    nombre: 'Mesa',
+    name: 'Mesa',
+    width: 100,
+    height: 100,
+    ...(index === 2 ? {
+      status: 'OCCUPIED' as const,
+      currentOrderId: 'ORDER-3',
+      currentOrderTotal: 350
+    } : {})
+  })) as Table[];
+
+  const rendered = getRenderableFloorTables([...designedTables, ...masterTables]);
+  const tableThree = rendered.find(table => table.nombre === 'Mesa 3');
+
+  assert.equal(rendered.length, 12);
+  assert.equal(tableThree?.id, 'TABLE_03');
+  assert.equal(tableThree?.status, 'OCCUPIED');
+  assert.equal(tableThree?.posX, designedTables[2].posX);
+  assert.equal(tableThree?.posY, designedTables[2].posY);
+});
