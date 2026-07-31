@@ -16,6 +16,7 @@ import {
     normalizeMasterHost,
     resolveMasterEndpointFromCloud,
 } from '../utils/cloudMasterRegistry';
+import { NetworkScanner } from '../services/sync/NetworkScanner';
 
 interface TerminalPairingViewProps {
     currentDeviceId: string;
@@ -26,7 +27,12 @@ interface TerminalPairingViewProps {
     onBack?: () => void;
 }
 
-type ConnectionSource = 'CLOUD' | 'MANUAL' | 'LOCAL' | null;
+type ConnectionSource = 'CLOUD' | 'LAN' | 'MANUAL' | 'LOCAL' | null;
+
+type MasterCandidate = {
+    host: string;
+    source: Exclude<ConnectionSource, null>;
+};
 
 export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
     currentDeviceId,
@@ -54,6 +60,60 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
         localStorage.setItem('pos_master_ip', host);
         localStorage.setItem('CLIC_POS_MASTER_URL', resolvedUrl || buildMasterUrlFromHost(host));
         localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', source);
+    };
+
+    const getExpectedTenantId = () => (
+        localStorage.getItem('clic_erp_sync_tenant_id')
+        || localStorage.getItem('active_tenant_id')
+        || localStorage.getItem('clic_tenant_id')
+        || ''
+    ).trim();
+
+    const discoverLanCandidates = async (): Promise<MasterCandidate[]> => {
+        const expectedTenantId = getExpectedTenantId();
+        const nativeBridge = window.ClicPOSNativePrinter;
+        const candidates: MasterCandidate[] = [];
+        let localIpHint = '';
+
+        if (typeof nativeBridge?.discoverMasterServers === 'function') {
+            try {
+                const discovery = await nativeBridge.discoverMasterServers({ timeoutMs: 2500 });
+                const masters = Array.isArray(discovery?.masters) ? discovery.masters : [];
+                masters
+                    .filter(master => {
+                        const discoveredTenantId = String(master.tenantId || '').trim();
+                        return !expectedTenantId || !discoveredTenantId || discoveredTenantId === expectedTenantId;
+                    })
+                    .sort((left, right) => {
+                        const leftMatches = String(left.tenantId || '').trim() === expectedTenantId ? 1 : 0;
+                        const rightMatches = String(right.tenantId || '').trim() === expectedTenantId ? 1 : 0;
+                        return rightMatches - leftMatches;
+                    })
+                    .forEach(master => {
+                        const host = normalizeMasterHost(master.host || master.url || '');
+                        if (host && !candidates.some(candidate => candidate.host === host)) {
+                            candidates.push({ host, source: 'LAN' });
+                        }
+                    });
+            } catch (nativeError) {
+                console.warn('📡 Native Master discovery failed:', nativeError);
+            }
+        }
+
+        if (candidates.length > 0) return candidates;
+
+        if (typeof nativeBridge?.getDeviceInfo === 'function') {
+            try {
+                const deviceInfo = await nativeBridge.getDeviceInfo();
+                localIpHint = String(deviceInfo?.localIp || deviceInfo?.localIps?.[0] || '');
+            } catch {
+                localIpHint = '';
+            }
+        }
+
+        const scannedUrl = await NetworkScanner.findMaster(localIpHint || undefined, expectedTenantId || undefined);
+        const scannedHost = normalizeMasterHost(scannedUrl || '');
+        return scannedHost ? [{ host: scannedHost, source: 'LAN' }] : [];
     };
 
     const fetchAvailableTerminals = async (resolvedMasterIp: string) => {
@@ -110,67 +170,70 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
     const fetchTerminals = async (
         hostOverride?: string,
         sourceOverride?: Exclude<ConnectionSource, null>,
-        allowCloudFallback = true
+        allowAutomaticFallback = true
     ) => {
         const requestedHost = normalizeMasterHost(hostOverride ?? masterIp);
         const requestedSource = sourceOverride || connectionSource || 'MANUAL';
-
-        if (!requestedHost) {
-            setError('Ingrese la IP del servidor master.');
-            setShowIpInput(true);
-            setTerminals([]);
-            return;
-        }
 
         setIsLoading(true);
         setError(null);
         setTerminals([]);
 
-        try {
-            const result = await fetchAvailableTerminals(requestedHost);
-            setMasterIp(result.resolvedMasterHost);
-            setConnectionSource(requestedSource);
-            setShowIpInput(false);
-            persistResolvedMaster(result.resolvedMasterHost, requestedSource, result.resolvedMasterUrl);
-            setTerminals(result.terminals);
-
-            if (result.terminals.length === 0) {
-                setError('No hay terminales disponibles en el servidor.');
+        const candidates: MasterCandidate[] = [];
+        const appendCandidate = (candidate: MasterCandidate) => {
+            if (candidate.host && !candidates.some(existing => existing.host === candidate.host)) {
+                candidates.push(candidate);
             }
-        } catch (err: any) {
-            console.error('❌ Error fetching terminals:', err);
+        };
 
-            if (allowCloudFallback) {
-                const cloudEndpoint = await resolveMasterEndpointFromCloud();
-                const cloudHost = normalizeMasterHost(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl || '');
+        if (requestedHost) appendCandidate({ host: requestedHost, source: requestedSource });
+        let lastHost = requestedHost;
+        let lastError: unknown = null;
+        const attemptedHosts = new Set<string>();
 
-                if (cloudHost && cloudHost !== requestedHost) {
-                    try {
-                        const result = await fetchAvailableTerminals(cloudHost);
-                        setMasterIp(result.resolvedMasterHost);
-                        setConnectionSource('CLOUD');
-                        setShowIpInput(false);
-                        persistResolvedMaster(result.resolvedMasterHost, 'CLOUD', result.resolvedMasterUrl);
-                        setTerminals(result.terminals);
-
-                        if (result.terminals.length === 0) {
-                            setError('No hay terminales disponibles en el servidor.');
-                        }
-
-                        return;
-                    } catch (cloudError: any) {
-                        console.error('❌ Error fetching terminals from cloud-discovered host:', cloudError);
-                        setError(buildConnectionError(cloudHost, cloudError));
-                        setMasterIp(cloudHost);
-                        setConnectionSource('CLOUD');
-                        setShowIpInput(true);
-                        return;
-                    }
+        const connectToCandidates = async (): Promise<boolean> => {
+            for (const candidate of candidates) {
+                if (attemptedHosts.has(candidate.host)) continue;
+                attemptedHosts.add(candidate.host);
+                lastHost = candidate.host;
+                try {
+                    const result = await fetchAvailableTerminals(candidate.host);
+                    setMasterIp(result.resolvedMasterHost);
+                    setConnectionSource(candidate.source);
+                    setShowIpInput(false);
+                    persistResolvedMaster(result.resolvedMasterHost, candidate.source, result.resolvedMasterUrl);
+                    setTerminals(result.terminals);
+                    setError(result.terminals.length === 0 ? 'No hay terminales disponibles en el servidor.' : null);
+                    return true;
+                } catch (candidateError) {
+                    lastError = candidateError;
+                    console.warn(`❌ No se pudo conectar al Master candidato ${candidate.host}:`, candidateError);
                 }
             }
+            return false;
+        };
 
-            setError(buildConnectionError(requestedHost, err));
+        try {
+            if (allowAutomaticFallback) {
+                const cloudEndpoint = await resolveMasterEndpointFromCloud();
+                const cloudHost = normalizeMasterHost(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl || '');
+                if (cloudHost) appendCandidate({ host: cloudHost, source: 'CLOUD' });
+            }
+
+            if (await connectToCandidates()) return;
+
+            if (allowAutomaticFallback) {
+                const lanCandidates = await discoverLanCandidates();
+                lanCandidates.forEach(appendCandidate);
+                if (await connectToCandidates()) return;
+            }
+
+            setMasterIp(lastHost);
+            setConnectionSource(null);
             setShowIpInput(true);
+            setError(lastHost
+                ? buildConnectionError(lastHost, lastError)
+                : 'No se encontró una Caja Master en esta red. Ingrese la IP manualmente.');
         } finally {
             setIsLoading(false);
         }
@@ -189,7 +252,8 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
                 if (storedHost) {
                     if (!isMounted) return;
                     setMasterIp(storedHost);
-                    setConnectionSource(localStorage.getItem('CLIC_POS_MASTER_DISCOVERY') === 'CLOUD' ? 'CLOUD' : 'MANUAL');
+                    const storedDiscovery = localStorage.getItem('CLIC_POS_MASTER_DISCOVERY');
+                    setConnectionSource(storedDiscovery === 'CLOUD' || storedDiscovery === 'LAN' ? storedDiscovery : 'MANUAL');
                     return;
                 }
 
@@ -212,7 +276,10 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
 
         const bootstrapDiscovery = async () => {
             const storedHost = normalizeMasterHost(initialMasterIp || localStorage.getItem('pos_master_ip') || '');
-            const storedSource = localStorage.getItem('CLIC_POS_MASTER_DISCOVERY') === 'CLOUD' ? 'CLOUD' : 'MANUAL';
+            const storedDiscovery = localStorage.getItem('CLIC_POS_MASTER_DISCOVERY');
+            const storedSource: Exclude<ConnectionSource, null> = storedDiscovery === 'CLOUD' || storedDiscovery === 'LAN'
+                ? storedDiscovery
+                : 'MANUAL';
 
             if (storedHost) {
                 if (!isMounted) return;
@@ -222,23 +289,8 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
                 return;
             }
 
-            const cloudEndpoint = await resolveMasterEndpointFromCloud();
-            const cloudHost = normalizeMasterHost(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl || '');
-
-            if (cloudHost) {
-                if (!isMounted) return;
-                setMasterIp(cloudHost);
-                setConnectionSource('CLOUD');
-                await fetchTerminals(cloudHost, 'CLOUD', false);
-                return;
-            }
-
             if (!isMounted) return;
-
-            setMasterIp('');
-            setConnectionSource(null);
-            setShowIpInput(true);
-            setError('No se encontró un servidor master en cloud. Ingrese la IP manualmente.');
+            await fetchTerminals('', 'LAN', true);
         };
 
         void bootstrapDiscovery();
@@ -366,6 +418,7 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
                                         {connectionSource && (
                                             <p className="text-[11px] font-medium text-slate-400 uppercase tracking-wider mt-1">
                                                 {connectionSource === 'CLOUD' && 'Detectado desde Cloud'}
+                                                {connectionSource === 'LAN' && 'Detectado automáticamente en la red'}
                                                 {connectionSource === 'MANUAL' && 'Configurado manualmente'}
                                                 {connectionSource === 'LOCAL' && 'Host local'}
                                             </p>

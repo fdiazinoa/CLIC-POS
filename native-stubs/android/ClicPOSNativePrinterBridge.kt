@@ -100,6 +100,7 @@ class AndroidPrinterBridge(context: Context) {
                     updateMasterServerConfig: function (payload) { return call('updateMasterServerConfig', payload); },
                     stopMasterServer: function (payload) { return call('stopMasterServer', payload); },
                     getMasterServerStatus: function (payload) { return call('getMasterServerStatus', payload); },
+                    discoverMasterServers: function (payload) { return call('discoverMasterServers', payload); },
                     discoverFingerprintReaders: function (payload) { return call('discoverFingerprintReaders', payload); },
                     scanFingerprintReaders: function (payload) { return call('scanFingerprintReaders', payload); },
                     testFingerprintReader: function (payload) { return call('testFingerprintReader', payload); }
@@ -559,6 +560,17 @@ class AndroidPrinterBridge(context: Context) {
     @JavascriptInterface
     fun getMasterServerStatus(payloadJson: String?): String {
         return ClicPOSMasterHttpServer.status(appContext).toString()
+    }
+
+    @JavascriptInterface
+    fun discoverMasterServers(payloadJson: String?): String {
+        val payload = runCatching {
+            if (payloadJson.isNullOrBlank()) JSONObject() else JSONObject(payloadJson)
+        }.getOrDefault(JSONObject())
+        return ClicPOSMasterDiscovery.discover(
+            appContext,
+            payload.optLong("timeoutMs", 3_000L)
+        ).toString()
     }
 
     @JavascriptInterface

@@ -10,6 +10,12 @@ const bridgeSource = readFileSync(
   new URL('../native-stubs/android/ClicPOSNativePrinterBridge.kt', import.meta.url),
   'utf8',
 );
+const discoverySource = readFileSync(
+  new URL('../native-stubs/android/ClicPOSMasterDiscovery.kt', import.meta.url),
+  'utf8',
+);
+const pairingSource = readFileSync(new URL('../components/TerminalPairingView.tsx', import.meta.url), 'utf8');
+const scannerSource = readFileSync(new URL('../services/sync/NetworkScanner.ts', import.meta.url), 'utf8');
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 
 test('la Master Android expone el estado compartido de restaurante', () => {
@@ -90,4 +96,23 @@ test('la Master Android se reactiva al volver al primer plano y el cliente reint
   assert.match(appSource, /addListener\?\.\('resume', ensureMasterServerWithoutSnapshot\)/);
   assert.match(appSource, /attempt <= 6/);
   assert.match(appSource, /resolveOperationalApiUrl\('\/api\/sync\/ping'\)/);
+});
+
+test('la Caja Master Android se anuncia y puede identificarse automáticamente en la red local', () => {
+  assert.match(discoverySource, /SERVICE_TYPE = "_clicpos-master\._tcp\."/);
+  assert.match(discoverySource, /manager\.registerService/);
+  assert.match(discoverySource, /manager\.discoverServices/);
+  assert.match(discoverySource, /\.put\("tenantId", readTenantId\(config\)\)/);
+  assert.match(serverSource, /ClicPOSMasterDiscovery\.advertise\(context, activePort, configSnapshot\)/);
+  assert.match(serverSource, /path == "\/api\/sync\/identify"/);
+  assert.match(bridgeSource, /discoverMasterServers/);
+});
+
+test('la terminal cliente intenta IP guardada, Cloud y descubrimiento LAN antes de pedir la IP manual', () => {
+  assert.match(pairingSource, /discoverMasterServers\(\{ timeoutMs: 2500 \}\)/);
+  assert.match(pairingSource, /NetworkScanner\.findMaster/);
+  assert.match(pairingSource, /discoveredTenantId === expectedTenantId/);
+  assert.match(pairingSource, /source: 'LAN'/);
+  assert.match(scannerSource, /\/api\/sync\/identify/);
+  assert.doesNotMatch(scannerSource, /\/api\/network\/identify/);
 });

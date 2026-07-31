@@ -64,13 +64,17 @@ object ClicPOSMasterHttpServer {
         )
         activePort = requestedPort.takeIf { it in 1..65535 } ?: DEFAULT_PORT
 
-        if (running.get()) return status(context)
+        if (running.get()) {
+            ClicPOSMasterDiscovery.advertise(context, activePort, configSnapshot)
+            return status(context)
+        }
 
         return try {
             val socket = ServerSocket(activePort)
             socket.reuseAddress = true
             serverSocket = socket
             running.set(true)
+            ClicPOSMasterDiscovery.advertise(context, activePort, configSnapshot)
 
             executor.execute {
                 while (running.get()) {
@@ -113,6 +117,9 @@ object ClicPOSMasterHttpServer {
             parkedTickets,
             acknowledgedRestaurantRevision
         )
+        appContext?.let { context ->
+            if (running.get()) ClicPOSMasterDiscovery.advertise(context, activePort, configSnapshot)
+        }
         return JSONObject()
             .put("status", "success")
             .put("success", true)
@@ -124,6 +131,7 @@ object ClicPOSMasterHttpServer {
         running.set(false)
         runCatching { serverSocket?.close() }
         serverSocket = null
+        appContext?.let { ClicPOSMasterDiscovery.stopAdvertising(it) }
         return JSONObject()
             .put("status", "stopped")
             .put("success", true)
@@ -188,6 +196,8 @@ object ClicPOSMasterHttpServer {
 
                 when {
                     method == "OPTIONS" -> writeResponse(client, 204, "")
+                    method == "GET" && (path == "/api/sync/identify" || path == "/api/network/identify") ->
+                        writeResponse(client, 200, ClicPOSMasterDiscovery.identity(configSnapshot, activePort).toString())
                     method == "GET" && (path == "/api/sync/ping" || path == "/api/health") ->
                         writeResponse(client, 200, JSONObject()
                             .put("success", true)

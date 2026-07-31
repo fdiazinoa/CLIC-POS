@@ -1072,10 +1072,6 @@ class SyncManager {
                 console.warn('📡 SyncManager: Connection lost. Initiating Auto-Discovery...');
                 this.startRecoveryProcess();
             });
-            apiSyncAdapter.setOnConnectionLost(() => {
-                console.warn('📡 SyncManager: Connection lost. Initiating Auto-Discovery...');
-                this.startRecoveryProcess();
-            });
         }
 
         this.isInitialized = true;
