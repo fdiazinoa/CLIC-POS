@@ -3,7 +3,7 @@ import {
     Trash2, Plus, Layout, Grid, Settings
 } from 'lucide-react';
 import { Table, Room, TableShape, ParkedTicket } from '../types';
-import { getRenderableFloorTables } from '../utils/tableLayout';
+import { findAvailableTablePosition, getRenderableFloorTables } from '../utils/tableLayout';
 
 interface TableLayoutDesignerProps {
     rooms: Room[];
@@ -201,14 +201,21 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
         };
         const config = elementConfig[shape];
         const elementName = getNextElementName(shape, config.baseName);
+        const position = findAvailableTablePosition(currentRoomTables, {
+            roomId: currentRoomId,
+            width: config.width,
+            height: config.height,
+            canvasWidth: canvasSize.width,
+            gridSize: GRID_SIZE
+        });
 
         const newTable: Table = {
             id: generateTableId(),
             roomId: currentRoomId,
             name: elementName,
             nombre: elementName,
-            posX: 100 + (tables.length * 10), // Offset slightly to see new ones
-            posY: 100 + (tables.length * 10),
+            posX: position.posX,
+            posY: position.posY,
             width: config.width,
             height: config.height,
             shape,

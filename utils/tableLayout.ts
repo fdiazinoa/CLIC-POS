@@ -114,6 +114,49 @@ const tablesOverlap = (left: Table, right: Table): boolean => (
   && left.posY + left.height > right.posY
 );
 
+export const findAvailableTablePosition = (
+  tables: Table[],
+  options: {
+    roomId: string;
+    width: number;
+    height: number;
+    canvasWidth?: number;
+    gridSize?: number;
+    padding?: number;
+    gap?: number;
+  }
+): { posX: number; posY: number } => {
+  const gridSize = Math.max(1, Number(options.gridSize || 20));
+  const padding = Math.max(0, Number(options.padding ?? 40));
+  const gap = Math.max(0, Number(options.gap ?? 20));
+  const width = Math.max(gridSize, Number(options.width || 100));
+  const height = Math.max(gridSize, Number(options.height || 100));
+  const canvasWidth = Math.max(width + (padding * 2), Number(options.canvasWidth || 800));
+  const roomTables = (Array.isArray(tables) ? tables : []).filter(table => (
+    (table.roomId || String(table.room_id || '')) === options.roomId
+    && hasExplicitTableLayout(table)
+  ));
+  const maxX = canvasWidth - padding - width;
+
+  for (let posY = padding; posY <= padding + 10000; posY += gridSize) {
+    for (let posX = padding; posX <= maxX; posX += gridSize) {
+      const overlaps = roomTables.some(table => (
+        posX < table.posX + table.width + gap
+        && posX + width + gap > table.posX
+        && posY < table.posY + table.height + gap
+        && posY + height + gap > table.posY
+      ));
+      if (!overlaps) return { posX, posY };
+    }
+  }
+
+  const bottom = roomTables.reduce(
+    (max, table) => Math.max(max, Number(table.posY || 0) + Number(table.height || 0)),
+    padding - gap
+  );
+  return { posX: padding, posY: Math.ceil((bottom + gap) / gridSize) * gridSize };
+};
+
 const placeInFallbackGrid = (table: Table, index: number): Table => {
   const label = resolveIncomingTableLabel(table);
   const roomId = table.roomId || String(table.room_id || '');

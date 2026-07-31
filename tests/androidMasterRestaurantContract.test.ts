@@ -100,6 +100,10 @@ test('la Master Android se reactiva al volver al primer plano y el cliente reint
   assert.match(appSource, /`\$\{baseUrl\}\/api\/sync\/ping`/);
 });
 
+test('el sondeo nativo no reemplaza el borrador mientras se edita el plano de mesas', () => {
+  assert.match(appSource, /currentViewRef\.current === 'TABLE_DESIGNER'/);
+});
+
 test('la Caja Master Android se anuncia y puede identificarse automáticamente en la red local', () => {
   assert.match(discoverySource, /SERVICE_TYPE = "_clicpos-master\._tcp\."/);
   assert.match(discoverySource, /manager\.registerService/);
