@@ -1667,6 +1667,7 @@ const AppContent: React.FC = () => {
   const [activeTable, setActiveTable] = useState<Table | null>(null); // New state for selected table context
   const [activeTableEditLock, setActiveTableEditLock] = useState<ActiveTableEditLock | null>(null);
   const activeTableEditLockRef = useRef<ActiveTableEditLock | null>(null);
+  const closedRestaurantOrderIdsRef = useRef<Set<string>>(new Set());
   /* original code */
   const [currentView, setCurrentView] = useState<ViewState>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -4277,10 +4278,12 @@ const AppContent: React.FC = () => {
         if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
           masterRestaurantRevisionRef.current = responseRevision;
         }
-        const responseParkedTickets = Array.isArray(data?.parkedTickets) ? data.parkedTickets : [];
+        const hasAuthoritativeParkedTickets = Array.isArray(data?.parkedTickets);
+        const responseParkedTickets = hasAuthoritativeParkedTickets ? data.parkedTickets : [];
+        const ticketsForReconciliation = hasAuthoritativeParkedTickets ? responseParkedTickets : parkedTickets;
         const mergeRemoteTables = (incomingTables: Table[], previousTables: Table[]) => {
           if (isClientRuntime) {
-            return reconcileTablesWithParkedTickets(incomingTables, responseParkedTickets);
+            return reconcileTablesWithParkedTickets(incomingTables, ticketsForReconciliation);
           }
 
           const localFloorPlan = locallySavedFloorPlanRef.current;
@@ -4289,7 +4292,7 @@ const AppContent: React.FC = () => {
             : incomingTables;
 
           if (previousTables.length === 0) {
-            return reconcileTablesWithParkedTickets(allowedIncoming, parkedTickets);
+            return reconcileTablesWithParkedTickets(allowedIncoming, ticketsForReconciliation);
           }
 
           const incomingById = new Map(allowedIncoming.map(table => [String(table.id), table]));
@@ -4311,7 +4314,10 @@ const AppContent: React.FC = () => {
           });
 
           incomingById.forEach(table => merged.push(table));
-          return reconcileTablesWithParkedTickets(merged, parkedTickets);
+          // El endpoint ya entregó el snapshot atómico de mesas y órdenes.
+          // No reconciliar contra el closure anterior: después de cobrar aún
+          // podía contener la orden cerrada y volver a poner la mesa en rojo.
+          return reconcileTablesWithParkedTickets(merged, ticketsForReconciliation);
         };
 
         // Backward compatibility: some endpoints may return only Table[].
@@ -4333,7 +4339,6 @@ const AppContent: React.FC = () => {
 
         if (isClientRuntime) {
           setClientMasterTablesStatus('ONLINE');
-          setParkedTickets(nextParkedTickets);
           locallySavedFloorPlanRef.current = {
             roomIds: new Set(nextRooms.map((room: Room) => String(room.id))),
             tableIds: new Set(nextTables.map((table: Table) => String(table.id)))
@@ -4344,6 +4349,10 @@ const AppContent: React.FC = () => {
             tables: nextTables.length
           });
         }
+
+        // También en Master el snapshot remoto es autoritativo. Esto evita
+        // restaurar una cuenta ya cobrada al regresar a la pantalla de mesas.
+        if (hasAuthoritativeParkedTickets) setParkedTickets(nextParkedTickets);
 
         setTables(previousTables => {
           if (nextTables.length === 0 && previousTables.length > 0) {
@@ -4615,6 +4624,10 @@ const AppContent: React.FC = () => {
 
       const data = await res.json();
       if (res.ok && data.status === 'success') {
+        const responseRevision = Number(data?.revision || 0);
+        if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
+          masterRestaurantRevisionRef.current = responseRevision;
+        }
         const updated = { ...baseUpdate, currentOrderId: data.orden_id };
         setTables(prev => {
           const next = prev.map(t => t.id === updated.id ? updated : t);
@@ -7157,7 +7170,10 @@ const AppContent: React.FC = () => {
     tickets: ParkedTicket[],
     options: ParkedTicketSyncOptions = { reason: 'explicit' },
   ) => {
-    const validTickets = Array.isArray(tickets) ? tickets : [];
+    const validTickets = (Array.isArray(tickets) ? tickets : []).filter(ticket => {
+      const ticketId = String(ticket?.id || '').trim();
+      return !ticketId || !closedRestaurantOrderIdsRef.current.has(ticketId);
+    });
     if (isClientTerminalMode()) {
       const editLock = activeTableEditLockRef.current;
       const pendingSync: PendingClientTableSync = {
@@ -7235,6 +7251,37 @@ const AppContent: React.FC = () => {
       ...validTickets.map(ticket => db.saveDocument('parkedTickets' as any, ticket as any)),
     ]);
     await db.save('parkedTickets', validTickets); // Uses 'settings' table logic or collection
+
+    // La caja maestra Android también debe confirmar el cambio en el servidor
+    // nativo antes de que el poll de estado pueda devolver el snapshot previo.
+    // Sin esta escritura atómica, la primera digitación de una mesa recién
+    // abierta podía ser reemplazada por la revisión creada al abrir la mesa.
+    if (isNativeAndroidRuntime() && isNativeStandaloneTerminalRuntime(getCurrentTerminal())) {
+      // El autoguardado y el cobro pueden coincidir. Serializar también en
+      // Master evita que un snapshot anterior vuelva a insertar una orden ya cobrada.
+      const syncOperation = async () => {
+        const response = await fetch(resolveOperationalApiUrl('/api/mesas/parked-tickets'), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ parkedTickets: validTickets }),
+        });
+        const result = await response.json().catch(() => null);
+        if (!response.ok || result?.success === false) {
+          throw new Error(result?.message || `No se pudo confirmar la orden local (HTTP ${response.status})`);
+        }
+        if (Array.isArray(result?.parkedTickets)) setParkedTickets(result.parkedTickets);
+        if (Array.isArray(result?.tables)) setTables(result.tables);
+        const responseRevision = Number(result?.revision || 0);
+        if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
+          masterRestaurantRevisionRef.current = responseRevision;
+        }
+      };
+      const queuedSync = parkedTicketSyncQueueRef.current
+        .catch(() => undefined)
+        .then(syncOperation);
+      parkedTicketSyncQueueRef.current = queuedSync.catch(() => undefined);
+      return queuedSync;
+    }
   };
 
   const handleParkedOrderSplitFromMap = useCallback(
@@ -9954,6 +10001,13 @@ const AppContent: React.FC = () => {
             onTableOrderClosed={async (table, _closedOrderId, remainingTickets = []) => {
               await clearActiveCartDraftStorage().catch((error) => console.warn('No se pudo limpiar borrador activo tras cerrar mesa:', error));
               const closedOrderId = _closedOrderId ? String(_closedOrderId) : '';
+              if (closedOrderId) {
+                closedRestaurantOrderIdsRef.current.add(closedOrderId);
+                if (closedRestaurantOrderIdsRef.current.size > 200) {
+                  const oldestOrderId = closedRestaurantOrderIdsRef.current.values().next().value;
+                  if (oldestOrderId) closedRestaurantOrderIdsRef.current.delete(oldestOrderId);
+                }
+              }
               const tableId = String(table.id ?? '');
               const effectiveRemainingTickets = (remainingTickets || []).filter(ticket => {
                 const isClosedOrder = closedOrderId && String(ticket.id) === closedOrderId;

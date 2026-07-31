@@ -1096,6 +1096,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // evita que una pulsación posterior reconstruya la orden con datos viejos.
    const parkedTicketsRef = useRef<ParkedTicket[]>(parkedTickets);
    const closedTableOrderIdsRef = useRef<Set<string>>(new Set());
+   const paymentFinalizationInFlightRef = useRef(false);
    const activeTableHydrationRef = useRef<{ key: string; missingTicket: boolean } | null>(null);
    const kdsRetryInFlightRef = useRef(false);
    const quickActionTouchTimerRef = useRef<number | null>(null);
@@ -4175,6 +4176,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             await Promise.resolve(onUpdateParkedTickets(nextTickets, {
                reason: batchClientSync ? 'debounced' : 'explicit',
             }));
+            if (closedTableOrderIdsRef.current.has(String(orderId))) {
+               return;
+            }
             await Promise.resolve(onTableOrderSaved?.(activeTable, syncedTicket));
          } catch (error) {
             console.error('[TABLE_SYNC] No se pudo sincronizar automáticamente la mesa:', error);
@@ -4202,11 +4206,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             ticketAutoSyncTimeoutRef.current = null;
          }
          if (ticketAutoSyncFlushRef.current === flushTicketSync) {
-            if (!batchClientSync && !closedTableOrderIdsRef.current.has(String(orderId))) {
-               void flushTicketSync();
-            } else if (batchClientSync) {
-               ticketAutoSyncFlushRef.current = null;
-            }
+            ticketAutoSyncFlushRef.current = null;
          }
       };
    }, [
@@ -4604,6 +4604,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
    const handlePaymentConfirm = async (payments: PaymentEntry[], voluntaryTip?: number): Promise<Transaction | null> => {
+      if (paymentFinalizationInFlightRef.current) {
+         console.warn('[PAYMENT] Se ignoró un segundo intento de finalizar la misma venta.');
+         return null;
+      }
+      paymentFinalizationInFlightRef.current = true;
          const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> => {
          let timeoutHandle: number | undefined;
          try {
@@ -5222,6 +5227,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          console.error('Payment confirm error:', error);
          alert(`Error al finalizar venta: ${error?.message || 'Error desconocido'}`);
          return null;
+      } finally {
+         paymentFinalizationInFlightRef.current = false;
       }
    };
 

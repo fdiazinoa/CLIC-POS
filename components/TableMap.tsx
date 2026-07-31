@@ -868,9 +868,36 @@ const TableMap: React.FC<TableMapProps> = ({
     const minExpectedTicket = activeRoom?.consumo_minimo || 0;
 
     const resolveTicketForTable = useCallback((table: Table): ParkedTicket | undefined => {
-        return (parkedTickets || []).find(ticket => table.currentOrderId && String(ticket.id) === String(table.currentOrderId))
-            || (parkedTickets || []).find(ticket => String(ticket.tableId) === String(table.id));
+        const tableId = String(table.id);
+        const belongsToTable = (ticket: ParkedTicket) => {
+            const ticketTableId = String(ticket.tableId ?? '');
+            const joinedTableIds = (ticket as any).joinedTableIds;
+            const joinedTableId = (table as any).joinedTableId;
+            const joinedSourceTableId = (table as any).joinedSourceTableId;
+            return ticketTableId === tableId
+                || (Array.isArray(joinedTableIds) && joinedTableIds.some(id => String(id) === tableId))
+                || String(joinedTableId ?? '') === ticketTableId
+                || String(joinedSourceTableId ?? '') === tableId;
+        };
+
+        // currentOrderId puede quedar obsoleto después de liberar o mover una mesa.
+        // Nunca debe convertir una mesa libre en ocupada si la orden ya pertenece a otra.
+        return (parkedTickets || []).find(ticket => (
+            table.currentOrderId
+            && String(ticket.id) === String(table.currentOrderId)
+            && belongsToTable(ticket)
+        )) || (parkedTickets || []).find(belongsToTable);
     }, [parkedTickets]);
+
+    const isTableMoveTargetOccupied = useCallback((table: Table): boolean => {
+        const ticket = resolveTicketForTable(table);
+        const visualStatus = getVisualTableState(table).status;
+        // Las mesas creadas por el ERP pueden no traer status. En ese contrato,
+        // ausencia de estado equivale a libre; solo OCCUPIED/RESERVED bloquean mover.
+        return Boolean(ticket?.items?.length)
+            || visualStatus === 'OCCUPIED'
+            || visualStatus === 'RESERVED';
+    }, [getVisualTableState, resolveTicketForTable]);
 
     const resetTableRuntimeState = useCallback((table: Table): Table => ({
         ...table,
@@ -907,7 +934,7 @@ const TableMap: React.FC<TableMapProps> = ({
         }
 
         const targetTicket = resolveTicketForTable(targetTable);
-        const targetIsOccupied = Boolean(targetTicket?.items?.length) || getVisualTableState(targetTable).status !== 'FREE';
+        const targetIsOccupied = isTableMoveTargetOccupied(targetTable);
         if (mode === 'MOVE' && targetIsOccupied) {
             alert('Para mover, seleccione una mesa destino libre. Si desea combinar cuentas use Unir mesas.');
             return;
@@ -1110,9 +1137,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 alert('Seleccione una mesa destino distinta.');
                 return true;
             }
-            const targetTicket = resolveTicketForTable(table);
-            const targetIsOccupied = Boolean(targetTicket?.items?.length)
-                || getVisualTableState(table).status !== 'FREE';
+            const targetIsOccupied = isTableMoveTargetOccupied(table);
             if (targetIsOccupied) {
                 alert('Seleccione una mesa destino libre.');
                 return true;
@@ -1127,7 +1152,7 @@ const TableMap: React.FC<TableMapProps> = ({
 
         void completeTableTransfer(transferSelection.sourceTableId, table.id, transferSelection.mode);
         return true;
-    }, [completeTableTransfer, getVisualTableState, resolveTicketForTable, transferSelection]);
+    }, [completeTableTransfer, isTableMoveTargetOccupied, resolveTicketForTable, transferSelection]);
 
     const handleTableAction = useCallback(async (table: Table) => {
         if (onBeforeTableOpen && !(await onBeforeTableOpen(table))) {
