@@ -1119,12 +1119,21 @@ router.get('/ping', (req, res) => {
 router.get('/identify', (req, res) => {
     try {
         const businessConfig = getSetting('businessConfig') || {};
+        const companyInfo = businessConfig.companyInfo || {};
+        const terminals = Array.isArray(businessConfig.terminals) ? businessConfig.terminals : [];
+        const primaryTerminal = terminals.find((terminal: any) => terminal?.config?.isPrimaryNode) || terminals[0];
+        const terminalTenantId = terminals
+            .map((terminal: any) => terminal?.config?.tenantId || terminal?.config?.tenant_id || terminal?.config?.erpBinding?.tenantId || terminal?.config?.erpBinding?.tenant_id)
+            .find(Boolean);
 
         res.json({
             status: 'online',
             app: 'CLIC-POS',
             role: 'MASTER',
             storeId: businessConfig.storeId || 'UNKNOWN',
+            tenantId: businessConfig.tenantId || businessConfig.tenant_id || companyInfo.tenantId || companyInfo.tenant_id || terminalTenantId || '',
+            terminalId: primaryTerminal?.id || '',
+            companyName: companyInfo.name || businessConfig.businessName || businessConfig.name || '',
             serverTime: new Date().toISOString()
         });
     } catch (error: any) {

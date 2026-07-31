@@ -7,21 +7,21 @@
 export class NetworkScanner {
     private static readonly TIMEOUT_MS = 400;
     private static readonly PORTS = [3000, 3001];
-    private static readonly BATCH_SIZE = 20;
+    private static readonly BATCH_SIZE = 32;
 
     /**
      * Attempts to find the Master server IP on the local network.
      * @param currentIp Optional hint for the current subnet.
      * @returns The base URL of the Master server if found, otherwise null.
      */
-    static async findMaster(currentIp?: string): Promise<string | null> {
+    static async findMaster(currentIp?: string, expectedTenantId?: string): Promise<string | null> {
         console.log('🕵️‍♂️ NetworkScanner: Starting scan...');
 
         const subnets = this.determineSubnets(currentIp);
 
         for (const subnet of subnets) {
             console.log(`🕵️‍♂️ NetworkScanner: Scanning subnet ${subnet}.x ...`);
-            const foundUrl = await this.scanSubnet(subnet);
+            const foundUrl = await this.scanSubnet(subnet, expectedTenantId);
             if (foundUrl) {
                 console.log(`✅ NetworkScanner: FOUND MASTER at ${foundUrl}`);
                 return foundUrl;
@@ -38,6 +38,7 @@ export class NetworkScanner {
         // Priority 1: Subnet from current IP hint
         if (currentIp && this.isValidIp(currentIp)) {
             subnets.add(this.getSubnet(currentIp));
+            return Array.from(subnets);
         }
 
         // Priority 2: Common local subnets
@@ -56,7 +57,7 @@ export class NetworkScanner {
         return /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(ip);
     }
 
-    private static async scanSubnet(subnet: string): Promise<string | null> {
+    private static async scanSubnet(subnet: string, expectedTenantId?: string): Promise<string | null> {
         const ips = [];
         for (let i = 1; i < 255; i++) {
             ips.push(`${subnet}.${i}`);
@@ -66,7 +67,7 @@ export class NetworkScanner {
         for (let i = 0; i < ips.length; i += this.BATCH_SIZE) {
             const batch = ips.slice(i, i + this.BATCH_SIZE);
             const promiseResults = await Promise.all(
-                batch.map(ip => this.checkIp(ip))
+                batch.map(ip => this.checkIp(ip, expectedTenantId))
             );
 
             const found = promiseResults.find(url => url !== null);
@@ -76,39 +77,41 @@ export class NetworkScanner {
         return null;
     }
 
-    private static async checkIp(ip: string): Promise<string | null> {
-        // Check both ports for each IP
-        for (const port of this.PORTS) {
+    private static async checkIp(ip: string, expectedTenantId?: string): Promise<string | null> {
+        const matches = await Promise.all(this.PORTS.map(async port => {
             const url = `http://${ip}:${port}`;
-            if (await this.verifyIdent(url)) {
+            if (await this.verifyIdent(url, expectedTenantId)) {
                 return url;
             }
-        }
-        return null;
+            return null;
+        }));
+        return matches.find(Boolean) || null;
     }
 
-    private static async verifyIdent(baseUrl: string): Promise<boolean> {
+    private static async verifyIdent(baseUrl: string, expectedTenantId?: string): Promise<boolean> {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), this.TIMEOUT_MS);
         try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), this.TIMEOUT_MS);
-
-            const res = await fetch(`${baseUrl}/api/network/identify`, {
+            const res = await fetch(`${baseUrl}/api/sync/identify`, {
                 signal: controller.signal,
                 method: 'GET',
                 mode: 'cors'
             });
-
-            clearTimeout(timeoutId);
-
             if (res.ok) {
                 const data = await res.json();
                 // Validate it's actually our Master server
-                if (data.app === 'CLIC-POS' && data.role === 'MASTER') {
+                const discoveredTenantId = String(data.tenantId || '').trim();
+                const tenantMatches = !expectedTenantId
+                    || !discoveredTenantId
+                    || discoveredTenantId === expectedTenantId;
+                if (data.app === 'CLIC-POS' && data.role === 'MASTER' && tenantMatches) {
                     return true;
                 }
             }
         } catch (e) {
             // Ignore connection errors
+        } finally {
+            clearTimeout(timeoutId);
         }
         return false;
     }
