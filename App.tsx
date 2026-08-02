@@ -9769,6 +9769,12 @@ const AppContent: React.FC = () => {
                 tables={tables}
                 parkedTickets={parkedTickets}
                 onBeforeTableOpen={acquireTableEditLock}
+                onTableOpenCancelled={async () => {
+                  const released = await releaseActiveTableEditLock();
+                  if (!released) {
+                    alert('No se pudo liberar la mesa en la Caja Master. Reintente antes de abrirla nuevamente.');
+                  }
+                }}
                 onTableClick={async (table) => {
                   console.log('Mesa seleccionada:', table.name);
                   if (!(await acquireTableEditLock(table))) {

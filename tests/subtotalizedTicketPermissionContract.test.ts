@@ -38,7 +38,8 @@ test('una mesa dividida distingue subtotal total y parcial por ticket', () => {
   assert.match(mapSource, /subtotalizedTicketCount: existing\.subtotalizedTicketCount \+ summary\.subtotalizedTicketCount/);
   assert.match(mapSource, /const isSubtotalized = ticketCount > 0 && subtotalizedTicketCount === ticketCount/);
   assert.match(mapSource, /const isPartiallySubtotalized = subtotalizedTicketCount > 0 && subtotalizedTicketCount < ticketCount/);
-  assert.match(mapSource, /\{model\.subtotalizedTicketCount\} de \{model\.ticketCount\} subtotalizados/);
+  assert.match(mapSource, /\{model\.subtotalizedTicketCount\}\/\{model\.ticketCount\}/);
+  assert.match(mapSource, /h-9 w-9[\s\S]*rounded-full[\s\S]*from-violet-500 to-indigo-700/);
 });
 
 test('el selector identifica la cuenta subtotalizada con hora, usuario y monto', () => {
