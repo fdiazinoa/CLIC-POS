@@ -74,6 +74,9 @@ interface SmartTableModel {
     total: number;
     hasDigitizedItems: boolean;
     isSubtotalized: boolean;
+    isPartiallySubtotalized: boolean;
+    subtotalizedTicketCount: number;
+    ticketCount: number;
     progress: number;
     serviceStage: {
         icon: string;
@@ -100,6 +103,8 @@ interface ParkedOrderSummary {
     finalTotal: number;
     hasExplicitTotal: boolean;
     isSubtotalized: boolean;
+    subtotalizedTicketCount: number;
+    ticketCount: number;
 }
 
 type TableTransferMode = 'MOVE' | 'MERGE' | 'SPLIT' | 'FRACTION';
@@ -167,21 +172,40 @@ const BarTabsModal: React.FC<{
                         ) : (
                             tickets.map((ticket, index) => {
                                 const ticketTotal = Number(ticket.total ?? (ticket.items || []).reduce((acc, item) => acc + Number(item.price || 0) * Number(item.quantity || 0), 0));
-                                            const label = ticket.barTabName || ticket.alias || ticket.name || `Cuenta ${index + 1}`;
+                                const label = ticket.barTabName || ticket.alias || ticket.name || `Cuenta ${index + 1}`;
+                                const subtotalState = getTicketSubtotalization(ticket);
                                 return (
                                     <button
                                         key={ticket.id}
                                         type="button"
                                         onClick={() => onOpenTab(ticket)}
-                                        className="flex w-full items-center justify-between gap-4 rounded-3xl border border-slate-100 bg-white p-4 text-left shadow-sm transition-all hover:border-blue-300 hover:bg-blue-50"
+                                        className={`flex w-full items-center justify-between gap-4 rounded-3xl border p-4 text-left shadow-sm transition-all ${subtotalState.isSubtotalized
+                                            ? 'border-violet-300 bg-violet-50 hover:border-violet-400 hover:bg-violet-100'
+                                            : 'border-slate-100 bg-white hover:border-blue-300 hover:bg-blue-50'
+                                        }`}
                                     >
                                         <div className="min-w-0">
-                                            <p className="truncate text-lg font-black text-slate-900">{label}</p>
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <p className="truncate text-lg font-black text-slate-900">{label}</p>
+                                                {subtotalState.isSubtotalized && (
+                                                    <span className="rounded-full bg-violet-600 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-white">
+                                                        Subtotalizado
+                                                    </span>
+                                                )}
+                                            </div>
                                             <p className="mt-1 text-xs font-bold uppercase tracking-wide text-slate-400">
                                                 {(ticket.items || []).length} línea(s) · {new Date(ticket.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                             </p>
+                                            {subtotalState.isSubtotalized && subtotalState.subtotalizedAt && (
+                                                <p className="mt-1 text-[10px] font-black text-violet-600">
+                                                    Pre-cuenta {new Date(subtotalState.subtotalizedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                    {subtotalState.subtotalizedBy ? ` · ${subtotalState.subtotalizedBy}` : ''}
+                                                </p>
+                                            )}
                                         </div>
-                                        <span className="shrink-0 text-xl font-black text-emerald-600">{currencySymbol}{ticketTotal.toLocaleString()}</span>
+                                        <span className={`shrink-0 text-xl font-black ${subtotalState.isSubtotalized ? 'text-violet-700' : 'text-emerald-600'}`}>
+                                            {currencySymbol}{ticketTotal.toLocaleString()}
+                                        </span>
                                     </button>
                                 );
                             })
@@ -275,6 +299,23 @@ const formatElapsed = (minutes: number): string => {
     return `${h}h ${m}m`;
 };
 
+const getTicketSubtotalization = (ticket: ParkedTicket): {
+    isSubtotalized: boolean;
+    subtotalizedAt?: string;
+    subtotalizedBy?: string;
+} => {
+    const items = Array.isArray(ticket.items) ? ticket.items : [];
+    if (items.length === 0 || !items.every(item => Boolean(item.subtotalizedAt))) {
+        return { isSubtotalized: false };
+    }
+    const referenceItem = items.find(item => Boolean(item.subtotalizedAt));
+    return {
+        isSubtotalized: true,
+        subtotalizedAt: referenceItem?.subtotalizedAt,
+        subtotalizedBy: referenceItem?.subtotalizedBy
+    };
+};
+
 const summarizeParkedTicket = (ticket: ParkedTicket): ParkedOrderSummary | null => {
     const items = Array.isArray(ticket.items) ? ticket.items : [];
     const itemCount = items.reduce((acc, item) => acc + Math.max(0, Number(item.quantity || 0)), 0);
@@ -286,6 +327,7 @@ const summarizeParkedTicket = (ticket: ParkedTicket): ParkedOrderSummary | null 
     );
     const hasExplicitTotal = typeof ticket.total === 'number';
     const finalTotal = hasExplicitTotal ? Number(ticket.total) : calculatedTotal;
+    const subtotalState = getTicketSubtotalization(ticket);
 
     return {
         orderId: ticket.id,
@@ -297,7 +339,9 @@ const summarizeParkedTicket = (ticket: ParkedTicket): ParkedOrderSummary | null 
         calculatedTotal,
         finalTotal,
         hasExplicitTotal,
-        isSubtotalized: items.some(item => Boolean(item.subtotalizedAt))
+        isSubtotalized: subtotalState.isSubtotalized,
+        subtotalizedTicketCount: subtotalState.isSubtotalized ? 1 : 0,
+        ticketCount: 1
     };
 };
 
@@ -620,7 +664,9 @@ const TableMap: React.FC<TableMapProps> = ({
                     calculatedTotal: existing.calculatedTotal + summary.calculatedTotal,
                     finalTotal: existing.finalTotal + summary.finalTotal,
                     hasExplicitTotal: existing.hasExplicitTotal && summary.hasExplicitTotal,
-                    isSubtotalized: existing.isSubtotalized || summary.isSubtotalized
+                    isSubtotalized: existing.isSubtotalized && summary.isSubtotalized,
+                    subtotalizedTicketCount: existing.subtotalizedTicketCount + summary.subtotalizedTicketCount,
+                    ticketCount: existing.ticketCount + summary.ticketCount
                 });
             } else {
                 map.set(tableId, summary);
@@ -763,7 +809,11 @@ const TableMap: React.FC<TableMapProps> = ({
                 : 0;
             const total = parkedTotal > NO_ORDER_TOTAL_THRESHOLD ? parkedTotal : 0;
             const hasDigitizedItems = parkedItems > 0;
-            const isSubtotalized = Boolean(parkedSummary?.isSubtotalized);
+            const tableTickets = getTableTickets(table).filter(ticket => (ticket.items || []).length > 0);
+            const subtotalizedTicketCount = tableTickets.filter(ticket => getTicketSubtotalization(ticket).isSubtotalized).length;
+            const ticketCount = tableTickets.length;
+            const isSubtotalized = ticketCount > 0 && subtotalizedTicketCount === ticketCount;
+            const isPartiallySubtotalized = subtotalizedTicketCount > 0 && subtotalizedTicketCount < ticketCount;
             const smartStatus = getSmartStatus(table, elapsedMinutes, hasDigitizedItems, isSubtotalized);
             const displayTable = hasDigitizedItems && parkedSummary ? enrichTableWithParkedTicket(table) : table;
             const isOccupiedLike = smartStatus !== 'FREE';
@@ -796,6 +846,9 @@ const TableMap: React.FC<TableMapProps> = ({
                 total,
                 hasDigitizedItems,
                 isSubtotalized,
+                isPartiallySubtotalized,
+                subtotalizedTicketCount,
+                ticketCount,
                 progress,
                 serviceStage,
                 needsRevenueGlow,
@@ -2393,6 +2446,12 @@ const SmartTableNode = React.memo(({
             {model.isSubtotalized && (
                 <div className="pointer-events-none absolute left-1/2 top-1.5 z-10 -translate-x-1/2 rounded-full border border-white/30 bg-violet-950/75 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.16em] text-white shadow-lg">
                     Subtotal
+                </div>
+            )}
+
+            {model.isPartiallySubtotalized && (
+                <div className="pointer-events-none absolute left-1/2 top-1.5 z-10 -translate-x-1/2 whitespace-nowrap rounded-full border border-violet-300/60 bg-slate-950/85 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] text-violet-200 shadow-lg">
+                    {model.subtotalizedTicketCount} de {model.ticketCount} subtotalizados
                 </div>
             )}
 
