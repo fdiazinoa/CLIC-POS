@@ -39,6 +39,7 @@ interface TableMapProps {
     parkedTickets?: ParkedTicket[];
     onTableClick: (table: Table) => void;
     onBeforeTableOpen?: (table: Table) => boolean | Promise<boolean>;
+    onTableOpenCancelled?: (table: Table) => void | Promise<void>;
     currencySymbol: string;
     currentUser: UserType;
     isAdmin?: boolean;
@@ -443,6 +444,7 @@ const TableMap: React.FC<TableMapProps> = ({
     parkedTickets,
     onTableClick,
     onBeforeTableOpen,
+    onTableOpenCancelled,
     currencySymbol,
     currentUser,
     isAdmin,
@@ -478,6 +480,23 @@ const TableMap: React.FC<TableMapProps> = ({
     const [isControlCenterOpen, setIsControlCenterOpen] = useState(false);
     const [tableNotice, setTableNotice] = useState<TableNoticeState | null>(null);
     const reduceMotion = useReducedMotion();
+
+    const closeTablePreview = useCallback((table: Table, close: () => void) => {
+        close();
+        void Promise.resolve(onTableOpenCancelled?.(table))
+            .then(() => onRefreshTables?.())
+            .catch(error => console.error('No se pudo liberar el bloqueo de la mesa al cerrar el modal:', error));
+    }, [onRefreshTables, onTableOpenCancelled]);
+
+    const closeTableNotice = useCallback(() => {
+        const tableToRelease = tableNotice?.tableToOpen;
+        setTableNotice(null);
+        if (tableToRelease) {
+            void Promise.resolve(onTableOpenCancelled?.(tableToRelease))
+                .then(() => onRefreshTables?.())
+                .catch(error => console.error('No se pudo liberar el bloqueo de la mesa al cerrar el aviso:', error));
+        }
+    }, [onRefreshTables, onTableOpenCancelled, tableNotice]);
 
     const mapShellRef = useRef<HTMLDivElement | null>(null);
     const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -1629,7 +1648,7 @@ const TableMap: React.FC<TableMapProps> = ({
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
-                            onClick={() => setTableNotice(null)}
+                            onClick={closeTableNotice}
                         >
                             <m.div
                                 initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 18, scale: 0.96 }}
@@ -1657,7 +1676,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                     )}
                                     <button
                                         type="button"
-                                        onClick={() => setTableNotice(null)}
+                                        onClick={closeTableNotice}
                                         className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-black text-slate-700 active:scale-[0.98]"
                                     >
                                         {tableNotice.tableToOpen ? 'Cerrar' : (tableNotice.primaryLabel || 'Entendido')}
@@ -1948,7 +1967,7 @@ const TableMap: React.FC<TableMapProps> = ({
                         moveTargetTableIds={safeTables
                             .filter(candidate => candidate.id !== selectedTable.id && !isTableMoveTargetOccupied(candidate))
                             .map(candidate => String(candidate.id))}
-                        onClose={() => setSelectedTable(null)}
+                        onClose={() => closeTablePreview(selectedTable, () => setSelectedTable(null))}
                         onAddOrder={() => {
                             onTableClick(selectedTable);
                             setSelectedTable(null);
@@ -2037,7 +2056,7 @@ const TableMap: React.FC<TableMapProps> = ({
                         allowCreate
                         accountMode
                         titleLabel="Cuentas de la mesa"
-                        onClose={() => setSelectedAccountTable(null)}
+                        onClose={() => closeTablePreview(selectedAccountTable, () => setSelectedAccountTable(null))}
                         onOpenTab={(ticket) => {
                             const total = Number(ticket.total ?? (ticket.items || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
                             onTableClick({
@@ -2060,7 +2079,7 @@ const TableMap: React.FC<TableMapProps> = ({
                         table={selectedBarTable}
                         tickets={getBarTickets(selectedBarTable)}
                         currencySymbol={currencySymbol}
-                        onClose={() => setSelectedBarTable(null)}
+                        onClose={() => closeTablePreview(selectedBarTable, () => setSelectedBarTable(null))}
                         onOpenTab={(ticket) => {
                             const label = ticket.barTabName || ticket.alias || ticket.name || 'Minuta';
                             const total = Number(ticket.total ?? (ticket.items || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
@@ -2450,8 +2469,11 @@ const SmartTableNode = React.memo(({
             )}
 
             {model.isPartiallySubtotalized && (
-                <div className="pointer-events-none absolute left-1/2 top-1.5 z-10 -translate-x-1/2 whitespace-nowrap rounded-full border border-violet-300/60 bg-slate-950/85 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] text-violet-200 shadow-lg">
-                    {model.subtotalizedTicketCount} de {model.ticketCount} subtotalizados
+                <div
+                    className="pointer-events-none absolute left-1/2 top-1.5 z-10 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border-2 border-violet-200/90 bg-gradient-to-br from-violet-500 to-indigo-700 text-[11px] font-black text-white shadow-[0_4px_14px_rgba(109,40,217,0.65)]"
+                    aria-label={`${model.subtotalizedTicketCount} de ${model.ticketCount} tickets subtotalizados`}
+                >
+                    {model.subtotalizedTicketCount}/{model.ticketCount}
                 </div>
             )}
 
