@@ -32,3 +32,21 @@ test('la pre-cuenta se persiste y la mesa muestra estado subtotalizado', () => {
   assert.match(mapSource, /label: 'Subtotalizada'/);
   assert.match(mapSource, />\s*Subtotal\s*</);
 });
+
+test('una mesa dividida distingue subtotal total y parcial por ticket', () => {
+  assert.match(mapSource, /items\.every\(item => Boolean\(item\.subtotalizedAt\)\)/);
+  assert.match(mapSource, /subtotalizedTicketCount: existing\.subtotalizedTicketCount \+ summary\.subtotalizedTicketCount/);
+  assert.match(mapSource, /const isSubtotalized = ticketCount > 0 && subtotalizedTicketCount === ticketCount/);
+  assert.match(mapSource, /const isPartiallySubtotalized = subtotalizedTicketCount > 0 && subtotalizedTicketCount < ticketCount/);
+  assert.match(mapSource, /\{model\.subtotalizedTicketCount\} de \{model\.ticketCount\} subtotalizados/);
+});
+
+test('el selector identifica la cuenta subtotalizada con hora, usuario y monto', () => {
+  assert.match(mapSource, /const subtotalState = getTicketSubtotalization\(ticket\)/);
+  assert.match(mapSource, />\s*Subtotalizado\s*</);
+  assert.match(mapSource, /subtotalState\.subtotalizedBy/);
+  assert.match(posSource, /subtotalizedBy: item\.subtotalizedBy \|\| currentUser\?\.name \|\| currentUser\?\.id/);
+  assert.match(posSource, /Cuenta \{activeTableAccountIndex \+ 1\} de \{activeTableAccounts\.length\}/);
+  assert.match(posSource, /isActiveTableAccountSubtotalized/);
+  assert.match(posSource, /await Promise\.resolve\(onUpdateParkedTickets\(nextTickets\)\)/);
+});

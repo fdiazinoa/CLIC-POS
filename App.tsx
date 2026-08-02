@@ -9926,7 +9926,7 @@ const AppContent: React.FC = () => {
                       const subtotalizedItems = order.items.map(item => ({
                         ...item,
                         subtotalizedAt: item.subtotalizedAt || subtotalizedAt,
-                        subtotalizedBy: item.subtotalizedBy || currentUser?.id || currentUser?.name || 'POS'
+                        subtotalizedBy: item.subtotalizedBy || currentUser?.name || currentUser?.id || 'POS'
                       }));
                       const nextTickets = parkedTickets.map(ticket =>
                         String(ticket.id) === String(order.id)

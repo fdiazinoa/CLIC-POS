@@ -1240,6 +1240,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       0,
       activeTableAccounts.findIndex(ticket => String(ticket.id) === String(activeTable?.currentOrderId || ''))
    );
+   const activeTableAccount = activeTableAccounts[activeTableAccountIndex];
+   const isActiveTableAccountSubtotalized = Boolean(
+      activeTableAccount?.items?.length
+      && activeTableAccount.items.every(item => Boolean(item.subtotalizedAt))
+   );
    const handleNavigateTableAccount = useCallback((direction: -1 | 1) => {
       if (activeTableAccounts.length < 2 || !onSelectTableAccount) return;
       const nextIndex = (activeTableAccountIndex + direction + activeTableAccounts.length) % activeTableAccounts.length;
@@ -1251,7 +1256,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       void Promise.resolve(onSelectTableAccount(nextTicket));
    }, [activeTableAccountIndex, activeTableAccounts, onSelectTableAccount]);
    const renderTableAccountNavigator = () => activeTableAccounts.length > 1 ? (
-      <div className="flex shrink-0 items-center gap-1 rounded-xl border border-blue-200 bg-blue-50 p-1 shadow-sm">
+      <div className={`flex shrink-0 items-center gap-1 rounded-xl border p-1 shadow-sm ${isActiveTableAccountSubtotalized
+         ? 'border-violet-300 bg-violet-50'
+         : 'border-blue-200 bg-blue-50'
+      }`}>
          <button
             type="button"
             onClick={() => handleNavigateTableAccount(-1)}
@@ -1261,8 +1269,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          >
             <ChevronLeft size={16} strokeWidth={3} />
          </button>
-         <span className="min-w-[92px] text-center text-xs font-black text-blue-800">
-            Cuenta {activeTableAccountIndex + 1} de {activeTableAccounts.length}
+         <span className={`min-w-[108px] text-center text-xs font-black ${isActiveTableAccountSubtotalized ? 'text-violet-800' : 'text-blue-800'}`}>
+            <span className="block">Cuenta {activeTableAccountIndex + 1} de {activeTableAccounts.length}</span>
+            {isActiveTableAccountSubtotalized && (
+               <span className="mt-0.5 block text-[8px] uppercase tracking-[0.14em] text-violet-600">Subtotalizada</span>
+            )}
          </span>
          <button
             type="button"
@@ -5731,10 +5742,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             const nextCart = cart.map(item => ({
                ...item,
                subtotalizedAt: item.subtotalizedAt || subtotalizedAt,
-               subtotalizedBy: item.subtotalizedBy || currentUser?.id || currentUser?.name || 'POS'
+               subtotalizedBy: item.subtotalizedBy || currentUser?.name || currentUser?.id || 'POS'
             }));
             onUpdateCart(nextCart);
-            setSuccessToast('Subtotal enviado a impresora. Documento bloqueado para edición.');
+            const activeOrderId = String(activeTable?.currentOrderId || '').trim();
+            if (activeOrderId) {
+               const nextTickets = parkedTickets.map(ticket => String(ticket.id) === activeOrderId
+                  ? { ...ticket, items: nextCart }
+                  : ticket
+               );
+               parkedTicketsRef.current = nextTickets;
+               await Promise.resolve(onUpdateParkedTickets(nextTickets));
+            }
+            setSuccessToast('Subtotal enviado a impresora. Esta cuenta requiere autorización para modificarse.');
             return;
          }
 
