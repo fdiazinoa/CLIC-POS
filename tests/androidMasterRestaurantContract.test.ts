@@ -57,8 +57,19 @@ test('la Master Android bloquea la digitación simultánea y limita la mutación
   assert.match(serverSource, /publicTableLock\(lock: JSONObject\)/);
   assert.match(serverSource, /remove\("token"\)/);
   assert.match(serverSource, /mergeTicketsForTable\(tableId, tickets\)/);
-  assert.match(serverSource, /if \(ticket\.optString\("tableId"\) != tableId\)/);
+  assert.match(serverSource, /if \(!ticketReferencesTable\(ticket, tableId\)\)/);
+  assert.match(serverSource, /if \(ticketReferencesTable\(ticket, tableId\)\)/);
   assert.match(serverSource, /\.put\("tables", buildTablesWithEditLocks\(\)\)/);
+});
+
+test('la Master conserva y libera de forma simétrica las mesas unidas', () => {
+  assert.match(serverSource, /private fun ticketReferencesTable/);
+  assert.match(serverSource, /ticket\.optJSONArray\("joinedTableIds"\)/);
+  assert.match(serverSource, /activeByTableId\[it\] = ticket/);
+  assert.match(serverSource, /linkedTableIds\.contains\(table\.optString\("id"\)\)/);
+  assert.match(serverSource, /val belongsToTable = ticketReferencesTable\(ticket, tableId\)/);
+  assert.match(serverSource, /table\.remove\("joinedTableId"\)/);
+  assert.match(appSource, /joinedTableId: undefined,[\s\S]*joinedSourceTableName: undefined/);
 });
 
 test('la WebView entrega el snapshot operativo al servidor nativo sin sobreescribir cambios clientes en el watchdog', () => {

@@ -10,6 +10,7 @@ interface TableOptionsModalProps {
   room?: Room;
   rooms?: Room[];
   allTables: Table[];
+  moveTargetTableIds?: string[];
   onClose: () => void;
   onAddOrder: () => void;
   onPrintPrecheck: () => void;
@@ -42,6 +43,7 @@ const TableOptionsModal: React.FC<TableOptionsModalProps> = ({
   room,
   rooms = [],
   allTables,
+  moveTargetTableIds,
   onClose,
   onAddOrder,
   onPrintPrecheck,
@@ -54,7 +56,12 @@ const TableOptionsModal: React.FC<TableOptionsModalProps> = ({
   onFree
 }) => {
   const isOccupied = table.status === 'OCCUPIED';
-  const availableTables = allTables.filter(t => t.id !== table.id && (!t.status || t.status === 'FREE') && t.shape !== 'OBSTACLE');
+  const explicitMoveTargets = new Set((moveTargetTableIds || []).map(String));
+  const availableTables = allTables.filter(t => (
+    t.id !== table.id
+    && t.shape !== 'OBSTACLE'
+    && (moveTargetTableIds ? explicitMoveTargets.has(String(t.id)) : (!t.status || t.status === 'FREE'))
+  ));
   const [showMoveView, setShowMoveView] = useState(false);
   const [moveMode, setMoveMode] = useState<'ALL' | 'PARTIAL'>('ALL');
   const [partialQuantities, setPartialQuantities] = useState<Record<string, number>>({});

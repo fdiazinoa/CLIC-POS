@@ -59,7 +59,7 @@ interface TableMapProps {
     onChangeRoom?: (roomId: string) => void;
 }
 
-type SmartStatus = 'FREE' | 'ATTENTION' | 'OCCUPIED' | 'CHECK_REQUESTED';
+type SmartStatus = 'FREE' | 'ATTENTION' | 'OCCUPIED' | 'SUBTOTALIZED' | 'CHECK_REQUESTED';
 type TableArchetype = 'CIRCLE' | 'SQUARE' | 'BAR' | 'BOOTH' | 'CHAISE_LONGUE';
 
 interface SmartTableModel {
@@ -73,6 +73,7 @@ interface SmartTableModel {
     elapsedLabel: string;
     total: number;
     hasDigitizedItems: boolean;
+    isSubtotalized: boolean;
     progress: number;
     serviceStage: {
         icon: string;
@@ -98,6 +99,7 @@ interface ParkedOrderSummary {
     calculatedTotal: number;
     finalTotal: number;
     hasExplicitTotal: boolean;
+    isSubtotalized: boolean;
 }
 
 type TableTransferMode = 'MOVE' | 'MERGE' | 'SPLIT' | 'FRACTION';
@@ -294,7 +296,8 @@ const summarizeParkedTicket = (ticket: ParkedTicket): ParkedOrderSummary | null 
         itemCount,
         calculatedTotal,
         finalTotal,
-        hasExplicitTotal
+        hasExplicitTotal,
+        isSubtotalized: items.some(item => Boolean(item.subtotalizedAt))
     };
 };
 
@@ -334,13 +337,15 @@ const inferArchetype = (table: Table): TableArchetype => {
     return 'SQUARE';
 };
 
-const getSmartStatus = (table: Table, elapsedMinutes: number, hasDigitizedItems: boolean): SmartStatus => {
+const getSmartStatus = (table: Table, elapsedMinutes: number, hasDigitizedItems: boolean, isSubtotalized: boolean): SmartStatus => {
+    if (isSubtotalized) return 'SUBTOTALIZED';
     if (hasDigitizedItems) return 'OCCUPIED';
     if (table.status === 'RESERVED') return 'CHECK_REQUESTED';
     return 'FREE';
 };
 
 const computeLastOrderHint = (model: Pick<SmartTableModel, 'smartStatus' | 'serviceStage' | 'hasDigitizedItems'>): string => {
+    if (model.smartStatus === 'SUBTOTALIZED') return 'Pre-cuenta impresa';
     if (model.smartStatus === 'ATTENTION') return 'Sin pedido reciente (+10m)';
     if (!model.hasDigitizedItems) return 'Aun sin pedidos cargados';
     return `${model.serviceStage.label} en curso`;
@@ -372,6 +377,12 @@ const statusPalette: Record<
         badge: 'text-rose-100',
         icon: <Sparkles size={14} className="text-rose-100" />,
         label: 'Ocupada'
+    },
+    SUBTOTALIZED: {
+        shell: 'border-violet-300/80 bg-gradient-to-br from-violet-600/90 via-purple-600/85 to-indigo-700/90 text-white',
+        badge: 'text-violet-100',
+        icon: <ReceiptText size={14} className="text-violet-100" />,
+        label: 'Subtotalizada'
     },
     CHECK_REQUESTED: {
         shell: 'border-fuchsia-400/70 bg-gradient-to-br from-violet-600/75 to-fuchsia-600/75 text-white',
@@ -608,7 +619,8 @@ const TableMap: React.FC<TableMapProps> = ({
                     itemCount: existing.itemCount + summary.itemCount,
                     calculatedTotal: existing.calculatedTotal + summary.calculatedTotal,
                     finalTotal: existing.finalTotal + summary.finalTotal,
-                    hasExplicitTotal: existing.hasExplicitTotal && summary.hasExplicitTotal
+                    hasExplicitTotal: existing.hasExplicitTotal && summary.hasExplicitTotal,
+                    isSubtotalized: existing.isSubtotalized || summary.isSubtotalized
                 });
             } else {
                 map.set(tableId, summary);
@@ -751,7 +763,8 @@ const TableMap: React.FC<TableMapProps> = ({
                 : 0;
             const total = parkedTotal > NO_ORDER_TOTAL_THRESHOLD ? parkedTotal : 0;
             const hasDigitizedItems = parkedItems > 0;
-            const smartStatus = getSmartStatus(table, elapsedMinutes, hasDigitizedItems);
+            const isSubtotalized = Boolean(parkedSummary?.isSubtotalized);
+            const smartStatus = getSmartStatus(table, elapsedMinutes, hasDigitizedItems, isSubtotalized);
             const displayTable = hasDigitizedItems && parkedSummary ? enrichTableWithParkedTicket(table) : table;
             const isOccupiedLike = smartStatus !== 'FREE';
             const isBeingEdited = Boolean(displayTable.editingLock);
@@ -782,6 +795,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 elapsedLabel: formatElapsed(elapsedMinutes),
                 total,
                 hasDigitizedItems,
+                isSubtotalized,
                 progress,
                 serviceStage,
                 needsRevenueGlow,
@@ -1424,10 +1438,6 @@ const TableMap: React.FC<TableMapProps> = ({
                             alert('No hay mesas ocupadas para mover.');
                             return;
                         }
-                        if (freeForTools.length === 0) {
-                            alert('No hay mesas libres para recibir el pedido.');
-                            return;
-                        }
                         setTransferSelection({ mode: 'MOVE', step: 'SOURCE' });
                     }}
                     className={buttonClass}
@@ -1882,6 +1892,9 @@ const TableMap: React.FC<TableMapProps> = ({
                         room={rooms.find(candidate => candidate.id === selectedTable.roomId) || activeRoom}
                         rooms={rooms}
                         allTables={safeTables.map(table => enrichTableWithParkedTicket(getVisualTableState(table)))}
+                        moveTargetTableIds={safeTables
+                            .filter(candidate => candidate.id !== selectedTable.id && !isTableMoveTargetOccupied(candidate))
+                            .map(candidate => String(candidate.id))}
                         onClose={() => setSelectedTable(null)}
                         onAddOrder={() => {
                             onTableClick(selectedTable);
@@ -2375,6 +2388,12 @@ const SmartTableNode = React.memo(({
                     }
                     transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
                 />
+            )}
+
+            {model.isSubtotalized && (
+                <div className="pointer-events-none absolute left-1/2 top-1.5 z-10 -translate-x-1/2 rounded-full border border-white/30 bg-violet-950/75 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.16em] text-white shadow-lg">
+                    Subtotal
+                </div>
             )}
 
             {model.archetype === 'BOOTH' && (

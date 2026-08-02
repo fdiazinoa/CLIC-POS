@@ -900,17 +900,26 @@ object ClicPOSMasterHttpServer {
         val merged = JSONArray()
         for (index in 0 until parkedTicketsSnapshot.length()) {
             val ticket = parkedTicketsSnapshot.optJSONObject(index) ?: continue
-            if (ticket.optString("tableId") != tableId) {
+            if (!ticketReferencesTable(ticket, tableId)) {
                 merged.put(JSONObject(ticket.toString()))
             }
         }
         for (index in 0 until incomingTickets.length()) {
             val ticket = incomingTickets.optJSONObject(index) ?: continue
-            if (ticket.optString("tableId") == tableId) {
+            if (ticketReferencesTable(ticket, tableId)) {
                 merged.put(JSONObject(ticket.toString()))
             }
         }
         return merged
+    }
+
+    private fun ticketReferencesTable(ticket: JSONObject, tableId: String): Boolean {
+        if (ticket.optString("tableId") == tableId) return true
+        val joinedTableIds = ticket.optJSONArray("joinedTableIds") ?: JSONArray()
+        for (index in 0 until joinedTableIds.length()) {
+            if (joinedTableIds.optString(index) == tableId) return true
+        }
+        return false
     }
 
     private fun reconcileTablesWithParkedTickets(
@@ -932,6 +941,12 @@ object ClicPOSMasterHttpServer {
             if (!hasItems) continue
             ticket.optString("id").takeIf { it.isNotBlank() }?.let { activeByOrderId[it] = ticket }
             ticket.optString("tableId").takeIf { it.isNotBlank() }?.let { activeByTableId[it] = ticket }
+            val joinedTableIds = ticket.optJSONArray("joinedTableIds") ?: JSONArray()
+            for (joinedIndex in 0 until joinedTableIds.length()) {
+                joinedTableIds.optString(joinedIndex).takeIf { it.isNotBlank() }?.let {
+                    activeByTableId[it] = ticket
+                }
+            }
         }
 
         val reconciled = JSONArray(sourceTables.toString())
@@ -941,9 +956,17 @@ object ClicPOSMasterHttpServer {
             val currentOrderId = table.optString("currentOrderId")
             val orderTicket = activeByOrderId[currentOrderId]
             val orderTicketTableId = orderTicket?.optString("tableId").orEmpty()
+            val joinedTableIds = orderTicket?.optJSONArray("joinedTableIds") ?: JSONArray()
+            var orderBelongsToTable = orderTicketTableId.isBlank() || orderTicketTableId == tableId
+            for (joinedIndex in 0 until joinedTableIds.length()) {
+                if (joinedTableIds.optString(joinedIndex) == tableId) {
+                    orderBelongsToTable = true
+                    break
+                }
+            }
             val ticket = if (
                 orderTicket != null &&
-                (orderTicketTableId.isBlank() || orderTicketTableId == tableId)
+                orderBelongsToTable
             ) {
                 orderTicket
             } else {
@@ -955,6 +978,10 @@ object ClicPOSMasterHttpServer {
                     .put("currentOrderId", JSONObject.NULL)
                     .put("currentOrderTotal", 0)
                     .put("timeSeated", JSONObject.NULL)
+                table.remove("joinedTableId")
+                table.remove("joinedTableName")
+                table.remove("joinedSourceTableId")
+                table.remove("joinedSourceTableName")
                 continue
             }
 
@@ -1238,10 +1265,43 @@ object ClicPOSMasterHttpServer {
             return
         }
 
+        val linkedTableIds = mutableSetOf(tableId)
+        for (index in 0 until parkedTicketsSnapshot.length()) {
+            val ticket = parkedTicketsSnapshot.optJSONObject(index) ?: continue
+            val joinedIds = ticket.optJSONArray("joinedTableIds") ?: JSONArray()
+            var includesReleasedTable = ticket.optString("tableId") == tableId
+            for (joinedIndex in 0 until joinedIds.length()) {
+                if (joinedIds.optString(joinedIndex) == tableId) includesReleasedTable = true
+            }
+            val sameOrder = orderId.isNotBlank() && ticket.optString("id") == orderId
+            if (!includesReleasedTable && !sameOrder) continue
+            ticket.optString("tableId").takeIf { it.isNotBlank() }?.let(linkedTableIds::add)
+            for (joinedIndex in 0 until joinedIds.length()) {
+                joinedIds.optString(joinedIndex).takeIf { it.isNotBlank() }?.let(linkedTableIds::add)
+            }
+        }
+        for (index in 0 until updatedTables.length()) {
+            val table = updatedTables.optJSONObject(index) ?: continue
+            val belongsToJoinedAccount = linkedTableIds.contains(table.optString("id")) ||
+                (orderId.isNotBlank() && table.optString("currentOrderId") == orderId)
+            if (!belongsToJoinedAccount) continue
+            table
+                .put("status", "FREE")
+                .put("currentOrderId", JSONObject.NULL)
+                .put("currentOrderTotal", 0)
+                .put("timeSeated", JSONObject.NULL)
+                .put("waiterId", JSONObject.NULL)
+                .put("waiterName", JSONObject.NULL)
+            table.remove("joinedTableId")
+            table.remove("joinedTableName")
+            table.remove("joinedSourceTableId")
+            table.remove("joinedSourceTableName")
+        }
+
         val remainingTickets = JSONArray()
         for (index in 0 until parkedTicketsSnapshot.length()) {
             val ticket = parkedTicketsSnapshot.optJSONObject(index) ?: continue
-            val belongsToTable = ticket.optString("tableId") == tableId
+            val belongsToTable = ticketReferencesTable(ticket, tableId)
             val belongsToOrder = orderId.isNotBlank() && ticket.optString("id") == orderId
             if (!belongsToTable && !belongsToOrder) remainingTickets.put(ticket)
         }

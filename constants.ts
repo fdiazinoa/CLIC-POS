@@ -406,6 +406,8 @@ export const AVAILABLE_PERMISSIONS = [
   { key: 'POS_CREDIT_OVERRIDE', label: 'Vender sobre límite de crédito', description: 'Vender a clientes excediendo su límite de crédito', category: 'SALES' },
   { key: 'POS_VOID_ITEM', label: 'Anular Ítem', description: 'Eliminar productos del carrito', category: 'SALES' },
   { key: 'POS_VOID_TICKET', label: 'Anular Ticket (En Curso)', description: 'Cancelar venta antes de pago', category: 'SALES' },
+  { key: 'POS_EDIT_SUBTOTALIZED_TICKET', label: 'Modificar Ticket Subtotalizado', description: 'Agregar, borrar o modificar artículos, cantidades y descuentos después de imprimir el subtotal', category: 'SALES' },
+  { key: 'POS_VOID_SUBTOTALIZED_TICKET', label: 'Eliminar Ticket Subtotalizado', description: 'Eliminar por completo una cuenta después de imprimir el subtotal', category: 'SALES' },
   { key: 'POS_VOID_PAID_TICKET', label: 'Anular Factura Pagada', description: 'Revertir una venta finalizada', category: 'SALES' },
   { key: 'POS_RETURNS', label: 'Autorizar Devoluciones y Notas de Crédito', description: 'Permite activar el modo de devolución en el POS y procesar notas de crédito', category: 'SALES' },
   { key: 'POS_MANAGE_PARKED', label: 'Gestionar Cuentas', description: 'Ver y recuperar cuentas de otros', category: 'SALES' },
