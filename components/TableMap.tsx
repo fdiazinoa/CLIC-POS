@@ -2468,15 +2468,6 @@ const SmartTableNode = React.memo(({
                 </div>
             )}
 
-            {model.isPartiallySubtotalized && (
-                <div
-                    className="pointer-events-none absolute left-1/2 top-1.5 z-10 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border-2 border-violet-200/90 bg-gradient-to-br from-violet-500 to-indigo-700 text-[11px] font-black text-white shadow-[0_4px_14px_rgba(109,40,217,0.65)]"
-                    aria-label={`${model.subtotalizedTicketCount} de ${model.ticketCount} tickets subtotalizados`}
-                >
-                    {model.subtotalizedTicketCount}/{model.ticketCount}
-                </div>
-            )}
-
             {model.archetype === 'BOOTH' && (
                 <>
                     <div className="pointer-events-none absolute inset-y-2 left-1 w-1 rounded-full bg-white/20" />
@@ -2520,26 +2511,37 @@ const SmartTableNode = React.memo(({
                             </div>
 
                             <div className="relative h-8 w-8">
-                                <svg className="h-8 w-8 -rotate-90" viewBox="0 0 32 32">
-                                    <circle cx="16" cy="16" r={ringRadius} stroke="rgba(255,255,255,0.25)" strokeWidth="3" fill="none" />
-                                    <circle
-                                        cx="16"
-                                        cy="16"
-                                        r={ringRadius}
-                                        stroke="rgba(56,189,248,0.95)"
-                                        strokeWidth="3"
-                                        fill="none"
-                                        strokeLinecap="round"
-                                        strokeDasharray={ringCircumference}
-                                        strokeDashoffset={ringOffset}
-                                    />
-                                </svg>
-                                <span
-                                    className={`absolute inset-0 flex items-center justify-center text-[10px] ${model.hasPendingKitchenDispatch ? 'rounded-full bg-amber-400 text-amber-950 shadow-[0_0_18px_rgba(251,191,36,0.8)]' : ''}`}
-                                    title={model.hasPendingKitchenDispatch ? 'Pedido pendiente de recepción en cocina' : model.serviceStage.label}
-                                >
-                                    {model.hasPendingKitchenDispatch ? <CircleHelp size={19} strokeWidth={3} /> : model.serviceStage.icon}
-                                </span>
+                                {model.isPartiallySubtotalized ? (
+                                    <div
+                                        className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-violet-200/90 bg-gradient-to-br from-violet-500 to-indigo-700 text-[10px] font-black text-white shadow-[0_4px_14px_rgba(109,40,217,0.65)]"
+                                        aria-label={`${model.subtotalizedTicketCount} de ${model.ticketCount} tickets subtotalizados`}
+                                    >
+                                        {model.subtotalizedTicketCount}/{model.ticketCount}
+                                    </div>
+                                ) : (
+                                    <>
+                                        <svg className="h-8 w-8 -rotate-90" viewBox="0 0 32 32">
+                                            <circle cx="16" cy="16" r={ringRadius} stroke="rgba(255,255,255,0.25)" strokeWidth="3" fill="none" />
+                                            <circle
+                                                cx="16"
+                                                cy="16"
+                                                r={ringRadius}
+                                                stroke="rgba(56,189,248,0.95)"
+                                                strokeWidth="3"
+                                                fill="none"
+                                                strokeLinecap="round"
+                                                strokeDasharray={ringCircumference}
+                                                strokeDashoffset={ringOffset}
+                                            />
+                                        </svg>
+                                        <span
+                                            className={`absolute inset-0 flex items-center justify-center text-[10px] ${model.hasPendingKitchenDispatch ? 'rounded-full bg-amber-400 text-amber-950 shadow-[0_0_18px_rgba(251,191,36,0.8)]' : ''}`}
+                                            title={model.hasPendingKitchenDispatch ? 'Pedido pendiente de recepción en cocina' : model.serviceStage.label}
+                                        >
+                                            {model.hasPendingKitchenDispatch ? <CircleHelp size={19} strokeWidth={3} /> : model.serviceStage.icon}
+                                        </span>
+                                    </>
+                                )}
                             </div>
                         </div>
 
