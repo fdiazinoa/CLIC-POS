@@ -4210,6 +4210,13 @@ const AppContent: React.FC = () => {
       if (ticket.tableId !== undefined && ticket.tableId !== null) {
         byTableId.set(String(ticket.tableId), ticket);
       }
+      const joinedTableIds = Array.isArray((ticket as any).joinedTableIds)
+        ? (ticket as any).joinedTableIds
+        : [];
+      joinedTableIds.forEach((joinedTableId: unknown) => {
+        const normalizedId = String(joinedTableId || '').trim();
+        if (normalizedId) byTableId.set(normalizedId, ticket);
+      });
     });
 
     return (sourceTables || []).map(table => {
@@ -4245,7 +4252,11 @@ const AppContent: React.FC = () => {
           currentOrderTotal: undefined,
           timeSeated: undefined,
           waiterId: undefined,
-          waiterName: undefined
+          waiterName: undefined,
+          joinedTableId: undefined,
+          joinedTableName: undefined,
+          joinedSourceTableId: undefined,
+          joinedSourceTableName: undefined
         } as Table;
       }
 
@@ -9884,12 +9895,21 @@ const AppContent: React.FC = () => {
                 canViewBusinessMetrics={canViewBusinessMetrics}
                 onPrintPrecheck={async (table) => {
                   if (!table.currentOrderId) return;
-                  const order = (parkedTickets || []).find(p => p.id === table.currentOrderId);
-                  if (order) {
+                  let temporaryLockAcquired = false;
+                  if (isClientTerminalMode() && activeTableEditLockRef.current?.tableId !== String(table.id)) {
+                    temporaryLockAcquired = await acquireTableEditLock(table);
+                    if (!temporaryLockAcquired) return;
+                  }
+                  try {
+                    const order = (parkedTickets || []).find(p => p.id === table.currentOrderId);
+                    if (!order) {
+                      alert('No se encontró el pedido activo para esta mesa.');
+                      return;
+                    }
                     // Pre-calculate totals for printPrecuenta
                     const subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
                     
-                    await printPrecuenta(config, {
+                    const printed = await printPrecuenta(config, {
                       items: order.items,
                       subtotal: subtotal,
                       discountTotal: Number(order.discountAmount || 0),
@@ -9901,8 +9921,22 @@ const AppContent: React.FC = () => {
                       tableDisplayLabel: order.tableDisplayLabel,
                       terminalId: getCurrentTerminal()?.id || 'T1'
                     });
-                  } else {
-                    alert('No se encontró el pedido activo para esta mesa.');
+                    if (printed) {
+                      const subtotalizedAt = new Date().toISOString();
+                      const subtotalizedItems = order.items.map(item => ({
+                        ...item,
+                        subtotalizedAt: item.subtotalizedAt || subtotalizedAt,
+                        subtotalizedBy: item.subtotalizedBy || currentUser?.id || currentUser?.name || 'POS'
+                      }));
+                      const nextTickets = parkedTickets.map(ticket =>
+                        String(ticket.id) === String(order.id)
+                          ? { ...ticket, items: subtotalizedItems }
+                          : ticket
+                      );
+                      await handleUpdateParkedTickets(nextTickets, { reason: 'explicit' });
+                    }
+                  } finally {
+                    if (temporaryLockAcquired) await releaseActiveTableEditLock();
                   }
                 }}
                 onParkedOrderSplitResult={handleParkedOrderSplitFromMap}

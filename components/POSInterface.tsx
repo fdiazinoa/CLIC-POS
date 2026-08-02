@@ -102,6 +102,13 @@ import { isClientTerminalMode, resolveOperationalApiUrl } from '../utils/masterO
 
 // ... existing imports
 
+const clearCartSubtotalization = (items: CartItem[]): CartItem[] => items.map(item => {
+   const nextItem = { ...item };
+   delete nextItem.subtotalizedAt;
+   delete nextItem.subtotalizedBy;
+   return nextItem;
+});
+
 export interface POSInterfaceProps {
    config: BusinessConfig;
    currentUser: UserType;
@@ -2242,6 +2249,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       roles,
       onUpdateConfig
    });
+   const hasSubtotalizedCart = useMemo(
+      () => cart.some(item => Boolean(item.subtotalizedAt)),
+      [cart]
+   );
+
+   const authorizeSubtotalizedEdit = useCallback(async (actionDescription: string): Promise<boolean> => {
+      if (!hasSubtotalizedCart) return true;
+      return requestApproval({
+         permission: 'POS_EDIT_SUBTOTALIZED_TICKET',
+         actionDescription,
+         context: {
+            ticketId: activeTable?.currentOrderId,
+            reason: 'Modificación posterior a la impresión del subtotal'
+         }
+      });
+   }, [activeTable?.currentOrderId, hasSubtotalizedCart, requestApproval]);
 
    // Credit Control (CxC) - Simple Check
    const isDelinquent = useMemo(() => {
@@ -2993,8 +3016,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
 
-   const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig'], consignmentPatch?: Pick<CartItem, 'consignmentId' | 'consignmentDocumentNo' | 'consignmentLineId'>) => {
+   const addToCart = useCallback(async (product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig'], consignmentPatch?: Pick<CartItem, 'consignmentId' | 'consignmentDocumentNo' | 'consignmentLineId'>) => {
       if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
+      if (!(await authorizeSubtotalizedEdit('Agregar artículo a ticket subtotalizado'))) return;
       if (quantity > 0 && !ensureSalesWithOpenZPermission()) return;
       if (!canAddItemToCart(product, quantity, { skipStockValidation: Boolean(consignmentPatch?.consignmentLineId) })) return;
 
@@ -3038,15 +3062,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (existing && !usesSerial && !existing.dispatched) {
          targetCartId = existing.cartId!;
          onUpdateCart(prev => {
+            const editableCart = hasSubtotalizedCart ? clearCartSubtotalization(prev) : prev;
             const updatedItem = {
                ...existing,
+               subtotalizedAt: undefined,
+               subtotalizedBy: undefined,
                quantity: existing.quantity + quantity,
                appliedTaxIds: effectiveTaxIds,
                createdAt: existing.createdAt || new Date().toISOString(),
                production_area_id: resolveProductionAreaId(existing) || productionAreaId || undefined,
                ...consignmentPatch,
             };
-            return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
+            return [updatedItem, ...editableCart.filter(i => i.cartId !== existing.cartId)];
          });
       } else {
          const newCartId = Math.random().toString(36).substr(2, 9);
@@ -3072,12 +3099,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             trackingData,
             ...consignmentPatch,
          };
-         onUpdateCart(prev => [newItem, ...prev]);
+         onUpdateCart(prev => [newItem, ...(hasSubtotalizedCart ? clearCartSubtotalization(prev) : prev)]);
       }
 
       // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
       setLastAddedCartId(targetCartId);
-   }, [blockRecoveredUberOrderMutation, canAddItemToCart, ensureSalesWithOpenZPermission, getProductPrice, onUpdateCart, cart, activeTerminalConfig]); // Added cart to dependencies
+   }, [activeTerminalConfig, authorizeSubtotalizedEdit, blockRecoveredUberOrderMutation, canAddItemToCart, cart, ensureSalesWithOpenZPermission, getProductPrice, hasSubtotalizedCart, onUpdateCart]);
 
    const handleProductClick = useCallback((product: Product) => {
       // MOBILE INTERCEPTION
@@ -3931,11 +3958,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       () => cart.some(item => !isKitchenDispatchedCartItem(item)),
       [cart]
    );
-   const hasSubtotalizedCart = useMemo(
-      () => cart.some(item => Boolean(item.subtotalizedAt)),
-      [cart]
-   );
-
    const isTaxIncluded = activeTariff?.taxIncluded || false;
    const grossLineTotal = useMemo(
       () => processedCart.reduce((sum, item) => sum + (item.price * item.quantity), 0),
@@ -4390,10 +4412,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const updateCartItem = async (updatedItem: CartItem | null, cartIdToDelete?: string) => {
       if (blockRecoveredUberOrderMutation('editar el pedido')) return;
-      if (hasSubtotalizedCart) {
-         alert('Este documento ya fue subtotalizado. No se pueden borrar ni editar artículos; realiza una NC con autorización.');
-         return;
-      }
+      const isSubtotalizedMutation = hasSubtotalizedCart;
+      if (!(await authorizeSubtotalizedEdit('Modificar artículo o cantidad de ticket subtotalizado'))) return;
 
       let newCart: CartItem[] = [];
 
@@ -4409,12 +4429,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          // Void Line Check
-         const authorized = await requestApproval({
-            permission: 'POS_VOID_ITEM',
-            actionDescription: 'Eliminar artículo del carrito',
-            context: { itemId: targetCartId }
-         });
-         if (!authorized) return;
+         if (!isSubtotalizedMutation) {
+            const authorized = await requestApproval({
+               permission: 'POS_VOID_ITEM',
+               actionDescription: 'Eliminar artículo del carrito',
+               context: { itemId: targetCartId }
+            });
+            if (!authorized) return;
+         }
 
          newCart = cart.filter(i => i.cartId !== targetCartId);
       } else {
@@ -4441,6 +4463,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          newCart = cart.map(item => item.cartId === updatedItem.cartId ? updatedItem : item);
       }
 
+      if (isSubtotalizedMutation) newCart = clearCartSubtotalization(newCart);
       onUpdateCart(newCart);
 
       // KDS Sync (if active table)
@@ -4462,7 +4485,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const handleClearFreshCartItems = async () => {
       if (blockRecoveredUberOrderMutation('limpiar los artículos nuevos del ticket')) return;
       if (hasSubtotalizedCart) {
-         alert('Este documento ya fue subtotalizado. No se pueden borrar artículos; realiza una NC con autorización.');
+         if (!window.confirm('¿Eliminar por completo este ticket subtotalizado? Esta acción liberará la mesa.')) return;
+         const authorized = await requestApproval({
+            permission: 'POS_VOID_SUBTOTALIZED_TICKET',
+            actionDescription: 'Eliminar ticket subtotalizado',
+            context: {
+               ticketId: activeTable?.currentOrderId,
+               reason: 'Eliminación completa posterior a la impresión del subtotal'
+            }
+         });
+         if (!authorized) return;
+         setGlobalDiscount({ type: 'PERCENT', value: 0 });
+         setRedeemedCoupon(null);
+         setCouponCode('');
+         if (activeTable) {
+            await releaseActiveEmptyTable({ force: true });
+         } else {
+            onUpdateCart([]);
+         }
          return;
       }
       if (cart.length === 0) return;
@@ -7205,13 +7245,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         const isActiveCartItem = activeCartItemId === item.cartId;
                         const isReturnedToKds = isKdsReturnedCartItem(item);
                         const isSubtotalizedItem = Boolean(item.subtotalizedAt);
-                        const isDispatchedToKds = Boolean(item.dispatched) || isSubtotalizedItem;
-                        const lockedMutationMessage = isSubtotalizedItem
-                           ? 'Documento subtotalizado: usa Devolver para corregirlo.'
-                           : 'Este artículo ya fue enviado al KDS. Usa Devolver para cancelar la preparación.';
-                        const lockedReturnTitle = isSubtotalizedItem
-                           ? 'Documento subtotalizado: usa Devolver para corregir'
-                           : isReturnedToKds ? 'Artículo ya devuelto en KDS' : 'Devolver en KDS';
+                        const isDispatchedToKds = Boolean(item.dispatched);
+                        const lockedMutationMessage = 'Este artículo ya fue enviado al KDS. Usa Devolver para cancelar la preparación.';
+                        const lockedReturnTitle = isReturnedToKds ? 'Artículo ya devuelto en KDS' : 'Devolver en KDS';
 
                         // MOBILE CARD DESIGN
                         if (isMobile) {
@@ -7243,6 +7279,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           {isDispatchedToKds && (
                                              <span className={`mt-1 inline-flex w-fit rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${isReturnedToKds ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
                                                 {isReturnedToKds ? 'KDS devuelto' : 'KDS enviado'}
+                                             </span>
+                                          )}
+                                          {isSubtotalizedItem && (
+                                             <span className="mt-1 inline-flex w-fit rounded-full bg-violet-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-violet-700">
+                                                Subtotalizado
                                              </span>
                                           )}
                                        </div>
@@ -7285,7 +7326,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                    onClick={(e) => {
                                                       e.stopPropagation();
                                                       if (isDispatchedToKds) {
-                                                         alert(isSubtotalizedItem ? lockedMutationMessage : 'Para agregar más cantidad a un artículo ya enviado al KDS, agrega una línea nueva desde el catálogo.');
+                                                         alert('Para agregar más cantidad a un artículo ya enviado al KDS, agrega una línea nueva desde el catálogo.');
                                                          return;
                                                       }
                                                       updateCartItem({ ...item, cartId: item.cartId, quantity: item.quantity + 1 });
@@ -7302,10 +7343,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              <button
                                                   onClick={(e) => {
                                                      e.stopPropagation();
-                                                     if (isSubtotalizedItem) {
-                                                        alert(lockedMutationMessage);
-                                                        return;
-                                                     }
                                                      setEditingItem(item);
                                                   }}
                                                 className="inline-flex items-center justify-center rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-blue-700 shadow-sm transition-all hover:bg-blue-100"
@@ -7317,10 +7354,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 <button
                                                    onClick={(e) => {
                                                       e.stopPropagation();
-                                                      if (isSubtotalizedItem && !item.dispatched) {
-                                                         handleGridAction('RETURN');
-                                                         return;
-                                                      }
                                                       handleReturnDispatchedCartItem(item);
                                                    }}
                                                    disabled={isReturnedToKds}
@@ -7438,7 +7471,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 onClick={(e) => {
                                                    e.stopPropagation();
                                                    if (isDispatchedToKds) {
-                                                      alert(isSubtotalizedItem ? lockedMutationMessage : 'Para agregar más cantidad a un artículo ya enviado al KDS, agrega una línea nueva desde el catálogo.');
+                                                      alert('Para agregar más cantidad a un artículo ya enviado al KDS, agrega una línea nueva desde el catálogo.');
                                                       return;
                                                    }
                                                    updateCartItem({ ...item, quantity: item.quantity + 1 });
@@ -7452,10 +7485,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              <button
                                                onClick={(e) => {
                                                   e.stopPropagation();
-                                                  if (isSubtotalizedItem) {
-                                                     alert(lockedMutationMessage);
-                                                     return;
-                                                  }
                                                   setEditingItem(item);
                                                }}
                                                 className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-700 shadow-sm transition-colors hover:bg-blue-100"
@@ -7467,10 +7496,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 <button
                                                    onClick={(e) => {
                                                       e.stopPropagation();
-                                                      if (isSubtotalizedItem && !item.dispatched) {
-                                                         handleGridAction('RETURN');
-                                                         return;
-                                                      }
                                                       handleReturnDispatchedCartItem(item);
                                                    }}
                                                    disabled={isReturnedToKds}
@@ -7934,13 +7959,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          {
             showGlobalDiscount && <GlobalDiscountModal currentSubtotal={cartSubtotal} currencySymbol={baseCurrency.symbol} initialValue={globalDiscount.value.toString()} initialType={globalDiscount.type} themeColor={config.themeColor} onClose={() => setShowGlobalDiscount(false)} onConfirm={async (val, type) => {
                const numVal = parseFloat(val) || 0;
-               const authorized = await requestApproval({
-                  permission: 'POS_DISCOUNT',
-                  actionDescription: 'Aplicar Descuento Global',
-                  context: { newValue: type === 'PERCENT' ? numVal : undefined, originalValue: cartSubtotal }
-               });
-               if (!authorized) return;
+               const isSubtotalizedMutation = hasSubtotalizedCart;
+               if (!(await authorizeSubtotalizedEdit('Modificar descuento de ticket subtotalizado'))) return;
+               if (!isSubtotalizedMutation) {
+                  const authorized = await requestApproval({
+                     permission: 'POS_DISCOUNT',
+                     actionDescription: 'Aplicar Descuento Global',
+                     context: { newValue: type === 'PERCENT' ? numVal : undefined, originalValue: cartSubtotal }
+                  });
+                  if (!authorized) return;
+               }
 
+               if (isSubtotalizedMutation) onUpdateCart(current => clearCartSubtotalization(current));
                setGlobalDiscount({ value: numVal, type });
                setShowGlobalDiscount(false);
             }} />
