@@ -3578,6 +3578,7 @@ const AppContent: React.FC = () => {
   );
   const clientMasterFailureCountRef = useRef(0);
   const clientMasterLastSuccessAtRef = useRef(0);
+  const clientMasterTablesFetchInFlightRef = useRef(false);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [activeRoomId, setActiveRoomId] = useState<string>('');
   const [activeRoomId2, setActiveRoomId2] = useState<string>(''); // For backward compatibility if needed
@@ -4306,18 +4307,35 @@ const AppContent: React.FC = () => {
     });
   }, []);
 
+  const markClientMasterOnline = () => {
+    if (!isClientTerminalMode()) return;
+    clientMasterFailureCountRef.current = 0;
+    clientMasterLastSuccessAtRef.current = Date.now();
+    setClientMasterTablesStatus('ONLINE');
+  };
+
+  const recordClientMasterFailure = (source: string, error: unknown): boolean => {
+    clientMasterFailureCountRef.current += 1;
+    const failureCount = clientMasterFailureCountRef.current;
+    const hadRecentSuccess = Date.now() - clientMasterLastSuccessAtRef.current < 15_000;
+    const shouldBlock = failureCount >= (hadRecentSuccess ? 3 : 2);
+    if (shouldBlock) setClientMasterTablesStatus('OFFLINE');
+    console.error(shouldBlock ? '[TABLE_LAYOUT_CLIENT_BLOCKED]' : '[TABLE_LAYOUT_CLIENT_RETRY]', {
+      source,
+      masterUrl: localStorage.getItem('CLIC_POS_MASTER_URL') || localStorage.getItem('pos_master_ip'),
+      consecutiveFailures: failureCount,
+      reason: error instanceof Error ? error.message : String(error)
+    });
+    return shouldBlock;
+  };
+
   const fetchTables = async () => {
     const isClientRuntime = isClientTerminalMode();
-    const markClientMasterOnline = () => {
-      if (!isClientRuntime) return;
-      clientMasterFailureCountRef.current = 0;
-      clientMasterLastSuccessAtRef.current = Date.now();
-      setClientMasterTablesStatus('ONLINE');
-    };
+    if (isClientRuntime && clientMasterTablesFetchInFlightRef.current) {
+      return;
+    }
+    if (isClientRuntime) clientMasterTablesFetchInFlightRef.current = true;
     try {
-      if (isClientRuntime && clientMasterTablesStatus !== 'ONLINE') {
-        setClientMasterTablesStatus('CHECKING');
-      }
       const terminalId = getCurrentTerminal()?.id;
       const query = terminalId ? `?terminal_id=${encodeURIComponent(terminalId)}` : '';
       const endpoint = resolveOperationalApiUrl(`/api/mesas${query}`);
@@ -4461,16 +4479,7 @@ const AppContent: React.FC = () => {
     } catch (e) {
       console.warn("Failed to fetch tables from Master/API:", e);
       if (isClientRuntime) {
-        clientMasterFailureCountRef.current += 1;
-        const failureCount = clientMasterFailureCountRef.current;
-        const hadRecentSuccess = Date.now() - clientMasterLastSuccessAtRef.current < 15_000;
-        const shouldBlock = failureCount >= (hadRecentSuccess ? 3 : 2);
-        if (shouldBlock) setClientMasterTablesStatus('OFFLINE');
-        console.error(shouldBlock ? '[TABLE_LAYOUT_CLIENT_BLOCKED]' : '[TABLE_LAYOUT_CLIENT_RETRY]', {
-          masterUrl: localStorage.getItem('CLIC_POS_MASTER_URL') || localStorage.getItem('pos_master_ip'),
-          consecutiveFailures: failureCount,
-          reason: e instanceof Error ? e.message : String(e)
-        });
+        recordClientMasterFailure('tables_poll', e);
         return;
       }
       console.warn('Using local rooms/tables because this terminal owns its operational database.');
@@ -4506,6 +4515,8 @@ const AppContent: React.FC = () => {
       } catch (fallbackError) {
         console.error('Failed to load tables from local DB:', fallbackError);
       }
+    } finally {
+      if (isClientRuntime) clientMasterTablesFetchInFlightRef.current = false;
     }
   };
 
@@ -4729,6 +4740,7 @@ const AppContent: React.FC = () => {
 
       const data = await res.json();
       if (res.ok && data.status === 'success') {
+        markClientMasterOnline();
         const responseRevision = Number(data?.revision || 0);
         if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
           masterRestaurantRevisionRef.current = responseRevision;
@@ -4749,7 +4761,7 @@ const AppContent: React.FC = () => {
     } catch (error) {
       console.warn('Table service not available, opening table locally:', error);
       if (isClientTerminalMode()) {
-        setClientMasterTablesStatus('OFFLINE');
+        recordClientMasterFailure('open_table', error);
         return null;
       }
     }
