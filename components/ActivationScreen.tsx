@@ -448,6 +448,8 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
             }
             if (identity.cloudAdminTenantId) {
                 localStorage.setItem('clic_cloud_tenant_id', identity.cloudAdminTenantId);
+                localStorage.setItem('cloud_admin_tenant_id', identity.cloudAdminTenantId);
+                localStorage.setItem('clic_cloud_admin_tenant_id', identity.cloudAdminTenantId);
             }
             localStorage.removeItem('clic_tenant_unverified');
             if (tenantData.slug) {
@@ -486,6 +488,8 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
         }
         if (identity.cloudAdminTenantId) {
             localStorage.setItem('clic_cloud_tenant_id', identity.cloudAdminTenantId);
+            localStorage.setItem('cloud_admin_tenant_id', identity.cloudAdminTenantId);
+            localStorage.setItem('clic_cloud_admin_tenant_id', identity.cloudAdminTenantId);
         }
         if (!resolvedTenant?.id) {
             localStorage.setItem('clic_tenant_unverified', '1');

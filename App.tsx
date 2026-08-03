@@ -6522,7 +6522,11 @@ const AppContent: React.FC = () => {
           deviceId,
           tenantId: localStorage.getItem('clic_tenant_id') || localStorage.getItem('active_tenant_id') || null,
           erpTenantId: localStorage.getItem('clic_tenant_id') || localStorage.getItem('active_tenant_id') || null,
-          cloudAdminTenantId: localStorage.getItem('cloud_admin_tenant_id') || localStorage.getItem('clic_tenant_id') || null,
+          cloudAdminTenantId:
+            localStorage.getItem('cloud_admin_tenant_id')
+            || localStorage.getItem('clic_cloud_admin_tenant_id')
+            || localStorage.getItem('clic_cloud_tenant_id')
+            || null,
           deviceToken: effectiveDeviceToken,
           deviceTokenSource: normalizedDeviceToken ? 'ERP_REGISTER' : 'ERP_REGISTER_FALLBACK',
           deviceTokenUpdatedAt: new Date().toISOString(),
