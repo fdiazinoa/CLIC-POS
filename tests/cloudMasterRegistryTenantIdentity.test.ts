@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { resolveStoredTenantIdentity } from '../utils/tenantIdentityStorage';
+import {
+  resolveStoredErpTenantIdentity,
+  resolveStoredTenantIdentity,
+} from '../utils/tenantIdentityStorage';
 
 const storageFrom = (values: Record<string, string>) => ({
   getItem: (key: string) => values[key] ?? null,
@@ -38,4 +41,14 @@ test('keeps the legacy POS_ONLY tenant fallback', () => {
   }));
 
   assert.equal(identity.tenantId, '33333333-3333-4333-8333-333333333333');
+});
+
+test('ERP sync keeps its ERP tenant after cloud and ERP identities are separated', () => {
+  const identity = resolveStoredErpTenantIdentity(storageFrom({
+    cloud_admin_tenant_id: 'cloud-tenant',
+    clic_erp_sync_tenant_id: 'erp-tenant',
+    clic_tenant_id: 'legacy-tenant',
+  }));
+
+  assert.equal(identity.tenantId, 'erp-tenant');
 });

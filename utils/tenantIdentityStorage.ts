@@ -35,3 +35,14 @@ export const resolveStoredTenantIdentity = (storage: TenantIdentityStorage): Ten
         tenantEmail: normalizeOptional(storage.getItem('clic_tenant_email')).toLowerCase() || null,
     };
 };
+
+export const resolveStoredErpTenantIdentity = (storage: TenantIdentityStorage): TenantIdentity => ({
+    tenantId:
+        normalizeOptional(storage.getItem('clic_erp_sync_tenant_id'))
+        || normalizeOptional(storage.getItem('clic_erp_tenant_id'))
+        || normalizeOptional(storage.getItem('clic_tenant_id'))
+        || normalizeOptional(storage.getItem('active_tenant_id'))
+        || null,
+    tenantSlug: normalizeOptional(storage.getItem('clic_tenant_slug')) || null,
+    tenantEmail: normalizeOptional(storage.getItem('clic_tenant_email')).toLowerCase() || null,
+});
