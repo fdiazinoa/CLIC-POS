@@ -3732,7 +3732,10 @@ const AppContent: React.FC = () => {
       }
     };
 
-    ensureMasterServer();
+    // El diseñador es un borrador local. Publicar cada render intermedio puede
+    // dejar al servidor nativo con solo la primera mesa cuando una Cliente hace
+    // avanzar la revisión. El plano completo se publica únicamente al guardar.
+    ensureMasterServer(currentViewRef.current !== 'TABLE_DESIGNER');
     const ensureMasterServerWithoutSnapshot = () => {
       ensureMasterServer(false);
       void reconcileNativeRestaurantState();
@@ -8589,10 +8592,16 @@ const AppContent: React.FC = () => {
         if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
           masterRestaurantRevisionRef.current = responseRevision;
         }
-        return {
-          rooms: Array.isArray(atomicResult.rooms) ? atomicResult.rooms : normalizedRoomsPayload,
-          tables: Array.isArray(atomicResult.tables) ? atomicResult.tables : normalizedTablesPayload
-        };
+        const confirmedRooms = Array.isArray(atomicResult.rooms) ? atomicResult.rooms : normalizedRoomsPayload;
+        const confirmedTables = Array.isArray(atomicResult.tables) ? atomicResult.tables : normalizedTablesPayload;
+        const confirmedTableIds = new Set(confirmedTables.map((table: Table) => String(table.id)));
+        const missingTableIds = normalizedTablesPayload
+          .map(table => String(table.id))
+          .filter(tableId => !confirmedTableIds.has(tableId));
+        if (missingTableIds.length > 0) {
+          throw new Error(`La Master devolvió un plano incompleto (${missingTableIds.length} mesas faltantes).`);
+        }
+        return { rooms: confirmedRooms, tables: confirmedTables };
       }
     }
 
@@ -8652,10 +8661,10 @@ const AppContent: React.FC = () => {
     return null;
   };
 
-  const handleSaveFloorPlan = async (newRooms: Room[], newTables: Table[]) => {
+  const handleSaveFloorPlan = async (newRooms: Room[], newTables: Table[]): Promise<boolean> => {
     if (isClientTerminalMode()) {
       alert('El layout solo puede modificarse desde la caja Master.');
-      return;
+      return false;
     }
     console.log('💾 Saving Floor Plan:', { rooms: newRooms.length, tables: newTables.length });
     const normalizedRooms = newRooms.map(normalizeRoomForLayout);
@@ -8671,7 +8680,7 @@ const AppContent: React.FC = () => {
       alert('El layout no se guardó porque debe existir al menos una sala.');
       if (existingDbRooms.length > 0) setRooms(existingDbRooms);
       if (existingDbTables.length > 0) setTables(existingDbTables);
-      return;
+      return false;
     }
 
     locallySavedFloorPlanRef.current = {
@@ -8731,12 +8740,15 @@ const AppContent: React.FC = () => {
     } catch (error: any) {
       console.error('❌ Floor Plan API sync failed:', error);
       console.warn(`Layout guardado localmente; sync remoto de plano omitido: ${error?.message || 'Error desconocido'}`);
+      alert(`El plano se conservó en esta caja, pero la Master no confirmó todas las mesas. Reintente Guardar y Volver.\n\n${error?.message || ''}`);
+      return false;
     }
     console.log('✅ Floor Plan saved to DB with robustness.');
     // Optional: Sync Trigger
     if (syncManager) {
       // syncManager.broadcastChange('tables', null, 'UPDATE').catch(console.error);
     }
+    return true;
   };
 
   const handleXReport = async (cashCounted: number, notes = 'Arqueo parcial') => {
@@ -10077,13 +10089,11 @@ const AppContent: React.FC = () => {
               <button
                 onClick={async () => {
                   // Auto-save on exit to prevent data loss
-                  await handleSaveFloorPlan(rooms, tables);
+                  const floorPlanSaved = await handleSaveFloorPlan(rooms, tables);
+                  if (!floorPlanSaved) return;
                   const returnView = tableDesignerReturnViewRef.current;
                   if (returnView === 'TABLE_MAP') {
                     setCurrentView('TABLE_MAP');
-                    await fetchTables().catch(error => {
-                      console.warn('No se pudo refrescar el mapa al cerrar el diseñador:', error);
-                    });
                   } else {
                     setSettingsInitialView('LAYOUT');
                     setCurrentView(returnView === 'SETTINGS_SYNC' ? 'SETTINGS_SYNC' : 'SETTINGS');

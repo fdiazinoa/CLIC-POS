@@ -187,6 +187,10 @@ test('abrir una mesa usa tolerancia de fallos antes de declarar la Master descon
 
 test('el sondeo nativo no reemplaza el borrador mientras se edita el plano de mesas', () => {
   assert.match(appSource, /currentViewRef\.current === 'TABLE_DESIGNER'/);
+  assert.match(appSource, /ensureMasterServer\(currentViewRef\.current !== 'TABLE_DESIGNER'\)/);
+  assert.match(appSource, /const floorPlanSaved = await handleSaveFloorPlan\(rooms, tables\)/);
+  assert.match(appSource, /if \(!floorPlanSaved\) return/);
+  assert.match(appSource, /La Master devolvió un plano incompleto/);
 });
 
 test('la Caja Master Android se anuncia y puede identificarse automáticamente en la red local', () => {
