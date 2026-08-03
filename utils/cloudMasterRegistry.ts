@@ -1,10 +1,7 @@
 import { ensureSupabaseSessionRestored, supabase } from './supabase';
+import { resolveStoredTenantIdentity, type TenantIdentity } from './tenantIdentityStorage';
 
-export type TenantIdentity = {
-    tenantId?: string | null;
-    tenantSlug?: string | null;
-    tenantEmail?: string | null;
-};
+export type { TenantIdentity } from './tenantIdentityStorage';
 
 export type CloudMasterEndpoint = {
     tenantId?: string | null;
@@ -297,14 +294,7 @@ const normalizeEndpointRecord = (row: Record<string, any> | null | undefined): C
     };
 };
 
-export const getStoredTenantIdentity = (): TenantIdentity => ({
-    tenantId:
-        normalizeOptional(localStorage.getItem('clic_tenant_id'))
-        || normalizeOptional(localStorage.getItem('active_tenant_id'))
-        || null,
-    tenantSlug: normalizeOptional(localStorage.getItem('clic_tenant_slug')) || null,
-    tenantEmail: normalizeOptional(localStorage.getItem('clic_tenant_email')).toLowerCase() || null,
-});
+export const getStoredTenantIdentity = (): TenantIdentity => resolveStoredTenantIdentity(localStorage);
 
 const buildResolveQuery = (identity: TenantIdentity) => {
     const params = new URLSearchParams();

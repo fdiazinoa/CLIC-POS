@@ -32,6 +32,8 @@ test('clears a previous tenant and terminal identity before activation', () => {
   assert.ok(removed.includes('active_tenant_id'));
   assert.ok(removed.includes('clic_tenant_id'));
   assert.ok(removed.includes('clic_erp_sync_tenant_id'));
+  assert.ok(removed.includes('cloud_admin_tenant_id'));
+  assert.ok(removed.includes('clic_cloud_admin_tenant_id'));
   assert.ok(removed.includes('active_terminal_id'));
   assert.ok(removed.includes('clic_erp_sync_terminal_id'));
   assert.ok(!removed.includes('clic_tenant_email'));

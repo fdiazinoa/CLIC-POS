@@ -77,6 +77,8 @@ export const clearPersistedActivationIdentity = (storage: Pick<Storage, 'removeI
     'clic_erp_tenant_id',
     'clic_erp_sync_tenant_id',
     'clic_cloud_tenant_id',
+    'cloud_admin_tenant_id',
+    'clic_cloud_admin_tenant_id',
     'active_terminal_id',
     'CLIC_POS_TERMINAL_ID',
     'clic_last_authorized_erp_terminal_id',
