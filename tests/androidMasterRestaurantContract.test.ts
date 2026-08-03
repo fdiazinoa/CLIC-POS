@@ -187,10 +187,23 @@ test('abrir una mesa usa tolerancia de fallos antes de declarar la Master descon
 
 test('el sondeo nativo no reemplaza el borrador mientras se edita el plano de mesas', () => {
   assert.match(appSource, /currentViewRef\.current === 'TABLE_DESIGNER'/);
-  assert.match(appSource, /ensureMasterServer\(currentViewRef\.current !== 'TABLE_DESIGNER'\)/);
+  assert.match(appSource, /ensureMasterServer\(false\)/);
   assert.match(appSource, /const floorPlanSaved = await handleSaveFloorPlan\(rooms, tables\)/);
   assert.match(appSource, /if \(!floorPlanSaved\) return/);
   assert.match(appSource, /La Master devolvió un plano incompleto/);
+});
+
+test('los renders de la Master no reemplazan el estado operativo nativo', () => {
+  const masterServerEffect = appSource.slice(
+    appSource.indexOf('const ensureMasterServer ='),
+    appSource.indexOf('useEffect(() => {\n    if (currentView !== \'TABLE_DESIGNER\')'),
+  );
+  assert.match(masterServerEffect, /includeOperationalSnapshot \? \{ rooms, tables, parkedTickets \} : \{\}/);
+  assert.match(masterServerEffect, /revision === 0/);
+  assert.match(masterServerEffect, /masterRestaurantBootstrapRequestedRef\.current/);
+  assert.match(masterServerEffect, /activeTableEditLockRef\.current/);
+  assert.match(masterServerEffect, /Restored designed floor plan after rejecting ERP seed tables/);
+  assert.match(masterServerEffect, /writeFloorPlanMirror\(nextRooms, reconciledTables\)/);
 });
 
 test('la Caja Master Android se anuncia y puede identificarse automáticamente en la red local', () => {

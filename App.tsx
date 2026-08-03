@@ -394,6 +394,15 @@ const writeFloorPlanMirror = (rooms: Room[], tables: Table[]): void => {
   }
 };
 
+const hasDesignedFloorPlanGeometry = (tables: Table[]): boolean =>
+  Array.isArray(tables) && tables.length > 0 && tables.every(table =>
+    Boolean(String(table?.roomId || '').trim()) &&
+    Number.isFinite(Number(table?.posX)) &&
+    Number.isFinite(Number(table?.posY)) &&
+    Number.isFinite(Number(table?.width)) &&
+    Number.isFinite(Number(table?.height))
+  );
+
 const isTableManagedCartSnapshot = (snapshot: Pick<SafeExitSnapshot, 'activeTable'>): boolean =>
   Boolean(snapshot.activeTable?.id || snapshot.activeTable?.currentOrderId);
 
@@ -3605,6 +3614,8 @@ const AppContent: React.FC = () => {
   const parkedTicketSyncQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingClientTableSyncRef = useRef<PendingClientTableSync | null>(null);
   const pendingMasterTableSyncRef = useRef<PendingClientTableSync | null>(null);
+  const masterRestaurantBootstrapRequestedRef = useRef(false);
+  const masterFloorPlanRestoreInFlightRef = useRef(false);
 
   useEffect(() => {
     if (!isNativeAndroidRuntime()) return;
@@ -3641,18 +3652,17 @@ const AppContent: React.FC = () => {
         return;
       }
 
-      const payload = includeOperationalSnapshot
-        ? {
-            port: 3001,
-            config,
-            users,
-            rooms,
-            tables,
-            parkedTickets,
-            catalogs,
-            restaurantRevision: masterRestaurantRevisionRef.current,
-          }
-        : { port: 3001 };
+      const payload = {
+        port: 3001,
+        config,
+        users,
+        catalogs,
+        restaurantRevision: masterRestaurantRevisionRef.current,
+        ...(includeOperationalSnapshot ? { rooms, tables, parkedTickets } : {}),
+      };
+      if (includeOperationalSnapshot) {
+        masterRestaurantBootstrapRequestedRef.current = true;
+      }
       Promise.resolve(nativeBridge.startMasterServer(payload))
         .then((status: any) => {
           if (disposed) return;
@@ -3664,7 +3674,12 @@ const AppContent: React.FC = () => {
             error: status?.message || null,
           });
         })
-        .catch((error: unknown) => console.error('[MASTER_LAN] Could not ensure native server:', error));
+        .catch((error: unknown) => {
+          if (includeOperationalSnapshot) {
+            masterRestaurantBootstrapRequestedRef.current = false;
+          }
+          console.error('[MASTER_LAN] Could not ensure native server:', error);
+        });
     };
 
     const reconcileNativeRestaurantState = async () => {
@@ -3672,7 +3687,7 @@ const AppContent: React.FC = () => {
       // El diseñador mantiene un borrador local hasta "Guardar y Volver".
       // No permitir que un snapshot nativo anterior reponga coordenadas mientras
       // el usuario está moviendo o agregando elementos del plano.
-      if (currentViewRef.current === 'TABLE_DESIGNER') return;
+      if (currentViewRef.current === 'TABLE_DESIGNER' || activeTableEditLockRef.current) return;
       const nativeBridge = (window as any).ClicPOSNativePrinter;
       if (typeof nativeBridge?.getMasterRestaurantState !== 'function') return;
       if (!isNativeStandaloneTerminalRuntime(getCurrentTerminal())) return;
@@ -3681,11 +3696,66 @@ const AppContent: React.FC = () => {
       try {
         const rawState = await Promise.resolve(nativeBridge.getMasterRestaurantState({}));
         const state = parseNativeBridgeJson(rawState);
-        const revision = Number(state?.revision || 0);
-        if (!Number.isFinite(revision) || revision <= masterRestaurantRevisionRef.current) return;
-
         const nextRooms = Array.isArray(state?.rooms) ? state.rooms : [];
         const nextTables = Array.isArray(state?.tables) ? state.tables : [];
+        const revision = Number(state?.revision || 0);
+        if (!Number.isFinite(revision)) return;
+
+        // Un servidor nativo nuevo se inicializa una sola vez desde SQLite.
+        // Después de esto el estado restaurante solo cambia mediante endpoints
+        // atómicos; los renders de React nunca vuelven a reemplazarlo completo.
+        if (
+          revision === 0 &&
+          nextRooms.length === 0 &&
+          nextTables.length === 0 &&
+          isDataLoaded &&
+          rooms.length > 0 &&
+          tables.length > 0 &&
+          !masterRestaurantBootstrapRequestedRef.current
+        ) {
+          ensureMasterServer(true);
+          return;
+        }
+
+        if (revision <= masterRestaurantRevisionRef.current) return;
+
+        // Si una versión anterior publicó las 12 mesas ERP sin geometría sobre
+        // un plano diseñado, restaurar el espejo local mediante el endpoint
+        // atómico. Esto conserva los UUID usados por los tickets abiertos.
+        const savedFloorPlan = readFloorPlanMirror();
+        if (
+          nextTables.length > 0 &&
+          !hasDesignedFloorPlanGeometry(nextTables) &&
+          savedFloorPlan &&
+          hasDesignedFloorPlanGeometry(savedFloorPlan.tables) &&
+          !masterFloorPlanRestoreInFlightRef.current
+        ) {
+          masterFloorPlanRestoreInFlightRef.current = true;
+          try {
+            const response = await fetch(resolveOperationalApiUrl('/api/mesas/layout'), {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                rooms: savedFloorPlan.rooms,
+                tables: savedFloorPlan.tables,
+              }),
+            });
+            const result = await response.json().catch(() => null);
+            if (!response.ok || result?.success === false) {
+              throw new Error(result?.message || `HTTP ${response.status}`);
+            }
+            const restoredRevision = Number(result?.revision || revision);
+            masterRestaurantRevisionRef.current = Math.max(revision, restoredRevision);
+            console.warn('[MASTER_LAN] Restored designed floor plan after rejecting ERP seed tables', {
+              restoredTables: savedFloorPlan.tables.length,
+              revision: restoredRevision,
+            });
+          } finally {
+            masterFloorPlanRestoreInFlightRef.current = false;
+          }
+          return;
+        }
+
         const remoteParkedTickets = Array.isArray(state?.parkedTickets) ? state.parkedTickets : [];
         // Una revisión nativa también puede cambiar por actividad de la Cliente
         // (locks, otra mesa, heartbeat). Mientras la Master guarda su mesa activa,
@@ -3702,6 +3772,13 @@ const AppContent: React.FC = () => {
           (customer: Customer) => !knownCustomerIds.has(String(customer.id))
         );
         masterRestaurantRevisionRef.current = revision;
+        if (hasDesignedFloorPlanGeometry(reconciledTables)) {
+          locallySavedFloorPlanRef.current = {
+            roomIds: new Set(nextRooms.map((room: Room) => String(room.id))),
+            tableIds: new Set(reconciledTables.map((table: Table) => String(table.id))),
+          };
+          writeFloorPlanMirror(nextRooms, reconciledTables);
+        }
         setRooms(nextRooms);
         setTables(reconciledTables);
         setParkedTickets(nextParkedTickets);
@@ -3732,10 +3809,9 @@ const AppContent: React.FC = () => {
       }
     };
 
-    // El diseñador es un borrador local. Publicar cada render intermedio puede
-    // dejar al servidor nativo con solo la primera mesa cuando una Cliente hace
-    // avanzar la revisión. El plano completo se publica únicamente al guardar.
-    ensureMasterServer(currentViewRef.current !== 'TABLE_DESIGNER');
+    // Iniciar/actualizar configuración sin publicar rooms/tables/tickets. El
+    // servidor nativo es la fuente operativa después de su bootstrap inicial.
+    ensureMasterServer(false);
     const ensureMasterServerWithoutSnapshot = () => {
       ensureMasterServer(false);
       void reconcileNativeRestaurantState();
@@ -3769,6 +3845,7 @@ const AppContent: React.FC = () => {
     customers,
     getCurrentTerminal,
     internalSequences,
+    isDataLoaded,
     parkedTickets,
     productStocks,
     products,
