@@ -48,6 +48,25 @@ test('la Master conserva una cuenta abierta aunque todavía no tenga artículos'
   assert.match(serverSource, /if \(!belongsToTable && !belongsToOrder\) remainingTickets\.put\(ticket\)/);
 });
 
+test('la Master protege su borrador frente a revisiones provocadas por una Cliente', () => {
+  const nativeReconciliationSource = appSource.slice(
+    appSource.indexOf('const reconcileNativeRestaurantState'),
+    appSource.indexOf('ensureMasterServer();'),
+  );
+  assert.match(nativeReconciliationSource, /pendingMasterTableSyncRef\.current/);
+  assert.match(nativeReconciliationSource, /mergePendingClientTableTickets/);
+  assert.match(nativeReconciliationSource, /reconcileTablesWithParkedTickets\(nextTables, nextParkedTickets\)/);
+
+  const updateSource = appSource.slice(
+    appSource.indexOf('const handleUpdateParkedTickets'),
+    appSource.indexOf('const handleParkedOrderSplitFromMap'),
+  );
+  assert.match(updateSource, /pendingMasterTableSyncRef\.current = masterPendingSync/);
+  assert.match(updateSource, /tableId: masterEditLock\.tableId/);
+  assert.match(updateSource, /lockToken: masterEditLock\.token/);
+  assert.match(updateSource, /baseRevision: masterRestaurantRevisionRef\.current/);
+});
+
 test('la Master Android reemplaza el layout completo en una sola mutación persistida', () => {
   assert.match(serverSource, /method == "PUT" && path == "\/api\/mesas\/layout"/);
   assert.match(serverSource, /private fun handleFloorPlanReplace/);

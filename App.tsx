@@ -3604,6 +3604,7 @@ const AppContent: React.FC = () => {
   const masterRestaurantPollInFlightRef = useRef(false);
   const parkedTicketSyncQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingClientTableSyncRef = useRef<PendingClientTableSync | null>(null);
+  const pendingMasterTableSyncRef = useRef<PendingClientTableSync | null>(null);
 
   useEffect(() => {
     if (!isNativeAndroidRuntime()) return;
@@ -3685,7 +3686,16 @@ const AppContent: React.FC = () => {
 
         const nextRooms = Array.isArray(state?.rooms) ? state.rooms : [];
         const nextTables = Array.isArray(state?.tables) ? state.tables : [];
-        const nextParkedTickets = Array.isArray(state?.parkedTickets) ? state.parkedTickets : [];
+        const remoteParkedTickets = Array.isArray(state?.parkedTickets) ? state.parkedTickets : [];
+        // Una revisión nativa también puede cambiar por actividad de la Cliente
+        // (locks, otra mesa, heartbeat). Mientras la Master guarda su mesa activa,
+        // conservar ese borrador para que un snapshot anterior no borre la primera
+        // digitación antes de que termine el PUT atómico.
+        const nextParkedTickets = mergePendingClientTableTickets(
+          remoteParkedTickets,
+          pendingMasterTableSyncRef.current,
+        );
+        const reconciledTables = reconcileTablesWithParkedTickets(nextTables, nextParkedTickets);
         const nextCustomers = Array.isArray(state?.customers) ? state.customers : customers;
         const knownCustomerIds = new Set(customers.map(customer => String(customer.id)));
         const customersCreatedByClients = nextCustomers.filter(
@@ -3693,13 +3703,13 @@ const AppContent: React.FC = () => {
         );
         masterRestaurantRevisionRef.current = revision;
         setRooms(nextRooms);
-        setTables(nextTables);
+        setTables(reconciledTables);
         setParkedTickets(nextParkedTickets);
         setCustomers(nextCustomers);
         writeCriticalCollectionsMirror(nextParkedTickets, cashMovements);
         await Promise.all([
           db.save('rooms', nextRooms),
-          db.save('tables', nextTables),
+          db.save('tables', reconciledTables),
           db.save('parkedTickets', nextParkedTickets),
           db.save('customers', nextCustomers),
         ]);
@@ -7369,6 +7379,23 @@ const AppContent: React.FC = () => {
       parkedTicketSyncQueueRef.current = queuedSync.catch(() => undefined);
       return queuedSync;
     }
+    const servesAsNativeMaster =
+      isNativeAndroidRuntime() &&
+      isNativeStandaloneTerminalRuntime(getCurrentTerminal());
+    const masterEditLock = servesAsNativeMaster ? activeTableEditLockRef.current : null;
+    const masterPendingSync: PendingClientTableSync | null = masterEditLock?.tableId
+      ? {
+          id: 'current',
+          status: 'PENDING',
+          tableId: String(masterEditLock.tableId),
+          queuedAt: new Date().toISOString(),
+          reason: options.reason || 'explicit',
+          parkedTickets: validTickets,
+        }
+      : null;
+    // Debe registrarse antes de cualquier await de persistencia: el poll nativo
+    // corre cada segundo y podría aplicar una revisión Cliente en ese intervalo.
+    if (masterPendingSync) pendingMasterTableSyncRef.current = masterPendingSync;
     writeCriticalCollectionsMirror(validTickets, cashMovements);
     setParkedTickets(validTickets);
     const nextTicketIds = new Set(
@@ -7395,24 +7422,45 @@ const AppContent: React.FC = () => {
     // nativo antes de que el poll de estado pueda devolver el snapshot previo.
     // Sin esta escritura atómica, la primera digitación de una mesa recién
     // abierta podía ser reemplazada por la revisión creada al abrir la mesa.
-    if (isNativeAndroidRuntime() && isNativeStandaloneTerminalRuntime(getCurrentTerminal())) {
+    if (servesAsNativeMaster) {
       // El autoguardado y el cobro pueden coincidir. Serializar también en
       // Master evita que un snapshot anterior vuelva a insertar una orden ya cobrada.
       const syncOperation = async () => {
         const response = await fetch(resolveOperationalApiUrl('/api/mesas/parked-tickets'), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ parkedTickets: validTickets }),
+          // Con lock activo, actualizar únicamente esta mesa. Una Terminal Cliente
+          // puede estar guardando otra al mismo tiempo y su estado no debe ser
+          // reemplazado por el snapshot completo de la Master.
+          body: JSON.stringify({
+            parkedTickets: validTickets,
+            ...(masterEditLock?.tableId ? {
+              tableId: masterEditLock.tableId,
+              ownerId: masterEditLock.ownerId,
+              lockToken: masterEditLock.token,
+              baseRevision: masterRestaurantRevisionRef.current,
+            } : {}),
+          }),
         });
         const result = await response.json().catch(() => null);
         if (!response.ok || result?.success === false) {
           throw new Error(result?.message || `No se pudo confirmar la orden local (HTTP ${response.status})`);
         }
-        if (Array.isArray(result?.parkedTickets)) setParkedTickets(result.parkedTickets);
-        if (Array.isArray(result?.tables)) setTables(result.tables);
+        const sharedTickets = Array.isArray(result?.parkedTickets) ? result.parkedTickets : validTickets;
+        const newerPendingSync = pendingMasterTableSyncRef.current;
+        const effectiveSharedTickets = newerPendingSync && newerPendingSync !== masterPendingSync
+          ? mergePendingClientTableTickets(sharedTickets, newerPendingSync)
+          : sharedTickets;
+        setParkedTickets(effectiveSharedTickets);
+        if (Array.isArray(result?.tables)) {
+          setTables(reconcileTablesWithParkedTickets(result.tables, effectiveSharedTickets));
+        }
         const responseRevision = Number(result?.revision || 0);
         if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
           masterRestaurantRevisionRef.current = responseRevision;
+        }
+        if (pendingMasterTableSyncRef.current === masterPendingSync) {
+          pendingMasterTableSyncRef.current = null;
         }
       };
       const queuedSync = parkedTicketSyncQueueRef.current
