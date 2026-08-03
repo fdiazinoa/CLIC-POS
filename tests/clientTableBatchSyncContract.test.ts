@@ -13,6 +13,22 @@ test('la terminal cliente persiste cada cambio localmente y agrupa el envío rem
   assert.match(appSource, /persistPendingClientTableSync\(pendingSync\)/);
   assert.match(appSource, /await readPendingClientTableSync\(\)/);
   assert.match(appSource, /db\.save\('parkedTickets', validTickets\)/);
+  assert.match(appSource, /pendingClientTableSyncRef\.current = pendingSync/);
+  assert.match(appSource, /setParkedTickets\(validTickets\)/);
+  assert.match(appSource, /mergePendingClientTableTickets\(responseParkedTickets, pendingClientSync\)/);
+});
+
+test('el polling no cancela el envío diferido de la primera digitación', () => {
+  const autoSyncSource = posSource.slice(
+    posSource.indexOf('useEffect(() => {\n      const orderId = activeTable?.currentOrderId;'),
+    posSource.indexOf('const handleCreateReservation'),
+  );
+  assert.match(autoSyncSource, /parkedTicketsRef\.current\.find/);
+  assert.match(autoSyncSource, /onUpdateParkedTicketsRef\.current/);
+  assert.match(autoSyncSource, /onTableOrderSavedRef\.current/);
+  assert.match(autoSyncSource, /ticketAutoSyncTimeoutRef\.current === timeoutId/);
+  assert.doesNotMatch(autoSyncSource, /\n\s+parkedTickets,\n/);
+  assert.doesNotMatch(autoSyncSource, /\n\s+onUpdateParkedTickets,\n/);
 });
 
 test('volver al mapa fuerza el último envío antes de liberar el bloqueo', () => {

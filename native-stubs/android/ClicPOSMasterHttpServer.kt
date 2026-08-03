@@ -930,15 +930,8 @@ object ClicPOSMasterHttpServer {
         val activeByTableId = mutableMapOf<String, JSONObject>()
         for (index in 0 until tickets.length()) {
             val ticket = tickets.optJSONObject(index) ?: continue
-            val items = ticket.optJSONArray("items") ?: JSONArray()
-            var hasItems = false
-            for (itemIndex in 0 until items.length()) {
-                if ((items.optJSONObject(itemIndex)?.optDouble("quantity", 0.0) ?: 0.0) > 0) {
-                    hasItems = true
-                    break
-                }
-            }
-            if (!hasItems) continue
+            // Una cuenta abierta sin artículos sigue siendo una cuenta válida.
+            // Solo el endpoint explícito de liberación debe cerrar la mesa.
             ticket.optString("id").takeIf { it.isNotBlank() }?.let { activeByOrderId[it] = ticket }
             ticket.optString("tableId").takeIf { it.isNotBlank() }?.let { activeByTableId[it] = ticket }
             val joinedTableIds = ticket.optJSONArray("joinedTableIds") ?: JSONArray()
@@ -1213,7 +1206,37 @@ object ClicPOSMasterHttpServer {
             return
         }
 
-        applyClientRestaurantMutation(tables = updatedTables)
+        val updatedTickets = JSONArray(parkedTicketsSnapshot.toString())
+        var hasOrderTicket = false
+        for (index in 0 until updatedTickets.length()) {
+            val ticket = updatedTickets.optJSONObject(index) ?: continue
+            if (ticket.optString("id") == orderId || ticketReferencesTable(ticket, tableId)) {
+                hasOrderTicket = true
+                break
+            }
+        }
+        if (!hasOrderTicket) {
+            val openedTable = (0 until updatedTables.length())
+                .mapNotNull { updatedTables.optJSONObject(it) }
+                .firstOrNull { it.optString("id") == tableId }
+            val timestamp = openedTable?.optString("timeSeated")
+                ?.takeIf { it.isNotBlank() }
+                ?: java.time.Instant.now().toString()
+            val tableName = openedTable?.optString("name")
+                ?.takeIf { it.isNotBlank() }
+                ?: openedTable?.optString("nombre")
+                    ?.takeIf { it.isNotBlank() }
+                ?: "Mesa"
+            updatedTickets.put(JSONObject()
+                .put("id", orderId)
+                .put("name", tableName)
+                .put("items", JSONArray())
+                .put("total", 0)
+                .put("timestamp", timestamp)
+                .put("tableId", tableId))
+        }
+
+        applyClientRestaurantMutation(tables = updatedTables, parkedTickets = updatedTickets)
         writeResponse(socket, 200, JSONObject()
             .put("status", "success")
             .put("orden_id", orderId)
