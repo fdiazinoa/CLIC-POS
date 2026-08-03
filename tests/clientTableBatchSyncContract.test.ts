@@ -15,7 +15,7 @@ test('la terminal cliente persiste cada cambio localmente y agrupa el envío rem
   assert.match(appSource, /db\.save\('parkedTickets', validTickets\)/);
   assert.match(appSource, /pendingClientTableSyncRef\.current = pendingSync/);
   assert.match(appSource, /setParkedTickets\(validTickets\)/);
-  assert.match(appSource, /mergePendingClientTableTickets\(responseParkedTickets, pendingClientSync\)/);
+  assert.match(appSource, /mergePendingClientTableTickets\(responseParkedTickets, pendingTableSync\)/);
 });
 
 test('el polling no cancela el envío diferido de la primera digitación', () => {

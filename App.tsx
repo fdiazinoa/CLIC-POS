@@ -4445,13 +4445,15 @@ const AppContent: React.FC = () => {
         }
         const hasAuthoritativeParkedTickets = Array.isArray(data?.parkedTickets);
         const responseParkedTickets = hasAuthoritativeParkedTickets ? data.parkedTickets : [];
-        let pendingClientSync = isClientRuntime ? pendingClientTableSyncRef.current : null;
-        if (isClientRuntime && !pendingClientSync) {
-          pendingClientSync = await readPendingClientTableSync();
-          if (pendingClientSync) pendingClientTableSyncRef.current = pendingClientSync;
+        let pendingTableSync = isClientRuntime
+          ? pendingClientTableSyncRef.current
+          : pendingMasterTableSyncRef.current;
+        if (isClientRuntime && !pendingTableSync) {
+          pendingTableSync = await readPendingClientTableSync();
+          if (pendingTableSync) pendingClientTableSyncRef.current = pendingTableSync;
         }
         const nextParkedTickets = hasAuthoritativeParkedTickets
-          ? mergePendingClientTableTickets(responseParkedTickets, pendingClientSync)
+          ? mergePendingClientTableTickets(responseParkedTickets, pendingTableSync)
           : [];
         const ticketsForReconciliation = hasAuthoritativeParkedTickets ? nextParkedTickets : parkedTickets;
         const mergeRemoteTables = (incomingTables: Table[], previousTables: Table[]) => {

@@ -132,6 +132,8 @@ test('el puente Android publica reconciliación, locks y sincronización seriali
   assert.match(appSource, /No reconciliar contra el closure anterior/);
   assert.match(appSource, /const ticketsForReconciliation = hasAuthoritativeParkedTickets \? nextParkedTickets : parkedTickets/);
   assert.match(appSource, /reconcileTablesWithParkedTickets\(merged, ticketsForReconciliation\)/);
+  assert.match(appSource, /pendingMasterTableSyncRef\.current/);
+  assert.match(appSource, /mergePendingClientTableTickets\(responseParkedTickets, pendingTableSync\)/);
 });
 
 test('la Master Android implementa autenticación y lectura de catálogos para clientes', () => {
