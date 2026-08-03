@@ -139,6 +139,33 @@ test('un fallo transitorio no muestra de inmediato la Master como desconectada',
   assert.match(appSource, /clientMasterFailureCountRef\.current = 0/);
 });
 
+test('el polling en segundo plano no hace parpadear el modal de reconexión', () => {
+  const fetchTablesSource = appSource.slice(
+    appSource.indexOf('const fetchTables = async () =>'),
+    appSource.indexOf('const invokeTableEditLock'),
+  );
+  assert.match(fetchTablesSource, /clientMasterTablesFetchInFlightRef\.current/);
+  assert.match(fetchTablesSource, /recordClientMasterFailure\('tables_poll', e\)/);
+  assert.doesNotMatch(fetchTablesSource, /clientMasterTablesStatus !== 'ONLINE'/);
+  assert.doesNotMatch(fetchTablesSource, /setClientMasterTablesStatus\('CHECKING'\)/);
+
+  const retrySource = appSource.slice(
+    appSource.indexOf('const retryClientMasterConnection'),
+    appSource.indexOf('const openTableForService'),
+  );
+  assert.match(retrySource, /setClientMasterTablesStatus\('CHECKING'\)/);
+});
+
+test('abrir una mesa usa tolerancia de fallos antes de declarar la Master desconectada', () => {
+  const openTableSource = appSource.slice(
+    appSource.indexOf('const openTableForService'),
+    appSource.indexOf('useKioskMode', appSource.indexOf('const openTableForService')),
+  );
+  assert.match(openTableSource, /markClientMasterOnline\(\)/);
+  assert.match(openTableSource, /recordClientMasterFailure\('open_table', error\)/);
+  assert.doesNotMatch(openTableSource, /setClientMasterTablesStatus\('OFFLINE'\)/);
+});
+
 test('el sondeo nativo no reemplaza el borrador mientras se edita el plano de mesas', () => {
   assert.match(appSource, /currentViewRef\.current === 'TABLE_DESIGNER'/);
 });
