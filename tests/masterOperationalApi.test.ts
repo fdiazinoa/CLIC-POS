@@ -53,7 +53,7 @@ test('la caja cliente corrige HTTPS persistido para una IP privada del Master', 
   );
 });
 
-test('Master y ERP directo mantienen las rutas relativas actuales', () => {
+test('Master web mantiene rutas relativas y Master Android usa el servidor nativo', () => {
   const masterStorage = createStorage({
     clic_pos_terminal_setup_mode: 'SERVER_LOCAL',
     CLIC_POS_MASTER_URL: 'http://192.168.1.20:3001'
@@ -63,8 +63,28 @@ test('Master y ERP directo mantienen las rutas relativas actuales', () => {
     CLIC_POS_MASTER_URL: 'http://192.168.1.20:3001'
   });
 
-  assert.equal(resolveOperationalApiUrl('/api/mesas', masterStorage), '/api/mesas');
-  assert.equal(resolveOperationalApiUrl('/api/mesas', erpStorage), '/api/mesas');
+  assert.equal(resolveOperationalApiUrl('/api/mesas', masterStorage, false), '/api/mesas');
+  assert.equal(resolveOperationalApiUrl('/api/mesas', erpStorage, false), '/api/mesas');
+  assert.equal(
+    resolveOperationalApiUrl('/api/mesas', masterStorage, true),
+    'http://127.0.0.1:3001/api/mesas'
+  );
+  assert.equal(
+    resolveOperationalApiUrl('/api/mesas/parked-tickets', erpStorage, true),
+    'http://127.0.0.1:3001/api/mesas/parked-tickets'
+  );
   assert.equal(canUseLocalOperationalTableStore(masterStorage), true);
   assert.equal(canUseLocalOperationalTableStore(erpStorage), true);
+});
+
+test('una Cliente Android conserva la URL LAN de la Master', () => {
+  const storage = createStorage({
+    clic_pos_terminal_setup_mode: 'CLIENT',
+    CLIC_POS_MASTER_URL: 'http://10.0.0.94:3001'
+  });
+
+  assert.equal(
+    resolveOperationalApiUrl('/api/mesas/parked-tickets', storage, true),
+    'http://10.0.0.94:3001/api/mesas/parked-tickets'
+  );
 });

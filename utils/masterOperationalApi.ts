@@ -1,12 +1,23 @@
+import { Capacitor } from '@capacitor/core';
+
 const TERMINAL_SETUP_MODE_KEY = 'clic_pos_terminal_setup_mode';
 const MASTER_URL_KEY = 'CLIC_POS_MASTER_URL';
 const MASTER_IP_KEY = 'pos_master_ip';
+const NATIVE_MASTER_OPERATIONAL_BASE_URL = 'http://127.0.0.1:3001';
 
 type StorageReader = Pick<Storage, 'getItem'>;
 
 const getStorage = (): StorageReader | null => {
   if (typeof window === 'undefined') return null;
   return window.localStorage;
+};
+
+const isNativeAndroidRuntime = (): boolean => {
+  try {
+    return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+  } catch {
+    return false;
+  }
 };
 
 const normalizeBaseUrl = (value: string | null): string => {
@@ -60,9 +71,18 @@ export const resolveMasterOperationalBaseUrl = (
 
 export const resolveOperationalApiUrl = (
   path: string,
-  storage: StorageReader | null = getStorage()
+  storage: StorageReader | null = getStorage(),
+  nativeAndroid: boolean = isNativeAndroidRuntime()
 ): string => {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
   const masterBaseUrl = resolveMasterOperationalBaseUrl(storage);
-  return masterBaseUrl ? `${masterBaseUrl}${normalizedPath}` : normalizedPath;
+  if (masterBaseUrl) return `${masterBaseUrl}${normalizedPath}`;
+
+  // Capacitor serves the UI from https://localhost. A relative /api request is
+  // therefore answered by the WebView asset server with index.html instead of
+  // reaching the embedded restaurant server. Native Master terminals must use
+  // the loopback listener explicitly so both Master and Client share one state.
+  if (nativeAndroid) return `${NATIVE_MASTER_OPERATIONAL_BASE_URL}${normalizedPath}`;
+
+  return normalizedPath;
 };
