@@ -1,4 +1,4 @@
-import { getStoredTenantIdentity } from './cloudMasterRegistry';
+import { resolveStoredErpTenantIdentity } from './tenantIdentityStorage';
 import { normalizeErpSyncApiBase, resolveErpSyncApiBase } from './erpBaseUrl';
 import { extractErpRegisterAuth, resolveNormalizedRegisterDeviceToken } from '../services/sync/erpRegisterResponse';
 import { getSyncDeviceToken, persistSyncDeviceToken } from '../services/sync/deviceToken';
@@ -30,6 +30,8 @@ type TenantIdentity = {
     tenantSlug?: string | null;
     tenantEmail?: string | null;
 };
+
+const getStoredTenantIdentity = (): TenantIdentity => resolveStoredErpTenantIdentity(localStorage);
 
 type SyncActivationState = {
     tenant_id?: string | null;
