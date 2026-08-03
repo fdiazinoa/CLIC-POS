@@ -1102,6 +1102,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // propague parkedTickets de vuelta como prop. Mantener el último snapshot
    // evita que una pulsación posterior reconstruya la orden con datos viejos.
    const parkedTicketsRef = useRef<ParkedTicket[]>(parkedTickets);
+   const onUpdateParkedTicketsRef = useRef(onUpdateParkedTickets);
+   const onTableOrderSavedRef = useRef(onTableOrderSaved);
    const closedTableOrderIdsRef = useRef<Set<string>>(new Set());
    const paymentFinalizationInFlightRef = useRef(false);
    const activeTableHydrationRef = useRef<{ key: string; missingTicket: boolean } | null>(null);
@@ -1121,6 +1123,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    useEffect(() => {
       parkedTicketsRef.current = Array.isArray(parkedTickets) ? parkedTickets : [];
    }, [parkedTickets]);
+
+   useEffect(() => {
+      onUpdateParkedTicketsRef.current = onUpdateParkedTickets;
+      onTableOrderSavedRef.current = onTableOrderSaved;
+   }, [onUpdateParkedTickets, onTableOrderSaved]);
 
    useEffect(() => {
       let cancelled = false;
@@ -4133,7 +4140,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (closedTableOrderIdsRef.current.has(String(orderId))) return;
       if (cart.length === 0) return;
 
-      const existing = parkedTickets.find(ticket => ticket.id === orderId);
+      const existing = parkedTicketsRef.current.find(ticket => ticket.id === orderId);
       const nextDigest = buildCartDigest(cart);
       const existingDigest = buildCartDigest(existing?.items || []);
       const sameCustomer = (existing?.customerId || '') === (selectedCustomer?.id || '');
@@ -4192,7 +4199,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       if (batchClientSync) {
-         void Promise.resolve(onUpdateParkedTickets(nextTickets, {
+         void Promise.resolve(onUpdateParkedTicketsRef.current(nextTickets, {
             deferRemote: true,
             reason: 'cart_changed',
          })).catch((error) => {
@@ -4207,13 +4214,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return;
          }
          try {
-            await Promise.resolve(onUpdateParkedTickets(nextTickets, {
+            await Promise.resolve(onUpdateParkedTicketsRef.current(nextTickets, {
                reason: batchClientSync ? 'debounced' : 'explicit',
             }));
             if (closedTableOrderIdsRef.current.has(String(orderId))) {
                return;
             }
-            await Promise.resolve(onTableOrderSaved?.(activeTable, syncedTicket));
+            await Promise.resolve(onTableOrderSavedRef.current?.(activeTable, syncedTicket));
          } catch (error) {
             console.error('[TABLE_SYNC] No se pudo sincronizar automáticamente la mesa:', error);
             if (batchClientSync) {
@@ -4229,14 +4236,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       };
 
       ticketAutoSyncFlushRef.current = flushTicketSync;
-      ticketAutoSyncTimeoutRef.current = window.setTimeout(
+      const timeoutId = window.setTimeout(
          () => void flushTicketSync(),
          batchClientSync ? 2_000 : 120,
       );
+      ticketAutoSyncTimeoutRef.current = timeoutId;
 
       return () => {
-         if (ticketAutoSyncTimeoutRef.current) {
-            window.clearTimeout(ticketAutoSyncTimeoutRef.current);
+         if (ticketAutoSyncTimeoutRef.current === timeoutId) {
+            window.clearTimeout(timeoutId);
             ticketAutoSyncTimeoutRef.current = null;
          }
          if (ticketAutoSyncFlushRef.current === flushTicketSync) {
@@ -4257,11 +4265,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       discountAmount,
       globalDiscount.type,
       globalDiscount.value,
-      parkedTickets,
       selectedCustomer?.id,
       selectedCustomer?.name,
-      onUpdateParkedTickets,
-      onTableOrderSaved
    ]);
 
    const handleCreateReservation = async () => {

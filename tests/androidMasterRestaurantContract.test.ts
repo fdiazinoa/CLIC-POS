@@ -34,6 +34,18 @@ test('la Master Android permite abrir y liberar mesas desde una terminal cliente
   assert.match(serverSource, /private fun handleOpenTable/);
   assert.match(serverSource, /private fun handleReleaseTable/);
   assert.match(serverSource, /\.put\("orden_id", orderId\)\s+\.put\("revision", restaurantRevision\.get\(\)\)/);
+  assert.match(serverSource, /\.put\("items", JSONArray\(\)\)/);
+  assert.match(serverSource, /applyClientRestaurantMutation\(tables = updatedTables, parkedTickets = updatedTickets\)/);
+});
+
+test('la Master conserva una cuenta abierta aunque todavía no tenga artículos', () => {
+  const reconciliationSource = serverSource.slice(
+    serverSource.indexOf('private fun reconcileTablesWithParkedTickets'),
+    serverSource.indexOf('private fun handleTableUpdate'),
+  );
+  assert.doesNotMatch(reconciliationSource, /if \(!hasItems\) continue/);
+  assert.match(reconciliationSource, /Solo el endpoint explícito de liberación debe cerrar la mesa/);
+  assert.match(serverSource, /if \(!belongsToTable && !belongsToOrder\) remainingTickets\.put\(ticket\)/);
 });
 
 test('la Master Android reemplaza el layout completo en una sola mutación persistida', () => {
@@ -99,7 +111,7 @@ test('el puente Android publica reconciliación, locks y sincronización seriali
   assert.match(appSource, /Master evita que un snapshot anterior vuelva a insertar una orden ya cobrada/);
   assert.match(appSource, /const queuedSync = parkedTicketSyncQueueRef\.current/);
   assert.match(appSource, /No reconciliar contra el closure anterior/);
-  assert.match(appSource, /const ticketsForReconciliation = hasAuthoritativeParkedTickets \? responseParkedTickets : parkedTickets/);
+  assert.match(appSource, /const ticketsForReconciliation = hasAuthoritativeParkedTickets \? nextParkedTickets : parkedTickets/);
   assert.match(appSource, /reconcileTablesWithParkedTickets\(merged, ticketsForReconciliation\)/);
 });
 

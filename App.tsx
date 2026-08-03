@@ -623,6 +623,36 @@ const mergeById = <T extends { id?: string }>(primary: T[], fallback: T[]): T[] 
   return Array.from(merged.values());
 };
 
+const parkedTicketReferencesTable = (ticket: ParkedTicket, tableId: string): boolean => {
+  const normalizedTableId = String(tableId || '').trim();
+  if (!normalizedTableId) return false;
+  if (String(ticket?.tableId || '').trim() === normalizedTableId) return true;
+  const joinedTableIds = Array.isArray((ticket as any)?.joinedTableIds)
+    ? (ticket as any).joinedTableIds
+    : [];
+  return joinedTableIds.some((joinedTableId: unknown) =>
+    String(joinedTableId || '').trim() === normalizedTableId
+  );
+};
+
+const mergePendingClientTableTickets = (
+  remoteTickets: ParkedTicket[],
+  pendingSync?: PendingClientTableSync | null,
+): ParkedTicket[] => {
+  const tableId = String(pendingSync?.tableId || '').trim();
+  if (pendingSync?.status !== 'PENDING' || !tableId || !Array.isArray(pendingSync.parkedTickets)) {
+    return remoteTickets;
+  }
+
+  const unrelatedRemoteTickets = remoteTickets.filter(ticket =>
+    !parkedTicketReferencesTable(ticket, tableId)
+  );
+  const pendingTableTickets = pendingSync.parkedTickets.filter(ticket =>
+    parkedTicketReferencesTable(ticket, tableId)
+  );
+  return mergeById(pendingTableTickets, unrelatedRemoteTickets);
+};
+
 const persistActiveCartDraftSnapshot = async (snapshot: SafeExitSnapshot, reason = 'auto') => {
   if (isTableManagedCartSnapshot(snapshot)) {
     await clearActiveCartDraftStorage();
@@ -3572,6 +3602,7 @@ const AppContent: React.FC = () => {
   const masterRestaurantRevisionRef = useRef(0);
   const masterRestaurantPollInFlightRef = useRef(false);
   const parkedTicketSyncQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingClientTableSyncRef = useRef<PendingClientTableSync | null>(null);
 
   useEffect(() => {
     if (!isNativeAndroidRuntime()) return;
@@ -4195,8 +4226,6 @@ const AppContent: React.FC = () => {
   }, [currentUser]);
 
   const reconcileTablesWithParkedTickets = useCallback((sourceTables: Table[], tickets: ParkedTicket[] = []): Table[] => {
-    const hasItems = (ticket?: ParkedTicket | null) =>
-      Boolean(ticket && Array.isArray(ticket.items) && ticket.items.some(item => Number(item.quantity || 0) > 0));
     const ticketTotal = (ticket: ParkedTicket) =>
       typeof ticket.total === 'number'
         ? Number(ticket.total || 0)
@@ -4205,8 +4234,12 @@ const AppContent: React.FC = () => {
     const byTableId = new Map<string, ParkedTicket>();
 
     (tickets || []).forEach(ticket => {
-      if (!hasItems(ticket)) return;
-      byOrderId.set(String(ticket.id), ticket);
+      const ticketId = String(ticket?.id || '').trim();
+      if (!ticketId) return;
+      // Una cuenta recién abierta es válida aunque todavía no tenga artículos.
+      // La liberación debe llegar por el flujo explícito de cierre, no inferirse
+      // a partir de un carrito temporalmente vacío.
+      byOrderId.set(ticketId, ticket);
       if (ticket.tableId !== undefined && ticket.tableId !== null) {
         byTableId.set(String(ticket.tableId), ticket);
       }
@@ -4304,7 +4337,15 @@ const AppContent: React.FC = () => {
         }
         const hasAuthoritativeParkedTickets = Array.isArray(data?.parkedTickets);
         const responseParkedTickets = hasAuthoritativeParkedTickets ? data.parkedTickets : [];
-        const ticketsForReconciliation = hasAuthoritativeParkedTickets ? responseParkedTickets : parkedTickets;
+        let pendingClientSync = isClientRuntime ? pendingClientTableSyncRef.current : null;
+        if (isClientRuntime && !pendingClientSync) {
+          pendingClientSync = await readPendingClientTableSync();
+          if (pendingClientSync) pendingClientTableSyncRef.current = pendingClientSync;
+        }
+        const nextParkedTickets = hasAuthoritativeParkedTickets
+          ? mergePendingClientTableTickets(responseParkedTickets, pendingClientSync)
+          : [];
+        const ticketsForReconciliation = hasAuthoritativeParkedTickets ? nextParkedTickets : parkedTickets;
         const mergeRemoteTables = (incomingTables: Table[], previousTables: Table[]) => {
           if (isClientRuntime) {
             return reconcileTablesWithParkedTickets(incomingTables, ticketsForReconciliation);
@@ -4359,8 +4400,6 @@ const AppContent: React.FC = () => {
 
         const nextTables = Array.isArray(data?.tables) ? data.tables : [];
         const nextRooms = Array.isArray(data?.rooms) ? data.rooms : [];
-        const nextParkedTickets = responseParkedTickets;
-
         if (isClientRuntime) {
           markClientMasterOnline();
           locallySavedFloorPlanRef.current = {
@@ -7263,7 +7302,9 @@ const AppContent: React.FC = () => {
         reason: options.reason || 'explicit',
         parkedTickets: validTickets,
       };
+      pendingClientTableSyncRef.current = pendingSync;
       writeCriticalCollectionsMirror(validTickets, cashMovements);
+      setParkedTickets(validTickets);
       await Promise.allSettled([
         db.save('parkedTickets', validTickets),
         persistPendingClientTableSync(pendingSync),
@@ -7294,11 +7335,18 @@ const AppContent: React.FC = () => {
         if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
           masterRestaurantRevisionRef.current = responseRevision;
         }
-        setParkedTickets(sharedTickets);
+        const newerPendingSync = pendingClientTableSyncRef.current;
+        const effectiveSharedTickets = newerPendingSync && newerPendingSync !== pendingSync
+          ? mergePendingClientTableTickets(sharedTickets, newerPendingSync)
+          : sharedTickets;
+        setParkedTickets(effectiveSharedTickets);
         if (Array.isArray(result?.tables)) {
           setTables(result.tables);
         }
-        await clearPendingClientTableSync();
+        if (pendingClientTableSyncRef.current === pendingSync) {
+          pendingClientTableSyncRef.current = null;
+          await clearPendingClientTableSync();
+        }
         void fetchTables().catch(error => {
           console.warn('[TABLE_SYNC] No se pudo refrescar el mapa después de guardar:', error);
         });
