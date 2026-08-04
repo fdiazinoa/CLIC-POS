@@ -69,6 +69,10 @@ import { canEnterReducedSyncMode, resolveReducedSyncAfterMinutes } from './utils
 import { validateRefundItems } from './utils/refundAvailability';
 import { buildPosMasterCatalogSnapshot } from './utils/posMasterCatalogContract';
 import {
+  isEligibleOperationalMasterConfig,
+  isEligibleOperationalMasterTerminal,
+} from './utils/masterServerEligibility';
+import {
   canUseLocalOperationalTableStore,
   isClientTerminalMode,
   resolveOperationalApiUrl
@@ -1430,6 +1434,10 @@ const hasPendingTerminalSetup = (): boolean => localStorage.getItem(TERMINAL_SET
 const isNativeStandaloneTerminalRuntime = (terminal?: { config?: TerminalConfig } | null): boolean => {
   if (!isNativeAndroidRuntime()) return false;
 
+  // Un KDS, toma de pedidos, verificador o kiosco nunca debe anunciarse como
+  // Caja Master aunque una configuración ERP antigua lo marque como primario.
+  if (terminal && !isEligibleOperationalMasterTerminal(terminal)) return false;
+
   const setupMode = getStoredTerminalSetupMode();
   if (setupMode === 'CLIENT') return false;
 
@@ -1468,8 +1476,13 @@ const resolveReachableMasterBinding = async (host: string): Promise<{ host: stri
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 3500);
     try {
-      const response = await fetch(`${baseUrl}/api/sync/ping`, { signal: controller.signal });
-      if (!response.ok) continue;
+      const [response, configResponse] = await Promise.all([
+        fetch(`${baseUrl}/api/sync/ping`, { signal: controller.signal }),
+        fetch(`${baseUrl}/api/config`, { signal: controller.signal }),
+      ]);
+      if (!response.ok || !configResponse.ok) continue;
+      const remoteConfig = await configResponse.json();
+      if (!isEligibleOperationalMasterConfig(remoteConfig)) continue;
 
       return {
         host: new URL(baseUrl).hostname,
@@ -3589,6 +3602,7 @@ const AppContent: React.FC = () => {
   const clientMasterFailureCountRef = useRef(0);
   const clientMasterLastSuccessAtRef = useRef(0);
   const clientMasterTablesFetchInFlightRef = useRef(false);
+  const clientValidatedMasterBaseUrlRef = useRef('');
   const [collections, setCollections] = useState<Collection[]>([]);
   const [activeRoomId, setActiveRoomId] = useState<string>('');
   const [activeRoomId2, setActiveRoomId2] = useState<string>(''); // For backward compatibility if needed
@@ -4440,6 +4454,61 @@ const AppContent: React.FC = () => {
     return shouldBlock;
   };
 
+  const ensureEligibleClientMasterEndpoint = async (): Promise<string> => {
+    const candidates: Array<{ host: string; source: 'STORED' | 'CLOUD' | 'LAN' }> = [];
+    const appendCandidate = (value: string | null | undefined, source: 'STORED' | 'CLOUD' | 'LAN') => {
+      const host = normalizeMasterHost(value || '');
+      if (host && !candidates.some(candidate => candidate.host === host)) candidates.push({ host, source });
+    };
+    appendCandidate(localStorage.getItem('CLIC_POS_MASTER_URL'), 'STORED');
+    appendCandidate(localStorage.getItem('pos_master_ip'), 'STORED');
+
+    const tryCandidates = async (): Promise<string | null> => {
+      for (const candidate of candidates) {
+        for (const baseUrl of buildMasterUrlCandidates(candidate.host)) {
+          if (clientValidatedMasterBaseUrlRef.current === baseUrl) return baseUrl;
+          const controller = new AbortController();
+          const timeoutId = window.setTimeout(() => controller.abort(), 2500);
+          try {
+            const response = await fetch(`${baseUrl}/api/config`, { signal: controller.signal });
+            if (!response.ok) continue;
+            const remoteConfig = await response.json();
+            if (!isEligibleOperationalMasterConfig(remoteConfig)) {
+              console.warn('[MASTER_DISCOVERY] Se rechazó KDS/terminal no-Master', { baseUrl });
+              continue;
+            }
+            const resolvedHost = normalizeMasterHost(new URL(baseUrl).hostname);
+            localStorage.setItem('pos_master_ip', resolvedHost);
+            localStorage.setItem('CLIC_POS_MASTER_URL', baseUrl);
+            localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', candidate.source);
+            clientValidatedMasterBaseUrlRef.current = baseUrl;
+            return baseUrl;
+          } catch {
+            // Probar siguiente candidato conocido o descubierto.
+          } finally {
+            window.clearTimeout(timeoutId);
+          }
+        }
+      }
+      return null;
+    };
+
+    const storedOrKnown = await tryCandidates();
+    if (storedOrKnown) return storedOrKnown;
+
+    const cloudEndpoint = await resolveMasterEndpointFromCloud().catch(() => null);
+    appendCandidate(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl, 'CLOUD');
+    const cloudResolved = await tryCandidates();
+    if (cloudResolved) return cloudResolved;
+
+    const lanCandidates = await discoverLanMasterCandidates({ timeoutMs: 2500 });
+    lanCandidates.forEach(candidate => appendCandidate(candidate.host, 'LAN'));
+    const lanResolved = await tryCandidates();
+    if (lanResolved) return lanResolved;
+
+    throw new Error('No se encontró una Caja Master operativa; se descartaron KDS y terminales auxiliares.');
+  };
+
   const fetchTables = async () => {
     const isClientRuntime = isClientTerminalMode();
     if (isClientRuntime && clientMasterTablesFetchInFlightRef.current) {
@@ -4449,7 +4518,9 @@ const AppContent: React.FC = () => {
     try {
       const terminalId = getCurrentTerminal()?.id;
       const query = terminalId ? `?terminal_id=${encodeURIComponent(terminalId)}` : '';
-      const endpoint = resolveOperationalApiUrl(`/api/mesas${query}`);
+      const endpoint = isClientRuntime
+        ? `${await ensureEligibleClientMasterEndpoint()}/api/mesas${query}`
+        : resolveOperationalApiUrl(`/api/mesas${query}`);
       const res = await fetch(endpoint);
       if (!res.ok) {
         throw new Error(`Master respondió HTTP ${res.status}`);
@@ -4792,8 +4863,16 @@ const AppContent: React.FC = () => {
           try {
             const controller = new AbortController();
             timeout = window.setTimeout(() => controller.abort(), 2500);
-            const response = await fetch(`${baseUrl}/api/sync/ping`, { signal: controller.signal });
-            if (!response.ok) continue;
+            const [response, configResponse] = await Promise.all([
+              fetch(`${baseUrl}/api/sync/ping`, { signal: controller.signal }),
+              fetch(`${baseUrl}/api/config`, { signal: controller.signal }),
+            ]);
+            if (!response.ok || !configResponse.ok) continue;
+            const remoteConfig = await configResponse.json();
+            if (!isEligibleOperationalMasterConfig(remoteConfig)) {
+              console.warn('[MASTER_DISCOVERY] Se rechazó un terminal no-Master', { baseUrl });
+              continue;
+            }
 
             const resolvedHost = normalizeMasterHost(new URL(baseUrl).hostname);
             localStorage.setItem('pos_master_ip', resolvedHost);
