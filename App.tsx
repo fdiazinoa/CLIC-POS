@@ -6374,6 +6374,12 @@ const AppContent: React.FC = () => {
         case 'zReports': setZReports(freshData as ZReport[]); break;
         case 'xReports': setXReports(Array.isArray(freshData) ? freshData as XReport[] : []); break;
         case 'warehouses': setWarehouses(Array.isArray(freshData) ? freshData as Warehouse[] : []); break;
+        case 'promotions': {
+          if (Array.isArray(freshData)) {
+            setConfig((previous) => ({ ...previous, promotions: freshData as any[] }));
+          }
+          break;
+        }
       }
     };
 
@@ -6387,7 +6393,7 @@ const AppContent: React.FC = () => {
       });
     };
 
-    const syncEvents = ['productsUpdated', 'customersUpdated', 'suppliersUpdated', 'usersUpdated', 'rolesUpdated', 'purchaseOrdersUpdated', 'transfersUpdated', 'internalSequencesUpdated', 'transactionsUpdated', 'cashMovementsUpdated', 'zReportsUpdated', 'warehousesUpdated', 'productStocksUpdated', 'tablesUpdated'];
+    const syncEvents = ['productsUpdated', 'customersUpdated', 'suppliersUpdated', 'usersUpdated', 'rolesUpdated', 'purchaseOrdersUpdated', 'transfersUpdated', 'internalSequencesUpdated', 'transactionsUpdated', 'cashMovementsUpdated', 'zReportsUpdated', 'warehousesUpdated', 'productStocksUpdated', 'tablesUpdated', 'productionAreasUpdated', 'promotionsUpdated'];
     syncEvents.forEach(e => window.addEventListener(e, handleSyncEvent));
 
     // Android defers heavy collections during db.init(). The customer sync can

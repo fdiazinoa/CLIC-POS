@@ -5207,7 +5207,10 @@ class SyncManager {
 	                        this.clearTimestampCursorState(collection);
 	                    }
 
-                    const pulled = await this.pullCatalog(collection);
+                    // initializeMasterData ya coordina su propio lote. El debounce de
+                    // pullCatalog no debe omitir silenciosamente las colecciones que
+                    // siguen a la primera dentro de este mismo ciclo.
+                    const pulled = await this.pullCatalog(collection, false, { ignoreThrottle: true });
                     if (pulled > 0) {
                         continue;
                     }
@@ -6027,7 +6030,9 @@ class SyncManager {
                     continue;
                 } else {
                     // Pull only when the channel allows remote masters (ERP_ACTIVE or POS_MASTER).
-                    await this.pullCatalog(collection);
+                    // syncAllCatalogs es un lote explícito: procesar cada maestro en
+                    // orden sin aplicar entre ellos el debounce de llamadas aisladas.
+                    await this.pullCatalog(collection, false, { ignoreThrottle: true });
                 }
 
                 const metadata = await apiSyncAdapter.getMetadata(collection);
@@ -6073,7 +6078,7 @@ class SyncManager {
             for (const collection of operations) {
                 try {
                     // Master pulls operations from Server to see what Slaves have sent
-                    await this.pullCatalog(collection);
+                    await this.pullCatalog(collection, false, { ignoreThrottle: true });
 
                     const metadata = await apiSyncAdapter.getMetadata(collection);
                     const localVersion = this.syncVersions.get(collection) || 0;

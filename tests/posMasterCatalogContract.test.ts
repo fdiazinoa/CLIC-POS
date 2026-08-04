@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -38,4 +39,38 @@ test('catalog snapshot reads SQLite and falls back to operational config arrays'
   assert.deepEqual(snapshot.promotions, [{ id: 'promo-1' }]);
   assert.deepEqual(snapshot.paymentMethods, [{ id: 'cash', name: 'Efectivo', type: 'CASH', isActive: true }]);
   assert.deepEqual(snapshot.priceLists, [{ id: 'retail', name: 'Detalle', active: true }]);
+});
+
+test('client catalog batches bypass per-call debounce so production and promotions are not skipped', () => {
+  const syncManagerSource = fs.readFileSync(
+    new URL('../services/sync/SyncManager.ts', import.meta.url),
+    'utf8',
+  );
+  const syncAllCatalogsSource = syncManagerSource.slice(
+    syncManagerSource.indexOf('async syncAllCatalogs()'),
+    syncManagerSource.indexOf('async syncAllCatalogs()') + 10_000,
+  );
+
+  assert.match(
+    syncAllCatalogsSource,
+    /pullCatalog\(collection, false, \{ ignoreThrottle: true \}\)/,
+  );
+  assert.doesNotMatch(
+    syncAllCatalogsSource,
+    /await this\.pullCatalog\(collection\);/,
+  );
+});
+
+test('production and promotion screens refresh when their client catalogs arrive', () => {
+  const appSource = fs.readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  const productionAreaSource = fs.readFileSync(
+    new URL('../components/ProductionAreaManager.tsx', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(appSource, /case 'promotions':[\s\S]*setConfig/);
+  assert.match(appSource, /'productionAreasUpdated'/);
+  assert.match(appSource, /'promotionsUpdated'/);
+  assert.match(productionAreaSource, /addEventListener\('productionAreasUpdated'/);
+  assert.match(productionAreaSource, /removeEventListener\('productionAreasUpdated'/);
 });

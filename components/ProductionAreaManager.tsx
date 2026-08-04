@@ -52,6 +52,17 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
     useEffect(() => {
         fetchAreas();
         fetchProducts();
+
+        // La sincronización LAN puede terminar mientras esta pantalla ya está
+        // abierta. Refrescar el catálogo sin obligar al usuario a salir y entrar.
+        const handleProductionAreasUpdated = () => { void fetchAreas(); };
+        const handleProductsUpdated = () => { void fetchProducts(); };
+        window.addEventListener('productionAreasUpdated', handleProductionAreasUpdated);
+        window.addEventListener('productsUpdated', handleProductsUpdated);
+        return () => {
+            window.removeEventListener('productionAreasUpdated', handleProductionAreasUpdated);
+            window.removeEventListener('productsUpdated', handleProductsUpdated);
+        };
     }, []);
 
     const assignedProductCountByArea = useMemo(() => {
