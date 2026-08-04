@@ -74,3 +74,33 @@ test('production and promotion screens refresh when their client catalogs arrive
   assert.match(productionAreaSource, /addEventListener\('productionAreasUpdated'/);
   assert.match(productionAreaSource, /removeEventListener\('productionAreasUpdated'/);
 });
+
+test('client pairing keeps the LAN Master product routing authoritative', () => {
+  const appSource = fs.readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  const syncManagerSource = fs.readFileSync(
+    new URL('../services/sync/SyncManager.ts', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(appSource, /const shouldPersistSetupSnapshotItems = !shouldRestoreRemoteData/);
+  assert.equal(
+    (appSource.match(/shouldPersistSetupSnapshotItems && Array\.isArray\(setupResult\?\.snapshotItems\)/g) || []).length,
+    2,
+  );
+  assert.match(
+    syncManagerSource,
+    /activeTarget\.kind === 'POS_MASTER' && activeTarget\.baseUrl/,
+  );
+});
+
+test('KDS dispatch uses Cocina and the table-map fallback without raw cart auto-sync', () => {
+  const posSource = fs.readFileSync(
+    new URL('../components/POSInterface.tsx', import.meta.url),
+    'utf8',
+  );
+
+  assert.doesNotMatch(posSource, /syncOrderToConfiguredKds/);
+  assert.match(posSource, /const newItems = cart\.filter\(item => !item\.dispatched\)/);
+  assert.match(posSource, /cart\.some\(item => !item\.dispatched\)/);
+  assert.match(posSource, /const dispatchedBeforeExit = await handleDispatchCommand\(\)/);
+});

@@ -4404,28 +4404,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setCouponCode('');
       setGlobalDiscount({ type: 'PERCENT', value: 0 });
    }, [cart.length, redeemedCoupon]);
-
-
-
-   const syncOrderToConfiguredKds = useCallback(async (orderId: string, payload: Record<string, unknown>) => {
-      if (!orderId) return;
-      const configuredAreas = await db.get('productionAreas' as any).catch(() => []) as any;
-      const productionAreas: ProductionAreaConfig[] = Array.isArray(configuredAreas) ? configuredAreas : [];
-      const targets = Array.from(new Set(
-         productionAreas
-            .filter(area => {
-               const mode = normalizeProductionOutputMode(area.modo_salida);
-               return mode === 'KDS' || mode === 'AMBOS';
-            })
-            .map(area => resolveKdsBaseUrl(area, config))
-            .filter((url): url is string => Boolean(url))
-      ));
-
-      await Promise.all(targets.map(async (baseUrl) => {
-         await postJsonWithTimeout(`${baseUrl}/api/ordenes/${encodeURIComponent(orderId)}`, payload);
-      }));
-   }, [config]);
-
    const updateCartItem = async (updatedItem: CartItem | null, cartIdToDelete?: string) => {
       if (blockRecoveredUberOrderMutation('editar el pedido')) return;
       const isSubtotalizedMutation = hasSubtotalizedCart;
@@ -4485,16 +4463,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       // KDS Sync (if active table)
       if (activeTable) {
          const ticketId = activeTable.currentOrderId;
-         const total = newCart.reduce((sum, i) => sum + (i.price * i.quantity), 0);
 
          // Update Local Persistence
          if (onUpdateParkedTickets) {
             const updatedTickets = parkedTickets.map(p => p.id === ticketId ? { ...p, items: newCart } : p);
             onUpdateParkedTickets(updatedTickets);
          }
-
-         void syncOrderToConfiguredKds(String(ticketId || ''), { items: newCart, total, status: 'OCCUPIED' })
-            .catch(error => console.error('Auto-sync KDS failed:', error));
       }
    };
 
@@ -4562,11 +4536,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             );
             await Promise.resolve(onUpdateParkedTickets(updatedTickets));
 
-            try {
-               await syncOrderToConfiguredKds(String(ticketId), { items: dispatchedItems, total, status: 'OCCUPIED' });
-            } catch (e) {
-               console.error('Auto-sync clear failed:', e);
-            }
          }
       }
 
@@ -5397,13 +5366,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setShowPaymentModal(true);
    };
 
-   const handleDispatchCommand = async () => {
-      if (cart.length === 0) return;
+   const handleDispatchCommand = async (): Promise<boolean> => {
+      if (cart.length === 0) return false;
 
       const newItems = cart.filter(item => !item.dispatched);
       if (newItems.length === 0) {
          alert("Todos los ítems ya han sido enviados.");
-         return;
+         return false;
       }
 
       const orderId = activeTable?.currentOrderId || `P-${Date.now()}`;
@@ -5448,7 +5417,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const areaEntries = Object.entries(areas);
          if (areaEntries.length === 0) {
             alert("No hay ítems con centro de producción configurado para enviar.");
-            return;
+            return false;
          }
 
          let printedCount = 0;
@@ -5634,10 +5603,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             queuedKdsCount > 0 ? `${queuedKdsCount} KDS pendiente(s)` : '',
          ].filter(Boolean);
          setSuccessToast(parts.length > 0 ? `Comanda procesada: ${parts.join(' · ')}` : 'Comanda procesada');
+         return true;
 
       } catch (e) {
          console.error("Dispatch error:", e);
          alert("Error al procesar el envío a cocina");
+         return false;
       }
    };
 
@@ -5914,13 +5885,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       if (activeTable) {
          await Promise.resolve(onTableOrderSaved?.(activeTable, newParked));
-         const total = ticketItems.reduce((sum, i) => sum + (i.price * i.quantity), 0);
-         void syncOrderToConfiguredKds(newParked.id, {
-               items: ticketItems,
-               total,
-               status: 'OCCUPIED'
-            })
-            .catch((error) => console.warn('No se pudo sincronizar la mesa con cocina en segundo plano:', error));
 
          if (onClearActiveTable) onClearActiveTable();
          if (onOpenTableMap) onOpenTableMap();
@@ -5984,18 +5948,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       onSelectCustomer(null);
       setActiveRecoveredReservation(null);
       if (onClearActiveTable) onClearActiveTable();
-
-      void (async () => {
-         try {
-            await syncOrderToConfiguredKds(tableOrder.id, {
-               items: tableOrder.items,
-               total: tableOrder.total,
-               status: 'OCCUPIED'
-            });
-         } catch (error) {
-            console.warn('No se pudo sincronizar la mesa con cocina al volver al mapa:', error);
-         }
-      })();
    };
 
    const handleSendAndExit = async () => {
@@ -6022,6 +5974,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (cart.length === 0) {
             await releaseActiveEmptyTable({ silent: true });
          } else {
+            // Returning to the table map is the waiter safety net: dispatch only
+            // fresh lines. The regular Cocina action already marks them dispatched,
+            // so this path cannot send the same line twice.
+            if (cart.some(item => !item.dispatched)) {
+               const dispatchedBeforeExit = await handleDispatchCommand();
+               if (dispatchedBeforeExit) return;
+            }
             await saveActiveTableOrderForMap();
          }
       }
