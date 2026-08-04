@@ -47,7 +47,7 @@ test('asignar un cliente persiste el ticket sin perder el lock ni la selección 
   assert.match(posSource, /else if \(!selectedCustomer\) \{\s*onSelectCustomer\(null\)/);
 });
 
-test('la salida conserva las credenciales del lock hasta recibir confirmación y evita esperas redundantes', () => {
+test('la salida conserva las credenciales del lock, evita esperas y no duplica comandas KDS', () => {
   const releaseStart = appSource.indexOf('const releaseActiveTableEditLock');
   const releaseEnd = appSource.indexOf('const acquireTableEditLock', releaseStart);
   const releaseSource = appSource.slice(releaseStart, releaseEnd);
@@ -65,8 +65,13 @@ test('la salida conserva las credenciales del lock hasta recibir confirmación y
   const parkStart = posSource.indexOf('const handleParkCurrentTicket');
   const parkEnd = posSource.indexOf('const saveActiveTableOrderForMap', parkStart);
   const parkSource = posSource.slice(parkStart, parkEnd);
-  assert.match(parkSource, /void syncOrderToConfiguredKds/);
-  assert.doesNotMatch(parkSource, /await syncOrderToConfiguredKds/);
+  assert.doesNotMatch(parkSource, /api\/ordenes/);
+
+  const backStart = posSource.indexOf('const handleBackToMap');
+  const backEnd = posSource.indexOf('const handleRestoreTicket', backStart);
+  const backSource = posSource.slice(backStart, backEnd);
+  assert.match(backSource, /cart\.some\(item => !item\.dispatched\)/);
+  assert.match(backSource, /await handleDispatchCommand\(\)/);
 });
 
 test('el diseñador vuelve al mapa cuando se abrió desde Salas', () => {

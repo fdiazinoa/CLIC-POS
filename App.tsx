@@ -7121,6 +7121,9 @@ const AppContent: React.FC = () => {
         }
       }
       const shouldFullPullOnPairing = setupResult?.snapshotMeta?.fullPullOnPairing ?? true;
+      // A slave's authoritative catalog is the LAN Master. The ERP setup snapshot can
+      // omit POS-only routing fields such as production_area_id and must not overwrite it.
+      const shouldPersistSetupSnapshotItems = !shouldRestoreRemoteData;
       if (shouldFullPullOnPairing) {
         setupResult.progress?.({
           stepId: 'sync',
@@ -7128,7 +7131,7 @@ const AppContent: React.FC = () => {
         });
         try {
           setCatalogDiagnosticStatus('SYNCING');
-          if (Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
+          if (shouldPersistSetupSnapshotItems && Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
             setupResult.progress?.({
               stepId: 'sync',
               message: 'Guardando productos recibidos en el snapshot inicial...',
@@ -7151,7 +7154,7 @@ const AppContent: React.FC = () => {
           });
         }
       } else {
-        if (Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
+        if (shouldPersistSetupSnapshotItems && Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
           setupResult.progress?.({
             stepId: 'sync',
             message: 'Guardando productos recibidos en el snapshot inicial...',

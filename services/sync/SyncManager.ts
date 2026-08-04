@@ -721,6 +721,11 @@ class SyncManager {
     }
 
     private resolveTerminalConfigSyncApiBase(context: { erpBaseUrl: string | null }): string | null {
+        const activeTarget = syncPolicy.resolve();
+        if (activeTarget.kind === 'POS_MASTER' && activeTarget.baseUrl) {
+            return activeTarget.baseUrl;
+        }
+
         const env = (import.meta as any)?.env || {};
         const candidates = [
             localStorage.getItem('CLIC_ERP_SYNC_URL'),
