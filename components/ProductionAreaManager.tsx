@@ -177,10 +177,12 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
         if (confirm("¿Está seguro de eliminar esta área de producción?")) {
             const nextAreas = areas.filter(a => a.id !== id);
             setAreas(nextAreas);
-            db.save('productionAreas' as any, nextAreas).catch((error) => {
-                console.error("Failed to delete production area", error);
-                alert("Error al eliminar área");
-            });
+            db.save('productionAreas' as any, nextAreas)
+                .then(() => window.dispatchEvent(new CustomEvent('productionAreasUpdated')))
+                .catch((error) => {
+                    console.error("Failed to delete production area", error);
+                    alert("Error al eliminar área");
+                });
         }
     };
 
@@ -207,6 +209,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                 : [...areas, normalizedArea];
             setAreas(nextAreas);
             await db.save('productionAreas' as any, nextAreas);
+            window.dispatchEvent(new CustomEvent('productionAreasUpdated'));
             await ensureKitchenModuleEnabled();
             alert("Área guardada correctamente");
         } catch (e) {
@@ -257,6 +260,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
             });
             setProducts(nextProducts);
             await db.save('products' as any, nextProducts);
+            window.dispatchEvent(new CustomEvent('productsUpdated'));
             await ensureKitchenModuleEnabled();
         } catch (error) {
             console.error('Failed to assign product to production area', error);
@@ -304,6 +308,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
             });
             setProducts(nextProducts);
             await db.save('products' as any, nextProducts);
+            window.dispatchEvent(new CustomEvent('productsUpdated'));
             await ensureKitchenModuleEnabled();
         } catch (error) {
             console.error('Failed to bulk assign products to production area', error);

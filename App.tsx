@@ -3854,6 +3854,7 @@ const AppContent: React.FC = () => {
     const watchdog = window.setInterval(ensureMasterServerWithoutSnapshot, 30000);
     const restaurantPoll = window.setInterval(() => void reconcileNativeRestaurantState(), 1000);
     window.addEventListener('online', ensureMasterServerWithoutSnapshot);
+    window.addEventListener('productionAreasUpdated', ensureMasterServerWithoutSnapshot);
     const handleVisibilityChange = () => {
       if (!document.hidden) ensureMasterServerWithoutSnapshot();
     };
@@ -3869,6 +3870,7 @@ const AppContent: React.FC = () => {
       window.clearInterval(watchdog);
       window.clearInterval(restaurantPoll);
       window.removeEventListener('online', ensureMasterServerWithoutSnapshot);
+      window.removeEventListener('productionAreasUpdated', ensureMasterServerWithoutSnapshot);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       resumeListener?.remove?.();
       stateListener?.remove?.();

@@ -5380,41 +5380,70 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const displayOrderRef = orderNumber || activeTableContext.compactLabel || orderId;
 
       try {
-         const configuredAreas = await db.get('productionAreas' as any).catch(() => []) as any;
-         const productionAreas: ProductionAreaConfig[] = Array.isArray(configuredAreas) ? configuredAreas : [];
-         const areaById = new Map(productionAreas.map(area => [String(area.id), area]));
-         const configuredProducts = await db.get('products' as any).catch(() => []) as any;
-         const productionProducts: Product[] = Array.isArray(configuredProducts) ? configuredProducts : [];
-         const resolveAreaForDispatch = buildProductionAreaResolver(productionAreas, productionProducts);
+         const readProductionRoutingCatalogs = async () => {
+            const [configuredAreas, configuredProducts] = await Promise.all([
+               db.get('productionAreas' as any).catch(() => []),
+               db.get('products' as any).catch(() => []),
+            ]);
+            const productionAreas: ProductionAreaConfig[] = Array.isArray(configuredAreas) ? configuredAreas : [];
+            const productionProducts: Product[] = Array.isArray(configuredProducts) ? configuredProducts : [];
+            return {
+               productionAreas,
+               areaById: new Map(productionAreas.map(area => [String(area.id), area])),
+               resolveAreaForDispatch: buildProductionAreaResolver(productionAreas, productionProducts),
+            };
+         };
+
+         let routingCatalogs = await readProductionRoutingCatalogs();
+
+         const groupItemsByProductionArea = () => {
+            const grouped: Record<string, { area: ProductionAreaConfig, title: string, items: CartItem[] }> = {};
+            newItems.forEach(item => {
+               const areaId = routingCatalogs.resolveAreaForDispatch(item);
+               if (!areaId) return;
+
+               const configuredArea = routingCatalogs.areaById.get(areaId);
+               if (!configuredArea) {
+                  console.warn('[KDS] Producto con centro de producción no configurado en POS:', {
+                     itemId: item.id,
+                     itemName: item.name,
+                     areaId,
+                  });
+                  return;
+               }
+
+               if (!grouped[areaId]) {
+                  grouped[areaId] = {
+                     area: configuredArea,
+                     title: configuredArea.nombre || areaId,
+                     items: []
+                  };
+               }
+               grouped[areaId].items.push(item);
+            });
+            return grouped;
+         };
 
          // 1. Group only routed items by production area for separate tickets/KDS screens.
-         const areas: Record<string, { area: ProductionAreaConfig, title: string, items: CartItem[] }> = {};
          const dispatchMetaByCartId = new Map<string, KdsDispatchMeta>();
-         newItems.forEach(item => {
-            const areaId = resolveAreaForDispatch(item);
-            if (!areaId) return;
+         let areas = groupItemsByProductionArea();
+         let areaEntries = Object.entries(areas);
 
-            const configuredArea = areaById.get(areaId);
-            if (!configuredArea) {
-               console.warn('[KDS] Producto con centro de producción no configurado en POS:', {
-                  itemId: item.id,
-                  itemName: item.name,
-                  areaId,
-               });
-               return;
+         // A client can retain a valid sales catalog while its production routing
+         // is stale or empty. Recover both authoritative collections from Master
+         // at dispatch time before concluding that the items have no kitchen route.
+         if (areaEntries.length === 0 && isClientTerminalMode()) {
+            try {
+               await syncManager.pullCatalog('productionAreas', true, { ignoreThrottle: true });
+               await syncManager.pullCatalog('products', true, { ignoreThrottle: true });
+               routingCatalogs = await readProductionRoutingCatalogs();
+               areas = groupItemsByProductionArea();
+               areaEntries = Object.entries(areas);
+            } catch (routingRefreshError) {
+               console.warn('[KDS] No se pudo recuperar el enrutamiento de producción desde la Master:', routingRefreshError);
             }
+         }
 
-            if (!areas[areaId]) {
-               areas[areaId] = {
-                  area: configuredArea,
-                  title: configuredArea.nombre || areaId,
-                  items: []
-               };
-            }
-            areas[areaId].items.push(item);
-         });
-
-         const areaEntries = Object.entries(areas);
          if (areaEntries.length === 0) {
             alert("No hay ítems con centro de producción configurado para enviar.");
             return false;

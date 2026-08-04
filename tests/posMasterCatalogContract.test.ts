@@ -6,6 +6,7 @@ import {
   buildPosMasterCatalogSnapshot,
   POS_MASTER_OPERATIONAL_CATALOGS,
 } from '../utils/posMasterCatalogContract';
+import { normalizeRestaurantProductConfig } from '../utils/restaurantProductConfig';
 
 test('POS Master publishes production and promotion catalogs required by clients', () => {
   const collections = new Set(POS_MASTER_OPERATIONAL_CATALOGS);
@@ -103,4 +104,43 @@ test('KDS dispatch uses Cocina and the table-map fallback without raw cart auto-
   assert.match(posSource, /const newItems = cart\.filter\(item => !item\.dispatched\)/);
   assert.match(posSource, /cart\.some\(item => !item\.dispatched\)/);
   assert.match(posSource, /const dispatchedBeforeExit = await handleDispatchCommand\(\)/);
+});
+
+test('production assignments are published immediately by the Master LAN catalog', () => {
+  const appSource = fs.readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  const managerSource = fs.readFileSync(
+    new URL('../components/ProductionAreaManager.tsx', import.meta.url),
+    'utf8',
+  );
+
+  assert.equal(
+    (managerSource.match(/dispatchEvent\(new CustomEvent\('productsUpdated'\)\)/g) || []).length,
+    2,
+  );
+  assert.match(managerSource, /dispatchEvent\(new CustomEvent\('productionAreasUpdated'\)\)/);
+  assert.match(appSource, /addEventListener\('productionAreasUpdated', ensureMasterServerWithoutSnapshot\)/);
+  assert.match(appSource, /removeEventListener\('productionAreasUpdated', ensureMasterServerWithoutSnapshot\)/);
+});
+
+test('client KDS dispatch self-heals missing routing from the Master', () => {
+  const posSource = fs.readFileSync(
+    new URL('../components/POSInterface.tsx', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(posSource, /areaEntries\.length === 0 && isClientTerminalMode\(\)/);
+  assert.match(posSource, /pullCatalog\('productionAreas', true, \{ ignoreThrottle: true \}\)/);
+  assert.match(posSource, /pullCatalog\('products', true, \{ ignoreThrottle: true \}\)/);
+  assert.match(posSource, /routingCatalogs = await readProductionRoutingCatalogs\(\)/);
+});
+
+test('restaurant product normalization preserves the production area aliases used by the Master', () => {
+  const normalized = normalizeRestaurantProductConfig({
+    id: 'product-1',
+    name: 'Agua',
+    productionAreaId: 'kitchen-1',
+  } as any);
+
+  assert.equal(normalized.production_area_id, 'kitchen-1');
+  assert.equal(normalized.restaurant.production_area_id, 'kitchen-1');
 });
