@@ -4,8 +4,11 @@
  * Service responsible for discovering the Master server on the local network.
  */
 
+import { isEligibleOperationalMasterConfig } from '../../utils/masterServerEligibility';
+
 export class NetworkScanner {
     private static readonly TIMEOUT_MS = 400;
+    private static readonly CONFIG_VALIDATION_TIMEOUT_MS = 2_500;
     private static readonly PORTS = [3000, 3001];
     private static readonly BATCH_SIZE = 32;
 
@@ -105,7 +108,23 @@ export class NetworkScanner {
                     || !discoveredTenantId
                     || discoveredTenantId === expectedTenantId;
                 if (data.app === 'CLIC-POS' && data.role === 'MASTER' && tenantMatches) {
-                    return true;
+                    // La identidad es liviana; la configuración puede ser grande y necesita
+                    // su propio margen para distinguir la Master real de un KDS mal anunciado.
+                    clearTimeout(timeoutId);
+                    const configController = new AbortController();
+                    const configTimeoutId = setTimeout(
+                        () => configController.abort(),
+                        this.CONFIG_VALIDATION_TIMEOUT_MS
+                    );
+                    try {
+                        const configResponse = await fetch(`${baseUrl}/api/config`, {
+                            signal: configController.signal,
+                        });
+                        if (!configResponse.ok) return false;
+                        return isEligibleOperationalMasterConfig(await configResponse.json());
+                    } finally {
+                        clearTimeout(configTimeoutId);
+                    }
                 }
             }
         } catch (e) {

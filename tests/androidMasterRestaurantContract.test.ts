@@ -218,6 +218,14 @@ test('la Caja Master Android se anuncia y puede identificarse automáticamente e
   assert.match(bridgeSource, /discoverMasterServers/);
 });
 
+test('un KDS no levanta ni puede ser seleccionado como Caja Master', () => {
+  assert.match(appSource, /isEligibleOperationalMasterTerminal\(terminal\)/);
+  assert.match(pairingSource, /isEligibleOperationalMasterConfig\(fetchedConfig\)/);
+  assert.match(scannerSource, /isEligibleOperationalMasterConfig\(await configResponse\.json\(\)\)/);
+  assert.match(appSource, /ensureEligibleClientMasterEndpoint/);
+  assert.match(appSource, /Se rechazó KDS\/terminal no-Master/);
+});
+
 test('la terminal cliente intenta IP guardada, Cloud y descubrimiento LAN antes de pedir la IP manual', () => {
   assert.match(pairingSource, /resolveMasterEndpointFromCloud\(\)/);
   assert.match(pairingSource, /discoverLanMasterCandidates\(\{ timeoutMs: 2500 \}\)/);

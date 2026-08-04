@@ -9,6 +9,7 @@ import {
   resolveMasterEndpointFromCloud,
 } from '../utils/cloudMasterRegistry';
 import { discoverLanMasterCandidates } from '../utils/masterLanDiscovery';
+import { isEligibleOperationalMasterConfig } from '../utils/masterServerEligibility';
 import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../services/sync/SyncProfile';
 import type { RuntimeTerminalRecoveryState } from '../services/setup/erpTerminalSetup';
 import {
@@ -130,6 +131,9 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
         }
 
         const fetchedConfig = await configResponse.json();
+        if (!isEligibleOperationalMasterConfig(fetchedConfig)) {
+          throw new Error('El equipo encontrado no es una Caja Master operativa.');
+        }
         const fetchedUsers = usersResponse.ok ? await usersResponse.json() : [];
         return {
           baseUrl,
