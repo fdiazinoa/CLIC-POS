@@ -67,6 +67,7 @@ import { resolveDeviceRoleValue } from './utils/deviceRoleHelpers';
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from './utils/posSaleActivity';
 import { canEnterReducedSyncMode, resolveReducedSyncAfterMinutes } from './utils/syncInactivityPolicy';
 import { validateRefundItems } from './utils/refundAvailability';
+import { buildPosMasterCatalogSnapshot } from './utils/posMasterCatalogContract';
 import {
   canUseLocalOperationalTableStore,
   isClientTerminalMode,
@@ -3621,7 +3622,9 @@ const AppContent: React.FC = () => {
     if (!isNativeAndroidRuntime()) return;
 
     let disposed = false;
-    const catalogs = {
+    // Antes de terminar el bootstrap, SQLite es más confiable que los estados
+    // React todavía vacíos. Luego, los estados vivos evitan publicar datos viejos.
+    const liveCatalogs = isDataLoaded ? {
       products,
       customers,
       warehouses,
@@ -3633,8 +3636,9 @@ const AppContent: React.FC = () => {
       transfers,
       receptions,
       productStocks,
-    };
-    const ensureMasterServer = (includeOperationalSnapshot = true) => {
+    } : {};
+    let catalogPublishInFlight = false;
+    const ensureMasterServer = async (includeOperationalSnapshot = true) => {
       if (disposed) return;
       const nativeBridge = (window as any).ClicPOSNativePrinter;
       const currentTerminal = getCurrentTerminal();
@@ -3649,6 +3653,20 @@ const AppContent: React.FC = () => {
 
       if (typeof nativeBridge?.startMasterServer !== 'function') {
         console.error('[MASTER_LAN] Native Master server bridge is unavailable.');
+        return;
+      }
+
+      if (catalogPublishInFlight) return;
+      catalogPublishInFlight = true;
+
+      const catalogs = await buildPosMasterCatalogSnapshot(
+        (collection) => db.get(collection as any),
+        liveCatalogs,
+        config,
+      );
+
+      if (disposed) {
+        catalogPublishInFlight = false;
         return;
       }
 
@@ -3679,6 +3697,9 @@ const AppContent: React.FC = () => {
             masterRestaurantBootstrapRequestedRef.current = false;
           }
           console.error('[MASTER_LAN] Could not ensure native server:', error);
+        })
+        .finally(() => {
+          catalogPublishInFlight = false;
         });
     };
 

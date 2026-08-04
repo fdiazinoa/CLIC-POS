@@ -52,6 +52,7 @@ import { reportSyncErrorDiagnostic, setCatalogDiagnosticStatus } from './SyncErr
 import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked } from '../../utils/deviceRevocation';
 import { triggerErpSyncOutbox } from '../../utils/erpSyncLifecycle';
 import { isPosSaleActive } from '../../utils/posSaleActivity';
+import { POS_MASTER_OPERATIONAL_CATALOGS } from '../../utils/posMasterCatalogContract';
 
 export type SyncableCollection =
     | 'products' | 'items' | 'taxes' | 'customers' | 'suppliers' | 'warehouses'
@@ -5945,19 +5946,9 @@ class SyncManager {
             : defaultCatalogs;
         if (target.kind === 'POS_MASTER' && !isMaster) {
             const androidMasterCollections = new Set<SyncableCollection>([
-                'products',
-                'customers',
-                'suppliers',
-                'warehouses',
-                'collections',
+                ...POS_MASTER_OPERATIONAL_CATALOGS,
                 'rooms',
                 'tables',
-                'users',
-                'roles',
-                'internalSequences',
-                'productStocks',
-                'transfers',
-                'receptions',
             ]);
             catalogs = defaultCatalogs.filter(collection => androidMasterCollections.has(collection));
         } else if (target.kind === 'ERP_ACTIVE') {
