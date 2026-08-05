@@ -10,7 +10,7 @@ const realtimeSource = await readFile(
 
 test('heartbeat remains independent and configuration safety polling is at least five minutes', () => {
   assert.match(appSource, /const HEARTBEAT_INTERVAL_MS = 60000/);
-  assert.match(appSource, /const CONFIG_SAFETY_CHECK_INTERVAL_MS = 300000/);
+  assert.match(appSource, /const CONFIG_SAFETY_CHECK_INTERVAL_MS = 15 \* 60 \* 1000/);
   assert.match(appSource, /requestConditionalTerminalConfig\('safety_check'\)/);
   assert.doesNotMatch(
     appSource.match(/const scheduleNextHeartbeat[\s\S]*?scheduleNextHeartbeat\(\);/)?.[0] || '',

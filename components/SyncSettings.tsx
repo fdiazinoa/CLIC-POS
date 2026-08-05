@@ -465,9 +465,12 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         setIsSyncing(true);
         try {
             await triggerErpSyncOutbox('manual_sync');
-            // Master should also use syncAllCatalogs to PULL operations (Z-Reports, etc.)
-            // while PUSHING catalogs.
-            await syncManager.syncAllCatalogs();
+            if (syncManager.isUsingConfigPushV2Primary()) {
+                await syncManager.syncTerminalManifestInBackground(undefined, { reason: 'manual_sync' });
+            } else {
+                // Legacy/POS master modes preserve their existing catalog flow.
+                await syncManager.syncAllCatalogs();
+            }
 
             if (isMaster) {
                 alert('✅ Sincronización completa. Catálogos enviados y datos operativos recibidos.');

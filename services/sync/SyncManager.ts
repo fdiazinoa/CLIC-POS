@@ -50,9 +50,17 @@ import { protectsLocalCatalogFromCloud, syncPolicy } from './SyncProfile';
 import { isPosCloudStagingPushCollection } from './PosCloudStagingService';
 import { reportSyncErrorDiagnostic, setCatalogDiagnosticStatus } from './SyncErrorDiagnostic';
 import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked } from '../../utils/deviceRevocation';
-import { triggerErpSyncOutbox } from '../../utils/erpSyncLifecycle';
+import { isConfigPushV2Enabled, triggerErpSyncOutbox } from '../../utils/erpSyncLifecycle';
 import { isPosSaleActive } from '../../utils/posSaleActivity';
 import { POS_MASTER_OPERATIONAL_CATALOGS } from '../../utils/posMasterCatalogContract';
+import {
+    ERP_SUPPORTED_MASTER_COLLECTIONS,
+    isCriticalErpMasterCollection,
+} from './ErpMasterSyncContract';
+import {
+    resolveAutomaticMasterSyncStrategy,
+    shouldRunLegacyAutomaticMasterSweep,
+} from './ErpMasterSyncStrategy';
 
 export type SyncableCollection =
     | 'products' | 'items' | 'taxes' | 'customers' | 'suppliers' | 'warehouses'
@@ -72,68 +80,6 @@ export type SyncableCollection =
     | 'loyaltyPointMovements' | 'loyaltyPointAccruals' | 'loyaltyPointRedemptions'
     | 'pointAdjustments' | 'issuedFiscalDocuments' | 'fiscalDocumentUsages'
     | 'purchaseOrders' | 'activities' | 'crmOpportunities' | 'erp_sales_documents';
-
-const MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
-    'products',
-    'items',
-    'taxes',
-    'customers',
-    'suppliers',
-    'warehouses',
-    'paymentMethods',
-    'priceLists',
-    'productStocks',
-    'productPrices',
-    'supplierProductPrices',
-    'categories',
-    'productCategories',
-    'productGroups',
-    'collections',
-    'serviceTypes',
-    'rooms',
-    'tables',
-    'productionAreas',
-    'documentSeries',
-    'documentTypes',
-    'fiscalRanges',
-    'fiscalReceiptTypes',
-    'fiscalReceipts',
-    'fiscalSequences',
-    'internalSequences',
-    'terminalFiscalConfig',
-    'promotions',
-    'campaigns',
-    'coupons',
-    'discountRules',
-    'promotionRules',
-    'promotionConditions',
-    'promotionBenefits',
-    'pointsPrograms',
-    'loyaltyPrograms',
-    'pointsRules',
-    'earningRules',
-    'redemptionRules',
-    'customerPointBalances',
-    'loyaltyTiers',
-    'users',
-    'roles',
-]);
-
-const CRITICAL_MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
-    'products',
-    'taxes',
-    'warehouses',
-    'paymentMethods',
-    'categories',
-    'productCategories',
-    'productGroups',
-    'collections',
-    'documentSeries',
-    'fiscalRanges',
-    'fiscalSequences',
-    'internalSequences',
-    'terminalFiscalConfig',
-]);
 
 const FISCAL_MASTER_COLLECTIONS_FOR_ERP_PULL = new Set<SyncableCollection>([
     'documentSeries',
@@ -195,13 +141,13 @@ const OPERATION_COLLECTIONS_FOR_ERP_PUSH = new Set<SyncableCollection>([
 ]);
 
 const isErpMasterPullCollection = (collection: SyncableCollection): boolean =>
-    MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection);
+    ERP_SUPPORTED_MASTER_COLLECTIONS.has(collection);
 
 const isErpOperationCollection = (collection: SyncableCollection): boolean =>
     OPERATION_COLLECTIONS_FOR_ERP_PUSH.has(collection);
 
 const isErpCriticalMasterCollection = (collection: SyncableCollection): boolean =>
-    CRITICAL_MASTER_COLLECTIONS_FOR_ERP_PULL.has(collection);
+    isCriticalErpMasterCollection(collection);
 
 const isPaymentMethodsMissingSyncError = (error: unknown): boolean => {
     if (!error || typeof error !== 'object') return false;
@@ -1025,7 +971,13 @@ class SyncManager {
             } catch (configError) {
                 console.warn('⚠️ SyncManager: Master config refresh failed during init:', configError);
             }
-            if (apiSyncAdapter.isErpActiveOperationalTarget()) {
+            if (this.isUsingConfigPushV2Primary()) {
+                console.info('[SYNC_STRATEGY]', {
+                    target: 'ERP_ACTIVE',
+                    strategy: 'CONFIG_PUSH_V2_PRIMARY',
+                    action: 'legacy_startup_recovery_skipped',
+                });
+            } else if (apiSyncAdapter.isErpActiveOperationalTarget()) {
                 void this.initializeMasterData().catch((error) => {
                     console.warn('⚠️ SyncManager: ERP startup master recovery deferred/failed:', error);
                 });
@@ -1038,6 +990,10 @@ class SyncManager {
         apiSyncAdapter.setOnConnectionRestored(async () => {
             console.log('🔄 SyncManager: Connection restored, re-triggering recovery/sync...');
             await triggerErpSyncOutbox('connection_restored');
+            if (this.isUsingConfigPushV2Primary()) {
+                await this.syncTerminalManifestInBackground(undefined, { reason: 'connection_restored' });
+                return;
+            }
             if (this.isMaster) {
                 await this.initializeMasterData();
             } else {
@@ -2908,15 +2864,33 @@ class SyncManager {
         baseConfig?: BusinessConfig | null,
         options?: {
             bootstrapBlocks?: boolean;
+            reason?: 'startup' | 'connection_restored' | 'app_resumed' | 'manual_sync' | 'force_sync' | 'periodic_manifest' | 'realtime';
         }
     ): Promise<BusinessConfig | null> {
+        const startedAt = Date.now();
         try {
-            return await this.reconcileTerminalManifest(baseConfig ?? null, {
+            const result = await this.reconcileTerminalManifest(baseConfig ?? null, {
                 skipIfStartupCompleted: false,
                 markStartupCompleted: false,
                 bootstrapBlocks: Boolean(options?.bootstrapBlocks),
             });
+            console.info('[SYNC_FALLBACK]', {
+                reason: options?.reason || 'periodic_manifest',
+                mechanism: 'terminal_manifest',
+                legacy_collection_sweep: false,
+                avoided_metadata_requests: ERP_SUPPORTED_MASTER_COLLECTIONS.size,
+                result: result ? 'APPLIED' : 'NO_CHANGES',
+                duration_ms: Date.now() - startedAt,
+            });
+            return result;
         } catch (error) {
+            console.warn('[SYNC_FALLBACK]', {
+                reason: options?.reason || 'periodic_manifest',
+                mechanism: 'terminal_manifest',
+                legacy_collection_sweep: false,
+                result: 'FAILED',
+                duration_ms: Date.now() - startedAt,
+            });
             console.warn('⚠️ SyncManager: background manifest sync failed:', error);
             return null;
         }
@@ -4930,8 +4904,13 @@ class SyncManager {
         this.isRecoveringConnection = false;
 
         // Force immediate sync
-        setTimeout(() => {
+        setTimeout(async () => {
             console.log('🔄 SyncManager: Triggering immediate post-recovery sync.');
+            if (this.isUsingConfigPushV2Primary()) {
+                await triggerErpSyncOutbox('connection_restored');
+                await this.syncTerminalManifestInBackground(undefined, { reason: 'connection_restored' });
+                return;
+            }
             this.checkForUpdates().then((updates) => {
                 if (updates.length > 0) this.syncAllCatalogs();
             });
@@ -6583,6 +6562,14 @@ class SyncManager {
         return apiSyncAdapter.isErpActiveOperationalTarget();
     }
 
+    isUsingConfigPushV2Primary(): boolean {
+        const target = syncPolicy.resolve();
+        return resolveAutomaticMasterSyncStrategy({
+            targetKind: target.kind,
+            configPushV2Enabled: isConfigPushV2Enabled(),
+        }) === 'CONFIG_PUSH_V2_PRIMARY';
+    }
+
     /**
      * Start automatic sync (for slave terminals)
      */
@@ -6593,18 +6580,50 @@ class SyncManager {
             this.stopAutoSync();
         }
 
-        this.autoSyncInterval = setInterval(() => {
-            void this.runAutomaticMasterDataSync();
-        }, intervalMs);
+        const target = syncPolicy.resolve();
+        const strategy = resolveAutomaticMasterSyncStrategy({
+            targetKind: target.kind,
+            configPushV2Enabled: isConfigPushV2Enabled(),
+        });
 
         if (!permissionService.isMasterTerminal()) {
             this.startImageSync(this.IMAGE_SYNC_INTERVAL_MS);
         }
 
-        console.log(`⏰ Auto-sync started (${intervalMs / 1000}s interval)`);
+        if (strategy === 'CONFIG_PUSH_V2_PRIMARY') {
+            console.info('[SYNC_STRATEGY]', {
+                target: target.kind,
+                strategy,
+                legacy_sweep_interval_ms: null,
+                avoided_metadata_requests_per_cycle: ERP_SUPPORTED_MASTER_COLLECTIONS.size,
+                fallback: 'startup_reconnect_manual_manifest',
+            });
+            return;
+        }
+
+        this.autoSyncInterval = setInterval(() => {
+            void this.runAutomaticMasterDataSync();
+        }, intervalMs);
+
+        console.log(`⏰ Auto-sync started (${intervalMs / 1000}s interval, ${strategy})`);
     }
 
     private async runAutomaticMasterDataSync(): Promise<void> {
+        const target = syncPolicy.resolve();
+        const strategyInput = {
+            targetKind: target.kind,
+            configPushV2Enabled: isConfigPushV2Enabled(),
+        };
+        if (!shouldRunLegacyAutomaticMasterSweep(strategyInput)) {
+            console.info('[SYNC_STRATEGY]', {
+                target: target.kind,
+                strategy: resolveAutomaticMasterSyncStrategy(strategyInput),
+                action: 'legacy_master_sweep_skipped',
+                avoided_metadata_requests: ERP_SUPPORTED_MASTER_COLLECTIONS.size,
+            });
+            return;
+        }
+
         if (!permissionService.isMasterTerminal()) {
             try {
                 await this.pullConfig();

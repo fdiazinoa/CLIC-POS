@@ -177,6 +177,17 @@ class RealtimeNotificationService {
             const specificCollections = normalizeCollections(eventPayload);
             const imageOnly = Boolean(eventPayload.imageOnly || eventPayload.image_only || eventPayload.reason === 'PRODUCT_IMAGE_UPDATED');
 
+            if (syncManager.isUsingConfigPushV2Primary() && !imageOnly) {
+                await syncManager.syncTerminalManifestInBackground(undefined, { reason: 'realtime' });
+                console.info('[SYNC_STRATEGY]', {
+                    target: 'ERP_ACTIVE',
+                    strategy: 'CONFIG_PUSH_V2_PRIMARY',
+                    action: 'realtime_legacy_catalog_pull_skipped',
+                    requested_collections: specificCollections.length,
+                });
+                return;
+            }
+
             if (imageOnly || specificCollections.length > 0) {
                 this.scheduleLightweightSync(eventPayload, imageOnly ? ['products'] : specificCollections);
                 return;

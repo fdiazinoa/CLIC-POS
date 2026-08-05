@@ -58,6 +58,8 @@ const resetHarness = () => {
     collections.set('productPrices', []);
     localStorage.setItem('CLIC_ERP_BASE_URL', 'https://erp.example.test');
     localStorage.setItem('CLIC_POS_DEVICE_ID', deviceId);
+    localStorage.setItem('clic_tenant_id', 'tenant-config-push-contract');
+    localStorage.setItem('clic_erp_sync_tenant_id', 'tenant-config-push-contract');
     localStorage.setItem('clic_erp_sync_terminal_id', terminalId);
     localStorage.setItem('clic_erp_sync_local_terminal_id', localTerminalId);
     localStorage.setItem('active_terminal_id', localTerminalId);
@@ -148,6 +150,19 @@ test('maps ERP prices { cursor, prices } to canonical productPrices', async () =
     assert.equal((writes[0].value as any[])[0].tariffId, 'tariff-1');
 });
 
+test('migrates legacy config and documents version keys to canonical ERP domains', () => {
+    resetHarness();
+    localStorage.setItem('clic_pos_config_push_v2_state', JSON.stringify({
+        versionHash: 'legacy-domain-state',
+        domainVersions: { config: 7, terminal_config: 6, documents: 4 },
+    }));
+
+    assert.deepEqual(lifecycle.getConfigPushV2Diagnostics().domainVersions, {
+        terminal_config: 7,
+        fiscal: 4,
+    });
+});
+
 test('accepts an empty ERP prices array as an authoritative clear', async () => {
     resetHarness();
     const writes = await lifecycle.buildConfigPushV2DomainWrites('prices', { cursor: 'cursor-empty', prices: [] });
@@ -228,7 +243,7 @@ test('applies and persists USD from CONFIG_PUSH_V2 while keeping DOP enabled', a
 
     const diagnostics = lifecycle.getConfigPushV2Diagnostics();
     assert.equal(diagnostics.versionHash, 'hash-usd-base-currency');
-    assert.equal(diagnostics.domainVersions.config, 7);
+    assert.equal(diagnostics.domainVersions.terminal_config, 7);
     assert.ok(diagnostics.appliedAt);
 });
 
@@ -465,6 +480,8 @@ test('maps nested loyalty into BusinessConfig and legacy loyalty collections', a
     });
     assert.deepEqual((writes.find((write) => write.collection === 'loyaltyPrograms')?.value as any[]).map((row) => row.id), ['program-1']);
     assert.deepEqual((writes.find((write) => write.collection === 'loyaltyTiers')?.value as any[]).map((row) => row.id), ['tier-1']);
+    assert.deepEqual(writes.find((write) => write.collection === 'campaigns')?.value, []);
+    assert.deepEqual(writes.find((write) => write.collection === 'coupons')?.value, []);
     assert.equal((writes.find((write) => write.collection === 'config')?.value as any).loyalty.earnRate, 2);
 });
 
@@ -485,7 +502,7 @@ test('applies prices + terminal_config + loyalty atomically and ACKs APPLIED', a
     assert.match(snapshotUrls[0], /scopes=prices%2Cterminal_config%2Cloyalty/);
     assert.equal((collections.get('productPrices') as any[]).length, 1);
     const state = JSON.parse(localStorage.getItem('clic_pos_config_push_v2_state') || '{}');
-    assert.deepEqual(state.domainVersions, { prices: 2, config: 3, loyalty: 4 });
+    assert.deepEqual(state.domainVersions, { prices: 2, terminal_config: 3, loyalty: 4 });
 });
 
 test('rolls back every prior collection when a later domain is invalid', async () => {

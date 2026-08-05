@@ -10,6 +10,11 @@ import { DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS } from '../constants';
 import { getDefaultRoleConfig, normalizeDeviceRoleValue, resolveDeviceRoleValue } from './deviceRoleHelpers';
 import { resolveOrderTakerContract } from './orderTakerPolicy';
 import {
+    ERP_CONFIG_PUSH_V2_DOMAIN_COLLECTIONS,
+    ERP_CONFIG_PUSH_V2_DOMAINS,
+    type ErpMasterDomain,
+} from '../services/sync/ErpMasterSyncContract';
+import {
     DEVICE_SUPERSEDED_MESSAGE,
     dispatchDeviceRevoked,
     isDeviceSupersededError,
@@ -106,6 +111,8 @@ type ConfigPushV2Payload = {
     scopes?: unknown;
     terminal_id?: string;
     terminalId?: string;
+    tenant_id?: string;
+    tenantId?: string;
     created_at?: string;
 };
 
@@ -131,6 +138,10 @@ type ConfigSnapshotResponse = {
     versions?: Record<string, unknown>;
     scopes?: unknown;
     domains?: Record<string, unknown>;
+    tenant_id?: string;
+    tenantId?: string;
+    terminal_id?: string;
+    terminalId?: string;
 };
 
 type SyncOutboxPullResponse = {
@@ -198,28 +209,8 @@ const TERMINAL_CONFIG_PENDING_SNAPSHOT_KEY = 'clic_pos_terminal_config_pending_s
 const CONFIG_PUSH_V2_STATE_KEY = 'clic_pos_config_push_v2_state';
 const CONFIG_PUSH_V2_FLAG_KEY = 'CONFIG_PUSH_V2_ENABLED';
 const CONFIG_PUSH_V2_CAPABILITY = 'CONFIG_PUSH_V2';
-const CONFIG_PUSH_V2_SUPPORTED_SCOPES = new Set([
-    'catalog',
-    'prices',
-    'inventory',
-    'loyalty',
-    'documents',
-    'promotions',
-    'config',
-    'purchase_orders',
-    'transfers',
-]);
-const CONFIG_PUSH_V2_DOMAIN_COLLECTIONS: Record<string, string[]> = {
-    catalog: ['products', 'items', 'customers', 'suppliers', 'users', 'roles', 'categories', 'productCategories', 'productGroups', 'collections', 'serviceTypes'],
-    prices: ['priceLists', 'productPrices', 'supplierProductPrices'],
-    inventory: ['warehouses', 'productStocks'],
-    loyalty: ['pointsPrograms', 'loyaltyPrograms', 'pointsRules', 'earningRules', 'redemptionRules', 'customerPointBalances', 'loyaltyTiers'],
-    documents: ['documentSeries', 'documentTypes', 'fiscalRanges', 'fiscalAllocations', 'fiscalReceiptTypes', 'fiscalReceipts', 'fiscalSequences', 'internalSequences', 'terminalFiscalConfig', 'taxes'],
-    promotions: ['promotions', 'campaigns', 'coupons', 'discountRules', 'promotionRules', 'promotionConditions', 'promotionBenefits'],
-    config: ['config'],
-    purchase_orders: ['purchaseOrders'],
-    transfers: ['transfers'],
-};
+const CONFIG_PUSH_V2_SUPPORTED_SCOPES = ERP_CONFIG_PUSH_V2_DOMAINS;
+const CONFIG_PUSH_V2_DOMAIN_COLLECTIONS = ERP_CONFIG_PUSH_V2_DOMAIN_COLLECTIONS;
 
 type ConfigPushV2CollectionWrite = {
     collection: string;
@@ -285,9 +276,15 @@ const readConfigPushV2State = (): ConfigPushV2State => {
         if (!raw) return { versionHash: null, domainVersions: {} };
         const parsed = JSON.parse(raw);
         const domainVersions = parsed?.domainVersions && typeof parsed.domainVersions === 'object'
-            ? Object.fromEntries(
-                Object.entries(parsed.domainVersions).map(([key, value]) => [key, Number(value) || 0])
-            )
+            ? Object.entries(parsed.domainVersions).reduce<Record<string, number>>((acc, [key, value]) => {
+                const normalizedKey = key === 'config'
+                    ? 'terminal_config'
+                    : key === 'documents'
+                        ? 'fiscal'
+                        : key;
+                acc[normalizedKey] = Math.max(acc[normalizedKey] || 0, Number(value) || 0);
+                return acc;
+            }, {})
             : {};
         return {
             versionHash: normalizeOptional(parsed?.versionHash || null) || null,
@@ -326,17 +323,13 @@ const normalizeConfigPushV2Scope = (value: unknown): string | null => {
     if (['product_prices', 'productprices', 'prices'].includes(normalized)) return 'prices';
     if (['stock', 'stocks', 'inventory_stock'].includes(normalized)) return 'inventory';
     if (['promo', 'promotion'].includes(normalized)) return 'promotions';
-    if (['terminal_config', 'terminalconfig', 'config'].includes(normalized)) return 'config';
-    if (['fiscal', 'documents'].includes(normalized)) return 'documents';
+    if (['terminal_config', 'terminalconfig', 'config'].includes(normalized)) return 'terminal_config';
+    if (['fiscal', 'documents'].includes(normalized)) return 'fiscal';
     if (['purchaseorders', 'purchase_orders'].includes(normalized)) return 'purchase_orders';
     return normalized;
 };
 
-const toConfigPushV2WireScope = (scope: string): string => {
-    if (scope === 'config') return 'terminal_config';
-    if (scope === 'documents') return 'fiscal';
-    return scope;
-};
+const toConfigPushV2WireScope = (scope: string): string => scope;
 
 const normalizeConfigPushV2Scopes = (value: unknown): string[] => {
     const raw = Array.isArray(value)
@@ -347,7 +340,7 @@ const normalizeConfigPushV2Scopes = (value: unknown): string[] => {
     return Array.from(new Set(
         raw
             .map(normalizeConfigPushV2Scope)
-            .filter((scope): scope is string => Boolean(scope && CONFIG_PUSH_V2_SUPPORTED_SCOPES.has(scope)))
+            .filter((scope): scope is ErpMasterDomain => Boolean(scope && CONFIG_PUSH_V2_SUPPORTED_SCOPES.has(scope as ErpMasterDomain)))
     ));
 };
 
@@ -369,7 +362,7 @@ const normalizeConfigPushV2Domains = (value: unknown): Record<string, unknown> =
     const normalized: Record<string, unknown> = {};
     Object.entries(source).forEach(([rawScope, payload]) => {
         const scope = normalizeConfigPushV2Scope(rawScope);
-        if (!scope || !CONFIG_PUSH_V2_SUPPORTED_SCOPES.has(scope)) return;
+        if (!scope || !CONFIG_PUSH_V2_SUPPORTED_SCOPES.has(scope as ErpMasterDomain)) return;
         const existing = asObject<Record<string, unknown>>(normalized[scope]);
         normalized[scope] = {
             ...existing,
@@ -629,6 +622,9 @@ export const buildConfigPushV2DomainWrites = async (
     scope: string,
     domainPayload: unknown
 ): Promise<ConfigPushV2CollectionWrite[]> => {
+    // Keep the public helper backward-compatible with the former local names
+    // while storing and comparing only canonical ERP domain versions.
+    scope = normalizeConfigPushV2Scope(scope) || scope;
     const domain = asObject<Record<string, unknown>>(domainPayload);
     const writes = new Map<string, unknown>();
     const addArray = (collection: string, ...values: unknown[]) => {
@@ -662,7 +658,7 @@ export const buildConfigPushV2DomainWrites = async (
         addArray('productGroups', domain.productGroups, domain.product_groups, catalog.productGroups, catalog.product_groups);
         addArray('collections', domain.collections, catalog.collections);
         addArray('serviceTypes', domain.serviceTypes, domain.service_types, catalog.serviceTypes, catalog.service_types);
-    } else if (scope === 'documents') {
+    } else if (scope === 'fiscal') {
         addArray('documentSeries', domain.documentSeries, domain.document_series, documents.documentSeries, documents.document_series);
         addArray('documentTypes', domain.documentTypes, domain.document_types, documents.documentTypes, documents.document_types);
         addArray('fiscalRanges', domain.fiscalRanges, domain.fiscal_ranges, documents.fiscalRanges, documents.fiscal_ranges);
@@ -674,7 +670,7 @@ export const buildConfigPushV2DomainWrites = async (
             fiscal: asObject<Record<string, unknown>>(domain.fiscal),
         });
         if (configWrite) writes.set(configWrite.collection, configWrite.value);
-    } else if (scope === 'config') {
+    } else if (scope === 'terminal_config') {
         const configWrite = await buildConfigWriteFromSnapshot(domain, asObject<Record<string, unknown>>(domain.resolved));
         if (configWrite) writes.set(configWrite.collection, configWrite.value);
     } else if (scope === 'loyalty') {
@@ -779,6 +775,8 @@ const validateConfigSnapshotResponse = (input: {
     snapshotId: string;
     versionHash: string;
     requestedScopes: string[];
+    tenantId: string;
+    terminalId: string;
 }) => {
     const responseSnapshotId = normalizeOptional(input.payload.snapshot_id || null);
     const responseVersionHash = normalizeOptional(input.payload.version_hash || null);
@@ -787,6 +785,15 @@ const validateConfigSnapshotResponse = (input: {
     }
     if (responseVersionHash !== input.versionHash) {
         throw new Error('SYNC_SNAPSHOT_VERSION_MISMATCH');
+    }
+
+    const responseTenantId = normalizeOptional(input.payload.tenant_id || input.payload.tenantId || null);
+    if (responseTenantId && responseTenantId.toLowerCase() !== input.tenantId.toLowerCase()) {
+        throw new Error('SYNC_SNAPSHOT_TENANT_MISMATCH');
+    }
+    const responseTerminalId = normalizeOptional(input.payload.terminal_id || input.payload.terminalId || null);
+    if (responseTerminalId && !sameTerminalId(responseTerminalId, [input.terminalId])) {
+        throw new Error('SYNC_SNAPSHOT_TERMINAL_MISMATCH');
     }
 
     const responseScopes = normalizeConfigPushV2Scopes(input.payload.scopes);
@@ -821,6 +828,8 @@ const processConfigPushV2Event = async (
     const versions = normalizeVersionsMap(payload.versions);
     const scopes = normalizeConfigPushV2Scopes(payload.scopes);
     const terminalId = normalizeOptional(payload.terminal_id || payload.terminalId || null);
+    const eventTenantId = normalizeOptional(payload.tenant_id || payload.tenantId || null);
+    const boundTenantId = normalizeOptional(binding.tenantId || null);
 
     configPushV2Log('config_push_v2_received', {
         event_id: eventId,
@@ -835,6 +844,12 @@ const processConfigPushV2Event = async (
 
     if (!sameTerminalId(terminalId, [binding.terminalId, binding.terminalUuid, params.terminalId, params.localTerminalId])) {
         throw new Error('CONFIG_PUSH_V2_TERMINAL_MISMATCH');
+    }
+    if (!boundTenantId) {
+        throw new Error('CONFIG_PUSH_V2_TENANT_BINDING_MISSING');
+    }
+    if (eventTenantId && eventTenantId.toLowerCase() !== boundTenantId.toLowerCase()) {
+        throw new Error('CONFIG_PUSH_V2_TENANT_MISMATCH');
     }
 
     configPushV2Log('CONFIG_PUSH_V2_APPLY_STARTED', {
@@ -885,6 +900,15 @@ const processConfigPushV2Event = async (
     }
 
     const staleScopes = scopes.filter((scope) => Number(versions[scope] || 0) > getConfigPushV2LocalVersion(state, scope));
+    scopes.forEach((scope) => {
+        configPushV2Log('config_push_v2_domain_version_compared', {
+            reason: 'outbox_event',
+            domain: scope,
+            local_version: getConfigPushV2LocalVersion(state, scope),
+            remote_version: Number(versions[scope] || 0),
+            download_required: staleScopes.includes(scope),
+        });
+    });
     if (staleScopes.length === 0) {
         configPushV2Log('CONFIG_PUSH_V2_ALREADY_APPLIED', {
             outbox_id: eventId,
@@ -979,6 +1003,8 @@ const processConfigPushV2Event = async (
                 snapshotId,
                 versionHash,
                 requestedScopes: staleScopes,
+                tenantId: boundTenantId,
+                terminalId,
             });
 
             configPushV2Log('config_snapshot_downloaded', {
@@ -987,7 +1013,7 @@ const processConfigPushV2Event = async (
                 version_hash: versionHash,
                 scopes: staleScopes,
                 attempt,
-                size: result.size,
+                bytes_received: result.size,
             });
 
             const domains = normalizeConfigPushV2Domains(snapshotPayload.domains);
