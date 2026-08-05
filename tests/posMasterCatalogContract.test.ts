@@ -146,6 +146,11 @@ test('client KDS dispatch self-heals missing routing from the Master', () => {
   assert.match(managerSource, /pullLinkedMasterSnapshot\('products', linkedTarget\)/);
   assert.match(managerSource, /resolveMasterOperationalBaseUrl\(\)/);
   assert.doesNotMatch(managerSource, /pullProductionRoutingFromLinkedMaster[\s\S]{0,300}if \(this\.isMaster\)/);
+  assert.match(managerSource, /const isOperationalClient = isClientTerminalMode\(\)/);
+  assert.match(
+    managerSource,
+    /this\.isMaster = !isOperationalClient && permissionService\.isMasterTerminal\(\)/,
+  );
   assert.match(adapterSource, /pullLinkedMasterSnapshot\(\s*collection: string,/);
   assert.match(adapterSource, /\/api\/sync\/collections\/\$\{collection\}\/data/);
   assert.match(posSource, /diagnosticContext: \{ operation: 'KDS_POST' \}/);

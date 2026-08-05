@@ -53,7 +53,10 @@ import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked } from '../../utils/de
 import { isConfigPushV2Enabled, triggerErpSyncOutbox } from '../../utils/erpSyncLifecycle';
 import { isPosSaleActive } from '../../utils/posSaleActivity';
 import { POS_MASTER_OPERATIONAL_CATALOGS } from '../../utils/posMasterCatalogContract';
-import { resolveMasterOperationalBaseUrl } from '../../utils/masterOperationalApi';
+import {
+    isClientTerminalMode,
+    resolveMasterOperationalBaseUrl,
+} from '../../utils/masterOperationalApi';
 import {
     ERP_SUPPORTED_MASTER_COLLECTIONS,
     isCriticalErpMasterCollection,
@@ -778,7 +781,12 @@ class SyncManager {
         */
 
         permissionService.initialize(config, terminalId);
-        this.isMaster = permissionService.isMasterTerminal();
+        const isOperationalClient = isClientTerminalMode();
+        // The setup mode is the authoritative runtime role. A reauthorized
+        // Order Taker can retain an old isPrimaryNode flag in its downloaded
+        // terminal config; treating that stale flag as authoritative rewrites
+        // the paired Master URL to this device and breaks tables/KDS routing.
+        this.isMaster = !isOperationalClient && permissionService.isMasterTerminal();
 
         // Get sync configuration from terminal config
         const terminal = (config.terminals || []).find(t => t.id === terminalId);
