@@ -16,4 +16,3 @@ export const resolveAutomaticMasterSyncStrategy = ({
 
 export const shouldRunLegacyAutomaticMasterSweep = (input: AutomaticMasterSyncStrategyInput): boolean =>
     resolveAutomaticMasterSyncStrategy(input) === 'LEGACY_COLLECTION_SWEEP';
-
