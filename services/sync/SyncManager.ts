@@ -53,6 +53,7 @@ import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked } from '../../utils/de
 import { isConfigPushV2Enabled, triggerErpSyncOutbox } from '../../utils/erpSyncLifecycle';
 import { isPosSaleActive } from '../../utils/posSaleActivity';
 import { POS_MASTER_OPERATIONAL_CATALOGS } from '../../utils/posMasterCatalogContract';
+import { resolveMasterOperationalBaseUrl } from '../../utils/masterOperationalApi';
 import {
     ERP_SUPPORTED_MASTER_COLLECTIONS,
     isCriticalErpMasterCollection,
@@ -5465,14 +5466,20 @@ class SyncManager {
         productionAreaCount: number;
         productCount: number;
     }> {
-        if (this.isMaster) {
-            return { productionAreaCount: 0, productCount: 0 };
-        }
-
         const startedAt = Date.now();
+        const masterUrl = resolveMasterOperationalBaseUrl();
+        const terminalId = String(
+            permissionService.getTerminalId()
+            || localStorage.getItem('CLIC_POS_TERMINAL_ID')
+            || '',
+        ).trim();
+        if (!masterUrl || !terminalId) {
+            throw new Error('La Caja Cliente no tiene una Master vinculada para recuperar rutas de producción.');
+        }
+        const linkedTarget = { masterUrl, terminalId };
         const [productionAreas, pulledProducts] = await Promise.all([
-            apiSyncAdapter.pullLinkedMasterSnapshot('productionAreas'),
-            apiSyncAdapter.pullLinkedMasterSnapshot('products'),
+            apiSyncAdapter.pullLinkedMasterSnapshot('productionAreas', linkedTarget),
+            apiSyncAdapter.pullLinkedMasterSnapshot('products', linkedTarget),
         ]);
         const products = (await this.enrichPulledProducts(pulledProducts))
             .map((item: any) => normalizeRestaurantProductConfig(item));

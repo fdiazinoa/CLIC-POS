@@ -58,6 +58,7 @@ import ReturnModal from './ReturnModal';
 import PromoBottomSheet from './PromoBottomSheet';
 import { backgroundSyncManager, SyncState } from '../services/sync/BackgroundSyncManager';
 import { syncManager } from '../services/sync/SyncManager';
+import { requestJson } from '../services/network/httpClient';
 import ProductTableSupermarket from './ProductTableSupermarket';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { printComanda, printPrecuenta } from '../utils/printer';
@@ -248,24 +249,19 @@ const normalizeViewMode = (value: unknown): string => {
 const isRetailViewMode = (value: unknown): boolean => normalizeViewMode(value) === 'RETAIL';
 
 const postJsonWithTimeout = async (url: string, payload: unknown, timeoutMs = 5000) => {
-   const controller = new AbortController();
-   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-
-   try {
-      const response = await fetch(url, {
-         method: 'POST',
-         headers: { 'Content-Type': 'application/json' },
-         body: JSON.stringify(payload),
-         signal: controller.signal,
-      });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) {
-         throw new Error(data?.message || data?.error || `HTTP ${response.status}`);
-      }
-      return data;
-   } finally {
-      window.clearTimeout(timeoutId);
+   const response = await requestJson<any>({
+      url,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      timeoutMs,
+      diagnosticContext: { operation: 'KDS_POST' },
+   });
+   const data = response.data;
+   if (!response.ok) {
+      throw new Error(data?.message || data?.error || `HTTP ${response.status}`);
    }
+   return data;
 };
 
 const getConsignmentDocumentNo = (consignment: ErpConsignment): string =>
