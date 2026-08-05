@@ -22,6 +22,14 @@ const syncSettingsSource = await readFile(
     new URL('../components/SyncSettings.tsx', import.meta.url),
     'utf8',
 );
+const syncStatusSource = await readFile(
+    new URL('../components/SyncStatusIndicator.tsx', import.meta.url),
+    'utf8',
+);
+const apiAdapterSource = await readFile(
+    new URL('../services/sync/ApiSyncAdapter.ts', import.meta.url),
+    'utf8',
+);
 
 test('ERP_ACTIVE with CONFIG_PUSH_V2 skips legacy collection sweeps', () => {
     const input = { targetKind: 'ERP_ACTIVE', configPushV2Enabled: true };
@@ -65,4 +73,11 @@ test('startup, reconnect, manifest and manual fallbacks remain available', () =>
     assert.match(appSource, /requestConditionalTerminalConfig\('connection_restored'\)/);
     assert.match(appSource, /MANIFEST_REFRESH_INTERVAL_MS = 15 \* 60 \* 1000/);
     assert.match(syncSettingsSource, /triggerErpSyncOutbox\('manual_sync'\)/);
+    assert.match(syncStatusSource, /triggerErpSyncOutbox\('manual_sync'\)/);
+});
+
+test('ERP-declared unsupported collections are disabled for the runtime session', () => {
+    assert.match(apiAdapterSource, /ERP_RUNTIME_UNSUPPORTED_MASTER_COLLECTIONS/);
+    assert.match(apiAdapterSource, /input\.payload\?\.supported === false/);
+    assert.match(apiAdapterSource, /retry_policy: 'disabled_for_runtime_session'/);
 });

@@ -2864,7 +2864,7 @@ class SyncManager {
         baseConfig?: BusinessConfig | null,
         options?: {
             bootstrapBlocks?: boolean;
-            reason?: 'startup' | 'connection_restored' | 'manual_sync' | 'force_sync' | 'periodic_manifest' | 'realtime';
+            reason?: 'startup' | 'connection_restored' | 'app_resumed' | 'manual_sync' | 'force_sync' | 'periodic_manifest' | 'realtime';
         }
     ): Promise<BusinessConfig | null> {
         const startedAt = Date.now();

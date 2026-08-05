@@ -143,6 +143,8 @@ const ERP_SYNC_TOKEN_KEYS = [
 const ERP_SYNC_TOKEN_EXPIRES_AT_KEY = 'clic_erp_sync_token_expires_at';
 const ERP_SYNC_TOKEN_UPDATED_AT_KEY = 'clic_erp_sync_token_updated_at';
 const ERP_MASTER_PULL_COLLECTIONS = ERP_SUPPORTED_MASTER_COLLECTIONS;
+const ERP_RUNTIME_UNSUPPORTED_MASTER_COLLECTIONS = new Set<string>();
+const ERP_UNSUPPORTED_WARNING_COLLECTIONS = new Set<string>();
 const ERP_OPERATION_PUSH_COLLECTIONS = new Set([
     'transactions',
     'payments',
@@ -171,7 +173,22 @@ const ERP_OPERATION_PUSH_COLLECTIONS = new Set([
     'erp_sales_documents',
 ]);
 const isErpMasterPullCollection = (collection: string): boolean =>
-    ERP_MASTER_PULL_COLLECTIONS.has(collection);
+    ERP_MASTER_PULL_COLLECTIONS.has(collection)
+    && !ERP_RUNTIME_UNSUPPORTED_MASTER_COLLECTIONS.has(collection);
+
+const markErpMasterCollectionUnsupported = (
+    collection: string,
+    details: Record<string, unknown>,
+): void => {
+    ERP_RUNTIME_UNSUPPORTED_MASTER_COLLECTIONS.add(collection);
+    if (ERP_UNSUPPORTED_WARNING_COLLECTIONS.has(collection)) return;
+    ERP_UNSUPPORTED_WARNING_COLLECTIONS.add(collection);
+    console.warn('[SYNC_COLLECTION_SKIPPED_UNSUPPORTED_COLLECTION]', {
+        collection,
+        retry_policy: 'disabled_for_runtime_session',
+        ...details,
+    });
+};
 
 const isErpOperationPushCollection = (collection: string): boolean =>
     ERP_OPERATION_PUSH_COLLECTIONS.has(collection);
@@ -181,6 +198,7 @@ const logSkippedNonMasterPull = (
     operation: OperationalSyncOperation,
     endpoint?: string
 ): void => {
+    if (ERP_RUNTIME_UNSUPPORTED_MASTER_COLLECTIONS.has(collection)) return;
     console.warn('[SYNC_COLLECTION_SKIPPED_NOT_A_MASTER]', {
         collection,
         operation,
@@ -2160,6 +2178,16 @@ class ApiSyncAdapter {
         responseBody: string;
         requestHeaders: Record<string, string>;
     }): void {
+        if (input.payload?.supported === false) {
+            markErpMasterCollectionUnsupported(input.collection, {
+                operation: input.operation,
+                endpoint: input.endpoint,
+                httpStatus: input.status,
+                reason: 'ERP_DECLARED_UNSUPPORTED',
+                userVisibleSeverity: 'warning',
+            });
+            return;
+        }
         if (this.isFiscalConfigMissingResponse(input.status, input.payload, input.responseBody)) {
             throw this.handleFiscalConfigMissing(input);
         }
@@ -3354,11 +3382,12 @@ class ApiSyncAdapter {
 
                 if (!response.ok) {
                     if (response.status === 404 && !ERP_CRITICAL_MASTER_COLLECTIONS.has(collection)) {
-                        console.warn('[SYNC_COLLECTION_SKIPPED_UNSUPPORTED_COLLECTION]', {
+                        markErpMasterCollectionUnsupported(collection, {
                             collection,
                             operation: 'PULL_MASTERS',
                             endpoint: url.toString(),
                             httpStatus: response.status,
+                            reason: 'ERP_ENDPOINT_NOT_FOUND',
                             userVisibleSeverity: 'warning',
                         });
                         return [];
@@ -4032,11 +4061,12 @@ class ApiSyncAdapter {
                         });
                     }
                     if (response.status === 404 && !ERP_CRITICAL_MASTER_COLLECTIONS.has(collection)) {
-                        console.warn('[SYNC_COLLECTION_SKIPPED_UNSUPPORTED_COLLECTION]', {
+                        markErpMasterCollectionUnsupported(collection, {
                             collection,
                             operation: 'PULL_MASTERS',
                             endpoint: url.toString(),
                             httpStatus: response.status,
+                            reason: 'ERP_ENDPOINT_NOT_FOUND',
                             userVisibleSeverity: 'warning',
                         });
                         return {
@@ -4402,11 +4432,12 @@ class ApiSyncAdapter {
 
                 if (!response.ok) {
                     if (response.status === 404 && !ERP_CRITICAL_MASTER_COLLECTIONS.has(collection)) {
-                        console.warn('[SYNC_COLLECTION_SKIPPED_UNSUPPORTED_COLLECTION]', {
+                        markErpMasterCollectionUnsupported(collection, {
                             collection,
                             operation,
                             endpoint,
                             httpStatus: response.status,
+                            reason: 'ERP_ENDPOINT_NOT_FOUND',
                             userVisibleSeverity: 'warning',
                         });
                         return null;
