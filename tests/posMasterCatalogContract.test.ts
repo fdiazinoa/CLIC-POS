@@ -127,14 +127,25 @@ test('client KDS dispatch self-heals missing routing from the Master', () => {
     new URL('../components/POSInterface.tsx', import.meta.url),
     'utf8',
   );
+  const managerSource = fs.readFileSync(
+    new URL('../services/sync/SyncManager.ts', import.meta.url),
+    'utf8',
+  );
+  const adapterSource = fs.readFileSync(
+    new URL('../services/sync/ApiSyncAdapter.ts', import.meta.url),
+    'utf8',
+  );
 
   assert.match(
     posSource,
     /shouldRefreshClientProductionRouting\(\{[\s\S]*isClientTerminal: isClientTerminalMode\(\)[\s\S]*unresolvedRouteCount/,
   );
   assert.doesNotMatch(posSource, /routingCatalogs\.productionProductCount === 0/);
-  assert.match(posSource, /pullCatalog\('productionAreas', true, \{ ignoreThrottle: true \}\)/);
-  assert.match(posSource, /pullCatalog\('products', true, \{ ignoreThrottle: true \}\)/);
+  assert.match(posSource, /pullProductionRoutingFromLinkedMaster\(\)/);
+  assert.match(managerSource, /pullLinkedMasterSnapshot\('productionAreas'\)/);
+  assert.match(managerSource, /pullLinkedMasterSnapshot\('products'\)/);
+  assert.match(adapterSource, /pullLinkedMasterSnapshot\(collection: string\)/);
+  assert.match(adapterSource, /\/api\/sync\/collections\/\$\{collection\}\/data/);
   assert.match(posSource, /routingCatalogs = await readProductionRoutingCatalogs\(\)/);
 });
 

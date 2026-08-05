@@ -5529,8 +5529,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   localProductionAreaCount: routingCatalogs.productionAreas.length,
                   localProductCount: routingCatalogs.productionProductCount,
                });
-               await syncManager.pullCatalog('productionAreas', true, { ignoreThrottle: true });
-               await syncManager.pullCatalog('products', true, { ignoreThrottle: true });
+               await syncManager.pullProductionRoutingFromLinkedMaster();
                routingCatalogs = await readProductionRoutingCatalogs();
                areas = groupItemsByProductionArea();
                areaEntries = Object.entries(areas);

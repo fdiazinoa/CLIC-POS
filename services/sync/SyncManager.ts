@@ -5455,6 +5455,49 @@ class SyncManager {
         return this.isInternalSyncing;
     }
 
+    /**
+     * Recovers the two catalogs required for kitchen routing from the paired
+     * LAN Master. Unlike pullCatalog(), this path does not depend on the
+     * ERP/cloud strategy profile because table operations already established
+     * the linked Master as their operational source.
+     */
+    async pullProductionRoutingFromLinkedMaster(): Promise<{
+        productionAreaCount: number;
+        productCount: number;
+    }> {
+        if (this.isMaster) {
+            return { productionAreaCount: 0, productCount: 0 };
+        }
+
+        const startedAt = Date.now();
+        const [productionAreas, pulledProducts] = await Promise.all([
+            apiSyncAdapter.pullLinkedMasterSnapshot('productionAreas'),
+            apiSyncAdapter.pullLinkedMasterSnapshot('products'),
+        ]);
+        const products = (await this.enrichPulledProducts(pulledProducts))
+            .map((item: any) => normalizeRestaurantProductConfig(item));
+
+        // Both endpoints are full authoritative snapshots. Replacing the local
+        // collections also propagates deletions and remains idempotent.
+        await db.save('productionAreas' as any, productionAreas);
+        await db.save('products' as any, products);
+        window.dispatchEvent(new CustomEvent('productionAreasUpdated'));
+        window.dispatchEvent(new CustomEvent('productsUpdated'));
+
+        console.info('[PRODUCTION_ROUTING_LINKED_MASTER_PULL]', {
+            reason: 'UNRESOLVED_KDS_ROUTE',
+            productionAreaCount: productionAreas.length,
+            productCount: products.length,
+            durationMs: Date.now() - startedAt,
+            result: 'APPLIED',
+        });
+
+        return {
+            productionAreaCount: productionAreas.length,
+            productCount: products.length,
+        };
+    }
+
     async pullCatalog(
         collection: SyncableCollection,
         force: boolean = false,
