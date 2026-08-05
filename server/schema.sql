@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS products (
     operationalFlags TEXT, -- JSON object
     theoreticalCost REAL DEFAULT 0,
     recipeDetails TEXT, -- JSON array of RecipeDetail
+    production_area_id TEXT,
     measurementUnit TEXT,
     purchaseUnit TEXT,
     conversionFactor REAL DEFAULT 1,
