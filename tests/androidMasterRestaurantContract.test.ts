@@ -147,6 +147,22 @@ test('la Master Android implementa autenticación y lectura de catálogos para c
   assert.match(serverSource, /reconcileTablesWithParkedTickets\(tablesSnapshot, nextTickets\)/);
 });
 
+test('la Cliente usa transporte nativo para bloquear y abrir mesas en Android', () => {
+  const lockBlock = appSource.slice(
+    appSource.indexOf('const invokeTableEditLock'),
+    appSource.indexOf('const releaseActiveTableEditLock'),
+  );
+  const openBlock = appSource.slice(
+    appSource.indexOf('const openTableForService'),
+    appSource.indexOf('useKioskMode', appSource.indexOf('const openTableForService')),
+  );
+
+  assert.match(lockBlock, /requestJson<any>\(\{/);
+  assert.match(lockBlock, /TABLE_LOCK_/);
+  assert.match(openBlock, /requestJson<any>\(\{/);
+  assert.match(openBlock, /operation: 'TABLE_OPEN'/);
+});
+
 test('la Master Android se reactiva al volver al primer plano y el cliente reintenta con espera', () => {
   assert.match(appSource, /addListener\?\.\('resume', ensureMasterServerWithoutSnapshot\)/);
   assert.match(appSource, /discoverLanMasterCandidates\(\{ timeoutMs: 2500 \}\)/);
