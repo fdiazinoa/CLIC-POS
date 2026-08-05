@@ -38,6 +38,10 @@ import {
     markErpFullBootstrapRequired,
     persistErpSyncAuthIdentity,
 } from '../../utils/erpSyncLifecycle';
+import {
+    ERP_CRITICAL_MASTER_COLLECTIONS,
+    ERP_SUPPORTED_MASTER_COLLECTIONS,
+} from './ErpMasterSyncContract';
 
 /**
  * API Sync Adapter
@@ -138,51 +142,7 @@ const ERP_SYNC_TOKEN_KEYS = [
 ];
 const ERP_SYNC_TOKEN_EXPIRES_AT_KEY = 'clic_erp_sync_token_expires_at';
 const ERP_SYNC_TOKEN_UPDATED_AT_KEY = 'clic_erp_sync_token_updated_at';
-const ERP_MASTER_PULL_COLLECTIONS = new Set([
-    'products',
-    'items',
-    'taxes',
-    'customers',
-    'suppliers',
-    'warehouses',
-    'paymentMethods',
-    'priceLists',
-    'productPrices',
-    'categories',
-    'productCategories',
-    'productGroups',
-    'collections',
-    'serviceTypes',
-    'rooms',
-    'tables',
-    'productionAreas',
-    'documentSeries',
-    'documentTypes',
-    'fiscalRanges',
-    'fiscalReceiptTypes',
-    'fiscalReceipts',
-    'fiscalSequences',
-    'internalSequences',
-    'terminalFiscalConfig',
-    'promotions',
-    'campaigns',
-    'coupons',
-    'discountRules',
-    'promotionRules',
-    'promotionConditions',
-    'promotionBenefits',
-    'pointsPrograms',
-    'loyaltyPrograms',
-    'pointsRules',
-    'earningRules',
-    'redemptionRules',
-    'customerPointBalances',
-    'loyaltyTiers',
-    'users',
-    'roles',
-    'productStocks',
-    'supplierProductPrices',
-]);
+const ERP_MASTER_PULL_COLLECTIONS = ERP_SUPPORTED_MASTER_COLLECTIONS;
 const ERP_OPERATION_PUSH_COLLECTIONS = new Set([
     'transactions',
     'payments',
@@ -210,8 +170,6 @@ const ERP_OPERATION_PUSH_COLLECTIONS = new Set([
     'crmOpportunities',
     'erp_sales_documents',
 ]);
-const ERP_CRITICAL_MASTER_COLLECTIONS = new Set<string>();
-
 const isErpMasterPullCollection = (collection: string): boolean =>
     ERP_MASTER_PULL_COLLECTIONS.has(collection);
 
