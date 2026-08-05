@@ -106,6 +106,7 @@ import ProductionRoutingAssignmentModal, {
 import {
    applyProductionAreaAssignments,
    selectProductionRoutingStrategy,
+   shouldRefreshClientProductionRouting,
 } from '../utils/productionRoutingAssignment';
 
 // ... existing imports
@@ -5504,22 +5505,40 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          let areas = groupItemsByProductionArea();
          let areaEntries = Object.entries(areas);
 
-         // A client can retain a valid sales catalog while its production routing
-         // is stale or empty. Recover both authoritative collections from Master
-         // at dispatch time before concluding that the items have no kitchen route.
-         if (
-            areaEntries.length === 0
-            && routingCatalogs.productionAreas.length > 0
-            && routingCatalogs.productionProductCount === 0
-            && isClientTerminalMode()
-            && activeTerminalConfig?.operational?.usa_modulos_cocina
-         ) {
+         const countUnresolvedProductionRoutes = () => newItems.reduce((count, item) => {
+            const areaId = routingCatalogs.resolveAreaForDispatch(item);
+            return count + (areaId && routingCatalogs.areaById.has(areaId) ? 0 : 1);
+         }, 0);
+
+         // The LAN Master owns production centers and product routing. A client may
+         // already have a non-empty sales catalog while those routing fields are
+         // stale, so product-count checks cannot be used to decide whether to heal.
+         // Refresh only on an unresolved dispatch; the normal table flow remains
+         // local and does not add periodic network work.
+         const unresolvedRouteCount = countUnresolvedProductionRoutes();
+         if (shouldRefreshClientProductionRouting({
+            isClientTerminal: isClientTerminalMode(),
+            pendingItemCount: newItems.length,
+            unresolvedRouteCount,
+         })) {
             try {
+               console.info('[PRODUCTION_ROUTING] Recuperando rutas autoritativas desde la Master', {
+                  origin,
+                  pendingItemCount: newItems.length,
+                  unresolvedRouteCount,
+                  localProductionAreaCount: routingCatalogs.productionAreas.length,
+                  localProductCount: routingCatalogs.productionProductCount,
+               });
                await syncManager.pullCatalog('productionAreas', true, { ignoreThrottle: true });
                await syncManager.pullCatalog('products', true, { ignoreThrottle: true });
                routingCatalogs = await readProductionRoutingCatalogs();
                areas = groupItemsByProductionArea();
                areaEntries = Object.entries(areas);
+               console.info('[PRODUCTION_ROUTING] Rutas autoritativas recuperadas', {
+                  productionAreaCount: routingCatalogs.productionAreas.length,
+                  productCount: routingCatalogs.productionProductCount,
+                  unresolvedRouteCount: countUnresolvedProductionRoutes(),
+               });
             } catch (routingRefreshError) {
                console.warn('[KDS] No se pudo recuperar el enrutamiento de producción desde la Master:', routingRefreshError);
             }
