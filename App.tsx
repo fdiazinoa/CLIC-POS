@@ -3175,8 +3175,8 @@ const AppContent: React.FC = () => {
     const HEARTBEAT_INTERVAL_MS = 60000;
     const OUTBOX_POLL_BASE_MS = 30000;
     const OUTBOX_POLL_MAX_MS = 300000;
-    const MANIFEST_REFRESH_INTERVAL_MS = 300000;
-    const CONFIG_SAFETY_CHECK_INTERVAL_MS = 300000;
+    const MANIFEST_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+    const CONFIG_SAFETY_CHECK_INTERVAL_MS = 15 * 60 * 1000;
     const lifecycleManifestKeyParts = [
       deviceId,
       currentTerminal?.config?.erpTerminalId || currentTerminal?.id || 'unknown-terminal',
@@ -3222,7 +3222,10 @@ const AppContent: React.FC = () => {
       });
     };
 
-    const syncLifecycle = async (options?: { forceManifestRefresh?: boolean }) => {
+    const syncLifecycle = async (options?: {
+      forceManifestRefresh?: boolean;
+      reason?: 'startup' | 'connection_restored' | 'app_resumed' | 'heartbeat';
+    }) => {
       // Lifecycle effects can be recreated by runtime config updates. Keep one
       // shared operation so those recreations cannot overlap manifest refreshes.
       if (lifecycleSyncInFlightRef.current) {
@@ -3271,12 +3274,18 @@ const AppContent: React.FC = () => {
         const shouldHonorForcedManifestRefresh = forceManifestRefreshRequested
           && sessionStorage.getItem(bootManifestSyncKey) !== 'true';
         const shouldRefreshManifest = shouldHonorForcedManifestRefresh
-          || (result?.outbox?.applied || 0) > 0
           || now - lastManifestRefreshAt >= MANIFEST_REFRESH_INTERVAL_MS;
 
         if (shouldRefreshManifest) {
+          console.info('[SYNC_FALLBACK]', {
+            reason: options?.reason || 'heartbeat',
+            mechanism: 'terminal_manifest',
+            legacy_collection_sweep: false,
+            interval_ms: MANIFEST_REFRESH_INTERVAL_MS,
+          });
           const refreshedFromManifest = await syncManager.syncTerminalManifestInBackground(undefined, {
             bootstrapBlocks: shouldHonorForcedManifestRefresh,
+            reason: options?.reason === 'heartbeat' ? 'periodic_manifest' : options?.reason,
           });
           if (!disposed && refreshedFromManifest && !Array.isArray(refreshedFromManifest) && refreshedFromManifest.terminals) {
             console.log(`[ERP SYNC] ${terminalName} actualizó su estado runtime desde el manifest del ERP.`);
@@ -3310,7 +3319,7 @@ const AppContent: React.FC = () => {
     const handleErpOnline = () => {
       if (!disposed) {
         void triggerErpSyncOutbox('online');
-        void syncLifecycle();
+        void syncLifecycle({ reason: 'connection_restored' });
         void requestConditionalTerminalConfig('connection_restored').catch((error) => {
           console.warn('[CONFIG_SYNC] connection recovery check failed; local config preserved.', error);
         });
@@ -3319,7 +3328,7 @@ const AppContent: React.FC = () => {
     const handleErpAppResume = () => {
       if (!disposed && !document.hidden && navigator.onLine) {
         void triggerErpSyncOutbox('app_resumed');
-        void syncLifecycle();
+        void syncLifecycle({ reason: 'app_resumed' });
       }
     };
 
@@ -3327,7 +3336,7 @@ const AppContent: React.FC = () => {
     void publishEndpoint();
     if (!isPosOnlyCloudStagingTarget()) {
       void triggerErpSyncOutbox('startup');
-      void syncLifecycle({ forceManifestRefresh: true });
+      void syncLifecycle({ forceManifestRefresh: true, reason: 'startup' });
     } else {
       console.log('[CLOUD STAGING] ERP lifecycle and manifest refresh disabled for POS_CLOUD_STAGING.');
     }
@@ -3343,7 +3352,7 @@ const AppContent: React.FC = () => {
           // Publish on heartbeat is diff-only: cloudMasterRegistry.ts compara fingerprint e IP antes de escribir.
           void publishEndpoint();
           if (!isPosOnlyCloudStagingTarget()) {
-            await syncLifecycle();
+            await syncLifecycle({ reason: 'heartbeat' });
           }
         }
         scheduleNextHeartbeat();
