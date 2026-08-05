@@ -78,11 +78,22 @@ test('production assignment updates only selected products and preserves restaur
 
 test('table exit distinguishes dispatch, silent save, and modal cancellation', () => {
   const source = fs.readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
+  const sendAndExitBlock = source.slice(
+    source.indexOf('const handleSendAndExit'),
+    source.indexOf('const handleBackToMap'),
+  );
 
   assert.match(source, /handleDispatchCommand\('table_exit'\)/);
   assert.match(source, /routingStrategy === 'NO_PRODUCTION_AREAS'[\s\S]*return 'CONTINUE_WITHOUT_DISPATCH'/);
   assert.match(source, /dispatchOutcome === 'DISPATCHED' \|\| dispatchOutcome === 'CANCELLED'/);
   assert.doesNotMatch(source, /alert\("No hay ítems con centro de producción configurado para enviar\."\)/);
+  assert.match(sendAndExitBlock, /cart\.some\(item => !item\.dispatched\)/);
+  assert.match(sendAndExitBlock, /handleDispatchCommand\('table_exit'\)/);
+  assert.ok(
+    sendAndExitBlock.indexOf("handleDispatchCommand('table_exit')")
+      < sendAndExitBlock.indexOf('await handleParkCurrentTicket()'),
+    'Guardar pedido must dispatch fresh lines before parking the ticket',
+  );
 });
 
 test('routing changes publish asynchronously after local persistence', () => {
