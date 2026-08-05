@@ -3604,6 +3604,47 @@ class ApiSyncAdapter {
     }
 
     /**
+     * Pulls an authoritative full snapshot directly from the configured LAN
+     * Master. This intentionally bypasses the ERP/cloud strategy selector:
+     * operational clients can still need production routing from their paired
+     * Master while the generic sync profile is being rehydrated.
+     */
+    async pullLinkedMasterSnapshot(collection: string): Promise<any[]> {
+        this.ensureConfig();
+        if (!this.config) throw new Error('Sync configuration missing');
+
+        const requestSnapshot = async (allowReauth: boolean): Promise<any[]> => {
+            await this.authenticate(false, 'sales');
+            const endpoint = `${this.config!.masterUrl}/api/sync/collections/${collection}/data`;
+            const response = await this.fetchWithRetry(endpoint, {
+                method: 'GET',
+                headers: {
+                    'X-Sync-Token': this.authToken || '',
+                },
+            }, 2, 500, 'sales', 'PULL_MASTERS');
+
+            if (response.status === 401 && allowReauth) {
+                this.authToken = null;
+                await this.authenticate(true, 'sales');
+                return requestSnapshot(false);
+            }
+
+            if (!response.ok) {
+                const responseBody = await response.text().catch(() => '');
+                throw new Error(
+                    `Linked Master snapshot pull failed for ${collection}: ${response.status}`
+                    + (responseBody ? ` ${responseBody.slice(0, 200)}` : '')
+                );
+            }
+
+            const payload = await response.json();
+            return readArrayPayload(payload, collection);
+        };
+
+        return requestSnapshot(true);
+    }
+
+    /**
      * Pull incremental changes from Master (Delta Sync)
      */
 	    private async pullFullFallbackForCriticalMaster(
