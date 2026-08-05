@@ -5,7 +5,26 @@ import test from 'node:test';
 import {
   applyProductionAreaAssignments,
   selectProductionRoutingStrategy,
+  shouldRefreshClientProductionRouting,
 } from '../utils/productionRoutingAssignment';
+
+test('client refreshes authoritative routing whenever a pending item is unresolved', () => {
+  assert.equal(shouldRefreshClientProductionRouting({
+    isClientTerminal: true,
+    pendingItemCount: 2,
+    unresolvedRouteCount: 1,
+  }), true);
+  assert.equal(shouldRefreshClientProductionRouting({
+    isClientTerminal: true,
+    pendingItemCount: 2,
+    unresolvedRouteCount: 0,
+  }), false);
+  assert.equal(shouldRefreshClientProductionRouting({
+    isClientTerminal: false,
+    pendingItemCount: 2,
+    unresolvedRouteCount: 2,
+  }), false);
+});
 
 test('a POS without production areas never prompts or dispatches automatically', () => {
   assert.equal(selectProductionRoutingStrategy({

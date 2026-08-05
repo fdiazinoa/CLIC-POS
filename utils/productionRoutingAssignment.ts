@@ -3,6 +3,16 @@ import { normalizeRestaurantProductConfig, resolveRestaurantProductConfig } from
 
 export type ProductionRoutingStrategy = 'NO_PRODUCTION_AREAS' | 'PROMPT_ASSIGNMENT' | 'DISPATCH';
 
+export const shouldRefreshClientProductionRouting = (input: {
+  isClientTerminal: boolean;
+  pendingItemCount: number;
+  unresolvedRouteCount: number;
+}): boolean => (
+  input.isClientTerminal
+  && input.pendingItemCount > 0
+  && input.unresolvedRouteCount > 0
+);
+
 export const selectProductionRoutingStrategy = (input: {
   productionAreaCount: number;
   pendingItemCount: number;

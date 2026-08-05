@@ -130,8 +130,9 @@ test('client KDS dispatch self-heals missing routing from the Master', () => {
 
   assert.match(
     posSource,
-    /areaEntries\.length === 0[\s\S]*routingCatalogs\.productionAreas\.length > 0[\s\S]*routingCatalogs\.productionProductCount === 0[\s\S]*isClientTerminalMode\(\)/,
+    /shouldRefreshClientProductionRouting\(\{[\s\S]*isClientTerminal: isClientTerminalMode\(\)[\s\S]*unresolvedRouteCount/,
   );
+  assert.doesNotMatch(posSource, /routingCatalogs\.productionProductCount === 0/);
   assert.match(posSource, /pullCatalog\('productionAreas', true, \{ ignoreThrottle: true \}\)/);
   assert.match(posSource, /pullCatalog\('products', true, \{ ignoreThrottle: true \}\)/);
   assert.match(posSource, /routingCatalogs = await readProductionRoutingCatalogs\(\)/);
