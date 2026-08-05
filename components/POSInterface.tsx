@@ -6156,8 +6156,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       // 1. If table is empty, auto-release to avoid ghost occupied tables.
       const releasedEmptyTable = await releaseActiveEmptyTable();
 
-      // 2. Otherwise park/save the ticket.
+      // 2. Every table exit is also the production safety net. ORDER_TAKER uses
+      // this path for "Guardar pedido", so parking first would synchronize the
+      // ticket with Master without ever dispatching its fresh lines to kitchen.
       if (!releasedEmptyTable) {
+         if (cart.some(item => !item.dispatched)) {
+            const dispatchOutcome = await handleDispatchCommand('table_exit');
+            // A successful dispatch already parks the updated ticket and exits.
+            // Cancellation keeps the operator in the order so nothing is lost.
+            if (dispatchOutcome === 'DISPATCHED' || dispatchOutcome === 'CANCELLED') return;
+         }
          await handleParkCurrentTicket();
       } else if (onOpenTableMap) {
          onOpenTableMap();
