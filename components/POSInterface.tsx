@@ -99,6 +99,14 @@ import {
 import { resolveDeviceRoleValue } from '../utils/deviceRoleHelpers';
 import { normalizeProductionOutputMode, resolveProductionOutputTargets } from '../utils/productionOutputMode';
 import { isClientTerminalMode, resolveOperationalApiUrl } from '../utils/masterOperationalApi';
+import ProductionRoutingAssignmentModal, {
+   type ProductionRoutingPromptArea,
+   type ProductionRoutingPromptItem,
+} from './ProductionRoutingAssignmentModal';
+import {
+   applyProductionAreaAssignments,
+   selectProductionRoutingStrategy,
+} from '../utils/productionRoutingAssignment';
 
 // ... existing imports
 
@@ -116,6 +124,7 @@ export interface POSInterfaceProps {
    users: UserType[];
    customers: Customer[];
    products: Product[];
+   onUpdateProducts: (products: Product[]) => void;
    warehouses: Warehouse[];
    cart: CartItem[];
    transactions: Transaction[];
@@ -162,6 +171,7 @@ export interface POSInterfaceProps {
 
 type ProductionAreaConfig = {
    id: string;
+   name?: string;
    nombre?: string;
    modo_salida?: 'KDS' | 'PRINTER' | 'AMBOS' | string;
    target_terminal_id?: string;
@@ -180,6 +190,18 @@ type KdsDispatchMeta = {
    orderId: string;
    itemIds: string[];
 };
+
+type ProductionRoutingPromptDecision =
+   | { kind: 'ASSIGN'; assignments: Record<string, string> }
+   | { kind: 'SKIP' }
+   | { kind: 'CANCEL' };
+
+type ProductionRoutingPromptState = {
+   items: ProductionRoutingPromptItem[];
+   areas: ProductionRoutingPromptArea[];
+};
+
+type ProductionDispatchOutcome = 'DISPATCHED' | 'CONTINUE_WITHOUT_DISPATCH' | 'CANCELLED';
 
 const buildModifierSignature = (modifiers?: unknown[]): string => {
    if (!Array.isArray(modifiers) || modifiers.length === 0) return '';
@@ -1051,6 +1073,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    config,
    currentUser,
    products,
+   onUpdateProducts,
    roles,
    users,
    customers,
@@ -1108,6 +1131,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const paymentFinalizationInFlightRef = useRef(false);
    const activeTableHydrationRef = useRef<{ key: string; missingTicket: boolean } | null>(null);
    const kdsRetryInFlightRef = useRef(false);
+   const productionRoutingPromptResolverRef = useRef<((decision: ProductionRoutingPromptDecision) => void) | null>(null);
    const quickActionTouchTimerRef = useRef<number | null>(null);
    const quickActionTouchStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
    const lastTouchContextMenuAtRef = useRef(0);
@@ -2022,6 +2046,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showDiscountModal, setShowDiscountModal] = useState(false);
    const [showSplitModal, setShowSplitModal] = useState(false);
    const [showPaymentModal, setShowPaymentModal] = useState(false);
+   const [productionRoutingPrompt, setProductionRoutingPrompt] = useState<ProductionRoutingPromptState | null>(null);
    const [returnToTableMapAfterPayment, setReturnToTableMapAfterPayment] = useState(false);
    const [showTicketOptions, setShowTicketOptions] = useState(false);
    const [showParkedList, setShowParkedList] = useState(false);
@@ -2031,6 +2056,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showCouponModal, setShowCouponModal] = useState(false);
    const [couponCode, setCouponCode] = useState('');
    const [redeemedCoupon, setRedeemedCoupon] = useState<RedeemedCouponRef | null>(null);
+
+   const requestProductionRoutingDecision = useCallback((prompt: ProductionRoutingPromptState) => {
+      productionRoutingPromptResolverRef.current?.({ kind: 'CANCEL' });
+      setProductionRoutingPrompt(prompt);
+      return new Promise<ProductionRoutingPromptDecision>((resolve) => {
+         productionRoutingPromptResolverRef.current = resolve;
+      });
+   }, []);
+
+   const resolveProductionRoutingPrompt = useCallback((decision: ProductionRoutingPromptDecision) => {
+      const resolver = productionRoutingPromptResolverRef.current;
+      productionRoutingPromptResolverRef.current = null;
+      setProductionRoutingPrompt(null);
+      resolver?.(decision);
+   }, []);
+
+   useEffect(() => () => {
+      productionRoutingPromptResolverRef.current?.({ kind: 'CANCEL' });
+      productionRoutingPromptResolverRef.current = null;
+   }, []);
    const [showConsignmentModal, setShowConsignmentModal] = useState(false);
    const [consignmentSearchTerm, setConsignmentSearchTerm] = useState('');
    const [consignmentResults, setConsignmentResults] = useState<ErpConsignment[]>([]);
@@ -5366,13 +5411,42 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setShowPaymentModal(true);
    };
 
-   const handleDispatchCommand = async (): Promise<boolean> => {
-      if (cart.length === 0) return false;
+   const persistProductionRoutingAssignments = async (
+      assignments: Record<string, string>,
+      sourceProducts: Product[],
+   ): Promise<Product[]> => {
+      const { products: nextProducts, updatedProducts } = applyProductionAreaAssignments(sourceProducts, assignments);
+      if (updatedProducts.length === 0) return nextProducts;
+
+      await db.save('products' as any, nextProducts);
+      onUpdateProducts(nextProducts);
+      window.dispatchEvent(new CustomEvent('productsUpdated'));
+
+      updatedProducts.forEach((product) => {
+         void syncManager.broadcastProductRoutingChange(product).catch((error) => {
+            console.warn('[PRODUCTION_ROUTING] La ruta quedó guardada localmente; no se pudo publicarla todavía', {
+               productId: product.id,
+               error: error instanceof Error ? error.message : String(error),
+            });
+         });
+      });
+
+      console.info('[PRODUCTION_ROUTING] Rutas guardadas', {
+         productCount: updatedProducts.length,
+         source: isClientTerminalMode() ? 'POS_CLIENT' : 'POS_LOCAL_OR_MASTER',
+      });
+      return nextProducts;
+   };
+
+   const handleDispatchCommand = async (
+      origin: 'manual' | 'table_exit' = 'manual',
+   ): Promise<ProductionDispatchOutcome> => {
+      if (cart.length === 0) return 'CONTINUE_WITHOUT_DISPATCH';
 
       const newItems = cart.filter(item => !item.dispatched);
       if (newItems.length === 0) {
-         alert("Todos los ítems ya han sido enviados.");
-         return false;
+         if (origin === 'manual') alert("Todos los ítems ya han sido enviados.");
+         return 'CONTINUE_WITHOUT_DISPATCH';
       }
 
       const orderId = activeTable?.currentOrderId || `P-${Date.now()}`;
@@ -5389,6 +5463,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             const productionProducts: Product[] = Array.isArray(configuredProducts) ? configuredProducts : [];
             return {
                productionAreas,
+               productionProductCount: productionProducts.length,
                areaById: new Map(productionAreas.map(area => [String(area.id), area])),
                resolveAreaForDispatch: buildProductionAreaResolver(productionAreas, productionProducts),
             };
@@ -5432,7 +5507,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // A client can retain a valid sales catalog while its production routing
          // is stale or empty. Recover both authoritative collections from Master
          // at dispatch time before concluding that the items have no kitchen route.
-         if (areaEntries.length === 0 && isClientTerminalMode()) {
+         if (
+            areaEntries.length === 0
+            && routingCatalogs.productionAreas.length > 0
+            && routingCatalogs.productionProductCount === 0
+            && isClientTerminalMode()
+            && activeTerminalConfig?.operational?.usa_modulos_cocina
+         ) {
             try {
                await syncManager.pullCatalog('productionAreas', true, { ignoreThrottle: true });
                await syncManager.pullCatalog('products', true, { ignoreThrottle: true });
@@ -5444,9 +5525,80 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }
 
+         const productByKey = new Map<string, Product>();
+         const refreshedProducts = await db.get('products' as any).catch(() => []) as Product[];
+         (Array.isArray(refreshedProducts) ? refreshedProducts : []).forEach((product) => {
+            collectKdsProductKeys(product).forEach(key => {
+               if (!productByKey.has(key)) productByKey.set(key, product);
+            });
+         });
+
+         const unassignedByProductId = new Map<string, ProductionRoutingPromptItem>();
+         newItems.forEach((item) => {
+            const resolvedAreaId = routingCatalogs.resolveAreaForDispatch(item);
+            if (resolvedAreaId && routingCatalogs.areaById.has(resolvedAreaId)) return;
+
+            const catalogProduct = collectKdsProductKeys(item)
+               .map(key => productByKey.get(key))
+               .find(Boolean);
+            const productId = String(catalogProduct?.id || item.id || '').trim();
+            if (!productId) return;
+            const current = unassignedByProductId.get(productId);
+            unassignedByProductId.set(productId, {
+               id: productId,
+               name: String(catalogProduct?.name || item.name || 'Artículo'),
+               quantity: Number(current?.quantity || 0) + Number(item.quantity || 0),
+            });
+         });
+
+         const routingStrategy = selectProductionRoutingStrategy({
+            productionAreaCount: routingCatalogs.productionAreas.length,
+            pendingItemCount: newItems.length,
+            unassignedItemCount: unassignedByProductId.size,
+         });
+
+         if (routingStrategy === 'NO_PRODUCTION_AREAS') {
+            console.info('[PRODUCTION_ROUTING] Salida sin envío: POS sin centros de producción', { origin });
+            return 'CONTINUE_WITHOUT_DISPATCH';
+         }
+
+         if (routingStrategy === 'PROMPT_ASSIGNMENT') {
+            const decision = await requestProductionRoutingDecision({
+               items: Array.from(unassignedByProductId.values()),
+               areas: routingCatalogs.productionAreas.map(area => ({
+                  id: String(area.id),
+                  name: String(area.nombre || area.name || area.id),
+               })),
+            });
+
+            if (decision.kind === 'CANCEL') return 'CANCELLED';
+            if (decision.kind === 'ASSIGN') {
+               const nextProducts = await persistProductionRoutingAssignments(
+                  decision.assignments,
+                  Array.isArray(refreshedProducts) ? refreshedProducts : [],
+               );
+               const assignedResolver = buildProductionAreaResolver(
+                  routingCatalogs.productionAreas,
+                  nextProducts,
+               );
+               routingCatalogs = {
+                  ...routingCatalogs,
+                  resolveAreaForDispatch: (item: any) => {
+                     const productId = collectKdsProductKeys(item)
+                        .map(key => productByKey.get(key)?.id)
+                        .find(Boolean);
+                     const assignedAreaId = productId ? decision.assignments[String(productId)] : undefined;
+                     return assignedAreaId || assignedResolver(item);
+                  },
+               };
+            }
+
+            areas = groupItemsByProductionArea();
+            areaEntries = Object.entries(areas);
+         }
+
          if (areaEntries.length === 0) {
-            alert("No hay ítems con centro de producción configurado para enviar.");
-            return false;
+            return 'CONTINUE_WITHOUT_DISPATCH';
          }
 
          let printedCount = 0;
@@ -5632,12 +5784,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             queuedKdsCount > 0 ? `${queuedKdsCount} KDS pendiente(s)` : '',
          ].filter(Boolean);
          setSuccessToast(parts.length > 0 ? `Comanda procesada: ${parts.join(' · ')}` : 'Comanda procesada');
-         return true;
+         return 'DISPATCHED';
 
       } catch (e) {
          console.error("Dispatch error:", e);
          alert("Error al procesar el envío a cocina");
-         return false;
+         return 'CANCELLED';
       }
    };
 
@@ -6007,8 +6159,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             // fresh lines. The regular Cocina action already marks them dispatched,
             // so this path cannot send the same line twice.
             if (cart.some(item => !item.dispatched)) {
-               const dispatchedBeforeExit = await handleDispatchCommand();
-               if (dispatchedBeforeExit) return;
+               const dispatchOutcome = await handleDispatchCommand('table_exit');
+               if (dispatchOutcome === 'DISPATCHED' || dispatchOutcome === 'CANCELLED') return;
             }
             await saveActiveTableOrderForMap();
          }
@@ -6253,6 +6405,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          className="fixed inset-0 w-full overflow-hidden bg-gray-50 flex font-sans select-none text-gray-900"
          style={posShellStyle}
       >
+         {productionRoutingPrompt && (
+            <ProductionRoutingAssignmentModal
+               items={productionRoutingPrompt.items}
+               areas={productionRoutingPrompt.areas}
+               onAssign={(assignments) => resolveProductionRoutingPrompt({ kind: 'ASSIGN', assignments })}
+               onSkip={() => resolveProductionRoutingPrompt({ kind: 'SKIP' })}
+               onCancel={() => resolveProductionRoutingPrompt({ kind: 'CANCEL' })}
+            />
+         )}
+
          {errorToast && (
             <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
                <div className="bg-red-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border-2 border-red-400">
@@ -6732,7 +6894,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </button>
                         <button
                            type="button"
-                           onClick={handleDispatchCommand}
+                           onClick={() => { void handleDispatchCommand(); }}
                            disabled={cart.length === 0}
                            className="flex h-12 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
                         >
@@ -7898,7 +8060,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            </>
                         )}
                         {activeTerminalConfig?.operational?.usa_modulos_cocina && (
-                           <button onClick={handleDispatchCommand} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-orange-500 px-2 text-white shadow-sm shadow-orange-500/25 active:scale-95">
+                           <button onClick={() => { void handleDispatchCommand(); }} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-orange-500 px-2 text-white shadow-sm shadow-orange-500/25 active:scale-95">
                               <ChefHat size={18} />
                               <span className="text-[9px] font-bold uppercase">March.</span>
                            </button>

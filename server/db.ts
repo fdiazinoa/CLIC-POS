@@ -341,6 +341,7 @@ try {
 ensureColumn('customers', 'image', 'TEXT');
 ensureColumn('customers', 'imageUrl', 'TEXT');
 ensureColumn('customers', 'imageVersion', 'TEXT');
+ensureColumn('products', 'production_area_id', 'TEXT');
 
 applyAuditAndScopeColumns();
 ensureTransactionSettlementColumns();

@@ -37,6 +37,7 @@ object ClicPOSMasterHttpServer {
     private val restaurantRevision = AtomicLong(0)
     private val syncTokens = ConcurrentHashMap<String, String>()
     private val catalogVersions = ConcurrentHashMap<String, Long>()
+    private val productRoutingOverrides = ConcurrentHashMap<String, JSONObject>()
     private val tableEditLocks = ConcurrentHashMap<String, JSONObject>()
     @Volatile private var restaurantStateLoaded = false
 
@@ -212,6 +213,8 @@ object ClicPOSMasterHttpServer {
                         handleSyncCollectionMetadata(client, path, headers)
                     method == "GET" && path.startsWith("/api/sync/collections/") && path.endsWith("/data") ->
                         handleSyncCollectionData(client, path, parts.getOrNull(1) ?: path, headers)
+                    method == "POST" && path == "/api/sync/collections/products/push" ->
+                        handleProductRoutingPush(client, body, headers)
                     method == "GET" && path.startsWith("/api/sync/delta/") ->
                         handleSyncCollectionDelta(client, path, parts.getOrNull(1) ?: path, headers)
                     method == "GET" && path == "/api/config" ->
@@ -535,6 +538,8 @@ object ClicPOSMasterHttpServer {
                 catalogVersions[collection] = maxOf(now, priorVersion + 1)
             }
         }
+        val nextProducts = next.optJSONArray("products")
+        if (nextProducts != null) reconcileProductRoutingOverrides(nextProducts, acknowledgedRevision)
         catalogSnapshots = next
     }
 
@@ -561,6 +566,12 @@ object ClicPOSMasterHttpServer {
         roomsSnapshot = persisted.optJSONArray("rooms") ?: JSONArray()
         tablesSnapshot = persisted.optJSONArray("tables") ?: JSONArray()
         parkedTicketsSnapshot = persisted.optJSONArray("parkedTickets") ?: JSONArray()
+        val persistedRouting = persisted.optJSONArray("productRoutingUpdates") ?: JSONArray()
+        for (index in 0 until persistedRouting.length()) {
+            val update = persistedRouting.optJSONObject(index) ?: continue
+            val productId = update.optString("productId").trim()
+            if (productId.isNotBlank()) productRoutingOverrides[productId] = JSONObject(update.toString())
+        }
         restaurantRevision.set(persisted.optLong("revision", 0))
     }
 
@@ -685,6 +696,82 @@ object ClicPOSMasterHttpServer {
             .put("isFullDownload", changed)
             .put("latestVersion", version)
             .toString())
+    }
+
+    private fun handleProductRoutingPush(
+        socket: Socket,
+        body: String,
+        headers: Map<String, String>
+    ) {
+        if (!authorizeSyncRequest(socket, headers)) return
+        val payload = runCatching { parseJsonBody(body) }.getOrElse {
+            writeResponse(socket, 400, JSONObject()
+                .put("success", false)
+                .put("message", "Cuerpo de rutas de producción inválido")
+                .toString())
+            return
+        }
+        val items = payload.optJSONArray("items") ?: JSONArray()
+        var applied = 0
+        val now = java.time.Instant.now().toString()
+        for (index in 0 until items.length()) {
+            val item = items.optJSONObject(index) ?: continue
+            val productId = item.optString("id").trim()
+            val productionAreaId = item.optString("production_area_id").trim()
+            if (productId.isBlank() || productionAreaId.isBlank()) continue
+            productRoutingOverrides[productId] = JSONObject()
+                .put("productId", productId)
+                .put("productionAreaId", productionAreaId)
+                .put("updatedAt", item.optString("updatedAt").takeIf { it.isNotBlank() } ?: now)
+            applied += 1
+        }
+
+        if (applied > 0) {
+            catalogSnapshots.optJSONArray("products")?.let { applyProductRoutingOverrides(it) }
+            val previousVersion = catalogVersions["products"] ?: 0
+            catalogVersions["products"] = maxOf(System.currentTimeMillis(), previousVersion + 1)
+            restaurantRevision.incrementAndGet()
+            persistRestaurantSnapshot()
+        }
+
+        writeResponse(socket, 200, JSONObject()
+            .put("success", true)
+            .put("applied", applied)
+            .put("version", collectionVersion("products", getSyncCollection("products")))
+            .put("revision", restaurantRevision.get())
+            .toString())
+    }
+
+    private fun applyProductRoutingOverrides(products: JSONArray) {
+        for (index in 0 until products.length()) {
+            val product = products.optJSONObject(index) ?: continue
+            val override = productRoutingOverrides[product.optString("id").trim()] ?: continue
+            product.put("production_area_id", override.optString("productionAreaId"))
+            product.put("updatedAt", override.optString("updatedAt"))
+        }
+    }
+
+    private fun reconcileProductRoutingOverrides(products: JSONArray, acknowledgedRevision: Long) {
+        val currentRevision = restaurantRevision.get()
+        for (index in 0 until products.length()) {
+            val product = products.optJSONObject(index) ?: continue
+            val productId = product.optString("id").trim()
+            val override = productRoutingOverrides[productId] ?: continue
+            val incomingAreaId = product.optString("production_area_id").trim()
+            val overrideAreaId = override.optString("productionAreaId").trim()
+            val incomingUpdatedAt = product.optString("updatedAt").trim()
+            val overrideUpdatedAt = override.optString("updatedAt").trim()
+            val masterAcknowledgedRoute = acknowledgedRevision >= currentRevision && incomingAreaId == overrideAreaId
+            val authoritativeRouteIsNewer = incomingUpdatedAt.isNotBlank() &&
+                overrideUpdatedAt.isNotBlank() && incomingUpdatedAt > overrideUpdatedAt
+
+            if (masterAcknowledgedRoute || authoritativeRouteIsNewer) {
+                productRoutingOverrides.remove(productId)
+            } else {
+                product.put("production_area_id", overrideAreaId)
+                product.put("updatedAt", overrideUpdatedAt)
+            }
+        }
     }
 
     private fun authorizeSyncRequest(
@@ -843,6 +930,7 @@ object ClicPOSMasterHttpServer {
         .put("tables", buildTablesWithEditLocks())
         .put("parkedTickets", JSONArray(parkedTicketsSnapshot.toString()))
         .put("customers", getSyncCollection("customers"))
+        .put("productRoutingUpdates", JSONArray(productRoutingOverrides.values.map { JSONObject(it.toString()) }))
         .put("revision", restaurantRevision.get())
 
     fun getRestaurantState(): JSONObject = buildRestaurantSnapshot()
