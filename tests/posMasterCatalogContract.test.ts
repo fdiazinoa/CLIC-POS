@@ -103,7 +103,7 @@ test('KDS dispatch uses Cocina and the table-map fallback without raw cart auto-
   assert.doesNotMatch(posSource, /syncOrderToConfiguredKds/);
   assert.match(posSource, /const newItems = cart\.filter\(item => !item\.dispatched\)/);
   assert.match(posSource, /cart\.some\(item => !item\.dispatched\)/);
-  assert.match(posSource, /const dispatchedBeforeExit = await handleDispatchCommand\(\)/);
+  assert.match(posSource, /const dispatchOutcome = await handleDispatchCommand\('table_exit'\)/);
 });
 
 test('production assignments are published immediately by the Master LAN catalog', () => {
@@ -128,7 +128,10 @@ test('client KDS dispatch self-heals missing routing from the Master', () => {
     'utf8',
   );
 
-  assert.match(posSource, /areaEntries\.length === 0 && isClientTerminalMode\(\)/);
+  assert.match(
+    posSource,
+    /areaEntries\.length === 0[\s\S]*routingCatalogs\.productionAreas\.length > 0[\s\S]*routingCatalogs\.productionProductCount === 0[\s\S]*isClientTerminalMode\(\)/,
+  );
   assert.match(posSource, /pullCatalog\('productionAreas', true, \{ ignoreThrottle: true \}\)/);
   assert.match(posSource, /pullCatalog\('products', true, \{ ignoreThrottle: true \}\)/);
   assert.match(posSource, /routingCatalogs = await readProductionRoutingCatalogs\(\)/);

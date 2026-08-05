@@ -71,7 +71,8 @@ test('la salida conserva las credenciales del lock, evita esperas y no duplica c
   const backEnd = posSource.indexOf('const handleRestoreTicket', backStart);
   const backSource = posSource.slice(backStart, backEnd);
   assert.match(backSource, /cart\.some\(item => !item\.dispatched\)/);
-  assert.match(backSource, /await handleDispatchCommand\(\)/);
+  assert.match(backSource, /await handleDispatchCommand\('table_exit'\)/);
+  assert.match(backSource, /dispatchOutcome === 'DISPATCHED' \|\| dispatchOutcome === 'CANCELLED'/);
 });
 
 test('el diseñador vuelve al mapa cuando se abrió desde Salas', () => {
