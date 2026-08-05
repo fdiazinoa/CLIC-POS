@@ -6711,6 +6711,36 @@ class SyncManager {
     }
 
     /**
+     * Publishes a product routing correction made during restaurant operation.
+     * Unlike general catalog editing, a slave may submit this narrow update to
+     * its LAN Master. ERP-owned catalogs remain protected by ApiSyncAdapter's
+     * operational target policy.
+     */
+    async broadcastProductRoutingChange(product: Product): Promise<void> {
+        if (this.isDisabled || !this.syncConfig || !product?.id) {
+            console.warn('[PRODUCTION_ROUTING] Remote update skipped: sync unavailable or product missing id');
+            return;
+        }
+
+        try {
+            await apiSyncAdapter.push('products', [{
+                id: product.id,
+                production_area_id: product.production_area_id,
+                updatedAt: product.updatedAt,
+            }], 'UPDATE', 'UPSERT');
+            console.log('[PRODUCTION_ROUTING] Product route published', { productId: product.id });
+        } catch (error: any) {
+            if (error?.message === 'Cannot push while offline') {
+                console.warn('[PRODUCTION_ROUTING] Product route saved locally; remote update deferred', {
+                    productId: product.id,
+                });
+                return;
+            }
+            throw error;
+        }
+    }
+
+    /**
      * Push a single Z-Report to Master (or Server if we are Master)
      */
     async pushZReport(report: any) {

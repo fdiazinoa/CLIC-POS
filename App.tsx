@@ -68,6 +68,7 @@ import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from './utils/posSaleActivit
 import { canEnterReducedSyncMode, resolveReducedSyncAfterMinutes } from './utils/syncInactivityPolicy';
 import { validateRefundItems } from './utils/refundAvailability';
 import { buildPosMasterCatalogSnapshot } from './utils/posMasterCatalogContract';
+import { applyProductionAreaAssignments } from './utils/productionRoutingAssignment';
 import {
   isEligibleOperationalMasterConfig,
   isEligibleOperationalMasterTerminal,
@@ -3815,6 +3816,18 @@ const AppContent: React.FC = () => {
         const customersCreatedByClients = nextCustomers.filter(
           (customer: Customer) => !knownCustomerIds.has(String(customer.id))
         );
+        const productRoutingUpdates = Array.isArray(state?.productRoutingUpdates)
+          ? state.productRoutingUpdates
+          : [];
+        const routingAssignments = Object.fromEntries(
+          productRoutingUpdates
+            .map((update: any) => [
+              String(update?.productId || '').trim(),
+              String(update?.productionAreaId || '').trim(),
+            ])
+            .filter(([productId, productionAreaId]: string[]) => Boolean(productId && productionAreaId)),
+        );
+        const routedCatalog = applyProductionAreaAssignments(products, routingAssignments);
         masterRestaurantRevisionRef.current = revision;
         if (hasDesignedFloorPlanGeometry(reconciledTables)) {
           locallySavedFloorPlanRef.current = {
@@ -3827,12 +3840,19 @@ const AppContent: React.FC = () => {
         setTables(reconciledTables);
         setParkedTickets(nextParkedTickets);
         setCustomers(nextCustomers);
+        if (routedCatalog.updatedProducts.length > 0) {
+          setProducts(routedCatalog.products);
+          window.dispatchEvent(new CustomEvent('productsUpdated'));
+        }
         writeCriticalCollectionsMirror(nextParkedTickets, cashMovements);
         await Promise.all([
           db.save('rooms', nextRooms),
           db.save('tables', reconciledTables),
           db.save('parkedTickets', nextParkedTickets),
           db.save('customers', nextCustomers),
+          ...(routedCatalog.updatedProducts.length > 0
+            ? [db.save('products', routedCatalog.products)]
+            : []),
         ]);
         customersCreatedByClients.forEach((customer: Customer) => {
           syncManager.broadcastChange('customers', customer, 'CREATE').catch(error => {
@@ -3845,6 +3865,7 @@ const AppContent: React.FC = () => {
           tables: nextTables.length,
           parkedTickets: nextParkedTickets.length,
           customers: nextCustomers.length,
+          productRoutes: routedCatalog.updatedProducts.length,
         });
       } catch (error) {
         console.warn('[MASTER_LAN] Could not reconcile native restaurant state:', error);
@@ -10350,6 +10371,7 @@ const AppContent: React.FC = () => {
             users={users}
             customers={customers}
             products={products}
+            onUpdateProducts={setProducts}
             warehouses={warehouses}
             cart={cart}
             transactions={transactions}
