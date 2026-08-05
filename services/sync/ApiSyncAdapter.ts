@@ -3609,23 +3609,54 @@ class ApiSyncAdapter {
      * operational clients can still need production routing from their paired
      * Master while the generic sync profile is being rehydrated.
      */
-    async pullLinkedMasterSnapshot(collection: string): Promise<any[]> {
-        this.ensureConfig();
-        if (!this.config) throw new Error('Sync configuration missing');
+    async pullLinkedMasterSnapshot(
+        collection: string,
+        linkedTarget?: { masterUrl: string; terminalId: string },
+    ): Promise<any[]> {
+        if (!linkedTarget) {
+            this.ensureConfig();
+            if (!this.config) throw new Error('Sync configuration missing');
+        }
+
+        const masterUrl = String(linkedTarget?.masterUrl || this.config?.masterUrl || '').replace(/\/+$/, '');
+        const terminalId = String(linkedTarget?.terminalId || this.config?.terminalId || '').trim();
+        if (!masterUrl || !terminalId) throw new Error('Linked Master sync target missing');
 
         const requestSnapshot = async (allowReauth: boolean): Promise<any[]> => {
-            await this.authenticate(false, 'sales');
-            const endpoint = `${this.config!.masterUrl}/api/sync/collections/${collection}/data`;
+            let token = this.authToken;
+            if (linkedTarget || !token) {
+                const authResponse = await this.fetchWithRetry(`${masterUrl}/api/sync/auth`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...this.getLocalDeviceHeaders(),
+                    },
+                    body: JSON.stringify({
+                        terminalId,
+                        terminal_id: terminalId,
+                        deviceToken: this.getLocalDeviceId(),
+                        device_id: this.getLocalDeviceId(),
+                    }),
+                }, 2, 500, 'sales', 'PULL_MASTERS');
+                if (!authResponse.ok) {
+                    throw new Error(`Linked Master authentication failed: ${authResponse.status}`);
+                }
+                const authPayload = await authResponse.json();
+                token = String(authPayload?.token || '').trim();
+                if (!token) throw new Error('Linked Master authentication returned no token');
+                if (!linkedTarget) this.authToken = token;
+            }
+
+            const endpoint = `${masterUrl}/api/sync/collections/${collection}/data`;
             const response = await this.fetchWithRetry(endpoint, {
                 method: 'GET',
                 headers: {
-                    'X-Sync-Token': this.authToken || '',
+                    'X-Sync-Token': token || '',
                 },
             }, 2, 500, 'sales', 'PULL_MASTERS');
 
             if (response.status === 401 && allowReauth) {
-                this.authToken = null;
-                await this.authenticate(true, 'sales');
+                if (!linkedTarget) this.authToken = null;
                 return requestSnapshot(false);
             }
 

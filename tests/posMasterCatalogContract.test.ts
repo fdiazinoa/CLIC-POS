@@ -142,10 +142,13 @@ test('client KDS dispatch self-heals missing routing from the Master', () => {
   );
   assert.doesNotMatch(posSource, /routingCatalogs\.productionProductCount === 0/);
   assert.match(posSource, /pullProductionRoutingFromLinkedMaster\(\)/);
-  assert.match(managerSource, /pullLinkedMasterSnapshot\('productionAreas'\)/);
-  assert.match(managerSource, /pullLinkedMasterSnapshot\('products'\)/);
-  assert.match(adapterSource, /pullLinkedMasterSnapshot\(collection: string\)/);
+  assert.match(managerSource, /pullLinkedMasterSnapshot\('productionAreas', linkedTarget\)/);
+  assert.match(managerSource, /pullLinkedMasterSnapshot\('products', linkedTarget\)/);
+  assert.match(managerSource, /resolveMasterOperationalBaseUrl\(\)/);
+  assert.doesNotMatch(managerSource, /pullProductionRoutingFromLinkedMaster[\s\S]{0,300}if \(this\.isMaster\)/);
+  assert.match(adapterSource, /pullLinkedMasterSnapshot\(\s*collection: string,/);
   assert.match(adapterSource, /\/api\/sync\/collections\/\$\{collection\}\/data/);
+  assert.match(posSource, /diagnosticContext: \{ operation: 'KDS_POST' \}/);
   assert.match(posSource, /routingCatalogs = await readProductionRoutingCatalogs\(\)/);
 });
 
