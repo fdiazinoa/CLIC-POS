@@ -52,6 +52,7 @@ import { db } from './utils/db'; // Import Local DB
 import { dbAdapter } from './services/db'; // Import Adapter for Healthcheck
 import { syncManager } from './services/sync/SyncManager';
 import { apiSyncAdapter } from './services/sync/ApiSyncAdapter';
+import { requestJson } from './services/network/httpClient';
 import { backgroundSyncManager } from './services/sync/BackgroundSyncManager';
 import { productImageCacheService } from './services/sync/ProductImageCacheService';
 import { posCloudStagingService } from './services/sync/PosCloudStagingService';
@@ -4756,12 +4757,15 @@ const AppContent: React.FC = () => {
     const endpoint = action === 'acquire'
       ? '/api/mesas/bloquear'
       : '/api/mesas/desbloquear';
-    const response = await fetch(resolveOperationalApiUrl(endpoint), {
+    const response = await requestJson<any>({
+      url: resolveOperationalApiUrl(endpoint),
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      timeoutMs: 5000,
+      diagnosticContext: { operation: `TABLE_LOCK_${action.toUpperCase()}` },
     });
-    const result = await response.json().catch(() => null);
+    const result = response.data;
     if (!response.ok || result?.success === false) {
       const error = new Error(result?.message || `Master respondió HTTP ${response.status}`);
       (error as any).code = result?.code;
@@ -4952,17 +4956,20 @@ const AppContent: React.FC = () => {
     };
 
     try {
-      const res = await fetch(resolveOperationalApiUrl('/api/mesas/abrir'), {
+      const res = await requestJson<any>({
+        url: resolveOperationalApiUrl('/api/mesas/abrir'),
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tableId: table.id,
           waiterId: currentUser.id,
           waiterName: currentUser.name
-        })
+        }),
+        timeoutMs: 5000,
+        diagnosticContext: { operation: 'TABLE_OPEN' },
       });
 
-      const data = await res.json();
+      const data = res.data;
       if (res.ok && data.status === 'success') {
         markClientMasterOnline();
         const responseRevision = Number(data?.revision || 0);
