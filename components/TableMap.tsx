@@ -2553,14 +2553,11 @@ const SmartTableNode = React.memo(({
                         </div>
 
                         <div className="text-center leading-none">
-                            <p className="text-base font-black tracking-tight drop-shadow-[0_2px_6px_rgba(2,6,23,0.5)] truncate">
-                                {model.table.nombre || model.table.name}
+                            <p className="flex items-center justify-center gap-1 text-base font-black tracking-tight drop-shadow-[0_2px_6px_rgba(2,6,23,0.5)] truncate">
+                                {model.joinedPrimaryLabel ? (
+                                    <><Link2 size={15} strokeWidth={3} className="shrink-0" /> {model.joinedPrimaryLabel}</>
+                                ) : (model.table.nombre || model.table.name)}
                             </p>
-                            {model.joinedPrimaryLabel && (
-                                <p className="mt-1 truncate text-[8px] font-black uppercase tracking-wide text-white/85">
-                                    Unida a {model.joinedPrimaryLabel}
-                                </p>
-                            )}
                         </div>
 
                         <div className="flex items-center justify-between text-[11px] font-semibold">
@@ -2568,9 +2565,9 @@ const SmartTableNode = React.memo(({
                                 <Clock size={11} />
                                 {model.elapsedLabel}
                             </span>
-                            <span className="font-black">
-                                {model.joinedPrimaryLabel ? 'Cuenta compartida' : `${currencySymbol}${model.total.toLocaleString()}`}
-                            </span>
+                            {!model.joinedPrimaryLabel && (
+                                <span className="font-black">{currencySymbol}{model.total.toLocaleString()}</span>
+                            )}
                         </div>
                     </>
                 )}

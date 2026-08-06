@@ -26,6 +26,9 @@ test('la unión conserva la mesa origen como cuenta principal y un solo ticket',
   assert.doesNotMatch(tableMapSource, /resolveOperationalApiUrl\('\/api\/mesas\/unir'\)/);
   assert.match(nativeServerSource, /val affectedTableIds = mutableSetOf\(tableId\)/);
   assert.match(nativeServerSource, /affectedTableIds\.none/);
+  assert.match(tableMapSource, /<Link2 size=\{15\} strokeWidth=\{3\}/);
+  assert.doesNotMatch(tableMapSource, /Unida a \{model\.joinedPrimaryLabel\}/);
+  assert.doesNotMatch(tableMapSource, /'Cuenta compartida'/);
 });
 
 test('el KDS usa cuadrícula responsive con desplazamiento vertical', () => {
