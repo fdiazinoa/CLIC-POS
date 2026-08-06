@@ -3921,49 +3921,6 @@ class SyncManager {
         return /^\d{4}$/.test(digits) ? digits : '';
     }
 
-    private terminalScopeMatches(row: Record<string, unknown>, terminalIds: Array<string | null | undefined>): boolean {
-        const scope = this.snapshotText(row.terminal_scope ?? row.terminalScope).toUpperCase();
-        const rawTerminalIds = row.terminal_ids ?? row.terminalIds ?? row.terminals ?? row.terminal_id ?? row.terminalId;
-        const values = Array.isArray(rawTerminalIds)
-            ? rawTerminalIds
-            : rawTerminalIds
-                ? [rawTerminalIds]
-                : [];
-        const allowedTerminalIds = values
-            .map((entry) => {
-                if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
-                    const record = entry as Record<string, unknown>;
-                    return this.snapshotText(
-                        record.id ??
-                        record.terminal_id ??
-                        record.terminalId ??
-                        record.local_terminal_id ??
-                        record.localTerminalId ??
-                        record.device_id ??
-                        record.deviceId
-                    );
-                }
-                return this.snapshotText(entry);
-            })
-            .filter(Boolean);
-
-        if (scope === 'ALL') {
-            return true;
-        }
-
-        if (scope !== 'SELECTED' && allowedTerminalIds.length === 0) {
-            return true;
-        }
-
-        const candidates = new Set(
-            terminalIds
-                .map((id) => this.snapshotText(id).toLowerCase())
-                .filter(Boolean)
-        );
-
-        return allowedTerminalIds.some((id) => candidates.has(id.toLowerCase()));
-    }
-
     private normalizeSnapshotRoleId(row: Record<string, unknown>): string {
         const roleObject = row.role && typeof row.role === 'object' && !Array.isArray(row.role)
             ? row.role as Record<string, unknown>
@@ -3984,10 +3941,7 @@ class SyncManager {
         ) || 'CASHIER';
     }
 
-    private normalizeSnapshotPosUser(
-        raw: unknown,
-        terminalIds: Array<string | null | undefined>
-    ): (User & { syncSource?: 'ERP_SNAPSHOT' }) | null {
+    private normalizeSnapshotPosUser(raw: unknown): (User & { syncSource?: 'ERP_SNAPSHOT' }) | null {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
             return null;
         }
@@ -4002,7 +3956,9 @@ class SyncManager {
             row.pos_enabled ??
             row.posEnabled
         );
-        if (canOperatePos === false || !this.terminalScopeMatches(row, terminalIds)) {
+        // El padrón de credenciales POS debe estar disponible offline en todas las cajas
+        // del tenant. El alcance de terminal no convierte una fila válida en una baja.
+        if (canOperatePos === false) {
             return null;
         }
 
@@ -4055,6 +4011,37 @@ class SyncManager {
             ...(photo ? { photo } : {}),
             syncSource: 'ERP_SNAPSHOT',
         };
+    }
+
+    private snapshotPosUserId(raw: unknown): string {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return '';
+        const row = raw as Record<string, unknown>;
+        return this.snapshotText(
+            row.id ??
+            row.user_id ??
+            row.userId ??
+            row.employee_id ??
+            row.employeeId ??
+            row.code ??
+            row.email ??
+            row.username
+        );
+    }
+
+    private snapshotExplicitlyRemovesPosUser(raw: unknown): boolean {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+        const row = raw as Record<string, unknown>;
+        const operation = this.snapshotText(row._op ?? row.operation ?? row.action).toUpperCase();
+        const canOperatePos = this.snapshotBool(
+            row.puede_operar_pos ??
+            row.can_operate_pos ??
+            row.canOperatePos ??
+            row.allow_pos_access ??
+            row.allowPosAccess ??
+            row.pos_enabled ??
+            row.posEnabled
+        );
+        return operation === 'DELETE' || operation === 'REMOVE' || canOperatePos === false;
     }
 
     private normalizeSnapshotPermissions(value: unknown, fallback: Permission[]): Permission[] {
@@ -4146,10 +4133,19 @@ class SyncManager {
         terminalIds: Array<string | null | undefined>,
         replaceSnapshotSet = true
     ): Promise<number> {
-        const normalizedUsers = (Array.isArray(incomingItems) ? incomingItems : [])
-            .map((item) => this.normalizeSnapshotPosUser(item, terminalIds))
+        const sourceItems = Array.isArray(incomingItems) ? incomingItems : [];
+        const normalizedUsers = sourceItems
+            .map((item) => this.normalizeSnapshotPosUser(item))
             .filter(Boolean) as Array<User & { syncSource?: 'ERP_SNAPSHOT' }>;
         const incomingIds = new Set(normalizedUsers.map((user) => user.id));
+        const explicitlyRemovedIds = new Set(
+            sourceItems
+                .filter((item) => this.snapshotExplicitlyRemovesPosUser(item))
+                .map((item) => this.snapshotPosUserId(item))
+                .filter(Boolean)
+        );
+        const isTerminalScopedSnapshot = terminalIds.some((id) => Boolean(this.snapshotText(id)));
+        const canReplaceSnapshotSet = replaceSnapshotSet && !isTerminalScopedSnapshot;
         const existingUsers = ((await db.get('users')) as Array<User & { syncSource?: 'ERP_SNAPSHOT' }>) || [];
         const existingById = new Map<string, User & { syncSource?: 'ERP_SNAPSHOT' }>(
             (Array.isArray(existingUsers) ? existingUsers : [])
@@ -4159,10 +4155,10 @@ class SyncManager {
         const nextById = new Map<string, User & { syncSource?: 'ERP_SNAPSHOT' }>();
 
         (Array.isArray(existingUsers) ? existingUsers : []).forEach((user) => {
-            if (!user?.id || incomingIds.has(user.id)) {
+            if (!user?.id || incomingIds.has(user.id) || explicitlyRemovedIds.has(user.id)) {
                 return;
             }
-            if (replaceSnapshotSet && user.syncSource === 'ERP_SNAPSHOT') {
+            if (canReplaceSnapshotSet && user.syncSource === 'ERP_SNAPSHOT') {
                 return;
             }
             nextById.set(user.id, user);
@@ -4179,6 +4175,13 @@ class SyncManager {
         });
 
         await db.save('users', Array.from(nextById.values()));
+        if (isTerminalScopedSnapshot) {
+            console.info('[SYNC_USERS] terminal_scoped_snapshot_applied', {
+                incoming: normalizedUsers.length,
+                preserved: Math.max(0, nextById.size - normalizedUsers.length),
+                explicitlyRemoved: explicitlyRemovedIds.size,
+            });
+        }
         window.dispatchEvent(new CustomEvent('usersUpdated'));
         return normalizedUsers.length;
     }
