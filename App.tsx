@@ -79,6 +79,10 @@ import {
   isClientTerminalMode,
   resolveOperationalApiUrl
 } from './utils/masterOperationalApi';
+import {
+  hasDesignedFloorPlan,
+  selectAuthoritativeFloorPlan,
+} from './utils/tableLayout';
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
@@ -352,6 +356,9 @@ type FloorPlanMirror = {
   savedAt: string;
   tenantId?: string;
   terminalId?: string;
+  layoutSource?: 'MASTER_DESIGNER' | 'MASTER_RUNTIME' | 'MASTER_SNAPSHOT' | 'DEFAULT_SEED';
+  layoutRevision?: number;
+  isDefaultSeed?: boolean;
 };
 
 const readFloorPlanMirror = (): FloorPlanMirror | null => {
@@ -374,14 +381,21 @@ const readFloorPlanMirror = (): FloorPlanMirror | null => {
       tables: parsed.tables as Table[],
       savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : '',
       tenantId: parsed.tenantId,
-      terminalId: parsed.terminalId
+      terminalId: parsed.terminalId,
+      layoutSource: parsed.layoutSource,
+      layoutRevision: parsed.layoutRevision,
+      isDefaultSeed: parsed.isDefaultSeed,
     };
   } catch {
     return null;
   }
 };
 
-const writeFloorPlanMirror = (rooms: Room[], tables: Table[]): void => {
+const writeFloorPlanMirror = (
+  rooms: Room[],
+  tables: Table[],
+  metadata: Pick<FloorPlanMirror, 'layoutSource' | 'layoutRevision' | 'isDefaultSeed'> = {},
+): void => {
   if (!Array.isArray(rooms) || rooms.length === 0) return;
   if (!Array.isArray(tables) || tables.length === 0) return;
   try {
@@ -394,21 +408,13 @@ const writeFloorPlanMirror = (rooms: Room[], tables: Table[]): void => {
         window.localStorage.getItem('active_terminal_id')
         || window.localStorage.getItem('CLIC_POS_TERMINAL_ID')
         || ''
-      ).trim() || undefined
+      ).trim() || undefined,
+      ...metadata,
     } satisfies FloorPlanMirror));
   } catch (error) {
     console.warn('No se pudo actualizar el respaldo local del layout:', error);
   }
 };
-
-const hasDesignedFloorPlanGeometry = (tables: Table[]): boolean =>
-  Array.isArray(tables) && tables.length > 0 && tables.every(table =>
-    Boolean(String(table?.roomId || '').trim()) &&
-    Number.isFinite(Number(table?.posX)) &&
-    Number.isFinite(Number(table?.posY)) &&
-    Number.isFinite(Number(table?.width)) &&
-    Number.isFinite(Number(table?.height))
-  );
 
 const isTableManagedCartSnapshot = (snapshot: Pick<SafeExitSnapshot, 'activeTable'>): boolean =>
   Boolean(snapshot.activeTable?.id || snapshot.activeTable?.currentOrderId);
@@ -3766,25 +3772,26 @@ const AppContent: React.FC = () => {
 
         if (revision <= masterRestaurantRevisionRef.current) return;
 
-        // Si una versión anterior publicó las 12 mesas ERP sin geometría sobre
-        // un plano diseñado, restaurar el espejo local mediante el endpoint
-        // atómico. Esto conserva los UUID usados por los tickets abiertos.
+        // El plano diseñado de la Master conserva autoridad aunque un bootstrap
+        // posterior entregue otra cuadrícula (incluso si ya trae coordenadas).
+        // Las mutaciones operativas solo se aceptan si conservan los UUID.
         const savedFloorPlan = readFloorPlanMirror();
-        if (
-          nextTables.length > 0 &&
-          !hasDesignedFloorPlanGeometry(nextTables) &&
-          savedFloorPlan &&
-          hasDesignedFloorPlanGeometry(savedFloorPlan.tables) &&
-          !masterFloorPlanRestoreInFlightRef.current
-        ) {
+        const floorPlanSelection = savedFloorPlan
+          ? selectAuthoritativeFloorPlan({
+              local: savedFloorPlan,
+              incoming: { rooms: nextRooms, tables: nextTables },
+              isClientTerminal: false,
+            })
+          : null;
+        if (floorPlanSelection?.reason === 'PRESERVE_MASTER_DESIGN' && !masterFloorPlanRestoreInFlightRef.current) {
           masterFloorPlanRestoreInFlightRef.current = true;
           try {
             const response = await fetch(resolveOperationalApiUrl('/api/mesas/layout'), {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                rooms: savedFloorPlan.rooms,
-                tables: savedFloorPlan.tables,
+                rooms: floorPlanSelection.rooms,
+                tables: floorPlanSelection.tables,
               }),
             });
             const result = await response.json().catch(() => null);
@@ -3794,7 +3801,7 @@ const AppContent: React.FC = () => {
             const restoredRevision = Number(result?.revision || revision);
             masterRestaurantRevisionRef.current = Math.max(revision, restoredRevision);
             console.warn('[MASTER_LAN] Restored designed floor plan after rejecting ERP seed tables', {
-              restoredTables: savedFloorPlan.tables.length,
+              restoredTables: floorPlanSelection.tables.length,
               revision: restoredRevision,
             });
           } finally {
@@ -3812,7 +3819,9 @@ const AppContent: React.FC = () => {
           remoteParkedTickets,
           pendingMasterTableSyncRef.current,
         );
-        const reconciledTables = reconcileTablesWithParkedTickets(nextTables, nextParkedTickets);
+        const selectedRooms = floorPlanSelection?.rooms || nextRooms;
+        const selectedTables = floorPlanSelection?.tables || nextTables;
+        const reconciledTables = reconcileTablesWithParkedTickets(selectedTables, nextParkedTickets);
         const nextCustomers = Array.isArray(state?.customers) ? state.customers : customers;
         const knownCustomerIds = new Set(customers.map(customer => String(customer.id)));
         const customersCreatedByClients = nextCustomers.filter(
@@ -3831,14 +3840,18 @@ const AppContent: React.FC = () => {
         );
         const routedCatalog = applyProductionAreaAssignments(products, routingAssignments);
         masterRestaurantRevisionRef.current = revision;
-        if (hasDesignedFloorPlanGeometry(reconciledTables)) {
+        if (hasDesignedFloorPlan(reconciledTables)) {
           locallySavedFloorPlanRef.current = {
-            roomIds: new Set(nextRooms.map((room: Room) => String(room.id))),
+            roomIds: new Set(selectedRooms.map((room: Room) => String(room.id))),
             tableIds: new Set(reconciledTables.map((table: Table) => String(table.id))),
           };
-          writeFloorPlanMirror(nextRooms, reconciledTables);
+          writeFloorPlanMirror(selectedRooms, reconciledTables, {
+            layoutSource: 'MASTER_RUNTIME',
+            layoutRevision: revision,
+            isDefaultSeed: false,
+          });
         }
-        setRooms(nextRooms);
+        setRooms(selectedRooms);
         setTables(reconciledTables);
         setParkedTickets(nextParkedTickets);
         setCustomers(nextCustomers);
@@ -3848,7 +3861,7 @@ const AppContent: React.FC = () => {
         }
         writeCriticalCollectionsMirror(nextParkedTickets, cashMovements);
         await Promise.all([
-          db.save('rooms', nextRooms),
+          db.save('rooms', selectedRooms),
           db.save('tables', reconciledTables),
           db.save('parkedTickets', nextParkedTickets),
           db.save('customers', nextCustomers),
@@ -6890,22 +6903,49 @@ const AppContent: React.FC = () => {
           : Array.isArray((updatedConfig as any).initialTables)
             ? (updatedConfig as any).initialTables
             : [];
-      if (hasAuthoritativeRoomSnapshot || setupRooms.length > 0) {
-        await db.save('rooms', setupRooms);
-        setRooms(setupRooms);
-        setActiveRoomId(setupRooms[0]?.id || setupRooms[0]?.room_id || setupRooms[0]?.code || '');
+      const [persistedRoomsRaw, persistedTablesRaw] = await Promise.all([
+        db.get('rooms') as Promise<Room[]>,
+        db.get('tables') as Promise<Table[]>,
+      ]);
+      const persistedRooms = Array.isArray(persistedRoomsRaw) ? persistedRoomsRaw : [];
+      const persistedTables = Array.isArray(persistedTablesRaw) ? persistedTablesRaw : [];
+      const selectedSetupFloorPlan = selectAuthoritativeFloorPlan({
+        local: { rooms: persistedRooms, tables: persistedTables },
+        incoming: { rooms: setupRooms, tables: setupTables },
+        isClientTerminal: isSlave,
+      });
+      if (selectedSetupFloorPlan.reason === 'PRESERVE_MASTER_DESIGN') {
+        console.warn('[FLOOR_PLAN] Ignored setup/bootstrap tables because the Master has a designed layout', {
+          localTables: persistedTables.length,
+          incomingTables: setupTables.length,
+        });
       }
-      if (hasAuthoritativeTableSnapshot || setupTables.length > 0) {
-        await db.save('tables', setupTables);
-        setTables(setupTables);
+      const effectiveSetupRooms = selectedSetupFloorPlan.rooms;
+      const effectiveSetupTables = selectedSetupFloorPlan.tables;
+      if (hasAuthoritativeRoomSnapshot || effectiveSetupRooms.length > 0) {
+        await db.save('rooms', effectiveSetupRooms);
+        setRooms(effectiveSetupRooms);
+        setActiveRoomId(
+          effectiveSetupRooms[0]?.id
+          || (effectiveSetupRooms[0] as any)?.room_id
+          || (effectiveSetupRooms[0] as any)?.code
+          || ''
+        );
+      }
+      if (hasAuthoritativeTableSnapshot || effectiveSetupTables.length > 0) {
+        await db.save('tables', effectiveSetupTables);
+        setTables(effectiveSetupTables);
       }
       if (hasAuthoritativeRoomSnapshot || hasAuthoritativeTableSnapshot) {
         locallySavedFloorPlanRef.current = {
-          roomIds: new Set(setupRooms.map(room => String(room.id))),
-          tableIds: new Set(setupTables.map(table => String(table.id))),
+          roomIds: new Set(effectiveSetupRooms.map(room => String(room.id))),
+          tableIds: new Set(effectiveSetupTables.map(table => String(table.id))),
         };
         localStorage.removeItem(FLOOR_PLAN_STORAGE_KEY);
-        writeFloorPlanMirror(setupRooms, setupTables);
+        writeFloorPlanMirror(effectiveSetupRooms, effectiveSetupTables, {
+          layoutSource: isSlave ? 'MASTER_SNAPSHOT' : 'MASTER_RUNTIME',
+          isDefaultSeed: false,
+        });
       }
       setupResult.progress?.({
         stepId: 'apply',
@@ -8982,7 +9022,11 @@ const AppContent: React.FC = () => {
     await db.save('tables', mergedTables);
     setTables(mergedTables);
     window.localStorage.removeItem(FLOOR_PLAN_STORAGE_KEY);
-    writeFloorPlanMirror(normalizedRooms, mergedTables);
+    writeFloorPlanMirror(normalizedRooms, mergedTables, {
+      layoutSource: 'MASTER_DESIGNER',
+      layoutRevision: masterRestaurantRevisionRef.current,
+      isDefaultSeed: false,
+    });
     try {
       const syncedLayout = await syncFloorPlanToServer(normalizedRooms, mergedTables);
       if (syncedLayout) {

@@ -59,7 +59,8 @@ test('la Master protege su borrador frente a revisiones provocadas por una Clien
   );
   assert.match(nativeReconciliationSource, /pendingMasterTableSyncRef\.current/);
   assert.match(nativeReconciliationSource, /mergePendingClientTableTickets/);
-  assert.match(nativeReconciliationSource, /reconcileTablesWithParkedTickets\(nextTables, nextParkedTickets\)/);
+  assert.match(nativeReconciliationSource, /selectAuthoritativeFloorPlan/);
+  assert.match(nativeReconciliationSource, /reconcileTablesWithParkedTickets\(selectedTables, nextParkedTickets\)/);
 
   const updateSource = appSource.slice(
     appSource.indexOf('const handleUpdateParkedTickets'),
@@ -241,7 +242,7 @@ test('los renders de la Master no reemplazan el estado operativo nativo', () => 
   assert.match(masterServerEffect, /masterRestaurantBootstrapRequestedRef\.current/);
   assert.match(masterServerEffect, /activeTableEditLockRef\.current/);
   assert.match(masterServerEffect, /Restored designed floor plan after rejecting ERP seed tables/);
-  assert.match(masterServerEffect, /writeFloorPlanMirror\(nextRooms, reconciledTables\)/);
+  assert.match(masterServerEffect, /writeFloorPlanMirror\(selectedRooms, reconciledTables/);
 });
 
 test('la Caja Master Android se anuncia y puede identificarse automáticamente en la red local', () => {

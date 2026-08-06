@@ -49,7 +49,8 @@ test('la Cliente recibe mesas y productos desde el snapshot operativo de la Mast
     /tables: Array\.isArray\(initialConfigData\.tables\) \? initialConfigData\.tables : undefined/,
   );
   assert.match(appSource, /const hasAuthoritativeTableSnapshot = Array\.isArray\(setupResult\?\.tables\)/);
-  assert.match(appSource, /if \(hasAuthoritativeTableSnapshot \|\| setupTables\.length > 0\)/);
+  assert.match(appSource, /isClientTerminal: isSlave/);
+  assert.match(appSource, /if \(hasAuthoritativeTableSnapshot \|\| effectiveSetupTables\.length > 0\)/);
   assert.match(appSource, /if \(!isClientRuntime && nextTables\.length === 0 && previousTables\.length > 0\)/);
 });
 
