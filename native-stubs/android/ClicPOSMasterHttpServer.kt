@@ -237,6 +237,8 @@ object ClicPOSMasterHttpServer {
                         handleCustomerUpsert(client, body)
                     method == "POST" && path == "/api/mesas/abrir" ->
                         handleOpenTable(client, body)
+                    method == "POST" && path == "/api/mesas/unir" ->
+                        handleJoinTables(client, body)
                     method == "POST" && path == "/api/mesas/liberar" ->
                         handleReleaseTable(client, body)
                     method == "GET" && path == "/api/setup/terminals" ->
@@ -1018,6 +1020,119 @@ object ClicPOSMasterHttpServer {
             if (joinedTableIds.optString(index) == tableId) return true
         }
         return false
+    }
+
+    private fun parkedTicketTotal(ticket: JSONObject): Double {
+        val explicitTotal = ticket.optDouble("total", Double.NaN)
+        if (!explicitTotal.isNaN()) return explicitTotal
+        var total = 0.0
+        val items = ticket.optJSONArray("items") ?: JSONArray()
+        for (index in 0 until items.length()) {
+            val item = items.optJSONObject(index) ?: continue
+            total += item.optDouble("price", 0.0) * item.optDouble("quantity", 0.0)
+        }
+        return total
+    }
+
+    @Synchronized
+    private fun handleJoinTables(socket: Socket, body: String) {
+        val payload = runCatching { if (body.isBlank()) JSONObject() else JSONObject(body) }
+            .getOrElse {
+                writeResponse(socket, 400, JSONObject()
+                    .put("success", false)
+                    .put("message", "Cuerpo de unión inválido")
+                    .toString())
+                return
+            }
+        val mainTableId = payload.optString("mainTableId").trim()
+        val requestedSecondaryIds = payload.optJSONArray("secondaryTableIds") ?: JSONArray()
+        val secondaryTableIds = (0 until requestedSecondaryIds.length())
+            .map { requestedSecondaryIds.optString(it).trim() }
+            .filter { it.isNotBlank() && it != mainTableId }
+            .distinct()
+        if (mainTableId.isBlank() || secondaryTableIds.isEmpty()) {
+            writeResponse(socket, 400, JSONObject()
+                .put("success", false)
+                .put("message", "Seleccione una mesa principal y al menos una secundaria")
+                .toString())
+            return
+        }
+
+        val sourceTicket = (0 until parkedTicketsSnapshot.length())
+            .mapNotNull { parkedTicketsSnapshot.optJSONObject(it) }
+            .firstOrNull { ticketReferencesTable(it, mainTableId) }
+        if (sourceTicket == null || (sourceTicket.optJSONArray("items") ?: JSONArray()).length() == 0) {
+            writeResponse(socket, 409, JSONObject()
+                .put("success", false)
+                .put("message", "La mesa principal no tiene artículos para unir")
+                .toString())
+            return
+        }
+
+        val memberTableIds = linkedSetOf(mainTableId)
+        val ticketsToJoin = linkedMapOf<String, JSONObject>()
+        fun includeTicket(ticket: JSONObject?) {
+            if (ticket == null) return
+            val ticketId = ticket.optString("id").ifBlank { "ticket-${ticketsToJoin.size}" }
+            ticketsToJoin[ticketId] = ticket
+            ticket.optString("tableId").takeIf { it.isNotBlank() }?.let(memberTableIds::add)
+            val joinedIds = ticket.optJSONArray("joinedTableIds") ?: JSONArray()
+            for (index in 0 until joinedIds.length()) {
+                joinedIds.optString(index).takeIf { it.isNotBlank() }?.let(memberTableIds::add)
+            }
+        }
+        includeTicket(sourceTicket)
+        secondaryTableIds.forEach { secondaryId ->
+            memberTableIds.add(secondaryId)
+            val targetTicket = (0 until parkedTicketsSnapshot.length())
+                .mapNotNull { parkedTicketsSnapshot.optJSONObject(it) }
+                .firstOrNull { ticketReferencesTable(it, secondaryId) }
+            includeTicket(targetTicket)
+        }
+
+        val combinedItems = JSONArray()
+        var combinedTotal = 0.0
+        ticketsToJoin.values.forEach { ticket ->
+            val items = ticket.optJSONArray("items") ?: JSONArray()
+            for (index in 0 until items.length()) {
+                items.optJSONObject(index)?.let { combinedItems.put(JSONObject(it.toString())) }
+            }
+            combinedTotal += parkedTicketTotal(ticket)
+        }
+        val mainTable = (0 until tablesSnapshot.length())
+            .mapNotNull { tablesSnapshot.optJSONObject(it) }
+            .firstOrNull { it.optString("id") == mainTableId }
+        val mainTableName = mainTable?.let {
+            firstNonBlank(it.optString("nombre"), it.optString("name"), mainTableId)
+        } ?: mainTableId
+        val mergedTicket = JSONObject(sourceTicket.toString())
+            .put("items", combinedItems)
+            .put("total", combinedTotal)
+            .put("tableId", mainTableId)
+            .put("primaryTableId", mainTableId)
+            .put("joinedTableIds", JSONArray(memberTableIds.toList()))
+            .put("tableDisplayLabel", mainTableName)
+
+        val nextTickets = JSONArray()
+        val mergedTicketIds = ticketsToJoin.keys
+        for (index in 0 until parkedTicketsSnapshot.length()) {
+            val ticket = parkedTicketsSnapshot.optJSONObject(index) ?: continue
+            if (!mergedTicketIds.contains(ticket.optString("id"))) {
+                nextTickets.put(JSONObject(ticket.toString()))
+            }
+        }
+        nextTickets.put(mergedTicket)
+        val reconciledTables = reconcileTablesWithParkedTickets(tablesSnapshot, nextTickets)
+        applyClientRestaurantMutation(tables = reconciledTables, parkedTickets = nextTickets)
+        writeResponse(socket, 200, JSONObject()
+            .put("success", true)
+            .put("message", "Mesas unidas correctamente")
+            .put("primaryTableId", mainTableId)
+            .put("joinedTableIds", JSONArray(memberTableIds.toList()))
+            .put("parkedTickets", JSONArray(parkedTicketsSnapshot.toString()))
+            .put("tables", buildTablesWithEditLocks())
+            .put("revision", restaurantRevision.get())
+            .toString())
     }
 
     private fun reconcileTablesWithParkedTickets(

@@ -191,6 +191,9 @@ const indexParkedTicketsForTables = (tickets: any[]) => {
         if (ticket?.tableId !== undefined && ticket?.tableId !== null) {
             byTableId.set(String(ticket.tableId), ticket);
         }
+        (Array.isArray(ticket?.joinedTableIds) ? ticket.joinedTableIds : []).forEach((tableId: unknown) => {
+            if (tableId !== undefined && tableId !== null) byTableId.set(String(tableId), ticket);
+        });
     });
 
     return { byOrderId, byTableId };
@@ -233,12 +236,20 @@ server.get('/api/mesas', (req, res) => {
             const linkedTicket = (t.currentOrderId ? parkedTicketsIndex.byOrderId.get(String(t.currentOrderId)) : undefined)
                 || parkedTicketsIndex.byTableId.get(String(t.id));
             const linkedTotal = getParkedTicketTotal(linkedTicket);
+            const primaryTableId = String(linkedTicket?.primaryTableId || linkedTicket?.tableId || '');
+            const isJoinedSecondary = Boolean(primaryTableId && primaryTableId !== String(t.id));
+            const primaryTable = tables.find((candidate: any) => String(candidate.id) === primaryTableId) as any;
+            const primaryTableName = primaryTable?.nombre || primaryTable?.name || primaryTableId;
 
             return {
                 ...t,
                 status: linkedTicket ? 'OCCUPIED' : t.status,
                 currentOrderId: linkedTicket ? linkedTicket.id : (t.currentOrderId || null),
-                currentOrderTotal: linkedTicket ? linkedTotal : t.currentOrderTotal,
+                currentOrderTotal: linkedTicket ? (isJoinedSecondary ? 0 : linkedTotal) : t.currentOrderTotal,
+                joinedSourceTableId: linkedTicket?.joinedTableIds?.length > 1 ? primaryTableId : undefined,
+                joinedSourceTableName: linkedTicket?.joinedTableIds?.length > 1 ? primaryTableName : undefined,
+                joinedTableId: isJoinedSecondary ? primaryTableId : undefined,
+                joinedTableName: isJoinedSecondary ? primaryTableName : undefined,
                 data: t.data ? JSON.parse(t.data) : {}
             };
         });
@@ -404,10 +415,67 @@ server.get('/api/tables', (req, res) => {
 // Generic Table Update (for POS status updates) handled by generic /api/:collection/:id
 
 server.post('/api/mesas/unir', (req, res) => {
-    const { mainTableId, secondaryTableIds } = req.body;
-    // Stub
     try {
-        res.json({ success: true, message: 'Tables joined successfully' });
+        const mainTableId = String(req.body?.mainTableId || '').trim();
+        const secondaryTableIds = Array.from(new Set(
+            (Array.isArray(req.body?.secondaryTableIds) ? req.body.secondaryTableIds : [])
+                .map((value: unknown) => String(value || '').trim())
+                .filter((value: string) => value && value !== mainTableId)
+        )) as string[];
+        if (!mainTableId || secondaryTableIds.length === 0) {
+            return res.status(400).json({ success: false, message: 'Seleccione una mesa principal y al menos una secundaria.' });
+        }
+        const allTickets = getSetting('parkedTickets');
+        const parkedTickets = Array.isArray(allTickets) ? allTickets : [];
+        const referencesTable = (ticket: any, tableId: string) =>
+            String(ticket?.tableId || '') === tableId ||
+            (Array.isArray(ticket?.joinedTableIds) && ticket.joinedTableIds.map(String).includes(tableId));
+        const sourceTicket = parkedTickets.find((ticket: any) => referencesTable(ticket, mainTableId));
+        if (!sourceTicket || !Array.isArray(sourceTicket.items) || sourceTicket.items.length === 0) {
+            return res.status(409).json({ success: false, message: 'La mesa principal no tiene artículos para unir.' });
+        }
+        const ticketsToJoin = new Map<string, any>([[String(sourceTicket.id), sourceTicket]]);
+        const memberTableIds = new Set<string>([mainTableId]);
+        const includeTicket = (ticket: any) => {
+            if (!ticket) return;
+            ticketsToJoin.set(String(ticket.id), ticket);
+            if (ticket.tableId) memberTableIds.add(String(ticket.tableId));
+            (Array.isArray(ticket.joinedTableIds) ? ticket.joinedTableIds : []).forEach((id: unknown) => memberTableIds.add(String(id)));
+        };
+        secondaryTableIds.forEach((tableId) => {
+            memberTableIds.add(tableId);
+            includeTicket(parkedTickets.find((ticket: any) => referencesTable(ticket, tableId)));
+        });
+        const mergedItems = Array.from(ticketsToJoin.values()).flatMap(ticket => Array.isArray(ticket.items) ? ticket.items : []);
+        const mergedTotal = Array.from(ticketsToJoin.values()).reduce((sum, ticket) => sum + getParkedTicketTotal(ticket), 0);
+        const mergedTicket = {
+            ...sourceTicket,
+            items: mergedItems,
+            total: mergedTotal,
+            tableId: mainTableId,
+            primaryTableId: mainTableId,
+            joinedTableIds: Array.from(memberTableIds),
+        };
+        const nextTickets = parkedTickets.filter((ticket: any) => !ticketsToJoin.has(String(ticket.id)));
+        nextTickets.push(mergedTicket);
+        const updateTables = db.transaction(() => {
+            saveSetting('parkedTickets', nextTickets);
+            Array.from(memberTableIds).forEach((tableId) => {
+                db.prepare(`
+                    UPDATE tables
+                    SET status = 'OCCUPIED', currentOrderId = ?, currentOrderTotal = ?
+                    WHERE id = ?
+                `).run(mergedTicket.id, tableId === mainTableId ? mergedTotal : 0, tableId);
+            });
+        });
+        updateTables();
+        res.json({
+            success: true,
+            message: 'Mesas unidas correctamente.',
+            primaryTableId: mainTableId,
+            joinedTableIds: Array.from(memberTableIds),
+            parkedTickets: nextTickets,
+        });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }

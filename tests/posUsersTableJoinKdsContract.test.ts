@@ -23,7 +23,8 @@ test('la unión conserva la mesa origen como cuenta principal y un solo ticket',
   assert.match(tableMapSource, /tableId: mode === 'MERGE' \? sourceTable\.id : targetTable\.id/);
   assert.match(tableMapSource, /primaryTableId: sourceTable\.id/);
   assert.match(tableMapSource, /currentOrderTotal: mode === 'MERGE' \? undefined : nextTotal/);
-  assert.doesNotMatch(tableMapSource, /resolveOperationalApiUrl\('\/api\/mesas\/unir'\)/);
+  assert.match(tableMapSource, /resolveOperationalApiUrl\('\/api\/mesas\/unir'\)/);
+  assert.match(tableMapSource, /diagnosticContext: \{ operation: 'TABLE_MERGE' \}/);
   assert.match(nativeServerSource, /val affectedTableIds = mutableSetOf\(tableId\)/);
   assert.match(nativeServerSource, /affectedTableIds\.none/);
   assert.match(tableMapSource, /<Link2 size=\{15\} strokeWidth=\{3\}/);
