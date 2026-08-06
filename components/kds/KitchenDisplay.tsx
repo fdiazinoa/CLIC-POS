@@ -289,12 +289,16 @@ const KitchenDisplay: React.FC = () => {
 
             const data = await response.json();
             const nextOrders = Array.isArray(data) ? data : [];
+            const previousSignatures = knownOrderSignaturesRef.current;
             const nextSignatures = new Set(nextOrders.map(getOrderSignature));
             const hasNewOrder = didPrimeOrdersRef.current
-                && nextOrders.some((order) => !knownOrderSignaturesRef.current.has(getOrderSignature(order)));
+                && nextOrders.some((order) => !previousSignatures.has(getOrderSignature(order)));
+            const ordersChanged = !didPrimeOrdersRef.current
+                || previousSignatures.size !== nextSignatures.size
+                || Array.from(nextSignatures).some((signature) => !previousSignatures.has(signature));
             knownOrderSignaturesRef.current = nextSignatures;
             didPrimeOrdersRef.current = true;
-            setOrders(nextOrders);
+            if (ordersChanged) setOrders(nextOrders);
             if (networkInfoRef.current.host && networkInfoRef.current.serverRunning) {
                 setConnectionState('online');
                 setConnectionMessage('Servicio KDS conectado');
@@ -317,11 +321,16 @@ const KitchenDisplay: React.FC = () => {
         }
     }, [playKitchenAlert]);
 
-    const reconnectKds = useCallback(async (forceRestart = false) => {
+    const reconnectKds = useCallback(async (
+        forceRestart = false,
+        options: { silent?: boolean } = {},
+    ) => {
         if (reconnectInFlightRef.current) return;
         reconnectInFlightRef.current = true;
-        setConnectionState('connecting');
-        setConnectionMessage('Reconectando servicio KDS...');
+        if (!options.silent) {
+            setConnectionState('connecting');
+            setConnectionMessage('Reconectando servicio KDS...');
+        }
         try {
             const nativeBridge = (window as any).ClicPOSNativePrinter;
             if (forceRestart && typeof nativeBridge?.stopKdsServer === 'function') {
@@ -377,7 +386,10 @@ const KitchenDisplay: React.FC = () => {
 
         void reconnectKds(false);
         const orderPolling = window.setInterval(() => void fetchOrders(), 5000);
-        const networkWatchdog = window.setInterval(() => void reconnectKds(false), KDS_NETWORK_WATCHDOG_MS);
+        const networkWatchdog = window.setInterval(
+            () => void reconnectKds(false, { silent: true }),
+            KDS_NETWORK_WATCHDOG_MS,
+        );
         window.addEventListener('online', handleOnline);
         window.addEventListener('offline', handleOffline);
         document.addEventListener('visibilitychange', handleResume);
