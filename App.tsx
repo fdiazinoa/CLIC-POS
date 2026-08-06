@@ -3636,6 +3636,7 @@ const AppContent: React.FC = () => {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [activeCartDraftRestorePrompt, setActiveCartDraftRestorePrompt] = useState<ActiveCartDraft | null>(null);
   const masterRestaurantRevisionRef = useRef(0);
+  const lastAppliedClientRestaurantRevisionRef = useRef(0);
   const masterRestaurantPollInFlightRef = useRef(false);
   const parkedTicketSyncQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingClientTableSyncRef = useRef<PendingClientTableSync | null>(null);
@@ -4565,6 +4566,10 @@ const AppContent: React.FC = () => {
         }
         const data = await res.json();
         const responseRevision = Number(data?.revision || 0);
+        const hasUnchangedClientRevision = isClientRuntime
+          && Number.isFinite(responseRevision)
+          && responseRevision > 0
+          && responseRevision === lastAppliedClientRestaurantRevisionRef.current;
         if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
           masterRestaurantRevisionRef.current = responseRevision;
         }
@@ -4576,6 +4581,11 @@ const AppContent: React.FC = () => {
         if (isClientRuntime && !pendingTableSync) {
           pendingTableSync = await readPendingClientTableSync();
           if (pendingTableSync) pendingClientTableSyncRef.current = pendingTableSync;
+        }
+        if (hasUnchangedClientRevision && !pendingTableSync) {
+          markClientMasterOnline();
+          console.debug('[TABLE_LAYOUT_CLIENT_UNCHANGED]', { revision: responseRevision });
+          return;
         }
         const nextParkedTickets = hasAuthoritativeParkedTickets
           ? mergePendingClientTableTickets(responseParkedTickets, pendingTableSync)
@@ -4667,6 +4677,9 @@ const AppContent: React.FC = () => {
               ? prev
               : (nextRooms[0]?.id || '')
           );
+          if (Number.isFinite(responseRevision) && responseRevision > 0) {
+            lastAppliedClientRestaurantRevisionRef.current = responseRevision;
+          }
         } else if (nextRooms.length > 0) {
           setRooms(previousRooms => {
             const localFloorPlan = locallySavedFloorPlanRef.current;

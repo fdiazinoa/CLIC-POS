@@ -18,6 +18,10 @@ const pairingSource = readFileSync(new URL('../components/TerminalBindingScreen.
 const lanDiscoverySource = readFileSync(new URL('../utils/masterLanDiscovery.ts', import.meta.url), 'utf8');
 const scannerSource = readFileSync(new URL('../services/sync/NetworkScanner.ts', import.meta.url), 'utf8');
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+const kitchenDisplaySource = readFileSync(
+  new URL('../components/kds/KitchenDisplay.tsx', import.meta.url),
+  'utf8',
+);
 
 test('la Master Android expone el estado compartido de restaurante', () => {
   assert.match(serverSource, /method == "GET" && path == "\/api\/mesas"/);
@@ -183,6 +187,9 @@ test('el polling en segundo plano no hace parpadear el modal de reconexión', ()
   );
   assert.match(fetchTablesSource, /clientMasterTablesFetchInFlightRef\.current/);
   assert.match(fetchTablesSource, /recordClientMasterFailure\('tables_poll', e\)/);
+  assert.match(fetchTablesSource, /hasUnchangedClientRevision && !pendingTableSync/);
+  assert.match(fetchTablesSource, /TABLE_LAYOUT_CLIENT_UNCHANGED/);
+  assert.match(fetchTablesSource, /lastAppliedClientRestaurantRevisionRef\.current = responseRevision/);
   assert.doesNotMatch(fetchTablesSource, /clientMasterTablesStatus !== 'ONLINE'/);
   assert.doesNotMatch(fetchTablesSource, /setClientMasterTablesStatus\('CHECKING'\)/);
 
@@ -191,6 +198,19 @@ test('el polling en segundo plano no hace parpadear el modal de reconexión', ()
     appSource.indexOf('const openTableForService'),
   );
   assert.match(retrySource, /setClientMasterTablesStatus\('CHECKING'\)/);
+});
+
+test('el watchdog KDS comprueba en silencio y no reconstruye órdenes sin cambios', () => {
+  assert.match(
+    kitchenDisplaySource,
+    /reconnectKds\(false, \{ silent: true \}\)/,
+  );
+  assert.match(kitchenDisplaySource, /if \(!options\.silent\) \{/);
+  assert.match(kitchenDisplaySource, /if \(ordersChanged\) setOrders\(nextOrders\)/);
+  assert.doesNotMatch(
+    kitchenDisplaySource,
+    /networkWatchdog[\s\S]{0,180}reconnectKds\(false\)(?!,)/,
+  );
 });
 
 test('abrir una mesa usa tolerancia de fallos antes de declarar la Master desconectada', () => {
