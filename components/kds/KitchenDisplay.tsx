@@ -733,25 +733,25 @@ const TicketCard: React.FC<{
     const activeSeverityStyles = severityStyles[severity];
 
     return (
-        <div className={`min-w-0 h-[calc((100vh-9.5rem)/2)] min-h-[270px] flex flex-col rounded-[2rem] border-2 shadow-2xl transition-all duration-500 ${activeSeverityStyles.card}`}>
+        <div className={`min-w-0 h-[calc((100vh-9.5rem)/2)] min-h-[250px] flex flex-col rounded-[1.5rem] border-2 shadow-2xl transition-all duration-500 ${activeSeverityStyles.card}`}>
 
             {/* Card Header */}
-            <div className={`p-4 rounded-t-[1.8rem] flex flex-col gap-2 ${activeSeverityStyles.header}`}>
+            <div className={`p-3 rounded-t-[1.3rem] flex flex-col gap-1 ${activeSeverityStyles.header}`}>
                 <div className="flex items-center justify-between">
-                    <span className="text-2xl font-black tracking-tighter truncate pr-3"># {headerTitle}</span>
+                    <span className="text-lg font-black tracking-tighter truncate pr-2"># {headerTitle}</span>
                     <div
-                        className="flex items-center gap-1.5 text-xs font-black bg-black/20 px-3 py-1 rounded-full shrink-0"
+                        className="flex items-center gap-1 text-[10px] font-black bg-black/20 px-2 py-1 rounded-full shrink-0"
                         title={`Alerta: ${timing.warningMinutes} min · Crítico: ${timing.criticalMinutes} min`}
                     >
                         <Timer size={12} /> {elapsed} min
                     </div>
                 </div>
-                <div className="flex items-center justify-between text-[10px] font-black uppercase tracking-widest opacity-80">
+                <div className="flex items-center justify-between text-[9px] font-black uppercase tracking-wide opacity-80">
                     <span className="flex items-center gap-1"><Users size={10} /> {order.userName}</span>
                     <span>{visibleOrderNumber ? `Orden: ${visibleOrderNumber}` : `Ref: ${String(order.id).slice(-4)}`}</span>
                 </div>
                 {(productionAreaLabel || order.sourceTerminal) && (
-                    <div className="flex items-center justify-between gap-3 text-[10px] font-black uppercase tracking-wide opacity-90">
+                    <div className="flex items-center justify-between gap-2 text-[9px] font-black uppercase tracking-wide opacity-90">
                         <span className="truncate">{productionAreaLabel ? `Centro: ${productionAreaLabel}` : 'Centro de producción'}</span>
                         {order.sourceTerminal && (
                             <span className="flex max-w-[48%] items-center gap-1 truncate" title={sourceTerminalLabel}>
@@ -763,7 +763,7 @@ const TicketCard: React.FC<{
             </div>
 
             {/* Items List */}
-            <div className={`flex-1 overflow-y-auto p-4 space-y-4 ${activeSeverityStyles.body}`}>
+            <div className={`flex-1 overflow-y-auto p-3 space-y-2 ${activeSeverityStyles.body}`}>
                 {order.items.map((item) => {
                     const isReturned = item.estado_cocina === 'DEVUELTO';
                     const isReady = item.estado_cocina === 'LISTO';
@@ -776,11 +776,11 @@ const TicketCard: React.FC<{
                             }}
                             className={`transition-all ${isReturned ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'} ${isReady || isReturned ? 'grayscale line-through' : ''}`}
                         >
-                            <div className="flex items-start gap-3">
-                                <span className={`text-2xl font-black leading-tight ${isReturned ? 'text-red-200' : activeSeverityStyles.qty}`}>{item.cantidad}x</span>
+                            <div className="flex items-start gap-2">
+                                <span className={`text-lg font-black leading-tight ${isReturned ? 'text-red-200' : activeSeverityStyles.qty}`}>{item.cantidad}x</span>
                                 <div className="flex-1">
                                     <div className="flex items-start justify-between gap-2">
-                                        <p className={`text-xl font-bold leading-tight ${activeSeverityStyles.itemName}`}>{item.nombre}</p>
+                                        <p className={`text-base font-bold leading-tight ${activeSeverityStyles.itemName}`}>{item.nombre}</p>
                                         {isReturned && (
                                             <span className="rounded-full bg-red-500/20 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-red-200">
                                                 Devuelto
@@ -790,7 +790,7 @@ const TicketCard: React.FC<{
                                     {item.modificadores && item.modificadores.length > 0 && (
                                         <ul className="mt-1 space-y-0.5">
                                             {item.modificadores.map((mod, i) => (
-                                                <li key={i} className={`${activeSeverityStyles.modifier} text-sm font-bold uppercase flex items-center gap-1`}>
+                                                <li key={i} className={`${activeSeverityStyles.modifier} text-xs font-bold uppercase flex items-center gap-1`}>
                                                     <span className="text-xs">↳</span> {mod}
                                                 </li>
                                             ))}
@@ -804,12 +804,12 @@ const TicketCard: React.FC<{
             </div>
 
             {/* Card Footer */}
-            <div className={`p-4 rounded-b-[1.8rem] ${activeSeverityStyles.footer}`}>
+            <div className={`p-3 rounded-b-[1.3rem] ${activeSeverityStyles.footer}`}>
                 <button
                     onClick={() => onStatusChange(order.id, 'LISTO', 'order')}
-                    className={`w-full py-4 rounded-2xl font-black text-lg active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-xl ${activeSeverityStyles.button}`}
+                    className={`w-full py-2.5 rounded-xl font-black text-sm active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-xl ${activeSeverityStyles.button}`}
                 >
-                    <CheckCircle2 size={24} /> MARCHAR / LISTO
+                    <CheckCircle2 size={18} /> MARCHAR / LISTO
                 </button>
             </div>
 
