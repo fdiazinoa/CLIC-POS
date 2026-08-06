@@ -10,7 +10,9 @@ import {
     Monitor,
     Wifi,
     WifiOff,
-    RefreshCw
+    RefreshCw,
+    Maximize2,
+    X
 } from 'lucide-react';
 import { formatKdsIdentityLabel } from '../../utils/kdsPresentation';
 
@@ -75,6 +77,15 @@ const DEFAULT_WARNING_MINUTES = 10;
 const DEFAULT_CRITICAL_MINUTES = 20;
 const KDS_REQUEST_TIMEOUT_MS = 4500;
 const KDS_NETWORK_WATCHDOG_MS = 15000;
+const KDS_LONG_PRESS_MS = 550;
+
+export const resolveKdsTicketHeightClass = (orderCount: number): string => {
+    if (orderCount <= 1) return 'h-[calc(100vh-9.5rem)] min-h-[250px]';
+    if (orderCount <= 2) return 'h-[calc((100vh-9.5rem)/2)] min-h-[250px] sm:h-[calc(100vh-9.5rem)]';
+    if (orderCount <= 3) return 'h-[calc((100vh-9.5rem)/2)] min-h-[250px] lg:h-[calc(100vh-9.5rem)]';
+    if (orderCount <= 4) return 'h-[calc((100vh-9.5rem)/2)] min-h-[250px] 2xl:h-[calc(100vh-9.5rem)]';
+    return 'h-[calc((100vh-9.5rem)/2)] min-h-[250px]';
+};
 
 const fetchWithTimeout = async (url: string, options?: RequestInit): Promise<Response> => {
     const controller = new AbortController();
@@ -202,6 +213,7 @@ const resolveKdsNetworkInfo = async (): Promise<KDSNetworkInfo> => {
 const KitchenDisplay: React.FC = () => {
     const [orders, setOrders] = useState<KDSOrder[]>([]);
     const [showSummary, setShowSummary] = useState(false);
+    const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [currentTime, setCurrentTime] = useState(new Date());
     const [networkInfo, setNetworkInfo] = useState<KDSNetworkInfo>({
@@ -472,6 +484,15 @@ const KitchenDisplay: React.FC = () => {
         });
         return Object.entries(summary).sort((a, b) => b[1] - a[1]);
     }, [orders]);
+    const expandedOrder = useMemo(
+        () => orders.find(order => order.id === expandedOrderId) || null,
+        [expandedOrderId, orders]
+    );
+    const ticketHeightClass = useMemo(() => resolveKdsTicketHeightClass(orders.length), [orders.length]);
+
+    useEffect(() => {
+        if (expandedOrderId && !expandedOrder) setExpandedOrderId(null);
+    }, [expandedOrder, expandedOrderId]);
 
     if (loading && orders.length === 0) {
         return (
@@ -614,6 +635,8 @@ const KitchenDisplay: React.FC = () => {
                                 key={order.id}
                                 order={order}
                                 onStatusChange={handleUpdateStatus}
+                                onExpand={() => setExpandedOrderId(order.id)}
+                                heightClass={ticketHeightClass}
                             />
                         ))}
                         {orders.length === 0 && (
@@ -625,6 +648,14 @@ const KitchenDisplay: React.FC = () => {
                     </div>
                 )}
             </main>
+
+            {expandedOrder && (
+                <ExpandedTicketOverlay
+                    order={expandedOrder}
+                    onClose={() => setExpandedOrderId(null)}
+                    onStatusChange={handleUpdateStatus}
+                />
+            )}
 
         </div>
     );
@@ -668,11 +699,127 @@ const resolveVisibleOrderNumber = (order: KDSOrder): string => {
     return '';
 };
 
+const ExpandedTicketOverlay: React.FC<{
+    order: KDSOrder;
+    onClose: () => void;
+    onStatusChange: (id: string, status: string, type: 'item' | 'order') => void;
+}> = ({ order, onClose, onStatusChange }) => {
+    const tableLabel = resolveTableLabel(order);
+    const visibleOrderNumber = resolveVisibleOrderNumber(order);
+    const headerTitle = tableLabel || (visibleOrderNumber ? `Orden ${visibleOrderNumber}` : 'Venta directa');
+    const productionAreaLabel = String(order.area?.name || order.area?.nombre || '').trim();
+    const elapsed = Math.max(0, Math.floor((Date.now() - new Date(order.date).getTime()) / 60000));
+    const timing = resolveOrderTiming(order);
+    const severityClass = elapsed >= timing.criticalMinutes
+        ? 'border-red-500 bg-red-950/95'
+        : elapsed >= timing.warningMinutes
+            ? 'border-amber-400 bg-amber-950/95'
+            : 'border-emerald-400 bg-gray-900/98';
+
+    useEffect(() => {
+        const closeOnEscape = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') onClose();
+        };
+        window.addEventListener('keydown', closeOnEscape);
+        return () => window.removeEventListener('keydown', closeOnEscape);
+    }, [onClose]);
+
+    return (
+        <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 backdrop-blur-sm"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Orden completa de ${headerTitle}`}
+            onClick={onClose}
+        >
+            <section
+                className={`flex h-[calc(100vh-1.5rem)] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border-2 shadow-2xl ${severityClass}`}
+                onClick={event => event.stopPropagation()}
+            >
+                <header className="flex shrink-0 items-center justify-between gap-4 border-b border-white/15 px-5 py-3">
+                    <div className="min-w-0">
+                        <div className="flex items-center gap-3">
+                            <h2 className="truncate text-2xl font-black"># {headerTitle}</h2>
+                            <span className="shrink-0 rounded-full bg-black/25 px-3 py-1 text-xs font-black">
+                                <Timer size={13} className="mr-1 inline" /> {elapsed} min
+                            </span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-x-4 text-xs font-black uppercase tracking-wide text-white/70">
+                            <span>{order.userName}</span>
+                            {productionAreaLabel && <span>Centro: {productionAreaLabel}</span>}
+                            <span>{order.items.length} artículos</span>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/10 text-white hover:bg-white/20"
+                        aria-label="Cerrar orden ampliada"
+                    >
+                        <X size={24} />
+                    </button>
+                </header>
+
+                <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                        {order.items.map(item => {
+                            const isReturned = item.estado_cocina === 'DEVUELTO';
+                            const isReady = item.estado_cocina === 'LISTO';
+                            return (
+                                <button
+                                    type="button"
+                                    key={item.id}
+                                    disabled={isReturned}
+                                    onClick={() => onStatusChange(item.id, isReady ? 'PENDIENTE' : 'LISTO', 'item')}
+                                    className={`rounded-2xl border border-white/10 bg-black/20 p-3 text-left transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60 ${isReady || isReturned ? 'grayscale line-through' : ''}`}
+                                >
+                                    <div className="flex items-start gap-3">
+                                        <span className="text-xl font-black text-blue-300">{item.cantidad}x</span>
+                                        <div className="min-w-0 flex-1">
+                                            <div className="text-lg font-black leading-tight text-white">{item.nombre}</div>
+                                            {item.modificadores?.map((modifier, index) => (
+                                                <div key={index} className="mt-1 text-xs font-bold uppercase text-red-200">↳ {modifier}</div>
+                                            ))}
+                                        </div>
+                                        {isReady && <CheckCircle2 size={20} className="shrink-0 text-emerald-300" />}
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                <footer className="shrink-0 border-t border-white/15 bg-black/25 p-3">
+                    <button
+                        type="button"
+                        onClick={() => onStatusChange(order.id, 'LISTO', 'order')}
+                        className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white py-3 text-base font-black text-gray-950 shadow-xl active:scale-[0.99]"
+                    >
+                        <CheckCircle2 size={21} /> MARCAR ORDEN / LISTA
+                    </button>
+                </footer>
+            </section>
+        </div>
+    );
+};
+
 const TicketCard: React.FC<{
     order: KDSOrder,
-    onStatusChange: (id: string, s: string, t: 'item' | 'order') => void
-}> = ({ order, onStatusChange }) => {
+    onStatusChange: (id: string, s: string, t: 'item' | 'order') => void;
+    onExpand: () => void;
+    heightClass: string;
+}> = ({ order, onStatusChange, onExpand, heightClass }) => {
     const [elapsed, setElapsed] = useState(0);
+    const [hiddenItemCount, setHiddenItemCount] = useState(0);
+    const itemsContainerRef = useRef<HTMLDivElement | null>(null);
+    const itemRefs = useRef<Array<HTMLDivElement | null>>([]);
+    const longPressTimerRef = useRef<number | null>(null);
+    const longPressStartRef = useRef<{ x: number; y: number } | null>(null);
+    const suppressNextClickRef = useRef(false);
+
+    useEffect(() => () => {
+        if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
+    }, []);
 
     useEffect(() => {
         const start = new Date(order.date).getTime();
@@ -683,6 +830,57 @@ const TicketCard: React.FC<{
         const interval = setInterval(update, 30000);
         return () => clearInterval(interval);
     }, [order.date]);
+
+    useEffect(() => {
+        let frame = 0;
+        const measureOverflow = () => {
+            window.cancelAnimationFrame(frame);
+            frame = window.requestAnimationFrame(() => {
+                const container = itemsContainerRef.current;
+                if (!container) return;
+                const bounds = container.getBoundingClientRect();
+                const visibleCount = itemRefs.current.reduce((count, element) => {
+                    if (!element) return count;
+                    const itemBounds = element.getBoundingClientRect();
+                    return count + (itemBounds.top >= bounds.top - 1 && itemBounds.bottom <= bounds.bottom + 1 ? 1 : 0);
+                }, 0);
+                setHiddenItemCount(Math.max(0, order.items.length - visibleCount));
+            });
+        };
+        measureOverflow();
+        const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measureOverflow) : null;
+        if (itemsContainerRef.current) observer?.observe(itemsContainerRef.current);
+        window.addEventListener('resize', measureOverflow);
+        return () => {
+            window.cancelAnimationFrame(frame);
+            observer?.disconnect();
+            window.removeEventListener('resize', measureOverflow);
+        };
+    }, [heightClass, order.items]);
+
+    const cancelLongPress = () => {
+        if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+        longPressStartRef.current = null;
+    };
+
+    const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+        if ((event.target as HTMLElement).closest('button')) return;
+        cancelLongPress();
+        longPressStartRef.current = { x: event.clientX, y: event.clientY };
+        longPressTimerRef.current = window.setTimeout(() => {
+            suppressNextClickRef.current = true;
+            navigator.vibrate?.(35);
+            onExpand();
+            cancelLongPress();
+        }, KDS_LONG_PRESS_MS);
+    };
+
+    const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+        const start = longPressStartRef.current;
+        if (!start) return;
+        if (Math.abs(event.clientX - start.x) > 12 || Math.abs(event.clientY - start.y) > 12) cancelLongPress();
+    };
 
     // Aging Logic
     const timing = resolveOrderTiming(order);
@@ -733,10 +931,35 @@ const TicketCard: React.FC<{
     const activeSeverityStyles = severityStyles[severity];
 
     return (
-        <div className={`min-w-0 h-[calc((100vh-9.5rem)/2)] min-h-[250px] flex flex-col rounded-[1.5rem] border-2 shadow-2xl transition-all duration-500 ${activeSeverityStyles.card}`}>
+        <div
+            className={`min-w-0 flex flex-col rounded-[1.5rem] border-2 shadow-2xl transition-all duration-500 ${heightClass} ${activeSeverityStyles.card}`}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={cancelLongPress}
+            onPointerCancel={cancelLongPress}
+            onPointerLeave={cancelLongPress}
+            onClickCapture={event => {
+                if (!suppressNextClickRef.current) return;
+                event.preventDefault();
+                event.stopPropagation();
+                suppressNextClickRef.current = false;
+            }}
+        >
 
             {/* Card Header */}
-            <div className={`p-3 rounded-t-[1.3rem] flex flex-col gap-1 ${activeSeverityStyles.header}`}>
+            <div
+                className={`cursor-pointer p-3 rounded-t-[1.3rem] flex flex-col gap-1 ${activeSeverityStyles.header}`}
+                role="button"
+                tabIndex={0}
+                title="Toca para ver la orden completa"
+                onClick={onExpand}
+                onKeyDown={event => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        onExpand();
+                    }
+                }}
+            >
                 <div className="flex items-center justify-between">
                     <span className="text-lg font-black tracking-tighter truncate pr-2"># {headerTitle}</span>
                     <div
@@ -763,13 +986,14 @@ const TicketCard: React.FC<{
             </div>
 
             {/* Items List */}
-            <div className={`flex-1 overflow-y-auto p-3 space-y-2 ${activeSeverityStyles.body}`}>
-                {order.items.map((item) => {
+            <div ref={itemsContainerRef} className={`flex-1 overflow-y-auto p-3 space-y-2 ${activeSeverityStyles.body}`}>
+                {order.items.map((item, itemIndex) => {
                     const isReturned = item.estado_cocina === 'DEVUELTO';
                     const isReady = item.estado_cocina === 'LISTO';
                     return (
                         <div
                             key={item.id}
+                            ref={element => { itemRefs.current[itemIndex] = element; }}
                             onClick={() => {
                                 if (isReturned) return;
                                 onStatusChange(item.id, isReady ? 'PENDIENTE' : 'LISTO', 'item');
@@ -805,6 +1029,15 @@ const TicketCard: React.FC<{
 
             {/* Card Footer */}
             <div className={`p-3 rounded-b-[1.3rem] ${activeSeverityStyles.footer}`}>
+                {hiddenItemCount > 0 && (
+                    <button
+                        type="button"
+                        onClick={onExpand}
+                        className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-lg bg-blue-500/15 py-1.5 text-xs font-black text-blue-200 hover:bg-blue-500/25"
+                    >
+                        <Maximize2 size={14} /> +{hiddenItemCount} artículos · VER TODOS
+                    </button>
+                )}
                 <button
                     onClick={() => onStatusChange(order.id, 'LISTO', 'order')}
                     className={`w-full py-2.5 rounded-xl font-black text-sm active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-xl ${activeSeverityStyles.button}`}
