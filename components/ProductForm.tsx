@@ -445,37 +445,39 @@ const parseRestaurantSuggestionFractionRule = (candidate: any): ProductFractionR
   };
 };
 
-const normalizeRestaurantSuggestionTemplate = (candidate: any, fallbackId: string, fallbackName: string): RestaurantSuggestionTemplate | null => {
+export const normalizeRestaurantSuggestionTemplate = (candidate: any, fallbackId: string, fallbackName: string): RestaurantSuggestionTemplate | null => {
   if (!candidate || typeof candidate !== 'object') return null;
 
+  const resolvedCandidate = asTemplateEnvelope(candidate, candidate as Record<string, unknown>);
+
   const rawModifierGroups = asModifierArray(
-    (candidate as any).modifier_groups ||
-      (candidate as any).modifierGroups ||
-      (candidate as any).modifiers_groups ||
-      (candidate as any).modificadores_grupos ||
-      (candidate as any).grupos_modificadores ||
-      (candidate as any).groups
+    (resolvedCandidate as any).modifier_groups ||
+      (resolvedCandidate as any).modifierGroups ||
+      (resolvedCandidate as any).modifiers_groups ||
+      (resolvedCandidate as any).modificadores_grupos ||
+      (resolvedCandidate as any).grupos_modificadores ||
+      (resolvedCandidate as any).groups
   ).map((group, index) => parseRestaurantSuggestionGroupModifiers(group, index)).filter(Boolean) as ModifierGroup[];
 
   const rawComboGroups = asModifierArray(
-    (candidate as any).combo_groups ||
-      (candidate as any).comboGroups ||
-      (candidate as any).combos ||
-      (candidate as any).combo ||
-      (candidate as any).grupos_combo ||
-      (candidate as any).combo_groups_data ||
-      (candidate as any).combo_list ||
-      (candidate as any).combos_data
+    (resolvedCandidate as any).combo_groups ||
+      (resolvedCandidate as any).comboGroups ||
+      (resolvedCandidate as any).combos ||
+      (resolvedCandidate as any).combo ||
+      (resolvedCandidate as any).grupos_combo ||
+      (resolvedCandidate as any).combo_groups_data ||
+      (resolvedCandidate as any).combo_list ||
+      (resolvedCandidate as any).combos_data
   ).map((group, index) => parseRestaurantSuggestionComboGroup(group, index)).filter(Boolean) as ComboGroup[];
 
   const legacyAvailableModifiers = asModifierArray(
-    (candidate as any).availableModifiers ||
-    (candidate as any).available_modifiers ||
-    (candidate as any).suggestedModifiers ||
-    (candidate as any).suggested_modifiers ||
-    (candidate as any).modifiers ||
-    (candidate as any).modificadores ||
-    (candidate as any).sugeridos
+    (resolvedCandidate as any).availableModifiers ||
+    (resolvedCandidate as any).available_modifiers ||
+    (resolvedCandidate as any).suggestedModifiers ||
+    (resolvedCandidate as any).suggested_modifiers ||
+    (resolvedCandidate as any).modifiers ||
+    (resolvedCandidate as any).modificadores ||
+    (resolvedCandidate as any).sugeridos
   );
   const legacyGroups = rawModifierGroups.length > 0
     ? rawModifierGroups
@@ -494,8 +496,6 @@ const normalizeRestaurantSuggestionTemplate = (candidate: any, fallbackId: strin
             .filter(Boolean) as ModifierGroup['modifiers'],
         }]
       : [];
-
-  const resolvedCandidate = asTemplateEnvelope(candidate, candidate as Record<string, unknown>);
 
   const template: RestaurantSuggestionTemplate = {
     id: trimString((resolvedCandidate as any).id)
