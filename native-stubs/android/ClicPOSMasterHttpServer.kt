@@ -985,10 +985,20 @@ object ClicPOSMasterHttpServer {
     }
 
     private fun mergeTicketsForTable(tableId: String, incomingTickets: JSONArray): JSONArray {
+        val affectedTableIds = mutableSetOf(tableId)
+        for (index in 0 until incomingTickets.length()) {
+            val ticket = incomingTickets.optJSONObject(index) ?: continue
+            if (!ticketReferencesTable(ticket, tableId)) continue
+            ticket.optString("tableId").takeIf { it.isNotBlank() }?.let(affectedTableIds::add)
+            val joinedTableIds = ticket.optJSONArray("joinedTableIds") ?: JSONArray()
+            for (joinedIndex in 0 until joinedTableIds.length()) {
+                joinedTableIds.optString(joinedIndex).takeIf { it.isNotBlank() }?.let(affectedTableIds::add)
+            }
+        }
         val merged = JSONArray()
         for (index in 0 until parkedTicketsSnapshot.length()) {
             val ticket = parkedTicketsSnapshot.optJSONObject(index) ?: continue
-            if (!ticketReferencesTable(ticket, tableId)) {
+            if (affectedTableIds.none { affectedTableId -> ticketReferencesTable(ticket, affectedTableId) }) {
                 merged.put(JSONObject(ticket.toString()))
             }
         }
@@ -1078,11 +1088,34 @@ object ClicPOSMasterHttpServer {
             table
                 .put("status", "OCCUPIED")
                 .put("currentOrderId", ticket.optString("id"))
-                .put("currentOrderTotal", total)
+                .put("currentOrderTotal", if (ticket.optString("tableId") == tableId) total else 0.0)
                 .put("timeSeated", firstNonBlank(
                     table.optString("timeSeated"),
                     ticket.optString("timestamp")
                 ))
+            val primaryTableId = firstNonBlank(ticket.optString("primaryTableId"), ticket.optString("tableId"))
+            val ticketJoinedTableIds = ticket.optJSONArray("joinedTableIds") ?: JSONArray()
+            if (primaryTableId.isNotBlank() && ticketJoinedTableIds.length() > 1) {
+                val primaryTable = (0 until reconciled.length())
+                    .mapNotNull { reconciled.optJSONObject(it) }
+                    .firstOrNull { it.optString("id") == primaryTableId }
+                val primaryTableName = primaryTable?.let {
+                    firstNonBlank(it.optString("nombre"), it.optString("name"))
+                }.orEmpty()
+                table
+                    .put("joinedSourceTableId", primaryTableId)
+                    .put("joinedSourceTableName", primaryTableName)
+                if (tableId != primaryTableId) {
+                    table
+                        .put("joinedTableId", primaryTableId)
+                        .put("joinedTableName", primaryTableName)
+                }
+            } else {
+                table.remove("joinedTableId")
+                table.remove("joinedTableName")
+                table.remove("joinedSourceTableId")
+                table.remove("joinedSourceTableName")
+            }
             val guests = ticket.optInt("guests", 0)
             if (guests > 0) table.put("guests", guests)
         }

@@ -578,7 +578,7 @@ const KitchenDisplay: React.FC = () => {
             </header>
 
             {/* Main Content Area */}
-            <main className="flex-1 overflow-x-auto p-4 scroll-smooth">
+            <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 scroll-smooth">
                 {showSummary ? (
                     /* 1. Production Summary View */
                     <div className="max-w-4xl mx-auto animate-in fade-in zoom-in-95 duration-300">
@@ -608,7 +608,7 @@ const KitchenDisplay: React.FC = () => {
                     </div>
                 ) : (
                     /* 2. Ticket Grid View */
-                    <div className="flex h-full gap-6">
+                    <div className="grid min-h-full grid-cols-1 content-start gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
                         {orders.map(order => (
                             <TicketCard
                                 key={order.id}
@@ -733,7 +733,7 @@ const TicketCard: React.FC<{
     const activeSeverityStyles = severityStyles[severity];
 
     return (
-        <div className={`w-80 h-full flex flex-col rounded-[2rem] border-2 shadow-2xl transition-all duration-500 ${activeSeverityStyles.card}`}>
+        <div className={`min-w-0 h-[calc((100vh-9.5rem)/2)] min-h-[270px] flex flex-col rounded-[2rem] border-2 shadow-2xl transition-all duration-500 ${activeSeverityStyles.card}`}>
 
             {/* Card Header */}
             <div className={`p-4 rounded-t-[1.8rem] flex flex-col gap-2 ${activeSeverityStyles.header}`}>

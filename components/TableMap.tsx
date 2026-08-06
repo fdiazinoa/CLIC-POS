@@ -87,6 +87,7 @@ interface SmartTableModel {
     hasPendingKitchenDispatch: boolean;
     lastOrderHint: string;
     firstCustomerName?: string;
+    joinedPrimaryLabel?: string;
 }
 
 interface TooltipState {
@@ -826,7 +827,12 @@ const TableMap: React.FC<TableMapProps> = ({
                     ? parkedSummary.finalTotal
                     : parkedSummary.calculatedTotal)
                 : 0;
-            const total = parkedTotal > NO_ORDER_TOTAL_THRESHOLD ? parkedTotal : 0;
+            const isJoinedSecondary = Boolean(
+                parkedSummary?.tableId &&
+                parkedSummary.tableId !== String(table.id) &&
+                parkedSummary.joinedTableIds.includes(String(table.id))
+            );
+            const total = !isJoinedSecondary && parkedTotal > NO_ORDER_TOTAL_THRESHOLD ? parkedTotal : 0;
             const hasDigitizedItems = parkedItems > 0;
             const tableTickets = getTableTickets(table).filter(ticket => (ticket.items || []).length > 0);
             const subtotalizedTicketCount = tableTickets.filter(ticket => getTicketSubtotalization(ticket).isSubtotalized).length;
@@ -873,7 +879,10 @@ const TableMap: React.FC<TableMapProps> = ({
                 needsRevenueGlow,
                 hasPendingKitchenDispatch,
                 lastOrderHint: '',
-                firstCustomerName
+                firstCustomerName,
+                joinedPrimaryLabel: isJoinedSecondary
+                    ? String(table.joinedSourceTableName || '').trim() || undefined
+                    : undefined
             };
 
             return {
@@ -1101,19 +1110,30 @@ const TableMap: React.FC<TableMapProps> = ({
         const nextItems = [...ensureCartIds(sourceTicket.items || []), ...ensureCartIds(targetItems)];
         const nextTotal = nextItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
         const targetRoomLabel = roomLabelById.get(targetTable.roomId);
+        const sourceRoomLabel = roomLabelById.get(sourceTable.roomId);
         const targetTableLabel = getTableLabel(targetTable);
         const sourceTableLabel = getTableLabel(sourceTable);
         const nextTicket: ParkedTicket = {
             ...sourceTicket,
             items: nextItems,
             total: nextTotal,
-            tableId: targetTable.id,
-            name: `Mesa: ${targetRoomLabel ? `${targetRoomLabel} · ${targetTableLabel}` : targetTableLabel}`,
+            tableId: mode === 'MERGE' ? sourceTable.id : targetTable.id,
+            name: mode === 'MERGE'
+                ? `Mesa: ${sourceRoomLabel ? `${sourceRoomLabel} · ${sourceTableLabel}` : sourceTableLabel}`
+                : `Mesa: ${targetRoomLabel ? `${targetRoomLabel} · ${targetTableLabel}` : targetTableLabel}`,
             timestamp: sourceTicket.timestamp || new Date().toISOString(),
-            tableDisplayLabel: targetTableLabel,
-            tableRoomLabel: targetRoomLabel,
+            tableDisplayLabel: mode === 'MERGE' ? sourceTableLabel : targetTableLabel,
+            tableRoomLabel: mode === 'MERGE' ? sourceRoomLabel : targetRoomLabel,
             orderNumber: sourceTicket.orderNumber || targetTicket?.orderNumber,
-            ...(mode === 'MERGE' ? { joinedTableIds: [sourceTable.id, targetTable.id] } : { joinedTableIds: undefined }),
+            ...(mode === 'MERGE' ? {
+                primaryTableId: sourceTable.id,
+                joinedTableIds: Array.from(new Set([
+                    sourceTable.id,
+                    targetTable.id,
+                    ...(sourceTicket.joinedTableIds || []),
+                    ...(targetTicket?.joinedTableIds || [])
+                ]))
+            } : { primaryTableId: undefined, joinedTableIds: undefined }),
         } as ParkedTicket;
 
         const removedTicketIds = new Set([String(sourceTicket.id)]);
@@ -1127,7 +1147,7 @@ const TableMap: React.FC<TableMapProps> = ({
             ...targetTable,
             status: 'OCCUPIED',
             currentOrderId: nextTicket.id,
-            currentOrderTotal: nextTotal,
+            currentOrderTotal: mode === 'MERGE' ? undefined : nextTotal,
             waiterId: sourceTable.waiterId || targetTable.waiterId || currentUser.id,
             waiterName: sourceTable.waiterName || targetTable.waiterName || currentUser.name,
             timeSeated: sourceTable.timeSeated || targetTable.timeSeated || nextTicket.timestamp,
@@ -1241,52 +1261,56 @@ const TableMap: React.FC<TableMapProps> = ({
     }, [completeTableTransfer, isTableMoveTargetOccupied, resolveTicketForTable, transferSelection]);
 
     const handleTableAction = useCallback(async (table: Table) => {
-        if (onBeforeTableOpen && !(await onBeforeTableOpen(table))) {
+        const primaryTableId = String(table.joinedSourceTableId || '').trim();
+        const operationalTable = primaryTableId
+            ? safeTables.find(candidate => String(candidate.id) === primaryTableId) || table
+            : table;
+        if (onBeforeTableOpen && !(await onBeforeTableOpen(operationalTable))) {
             return;
         }
-        const tableTickets = getTableTickets(table);
-        if (isRestaurantMode && table.shape !== 'BAR' && tableTickets.length > 0) {
-            setSelectedAccountTable(table);
+        const tableTickets = getTableTickets(operationalTable);
+        if (isRestaurantMode && operationalTable.shape !== 'BAR' && tableTickets.length > 0) {
+            setSelectedAccountTable(operationalTable);
             return;
         }
-        if (table.shape === 'BAR') {
-            setSelectedBarTable(table);
+        if (operationalTable.shape === 'BAR') {
+            setSelectedBarTable(operationalTable);
             return;
         }
 
-        const joinedTableName = String((table as any).joinedTableName || '').trim();
+        const joinedTableName = String(operationalTable.joinedTableName || '').trim();
         if (isRestaurantMode && joinedTableName) {
             setTableNotice({
                 title: 'Mesa unida',
-                message: `${getTableLabel(table)} está unida con ${joinedTableName}. Ambas mesas comparten la misma cuenta.`,
+                message: `${getTableLabel(operationalTable)} está unida con ${joinedTableName}. Ambas mesas comparten la misma cuenta.`,
                 primaryLabel: 'Abrir cuenta',
-                tableToOpen: table
+                tableToOpen: operationalTable
             });
             return;
         }
 
-        if (table.status === 'OCCUPIED' || table.status === 'RESERVED') {
-            onTableClick(table);
+        if (operationalTable.status === 'OCCUPIED' || operationalTable.status === 'RESERVED') {
+            onTableClick(operationalTable);
             return;
         }
 
         if (isRestaurantMode) {
             if (onUpdateParkedTickets && onUpdateTables) {
-                const ticket = await createTableAccount(table);
+                const ticket = await createTableAccount(operationalTable);
                 setSelectedAccountTable(null);
                 onTableClick({
-                    ...table,
+                    ...operationalTable,
                     status: 'OCCUPIED',
                     currentOrderId: ticket.id,
                     currentOrderTotal: 0,
                     timeSeated: ticket.timestamp,
-                    waiterId: table.waiterId || currentUser.id,
-                    waiterName: table.waiterName || currentUser.name
+                    waiterId: operationalTable.waiterId || currentUser.id,
+                    waiterName: operationalTable.waiterName || currentUser.name
                 });
                 return;
             }
             if (onOpenTable) {
-                const openedTable = await onOpenTable(table);
+                const openedTable = await onOpenTable(operationalTable);
                 if (openedTable) {
                     onRefreshTables?.();
                     onTableClick(openedTable);
@@ -1299,7 +1323,7 @@ const TableMap: React.FC<TableMapProps> = ({
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        tableId: table.id,
+                        tableId: operationalTable.id,
                         waiterId: currentUser.id,
                         waiterName: currentUser.name
                     })
@@ -1308,7 +1332,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 const data = await res.json();
                 if (res.ok && data.status === 'success') {
                     onRefreshTables?.();
-                    onTableClick({ ...table, currentOrderId: data.orden_id, status: 'FREE' });
+                    onTableClick({ ...operationalTable, currentOrderId: data.orden_id, status: 'FREE' });
                 } else {
                     alert(data?.message || 'Error abriendo mesa');
                 }
@@ -1319,8 +1343,8 @@ const TableMap: React.FC<TableMapProps> = ({
             return;
         }
 
-        setSelectedTable(table);
-    }, [createTableAccount, currentUser.id, currentUser.name, getTableTickets, isRestaurantMode, onBeforeTableOpen, onOpenTable, onRefreshTables, onTableClick, onUpdateParkedTickets, onUpdateTables]);
+        setSelectedTable(operationalTable);
+    }, [createTableAccount, currentUser.id, currentUser.name, getTableTickets, isRestaurantMode, onBeforeTableOpen, onOpenTable, onRefreshTables, onTableClick, onUpdateParkedTickets, onUpdateTables, safeTables]);
 
     const handleNodeSelect = useCallback(
         (model: SmartTableModel) => {
@@ -2004,27 +2028,10 @@ const TableMap: React.FC<TableMapProps> = ({
                             setSelectedTable(null);
                         }}
                         onMergeTables={async (targetTableIds) => {
-                            try {
-                                const res = await fetch(resolveOperationalApiUrl('/api/mesas/unir'), {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({
-                                        mainTableId: selectedTable.id,
-                                        secondaryTableIds: targetTableIds
-                                    })
-                                });
-                                const data = await res.json().catch(() => ({}));
-                                if (res.ok && data.success !== false) {
-                                    onRefreshTables?.();
-                                    setSelectedTable(null);
-                                    alert(typeof data.message === 'string' ? data.message : 'Mesas unidas.');
-                                } else {
-                                    alert(data?.message || 'No se pudo unir las mesas.');
-                                }
-                            } catch (error) {
-                                console.error(error);
-                                alert('Error de conexión al unir mesas.');
-                            }
+                            const targetTableId = targetTableIds.find(id => String(id) !== String(selectedTable.id));
+                            if (!targetTableId) return;
+                            await completeTableTransfer(selectedTable.id, targetTableId, 'MERGE');
+                            setSelectedTable(null);
                         }}
                         onFree={async () => {
                             try {
@@ -2546,8 +2553,10 @@ const SmartTableNode = React.memo(({
                         </div>
 
                         <div className="text-center leading-none">
-                            <p className="text-base font-black tracking-tight drop-shadow-[0_2px_6px_rgba(2,6,23,0.5)] truncate">
-                                {model.table.nombre || model.table.name}
+                            <p className="flex items-center justify-center gap-1 text-base font-black tracking-tight drop-shadow-[0_2px_6px_rgba(2,6,23,0.5)] truncate">
+                                {model.joinedPrimaryLabel ? (
+                                    <><Link2 size={15} strokeWidth={3} className="shrink-0" /> {model.joinedPrimaryLabel}</>
+                                ) : (model.table.nombre || model.table.name)}
                             </p>
                         </div>
 
@@ -2556,7 +2565,9 @@ const SmartTableNode = React.memo(({
                                 <Clock size={11} />
                                 {model.elapsedLabel}
                             </span>
-                            <span className="font-black">{currencySymbol}{model.total.toLocaleString()}</span>
+                            {!model.joinedPrimaryLabel && (
+                                <span className="font-black">{currencySymbol}{model.total.toLocaleString()}</span>
+                            )}
                         </div>
                     </>
                 )}

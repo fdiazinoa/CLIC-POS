@@ -1536,6 +1536,11 @@ export interface Table {
   guests?: number;
   barTabId?: string;
   barTabName?: string;
+  /** Cuenta compartida: la mesa principal conserva el ticket y las secundarias la referencian. */
+  joinedTableId?: string;
+  joinedTableName?: string;
+  joinedSourceTableId?: string;
+  joinedSourceTableName?: string;
   editingLock?: {
     ownerId: string;
     terminalId?: string;
@@ -2113,6 +2118,9 @@ export interface ParkedTicket {
   orderNumber?: string;
   tableDisplayLabel?: string;
   tableRoomLabel?: string;
+  /** Mesa canónica de una cuenta compartida. */
+  primaryTableId?: string;
+  joinedTableIds?: string[];
   barTabId?: string;
   barTabName?: string;
   paymentFraction?: PaymentFractionPlan;

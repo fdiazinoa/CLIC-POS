@@ -4453,15 +4453,28 @@ const AppContent: React.FC = () => {
         } as Table;
       }
 
+      const primaryTableId = String(linkedTicket.primaryTableId || linkedTicket.tableId || '').trim();
+      const linkedTableIds = Array.isArray(linkedTicket.joinedTableIds)
+        ? linkedTicket.joinedTableIds.map(String)
+        : [];
+      const isSharedAccount = Boolean(primaryTableId && linkedTableIds.length > 1);
+      const primaryTable = sourceTables.find(candidate => String(candidate.id) === primaryTableId);
+      const primaryTableName = String(primaryTable?.nombre || primaryTable?.name || '').trim();
+      const isSecondaryTable = isSharedAccount && tableId !== primaryTableId;
+
       return {
         ...table,
         status: 'OCCUPIED',
         currentOrderId: linkedTicket.id,
-        currentOrderTotal: ticketTotal(linkedTicket),
+        currentOrderTotal: isSecondaryTable ? 0 : ticketTotal(linkedTicket),
         timeSeated: table.timeSeated || linkedTicket.timestamp,
         guests: Number(linkedTicket.guests || 0) > 0
           ? Number(linkedTicket.guests)
-          : table.guests
+          : table.guests,
+        joinedSourceTableId: isSharedAccount ? primaryTableId : undefined,
+        joinedSourceTableName: isSharedAccount ? primaryTableName : undefined,
+        joinedTableId: isSharedAccount ? (isSecondaryTable ? primaryTableId : table.joinedTableId) : undefined,
+        joinedTableName: isSharedAccount ? (isSecondaryTable ? primaryTableName : table.joinedTableName) : undefined,
       } as Table;
     });
   }, []);
