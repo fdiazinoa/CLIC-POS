@@ -1,4 +1,4 @@
-import type { Table, TableShape } from '../types';
+import type { Room, Table, TableShape } from '../types';
 
 const TABLE_SHAPES = new Set<TableShape>([
   'SQUARE',
@@ -22,6 +22,81 @@ export const hasExplicitTableLayout = (table: Table): boolean => (
   && table.width > 0
   && table.height > 0
 );
+
+export type FloorPlanSnapshot = {
+  rooms: Room[];
+  tables: Table[];
+};
+
+export type FloorPlanSelectionReason =
+  | 'CLIENT_ACCEPTS_MASTER'
+  | 'NO_LOCAL_DESIGN'
+  | 'SAME_LAYOUT_IDENTITY'
+  | 'PRESERVE_MASTER_DESIGN';
+
+export const hasDesignedFloorPlan = (tables: Table[]): boolean => (
+  Array.isArray(tables)
+  && tables.length > 0
+  && tables.every(hasExplicitTableLayout)
+);
+
+const floorPlanTableIds = (tables: Table[]): string[] => (
+  (Array.isArray(tables) ? tables : [])
+    .map(table => String(table?.id || '').trim())
+    .filter(Boolean)
+    .sort()
+);
+
+export const hasSameFloorPlanIdentity = (left: Table[], right: Table[]): boolean => {
+  const leftIds = floorPlanTableIds(left);
+  const rightIds = floorPlanTableIds(right);
+  return leftIds.length > 0
+    && leftIds.length === rightIds.length
+    && leftIds.every((id, index) => id === rightIds[index]);
+};
+
+/**
+ * A Client always follows the Master. On the Master, however, an already
+ * designed floor plan is authoritative: setup/bootstrap snapshots may update
+ * operational state only when they refer to the exact same table identities.
+ */
+export const selectAuthoritativeFloorPlan = (options: {
+  local: FloorPlanSnapshot;
+  incoming: FloorPlanSnapshot;
+  isClientTerminal: boolean;
+}): FloorPlanSnapshot & { reason: FloorPlanSelectionReason } => {
+  if (options.isClientTerminal) {
+    return { ...options.incoming, reason: 'CLIENT_ACCEPTS_MASTER' };
+  }
+
+  if (!hasDesignedFloorPlan(options.local.tables)) {
+    return { ...options.incoming, reason: 'NO_LOCAL_DESIGN' };
+  }
+
+  if (hasSameFloorPlanIdentity(options.local.tables, options.incoming.tables)) {
+    const incomingById = new Map(options.incoming.tables.map(table => [String(table.id), table]));
+    const tables = options.local.tables.map(localTable => {
+      const incomingTable = incomingById.get(String(localTable.id));
+      if (!incomingTable) return localTable;
+      return {
+        ...localTable,
+        ...incomingTable,
+        roomId: localTable.roomId,
+        name: localTable.name,
+        nombre: localTable.nombre,
+        shape: localTable.shape,
+        posX: localTable.posX,
+        posY: localTable.posY,
+        width: localTable.width,
+        height: localTable.height,
+        rotation: localTable.rotation,
+      };
+    });
+    return { rooms: options.local.rooms, tables, reason: 'SAME_LAYOUT_IDENTITY' };
+  }
+
+  return { ...options.local, reason: 'PRESERVE_MASTER_DESIGN' };
+};
 
 const resolveIncomingTableLabel = (table: Table): string => {
   const compatibilityTable = table as Table & { label?: string; code?: string };

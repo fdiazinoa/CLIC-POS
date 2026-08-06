@@ -5,7 +5,8 @@ import type { Table } from '../types';
 import {
   findAvailableTablePosition,
   getRenderableFloorTables,
-  hasExplicitTableLayout
+  hasExplicitTableLayout,
+  selectAuthoritativeFloorPlan,
 } from '../utils/tableLayout';
 
 const erpTable = {
@@ -40,6 +41,75 @@ test('un plano diseñado excluye registros ERP sin geometría sin borrarlos', ()
 
   assert.deepEqual(rendered.map(table => table.id), ['tbl-local-1']);
   assert.equal(source.length, 2);
+});
+
+test('la Master conserva su layout diseñado frente a una cuadrícula bootstrap distinta', () => {
+  const localTables = Array.from({ length: 3 }, (_, index) => ({
+    id: `designed-${index + 1}`,
+    roomId: 'room-designed',
+    name: `Terraza ${index + 1}`,
+    nombre: `Terraza ${index + 1}`,
+    posX: 40 + (index * 140),
+    posY: 40,
+    width: 100,
+    height: 100,
+    shape: 'SQUARE' as const,
+  })) as Table[];
+  const bootstrapTables = Array.from({ length: 12 }, (_, index) => ({
+    id: `bootstrap-${index + 1}`,
+    roomId: 'default-room',
+    name: `Mesa ${index + 1}`,
+    nombre: `Mesa ${index + 1}`,
+    posX: 80 + ((index % 4) * 140),
+    posY: 80 + (Math.floor(index / 4) * 140),
+    width: 100,
+    height: 100,
+    shape: 'SQUARE' as const,
+  })) as Table[];
+
+  const selected = selectAuthoritativeFloorPlan({
+    local: { rooms: [{ id: 'room-designed', name: 'Terraza' } as any], tables: localTables },
+    incoming: { rooms: [{ id: 'default-room', name: 'Sala 1' } as any], tables: bootstrapTables },
+    isClientTerminal: false,
+  });
+
+  assert.equal(selected.reason, 'PRESERVE_MASTER_DESIGN');
+  assert.deepEqual(selected.tables.map(table => table.id), localTables.map(table => table.id));
+});
+
+test('la Cliente acepta siempre el layout de su Master', () => {
+  const selected = selectAuthoritativeFloorPlan({
+    local: { rooms: [], tables: [designedTable] },
+    incoming: { rooms: [], tables: [erpTable] },
+    isClientTerminal: true,
+  });
+
+  assert.equal(selected.reason, 'CLIENT_ACCEPTS_MASTER');
+  assert.deepEqual(selected.tables, [erpTable]);
+});
+
+test('la Master acepta estado operativo sin perder geometría cuando los UUID coinciden', () => {
+  const incoming = {
+    ...designedTable,
+    name: 'Nombre genérico',
+    nombre: 'Nombre genérico',
+    posX: 0,
+    posY: 0,
+    status: 'OCCUPIED' as const,
+    currentOrderId: 'ORDER-1',
+    currentOrderTotal: 725,
+  };
+  const selected = selectAuthoritativeFloorPlan({
+    local: { rooms: [], tables: [designedTable] },
+    incoming: { rooms: [], tables: [incoming] },
+    isClientTerminal: false,
+  });
+
+  assert.equal(selected.reason, 'SAME_LAYOUT_IDENTITY');
+  assert.equal(selected.tables[0].posX, designedTable.posX);
+  assert.equal(selected.tables[0].nombre, designedTable.nombre);
+  assert.equal(selected.tables[0].status, 'OCCUPIED');
+  assert.equal(selected.tables[0].currentOrderTotal, 725);
 });
 
 test('sin plano diseñado genera una cuadrícula operativa para mesas ERP', () => {
