@@ -31,6 +31,7 @@ import { createPaymentFractionPlan } from '../utils/paymentFractions';
 import { getRenderableFloorTables } from '../utils/tableLayout';
 import { hasPendingKdsDispatch } from '../utils/kdsPresentation';
 import { resolveOperationalApiUrl } from '../utils/masterOperationalApi';
+import { requestJson } from '../services/network/httpClient';
 
 interface TableMapProps {
     rooms: Room[];
@@ -46,7 +47,7 @@ interface TableMapProps {
     bloqueoMeseros?: boolean;
     isRestaurantMode?: boolean;
     onOpenTable?: (table: Table) => Promise<Table | null>;
-    onRefreshTables?: () => void;
+    onRefreshTables?: () => void | Promise<void>;
     onUpdateTables?: (tables: Table[]) => void | Promise<void>;
     onUpdateParkedTickets?: (tickets: ParkedTicket[]) => void | Promise<void>;
     canViewBusinessMetrics?: boolean;
@@ -1038,6 +1039,43 @@ const TableMap: React.FC<TableMapProps> = ({
         if (mode === 'MERGE' && targetTicket && String(targetTicket.id) === String(sourceTicket.id)) {
             alert('Estas mesas ya pertenecen a la misma cuenta.');
             return;
+        }
+
+        if (mode === 'MERGE') {
+            const primarySourceTableId = String(sourceTicket.primaryTableId || sourceTable.id);
+            try {
+                const response = await requestJson<any>({
+                    url: resolveOperationalApiUrl('/api/mesas/unir'),
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mainTableId: primarySourceTableId,
+                        secondaryTableIds: [targetTable.id]
+                    }),
+                    timeoutMs: 5000,
+                    diagnosticContext: { operation: 'TABLE_MERGE' }
+                });
+                const result = response.data;
+                if (response.ok && result?.success !== false) {
+                    await Promise.resolve(onRefreshTables?.());
+                    setTransferSelection(null);
+                    setTableNotice({
+                        title: 'Mesas unidas',
+                        message: `${getTableLabel(targetTable)} quedó unida con ${getTableLabel(sourceTable)}. Al abrir cualquiera verás la cuenta principal.`,
+                        primaryLabel: 'Entendido'
+                    });
+                    return;
+                }
+                if (response.status !== 404 && response.status !== 501) {
+                    alert(result?.message || 'La Caja Master no pudo unir las mesas.');
+                    return;
+                }
+                console.warn('[TABLE_MERGE] Master sin endpoint atómico; usando compatibilidad local.');
+            } catch (error) {
+                console.error('[TABLE_MERGE] No se pudo confirmar la unión en la Caja Master:', error);
+                alert('No se pudo confirmar la unión con la Caja Master. Reintente.');
+                return;
+            }
         }
 
         if (mode === 'MOVE' && requestedItems) {
