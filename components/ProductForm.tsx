@@ -562,7 +562,122 @@ const RESTAURANT_TEMPLATE_DEFAULT_IDS = [
   'dark_kitchen',
 ];
 
-const extractRestaurantSuggestionTemplates = (product: Partial<Product>): RestaurantSuggestionTemplate[] => {
+const normalizeSuggestionSearchText = (value: unknown): string => {
+  if (value == null) return '';
+  const text = typeof value === 'object'
+    ? Object.values(value as Record<string, unknown>).filter(item => typeof item !== 'object').join(' ')
+    : String(value);
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+};
+
+const buildLocalSuggestionModifierGroup = (
+  id: string,
+  name: string,
+  modifierNames: string[],
+  options?: { selectionType?: 'SINGLE' | 'MULTIPLE'; required?: boolean },
+): ModifierGroup => ({
+  id: `local_${id}`,
+  name,
+  selection_type: options?.selectionType || 'MULTIPLE',
+  required: options?.required === true,
+  min_select: options?.required ? 1 : 0,
+  max_select: options?.selectionType === 'SINGLE' ? 1 : null,
+  free_quantity: 0,
+  sort_order: 1,
+  modifiers: modifierNames.map((modifierName, index) => ({
+    id: `local_${id}_${index + 1}`,
+    name: modifierName,
+    price: 0,
+    price_delta: 0,
+    modifier_type: /^sin\b/i.test(modifierName) ? 'REMOVE' : 'ADD',
+    affects_price: false,
+    sort_order: index + 1,
+    active: true,
+  })),
+});
+
+export const buildLocalRestaurantSuggestionTemplates = (product: Partial<Product>): RestaurantSuggestionTemplate[] => {
+  const source = product as Record<string, any>;
+  const searchableText = [
+    source.name,
+    source.description,
+    source.category,
+    source.categoria,
+    source.department,
+    source.section,
+    source.family,
+    source.subfamily,
+    source.type,
+    source.product_type,
+    source.productType,
+  ].map(normalizeSuggestionSearchText).join(' ');
+
+  const createTemplate = (
+    id: string,
+    name: string,
+    groups: ModifierGroup[],
+    notes: string[],
+    productType = 'SIMPLE',
+  ): RestaurantSuggestionTemplate[] => [{
+    id,
+    name: `Sugerencia local · ${name}`,
+    product_type: productType,
+    modifier_groups: groups,
+    combo_groups: [],
+    note_presets: notes,
+  }];
+
+  if (/pizza|pizzeria|calzone/.test(searchableText)) {
+    return createTemplate('pizzeria', 'Pizzería', [
+      buildLocalSuggestionModifierGroup('pizza_preparacion', 'Preparación', ['Extra queso', 'Sin queso', 'Bien horneada']),
+      buildLocalSuggestionModifierGroup('pizza_ingredientes', 'Ingredientes', ['Sin cebolla', 'Sin aceitunas', 'Sin salsa']),
+    ], ['Mitad y mitad', 'Cortar en más porciones', 'Para llevar']);
+  }
+
+  if (/agua|refresco|jugo|batida|cafe|capuccino|chocolate|limonada|bebida|te frio|te caliente/.test(searchableText)) {
+    return createTemplate('cafeteria_bar', 'Bebidas y cafetería', [
+      buildLocalSuggestionModifierGroup('bebida_hielo', 'Hielo', ['Con hielo', 'Poco hielo', 'Sin hielo'], { selectionType: 'SINGLE' }),
+      buildLocalSuggestionModifierGroup('bebida_preparacion', 'Preparación', ['Sin azúcar', 'Azúcar aparte']),
+    ], ['Servir frío', 'Servir caliente', 'Para llevar']);
+  }
+
+  if (/helado|postre|brownie|cheesecake|tres leches|dulce|pastel|bizcocho/.test(searchableText)) {
+    return createTemplate('heladeria_postres', 'Heladería y postres', [
+      buildLocalSuggestionModifierGroup('postre_toppings', 'Toppings', ['Chocolate', 'Caramelo', 'Crema batida', 'Sin topping']),
+    ], ['Topping aparte', 'Para compartir', 'Para llevar']);
+  }
+
+  if (/churrasco|carne|filete|steak|pechuga|parrilla|hamburguesa/.test(searchableText)) {
+    return createTemplate('casual', 'Término y preparación', [
+      buildLocalSuggestionModifierGroup('carne_termino', 'Término de cocción', ['Poco cocida', 'Término medio', 'Tres cuartos', 'Bien cocida'], { selectionType: 'SINGLE', required: true }),
+      buildLocalSuggestionModifierGroup('carne_preferencias', 'Preferencias', ['Sin cebolla', 'Sin salsa', 'Salsa aparte']),
+    ], ['Sin sal', 'Cortar en porciones', 'Para llevar']);
+  }
+
+  if (/desayuno|omelette|huevo|mangu|panqueque|tostada|croissant/.test(searchableText)) {
+    return createTemplate('casual', 'Desayunos', [
+      buildLocalSuggestionModifierGroup('desayuno_huevos', 'Preparación de huevos', ['Revueltos', 'Fritos', 'Hervidos'], { selectionType: 'SINGLE' }),
+      buildLocalSuggestionModifierGroup('desayuno_preferencias', 'Preferencias', ['Sin cebolla', 'Sin queso', 'Queso aparte']),
+    ], ['Sin sal', 'Bien tostado', 'Para llevar']);
+  }
+
+  if (/combo|sandwich|papas|nachos|alitas|croqueta|pollo|comida rapida|fast food/.test(searchableText)) {
+    const productType = /combo/.test(searchableText) || source.product_type === 'COMBO' ? 'COMBO' : 'SIMPLE';
+    return createTemplate('fast_food', 'Comida rápida', [
+      buildLocalSuggestionModifierGroup('fast_preferencias', 'Preferencias', ['Sin cebolla', 'Sin tomate', 'Sin salsa', 'Salsa aparte']),
+      buildLocalSuggestionModifierGroup('fast_extras', 'Extras', ['Extra queso', 'Extra tocineta']),
+    ], ['Papas sin sal', 'Empacar por separado', 'Para llevar'], productType);
+  }
+
+  return createTemplate('dark_kitchen', 'Preparación general', [
+    buildLocalSuggestionModifierGroup('general_preferencias', 'Preferencias', ['Sin sal', 'Sin salsa', 'Salsa aparte']),
+  ], ['Empacar por separado', 'Para compartir', 'Para llevar']);
+};
+
+export const extractRestaurantSuggestionTemplates = (product: Partial<Product>): RestaurantSuggestionTemplate[] => {
   const candidates: any[] = [];
   const pushCandidate = (value: unknown) => {
     if (!value) return;
@@ -704,7 +819,31 @@ const extractRestaurantSuggestionTemplates = (product: Partial<Product>): Restau
     .map((candidate, index) => normalizeRestaurantSuggestionTemplate(candidate, `template_${index + 1}`, `Plantilla ${index + 1}`))
     .filter(Boolean) as RestaurantSuggestionTemplate[];
 
-  if (normalized.length > 0) return normalized;
+  if (normalized.length > 0) {
+    const seenTemplateIds = new Set<string>();
+    const seenTemplateContents = new Set<string>();
+    return normalized.filter((template) => {
+      const templateId = trimString(template.id).toLowerCase();
+      const contentSignature = JSON.stringify({
+        productType: trimString(template.product_type).toLowerCase(),
+        productionAreaId: trimString(template.production_area_id).toLowerCase(),
+        modifierGroups: template.modifier_groups.map(group => ({
+          name: trimString(group.name).toLowerCase(),
+          modifiers: (group.modifiers || []).map(modifier => trimString(modifier.name).toLowerCase()),
+        })),
+        comboGroups: template.combo_groups.map(group => ({
+          name: trimString(group.name).toLowerCase(),
+          items: (group.items || []).map(item => trimString(item.name).toLowerCase()),
+        })),
+        fractionRule: template.fraction_rule || null,
+        notePresets: template.note_presets.map(note => trimString(note).toLowerCase()),
+      });
+      if (!templateId || seenTemplateIds.has(templateId) || seenTemplateContents.has(contentSignature)) return false;
+      seenTemplateIds.add(templateId);
+      seenTemplateContents.add(contentSignature);
+      return true;
+    });
+  }
 
   const legacyOnlyModifierSource = asModifierArray(
     source.availableModifiers ||
@@ -714,8 +853,8 @@ const extractRestaurantSuggestionTemplates = (product: Partial<Product>): Restau
     source.suggestedModifiers ||
     source.sugeridos
   );
-  return legacyOnlyModifierSource.length > 0
-    ? [
+  if (legacyOnlyModifierSource.length > 0) {
+    return [
         {
           id: 'legacy-modifiers-only',
           name: 'Modificadores sugeridos',
@@ -735,8 +874,10 @@ const extractRestaurantSuggestionTemplates = (product: Partial<Product>): Restau
           combo_groups: [],
           note_presets: [],
         },
-      ]
-    : [];
+      ];
+  }
+
+  return buildLocalRestaurantSuggestionTemplates(product);
 };
 
 type ProductTab = 'GENERAL' | 'CLASSIFICATION' | 'LABELS' | 'OPERATIVE' | 'TAXES' | 'PRICING' | 'VARIANTS' | 'MODIFIERS' | 'LOGISTICS' | 'STOCKS' | 'KARDEX' | 'RECIPE';
@@ -3878,7 +4019,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h3 className="text-lg font-black text-slate-800">Sugerir configuración de comanda</h3>
-                  <p className="text-xs text-slate-500 font-bold mt-1 uppercase tracking-widest">Plantilla del ERP</p>
+                  <p className="text-xs text-slate-500 font-bold mt-1 uppercase tracking-widest">ERP o sugerencia local</p>
                 </div>
                 <button onClick={() => setShowRestaurantSuggestionModal(false)} className="p-2 rounded-full hover:bg-gray-100">
                   <X size={18} />

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { normalizeRestaurantSuggestionTemplate } from '../components/ProductForm';
+import {
+  extractRestaurantSuggestionTemplates,
+  normalizeRestaurantSuggestionTemplate,
+} from '../components/ProductForm';
 
 test('lee modificadores cuando la sugerencia ERP viene dentro de template', () => {
   const suggestion = normalizeRestaurantSuggestionTemplate({
@@ -42,4 +45,61 @@ test('lee modificadores cuando la sugerencia ERP viene dentro de data/config', (
   assert.equal(suggestion?.modifier_groups.length, 1);
   assert.equal(suggestion?.modifier_groups[0].modifiers[0].name, 'Queso extra');
   assert.equal(suggestion?.modifier_groups[0].modifiers[0].price_delta, 35);
+});
+
+test('genera una sugerencia local cuando el contrato ERP real trae listas de restaurante vacías', () => {
+  const suggestions = extractRestaurantSuggestionTemplates({
+    id: '533cd4e9-bb3b-4a24-b255-f382b5af69be',
+    name: 'Hamburguesa Clásica',
+    category: 'Comida rápida',
+    price: 350,
+    images: [],
+    attributes: [],
+    variants: [],
+    tariffs: [],
+    appliedTaxIds: [],
+    modifier_groups: [],
+    modifierGroups: [],
+    combo_groups: [],
+    comboGroups: [],
+    restaurant: {
+      modifier_groups: [],
+      combo_groups: [],
+    },
+  });
+
+  assert.equal(suggestions.length, 1);
+  assert.equal(suggestions[0].id, 'casual');
+  assert.match(suggestions[0].name, /Sugerencia local/);
+  assert.ok(suggestions[0].modifier_groups.length > 0);
+  assert.ok(suggestions[0].modifier_groups.some(group => group.name === 'Término de cocción'));
+  assert.ok(suggestions[0].note_presets.includes('Para llevar'));
+});
+
+test('mantiene autoritativa una sugerencia ERP y no agrega plantillas locales', () => {
+  const suggestions = extractRestaurantSuggestionTemplates({
+    id: 'pizza-1',
+    name: 'Pizza especial',
+    category: 'Pizzería',
+    price: 500,
+    images: [],
+    attributes: [],
+    variants: [],
+    tariffs: [],
+    appliedTaxIds: [],
+    restaurantSuggestionTemplate: {
+      id: 'erp-pizza',
+      template: {
+        modifier_groups: [{
+          id: 'erp-size',
+          name: 'Tamaño ERP',
+          modifiers: [{ id: 'large', name: 'Grande' }],
+        }],
+      },
+    },
+  } as any);
+
+  assert.equal(suggestions.length, 1);
+  assert.equal(suggestions[0].id, 'erp-pizza');
+  assert.equal(suggestions[0].modifier_groups[0].name, 'Tamaño ERP');
 });
