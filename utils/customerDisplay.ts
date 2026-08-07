@@ -102,20 +102,22 @@ interface NativeCustomerDisplayBridge {
   probe(payload?: string): string;
 }
 
+interface NativeCustomerDisplayLaunchResponse {
+  success: boolean;
+  opened?: boolean;
+  mode?: DisplayLaunchMode;
+  usedSecondScreen?: boolean;
+  message?: string;
+  displayName?: string;
+}
+
 interface NativeCustomerDisplayShim {
   platform: 'android';
   launch: (payload: {
     mode: DisplayLaunchMode;
     url: string;
     welcomeMessage?: string;
-  }) => Promise<{
-    success: boolean;
-    opened?: boolean;
-    mode?: DisplayLaunchMode;
-    usedSecondScreen?: boolean;
-    message?: string;
-    displayName?: string;
-  }>;
+  }) => Promise<NativeCustomerDisplayLaunchResponse>;
   dismiss: () => Promise<{ success: boolean; message?: string }>;
   probe: () => Promise<{ success: boolean; displays?: Array<Record<string, unknown>>; message?: string }>;
 }
@@ -132,7 +134,41 @@ const isNativeAndroidDisplayMode = (mode: DisplayLaunchMode) => mode !== 'NETWOR
 const supportsNativeAndroidCustomerDisplay = () =>
   typeof window !== 'undefined'
   && isAndroidRuntime()
-  && typeof window.ClicPOSCustomerDisplay?.launch === 'function';
+  && (
+    typeof window.ClicPOSCustomerDisplay?.launch === 'function'
+    || typeof window.AndroidCustomerDisplay?.launch === 'function'
+  );
+
+const launchNativeAndroidCustomerDisplay = async (payload: {
+  mode: DisplayLaunchMode;
+  url: string;
+  welcomeMessage?: string;
+}): Promise<NativeCustomerDisplayLaunchResponse> => {
+  if (typeof window.ClicPOSCustomerDisplay?.launch === 'function') {
+    return window.ClicPOSCustomerDisplay.launch(payload);
+  }
+
+  if (typeof window.AndroidCustomerDisplay?.launch !== 'function') {
+    return {
+      success: false,
+      opened: false,
+      message: 'El puente nativo del visor Android no está disponible.',
+    };
+  }
+
+  try {
+    const rawResponse = window.AndroidCustomerDisplay.launch(JSON.stringify(payload));
+    return JSON.parse(rawResponse) as NativeCustomerDisplayLaunchResponse;
+  } catch (error) {
+    return {
+      success: false,
+      opened: false,
+      message: error instanceof Error
+        ? `Respuesta inválida del visor Android: ${error.message}`
+        : 'Respuesta inválida del visor Android.',
+    };
+  }
+};
 
 export const detectSecondaryDisplayPlacement = async (): Promise<DisplayPlacement | null> => {
   if (typeof window === 'undefined') return null;
@@ -215,7 +251,7 @@ export const launchCustomerDisplay = async (
   const url = buildCustomerDisplayUrl(normalized);
 
   if (supportsNativeAndroidCustomerDisplay() && isNativeAndroidDisplayMode(mode)) {
-    const response = await window.ClicPOSCustomerDisplay!.launch({
+    const response = await launchNativeAndroidCustomerDisplay({
       mode,
       url,
       welcomeMessage: normalized.welcomeMessage,
