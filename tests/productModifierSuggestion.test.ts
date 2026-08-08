@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   extractRestaurantSuggestionTemplates,
+  LOCAL_RESTAURANT_SUGGESTION_TYPES,
   normalizeRestaurantSuggestionTemplate,
 } from '../components/ProductForm';
 
@@ -47,7 +48,7 @@ test('lee modificadores cuando la sugerencia ERP viene dentro de data/config', (
   assert.equal(suggestion?.modifier_groups[0].modifiers[0].price_delta, 35);
 });
 
-test('genera una sugerencia local cuando el contrato ERP real trae listas de restaurante vacías', () => {
+test('ofrece tipos de negocio seleccionables cuando el contrato ERP real trae listas vacías', () => {
   const suggestions = extractRestaurantSuggestionTemplates({
     id: '533cd4e9-bb3b-4a24-b255-f382b5af69be',
     name: 'Hamburguesa Clásica',
@@ -68,12 +69,34 @@ test('genera una sugerencia local cuando el contrato ERP real trae listas de res
     },
   });
 
-  assert.equal(suggestions.length, 1);
-  assert.equal(suggestions[0].id, 'casual');
-  assert.match(suggestions[0].name, /Sugerencia local/);
-  assert.ok(suggestions[0].modifier_groups.length > 0);
-  assert.ok(suggestions[0].modifier_groups.some(group => group.name === 'Término de cocción'));
-  assert.ok(suggestions[0].note_presets.includes('Para llevar'));
+  assert.equal(suggestions.length, LOCAL_RESTAURANT_SUGGESTION_TYPES.length);
+  assert.equal(suggestions[0].id, 'fast_food');
+  assert.deepEqual(
+    new Set(suggestions.map(suggestion => suggestion.id)),
+    new Set(['fast_food', 'pizzeria', 'casual', 'cafeteria_bar', 'heladeria_postres', 'dark_kitchen']),
+  );
+  assert.ok(suggestions.every(suggestion => suggestion.origin === 'LOCAL'));
+  const restaurantSuggestion = suggestions.find(suggestion => suggestion.id === 'casual');
+  assert.ok(restaurantSuggestion?.modifier_groups.some(group => group.name === 'Término de cocción'));
+  assert.ok(restaurantSuggestion?.note_presets.includes('Para llevar'));
+});
+
+test('prioriza el tipo inferido pero permite cambiar a cualquier concepto', () => {
+  const suggestions = extractRestaurantSuggestionTemplates({
+    id: 'pizza-1',
+    name: 'Pizza especial',
+    category: 'Pizzería',
+    price: 500,
+    images: [],
+    attributes: [],
+    variants: [],
+    tariffs: [],
+    appliedTaxIds: [],
+  });
+
+  assert.equal(suggestions[0].id, 'pizzeria');
+  assert.ok(suggestions.some(suggestion => suggestion.id === 'cafeteria_bar'));
+  assert.ok(suggestions.some(suggestion => suggestion.id === 'fast_food'));
 });
 
 test('mantiene autoritativa una sugerencia ERP y no agrega plantillas locales', () => {

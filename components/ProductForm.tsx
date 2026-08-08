@@ -75,6 +75,7 @@ type RestaurantSuggestionApplyScope = {
 type RestaurantSuggestionTemplate = {
   id: string;
   name: string;
+  origin?: 'ERP' | 'LOCAL' | 'LEGACY';
   product_type?: string;
   production_area_id?: string;
   modifier_groups: ModifierGroup[];
@@ -553,14 +554,16 @@ export const normalizeRestaurantSuggestionTemplate = (candidate: any, fallbackId
   return hasTemplateContent ? template : null;
 };
 
-const RESTAURANT_TEMPLATE_DEFAULT_IDS = [
-  'pizzeria',
-  'fast_food',
-  'casual',
-  'cafeteria_bar',
-  'heladeria_postres',
-  'dark_kitchen',
-];
+export const LOCAL_RESTAURANT_SUGGESTION_TYPES = [
+  { id: 'fast_food', name: 'Fast Food', description: 'Hamburguesas, pollo, sándwiches y combos' },
+  { id: 'pizzeria', name: 'Pizzería', description: 'Pizzas, calzones, tamaños e ingredientes' },
+  { id: 'casual', name: 'Restaurante', description: 'Carnes, platos preparados y acompañamientos' },
+  { id: 'cafeteria_bar', name: 'Bar / Cafetería', description: 'Bebidas, café, hielo y preparación' },
+  { id: 'heladeria_postres', name: 'Postres / Heladería', description: 'Sabores, toppings y presentación' },
+  { id: 'dark_kitchen', name: 'Cocina general', description: 'Preferencias y notas de preparación' },
+] as const;
+
+const RESTAURANT_TEMPLATE_DEFAULT_IDS = LOCAL_RESTAURANT_SUGGESTION_TYPES.map(type => type.id);
 
 const normalizeSuggestionSearchText = (value: unknown): string => {
   if (value == null) return '';
@@ -621,60 +624,55 @@ export const buildLocalRestaurantSuggestionTemplates = (product: Partial<Product
     groups: ModifierGroup[],
     notes: string[],
     productType = 'SIMPLE',
-  ): RestaurantSuggestionTemplate[] => [{
+  ): RestaurantSuggestionTemplate => ({
     id,
-    name: `Sugerencia local · ${name}`,
+    name,
+    origin: 'LOCAL',
     product_type: productType,
     modifier_groups: groups,
     combo_groups: [],
     note_presets: notes,
-  }];
+  });
 
-  if (/pizza|pizzeria|calzone/.test(searchableText)) {
-    return createTemplate('pizzeria', 'Pizzería', [
-      buildLocalSuggestionModifierGroup('pizza_preparacion', 'Preparación', ['Extra queso', 'Sin queso', 'Bien horneada']),
-      buildLocalSuggestionModifierGroup('pizza_ingredientes', 'Ingredientes', ['Sin cebolla', 'Sin aceitunas', 'Sin salsa']),
-    ], ['Mitad y mitad', 'Cortar en más porciones', 'Para llevar']);
-  }
+  const inferredTypeId = /pizza|pizzeria|calzone/.test(searchableText)
+    ? 'pizzeria'
+    : /agua|refresco|jugo|batida|cafe|capuccino|chocolate|limonada|bebida|te frio|te caliente|bar/.test(searchableText)
+      ? 'cafeteria_bar'
+      : /helado|postre|brownie|cheesecake|tres leches|dulce|pastel|bizcocho/.test(searchableText)
+        ? 'heladeria_postres'
+        : /churrasco|carne|filete|steak|pechuga|parrilla|desayuno|omelette|huevo|mangu|panqueque|tostada|croissant|restaurante/.test(searchableText)
+          ? 'casual'
+          : /combo|sandwich|hamburguesa|papas|nachos|alitas|croqueta|pollo|comida rapida|fast food/.test(searchableText)
+            ? 'fast_food'
+            : 'dark_kitchen';
 
-  if (/agua|refresco|jugo|batida|cafe|capuccino|chocolate|limonada|bebida|te frio|te caliente/.test(searchableText)) {
-    return createTemplate('cafeteria_bar', 'Bebidas y cafetería', [
-      buildLocalSuggestionModifierGroup('bebida_hielo', 'Hielo', ['Con hielo', 'Poco hielo', 'Sin hielo'], { selectionType: 'SINGLE' }),
-      buildLocalSuggestionModifierGroup('bebida_preparacion', 'Preparación', ['Sin azúcar', 'Azúcar aparte']),
-    ], ['Servir frío', 'Servir caliente', 'Para llevar']);
-  }
-
-  if (/helado|postre|brownie|cheesecake|tres leches|dulce|pastel|bizcocho/.test(searchableText)) {
-    return createTemplate('heladeria_postres', 'Heladería y postres', [
-      buildLocalSuggestionModifierGroup('postre_toppings', 'Toppings', ['Chocolate', 'Caramelo', 'Crema batida', 'Sin topping']),
-    ], ['Topping aparte', 'Para compartir', 'Para llevar']);
-  }
-
-  if (/churrasco|carne|filete|steak|pechuga|parrilla|hamburguesa/.test(searchableText)) {
-    return createTemplate('casual', 'Término y preparación', [
-      buildLocalSuggestionModifierGroup('carne_termino', 'Término de cocción', ['Poco cocida', 'Término medio', 'Tres cuartos', 'Bien cocida'], { selectionType: 'SINGLE', required: true }),
-      buildLocalSuggestionModifierGroup('carne_preferencias', 'Preferencias', ['Sin cebolla', 'Sin salsa', 'Salsa aparte']),
-    ], ['Sin sal', 'Cortar en porciones', 'Para llevar']);
-  }
-
-  if (/desayuno|omelette|huevo|mangu|panqueque|tostada|croissant/.test(searchableText)) {
-    return createTemplate('casual', 'Desayunos', [
-      buildLocalSuggestionModifierGroup('desayuno_huevos', 'Preparación de huevos', ['Revueltos', 'Fritos', 'Hervidos'], { selectionType: 'SINGLE' }),
-      buildLocalSuggestionModifierGroup('desayuno_preferencias', 'Preferencias', ['Sin cebolla', 'Sin queso', 'Queso aparte']),
-    ], ['Sin sal', 'Bien tostado', 'Para llevar']);
-  }
-
-  if (/combo|sandwich|papas|nachos|alitas|croqueta|pollo|comida rapida|fast food/.test(searchableText)) {
-    const productType = /combo/.test(searchableText) || source.product_type === 'COMBO' ? 'COMBO' : 'SIMPLE';
-    return createTemplate('fast_food', 'Comida rápida', [
+  const fastFoodProductType = /combo/.test(searchableText) || source.product_type === 'COMBO' ? 'COMBO' : 'SIMPLE';
+  const templates: RestaurantSuggestionTemplate[] = [
+    createTemplate('fast_food', 'Fast Food', [
       buildLocalSuggestionModifierGroup('fast_preferencias', 'Preferencias', ['Sin cebolla', 'Sin tomate', 'Sin salsa', 'Salsa aparte']),
       buildLocalSuggestionModifierGroup('fast_extras', 'Extras', ['Extra queso', 'Extra tocineta']),
-    ], ['Papas sin sal', 'Empacar por separado', 'Para llevar'], productType);
-  }
+    ], ['Papas sin sal', 'Empacar por separado', 'Para llevar'], fastFoodProductType),
+    createTemplate('pizzeria', 'Pizzería', [
+      buildLocalSuggestionModifierGroup('pizza_preparacion', 'Preparación', ['Extra queso', 'Sin queso', 'Bien horneada']),
+      buildLocalSuggestionModifierGroup('pizza_ingredientes', 'Ingredientes', ['Sin cebolla', 'Sin aceitunas', 'Sin salsa']),
+    ], ['Mitad y mitad', 'Cortar en más porciones', 'Para llevar']),
+    createTemplate('casual', 'Restaurante', [
+      buildLocalSuggestionModifierGroup('restaurante_termino', 'Término de cocción', ['Poco cocida', 'Término medio', 'Tres cuartos', 'Bien cocida'], { selectionType: 'SINGLE' }),
+      buildLocalSuggestionModifierGroup('restaurante_preferencias', 'Preferencias', ['Sin cebolla', 'Sin sal', 'Sin salsa', 'Salsa aparte']),
+    ], ['Cortar en porciones', 'Empacar por separado', 'Para llevar']),
+    createTemplate('cafeteria_bar', 'Bar / Cafetería', [
+      buildLocalSuggestionModifierGroup('bebida_hielo', 'Hielo', ['Con hielo', 'Poco hielo', 'Sin hielo'], { selectionType: 'SINGLE' }),
+      buildLocalSuggestionModifierGroup('bebida_preparacion', 'Preparación', ['Sin azúcar', 'Azúcar aparte']),
+    ], ['Servir frío', 'Servir caliente', 'Para llevar']),
+    createTemplate('heladeria_postres', 'Postres / Heladería', [
+      buildLocalSuggestionModifierGroup('postre_toppings', 'Toppings', ['Chocolate', 'Caramelo', 'Crema batida', 'Sin topping']),
+    ], ['Topping aparte', 'Para compartir', 'Para llevar']),
+    createTemplate('dark_kitchen', 'Cocina general', [
+      buildLocalSuggestionModifierGroup('general_preferencias', 'Preferencias', ['Sin sal', 'Sin salsa', 'Salsa aparte']),
+    ], ['Empacar por separado', 'Para compartir', 'Para llevar']),
+  ];
 
-  return createTemplate('dark_kitchen', 'Preparación general', [
-    buildLocalSuggestionModifierGroup('general_preferencias', 'Preferencias', ['Sin sal', 'Sin salsa', 'Salsa aparte']),
-  ], ['Empacar por separado', 'Para compartir', 'Para llevar']);
+  return templates.sort((left, right) => Number(right.id === inferredTypeId) - Number(left.id === inferredTypeId));
 };
 
 export const extractRestaurantSuggestionTemplates = (product: Partial<Product>): RestaurantSuggestionTemplate[] => {
@@ -2075,6 +2073,11 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     () => restaurantSuggestionTemplates.find(template => template.id === selectedRestaurantSuggestionTemplateId) || restaurantSuggestionTemplates[0] || null,
     [restaurantSuggestionTemplates, selectedRestaurantSuggestionTemplateId],
   );
+  const usesLocalRestaurantSuggestionTypes = restaurantSuggestionTemplates.length > 0
+    && restaurantSuggestionTemplates.every(template => template.origin === 'LOCAL');
+  const selectedRestaurantSuggestionType = LOCAL_RESTAURANT_SUGGESTION_TYPES.find(
+    type => type.id === selectedRestaurantSuggestionTemplate?.id,
+  );
   const selectableRestaurantProducts = useMemo(() => (
     (allProducts || [])
       .filter(product => product.id !== formData.id && product.is_sellable !== false)
@@ -2090,9 +2093,11 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       alert('No hay sugerencias de comanda para este artículo.');
       return;
     }
-    const defaultTemplateId = RESTAURANT_TEMPLATE_DEFAULT_IDS.find((templateId) =>
-      restaurantSuggestionTemplates.some((template) => trimString(template.id).toLowerCase() === templateId)
-    );
+    const defaultTemplateId = usesLocalRestaurantSuggestionTypes
+      ? restaurantSuggestionTemplates[0]?.id
+      : RESTAURANT_TEMPLATE_DEFAULT_IDS.find((templateId) =>
+        restaurantSuggestionTemplates.some((template) => trimString(template.id).toLowerCase() === templateId)
+      );
     const firstTemplate = restaurantSuggestionTemplates.find((template) => trimString(template.id).toLowerCase() === defaultTemplateId) || restaurantSuggestionTemplates[0];
     setSelectedRestaurantSuggestionTemplateId(firstTemplate.id);
     setRestaurantSuggestionMode('append');
@@ -4015,7 +4020,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
         {showRestaurantSuggestionModal && (
           <div className="fixed inset-0 z-[170] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in">
-            <div className="w-full max-w-3xl rounded-[2rem] bg-white border border-gray-100 p-6 shadow-2xl space-y-5">
+            <div className="w-full max-w-3xl max-h-[92vh] overflow-y-auto rounded-[2rem] bg-white border border-gray-100 p-6 shadow-2xl space-y-5">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h3 className="text-lg font-black text-slate-800">Sugerir configuración de comanda</h3>
@@ -4026,18 +4031,76 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                 </button>
               </div>
 
-              <div className="space-y-2">
-                <label className="block text-xs font-black text-gray-500">Plantilla</label>
-                <select
-                  value={selectedRestaurantSuggestionTemplate?.id || ''}
-                  onChange={(e) => setSelectedRestaurantSuggestionTemplateId(e.target.value)}
-                  className="w-full rounded-xl bg-gray-50 px-3 py-3 text-sm font-bold outline-none border-2 border-transparent focus:border-blue-200"
-                >
-                  {restaurantSuggestionTemplates.map(template => (
-                    <option key={template.id} value={template.id}>{template.name}</option>
-                  ))}
-                </select>
-              </div>
+              {usesLocalRestaurantSuggestionTypes ? (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="block text-xs font-black text-gray-500">1. Tipo de comida o negocio</label>
+                    <p className="text-[11px] font-bold text-gray-400">Elige el concepto para cargar recomendaciones adecuadas.</p>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                      {LOCAL_RESTAURANT_SUGGESTION_TYPES.map(type => {
+                        const selected = selectedRestaurantSuggestionTemplate?.id === type.id;
+                        return (
+                          <button
+                            key={type.id}
+                            type="button"
+                            onClick={() => setSelectedRestaurantSuggestionTemplateId(type.id)}
+                            className={`rounded-2xl border-2 p-3 text-left transition-all ${selected
+                              ? 'border-blue-500 bg-blue-50 shadow-sm'
+                              : 'border-gray-100 bg-gray-50 hover:border-blue-200 hover:bg-white'
+                            }`}
+                          >
+                            <span className={`block text-sm font-black ${selected ? 'text-blue-800' : 'text-slate-700'}`}>{type.name}</span>
+                            <span className="mt-1 block text-[10px] font-bold leading-snug text-gray-500">{type.description}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {selectedRestaurantSuggestionTemplate && (
+                    <div className="space-y-2 rounded-2xl border border-gray-100 bg-gray-50/70 p-4">
+                      <div>
+                        <p className="text-xs font-black text-gray-600">2. Recomendaciones para {selectedRestaurantSuggestionType?.name || selectedRestaurantSuggestionTemplate.name}</p>
+                        <p className="mt-1 text-[11px] font-bold text-gray-400">Estos grupos se agregarán según el modo de aplicación elegido.</p>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {selectedRestaurantSuggestionTemplate.modifier_groups.map((group, index) => {
+                          const styles = [
+                            'border-blue-200 bg-blue-50 text-blue-800',
+                            'border-amber-200 bg-amber-50 text-amber-800',
+                            'border-emerald-200 bg-emerald-50 text-emerald-800',
+                            'border-violet-200 bg-violet-50 text-violet-800',
+                          ][index % 4];
+                          return (
+                            <div key={group.id} className={`rounded-xl border p-3 ${styles}`}>
+                              <p className="text-xs font-black uppercase tracking-wide">{group.name}</p>
+                              <p className="mt-1 text-[10px] font-bold opacity-80">{group.modifiers.map(modifier => modifier.name).join(' · ')}</p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {selectedRestaurantSuggestionTemplate.note_presets.length > 0 && (
+                        <p className="text-[10px] font-bold text-gray-500">
+                          Notas rápidas: {selectedRestaurantSuggestionTemplate.note_presets.join(' · ')}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <label className="block text-xs font-black text-gray-500">Plantilla configurada en ERP</label>
+                  <select
+                    value={selectedRestaurantSuggestionTemplate?.id || ''}
+                    onChange={(e) => setSelectedRestaurantSuggestionTemplateId(e.target.value)}
+                    className="w-full rounded-xl bg-gray-50 px-3 py-3 text-sm font-bold outline-none border-2 border-transparent focus:border-blue-200"
+                  >
+                    {restaurantSuggestionTemplates.map(template => (
+                      <option key={template.id} value={template.id}>{template.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <label className="block text-xs font-black text-gray-500">Modo de aplicación</label>
