@@ -11,6 +11,19 @@ interface ModifierModalProps {
   onConfirm: (modifiers: string[], finalPrice: number, note?: string, restaurantConfig?: Record<string, unknown>) => void;
 }
 
+export const MODIFIER_GROUP_VISUAL_STYLES = [
+  { section: 'border-blue-200 bg-blue-50/70', title: 'text-blue-800', badge: 'bg-blue-100 text-blue-700', accent: 'bg-blue-500' },
+  { section: 'border-amber-200 bg-amber-50/70', title: 'text-amber-800', badge: 'bg-amber-100 text-amber-700', accent: 'bg-amber-500' },
+  { section: 'border-emerald-200 bg-emerald-50/70', title: 'text-emerald-800', badge: 'bg-emerald-100 text-emerald-700', accent: 'bg-emerald-500' },
+  { section: 'border-violet-200 bg-violet-50/70', title: 'text-violet-800', badge: 'bg-violet-100 text-violet-700', accent: 'bg-violet-500' },
+  { section: 'border-rose-200 bg-rose-50/70', title: 'text-rose-800', badge: 'bg-rose-100 text-rose-700', accent: 'bg-rose-500' },
+  { section: 'border-cyan-200 bg-cyan-50/70', title: 'text-cyan-800', badge: 'bg-cyan-100 text-cyan-700', accent: 'bg-cyan-500' },
+] as const;
+
+export const getModifierGroupVisualStyle = (index: number) => (
+  MODIFIER_GROUP_VISUAL_STYLES[Math.abs(index) % MODIFIER_GROUP_VISUAL_STYLES.length]
+);
+
 const ModifierModal: React.FC<ModifierModalProps> = ({ 
   product, 
   currencySymbol, 
@@ -328,24 +341,28 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
             </section>
           )}
 
-          {modifierGroups.map(group => {
+          {modifierGroups.map((group, groupIndex) => {
             const selectedCount = (selectedModifiersByGroup[group.id] || []).length;
             const minSelect = group.required ? Math.max(1, Number(group.min_select || 1)) : Number(group.min_select || 0);
             const maxSelect = group.selection_type === 'SINGLE' ? 1 : Number(group.max_select || 0);
             const counterLabel = maxSelect > 0 ? `${selectedCount}/${maxSelect}` : `${selectedCount}`;
+            const groupStyle = getModifierGroupVisualStyle(groupIndex);
             return (
-            <section key={group.id}>
+            <section key={group.id} className={`rounded-3xl border-2 p-4 ${groupStyle.section}`}>
               <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-xs font-black text-gray-500 uppercase tracking-widest">
+                <div className="flex items-start gap-2">
+                  <span className={`mt-1 h-3 w-1.5 shrink-0 rounded-full ${groupStyle.accent}`} />
+                  <div>
+                  <h3 className={`text-xs font-black uppercase tracking-widest ${groupStyle.title}`}>
                     {group.name} {group.required && <span className="text-red-500">*</span>}
                   </h3>
                   {minSelect > 0 && (
                     <p className="mt-1 text-[11px] font-bold text-gray-400">Mínimo {minSelect}</p>
                   )}
+                  </div>
                 </div>
                 <span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase ${
-                  minSelect > 0 && selectedCount < minSelect ? 'bg-red-50 text-red-500' : 'bg-gray-100 text-gray-500'
+                  minSelect > 0 && selectedCount < minSelect ? 'bg-red-100 text-red-600' : groupStyle.badge
                 }`}>
                   {counterLabel}
                 </span>
