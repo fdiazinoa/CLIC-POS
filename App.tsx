@@ -99,6 +99,7 @@ import CustomerVisor from './components/CustomerVisor';
 import PosApkUpdateBanner from './components/PosApkUpdateBanner';
 import GlobalVirtualKeyboard from './components/GlobalVirtualKeyboard';
 import { visorSync } from './utils/visorSync';
+import { isCustomerDisplaySurface, recoverNativePrimaryDisplayUrl } from './utils/customerDisplay';
 import { markPosInteractionActivity, setPosSaleActivity } from './utils/posSaleActivity';
 
 // Layout imports
@@ -1734,8 +1735,11 @@ const AppContent: React.FC = () => {
   const closedRestaurantOrderIdsRef = useRef<Set<string>>(new Set());
   /* original code */
   const [currentView, setCurrentView] = useState<ViewState>(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('view') === 'VISOR' ? 'VISOR' : 'LOGIN';
+    const isVisorMode = isCustomerDisplaySurface();
+    if (!isVisorMode) {
+      recoverNativePrimaryDisplayUrl();
+    }
+    return isVisorMode ? 'VISOR' : 'LOGIN';
   });
   const currentViewRef = useRef<ViewState>(currentView);
   const currentUserRef = useRef<User | null>(null);
@@ -5654,7 +5658,7 @@ const AppContent: React.FC = () => {
             });
           }
         }
-        const isVisorMode = new URLSearchParams(window.location.search).get('view') === 'VISOR';
+        const isVisorMode = isCustomerDisplaySurface();
         const hasStartupTransactions = Array.isArray(data.transactions) && data.transactions.length > 0;
         const shouldResumeSetupWizard =
           terminalSetupPending &&

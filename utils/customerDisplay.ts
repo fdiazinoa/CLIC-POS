@@ -1,6 +1,8 @@
 import { CustomerDisplayConfig } from '../types';
 
 const DISPLAY_QUERY_PARAM = 'view=VISOR';
+const DISPLAY_SURFACE_PARAM = 'surface';
+const SECONDARY_DISPLAY_SURFACE = 'SECONDARY';
 
 const DISPLAY_SESSION_KEYS = [
   'ANDROID_SECONDARY',
@@ -8,7 +10,7 @@ const DISPLAY_SESSION_KEYS = [
   'USB',
   'NETWORK',
 ] as const;
-const NATIVE_ANDROID_VISOR_URL = 'https://localhost/?view=VISOR';
+const NATIVE_ANDROID_VISOR_URL = 'https://localhost/?view=VISOR&surface=SECONDARY';
 
 type DisplayLaunchMode = 'ANDROID_SECONDARY' | 'HDMI' | 'USB' | 'NETWORK';
 
@@ -75,6 +77,7 @@ const buildNetworkVisorUrl = (ipAddress: string): string => {
   const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
   const url = new URL(withProtocol);
   url.searchParams.set('view', 'VISOR');
+  url.searchParams.set(DISPLAY_SURFACE_PARAM, SECONDARY_DISPLAY_SURFACE);
   return url.toString();
 };
 
@@ -93,6 +96,7 @@ export const buildCustomerDisplayUrl = (config: CustomerDisplayConfig): string =
   const url = new URL(window.location.pathname || '/', window.location.origin);
   url.search = '';
   url.searchParams.set('view', 'VISOR');
+  url.searchParams.set(DISPLAY_SURFACE_PARAM, SECONDARY_DISPLAY_SURFACE);
   return url.toString();
 };
 
@@ -138,6 +142,36 @@ const supportsNativeAndroidCustomerDisplay = () =>
     typeof window.ClicPOSCustomerDisplay?.launch === 'function'
     || typeof window.AndroidCustomerDisplay?.launch === 'function'
   );
+
+export const isCustomerDisplaySurface = (): boolean => {
+  if (typeof window === 'undefined') return false;
+
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('view') !== 'VISOR') return false;
+
+  // The native bridge only exists on MainActivity's WebView. The Presentation
+  // has its own WebView without this bridge, so it remains the authoritative
+  // secondary surface even when Android restores the primary URL incorrectly.
+  return !supportsNativeAndroidCustomerDisplay();
+};
+
+export const recoverNativePrimaryDisplayUrl = (): boolean => {
+  if (typeof window === 'undefined' || !supportsNativeAndroidCustomerDisplay()) {
+    return false;
+  }
+
+  const url = new URL(window.location.href);
+  if (url.searchParams.get('view') !== 'VISOR') return false;
+
+  url.searchParams.delete('view');
+  url.searchParams.delete(DISPLAY_SURFACE_PARAM);
+  window.history.replaceState(
+    window.history.state,
+    '',
+    `${url.pathname}${url.search}${url.hash}` || '/',
+  );
+  return true;
+};
 
 const launchNativeAndroidCustomerDisplay = async (payload: {
   mode: DisplayLaunchMode;

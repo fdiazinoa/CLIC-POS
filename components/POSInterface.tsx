@@ -65,7 +65,7 @@ import { printComanda, printPrecuenta } from '../utils/printer';
 import ModifierModal from './ModifierModal';
 import { productHasRestaurantConfiguration, resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
 import { visorSync } from '../utils/visorSync';
-import { maybeAutoLaunchCustomerDisplay } from '../utils/customerDisplay';
+import { isCustomerDisplaySurface, maybeAutoLaunchCustomerDisplay } from '../utils/customerDisplay';
 import ProductQuickActions from './ProductQuickActions';
 import ActionGrid from './ActionGrid';
 import SupervisorAuthModal from './SupervisorAuthModal';
@@ -4420,7 +4420,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [processedCart, cartSubtotal, cartTax, discountAmount, cartTotal, activeTerminalConfig, baseCurrency]);
 
    useEffect(() => {
-      const isVisorMode = new URLSearchParams(window.location.search).get('view') === 'VISOR';
+      const isVisorMode = isCustomerDisplaySurface();
       if (isVisorMode) return;
       void maybeAutoLaunchCustomerDisplay(
          activeTerminalConfig?.hardware?.customerDisplay,
