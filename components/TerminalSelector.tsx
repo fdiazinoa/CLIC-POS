@@ -1168,7 +1168,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           terminalId: terminal.erpTerminalId || terminal.id,
           erpTerminalId: terminal.erpTerminalId,
           bindingMode,
-          forceTransfer: false,
+          forceTransfer,
           tenantId,
           tenantSlug: resolveTenantSlug(),
           tenantEmail: resolveTenantEmail(),
@@ -1213,7 +1213,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             terminalId: terminal.erpTerminalId || terminal.id,
             erpTerminalId: terminal.erpTerminalId,
             bindingMode,
-            forceTransfer: false,
+            forceTransfer,
             tenantId,
             tenantSlug: resolveTenantSlug(),
             tenantEmail: resolveTenantEmail(),
@@ -1641,7 +1641,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           setPendingTerminal(terminalWithDevice);
           setAuthorizationIssue({
             code: err.code,
-            message: 'Pendiente de autorización en Cloud-Admin.',
+            message: err.message,
             httpStatus: err.httpStatus || null,
             terminal: terminalWithDevice,
             currentDeviceId: err.currentDeviceId || terminal.currentDeviceId || null,
@@ -1987,7 +1987,10 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
               </div>
 
               <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50/70 px-4 py-3.5 text-sm font-medium leading-relaxed text-amber-900 sm:mt-5 sm:px-5">
-                No se creará otra terminal ni se cambiará el ERP. Puedes reintentar o reasignar esta terminal local al equipo actual.
+                <p>No se creará otra terminal ni se cambiará el ERP. Puedes reintentar o reasignar esta terminal local al equipo actual.</p>
+                {authorizationIssue.message && (
+                  <p className="mt-2 break-words font-mono text-xs">{authorizationIssue.message}</p>
+                )}
               </div>
 
               <div className="mt-4 grid gap-2 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-600">

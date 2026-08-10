@@ -12,6 +12,8 @@ import { getNetworkEngine, requestJson } from '../network/httpClient';
 import { resolveOrderTakerContract } from '../../utils/orderTakerPolicy';
 import { db } from '../../utils/db';
 import { terminalConfigRequestCoordinator } from '../sync/TerminalConfigRequestCoordinator';
+import { persistSyncDeviceToken } from '../sync/deviceToken';
+import { saveTerminalCredentialsSync } from '../sync/TerminalCredentialStore';
 
 export interface RuntimeTerminalCard {
   id: string;
@@ -157,6 +159,20 @@ export class SetupDeviceAuthorizationError extends Error {
     this.currentDeviceId = options.currentDeviceId;
     this.terminalId = options.terminalId;
     this.terminalName = options.terminalName;
+  }
+}
+
+export class SetupErpRequestError extends Error {
+  code: string;
+  httpStatus: number;
+  payload?: Record<string, any>;
+
+  constructor(code: string, message: string, options: { httpStatus: number; payload?: Record<string, any> }) {
+    super(`${code}: ${message}`);
+    this.name = 'SetupErpRequestError';
+    this.code = code;
+    this.httpStatus = options.httpStatus;
+    this.payload = options.payload;
   }
 }
 
@@ -319,6 +335,7 @@ const fetchErpJson = async (
     method?: 'GET' | 'POST';
     body?: Record<string, any>;
     headers?: Record<string, string>;
+    preserveBackendError?: boolean;
   }
 ) => {
   const requestUrl = `${stripTrailingSlashes(baseUrl)}${path}`;
@@ -377,6 +394,13 @@ const fetchErpJson = async (
             || undefined,
           terminalName: asString(asObject(payload).terminal_name) || undefined,
         }
+      );
+    }
+    if (options?.preserveBackendError) {
+      throw new SetupErpRequestError(
+        backendCode || `HTTP_${response.status}`,
+        message,
+        { httpStatus: response.status, payload: asObject(payload) },
       );
     }
     throw new Error(`ERP ${requestUrl}: ${message}`);
@@ -1404,6 +1428,51 @@ export const bindTerminalFromErp = async (input: {
 
   let takeoverPayload: any = null;
   let registerPayload: Record<string, any> | null = null;
+
+  const shouldTakeover = Boolean(
+    input.bindingMode === 'MASTER'
+    && input.forceTransfer === true
+    && occupiedDeviceId
+    && occupiedDeviceId !== input.posDeviceId
+  );
+
+  if (shouldTakeover) {
+    console.info('[POS_ERP_PAIRING]', {
+      ...pairingLogBase,
+      previousDeviceId: occupiedDeviceId,
+      status: 'TAKEOVER_REQUESTED',
+    });
+    takeoverPayload = asObject(await fetchErpJson(
+      input.erpBaseUrl,
+      `/api/sync/terminals/${encodeURIComponent(targetErpTerminalId)}/takeover`,
+      {
+        method: 'POST',
+        headers: buildDeviceHeaders(input.posDeviceId),
+        preserveBackendError: true,
+        body: {
+          terminal_id: targetErpTerminalId,
+          device_id: input.posDeviceId,
+          device_name: targetTerminalName,
+          tenant_id: resolvedContext.tenantId,
+          cloud_admin_tenant_id: input.tenantId || null,
+          reason: 'CLIC_POS_ANDROID_DIRECT_REAUTHORIZATION',
+          requested_by: 'clic-pos-android-setup',
+          takeover: true,
+          rotate_device_token: true,
+        },
+      },
+    ));
+    console.info('[POS_ERP_PAIRING]', {
+      ...pairingLogBase,
+      previousDeviceId:
+        asString(takeoverPayload.previous_device_id)
+        || asString(takeoverPayload.previousDeviceId)
+        || occupiedDeviceId,
+      authResponseCode: resolveBackendCode(takeoverPayload) || asString(takeoverPayload.status) || 'OK',
+      status: 'TAKEOVER_ACCEPTED',
+    });
+  }
+
   try {
     registerPayload = asObject(await fetchErpJson(input.erpBaseUrl, '/api/sync/terminals/register', {
       method: 'POST',
@@ -1570,7 +1639,7 @@ export const bindTerminalFromErp = async (input: {
 
   const profilesByTerminalId = new Map<string, any>(profiles);
   let recoveryState: RuntimeTerminalRecoveryState | null = null;
-  if (takeoverPayload || (occupiedDeviceId && occupiedDeviceId !== input.posDeviceId && input.forceTransfer)) {
+  if (takeoverPayload) {
     try {
       recoveryState = await fetchTerminalRecoveryStateFromErp({
         erpBaseUrl: input.erpBaseUrl,
@@ -1593,6 +1662,10 @@ export const bindTerminalFromErp = async (input: {
   });
   const runtimeAuth = extractErpRegisterAuth(
     registerPayload,
+    takeoverPayload,
+    takeoverPayload?.auth,
+    takeoverPayload?.syncHeaders,
+    takeoverPayload?.sync_headers,
     registerPayload?.auth,
     registerPayload?.syncHeaders,
     registerPayload?.sync_headers,
@@ -1604,6 +1677,33 @@ export const bindTerminalFromErp = async (input: {
     currentProfilePayload?.profile,
     targetTerminal
   );
+  if (runtimeAuth.deviceToken) {
+    persistSyncDeviceToken(runtimeAuth.deviceToken, takeoverPayload ? 'ERP_TAKEOVER' : 'ERP_REGISTER', runtimeAuth.tokenExpiresAt);
+  }
+  if (runtimeAuth.deviceToken || runtimeAuth.syncToken) {
+    saveTerminalCredentialsSync({
+      terminalId: canonicalErpTerminalId,
+      erpTerminalId: canonicalErpTerminalId,
+      terminalCode: targetTerminalCode,
+      stationNumber: targetTerminalCode,
+      terminalName: targetTerminalName,
+      deviceId: input.posDeviceId,
+      tenantId: resolvedContext.tenantId,
+      erpTenantId: resolvedContext.tenantId,
+      cloudAdminTenantId: input.tenantId || null,
+      ...(runtimeAuth.deviceToken ? {
+        deviceToken: runtimeAuth.deviceToken,
+        deviceTokenSource: takeoverPayload ? 'ERP_TAKEOVER' : 'ERP_REGISTER',
+        deviceTokenUpdatedAt: new Date().toISOString(),
+        deviceTokenExpiresAt: runtimeAuth.tokenExpiresAt || null,
+      } : {}),
+      ...(runtimeAuth.syncToken ? {
+        syncToken: runtimeAuth.syncToken,
+        syncTokenUpdatedAt: new Date().toISOString(),
+        syncTokenExpiresAt: runtimeAuth.tokenExpiresAt || null,
+      } : {}),
+    });
+  }
   const syncProfile = resolveIncomingSyncProfileFromRegister(
     registerPayload,
     {
@@ -1627,10 +1727,12 @@ export const bindTerminalFromErp = async (input: {
     terminal_name: targetTerminalName,
     company_id: asString(targetTerminal.company_id) || resolvedContext.companyId || null,
     store_id: asString(targetTerminal.store_id) || resolvedContext.storeId || null,
-    transferred: Boolean(occupiedDeviceId && occupiedDeviceId !== input.posDeviceId),
+    transferred: Boolean(takeoverPayload),
     previous_device_id:
       asString(takeoverPayload?.previous_device_id)
-      || (occupiedDeviceId && occupiedDeviceId !== input.posDeviceId ? occupiedDeviceId : null),
+      || asString(takeoverPayload?.previousDeviceId)
+      || asString(registerPayload?.previous_device_id)
+      || (takeoverPayload ? occupiedDeviceId || null : null),
     recovery_state: recoveryState,
     config: boundConfig,
     syncProfile,

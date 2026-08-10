@@ -15,6 +15,10 @@ const terminalBindingSource = readFileSync(
   'utf8',
 );
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+const erpTerminalSetupSource = readFileSync(
+  new URL('../services/setup/erpTerminalSetup.ts', import.meta.url),
+  'utf8',
+);
 
 test('el servidor Master Android expone el contrato completo de activacion cliente', () => {
   assert.match(serverSource, /path == "\/api\/setup\/terminals"/);
@@ -85,6 +89,29 @@ test('Master ERP lista terminales autoritativas del ERP y no acepta seeds del se
   assert.match(terminalSelectorSource, /if \(useErpDirectMasterAndroid \|\| usesErpDirect\)/);
   assert.match(terminalSelectorSource, /const erpData = await listTerminalsFromErp/);
   assert.doesNotMatch(terminalSelectorSource, /setup proxy \/terminals failed, falling back to ERP direct/);
+});
+
+test('Master ERP directo propaga forceTransfer en Android y en el fallback web', () => {
+  const directBindingFlow = terminalSelectorSource.slice(
+    terminalSelectorSource.indexOf('if (useErpDirectMasterAndroid) {', terminalSelectorSource.indexOf('const bindTerminal = useCallback')),
+    terminalSelectorSource.indexOf('} else {', terminalSelectorSource.indexOf('if (useErpDirectMasterAndroid) {', terminalSelectorSource.indexOf('const bindTerminal = useCallback'))),
+  );
+
+  assert.equal((directBindingFlow.match(/forceTransfer,/g) || []).length, 2);
+  assert.doesNotMatch(directBindingFlow, /forceTransfer:\s*false/);
+});
+
+test('el takeover ERP directo está limitado a MASTER y usa el UUID canónico', () => {
+  assert.match(erpTerminalSetupSource, /input\.bindingMode === 'MASTER'/);
+  assert.match(erpTerminalSetupSource, /input\.forceTransfer === true/);
+  assert.match(
+    erpTerminalSetupSource,
+    /`\/api\/sync\/terminals\/\$\{encodeURIComponent\(targetErpTerminalId\)\}\/takeover`/,
+  );
+  assert.match(erpTerminalSetupSource, /terminal_id:\s*targetErpTerminalId/);
+  assert.match(erpTerminalSetupSource, /status:\s*'TAKEOVER_ACCEPTED'/);
+  assert.match(terminalSelectorSource, /message:\s*err\.message/);
+  assert.match(terminalSelectorSource, /\{authorizationIssue\.message\}/);
 });
 
 test('volver desde la autorización regresa al selector canónico del modo de dispositivo', () => {
