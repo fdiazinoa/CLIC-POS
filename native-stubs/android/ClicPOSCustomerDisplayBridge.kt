@@ -207,19 +207,30 @@ class AndroidCustomerDisplayBridge(
 
     private fun resolveDisplay(activity: Activity, requestedMode: String): Any? {
         val manager = activity.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-        val preferred = manager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION)
-            .firstOrNull { it.displayId != Display.DEFAULT_DISPLAY }
+        val presentationDisplays = manager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION)
+            .filter { it.displayId != Display.DEFAULT_DISPLAY && !isCaptureDisplay(it) }
+        val preferred = presentationDisplays
+            .firstOrNull { it.flags and Display.FLAG_SECURE != 0 }
+            ?: presentationDisplays.firstOrNull()
 
         if (preferred != null) return preferred
 
         val allSecondary = manager.displays
-            .filter { it.displayId != Display.DEFAULT_DISPLAY }
+            .filter { it.displayId != Display.DEFAULT_DISPLAY && !isCaptureDisplay(it) }
 
         if (allSecondary.isNotEmpty()) {
             return allSecondary.first()
         }
 
         return null
+    }
+
+    private fun isCaptureDisplay(display: Display): Boolean {
+        val normalizedName = display.name.orEmpty().lowercase()
+        return normalizedName.contains("screencap")
+            || normalizedName.contains("screen capture")
+            || normalizedName.contains("anydesk")
+            || normalizedName.contains("recording")
     }
 
     private fun missingDisplayMessage(requestedMode: String): String {

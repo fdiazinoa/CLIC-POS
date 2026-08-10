@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   buildCustomerDisplayUrl,
   isCustomerDisplaySurface,
+  isCustomerDisplayView,
   launchCustomerDisplay,
   recoverNativePrimaryDisplayUrl,
 } from '../utils/customerDisplay';
@@ -119,6 +120,12 @@ test('mantiene el Presentation Android como superficie secundaria', () => {
   assert.equal(recoverNativePrimaryDisplayUrl(), false);
 });
 
+test('identifica VISOR como estado exclusivo de la segunda pantalla', () => {
+  assert.equal(isCustomerDisplayView('VISOR'), true);
+  assert.equal(isCustomerDisplayView('POS'), false);
+  assert.equal(isCustomerDisplayView(undefined), false);
+});
+
 test('mantiene compatible el visor por navegador y marca las URLs de red', () => {
   installBrowserRuntime({
     location: {
@@ -186,6 +193,7 @@ test('MainActivity recupera la superficie primaria después de que Capacitor ter
     new URL('../native-stubs/android/ClicPOSCustomerDisplayBridge.kt', import.meta.url),
     'utf8',
   );
+  const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 
   assert.match(mainActivitySource, /onPageLoaded\(WebView loadedWebView\)/);
   assert.match(
@@ -194,4 +202,12 @@ test('MainActivity recupera la superficie primaria después de que Capacitor ter
   );
   assert.match(customerDisplayBridgeSource, /searchParams\.delete\('view'\)/);
   assert.match(customerDisplayBridgeSource, /searchParams\.delete\('surface'\)/);
+  assert.match(appSource, /if \(isCustomerDisplayView\(currentView\)\) return;/);
+  assert.match(appSource, /'DEVICE_UNAUTHORIZED',\s*'VISOR',/);
+  assert.match(
+    customerDisplayBridgeSource,
+    /it\.displayId != Display\.DEFAULT_DISPLAY && !isCaptureDisplay\(it\)/,
+  );
+  assert.match(customerDisplayBridgeSource, /it\.flags and Display\.FLAG_SECURE != 0/);
+  assert.match(customerDisplayBridgeSource, /normalizedName\.contains\("anydesk"\)/);
 });
