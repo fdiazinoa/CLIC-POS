@@ -51,6 +51,7 @@ import { isPosCloudStagingPushCollection } from './PosCloudStagingService';
 import { reportSyncErrorDiagnostic, setCatalogDiagnosticStatus } from './SyncErrorDiagnostic';
 import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked } from '../../utils/deviceRevocation';
 import { isConfigPushV2Enabled, triggerErpSyncOutbox } from '../../utils/erpSyncLifecycle';
+import { normalizeCanonicalErpTerminalId, resolveCanonicalErpTerminalId } from './terminalIdentity';
 import { isPosSaleActive } from '../../utils/posSaleActivity';
 import { POS_MASTER_OPERATIONAL_CATALOGS } from '../../utils/posMasterCatalogContract';
 import {
@@ -633,9 +634,11 @@ class SyncManager {
             )
             : null;
 
-        const hintedTerminalId =
-            String(currentTerminal?.config?.erpBinding?.terminalId || '').trim() ||
-            String(currentTerminal?.config?.erpTerminalId || '').trim();
+        const hintedTerminalId = resolveCanonicalErpTerminalId(
+            currentTerminal?.config?.erpBinding?.terminalId,
+            currentTerminal?.config?.erpTerminalId,
+            currentTerminal?.id,
+        ) || null;
 
         const hintedBaseUrl =
             this.resolveConfigErpBaseUrl(localStorage.getItem('CLIC_ERP_BASE_URL')) ||
@@ -649,7 +652,7 @@ class SyncManager {
             null;
 
         apiSyncAdapter.setOperationalTargetHint({
-            terminalId: hintedTerminalId || null,
+            terminalId: hintedTerminalId,
             baseUrl: hintedBaseUrl || null,
         });
 
@@ -1150,13 +1153,12 @@ class SyncManager {
             )
             : null;
 
-        const erpTerminalId =
-            currentTerminal?.config?.erpBinding?.terminalId ||
-            currentTerminal?.config?.erpTerminalId ||
-            (looksLikeUuidString(currentTerminal?.id) ? currentTerminal?.id : null) ||
-            localStorage.getItem('clic_erp_sync_terminal_id') ||
-            activeTerminalId ||
-            null;
+        const erpTerminalId = resolveCanonicalErpTerminalId(
+            currentTerminal?.config?.erpBinding?.terminalId,
+            currentTerminal?.config?.erpTerminalId,
+            currentTerminal?.id,
+            normalizeCanonicalErpTerminalId(localStorage.getItem('clic_erp_sync_terminal_id')),
+        ) || null;
         const activeTenantId =
             currentTerminal?.config?.erpBinding?.tenantId ||
             localStorage.getItem('clic_erp_sync_tenant_id') ||

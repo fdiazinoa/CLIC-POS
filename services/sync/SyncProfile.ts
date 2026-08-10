@@ -3,6 +3,7 @@ import {
     type SyncProfileChainValidationContext,
 } from './erpRegisterResponse';
 import { normalizeErpBaseUrl, resolveErpBaseUrl } from '../../utils/erpBaseUrl';
+import { normalizeCanonicalErpTerminalId } from './terminalIdentity';
 
 export type ContractedProduct = 'POS_ONLY' | 'POS_ERP';
 export type PosRuntime = 'LOCAL_SQLITE' | 'MASTER' | 'SLAVE';
@@ -376,10 +377,10 @@ export function saveSyncProfileFromContract(
 
 export function inferLegacySyncProfile(): SyncProfile {
     const rawMode = String(readStorage('clic_sync_mode') || '').trim().toUpperCase();
-    const erpTerminalId = firstValue(
+    const erpTerminalId = normalizeCanonicalErpTerminalId(firstValue(
         readStorage('clic_erp_sync_terminal_id'),
         readStorage('erp_terminal_id')
-    );
+    )) || undefined;
     const erpBaseUrl = normalizeBaseUrl(firstValue(
         readStorage('CLIC_ERP_BASE_URL'),
         readStorage('erp_base_url'),
@@ -476,9 +477,12 @@ function normalizeProfile(input: Partial<SyncProfile>): SyncProfile {
 
     const resolvedErpBaseUrl = normalizeBaseUrl(input.erpBaseUrl || input.cloudBaseUrl)
         || (contractedProduct === 'POS_ERP' ? normalizeErpBaseUrl(resolveErpBaseUrl()) || undefined : undefined);
-    const resolvedErpTerminalId = input.erpTerminalId
+    const resolvedErpTerminalId = normalizeCanonicalErpTerminalId(input.erpTerminalId)
         || (contractedProduct === 'POS_ERP'
-            ? firstValue(readStorage('clic_erp_sync_terminal_id'), readStorage('erp_terminal_id'))
+            ? normalizeCanonicalErpTerminalId(firstValue(
+                readStorage('clic_erp_sync_terminal_id'),
+                readStorage('erp_terminal_id'),
+            )) || undefined
             : undefined);
 
     return {

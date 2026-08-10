@@ -253,6 +253,10 @@ import {
   resolveRegisterTerminalCode,
 } from './services/sync/erpRegisterResponse';
 import { readTerminalCredentials, saveTerminalCredentialsSync } from './services/sync/TerminalCredentialStore';
+import {
+  normalizeCanonicalErpTerminalId,
+  requireCanonicalErpTerminalId,
+} from './services/sync/terminalIdentity';
 import { normalizeErpBaseUrl, resolveErpBaseUrl } from './utils/erpBaseUrl';
 import {
   canRetryFiscalTransaction,
@@ -979,12 +983,18 @@ const restorePersistentOperationalIdentity = (
   credentials: Record<string, any>,
   fallbackDeviceId?: string | null
 ): boolean => {
-  const terminalId = String(
+  const terminalId = normalizeCanonicalErpTerminalId(
     credentials?.erpTerminalId
     || credentials?.terminalId
     || localStorage.getItem('clic_erp_sync_terminal_id')
-    || localStorage.getItem('CLIC_POS_TERMINAL_ID')
+    || ''
+  );
+  const operationalTerminalId = String(
+    credentials?.terminalCode
+    || credentials?.stationNumber
+    || localStorage.getItem('clic_erp_sync_terminal_code')
     || localStorage.getItem('active_terminal_id')
+    || localStorage.getItem('CLIC_POS_TERMINAL_ID')
     || ''
   ).trim();
   const tenantId = String(
@@ -1014,8 +1024,10 @@ const restorePersistentOperationalIdentity = (
 
   if (!hasOperationalIdentity) return false;
 
-  localStorage.setItem('active_terminal_id', terminalId);
-  localStorage.setItem('CLIC_POS_TERMINAL_ID', terminalId);
+  if (operationalTerminalId) {
+    localStorage.setItem('active_terminal_id', operationalTerminalId);
+    localStorage.setItem('CLIC_POS_TERMINAL_ID', operationalTerminalId);
+  }
   localStorage.setItem('clic_erp_sync_terminal_id', terminalId);
   localStorage.setItem('CLIC_POS_DEVICE_ID', deviceId);
   localStorage.setItem(TERMINAL_BINDING_STATUS_KEY, 'BOUND');
@@ -1030,6 +1042,7 @@ const restorePersistentOperationalIdentity = (
 
   console.info('persistent_operational_identity_restored_before_boot_redirect', {
     terminalId,
+    operationalTerminalId: operationalTerminalId || null,
     tenantId: tenantId || null,
     deviceId,
     hasToken,
@@ -2613,8 +2626,8 @@ const AppContent: React.FC = () => {
           localTerminalId: preferredLocalTerminalId || undefined,
         });
         saveTerminalCredentialsSync({
-          terminalId: preferredErpTerminalId || preferredTerminalId,
-          erpTerminalId: preferredErpTerminalId || preferredTerminalId,
+          terminalId: preferredErpTerminalId || null,
+          erpTerminalId: preferredErpTerminalId || null,
           terminalCode: preferredLocalTerminalId || null,
           terminalName: resolveFriendlyTerminalName(preferredTerminal),
           tenantId: preferredTenantId || null,
@@ -6776,6 +6789,22 @@ const AppContent: React.FC = () => {
           setupResult?.profile,
         )
         || terminalId;
+      const requiresCanonicalErpIdentity = Boolean(
+        setupResult?.erpBaseUrl
+        || setupResult?.syncProfile?.contractedProduct === 'POS_ERP'
+        || setupResult?.syncProfile?.cloudChannel === 'ERP_ACTIVE'
+        || setupResult?.syncProfile?.dataMaster === 'ERP'
+        || setupResult?.contractSource === 'ERP_REGISTER'
+      );
+      const canonicalSetupErpTerminalId = resolveRegisterErpTerminalId(
+        setupResult,
+        setupResult?.syncProfile,
+        setupResult?.incomingProfile,
+        setupResult?.profile,
+      );
+      if (requiresCanonicalErpIdentity && !canonicalSetupErpTerminalId) {
+        requireCanonicalErpTerminalId(setupResult);
+      }
       const resolvedMasterIp = typeof pairingContext === 'string' ? pairingContext : setupResult?.masterIp;
       const previouslyAssignedTerminal = (config.terminals || []).find(t => t.id === terminalId);
       const normalizedResolvedMasterIp = normalizeMasterHost(resolvedMasterIp || '');
@@ -6834,9 +6863,10 @@ const AppContent: React.FC = () => {
       if (effectiveDeviceToken) {
         persistSyncDeviceToken(effectiveDeviceToken, normalizedDeviceToken ? 'ERP_REGISTER' : 'ERP_REGISTER_FALLBACK', setupRegisterAuth.tokenExpiresAt);
         saveTerminalCredentialsSync({
-          terminalId: setupResult?.erpTerminalId || terminalId,
-          erpTerminalId: setupResult?.erpTerminalId || terminalId,
+          terminalId: canonicalSetupErpTerminalId,
+          erpTerminalId: canonicalSetupErpTerminalId,
           terminalCode: resolvedOperationalTerminalId,
+          stationNumber: resolvedOperationalTerminalId,
           terminalName: setupResult?.terminalName || resolvedOperationalTerminalId,
           deviceId,
           tenantId: localStorage.getItem('clic_tenant_id') || localStorage.getItem('active_tenant_id') || null,
@@ -6922,10 +6952,12 @@ const AppContent: React.FC = () => {
         || selectedTerminal?.id
         || terminalId;
       const resolvedErpTerminalId =
-        setupResult?.erpTerminalId
-        || resolveRegisterErpTerminalId(setupResult)
-        || selectedTerminal?.config?.erpTerminalId
-        || terminalId;
+        canonicalSetupErpTerminalId
+        || normalizeCanonicalErpTerminalId(selectedTerminal?.config?.erpTerminalId)
+        || null;
+      if (requiresCanonicalErpIdentity && !resolvedErpTerminalId) {
+        requireCanonicalErpTerminalId(setupResult);
+      }
       const isSlave = selectedTerminal?.config?.isPrimaryNode === false;
       const wasOccupiedByAnotherDevice =
         !!previouslyAssignedTerminal?.config?.currentDeviceId &&

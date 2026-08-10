@@ -212,11 +212,11 @@ test('register and heartbeat advertise explicit empty capabilities when CONFIG_P
         const body = JSON.parse(String(init?.body || '{}'));
         if (url.includes('/terminals/register')) {
             requestBodies.set('register', body);
-            return Response.json({ status: 'success' });
+            return Response.json({ status: 'success', terminal: { id: terminalId } });
         }
         if (url.includes('/terminals/heartbeat')) {
             requestBodies.set('heartbeat', body);
-            return Response.json({ status: 'success' });
+            return Response.json({ status: 'success', terminal: { id: terminalId } });
         }
         throw new Error(`Unexpected request: ${url}`);
     }) as typeof fetch;
@@ -240,11 +240,11 @@ test('register and heartbeat advertise CONFIG_PUSH_V2 by default', async () => {
         const body = JSON.parse(String(init?.body || '{}'));
         if (url.includes('/terminals/register')) {
             requestBodies.set('register', body);
-            return Response.json({ status: 'success' });
+            return Response.json({ status: 'success', terminal: { id: terminalId } });
         }
         if (url.includes('/terminals/heartbeat')) {
             requestBodies.set('heartbeat', body);
-            return Response.json({ status: 'success' });
+            return Response.json({ status: 'success', terminal: { id: terminalId } });
         }
         throw new Error(`Unexpected request: ${url}`);
     }) as typeof fetch;

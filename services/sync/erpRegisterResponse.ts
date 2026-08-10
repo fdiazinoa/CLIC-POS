@@ -1,4 +1,8 @@
 import type { SyncProfile, SyncProfileSource } from './SyncProfile';
+import {
+    ERP_TERMINAL_UUID_PATTERN,
+    resolveCanonicalErpTerminalId,
+} from './terminalIdentity';
 
 const SYNC_PROFILE_SOURCE_PRIORITY: Record<SyncProfileSource, number> = {
     ERP_REGISTER: 100,
@@ -34,7 +38,7 @@ const pickAuthString = (...values: unknown[]): string | undefined => {
 const asObject = (value: unknown): Record<string, any> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_PATTERN = ERP_TERMINAL_UUID_PATTERN;
 
 const flattenRegisterRecords = (...sources: unknown[]): Record<string, any>[] => {
     return sources
@@ -142,21 +146,7 @@ export const extractErpRegisterAuth = (...sources: unknown[]): ErpRegisterAuthPa
 };
 
 export const resolveRegisterErpTerminalId = (...sources: unknown[]): string | undefined => {
-    const records = flattenRegisterRecords(...sources);
-    return pickAuthString(
-        ...records.flatMap((record) => [
-            record.erpTerminalId,
-            record.erp_terminal_id,
-            record.terminalId,
-            record.terminal_id,
-            asObject(record.terminal).id,
-            asObject(record.terminal).erpTerminalId,
-            asObject(record.terminal).erp_terminal_id,
-            asObject(record.profile).erpTerminalId,
-            asObject(record.syncProfile).erpTerminalId,
-            asObject(record.incomingProfile).erpTerminalId,
-        ])
-    );
+    return resolveCanonicalErpTerminalId(...sources);
 };
 
 export const resolveRegisterTerminalCode = (...sources: unknown[]): string | undefined => {
@@ -198,12 +188,13 @@ export const resolveIncomingSyncProfileFromRegister = (
         contractSource: (profileCandidate as Partial<SyncProfile>).contractSource || contractSource,
     };
 
-    merged.erpTerminalId = pickAuthString(
-        merged.erpTerminalId,
-        resolveRegisterErpTerminalId(response, fallbacks),
-        fallbacks.erpTerminalId,
+    merged.erpTerminalId = resolveCanonicalErpTerminalId(
+        response,
         (profileCandidate as Partial<SyncProfile>).erpTerminalId,
         asObject(profileCandidate).erp_terminal_id,
+        fallbacks,
+        fallbacks.erpTerminalId,
+        merged.erpTerminalId,
     );
     merged.localTerminalId = pickAuthString(
         resolveRegisterTerminalCode(response, fallbacks),
