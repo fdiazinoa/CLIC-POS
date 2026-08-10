@@ -1,10 +1,12 @@
 import { Preferences } from '@capacitor/preferences';
 import type { BusinessConfig } from '../../types';
+import { separateTerminalIdentity } from './terminalIdentity';
 
 export interface TerminalCredentials {
     terminalId?: string | null;
     erpTerminalId?: string | null;
     terminalCode?: string | null;
+    stationNumber?: string | null;
     terminalName?: string | null;
     deviceId?: string | null;
     tenantId?: string | null;
@@ -25,6 +27,7 @@ export interface TerminalCredentials {
     setupMode?: string | null;
     syncMode?: string | null;
     configSnapshot?: BusinessConfig | null;
+    identityMigrationRequired?: boolean | null;
 }
 
 const CREDENTIALS_KEY = 'clic_terminal_credentials_v1';
@@ -80,9 +83,10 @@ const compactCredentials = (credentials: TerminalCredentials): TerminalCredentia
 };
 
 const buildFromLegacyKeys = (storage: Storage): TerminalCredentials => compactCredentials({
-    terminalId: cleanString(storage.getItem('clic_erp_sync_terminal_id') || storage.getItem('CLIC_POS_TERMINAL_ID') || storage.getItem('active_terminal_id')),
-    erpTerminalId: cleanString(storage.getItem('clic_erp_sync_terminal_id') || storage.getItem('CLIC_POS_TERMINAL_ID') || storage.getItem('active_terminal_id')),
-    terminalCode: cleanString(storage.getItem('clic_erp_sync_terminal_code')),
+    terminalId: cleanString(storage.getItem('clic_erp_sync_terminal_id') || storage.getItem('erp_terminal_id')),
+    erpTerminalId: cleanString(storage.getItem('clic_erp_sync_terminal_id') || storage.getItem('erp_terminal_id')),
+    terminalCode: cleanString(storage.getItem('clic_erp_sync_terminal_code') || storage.getItem('CLIC_POS_TERMINAL_ID') || storage.getItem('active_terminal_id')),
+    stationNumber: cleanString(storage.getItem('clic_erp_sync_station_number') || storage.getItem('clic_erp_sync_terminal_code')),
     terminalName: cleanString(storage.getItem('clic_erp_sync_terminal_name')),
     deviceId: cleanString(storage.getItem('CLIC_POS_DEVICE_ID') || storage.getItem('pos_device_id') || storage.getItem('clic_pos_device_id')),
     tenantId: cleanString(storage.getItem('clic_erp_sync_tenant_id') || storage.getItem('active_tenant_id') || storage.getItem('clic_tenant_id')),
@@ -105,6 +109,23 @@ const buildFromLegacyKeys = (storage: Storage): TerminalCredentials => compactCr
     configSnapshot: readConfigSnapshot(storage),
 });
 
+export const normalizeTerminalCredentialsIdentity = (
+    credentials: TerminalCredentials,
+): TerminalCredentials => {
+    const separated = separateTerminalIdentity(credentials);
+    return {
+        ...credentials,
+        terminalId: separated.terminalId,
+        erpTerminalId: separated.erpTerminalId,
+        terminalCode: separated.terminalCode,
+        stationNumber: separated.stationNumber,
+        terminalName: separated.terminalName,
+        deviceId: separated.deviceId,
+        identityMigrationRequired: separated.requiresPairing,
+        ...(separated.migratedLegacyIdentity ? { authStatus: 'PAIRING_REQUIRED' } : {}),
+    };
+};
+
 const mergeCredentials = (...entries: TerminalCredentials[]): TerminalCredentials => {
     const merged: TerminalCredentials = {};
     for (const entry of entries) {
@@ -121,14 +142,19 @@ const writeLegacyMirrors = (credentials: TerminalCredentials): void => {
     const storage = getStorage();
     if (!storage) return;
     try {
-        if (credentials.terminalId) {
-            storage.setItem('clic_erp_sync_terminal_id', credentials.terminalId);
-        }
-        if (credentials.erpTerminalId) {
-            storage.setItem('clic_erp_sync_terminal_id', credentials.erpTerminalId);
+        const canonicalTerminalId = separateTerminalIdentity(credentials).erpTerminalId;
+        if (canonicalTerminalId) {
+            storage.setItem('clic_erp_sync_terminal_id', canonicalTerminalId);
+            storage.setItem('erp_terminal_id', canonicalTerminalId);
+        } else {
+            storage.removeItem('clic_erp_sync_terminal_id');
+            storage.removeItem('erp_terminal_id');
         }
         if (credentials.terminalCode) {
             storage.setItem('clic_erp_sync_terminal_code', credentials.terminalCode);
+        }
+        if (credentials.stationNumber) {
+            storage.setItem('clic_erp_sync_station_number', credentials.stationNumber);
         }
         if (credentials.terminalName) {
             storage.setItem('clic_erp_sync_terminal_name', credentials.terminalName);
@@ -192,7 +218,17 @@ export const readTerminalCredentialsSync = (): TerminalCredentials => {
     const storage = getStorage();
     if (!storage) return {};
     const stored = readJson(storage.getItem(CREDENTIALS_KEY));
-    return mergeCredentials(stored, buildFromLegacyKeys(storage));
+    const merged = mergeCredentials(stored, buildFromLegacyKeys(storage));
+    const normalized = normalizeTerminalCredentialsIdentity(merged);
+    if (normalized.identityMigrationRequired || JSON.stringify(normalized) !== JSON.stringify(merged)) {
+        try {
+            storage.setItem(CREDENTIALS_KEY, JSON.stringify(normalized));
+            writeLegacyMirrors(normalized);
+        } catch {
+            // Identity migration is retried on the next boot without touching transactional stores.
+        }
+    }
+    return normalized;
 };
 
 export const readTerminalCredentials = async (): Promise<TerminalCredentials> => {
@@ -200,7 +236,7 @@ export const readTerminalCredentials = async (): Promise<TerminalCredentials> =>
     try {
         const result = await Preferences.get({ key: CREDENTIALS_KEY });
         const fromPreferences = readJson(result?.value || null);
-        return mergeCredentials(fromPreferences, local);
+        return normalizeTerminalCredentialsIdentity(mergeCredentials(fromPreferences, local));
     } catch {
         return local;
     }
@@ -209,7 +245,7 @@ export const readTerminalCredentials = async (): Promise<TerminalCredentials> =>
 export const saveTerminalCredentials = async (patch: TerminalCredentials): Promise<TerminalCredentials> => {
     const storage = getStorage();
     const current = readTerminalCredentialsSync();
-    const next = mergeCredentials(current, patch);
+    const next = normalizeTerminalCredentialsIdentity(mergeCredentials(current, patch));
     writeLegacyMirrors(next);
 
     try {
@@ -230,7 +266,7 @@ export const saveTerminalCredentials = async (patch: TerminalCredentials): Promi
 export const saveTerminalCredentialsSync = (patch: TerminalCredentials): TerminalCredentials => {
     const storage = getStorage();
     const current = readTerminalCredentialsSync();
-    const next = mergeCredentials(current, patch);
+    const next = normalizeTerminalCredentialsIdentity(mergeCredentials(current, patch));
     writeLegacyMirrors(next);
     try {
         storage?.setItem(CREDENTIALS_KEY, JSON.stringify(next));

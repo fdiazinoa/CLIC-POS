@@ -3,7 +3,9 @@ import { getDefaultRoleConfig, resolveDeviceRoleValue } from '../../utils/device
 import {
   extractErpRegisterAuth,
   resolveIncomingSyncProfileFromRegister,
+  resolveRegisterErpTerminalId,
 } from '../sync/erpRegisterResponse';
+import { CanonicalErpTerminalIdError } from '../sync/terminalIdentity';
 import type { SyncProfile } from '../sync/SyncProfile';
 import { supabase } from '../../utils/supabase';
 import { getNetworkEngine, requestJson } from '../network/httpClient';
@@ -1354,7 +1356,10 @@ export const bindTerminalFromErp = async (input: {
     throw new Error('La terminal no existe en el ERP para este tenant.');
   }
 
-  const targetErpTerminalId = asString(targetTerminal.id);
+  const targetErpTerminalId = resolveRegisterErpTerminalId(targetTerminal);
+  if (!targetErpTerminalId) {
+    throw new CanonicalErpTerminalIdError();
+  }
   const targetTerminalCode = resolveOperationalTerminalId(targetTerminal) || targetErpTerminalId;
   const targetTerminalId = targetErpTerminalId;
   const targetTerminalName = resolveTerminalName(targetTerminal, targetTerminalCode);
@@ -1448,8 +1453,29 @@ export const bindTerminalFromErp = async (input: {
       });
       throw registerError;
     }
-    console.warn('⚠️ ERP /terminals/register failed; continuing with terminal-profile bind fallback:', registerError);
+    console.warn('⚠️ ERP /terminals/register failed; pairing remains pending:', registerError);
+    throw registerError;
   }
+
+  const canonicalErpTerminalId = resolveRegisterErpTerminalId(registerPayload);
+  if (!canonicalErpTerminalId) {
+    console.warn('[POS_ERP_PAIRING]', {
+      ...pairingLogBase,
+      authResponseCode: 'CANONICAL_ERP_TERMINAL_ID_MISSING',
+      pairingStatus: 'PENDING',
+    });
+    throw new CanonicalErpTerminalIdError();
+  }
+  const canonicalErpTerminals = erpTerminals.map((terminal: any) => (
+    terminal === targetTerminal
+      ? {
+          ...terminal,
+          id: canonicalErpTerminalId,
+          erp_terminal_id: canonicalErpTerminalId,
+          erpTerminalId: canonicalErpTerminalId,
+        }
+      : terminal
+  ));
 
   const mergedMetadata = {
     ...currentMetadata,
@@ -1468,7 +1494,7 @@ export const bindTerminalFromErp = async (input: {
       tenant_id: resolvedContext.tenantId,
       company_id: asString(targetTerminal.company_id) || resolvedContext.companyId,
       store_id: asString(targetTerminal.store_id) || resolvedContext.storeId,
-        terminal_id: targetErpTerminalId,
+        terminal_id: canonicalErpTerminalId,
         device_id: input.posDeviceId,
       profile_status: currentProfile.profile_status || 'ACTIVE',
       document_types: Array.isArray(currentProfile.document_types) ? currentProfile.document_types : [],
@@ -1532,9 +1558,9 @@ export const bindTerminalFromErp = async (input: {
   };
 
   const profiles = await Promise.all(
-    erpTerminals.map(async (terminal: any) => {
+    canonicalErpTerminals.map(async (terminal: any) => {
       const id = asString(terminal.id);
-      if (id === targetErpTerminalId) {
+      if (id === canonicalErpTerminalId) {
         return [id, selectedProfilePayload] as const;
       }
       const profile = await fetchTerminalProfileSafe(input.erpBaseUrl, resolvedContext.tenantId, id);
@@ -1548,7 +1574,7 @@ export const bindTerminalFromErp = async (input: {
     try {
       recoveryState = await fetchTerminalRecoveryStateFromErp({
         erpBaseUrl: input.erpBaseUrl,
-        erpTerminalId: targetErpTerminalId,
+        erpTerminalId: canonicalErpTerminalId,
         posDeviceId: input.posDeviceId,
       });
     } catch (error) {
@@ -1558,10 +1584,10 @@ export const bindTerminalFromErp = async (input: {
 
   const boundConfig = buildBoundConfig({
     currentConfig: input.currentConfig,
-    terminals: erpTerminals,
+    terminals: canonicalErpTerminals,
     profilesByTerminalId,
-    selectedTerminalErpId: targetErpTerminalId,
-    selectedTerminalId: targetTerminalId,
+    selectedTerminalErpId: canonicalErpTerminalId,
+    selectedTerminalId: canonicalErpTerminalId,
     posDeviceId: input.posDeviceId,
     bindingMode: input.bindingMode,
   });
@@ -1581,7 +1607,7 @@ export const bindTerminalFromErp = async (input: {
   const syncProfile = resolveIncomingSyncProfileFromRegister(
     registerPayload,
     {
-      erpTerminalId: targetErpTerminalId,
+      erpTerminalId: canonicalErpTerminalId,
       localTerminalId: targetTerminalCode,
       localTenantId: resolvedContext.tenantId || undefined,
       localStoreId: asString(targetTerminal.store_id) || resolvedContext.storeId || undefined,
@@ -1592,10 +1618,11 @@ export const bindTerminalFromErp = async (input: {
   );
 
   return {
+    ...(registerPayload || {}),
     success: true,
     tenant_id: resolvedContext.tenantId,
-    terminal_id: targetTerminalId,
-    erp_terminal_id: targetErpTerminalId,
+    terminal_id: canonicalErpTerminalId,
+    erp_terminal_id: canonicalErpTerminalId,
     terminal_code: targetTerminalCode,
     terminal_name: targetTerminalName,
     company_id: asString(targetTerminal.company_id) || resolvedContext.companyId || null,
@@ -1606,7 +1633,6 @@ export const bindTerminalFromErp = async (input: {
       || (occupiedDeviceId && occupiedDeviceId !== input.posDeviceId ? occupiedDeviceId : null),
     recovery_state: recoveryState,
     config: boundConfig,
-    ...(registerPayload || {}),
     syncProfile,
     sync_profile: syncProfile,
     incomingProfile: registerPayload?.incomingProfile || registerPayload?.incoming_profile || syncProfile,

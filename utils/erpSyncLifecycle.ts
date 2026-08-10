@@ -1,6 +1,11 @@
 import { resolveStoredErpTenantIdentity } from './tenantIdentityStorage';
 import { normalizeErpSyncApiBase, resolveErpSyncApiBase } from './erpBaseUrl';
 import { extractErpRegisterAuth, resolveNormalizedRegisterDeviceToken } from '../services/sync/erpRegisterResponse';
+import {
+    CanonicalErpTerminalIdError,
+    normalizeCanonicalErpTerminalId,
+    resolveCanonicalErpTerminalId,
+} from '../services/sync/terminalIdentity';
 import { getSyncDeviceToken, persistSyncDeviceToken } from '../services/sync/deviceToken';
 import { readTerminalCredentialsSync, saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
 import { extractTerminalConfigRequestedScopes } from './terminalConfigPushScopes';
@@ -1332,7 +1337,8 @@ const persistBinding = (
         terminalName?: string | null;
     }
 ) => {
-    if (!terminal?.id) return;
+    const canonicalTerminalId = resolveCanonicalErpTerminalId(terminal);
+    if (!terminal || !canonicalTerminalId) return;
 
     const currentIdentity = identity || getStoredTenantIdentity();
     const tenantId = normalizeOptional(currentIdentity.tenantId || terminal.tenant_id || null);
@@ -1352,7 +1358,7 @@ const persistBinding = (
         localStorage.setItem(SYNC_BINDING_TENANT_KEY, tenantId);
     }
 
-    localStorage.setItem(SYNC_BINDING_TERMINAL_KEY, terminal.id);
+    localStorage.setItem(SYNC_BINDING_TERMINAL_KEY, canonicalTerminalId);
 
     if (localTerminalId) {
         localStorage.setItem(SYNC_BINDING_LOCAL_TERMINAL_KEY, localTerminalId);
@@ -1391,8 +1397,8 @@ export const persistStoredErpSyncBinding = (input: {
     status?: string | null;
 }) => {
     const tenantId = normalizeOptional(input.tenantId || null);
-    const terminalId = normalizeOptional(input.terminalId || null);
-    const terminalUuid = normalizeOptional(input.terminalUuid || null);
+    const terminalId = normalizeCanonicalErpTerminalId(input.terminalId);
+    const terminalUuid = normalizeCanonicalErpTerminalId(input.terminalUuid);
     const localTerminalId = normalizeOptional(input.localTerminalId || null);
     const terminalName = normalizeOptional(input.terminalName || null);
     const companyId = normalizeOptional(input.companyId || null);
@@ -1406,10 +1412,14 @@ export const persistStoredErpSyncBinding = (input: {
 
     if (terminalId) {
         localStorage.setItem(SYNC_BINDING_TERMINAL_KEY, terminalId);
+    } else if (input.terminalId) {
+        localStorage.removeItem(SYNC_BINDING_TERMINAL_KEY);
     }
 
     if (terminalUuid) {
         localStorage.setItem(SYNC_BINDING_TERMINAL_UUID_KEY, terminalUuid);
+    } else if (input.terminalUuid) {
+        localStorage.removeItem(SYNC_BINDING_TERMINAL_UUID_KEY);
     }
 
     if (localTerminalId) {
@@ -1454,12 +1464,12 @@ export const persistErpSyncAuthIdentity = (
     const operationalIdentity = asObject<Record<string, unknown>>(root.operational_identity);
     const terminal = asObject<Record<string, unknown>>(root.terminal);
 
-    const terminalId =
-        normalizeOptional(String(root.terminal_id || root.terminalId || terminal.id || fallbackTerminalId || ''))
-        || null;
+    const terminalId = resolveCanonicalErpTerminalId(root, terminal, fallbackTerminalId) || null;
     const terminalUuid =
-        normalizeOptional(String(root.terminal_uuid || root.terminalUuid || terminal.uuid || ''))
-        || null;
+        normalizeCanonicalErpTerminalId(root.terminal_uuid)
+        || normalizeCanonicalErpTerminalId(root.terminalUuid)
+        || normalizeCanonicalErpTerminalId(terminal.uuid)
+        || terminalId;
     const tenantId =
         normalizeOptional(String(operationalIdentity.tenant_id || root.tenant_id || terminal.tenant_id || ''))
         || null;
@@ -2263,8 +2273,8 @@ export const clearStoredErpSyncBinding = () => {
 
 export const getStoredErpSyncBinding = () => ({
     tenantId: normalizeOptional(localStorage.getItem(SYNC_BINDING_TENANT_KEY)) || null,
-    terminalId: normalizeOptional(localStorage.getItem(SYNC_BINDING_TERMINAL_KEY)) || null,
-    terminalUuid: normalizeOptional(localStorage.getItem(SYNC_BINDING_TERMINAL_UUID_KEY)) || null,
+    terminalId: normalizeCanonicalErpTerminalId(localStorage.getItem(SYNC_BINDING_TERMINAL_KEY)),
+    terminalUuid: normalizeCanonicalErpTerminalId(localStorage.getItem(SYNC_BINDING_TERMINAL_UUID_KEY)),
     localTerminalId: normalizeOptional(localStorage.getItem(SYNC_BINDING_LOCAL_TERMINAL_KEY)) || null,
     terminalName: normalizeOptional(localStorage.getItem(SYNC_BINDING_TERMINAL_NAME_KEY)) || null,
     companyId: normalizeOptional(localStorage.getItem(SYNC_BINDING_COMPANY_KEY)) || null,
@@ -2310,9 +2320,16 @@ export const registerErpSyncTerminal = async (params: EnsureLifecycleParams): Pr
 	    const runtimeTelemetry = await resolveRuntimeTelemetry();
 	    const storedBinding = getStoredErpSyncBinding();
 	    const syncCapabilities = getSyncCapabilities();
+        const existingCanonicalTerminalId = resolveCanonicalErpTerminalId(
+            params.terminalId,
+            storedBinding.terminalId,
+            storedBinding.terminalUuid,
+        );
 
 	    const payload = await postJson<SyncRegisterResponse>('/terminals/register', {
 	        device_id: params.deviceId,
+        terminal_id: existingCanonicalTerminalId || undefined,
+        erp_terminal_id: existingCanonicalTerminalId || undefined,
         tenant_id: identity.tenantId || null,
         company_ref: identity.tenantSlug || null,
         company_id: params.companyId || storedBinding.companyId || null,
@@ -2324,12 +2341,19 @@ export const registerErpSyncTerminal = async (params: EnsureLifecycleParams): Pr
         capabilities: syncCapabilities,
 	        metadata: {
 	            source: 'CLIC_POS_APK',
-            terminal_id: params.localTerminalId || params.terminalId,
-            erp_terminal_id: params.terminalId,
+            terminal_id: existingCanonicalTerminalId || undefined,
+            erp_terminal_id: existingCanonicalTerminalId || undefined,
+            terminal_code: params.localTerminalId || null,
+            station_number: params.localTerminalId || null,
             terminal_name: params.terminalName || params.localTerminalId || params.terminalId,
             is_primary: params.isPrimary ?? true,
         },
     });
+
+    const resolvedTerminalId = resolveCanonicalErpTerminalId(payload);
+    if (!resolvedTerminalId) {
+        throw new CanonicalErpTerminalIdError();
+    }
 
     if (payload?.terminal) {
         persistBinding(payload.terminal, identity, {
@@ -2340,14 +2364,6 @@ export const registerErpSyncTerminal = async (params: EnsureLifecycleParams): Pr
 
     const registerAuth = extractErpRegisterAuth(payload);
     const deviceToken = resolveNormalizedRegisterDeviceToken(payload, registerAuth);
-    const resolvedTerminalId =
-        payload?.terminal?.id
-        || payload?.erpTerminalId
-        || payload?.terminalId
-        || params.terminalId
-        || storedBinding.terminalId
-        || null;
-
     if (deviceToken) {
         persistSyncDeviceToken(deviceToken, 'ERP_REGISTER', registerAuth.tokenExpiresAt);
     }
@@ -2394,10 +2410,14 @@ export const heartbeatErpSyncTerminal = (
 	    const runtimeTelemetry = await resolveRuntimeTelemetry();
 	    const storedBinding = getStoredErpSyncBinding();
 	    const resolvedDeviceId = params.deviceId || fallbackDeviceId || resolveLocalDeviceId();
-	    const terminalRef = storedBinding.terminalId || null;
+	    const terminalRef = resolveCanonicalErpTerminalId(
+            storedBinding.terminalId,
+            storedBinding.terminalUuid,
+            params.terminalId,
+        ) || null;
 	    const syncCapabilities = getSyncCapabilities();
 
-        if (!terminalRef && !resolvedDeviceId) {
+        if (!terminalRef) {
             return null;
         }
 

@@ -25,9 +25,11 @@ import { persistSyncDeviceToken } from '../services/sync/deviceToken';
 import {
   extractErpRegisterAuth,
   resolveNormalizedRegisterDeviceToken,
+  resolveRegisterErpTerminalId,
   resolveRegisterTerminalCode,
 } from '../services/sync/erpRegisterResponse';
 import { saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
+import { CanonicalErpTerminalIdError, isCanonicalErpTerminalId } from '../services/sync/terminalIdentity';
 import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../services/sync/SyncProfile';
 import {
   isTerminalAllowedForBinding,
@@ -1275,6 +1277,12 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           throw new Error('No se pudo vincular la terminal.');
         }
 
+        const pairingRequestErpTerminalId = resolveRegisterErpTerminalId(data);
+        if (expectsErpDirect && !pairingRequestErpTerminalId) {
+          throw new CanonicalErpTerminalIdError();
+        }
+        const initialConfigTerminalRef = pairingRequestErpTerminalId || terminal.erpTerminalId || terminal.id;
+
         if (showProgress) {
           updateBindingProgress({
             stepId: 'config',
@@ -1297,13 +1305,12 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           success: true,
           tenant_id: data.tenant_id || tenantId,
           terminal_id: data.terminal_id || terminal.id,
-          erp_terminal_id: data.erp_terminal_id || terminal.erpTerminalId || data.terminal_id || terminal.id,
+          erp_terminal_id: pairingRequestErpTerminalId || undefined,
           config: data.config,
         };
 
         if (useErpDirectMasterAndroid) {
-          const erpTerminalIdForConfig =
-            data.erp_terminal_id || terminal.erpTerminalId || data.terminal_id || terminal.id;
+          const erpTerminalIdForConfig = initialConfigTerminalRef;
           const erpInitialConfigData = await fetchInitialConfigFromErp({
             erpBaseUrl: erpBaseUrl!,
             tenantId: data.tenant_id || tenantId,
@@ -1337,7 +1344,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             ...erpInitialConfigData,
             tenant_id: erpInitialConfigData.tenant_id || data.tenant_id || tenantId,
             terminal_id: data.terminal_id || terminal.id,
-            erp_terminal_id: data.erp_terminal_id || terminal.erpTerminalId || data.terminal_id || terminal.id,
+            erp_terminal_id: pairingRequestErpTerminalId || erpInitialConfigData.erp_terminal_id,
             config: applied.config,
             rooms: erpInitialConfigData.rooms || (applied.config as any).rooms || (applied.config as any).initialRooms,
             tables: erpInitialConfigData.tables || (applied.config as any).tables || (applied.config as any).initialTables,
@@ -1354,7 +1361,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           const erpInitialConfigData = await fetchInitialConfigFromErp({
             erpBaseUrl: erpBaseUrl!,
             tenantId: data.tenant_id || tenantId,
-            erpTerminalId: data.erp_terminal_id || terminal.erpTerminalId || data.terminal_id || terminal.id,
+            erpTerminalId: initialConfigTerminalRef,
             posDeviceId: deviceId,
           });
 
@@ -1384,7 +1391,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             ...erpInitialConfigData,
             tenant_id: erpInitialConfigData.tenant_id || data.tenant_id || tenantId,
             terminal_id: data.terminal_id || terminal.id,
-            erp_terminal_id: data.erp_terminal_id || terminal.erpTerminalId || data.terminal_id || terminal.id,
+            erp_terminal_id: pairingRequestErpTerminalId || erpInitialConfigData.erp_terminal_id,
             config: applied.config,
             rooms: erpInitialConfigData.rooms || (applied.config as any).rooms || (applied.config as any).initialRooms,
             tables: erpInitialConfigData.tables || (applied.config as any).tables || (applied.config as any).initialTables,
@@ -1399,7 +1406,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           };
         } else {
           const initialConfigResponse = await requestMasterSetup<InitialConfigResponse>(
-            `${apiBase}/initial-config/${encodeURIComponent(data.erp_terminal_id || terminal.erpTerminalId || data.terminal_id || terminal.id)}?${initialConfigParams.toString()}`,
+            `${apiBase}/initial-config/${encodeURIComponent(initialConfigTerminalRef)}?${initialConfigParams.toString()}`,
             {
               headers: {
                 'X-Device-Id': deviceId,
@@ -1430,13 +1437,15 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             ? normalizeMasterHost(masterIpInput) || masterIpInput.trim() || undefined
             : undefined;
         const resolvedErpTerminalId =
-          data.erp_terminal_id
-          || initialConfigData.erp_terminal_id
-          || (looksLikeUuid(initialConfigData.terminal_id) ? initialConfigData.terminal_id : undefined)
-          || (looksLikeUuid((initialConfigData as any).terminal_uuid) ? (initialConfigData as any).terminal_uuid : undefined)
-          || terminal.erpTerminalId
-          || (looksLikeUuid(terminal.id) ? terminal.id : undefined)
-          || undefined;
+          resolveRegisterErpTerminalId(
+            data,
+            initialConfigData,
+            initialConfigData.terminal_config,
+            (data as BindTerminalResponse & { auth?: Record<string, unknown> | null }).auth,
+          );
+        if (expectsErpDirect && !resolvedErpTerminalId) {
+          throw new CanonicalErpTerminalIdError();
+        }
         const resolvedTerminalCode =
           resolveRegisterTerminalCode(
             data,
@@ -1504,7 +1513,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           pairingStatus: 'BOUND',
           at: new Date().toISOString(),
         }));
-        const canonicalTerminalId = resolvedErpTerminalId || resolvedTerminalId;
+        const canonicalTerminalId = resolvedErpTerminalId || null;
         const selectedContract = resolveOrderTakerContract(terminal);
         localStorage.setItem('clic_pos_terminal_type', selectedContract.terminalType);
         if (selectedContract.masterTerminalId) {
@@ -1527,6 +1536,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           terminalId: canonicalTerminalId,
           erpTerminalId: canonicalTerminalId,
           terminalCode: resolvedTerminalCode,
+          stationNumber: terminal.config?.stationNumber || resolvedTerminalCode,
           terminalName: data.terminal_name || terminal.name || resolvedTerminalCode,
           deviceId,
           tenantId: tenantId || initialTenantId || null,
@@ -1982,15 +1992,25 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
               <div className="mt-4 grid gap-2 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-600">
                 <div className="flex justify-between gap-3">
-                  <span className="text-slate-400">selected terminal UUID</span>
-                  <span className="break-all text-right font-mono text-slate-800">{pendingTerminal.erpTerminalId || pendingTerminal.id}</span>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span className="text-slate-400">terminal name</span>
+                  <span className="text-slate-400">Nombre</span>
                   <span className="text-right text-slate-800">{pendingTerminal.name}</span>
                 </div>
                 <div className="flex justify-between gap-3">
-                  <span className="text-slate-400">generated device_id</span>
+                  <span className="text-slate-400">Código</span>
+                  <span className="text-right font-mono text-slate-800">
+                    {resolveRegisterTerminalCode(pendingTerminal, pendingTerminal.config) || pendingTerminal.id}
+                  </span>
+                </div>
+                {isCanonicalErpTerminalId(pendingTerminal.erpTerminalId || pendingTerminal.id) && (
+                  <div className="flex justify-between gap-3">
+                    <span className="text-slate-400">UUID ERP</span>
+                    <span className="break-all text-right font-mono text-slate-800">
+                      {pendingTerminal.erpTerminalId || pendingTerminal.id}
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between gap-3">
+                  <span className="text-slate-400">Dispositivo actual</span>
                   <span className="break-all text-right font-mono text-slate-800">{authorizationIssue.generatedDeviceId}</span>
                 </div>
                 <div className="flex justify-between gap-3">
@@ -2003,7 +2023,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                 </div>
                 {authorizationIssue.currentDeviceId && (
                   <div className="flex justify-between gap-3">
-                    <span className="text-slate-400">current device</span>
+                    <span className="text-slate-400">Dispositivo autorizado anterior</span>
                     <span className="break-all text-right font-mono text-slate-800">{authorizationIssue.currentDeviceId}</span>
                   </div>
                 )}
