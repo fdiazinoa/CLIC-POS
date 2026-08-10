@@ -99,7 +99,11 @@ import CustomerVisor from './components/CustomerVisor';
 import PosApkUpdateBanner from './components/PosApkUpdateBanner';
 import GlobalVirtualKeyboard from './components/GlobalVirtualKeyboard';
 import { visorSync } from './utils/visorSync';
-import { isCustomerDisplaySurface, recoverNativePrimaryDisplayUrl } from './utils/customerDisplay';
+import {
+  isCustomerDisplaySurface,
+  isCustomerDisplayView,
+  recoverNativePrimaryDisplayUrl,
+} from './utils/customerDisplay';
 import { markPosInteractionActivity, setPosSaleActivity } from './utils/posSaleActivity';
 
 // Layout imports
@@ -482,6 +486,9 @@ const readArrayMirrorFromLocalStorage = <T,>(key: string): T[] => {
 
 const persistActiveUserSession = (user: User | null, currentView: ViewState) => {
   try {
+    // The native Presentation shares localhost/localStorage with MainActivity.
+    // It must never overwrite or clear the operator session with VISOR state.
+    if (isCustomerDisplayView(currentView)) return;
     if (!user?.id) {
       window.localStorage.removeItem(ACTIVE_USER_SESSION_STORAGE_KEY);
       return;
@@ -3611,6 +3618,7 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     if (!isDataLoaded || currentUser || !Array.isArray(users) || users.length === 0) return;
+    if (isCustomerDisplaySurface()) return;
     if (consumeForceLoginAfterExit()) {
       clearActiveUserSession();
       clearSecurityState();
@@ -3632,6 +3640,7 @@ const AppContent: React.FC = () => {
       'TERMINAL_BINDING',
       'SETUP',
       'DEVICE_UNAUTHORIZED',
+      'VISOR',
     ] as ViewState[]);
     const restoreView = session.currentView && !forbiddenRestoreViews.has(session.currentView)
       ? session.currentView
@@ -5256,12 +5265,13 @@ const AppContent: React.FC = () => {
   }, [config, flushOfflinePrintQueue, getCurrentTerminal]);
 
   useEffect(() => {
-    // Detect if we should start in Visor Mode (HDMI Display)
-    const params = new URLSearchParams(window.location.search);
-    const forcedView = params.get('view');
-    if (forcedView === 'VISOR') {
+    // Only the isolated Presentation may enter VISOR. MainActivity can briefly
+    // inherit the same query while Android restores its WebView.
+    if (isCustomerDisplaySurface()) {
       console.log("📺 VISOR MODE DETECTED: Initialization bypass.");
       setCurrentView('VISOR');
+    } else if (isCustomerDisplayView(currentViewRef.current)) {
+      setCurrentView('LOGIN');
     }
   }, []);
 

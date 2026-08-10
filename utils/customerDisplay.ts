@@ -155,6 +155,8 @@ export const isCustomerDisplaySurface = (): boolean => {
   return !supportsNativeAndroidCustomerDisplay();
 };
 
+export const isCustomerDisplayView = (view: unknown): boolean => view === 'VISOR';
+
 export const recoverNativePrimaryDisplayUrl = (): boolean => {
   if (typeof window === 'undefined' || !supportsNativeAndroidCustomerDisplay()) {
     return false;
