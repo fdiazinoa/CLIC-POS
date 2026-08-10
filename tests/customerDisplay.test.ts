@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -174,4 +175,23 @@ test('mantiene preferencia por el shim Android cuando sigue disponible', async (
   assert.equal(result.opened, true);
   assert.equal(result.mode, 'ANDROID_SECONDARY');
   assert.equal(directBridgeCalls, 0);
+});
+
+test('MainActivity recupera la superficie primaria después de que Capacitor termina de cargar', () => {
+  const mainActivitySource = readFileSync(
+    new URL('../android/app/src/main/java/com/clicpos/app/MainActivity.java', import.meta.url),
+    'utf8',
+  );
+  const customerDisplayBridgeSource = readFileSync(
+    new URL('../native-stubs/android/ClicPOSCustomerDisplayBridge.kt', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(mainActivitySource, /onPageLoaded\(WebView loadedWebView\)/);
+  assert.match(
+    mainActivitySource,
+    /AndroidCustomerDisplayBridge\.recoverPrimarySurface\(loadedWebView\)/,
+  );
+  assert.match(customerDisplayBridgeSource, /searchParams\.delete\('view'\)/);
+  assert.match(customerDisplayBridgeSource, /searchParams\.delete\('surface'\)/);
 });
