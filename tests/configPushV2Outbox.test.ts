@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { createErpHeartbeatScheduler } from '../utils/erpHeartbeatScheduler';
+
 class MemoryStorage {
     private values = new Map<string, string>();
 
@@ -255,4 +257,106 @@ test('register and heartbeat advertise CONFIG_PUSH_V2 by default', async () => {
         assert.deepEqual(body.capabilities, ['CONFIG_PUSH_V2']);
     }
     assert.equal(requestBodies.size, 2);
+});
+
+test('pairing seguido de operación mantiene llamadas periódicas al endpoint ERP real', async () => {
+    resetRuntime();
+    const endpointCalls: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+        const url = new URL(String(input));
+        endpointCalls.push(url.pathname);
+        return Response.json({
+            status: 'success',
+            terminal: { id: terminalId, device_id: deviceId, name: 'Caja 4', status: 'ONLINE' },
+        });
+    }) as typeof fetch;
+
+    const sendHeartbeat = async () => {
+        await lifecycle.heartbeatErpSyncTerminal({
+            deviceId,
+            terminalId,
+            localTerminalId: 'POS-004',
+            terminalName: 'Caja 4',
+            pendingEvents: 0,
+        });
+    };
+
+    // Heartbeat inmediato al finalizar pairing.
+    await sendHeartbeat();
+
+    let scheduledCallback: (() => void) | null = null;
+    const scheduler = createErpHeartbeatScheduler({
+        intervalMs: 60_000,
+        getJitterMs: () => 4_000,
+        sendHeartbeat,
+        timerApi: {
+            setTimeout: (callback, delayMs) => {
+                assert.equal(delayMs, 64_000);
+                scheduledCallback = callback;
+                return callback;
+            },
+            clearTimeout: (timerId) => {
+                if (scheduledCallback === timerId) scheduledCallback = null;
+            },
+        },
+    });
+    scheduler.start();
+
+    for (let interval = 0; interval < 2; interval += 1) {
+        assert.ok(scheduledCallback);
+        const callback = scheduledCallback;
+        scheduledCallback = null;
+        callback();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    scheduler.stop();
+
+    assert.deepEqual(endpointCalls, [
+        '/api/sync/terminals/heartbeat',
+        '/api/sync/terminals/heartbeat',
+        '/api/sync/terminals/heartbeat',
+    ]);
+});
+
+test('DEVICE_SUPERSEDED en heartbeat directo conserva la revocación actual', async () => {
+    resetRuntime();
+    let revokedDetail: Record<string, unknown> | null = null;
+    (globalThis.window as any).dispatchEvent = (event: CustomEvent<Record<string, unknown>>) => {
+        if (event.type === 'clic-pos-device-revoked') revokedDetail = event.detail;
+        return true;
+    };
+    globalThis.fetch = (async () => Response.json({
+        code: 'DEVICE_SUPERSEDED',
+        message: 'Este dispositivo ya no está autorizado.',
+    }, { status: 403 })) as typeof fetch;
+
+    await assert.rejects(
+        lifecycle.heartbeatErpSyncTerminal({ deviceId, terminalId, pendingEvents: 0 }),
+        /ya no está autorizado/i,
+    );
+
+    assert.equal(revokedDetail?.reason, 'DEVICE_SUPERSEDED');
+    assert.equal(revokedDetail?.terminalId, terminalId);
+    assert.equal(revokedDetail?.previousDeviceId, deviceId);
+});
+
+test('bootstrap y timer comparten un único heartbeat HTTP en vuelo', async () => {
+    resetRuntime();
+    let heartbeatRequests = 0;
+    let releaseRequest!: () => void;
+    const requestGate = new Promise<void>((resolve) => { releaseRequest = resolve; });
+    globalThis.fetch = (async () => {
+        heartbeatRequests += 1;
+        await requestGate;
+        return Response.json({ status: 'success' });
+    }) as typeof fetch;
+
+    const input = { deviceId, terminalId, localTerminalId: 'POS-004', pendingEvents: 0 };
+    const bootstrapHeartbeat = lifecycle.heartbeatErpSyncTerminal(input);
+    const periodicHeartbeat = lifecycle.heartbeatErpSyncTerminal(input);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(heartbeatRequests, 1);
+    releaseRequest();
+    await Promise.all([bootstrapHeartbeat, periodicHeartbeat]);
 });

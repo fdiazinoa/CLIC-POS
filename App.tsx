@@ -183,10 +183,12 @@ import {
   ERP_FULL_BOOTSTRAP_REQUIRED_EVENT,
   getLifecycleActivationBlockMessage,
   getLifecycleBlockingMessageFromError,
+  heartbeatErpSyncTerminal,
   isLifecycleActivationBlocked,
   persistStoredErpSyncBinding,
   triggerErpSyncOutbox
 } from './utils/erpSyncLifecycle';
+import { createErpHeartbeatScheduler } from './utils/erpHeartbeatScheduler';
 import {
   SYNC_DIAGNOSTIC_EVENT,
   SYNC_DIAGNOSTIC_STORAGE_KEY,
@@ -1850,6 +1852,7 @@ const AppContent: React.FC = () => {
   const appBackgroundSinceRef = useRef<number | null>(null);
   const isAppInBackgroundRef = useRef(false);
   const lifecycleSyncInFlightRef = useRef<Promise<void> | null>(null);
+  const erpHeartbeatInFlightRef = useRef<Promise<void> | null>(null);
 
   // Security bootstrap logic moved to loadData
 
@@ -3193,7 +3196,6 @@ const AppContent: React.FC = () => {
     const bootManifestSyncKey = `clic_pos_lifecycle_boot_manifest_synced:${lifecycleManifestKeyParts}`;
     const lastManifestRefreshKey = `clic_pos_lifecycle_last_manifest_refresh:${lifecycleManifestKeyParts}`;
     let lastManifestRefreshAt = Number(sessionStorage.getItem(lastManifestRefreshKey) || '0') || 0;
-    let heartbeatTimeoutId: number | null = null;
     let outboxPollTimeoutId: number | null = null;
     let configSafetyCheckTimeoutId: number | null = null;
     let outboxPollFailures = 0;
@@ -3230,9 +3232,75 @@ const AppContent: React.FC = () => {
       });
     };
 
+    const resolveLifecycleTerminalContext = () => {
+      const operationalTerminalId = currentTerminal.config?.stationNumber || currentTerminal.id;
+      return {
+        operationalTerminalId,
+        erpTerminalId:
+          currentTerminal.config?.erpTerminalId
+          || loadSyncProfile().erpTerminalId
+          || localStorage.getItem('clic_erp_sync_terminal_id')
+          || operationalTerminalId,
+        terminalName: currentTerminal.config?.terminalName || operationalTerminalId,
+      };
+    };
+
+    const sendPeriodicErpHeartbeat = async () => {
+      const { operationalTerminalId, erpTerminalId, terminalName } = resolveLifecycleTerminalContext();
+      try {
+        const result = await heartbeatErpSyncTerminal({
+          deviceId,
+          terminalId: erpTerminalId,
+          localTerminalId: operationalTerminalId,
+          terminalName,
+          isPrimary: currentTerminal.config?.isPrimaryNode !== false,
+          pendingEvents: 0,
+        }, deviceId);
+
+        if (!disposed && isLifecycleActivationBlocked(result?.activation)) {
+          await triggerLockdownAfterAuthorizationCheck(
+            getLifecycleActivationBlockMessage(result?.activation),
+            deviceId,
+          );
+          return;
+        }
+
+        if (!disposed) {
+          console.info('[ERP HEARTBEAT]', {
+            endpoint: '/terminals/heartbeat',
+            terminalId: result?.terminal?.id || erpTerminalId,
+            deviceId,
+            status: result?.terminal?.status || result?.status || 'OK',
+          });
+        }
+      } catch (error) {
+        const blockingMessage = getLifecycleBlockingMessageFromError(error);
+        if (!disposed && blockingMessage) {
+          await triggerLockdownAfterAuthorizationCheck(blockingMessage, deviceId);
+          return;
+        }
+        throw error;
+      }
+    };
+
+    const heartbeatScheduler = createErpHeartbeatScheduler({
+      intervalMs: HEARTBEAT_INTERVAL_MS,
+      getJitterMs: getTimerJitterMs,
+      flightRef: erpHeartbeatInFlightRef,
+      shouldRun: () => !disposed && navigator.onLine && !isPosOnlyCloudStagingTarget(),
+      sendHeartbeat: async () => {
+        // La publicación Cloud es complementaria y nunca sustituye ni bloquea el heartbeat ERP.
+        void publishEndpoint();
+        await sendPeriodicErpHeartbeat();
+      },
+      onError: (error) => {
+        console.warn('[ERP HEARTBEAT] periodic /terminals/heartbeat failed; next interval remains scheduled.', error);
+      },
+    });
+
     const syncLifecycle = async (options?: {
       forceManifestRefresh?: boolean;
-      reason?: 'startup' | 'connection_restored' | 'app_resumed' | 'heartbeat';
+      reason?: 'startup' | 'connection_restored' | 'app_resumed';
     }) => {
       // Lifecycle effects can be recreated by runtime config updates. Keep one
       // shared operation so those recreations cannot overlap manifest refreshes.
@@ -3247,13 +3315,7 @@ const AppContent: React.FC = () => {
       }
 
       try {
-        const operationalTerminalId = currentTerminal.config?.stationNumber || currentTerminal.id;
-        const erpTerminalId =
-          currentTerminal.config?.erpTerminalId
-          || loadSyncProfile().erpTerminalId
-          || localStorage.getItem('clic_erp_sync_terminal_id')
-          || operationalTerminalId;
-        const terminalName = currentTerminal.config?.terminalName || operationalTerminalId;
+        const { operationalTerminalId, erpTerminalId, terminalName } = resolveLifecycleTerminalContext();
         const result = await ensureErpSyncLifecycle({
           deviceId,
           terminalId: erpTerminalId,
@@ -3286,14 +3348,14 @@ const AppContent: React.FC = () => {
 
         if (shouldRefreshManifest) {
           console.info('[SYNC_FALLBACK]', {
-            reason: options?.reason || 'heartbeat',
+            reason: options?.reason || 'startup',
             mechanism: 'terminal_manifest',
             legacy_collection_sweep: false,
             interval_ms: MANIFEST_REFRESH_INTERVAL_MS,
           });
           const refreshedFromManifest = await syncManager.syncTerminalManifestInBackground(undefined, {
             bootstrapBlocks: shouldHonorForcedManifestRefresh,
-            reason: options?.reason === 'heartbeat' ? 'periodic_manifest' : options?.reason,
+            reason: options?.reason,
           });
           if (!disposed && refreshedFromManifest && !Array.isArray(refreshedFromManifest) && refreshedFromManifest.terminals) {
             console.log(`[ERP SYNC] ${terminalName} actualizó su estado runtime desde el manifest del ERP.`);
@@ -3349,25 +3411,7 @@ const AppContent: React.FC = () => {
       console.log('[CLOUD STAGING] ERP lifecycle and manifest refresh disabled for POS_CLOUD_STAGING.');
     }
 
-    const scheduleNextHeartbeat = () => {
-      if (disposed) return;
-      if (heartbeatTimeoutId !== null) {
-        window.clearTimeout(heartbeatTimeoutId);
-      }
-
-      heartbeatTimeoutId = window.setTimeout(async () => {
-        if (!disposed && navigator.onLine) {
-          // Publish on heartbeat is diff-only: cloudMasterRegistry.ts compara fingerprint e IP antes de escribir.
-          void publishEndpoint();
-          if (!isPosOnlyCloudStagingTarget()) {
-            await syncLifecycle({ reason: 'heartbeat' });
-          }
-        }
-        scheduleNextHeartbeat();
-      }, HEARTBEAT_INTERVAL_MS + getTimerJitterMs());
-    };
-
-    scheduleNextHeartbeat();
+    heartbeatScheduler.start();
 
     const scheduleNextOutboxPoll = (delayMs = OUTBOX_POLL_BASE_MS) => {
       if (disposed || isPosOnlyCloudStagingTarget()) return;
@@ -3423,9 +3467,7 @@ const AppContent: React.FC = () => {
 
     return () => {
       disposed = true;
-      if (heartbeatTimeoutId !== null) {
-        window.clearTimeout(heartbeatTimeoutId);
-      }
+      heartbeatScheduler.stop();
       if (outboxPollTimeoutId !== null) {
         window.clearTimeout(outboxPollTimeoutId);
       }

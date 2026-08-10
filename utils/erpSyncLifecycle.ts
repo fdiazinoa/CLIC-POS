@@ -220,6 +220,9 @@ type ConfigPushV2CollectionWrite = {
 type ConfigPushV2RollbackJournal = Map<string, unknown>;
 
 let outboxProcessingPromise: Promise<{ processed: number; applied: number; failed: number } | null> | null = null;
+let heartbeatRequestPromise: Promise<SyncHeartbeatResponse | null> | null = null;
+
+export const ERP_SYNC_LIFECYCLE_REQUEST_TIMEOUT_MS = 15_000;
 
 const normalizeOptional = (value?: string | null) => (typeof value === 'string' ? value.trim() : '');
 const asObject = <T extends Record<string, unknown>>(value: unknown): T =>
@@ -1597,13 +1600,40 @@ const buildDeviceHeaders = (deviceId?: unknown): Record<string, string> => {
     };
 };
 
+const fetchLifecycleRequest = async (input: string, init: RequestInit): Promise<Response> => {
+    const controller = new AbortController();
+    const timeoutId = globalThis.setTimeout(
+        () => controller.abort(),
+        ERP_SYNC_LIFECYCLE_REQUEST_TIMEOUT_MS,
+    );
+
+    try {
+        return await fetch(input, {
+            ...init,
+            signal: controller.signal,
+        });
+    } catch (error) {
+        if (controller.signal.aborted) {
+            const timeoutError = new Error(
+                `ERP sync lifecycle request timed out after ${ERP_SYNC_LIFECYCLE_REQUEST_TIMEOUT_MS}ms`,
+            ) as SyncRequestError;
+            timeoutError.code = 'ERP_SYNC_TIMEOUT';
+            timeoutError.retryable = true;
+            throw timeoutError;
+        }
+        throw error;
+    } finally {
+        globalThis.clearTimeout(timeoutId);
+    }
+};
+
 const postJson = async <T>(path: string, body: Record<string, unknown>): Promise<T> => {
     const baseUrl = getSyncApiBase();
     if (!baseUrl) {
         throw new Error('ERP sync lifecycle URL is not configured');
     }
 
-    const response = await fetch(`${baseUrl}${path}`, {
+    const response = await fetchLifecycleRequest(`${baseUrl}${path}`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -1627,7 +1657,7 @@ const getJson = async <T>(path: string, query: Record<string, string | number | 
         searchParams.set(key, String(value));
     });
 
-    const response = await fetch(`${baseUrl}${path}?${searchParams.toString()}`, {
+    const response = await fetchLifecycleRequest(`${baseUrl}${path}?${searchParams.toString()}`, {
         method: 'GET',
         headers: {
             'Content-Type': 'application/json',
@@ -2353,40 +2383,65 @@ export const registerErpSyncTerminal = async (params: EnsureLifecycleParams): Pr
     return payload;
 };
 
-export const heartbeatErpSyncTerminal = async (
+export const heartbeatErpSyncTerminal = (
     params: EnsureLifecycleParams,
     fallbackDeviceId?: string
 ): Promise<SyncHeartbeatResponse | null> => {
-    if (!isConfigured()) return null;
+    if (!isConfigured()) return Promise.resolve(null);
+    if (heartbeatRequestPromise) return heartbeatRequestPromise;
 
+    const operation = (async () => {
 	    const runtimeTelemetry = await resolveRuntimeTelemetry();
 	    const storedBinding = getStoredErpSyncBinding();
 	    const resolvedDeviceId = params.deviceId || fallbackDeviceId || resolveLocalDeviceId();
 	    const terminalRef = storedBinding.terminalId || null;
 	    const syncCapabilities = getSyncCapabilities();
 
-    if (!terminalRef && !resolvedDeviceId) {
-        return null;
-    }
+        if (!terminalRef && !resolvedDeviceId) {
+            return null;
+        }
 
-	    const payload = await postJson<SyncHeartbeatResponse>('/terminals/heartbeat', {
-	        terminal_id: terminalRef || undefined,
-	        device_id: resolvedDeviceId || undefined,
-	        app_version: runtimeTelemetry.appVersion || null,
-	        ip_address: runtimeTelemetry.ipAddress || null,
-	        pending_events: Math.max(params.pendingEvents || 0, getConfigPushV2PendingEventCount()),
-        sync_capabilities: syncCapabilities,
-        capabilities: syncCapabilities,
-	    });
+	    let payload: SyncHeartbeatResponse;
+	    try {
+	        payload = await postJson<SyncHeartbeatResponse>('/terminals/heartbeat', {
+	            terminal_id: terminalRef || undefined,
+	            device_id: resolvedDeviceId || undefined,
+	            app_version: runtimeTelemetry.appVersion || null,
+	            ip_address: runtimeTelemetry.ipAddress || null,
+	            pending_events: Math.max(params.pendingEvents || 0, getConfigPushV2PendingEventCount()),
+            sync_capabilities: syncCapabilities,
+            capabilities: syncCapabilities,
+	        });
+	    } catch (error) {
+	        if (isDeviceSupersededError(error)) {
+	            dispatchDeviceRevoked({
+	                reason: 'DEVICE_SUPERSEDED',
+	                message: getLifecycleBlockingMessageFromError(error) || DEVICE_SUPERSEDED_MESSAGE,
+	                terminalId: terminalRef || params.terminalId,
+	                previousDeviceId: resolvedDeviceId || params.deviceId,
+	                payload: (error as SyncRequestError)?.payload || null,
+	            });
+	        }
+	        throw error;
+	    }
 
-    if (payload?.terminal) {
-        persistBinding(payload.terminal, undefined, {
-            localTerminalId: params.localTerminalId || storedBinding.localTerminalId || null,
-            terminalName: params.terminalName || storedBinding.terminalName || null,
-        });
-    }
+        if (payload?.terminal) {
+            persistBinding(payload.terminal, undefined, {
+                localTerminalId: params.localTerminalId || storedBinding.localTerminalId || null,
+                terminalName: params.terminalName || storedBinding.terminalName || null,
+            });
+        }
 
-    return payload;
+        return payload;
+    })();
+
+    const trackedOperation = operation.finally(() => {
+        if (heartbeatRequestPromise === trackedOperation) {
+            heartbeatRequestPromise = null;
+        }
+    });
+    heartbeatRequestPromise = trackedOperation;
+    return trackedOperation;
 };
 
 export const processErpSyncOutbox = async (
@@ -2571,13 +2626,6 @@ export const ensureErpSyncLifecycle = async (params: EnsureLifecycleParams): Pro
         heartbeat = await heartbeatErpSyncTerminal(params, params.deviceId);
     } catch (error) {
         if (isDeviceSupersededError(error)) {
-            dispatchDeviceRevoked({
-                reason: 'DEVICE_SUPERSEDED',
-                message: getLifecycleBlockingMessageFromError(error) || 'Este equipo fue reemplazado por otro dispositivo.',
-                terminalId: storedBinding.terminalId || params.terminalId,
-                previousDeviceId: params.deviceId,
-                payload: (error as SyncRequestError)?.payload || null,
-            });
             throw error;
         }
 
