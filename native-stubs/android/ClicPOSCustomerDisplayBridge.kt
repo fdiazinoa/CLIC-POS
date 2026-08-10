@@ -68,6 +68,33 @@ class AndroidCustomerDisplayBridge(
                 webView.evaluateJavascript(script, null)
             }
         }
+
+        @JvmStatic
+        fun recoverPrimarySurface(webView: WebView) {
+            val script = """
+                (function () {
+                  try {
+                    var url = new URL(window.location.href);
+                    if (url.searchParams.get('view') !== 'VISOR') return false;
+                    url.searchParams.delete('view');
+                    url.searchParams.delete('surface');
+                    window.location.replace(url.pathname + url.search + url.hash);
+                    return true;
+                  } catch (error) {
+                    console.warn('[customerDisplay] primary surface recovery failed', error);
+                    return false;
+                  }
+                })();
+            """.trimIndent()
+
+            webView.post {
+                webView.evaluateJavascript(script) { recovered ->
+                    if (recovered == "true") {
+                        Log.w(TAG, "MainActivity restored as VISOR; recovering primary POS surface.")
+                    }
+                }
+            }
+        }
     }
 
     private val activityRef = WeakReference(activity)

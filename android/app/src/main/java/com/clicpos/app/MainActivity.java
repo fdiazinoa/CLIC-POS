@@ -53,6 +53,7 @@ public class MainActivity extends BridgeActivity {
                 "AndroidCustomerDisplay"
         );
         webView.addJavascriptInterface(new AndroidAppBridge(), "ClicPOSAppBridge");
+        installPrimaryDisplaySurfaceGuard(webView);
         AndroidCustomerDisplayBridge.injectContractShim(webView);
         webView.setInitialScale(0);
         webView.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
@@ -98,6 +99,21 @@ public class MainActivity extends BridgeActivity {
                 });
 
                 return true;
+            }
+        });
+    }
+
+    private void installPrimaryDisplaySurfaceGuard(WebView webView) {
+        if (getBridge() == null) {
+            return;
+        }
+
+        AndroidCustomerDisplayBridge.recoverPrimarySurface(webView);
+        getBridge().addWebViewListener(new WebViewListener() {
+            @Override
+            public void onPageLoaded(WebView loadedWebView) {
+                AndroidCustomerDisplayBridge.recoverPrimarySurface(loadedWebView);
+                AndroidCustomerDisplayBridge.injectContractShim(loadedWebView);
             }
         });
     }
