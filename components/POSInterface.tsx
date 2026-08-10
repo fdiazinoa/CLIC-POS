@@ -6421,6 +6421,42 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
+   const renderQuickActionsPanel = () => (
+      <div className="animate-in fade-in zoom-in-95 duration-200 mt-2">
+         <button
+            onClick={onOpenHistory}
+            className="mb-3 flex w-full items-center justify-between rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-left text-sm font-black text-blue-700 shadow-sm transition-all hover:bg-blue-100"
+         >
+            <div className="flex items-center gap-3">
+               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/90 text-blue-600 shadow-sm">
+                  <History size={18} />
+               </div>
+               <div className="flex flex-col">
+                  <span className="text-[10px] uppercase tracking-[0.22em] text-blue-400">Acciones</span>
+                  <span>Historial de Facturas</span>
+               </div>
+            </div>
+            <ChevronRight size={18} />
+         </button>
+         <ActionGrid
+            orientation="vertical"
+            onAction={(action) => {
+               handleGridAction(action);
+               if (['PARK', 'RECOVER', 'PRINT_RESERVE', 'KITCHEN'].includes(action)) {
+                  setRightSidebarTab('CART');
+               }
+            }}
+            config={config}
+            parkedTicketsCount={parkedTickets.length}
+            isReturnMode={isReturnMode}
+            hasCartItems={cart.length > 0}
+            globalDiscountValue={globalDiscount.value}
+            showLogout={false}
+            allowWaitList={!activeTable}
+         />
+      </div>
+   );
+
    return (
       <div
          ref={posRootRef}
@@ -6611,7 +6647,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             <MobileCartButton
                buttonRef={mobileCartButtonRef}
                itemCount={cart.length}
-               onClick={() => setMobileView('TICKET')}
+               onClick={() => {
+                  setRightSidebarTab('CART');
+                  setMobileView('TICKET');
+               }}
                style={mobileCartButtonStyle}
             />
          )}
@@ -7038,6 +7077,50 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                </div>
 
+               <div
+                  data-testid="mobile-sidebar-tabs"
+                  className="flex items-center justify-end gap-2"
+                  aria-label="Vista del ticket"
+               >
+                  <button
+                     type="button"
+                     data-testid="mobile-cart-tab-button"
+                     onClick={() => setRightSidebarTab('CART')}
+                     aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${cartQuantity} artículos` : ''}`}
+                     aria-pressed={rightSidebarTab === 'CART'}
+                     className={`group relative flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
+                        rightSidebarTab === 'CART'
+                           ? 'border-red-200 bg-gradient-to-br from-red-50 via-rose-50 to-red-100 text-red-700 shadow-[0_14px_30px_rgba(248,113,113,0.18)]'
+                           : 'border-slate-200 bg-white text-slate-500'
+                     }`}
+                  >
+                     <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-red-100 bg-white text-red-500 shadow-sm">
+                        <ShoppingBag size={18} strokeWidth={2.3} />
+                     </span>
+                     {cartQuantity > 0 && (
+                        <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-7 items-center justify-center rounded-full border border-white bg-white px-2 py-1 text-[10px] font-black leading-none text-red-700 shadow-md">
+                           {cartQuantity}
+                        </span>
+                     )}
+                  </button>
+                  <button
+                     type="button"
+                     data-testid="mobile-actions-tab-button"
+                     onClick={() => setRightSidebarTab('ACTIONS')}
+                     aria-label="Abrir acciones rápidas"
+                     aria-pressed={rightSidebarTab === 'ACTIONS'}
+                     className={`group flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
+                        rightSidebarTab === 'ACTIONS'
+                           ? 'border-blue-200 bg-gradient-to-br from-blue-50 via-sky-50 to-blue-100 text-blue-700 shadow-[0_14px_30px_rgba(59,130,246,0.18)]'
+                           : 'border-slate-200 bg-white text-slate-500'
+                     }`}
+                  >
+                     <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-blue-100 bg-white text-blue-500 shadow-sm">
+                        <Layers size={18} strokeWidth={2.3} />
+                     </span>
+                  </button>
+               </div>
+
                {/* CUSTOMER PILL (MOBILE) */}
                {
                   selectedCustomer ? (
@@ -7372,7 +7455,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div >
 
             {/* --- CART ITEMS LIST & TAB VIEWS --- */}
-            {isRetailMode ? (
+            {rightSidebarTab === 'ACTIONS' && isMobile ? (
+               <div
+                  data-testid="mobile-quick-actions-panel"
+                  className="flex-1 min-h-0 overflow-y-auto px-4 py-3 custom-scrollbar bg-gray-100/70"
+               >
+                  {renderQuickActionsPanel()}
+               </div>
+            ) : isRetailMode ? (
                // SUPERMARKET MODE (DENSE TABLE)
                <ProductTableSupermarket
                   cart={processedCart}
@@ -7389,40 +7479,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3 custom-scrollbar bg-gray-100/70"
                      style={isMobile ? bottomAwareScrollStyle : undefined}
                   >
-                     {rightSidebarTab === 'ACTIONS' && !isMobile ? (
-                        <div className="animate-in fade-in zoom-in-95 duration-200 mt-2">
-                           <button
-                              onClick={onOpenHistory}
-                              className="mb-3 flex w-full items-center justify-between rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-left text-sm font-black text-blue-700 shadow-sm transition-all hover:bg-blue-100"
-                           >
-                              <div className="flex items-center gap-3">
-                                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/90 text-blue-600 shadow-sm">
-                                    <History size={18} />
-                                 </div>
-                                 <div className="flex flex-col">
-                                    <span className="text-[10px] uppercase tracking-[0.22em] text-blue-400">Acciones</span>
-                                    <span>Historial de Facturas</span>
-                                 </div>
-                              </div>
-                              <ChevronRight size={18} />
-                           </button>
-                           <ActionGrid
-                              orientation="vertical"
-                              onAction={(action) => {
-                                 handleGridAction(action);
-                                 if (['PARK', 'RECOVER', 'PRINT_RESERVE', 'KITCHEN'].includes(action)) {
-                                    setRightSidebarTab('CART');
-                                 }
-                              }}
-                              config={config}
-                              parkedTicketsCount={parkedTickets.length}
-                              isReturnMode={isReturnMode}
-                              hasCartItems={cart.length > 0}
-                              globalDiscountValue={globalDiscount.value}
-                              showLogout={false}
-                              allowWaitList={!activeTable}
-                           />
-                        </div>
+                     {rightSidebarTab === 'ACTIONS' ? (
+                        renderQuickActionsPanel()
                      ) : processedCart.length === 0 ? (
                         <div className="flex h-full min-h-[320px] items-center justify-center">
                            <div className="flex flex-col items-center text-center select-none">
@@ -8022,7 +8080,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          {/* MOBILE STICKY FOOTER */}
          {
-            isMobile && mobileView === 'TICKET' && (
+            isMobile && mobileView === 'TICKET' && rightSidebarTab === 'CART' && (
                <div
                   ref={mobileFooterRef}
                   className="md:hidden fixed left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5"
