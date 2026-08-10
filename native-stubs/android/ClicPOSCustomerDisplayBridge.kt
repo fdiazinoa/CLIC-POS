@@ -31,7 +31,7 @@ class AndroidCustomerDisplayBridge(
 ) {
     companion object {
         private const val TAG = "ClicPOSCustomerDisplay"
-        private const val DEFAULT_VISOR_URL = "https://localhost/?view=VISOR"
+        private const val DEFAULT_VISOR_URL = "https://localhost/?view=VISOR&surface=SECONDARY"
 
         @JvmStatic
         fun injectContractShim(webView: WebView) {
@@ -83,7 +83,9 @@ class AndroidCustomerDisplayBridge(
         return try {
             val payload = JSONObject(payloadJson ?: "{}")
             val requestedMode = payload.optString("mode", "ANDROID_SECONDARY").uppercase()
-            val targetUrl = normalizeTargetUrl(payload.optString("url", DEFAULT_VISOR_URL))
+            val targetUrl = markSecondarySurface(
+                normalizeTargetUrl(payload.optString("url", DEFAULT_VISOR_URL))
+            )
             val latch = CountDownLatch(1)
             var result = JSONObject().put("success", false).put("message", "Timeout al abrir visor.")
 
@@ -217,6 +219,12 @@ class AndroidCustomerDisplayBridge(
             trimmed.startsWith("https://localhost", ignoreCase = true) -> trimmed
             else -> trimmed
         }
+    }
+
+    private fun markSecondarySurface(rawUrl: String): String {
+        if (rawUrl.contains("surface=SECONDARY", ignoreCase = true)) return rawUrl
+        val separator = if (rawUrl.contains('?')) "&" else "?"
+        return "$rawUrl${separator}surface=SECONDARY"
     }
 
     private fun failure(message: String): String =
