@@ -16,6 +16,12 @@ import { isNativeAndroidRuntime, normalizeErpBaseUrl, normalizeErpSyncApiBase, r
 import { realtimeNotificationService } from './RealtimeNotificationService';
 import { productImageCacheService } from './ProductImageCacheService';
 import { masterDataImageCacheService, type ImageBackedCollection } from './MasterDataImageCacheService';
+import {
+    explicitlyRemovesPosUser,
+    reconcilePosUsers,
+    resolvePosUserId,
+    type SyncedPosUser,
+} from '../../utils/posUserReconciliation';
 import { DEFAULT_ROLES } from '../../constants';
 import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig, PurchaseOrder, StockTransfer, ProductStock, ProductPrice, TariffPrice, Warehouse, User, RoleDefinition, Permission } from '../../types';
 import {
@@ -4016,34 +4022,11 @@ class SyncManager {
     }
 
     private snapshotPosUserId(raw: unknown): string {
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return '';
-        const row = raw as Record<string, unknown>;
-        return this.snapshotText(
-            row.id ??
-            row.user_id ??
-            row.userId ??
-            row.employee_id ??
-            row.employeeId ??
-            row.code ??
-            row.email ??
-            row.username
-        );
+        return resolvePosUserId(raw);
     }
 
     private snapshotExplicitlyRemovesPosUser(raw: unknown): boolean {
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
-        const row = raw as Record<string, unknown>;
-        const operation = this.snapshotText(row._op ?? row.operation ?? row.action).toUpperCase();
-        const canOperatePos = this.snapshotBool(
-            row.puede_operar_pos ??
-            row.can_operate_pos ??
-            row.canOperatePos ??
-            row.allow_pos_access ??
-            row.allowPosAccess ??
-            row.pos_enabled ??
-            row.posEnabled
-        );
-        return operation === 'DELETE' || operation === 'REMOVE' || canOperatePos === false;
+        return explicitlyRemovesPosUser(raw);
     }
 
     private normalizeSnapshotPermissions(value: unknown, fallback: Permission[]): Permission[] {
@@ -4139,7 +4122,6 @@ class SyncManager {
         const normalizedUsers = sourceItems
             .map((item) => this.normalizeSnapshotPosUser(item))
             .filter(Boolean) as Array<User & { syncSource?: 'ERP_SNAPSHOT' }>;
-        const incomingIds = new Set(normalizedUsers.map((user) => user.id));
         const explicitlyRemovedIds = new Set(
             sourceItems
                 .filter((item) => this.snapshotExplicitlyRemovesPosUser(item))
@@ -4149,43 +4131,52 @@ class SyncManager {
         const isTerminalScopedSnapshot = terminalIds.some((id) => Boolean(this.snapshotText(id)));
         const canReplaceSnapshotSet = replaceSnapshotSet && !isTerminalScopedSnapshot;
         const existingUsers = ((await db.get('users')) as Array<User & { syncSource?: 'ERP_SNAPSHOT' }>) || [];
-        const existingById = new Map<string, User & { syncSource?: 'ERP_SNAPSHOT' }>(
-            (Array.isArray(existingUsers) ? existingUsers : [])
-                .filter((user) => Boolean(user?.id))
-                .map((user) => [user.id, user])
-        );
-        const nextById = new Map<string, User & { syncSource?: 'ERP_SNAPSHOT' }>();
-
-        (Array.isArray(existingUsers) ? existingUsers : []).forEach((user) => {
-            if (!user?.id || incomingIds.has(user.id) || explicitlyRemovedIds.has(user.id)) {
-                return;
-            }
-            if (canReplaceSnapshotSet && user.syncSource === 'ERP_SNAPSHOT') {
-                return;
-            }
-            nextById.set(user.id, user);
+        const reconciledUsers = reconcilePosUsers({
+            existingUsers: Array.isArray(existingUsers) ? existingUsers : [],
+            incomingUsers: normalizedUsers,
+            explicitlyRemovedIds,
+            allowAuthoritativeReplacement: canReplaceSnapshotSet,
         });
 
-        normalizedUsers.forEach((user) => {
-            const existing = existingById.get(user.id);
-            nextById.set(user.id, {
-                ...(existing || {}),
-                ...user,
-                photo: user.photo || existing?.photo,
-                biometrics: existing?.biometrics,
-            });
-        });
-
-        await db.save('users', Array.from(nextById.values()));
+        await db.save('users', reconciledUsers);
         if (isTerminalScopedSnapshot) {
             console.info('[SYNC_USERS] terminal_scoped_snapshot_applied', {
                 incoming: normalizedUsers.length,
-                preserved: Math.max(0, nextById.size - normalizedUsers.length),
+                preserved: Math.max(0, reconciledUsers.length - normalizedUsers.length),
                 explicitlyRemoved: explicitlyRemovedIds.size,
             });
         }
         window.dispatchEvent(new CustomEvent('usersUpdated'));
         return normalizedUsers.length;
+    }
+
+    private async reconcileFullDownloadPosUsers(
+        incomingUsers: unknown[],
+        sourceRows: unknown[]
+    ): Promise<SyncedPosUser[]> {
+        const existingUsers = ((await db.get('users')) as SyncedPosUser[]) || [];
+        const explicitlyRemovedIds = new Set(
+            (Array.isArray(sourceRows) ? sourceRows : [])
+                .filter(explicitlyRemovesPosUser)
+                .map(resolvePosUserId)
+                .filter(Boolean)
+        );
+        const activeIncomingUsers = (Array.isArray(incomingUsers) ? incomingUsers : [])
+            .filter((user) => !explicitlyRemovesPosUser(user))
+            .filter((user) => Boolean(resolvePosUserId(user))) as SyncedPosUser[];
+        const reconciledUsers = reconcilePosUsers({
+            existingUsers: Array.isArray(existingUsers) ? existingUsers : [],
+            incomingUsers: activeIncomingUsers,
+            explicitlyRemovedIds,
+        });
+
+        console.info('[SYNC_USERS] full_download_roster_reconciled', {
+            incoming: activeIncomingUsers.length,
+            preserved: Math.max(0, reconciledUsers.length - activeIncomingUsers.length),
+            explicitlyRemoved: explicitlyRemovedIds.size,
+            total: reconciledUsers.length,
+        });
+        return reconciledUsers;
     }
 
     private async applySnapshotImageBackedCollection(
@@ -5677,9 +5668,13 @@ class SyncManager {
                             cleanItems = await this.enrichPulledProducts(cleanItems);
                         }
 
-                        const safeItems = collection === 'transactions'
+                        let safeItems = collection === 'transactions'
                             ? await this.mergeTransactionsFullSnapshot(cleanItems)
                             : cleanItems;
+
+                        if (collection === 'users') {
+                            safeItems = await this.reconcileFullDownloadPosUsers(safeItems, fullItems);
+                        }
 
                         await db.save(collection as any, safeItems);
                         if (collection === 'documentSeries') {
@@ -5761,9 +5756,13 @@ class SyncManager {
                     cleanItems = await masterDataImageCacheService.normalizeIncomingItems(collection, cleanItems as any[]);
                 }
 
-                const safeItems = collection === 'transactions'
+                let safeItems = collection === 'transactions'
                     ? await this.mergeTransactionsFullSnapshot(cleanItems)
                     : cleanItems;
+
+                if (collection === 'users') {
+                    safeItems = await this.reconcileFullDownloadPosUsers(safeItems, items);
+                }
 
                 if (collection === 'products' && safeItems.length === 0) {
                     const localProducts = await db.get('products');

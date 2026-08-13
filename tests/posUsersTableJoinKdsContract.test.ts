@@ -13,7 +13,9 @@ const kdsSource = readFileSync(new URL('../components/kds/KitchenDisplay.tsx', i
 test('un snapshot de usuarios limitado por terminal no elimina usuarios ERP ausentes', () => {
   assert.match(syncSource, /const isTerminalScopedSnapshot = terminalIds\.some/);
   assert.match(syncSource, /const canReplaceSnapshotSet = replaceSnapshotSet && !isTerminalScopedSnapshot/);
-  assert.match(syncSource, /explicitlyRemovedIds\.has\(user\.id\)/);
+  assert.match(syncSource, /reconcilePosUsers\(\{/);
+  assert.match(syncSource, /reconcileFullDownloadPosUsers/);
+  assert.match(syncSource, /full_download_roster_reconciled/);
   assert.match(syncSource, /terminal_scoped_snapshot_applied/);
   assert.doesNotMatch(syncSource, /canOperatePos === false \|\| !this\.terminalScopeMatches/);
   assert.match(syncSource, /El padrón de credenciales POS debe estar disponible offline/);
