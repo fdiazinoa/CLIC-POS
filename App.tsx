@@ -105,6 +105,7 @@ import {
   recoverNativePrimaryDisplayUrl,
 } from './utils/customerDisplay';
 import { markPosInteractionActivity, setPosSaleActivity } from './utils/posSaleActivity';
+import { reconcilePosUsers } from './utils/posUserReconciliation';
 
 // Layout imports
 import StandardPOSLayout from './components/layouts/StandardPOSLayout';
@@ -7147,8 +7148,18 @@ const AppContent: React.FC = () => {
           stepId: 'apply',
           message: 'Actualizando usuarios autorizados para esta terminal...',
         });
-        setUsers(setupResult.boundUsers);
-        await db.save('users', setupResult.boundUsers);
+        const persistedUsers = await db.get('users') as User[];
+        const reconciledUsers = reconcilePosUsers({
+          existingUsers: Array.isArray(persistedUsers) ? persistedUsers : [],
+          incomingUsers: setupResult.boundUsers,
+        });
+        console.info('[SYNC_USERS] pairing_roster_reconciled', {
+          incoming: setupResult.boundUsers.length,
+          preserved: Math.max(0, reconciledUsers.length - setupResult.boundUsers.length),
+          total: reconciledUsers.length,
+        });
+        setUsers(reconciledUsers);
+        await db.save('users', reconciledUsers);
       }
 
       if (isSlave && finalResolvedMasterIp) {
