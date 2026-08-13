@@ -6106,6 +6106,9 @@ const AppContent: React.FC = () => {
               const refreshedTerminalConfig = await syncManager.refreshTerminalResolvedConfig(undefined, {
                 baseConfig: finalConfig,
                 dispatchEvent: false,
+                forceRemoteFetch: true,
+                forceFullCatalog: true,
+                masterScopes: ['pos_users', 'pos_roles'],
               });
 
               if (refreshedTerminalConfig) {
@@ -6116,6 +6119,11 @@ const AppContent: React.FC = () => {
                   (refreshedTerminalConfig.terminals || []).find(
                     (t: any) => t.id === pairedTerminal.id || t.config?.currentDeviceId === storedDeviceId
                   ) || effectivePairedTerminal;
+              }
+
+              const refreshedPosUsers = await db.get('users') as User[];
+              if (Array.isArray(refreshedPosUsers)) {
+                setUsers(refreshedPosUsers);
               }
             } catch (refreshError) {
               console.warn('⚠️ Startup terminal snapshot refresh failed. Using last known local config.', refreshError);
