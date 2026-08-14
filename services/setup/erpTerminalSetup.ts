@@ -18,9 +18,17 @@ import { saveTerminalCredentialsSync } from '../sync/TerminalCredentialStore';
 export interface RuntimeTerminalCard {
   id: string;
   erpTerminalId: string;
+  tenantId?: string;
+  companyId?: string;
+  companyName: string;
+  storeId?: string;
+  storeName: string;
   name: string;
+  terminalCode?: string;
+  bindingStatus?: string;
   location: string;
   occupied: boolean;
+  canReauthorize: boolean;
   currentDeviceId?: string;
   config: TerminalConfig;
   terminalType?: string;
@@ -652,8 +660,6 @@ const resolveErpTerminalContext = async (identity: ErpIdentity) => {
   for (const candidate of orderedCandidates) {
     const terminals = await fetchErpTerminals(identity.erpBaseUrl, {
       tenantId: candidate.tenantId,
-      companyId: candidate.companyId,
-      storeId: candidate.storeId,
     });
 
     const contextWithTerminals = {
@@ -703,7 +709,13 @@ const resolveOperationalTerminalId = (terminal: any): string => {
 };
 
 const resolveTerminalName = (terminal: any, fallbackId: string): string => {
-  return asString(terminal?.name) || fallbackId;
+  return (
+    asString(terminal?.terminal_name)
+    || asString(terminal?.terminalName)
+    || asString(terminal?.nombre)
+    || asString(terminal?.name)
+    || fallbackId
+  );
 };
 
 const normalizeCurrencyCode = (value: unknown): string => {
@@ -894,20 +906,9 @@ const normalizeTerminalDedupeValue = (value: unknown): string => (
 );
 
 const resolveTerminalDedupeKey = (terminal: any): string => {
-  const operationalId = resolveOperationalTerminalId(terminal);
-  const terminalName = resolveTerminalName(terminal, operationalId || asString(terminal?.id));
-  const identity = (
-    normalizeTerminalDedupeValue(operationalId)
-    || normalizeTerminalDedupeValue(terminalName)
-    || normalizeTerminalDedupeValue(terminal?.id)
-  );
-  const terminalType = normalizeTerminalDedupeValue(
-    resolveOrderTakerContract(terminal).terminalType
-  );
-
-  // El ERP puede asignar el mismo codigo operativo a una caja y a una toma de
-  // pedidos. Son terminales distintas y no deben colapsarse entre si.
-  return identity && terminalType ? `${identity}::${terminalType}` : identity;
+  // El UUID ERP es la única identidad autoritativa. Códigos y nombres pueden
+  // repetirse entre empresas, sucursales y tipos de terminal.
+  return normalizeTerminalDedupeValue(terminal?.id);
 };
 
 const collectPreferredErpTerminalIds = (
@@ -1278,6 +1279,7 @@ export const materializeErpTerminalCards = (input: {
       asString(terminal.company_name) ||
       'ERP';
     const currentDeviceId = asString(terminal.device_id) || undefined;
+    const occupied = Boolean(currentDeviceId && currentDeviceId !== input.posDeviceId);
     const orderTakerContract = resolveOrderTakerContract(terminal);
     const templateConfig =
       Array.isArray(input.currentConfig?.terminals) && input.currentConfig.terminals.length > 0
@@ -1304,9 +1306,19 @@ export const materializeErpTerminalCards = (input: {
     return {
       id: terminalId,
       erpTerminalId,
+      tenantId: asString(terminal.tenant_id) || undefined,
+      companyId: asString(terminal.company_id) || undefined,
+      companyName: asString(terminal.company_name) || 'Empresa sin identificar',
+      storeId: asString(terminal.store_id) || undefined,
+      storeName: asString(terminal.store_name) || 'Sucursal sin identificar',
       name: resolveTerminalName(terminal, terminalCode),
+      terminalCode: asString(terminal.terminal_code) || terminalCode || undefined,
+      bindingStatus: (asString(terminal.binding_status) || (occupied ? 'OCCUPIED' : 'AVAILABLE')).toUpperCase(),
       location,
-      occupied: Boolean(currentDeviceId && currentDeviceId !== input.posDeviceId),
+      occupied,
+      canReauthorize: typeof terminal.can_reauthorize === 'boolean'
+        ? terminal.can_reauthorize
+        : occupied,
       currentDeviceId: currentDeviceId || undefined,
       terminalType: orderTakerContract.terminalType,
       terminal_type: orderTakerContract.terminalType,
@@ -1352,6 +1364,7 @@ export const listTerminalsFromErp = async (input: {
 export const bindTerminalFromErp = async (input: {
   currentConfig: BusinessConfig;
   posDeviceId: string;
+  deviceName?: string;
   terminalId: string;
   erpTerminalId?: string | null;
   bindingMode: BindingMode;
@@ -1452,7 +1465,7 @@ export const bindTerminalFromErp = async (input: {
         body: {
           terminal_id: targetErpTerminalId,
           device_id: input.posDeviceId,
-          device_name: targetTerminalName,
+          ...(input.deviceName ? { device_name: input.deviceName } : {}),
           tenant_id: resolvedContext.tenantId,
           cloud_admin_tenant_id: input.tenantId || null,
           reason: 'CLIC_POS_ANDROID_DIRECT_REAUTHORIZATION',

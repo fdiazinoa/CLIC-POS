@@ -324,10 +324,35 @@ object ClicPOSMasterHttpServer {
             val restrictions = terminal.optJSONArray("restrictions")
                 ?: terminalConfig.optJSONArray("restrictions")
                 ?: JSONArray()
+            val occupied = currentDeviceId.isNotBlank() && currentDeviceId != deviceId
+            val companyId = firstNonBlank(terminal.optString("company_id"), terminalConfig.optString("company_id"))
+            val storeId = firstNonBlank(terminal.optString("store_id"), terminalConfig.optString("store_id"))
+            val companyName = firstNonBlank(
+                terminal.optString("company_name"),
+                terminalConfig.optString("company_name"),
+                "Empresa sin identificar"
+            )
+            val storeName = firstNonBlank(
+                terminal.optString("store_name"),
+                terminal.optString("sucursal"),
+                terminalConfig.optString("storeName"),
+                terminalConfig.optString("store_name"),
+                "Sucursal sin identificar"
+            )
 
             result.put(
                 JSONObject()
                     .put("id", terminalId)
+                    .put("tenant_id", tenantId)
+                    .put("company_id", if (companyId.isBlank()) JSONObject.NULL else companyId)
+                    .put("company_name", companyName)
+                    .put("store_id", if (storeId.isBlank()) JSONObject.NULL else storeId)
+                    .put("store_name", storeName)
+                    .put("terminal_name", terminalName)
+                    .put("terminal_code", terminalConfig.optString("stationNumber").takeIf { it.isNotBlank() } ?: JSONObject.NULL)
+                    .put("binding_status", if (occupied) "OCCUPIED" else "AVAILABLE")
+                    .put("is_occupied", occupied)
+                    .put("can_reauthorize", occupied)
                     .put("erpTerminalId", erpTerminalId)
                     .put("name", terminalName)
                     .put("location", firstNonBlank(
@@ -336,7 +361,7 @@ object ClicPOSMasterHttpServer {
                         terminalConfig.optString("store_name"),
                         "Caja Maestra"
                     ))
-                    .put("occupied", currentDeviceId.isNotBlank() && currentDeviceId != deviceId)
+                    .put("occupied", occupied)
                     .put("currentDeviceId", if (currentDeviceId.isBlank()) JSONObject.NULL else currentDeviceId)
                     .put("terminal_type", terminalType)
                     .put("terminalType", terminalType)
@@ -369,6 +394,7 @@ object ClicPOSMasterHttpServer {
             payload.optString("erp_terminal_id")
         )
         val deviceId = firstNonBlank(
+            payload.optString("new_device_id"),
             payload.optString("pos_device_id"),
             payload.optString("device_id")
         )

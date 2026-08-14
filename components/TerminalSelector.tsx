@@ -38,13 +38,29 @@ import {
   type PosTerminalType,
 } from '../utils/orderTakerPolicy';
 import { requestJson, type RequestJsonResult } from '../services/network/httpClient';
+import {
+  buildTerminalBindIdentityPayload,
+  formatTerminalBindingLabel,
+  formatTerminalBindingStatus,
+  groupTerminalBindingRecords,
+  isTerminalBindingSelectable,
+  normalizeTerminalBindingRecord,
+} from '../utils/terminalBindingHierarchy';
 
 interface TerminalCard {
   id: string;
   erpTerminalId: string;
+  tenantId?: string;
+  companyId?: string;
+  companyName: string;
+  storeId?: string;
+  storeName: string;
   name: string;
+  terminalCode?: string;
+  bindingStatus?: string;
   location: string;
   occupied: boolean;
+  canReauthorize: boolean;
   currentDeviceId?: string;
   config: TerminalConfig;
   terminalType?: string;
@@ -70,7 +86,7 @@ interface TerminalSelectorResponse {
   tenant_name?: string | null;
   erp_base_url?: string | null;
   source?: string | null;
-  terminals: TerminalCard[];
+  terminals: Record<string, any>[];
 }
 
 interface BindTerminalResponse {
@@ -217,13 +233,8 @@ const normalizeTerminalDedupeValue = (value: unknown): string => (
 );
 
 const resolveTerminalDedupeKey = (terminal: TerminalCard): string => (
-  [
-    normalizeTerminalDedupeValue(terminal.config?.stationNumber)
-      || normalizeTerminalDedupeValue(terminal.name)
-      || normalizeTerminalDedupeValue(terminal.id)
-      || normalizeTerminalDedupeValue(terminal.erpTerminalId),
-    normalizeTerminalDedupeValue(resolveOrderTakerContract(terminal).terminalType),
-  ].filter(Boolean).join('::')
+  normalizeTerminalDedupeValue(terminal.erpTerminalId)
+  || normalizeTerminalDedupeValue(terminal.id)
 );
 
 const dedupeTerminalCards = (
@@ -711,22 +722,6 @@ const requestMasterSetup = <T,>(
   });
 };
 
-const buildMasterClaimUrl = (
-  apiBase: string,
-  payload: Record<string, unknown>
-): string => {
-  const params = new URLSearchParams();
-  Object.entries(payload).forEach(([key, value]) => {
-    if (value === undefined || value === null || value === '') return;
-    if (Array.isArray(value)) {
-      value.forEach((entry) => params.append(key, String(entry)));
-      return;
-    }
-    params.set(key, String(value));
-  });
-  return `${apiBase}/claim-terminal?${params.toString()}`;
-};
-
 const resolveReachableMasterBinding = async (masterIp?: string) => {
   const normalizedHost = normalizeMasterHost(masterIp || '');
   if (!normalizedHost) return null;
@@ -850,7 +845,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isBinding, setIsBinding] = useState(false);
-  const [confirmTerminal, setConfirmTerminal] = useState<TerminalCard | null>(null);
+  const [confirmTerminalId, setConfirmTerminalId] = useState<string | null>(null);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [pendingTerminal, setPendingTerminal] = useState<TerminalCard | null>(null);
   const [authorizationIssue, setAuthorizationIssue] = useState<DeviceAuthorizationIssue | null>(null);
@@ -955,7 +950,12 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         throw new Error('El ERP devolvió un tenant distinto al de la sesión autenticada. Se rechazó la lista de terminales.');
       }
 
-      const rawTerminals = Array.isArray(data.terminals) ? data.terminals : [];
+      const rawTerminals = (Array.isArray(data.terminals) ? data.terminals : [])
+        .map((terminal) => normalizeTerminalBindingRecord(terminal, {
+          deviceId,
+          tenantId: data.tenant_id,
+        }) as TerminalCard)
+        .filter((terminal) => Boolean(terminal.id));
       const masterTerminalIds = new Set(
         (Array.isArray(currentConfig.terminals) ? currentConfig.terminals : [])
           .filter((entry) => entry?.config?.isPrimaryNode)
@@ -972,7 +972,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           ? config.metadata
           : (terminal?.metadata && typeof terminal.metadata === 'object' ? terminal.metadata : {});
         const terminalId = String(terminal?.id || terminal?.terminal_id || terminal?.erp_terminal_id || '').trim();
-        const terminalName = String(terminal?.name || terminal?.terminalName || terminal?.terminal_name || '').trim();
+        const terminalName = String(terminal?.name || terminal?.terminalName || terminal?.terminal_name || terminal?.nombre || '').trim();
         const archived =
           terminalName.toUpperCase().startsWith('ARCHIVED-')
           || metadata?.archived === true
@@ -1118,7 +1118,13 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         });
       }
 
+      const deviceName = (
+        localStorage.getItem('clic_pos_device_name')
+        || localStorage.getItem('device_name')
+        || ''
+      ).trim() || undefined;
       const bindTerminalRequestBody = {
+        ...buildTerminalBindIdentityPayload(terminal, deviceId, deviceName),
         tenant_id: tenantId,
         tenantId,
         cloudAdminTenantId: tenantId || null,
@@ -1126,10 +1132,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         tenant_slug: resolveTenantSlug(),
         tenant_email: resolveTenantEmail(),
         erp_base_url: erpBaseUrl,
-        terminal_id: terminal.erpTerminalId || terminal.id,
-        erp_terminal_id: terminal.erpTerminalId,
-        terminal_name: terminal.name,
-        terminal_code: terminal.config?.stationNumber || terminal.name || terminal.id,
+        erp_terminal_id: terminal.id,
         pos_device_id: deviceId,
         device_id: deviceId,
         app_version: resolveAppVersion(),
@@ -1141,7 +1144,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         force_transfer: forceTransfer,
       };
       const pairingDiagnosticBase = {
-        selectedTerminalUuid: terminal.erpTerminalId || terminal.id,
+        selectedTerminalUuid: terminal.id,
         terminalName: terminal.name,
         generatedDeviceId: deviceId,
         tenantId,
@@ -1165,8 +1168,9 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         data = await bindTerminalFromErp({
           currentConfig,
           posDeviceId: deviceId,
-          terminalId: terminal.erpTerminalId || terminal.id,
-          erpTerminalId: terminal.erpTerminalId,
+          terminalId: terminal.id,
+          erpTerminalId: terminal.id,
+          deviceName,
           bindingMode,
           forceTransfer,
           tenantId,
@@ -1210,8 +1214,9 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           data = await bindTerminalFromErp({
           currentConfig,
           posDeviceId: deviceId,
-            terminalId: terminal.erpTerminalId || terminal.id,
-            erpTerminalId: terminal.erpTerminalId,
+            terminalId: terminal.id,
+            erpTerminalId: terminal.id,
+            deviceName,
             bindingMode,
             forceTransfer,
             tenantId,
@@ -1229,9 +1234,10 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         }
 
         const response = await requestMasterSetup<BindTerminalResponse>(
-          buildMasterClaimUrl(apiBase, bindTerminalRequestBody),
+          `${apiBase}/bind-terminal`,
           {
-            method: 'GET',
+            method: 'POST',
+            body: bindTerminalRequestBody,
             stage: 'BIND_TERMINAL',
           }
         );
@@ -1677,9 +1683,9 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
   const handleCardClick = useCallback(
     async (terminal: TerminalCard) => {
-      if (isBinding || shouldBlockAlreadyBound) return;
+      if (isBinding || shouldBlockAlreadyBound || !isTerminalBindingSelectable(terminal)) return;
 
-      setConfirmTerminal(terminal);
+      setConfirmTerminalId(terminal.id);
     },
     [isBinding, shouldBlockAlreadyBound]
   );
@@ -1705,6 +1711,11 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   };
 
   const tenantDisplayName = useMemo(() => resolveTenantDisplayName(tenantId), [tenantId]);
+  const terminalGroups = useMemo(() => groupTerminalBindingRecords(terminals), [terminals]);
+  const confirmTerminal = useMemo(
+    () => terminals.find((terminal) => terminal.id === confirmTerminalId) || null,
+    [confirmTerminalId, terminals],
+  );
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
@@ -1794,85 +1805,87 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           </button>
         </div>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-5">
           {isLoading && terminals.length === 0 ? (
-            Array.from({ length: 4 }).map((_, index) => (
-              <div
-                key={`terminal-skeleton-${index}`}
-                className="rounded-[2rem] border border-slate-200/70 bg-white/60 p-6 shadow-[0_18px_46px_rgba(15,23,42,0.08)] backdrop-blur-xl"
-              >
-                <div className="h-5 w-24 animate-pulse rounded-full bg-slate-200" />
-                <div className="mt-5 h-4 w-40 animate-pulse rounded-full bg-slate-100" />
-                <div className="mt-3 h-3 w-32 animate-pulse rounded-full bg-slate-100" />
-              </div>
-            ))
-          ) : terminals.length > 0 ? (
-            terminals.map((terminal) => {
-              const occupiedByOtherDevice = Boolean(
-                terminal.occupied && terminal.currentDeviceId && terminal.currentDeviceId !== deviceId
-              );
-
-              return (
-                <button
-                  key={terminal.id}
-                  onClick={() => void handleCardClick(terminal)}
-                  disabled={isBinding}
-                  className={`group relative overflow-hidden rounded-[1.75rem] border p-5 text-left shadow-[0_22px_54px_rgba(15,23,42,0.08)] backdrop-blur-xl transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60 sm:rounded-[2rem] sm:p-6 ${
-                    occupiedByOtherDevice
-                      ? 'border-amber-200 bg-white/70'
-                      : 'border-white/70 bg-white/85 hover:border-blue-200'
-                  }`}
+            <div className="grid gap-4 md:grid-cols-2">
+              {Array.from({ length: 4 }).map((_, index) => (
+                <div
+                  key={`terminal-skeleton-${index}`}
+                  className="rounded-[2rem] border border-slate-200/70 bg-white/60 p-6 shadow-[0_18px_46px_rgba(15,23,42,0.08)] backdrop-blur-xl"
                 >
-                  <div className="absolute inset-0 bg-gradient-to-br from-white/50 via-transparent to-slate-100/40 opacity-80" />
-                  <div className="relative flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="flex min-w-0 items-center gap-4">
-                      <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.1rem] shadow-inner sm:h-14 sm:w-14 sm:rounded-[1.35rem] ${
-                        occupiedByOtherDevice ? 'bg-amber-50 text-amber-500' : 'bg-blue-50 text-blue-600'
-                      }`}>
-                        <Monitor size={22} />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400 break-all sm:tracking-[0.25em]">{terminal.id.toUpperCase()}</p>
-                        <h4 className="mt-1 text-xl font-black tracking-tight text-slate-900 sm:text-2xl">{terminal.name}</h4>
-                        <div className="mt-3 flex items-center gap-2 text-sm font-medium text-slate-500">
-                          <MapPin size={14} />
-                          <span className="truncate">{terminal.location}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className={`self-start rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.24em] sm:self-auto sm:tracking-[0.28em] ${
-                      occupiedByOtherDevice
-                        ? 'bg-amber-100 text-amber-700'
-                        : 'bg-emerald-100 text-emerald-700'
-                    }`}>
-                      {occupiedByOtherDevice ? 'Ocupada' : 'Disponible'}
-                    </div>
+                  <div className="h-5 w-24 animate-pulse rounded-full bg-slate-200" />
+                  <div className="mt-5 h-4 w-40 animate-pulse rounded-full bg-slate-100" />
+                  <div className="mt-3 h-3 w-32 animate-pulse rounded-full bg-slate-100" />
+                </div>
+              ))}
+            </div>
+          ) : terminals.length > 0 ? (
+            terminalGroups.map((company) => (
+              <section key={company.key} className="rounded-[2rem] border border-slate-200/70 bg-white/55 p-4 shadow-[0_18px_48px_rgba(15,23,42,0.06)] sm:p-5">
+                <div className="flex items-center gap-3 border-b border-slate-200/80 px-1 pb-4">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white shadow-md shadow-blue-600/20">
+                    <Server size={18} />
                   </div>
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-black uppercase tracking-[0.3em] text-blue-500">Empresa</p>
+                    <h4 className="truncate text-lg font-black text-slate-900">{company.name}</h4>
+                  </div>
+                </div>
 
-                  <div className="relative mt-6 flex flex-col gap-3 rounded-2xl border border-slate-100 bg-white/80 px-4 py-3 shadow-inner sm:flex-row sm:items-center sm:justify-between">
-                    <div className="min-w-0">
-                      <p className="text-[11px] font-black uppercase tracking-[0.28em] text-slate-400">Operación</p>
-                      <p className="mt-1 text-sm font-semibold text-slate-700">
-                      {terminal.config.isPrimaryNode ? 'Servidor principal' : 'Punto de venta'}
-                      </p>
-                      <p className="mt-1 break-all font-mono text-[11px] font-bold text-slate-400">
-                        UUID ERP: {terminal.erpTerminalId || terminal.id}
-                      </p>
+                <div className="mt-4 space-y-5">
+                  {company.stores.map((store) => (
+                    <div key={store.key}>
+                      <div className="mb-3 flex items-center gap-2 px-1 text-sm font-black text-slate-600">
+                        <MapPin size={15} className="text-slate-400" />
+                        <span>{store.name}</span>
+                      </div>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        {store.terminals.map((terminal) => {
+                          const selectable = isTerminalBindingSelectable(terminal);
+                          const occupied = terminal.occupied;
+                          return (
+                            <button
+                              key={terminal.id}
+                              onClick={() => void handleCardClick(terminal)}
+                              disabled={isBinding || !selectable}
+                              className={`group relative min-h-40 overflow-hidden rounded-[1.75rem] border p-5 text-left shadow-[0_16px_40px_rgba(15,23,42,0.07)] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-55 ${
+                                occupied ? 'border-amber-200 bg-white/80' : 'border-white bg-white hover:border-blue-200'
+                              }`}
+                            >
+                              <div className="relative flex items-start justify-between gap-3">
+                                <div className="flex min-w-0 items-center gap-3">
+                                  <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${occupied ? 'bg-amber-50 text-amber-500' : 'bg-blue-50 text-blue-600'}`}>
+                                    <Monitor size={22} />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <h5 className="text-lg font-black text-slate-900">{formatTerminalBindingLabel(terminal)}</h5>
+                                    <p className="mt-1 break-all font-mono text-[10px] font-bold text-slate-400">{terminal.id}</p>
+                                  </div>
+                                </div>
+                                <span className={`shrink-0 rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] ${occupied ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                                  {formatTerminalBindingStatus(terminal)}
+                                </span>
+                              </div>
+                              <div className="relative mt-5 flex items-center justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-3">
+                                <span className="text-xs font-bold text-slate-600">{terminal.config?.isPrimaryNode ? 'Servidor principal' : 'Punto de venta'}</span>
+                                {occupied ? (
+                                  <span className="flex items-center gap-1.5 text-xs font-black text-amber-700">
+                                    <Lock size={13} />
+                                    {terminal.canReauthorize ? 'Reautorizar' : 'No disponible'}
+                                  </span>
+                                ) : (
+                                  <span className="text-xs font-black text-blue-700">Vincular</span>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                    {occupiedByOtherDevice ? (
-                      <div className="flex w-fit items-center gap-2 rounded-full bg-amber-50 px-3 py-2 text-amber-700">
-                        <Lock size={14} />
-                        <span className="text-xs font-black uppercase tracking-[0.18em]">Reautorizar</span>
-                      </div>
-                    ) : (
-                      <div className="w-fit rounded-full bg-blue-50 px-3 py-2 text-xs font-black uppercase tracking-[0.18em] text-blue-700">
-                        Vincular
-                      </div>
-                    )}
-                  </div>
-                </button>
-              );
-            })
+                  ))}
+                </div>
+              </section>
+            ))
           ) : (
             <div className="col-span-full rounded-[2rem] border border-slate-200/70 bg-white/70 p-10 text-center shadow-[0_18px_48px_rgba(15,23,42,0.06)]">
               <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-[1.5rem] bg-slate-100 text-slate-400">
@@ -1940,7 +1953,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             <div className="border-t border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
               <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
                 <button
-                  onClick={() => setConfirmTerminal(null)}
+                  onClick={() => setConfirmTerminalId(null)}
                   disabled={isBinding}
                   className="w-full rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
                 >
@@ -1949,7 +1962,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                 <button
                   onClick={() => {
                     const terminal = confirmTerminal;
-                    setConfirmTerminal(null);
+                    setConfirmTerminalId(null);
                     void bindTerminal(terminal, false);
                   }}
                   disabled={isBinding}

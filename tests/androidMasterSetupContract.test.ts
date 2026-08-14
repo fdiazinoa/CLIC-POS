@@ -60,7 +60,9 @@ test('la Cliente recibe mesas y productos desde el snapshot operativo de la Mast
 
 test('la activacion cliente usa transporte nativo con timeout para todo el handshake', () => {
   assert.match(terminalSelectorSource, /requestMasterSetup<TerminalSelectorResponse>/);
-  assert.match(terminalSelectorSource, /buildMasterClaimUrl\(apiBase, bindTerminalRequestBody\)/);
+  assert.match(terminalSelectorSource, /`\$\{apiBase\}\/bind-terminal`/);
+  assert.match(terminalSelectorSource, /method: 'POST'/);
+  assert.match(terminalSelectorSource, /body: bindTerminalRequestBody/);
   assert.match(terminalSelectorSource, /stage: 'BIND_TERMINAL'/);
   assert.match(terminalSelectorSource, /stage: 'INITIAL_CONFIG'/);
   assert.match(terminalSelectorSource, /const timeoutMs = 12000/);

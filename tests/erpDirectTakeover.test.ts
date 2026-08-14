@@ -144,9 +144,11 @@ const bind = (options: {
   forceTransfer: boolean;
   bindingMode?: 'MASTER' | 'SLAVE';
   posDeviceId?: string;
+  deviceName?: string;
 }) => bindTerminalFromErp({
   currentConfig: getInitialConfig('Restaurante' as any),
   posDeviceId: options.posDeviceId || NEW_DEVICE_ID,
+  deviceName: options.deviceName,
   terminalId: ERP_UUID,
   erpTerminalId: ERP_UUID,
   bindingMode: options.bindingMode || 'MASTER',
@@ -160,7 +162,7 @@ test('MASTER ERP directo ejecuta takeover canónico una vez antes de register y 
   storage.clear();
   const requests = installErpMock();
 
-  const result = await bind({ forceTransfer: true });
+  const result = await bind({ forceTransfer: true, deviceName: 'Tablet QA' });
   const takeoverRequests = requests.filter(({ path }) => path.endsWith('/takeover'));
   const registerRequests = requests.filter(({ path }) => path === '/api/sync/terminals/register');
   assert.equal(takeoverRequests.length, 1);
@@ -172,7 +174,7 @@ test('MASTER ERP directo ejecuta takeover canónico una vez antes de register y 
   assert.equal(takeover.body.terminal_id, ERP_UUID);
   assert.notEqual(takeover.body.terminal_id, 'POS-001');
   assert.equal(takeover.body.device_id, NEW_DEVICE_ID);
-  assert.equal(takeover.body.device_name, 'Mast-01');
+  assert.equal(takeover.body.device_name, 'Tablet QA');
   assert.equal(takeover.body.tenant_id, ERP_TENANT_ID);
   assert.equal(takeover.body.cloud_admin_tenant_id, CLOUD_TENANT_ID);
   assert.equal(takeover.body.reason, 'CLIC_POS_ANDROID_DIRECT_REAUTHORIZATION');
