@@ -492,8 +492,6 @@ const resolveErpTerminalContext = async (
   for (const candidate of candidates) {
     const terminals = await fetchErpTerminals(req, baseUrl, {
       tenantId: candidate.tenantId,
-      companyId: candidate.companyId,
-      storeId: candidate.storeId,
     });
 
     const contextWithTerminals = {
@@ -778,23 +776,38 @@ router.get('/terminals', async (req, res) => {
 
       const terminals = erpTerminals.map((terminal: any) => {
         const erpTerminalId = asString(terminal.id);
-        const terminalId = resolveOperationalTerminalId(terminal) || erpTerminalId;
+        const terminalCode = resolveOperationalTerminalId(terminal) || erpTerminalId;
+        const terminalName = asString(terminal.terminal_name) || asString(terminal.nombre) || asString(terminal.name) || `Caja ${terminalCode}`;
         const location =
           asString(terminal.store_name) ||
+          asString(terminal.sucursal) ||
           asString(terminal.company_name) ||
           'ERP';
         const currentDeviceId = asString(terminal.device_id) || undefined;
+        const occupied = Boolean(currentDeviceId && currentDeviceId !== posDeviceId);
 
         return {
-          id: terminalId,
+          id: erpTerminalId,
+          tenant_id: asString(terminal.tenant_id) || resolvedErpTenantId,
+          company_id: asString(terminal.company_id) || null,
+          company_name: asString(terminal.company_name) || 'Empresa sin identificar',
+          store_id: asString(terminal.store_id) || null,
+          store_name: asString(terminal.store_name) || asString(terminal.sucursal) || 'Sucursal sin identificar',
+          terminal_name: terminalName,
+          terminal_code: asString(terminal.terminal_code) || terminalCode || null,
+          binding_status: (asString(terminal.binding_status) || (occupied ? 'OCCUPIED' : 'AVAILABLE')).toUpperCase(),
+          is_occupied: occupied,
+          can_reauthorize: typeof terminal.can_reauthorize === 'boolean'
+            ? terminal.can_reauthorize
+            : occupied,
           erpTerminalId,
-          name: asString(terminal.name) || `Caja ${terminalId}`,
+          name: terminalName,
           location,
-          occupied: Boolean(currentDeviceId && currentDeviceId !== posDeviceId),
+          occupied,
           currentDeviceId: currentDeviceId || undefined,
           config:
             Array.isArray(config?.terminals) && config.terminals.length > 0
-              ? createTerminalTemplate(config, terminalId)
+              ? createTerminalTemplate(config, terminalCode)
               : {},
         };
       });
@@ -851,7 +864,8 @@ router.post('/bind-terminal', async (req, res) => {
   const erpBaseUrl = resolveErpBaseUrl(req);
   const terminalId = asString(body.terminal_id);
   const erpTerminalIdFromBody = asString(body.erp_terminal_id);
-  const posDeviceId = asString(body.pos_device_id);
+  const posDeviceId = asString(body.new_device_id) || asString(body.pos_device_id) || asString(body.device_id);
+  const deviceName = asString(body.device_name);
   const bindingMode = asString(body.binding_mode).toUpperCase() === 'SLAVE' ? 'SLAVE' : 'MASTER';
   const forceTransfer = Boolean(body.force_transfer);
 
@@ -879,7 +893,7 @@ router.post('/bind-terminal', async (req, res) => {
   if (!terminalId || !posDeviceId) {
     return res.status(400).json({
       status: 'error',
-      message: 'terminal_id y pos_device_id son obligatorios.',
+      message: 'terminal_id y new_device_id son obligatorios.',
     });
   }
 
@@ -946,7 +960,7 @@ router.post('/bind-terminal', async (req, res) => {
           body: {
             terminal_id: targetErpTerminalId,
             device_id: posDeviceId,
-            device_name: targetTerminalName,
+            ...(deviceName ? { device_name: deviceName } : {}),
             source: 'CLIC_POS_SELF_SERVICE_RECOVERY',
           },
         }

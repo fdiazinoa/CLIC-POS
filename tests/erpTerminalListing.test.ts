@@ -52,6 +52,38 @@ test('keeps occupied ERP terminals visible with their own operational codes', ()
   assert.equal(terminals[1].occupied, false);
 });
 
+test('keeps repeated terminal codes from different companies as separate UUIDs', () => {
+  const currentConfig = getInitialConfig('Supermercado' as any);
+  const terminals = materializeErpTerminalCards({
+    currentConfig,
+    posDeviceId: 'DEV-NEW',
+    terminals: [
+      {
+        id: 'terminal-company-a',
+        company_id: 'company-a',
+        company_name: 'MercaSend-Pruebas',
+        store_id: 'store-a',
+        store_name: 'Sucursal Principal',
+        terminal_name: 'Caja 1',
+        terminal_code: 'POS-001',
+      },
+      {
+        id: 'terminal-company-b',
+        company_id: 'company-b',
+        company_name: 'Clic-Suites',
+        store_id: 'store-b',
+        store_name: 'Sucursal Principal',
+        terminal_name: 'Caja 1',
+        terminal_code: 'POS-001',
+      },
+    ],
+  });
+
+  assert.equal(terminals.length, 2);
+  assert.deepEqual(terminals.map((terminal) => terminal.id), ['terminal-company-a', 'terminal-company-b']);
+  assert.deepEqual(terminals.map((terminal) => terminal.companyId), ['company-a', 'company-b']);
+});
+
 test('filters archived ERP rows without hiding the active terminal with the same code', () => {
   const currentConfig = getInitialConfig('Supermercado' as any);
   const terminals = materializeErpTerminalCards({
