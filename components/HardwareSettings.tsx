@@ -13,6 +13,7 @@ import {
 import { BusinessConfig, Product, CustomerDisplayConfig, ScaleDevice, ScaleTech, PrinterDevice, ConnectionType, ScaleLabelConfig, FingerprintReaderConfig, FingerprintDriver, FingerprintDiscoveredDevice } from '../types';
 import { parseScaleBarcodeDetailed } from '../utils/barcodeParser';
 import { nativePrintBridge } from '../services/printer/NativePrintBridge';
+import { buildEscPosHardwareTestPayload } from '../services/printer/EscPosFormatter';
 import { biometricService } from '../services/BiometricAuthService';
 import {
    launchCustomerDisplay,
@@ -885,8 +886,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       setTestingPrinterId(printerKey);
 
       try {
-         const printed = await nativePrintBridge.printHtml({
-            html: buildPrinterTestHtml(printer),
+         const printPayload = {
             printerId: printer.id,
             printerName: printer.name,
             printerAddress: printer.address,
@@ -894,7 +894,21 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
             role: (printer.type || 'TICKET') as any,
             jobType: 'HARDWARE_TEST',
             referenceId: `test-${printerKey}`
-         });
+         };
+         const printed = String(printer.connection || '').toUpperCase() === 'NETWORK'
+            ? await nativePrintBridge.printEscPos({
+               ...printPayload,
+               dataBase64: buildEscPosHardwareTestPayload({
+                  printerName: printer.name,
+                  connection: printer.connection,
+                  address: printer.address,
+                  printedAt: new Date().toLocaleString(),
+               }),
+            })
+            : await nativePrintBridge.printHtml({
+               ...printPayload,
+               html: buildPrinterTestHtml(printer),
+            });
 
          let success = printed;
          let message = printed

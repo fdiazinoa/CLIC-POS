@@ -22,6 +22,13 @@ export interface EscPosKitchenOrderData {
   areaTitle?: string;
 }
 
+export interface EscPosHardwareTestData {
+  printerName?: string;
+  connection?: string;
+  address?: string;
+  printedAt?: string;
+}
+
 const ESC = 0x1b;
 const GS = 0x1d;
 const RECEIPT_LINE_WIDTH = 42;
@@ -330,6 +337,33 @@ const finalizeReceipt = (chunks: Uint8Array[], options?: { openCashDrawer?: bool
   }
 
   chunks.push(fullCut());
+};
+
+export const buildEscPosHardwareTestPayload = (data: EscPosHardwareTestData): string => {
+  const width = RECEIPT_LINE_WIDTH;
+  const chunks: Uint8Array[] = [];
+
+  chunks.push(initPrinter());
+  chunks.push(align(1));
+  chunks.push(bold(true));
+  chunks.push(size(0x11));
+  pushTextLines(chunks, splitLines('CLIC POS', width));
+  chunks.push(size(0x00));
+  pushTextLines(chunks, splitLines('PRUEBA DE IMPRESORA', width));
+  chunks.push(bold(false));
+  chunks.push(divider(width));
+  chunks.push(align(0));
+  pushPair(chunks, 'Impresora', data.printerName || 'Sin nombre', width);
+  pushPair(chunks, 'Conexion', data.connection || 'N/D', width);
+  pushPair(chunks, 'Direccion', data.address || 'N/D', width);
+  pushPair(chunks, 'Fecha', data.printedAt || new Date().toLocaleString(), width);
+  chunks.push(divider(width));
+  chunks.push(align(1));
+  pushTextLines(chunks, splitLines('CONEXION OPERATIVA', width));
+  chunks.push(align(0));
+  finalizeReceipt(chunks);
+
+  return toBase64(concat(chunks));
 };
 
 const buildReceiptHeader = (chunks: Uint8Array[], config: BusinessConfig, title: string, width: number) => {

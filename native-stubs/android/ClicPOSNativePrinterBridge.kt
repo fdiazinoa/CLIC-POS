@@ -132,14 +132,25 @@ class AndroidPrinterBridge(context: Context) {
 
             val rawBytes = Base64.decode(dataBase64, Base64.DEFAULT)
             val copies = payload.optInt("copies", 1).coerceIn(1, 10)
-            val result = printCopies(copies) {
+            val connection = payload.optString("connection", "BLUETOOTH").uppercase()
+            val result = if (connection == "NETWORK") {
                 routeEscPosPrint(
-                    rawBytes = rawBytes,
-                    connection = payload.optString("connection", "BLUETOOTH").uppercase(),
+                    rawBytes = repeatNetworkPayload(rawBytes, copies),
+                    connection = connection,
                     printerAddress = payload.optString("printerAddress", null),
                     printerName = payload.optString("printerName", null),
                     printerId = payload.optString("printerId", null)
-                )
+                ).withCopyMessage(copies)
+            } else {
+                printCopies(copies) {
+                    routeEscPosPrint(
+                        rawBytes = rawBytes,
+                        connection = connection,
+                        printerAddress = payload.optString("printerAddress", null),
+                        printerName = payload.optString("printerName", null),
+                        printerId = payload.optString("printerId", null)
+                    )
+                }
             }
             toJson(result)
         } catch (e: IllegalArgumentException) {
@@ -752,6 +763,22 @@ class AndroidPrinterBridge(context: Context) {
         return completed.copy(
             message = if (copies > 1) "$copies copias procesadas correctamente." else completed.message
         )
+    }
+
+    private fun repeatNetworkPayload(rawBytes: ByteArray, copies: Int): ByteArray {
+        val safeCopies = copies.coerceIn(1, 10)
+        if (safeCopies == 1) return rawBytes
+
+        val combined = ByteArray(rawBytes.size * safeCopies)
+        repeat(safeCopies) { copyIndex ->
+            rawBytes.copyInto(combined, destinationOffset = copyIndex * rawBytes.size)
+        }
+        return combined
+    }
+
+    private fun ClicPOSBluetoothPrinterManager.PrintResult.withCopyMessage(copies: Int): ClicPOSBluetoothPrinterManager.PrintResult {
+        if (!success || copies <= 1) return this
+        return copy(message = "$copies copias enviadas en un solo trabajo de red.")
     }
 
     private fun htmlToPlainTextBytes(html: String): ByteArray {
