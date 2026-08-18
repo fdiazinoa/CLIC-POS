@@ -210,4 +210,14 @@ test('MainActivity recupera la superficie primaria después de que Capacitor ter
   );
   assert.match(customerDisplayBridgeSource, /it\.flags and Display\.FLAG_SECURE != 0/);
   assert.match(customerDisplayBridgeSource, /normalizedName\.contains\("anydesk"\)/);
+  assert.match(
+    customerDisplayBridgeSource,
+    /WindowManager\.LayoutParams\.FLAG_NOT_FOCUSABLE[\s\S]*WindowManager\.LayoutParams\.FLAG_NOT_TOUCHABLE/,
+    'el visor secundario debe ser una ventana no interactiva para no capturar el touch principal',
+  );
+  assert.match(
+    customerDisplayBridgeSource,
+    /activity\.window\.clearFlags\(WindowManager\.LayoutParams\.FLAG_NOT_TOUCHABLE\)/,
+    'la ventana principal debe conservar explícitamente su capacidad táctil',
+  );
 });

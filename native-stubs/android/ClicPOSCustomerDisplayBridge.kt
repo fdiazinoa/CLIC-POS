@@ -10,6 +10,7 @@ import android.os.Looper
 import android.util.Log
 import android.view.Display
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.MimeTypeMap
 import android.webkit.WebSettings
 import android.webkit.WebResourceRequest
@@ -132,6 +133,7 @@ class AndroidCustomerDisplayBridge(
                         val presentation = CustomerDisplayPresentation(activity, display as Display, targetUrl)
                         presentation.show()
                         activePresentation = presentation
+                        restorePrimaryTouch(activity)
 
                         JSONObject()
                             .put("success", true)
@@ -167,6 +169,7 @@ class AndroidCustomerDisplayBridge(
         mainHandler.post {
             try {
                 dismissActivePresentation()
+                activityRef.get()?.let(::restorePrimaryTouch)
                 result = JSONObject().put("success", true).put("message", "Visor cerrado.")
             } catch (error: Throwable) {
                 result = JSONObject().put("success", false).put("message", error.message ?: "No se pudo cerrar el visor.")
@@ -176,6 +179,13 @@ class AndroidCustomerDisplayBridge(
         }
         latch.await(2, TimeUnit.SECONDS)
         return result.toString()
+    }
+
+    private fun restorePrimaryTouch(activity: Activity) {
+        activity.window.clearFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
+        activity.window.decorView.post {
+            activity.window.decorView.isEnabled = true
+        }
     }
 
     @android.webkit.JavascriptInterface
@@ -313,6 +323,12 @@ class AndroidCustomerDisplayBridge(
 
         override fun onCreate(savedInstanceState: android.os.Bundle?) {
             super.onCreate(savedInstanceState)
+
+            window?.addFlags(
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+            )
 
             val container = FrameLayout(context)
             val web = WebView(context)
