@@ -131,13 +131,16 @@ class AndroidPrinterBridge(context: Context) {
             }
 
             val rawBytes = Base64.decode(dataBase64, Base64.DEFAULT)
-            val result = routeEscPosPrint(
-                rawBytes = rawBytes,
-                connection = payload.optString("connection", "BLUETOOTH").uppercase(),
-                printerAddress = payload.optString("printerAddress", null),
-                printerName = payload.optString("printerName", null),
-                printerId = payload.optString("printerId", null)
-            )
+            val copies = payload.optInt("copies", 1).coerceIn(1, 10)
+            val result = printCopies(copies) {
+                routeEscPosPrint(
+                    rawBytes = rawBytes,
+                    connection = payload.optString("connection", "BLUETOOTH").uppercase(),
+                    printerAddress = payload.optString("printerAddress", null),
+                    printerName = payload.optString("printerName", null),
+                    printerId = payload.optString("printerId", null)
+                )
+            }
             toJson(result)
         } catch (e: IllegalArgumentException) {
             error(e.message ?: "Invalid base64 payload", "PAYLOAD_INVALID")
@@ -165,22 +168,25 @@ class AndroidPrinterBridge(context: Context) {
             val printerAddress = payload.optString("printerAddress", null)
             val printerName = payload.optString("printerName", null)
             val printerId = payload.optString("printerId", null)
+            val copies = payload.optInt("copies", 1).coerceIn(1, 10)
 
-            val result = if (connection == "BLUETOOTH") {
-                manager.printHtmlAsText(
-                    html = html,
-                    printerAddress = printerAddress,
-                    printerName = printerName,
-                    printerId = printerId
-                )
-            } else {
-                routeEscPosPrint(
-                    rawBytes = htmlToPlainTextBytes(html),
-                    connection = connection,
-                    printerAddress = printerAddress,
-                    printerName = printerName,
-                    printerId = printerId
-                )
+            val result = printCopies(copies) {
+                if (connection == "BLUETOOTH") {
+                    manager.printHtmlAsText(
+                        html = html,
+                        printerAddress = printerAddress,
+                        printerName = printerName,
+                        printerId = printerId
+                    )
+                } else {
+                    routeEscPosPrint(
+                        rawBytes = htmlToPlainTextBytes(html),
+                        connection = connection,
+                        printerAddress = printerAddress,
+                        printerName = printerName,
+                        printerId = printerId
+                    )
+                }
             }
             toJson(result)
         } catch (e: Exception) {
@@ -723,6 +729,29 @@ class AndroidPrinterBridge(context: Context) {
                 errorCode = "UNSUPPORTED_CONNECTION"
             )
         }
+    }
+
+    private fun printCopies(
+        copies: Int,
+        printCopy: () -> ClicPOSBluetoothPrinterManager.PrintResult
+    ): ClicPOSBluetoothPrinterManager.PrintResult {
+        var lastResult: ClicPOSBluetoothPrinterManager.PrintResult? = null
+        repeat(copies.coerceIn(1, 10)) {
+            val result = printCopy()
+            lastResult = result
+            if (!result.success) return result
+        }
+
+        val completed = lastResult ?: return ClicPOSBluetoothPrinterManager.PrintResult(
+            status = "error",
+            success = false,
+            printed = false,
+            message = "No se procesaron copias.",
+            errorCode = "COPIES_INVALID"
+        )
+        return completed.copy(
+            message = if (copies > 1) "$copies copias procesadas correctamente." else completed.message
+        )
     }
 
     private fun htmlToPlainTextBytes(html: String): ByteArray {

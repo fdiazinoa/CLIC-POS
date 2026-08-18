@@ -7,6 +7,7 @@ import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, form
 import { resolveLineDiscountPresentation } from './lineDiscountPresentation';
 import { buildPaymentSettlementSummary, resolveCurrencySymbol } from './paymentSettlement';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from './terminalSnapshotSellers';
+import { normalizePrintCopies, resolveConfiguredPrintCopies, resolveTransactionPrintKind } from './printCopies';
 
 const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -204,6 +205,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
 
     const documentTitle = transaction.ncfType ? (ncfTypeLabels[transaction.ncfType] || 'FACTURA DE VENTA') : 'TICKET DE VENTA';
     const isCreditNote = transaction.ncfType === 'B04' || transaction.documentType === 'REFUND';
+    const copies = resolveConfiguredPrintCopies(config, resolveTransactionPrintKind(transaction));
     const qrPayload = String(transaction.displayId || transaction.id || '').trim();
 
     // Foreign Currency Calculation
@@ -582,6 +584,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
             terminalId: transaction.terminalId,
             jobType: 'TICKET',
             referenceId: transaction.id,
+            copies,
         });
     }
 
@@ -595,6 +598,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
             terminalId: transaction.terminalId,
             jobType: 'TICKET',
             referenceId: transaction.id,
+            copies,
         });
     }
 
@@ -680,13 +684,16 @@ export const printIntegratedPaymentArtifacts = async (
 export const printReservation = async (
     reservation: Reservation,
     config: BusinessConfig,
-    copies = 1
+    requestedCopies?: number
 ): Promise<boolean> => {
     const { companyInfo, currencySymbol, receiptConfig } = config;
     const dateStr = new Date(reservation.createdAt).toLocaleDateString();
     const timeStr = new Date(reservation.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const deliveryStr = reservation.deliveryDate ? new Date(reservation.deliveryDate).toLocaleDateString() : 'No especificada';
     const expiryStr = new Date(reservation.expiryDate).toLocaleDateString();
+    const copies = requestedCopies === undefined
+        ? resolveConfiguredPrintCopies(config, 'other')
+        : normalizePrintCopies(requestedCopies);
 
     const receiptHtml = `
         <!DOCTYPE html>
@@ -870,6 +877,7 @@ export const printPrecuenta = async (
         tableDisplayLabel?: string;
     }
 ): Promise<boolean> => {
+    const copies = resolveConfiguredPrintCopies(config, 'other');
     const { companyInfo, currencySymbol } = config;
     const dateStr = new Date().toLocaleDateString();
     const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1007,7 +1015,7 @@ export const printPrecuenta = async (
             terminalId: params.terminalId,
             jobType: 'SUBTOTAL',
             referenceId: `SUBTOTAL-${Date.now()}`,
-            copies: 1,
+            copies,
         });
     }
 
@@ -1020,7 +1028,7 @@ export const printPrecuenta = async (
         terminalId: params.terminalId,
         jobType: 'SUBTOTAL',
         referenceId: `SUBTOTAL-${Date.now()}`,
-        copies: 1,
+        copies,
     });
 
     if (printedSilently) return true;
@@ -1053,6 +1061,7 @@ export const printComanda = async (
     }
 ): Promise<boolean> => {
     const { items, table, orderNumber, customerName, areaTitle, productionAreaId, printerId } = data;
+    const copies = resolveConfiguredPrintCopies(config, 'kitchenOrder');
     const tableLabel = (table as any)?.tableDisplayLabel || (table as any)?.displayLabel || table?.name || table?.nombre;
     const padClock = (value: number) => String(value).padStart(2, '0');
     const formatClock = (date: Date) => `${padClock(date.getHours())}:${padClock(date.getMinutes())}`;
@@ -1164,7 +1173,7 @@ export const printComanda = async (
             role: 'KITCHEN',
             jobType: 'TICKET',
             referenceId: `COMANDA-${Date.now()}`,
-            copies: 1,
+            copies,
             preferredPrinterId: printerId || productionAreaId
         });
     }
@@ -1176,7 +1185,7 @@ export const printComanda = async (
             role: 'KITCHEN',
             jobType: 'TICKET',
             referenceId: `COMANDA-${Date.now()}`,
-            copies: 1,
+            copies,
             preferredPrinterId: printerId || productionAreaId
         });
     }

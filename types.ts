@@ -459,6 +459,14 @@ export interface ReceiptConfig {
   showSerialNumbers?: boolean; // NEW: Toggle printing serial numbers
   showLotNumbers?: boolean; // NEW: Toggle printing lot numbers
   showOrderNumber?: boolean;
+  documentCopies?: {
+    invoice?: number;
+    creditNote?: number;
+    kitchenOrder?: number;
+    xReport?: number;
+    zReport?: number;
+    other?: number;
+  };
 }
 
 // Document Types for all transaction categories

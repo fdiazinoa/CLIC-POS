@@ -22,21 +22,27 @@ const terminalAliases = (terminal: HistoryTerminal): string[] => [
 export const resolveHistoryTerminalName = (
   transaction: Pick<Transaction, 'terminalId' | 'terminalName'>,
   terminals: HistoryTerminal[] = []
+): string => resolveTerminalDisplayName(transaction.terminalId, terminals, transaction.terminalName);
+
+export const resolveTerminalDisplayName = (
+  terminalId: unknown,
+  terminals: HistoryTerminal[] = [],
+  persistedTerminalName?: unknown,
 ): string => {
-  const persistedName = normalize(transaction.terminalName);
+  const persistedName = normalize(persistedTerminalName);
   if (persistedName) return persistedName;
-  const requested = normalizeKey(transaction.terminalId);
+  const requested = normalizeKey(terminalId);
   const match = terminals.find(terminal =>
     terminalAliases(terminal).some(alias => normalizeKey(alias) === requested)
   );
-  if (!match) return normalize(transaction.terminalId) || 'N/D';
+  if (!match) return normalize(terminalId) || 'N/D';
 
   return [
     match.config?.terminalName,
     match.config?.erpBinding?.terminalName,
     match.name,
     match.config?.stationNumber,
-  ].map(normalize).find(Boolean) || normalize(transaction.terminalId) || 'N/D';
+  ].map(normalize).find(Boolean) || normalize(terminalId) || 'N/D';
 };
 
 const resolveLineDiscount = (item: CartItem): number => {

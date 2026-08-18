@@ -6,6 +6,7 @@ const posSource = readFileSync(
   new URL('../components/POSInterface.tsx', import.meta.url),
   'utf8'
 );
+const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 
 test('table checkout keeps the completed-sale modal mounted until the cashier closes it', () => {
   const paymentHandler = posSource.slice(
@@ -30,5 +31,18 @@ test('closing the completed-sale modal performs the deferred table navigation', 
     posSource,
     /onClose=\{\(\) => \{\s*setShowPaymentModal\(false\);\s*if \(returnToTableMapAfterPayment && onOpenTableMap\) \{\s*setReturnToTableMapAfterPayment\(false\);\s*onOpenTableMap\(\);/,
     'the explicit modal close action must return restaurant sales to the table map'
+  );
+});
+
+test('closing a restaurant order releases its edit lock without waiting for another table', () => {
+  const orderClosedHandler = appSource.slice(
+    appSource.indexOf('onTableOrderClosed={async'),
+    appSource.indexOf('onOpenAgenda=', appSource.indexOf('onTableOrderClosed={async')),
+  );
+
+  assert.match(
+    orderClosedHandler,
+    /await releaseActiveTableEditLock\(\)/,
+    'la facturación debe liberar el bloqueo de edición dentro del cierre de la mesa',
   );
 });

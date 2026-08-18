@@ -10714,6 +10714,11 @@ const AppContent: React.FC = () => {
               } catch (error) {
                 console.warn('No se pudo persistir estado libre de mesa en API:', error);
               }
+
+              const editLockReleased = await releaseActiveTableEditLock();
+              if (!editLockReleased) {
+                console.warn('La mesa se cerró, pero no se pudo confirmar la liberación inmediata del bloqueo de edición.');
+              }
             }}
             onOpenAgenda={() => setCurrentView('AGENDA')}
             onTransactionComplete={handleTransactionComplete}

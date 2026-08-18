@@ -4,6 +4,7 @@ import { buildPaymentSettlementSummary } from '../../utils/paymentSettlement';
 import { resolveTerminalSellerName } from '../../utils/terminalSnapshotSellers';
 import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../../utils/fiscalBreakdown';
 import { resolveLineDiscountPresentation } from '../../utils/lineDiscountPresentation';
+import { resolveTerminalDisplayName } from '../../utils/transactionHistoryPresentation';
 
 export interface EscPosLabelRecord {
   productId: string;
@@ -855,7 +856,12 @@ export const buildEscPosZReportPayload = (
 
   pushPair(chunks, 'Fecha', new Date(report.closedAt).toLocaleString(), width);
   pushPair(chunks, 'Cajero', report.closedByUserName || 'N/D', width);
-  pushPair(chunks, 'Terminal', report.terminalId || 'POS-01', width);
+  pushPair(
+    chunks,
+    'Terminal',
+    resolveTerminalDisplayName(report.terminalId, config?.terminals || []),
+    width,
+  );
 
   if (!hiddenModules.includes('FINANCIAL')) {
     chunks.push(divider(width));
