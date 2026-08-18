@@ -81,9 +81,11 @@ test('el diseñador vuelve al mapa cuando se abrió desde Salas', () => {
 });
 
 test('la factura muestra el descuento junto al artículo y separa el descuento general', () => {
-  assert.match(htmlPrinterSource, /Descuento artículo:/);
+  assert.match(htmlPrinterSource, /Descuento artículo \(\$\{lineDiscount\.discountPercentageLabel\}\)/);
+  assert.match(htmlPrinterSource, /Precio final:/);
   assert.match(htmlPrinterSource, /const discountTotal = Math\.max\(0, Number\(transaction\.discountAmount \|\| 0\)\)/);
-  assert.match(escPosPrinterSource, /Descuento articulo/);
+  assert.match(escPosPrinterSource, /Descuento articulo \(\$\{discount\.discountPercentageLabel\}\)/);
+  assert.match(escPosPrinterSource, /'  Precio final'/);
   assert.match(escPosPrinterSource, /DESCUENTO GENERAL/);
   assert.match(escPosPrinterSource, /globalDiscountTotal/);
 });
