@@ -3,6 +3,7 @@ import { buildEscPosZReportPayload } from './EscPosFormatter';
 import { generateZReportReceipt } from './templates/ZReportReceipt';
 import { PrintRouterService } from './PrintRouterService';
 import { shouldSuppressBrowserPrintFallback } from './PrintRuntime';
+import { resolveConfiguredPrintCopies } from '../../utils/printCopies';
 
 export const ThermalPrinterService = {
     /**
@@ -24,7 +25,9 @@ export const ThermalPrinterService = {
             // block the native thermal payload.
             const runtimeConfig = config || ({ terminals: [], availablePrinters: [] } as BusinessConfig);
             const escPosBase64 = buildEscPosZReportPayload(report, hiddenModules, config);
-            const buildReceiptHtml = () => generateZReportReceipt(report, hiddenModules);
+            const isXReport = (report as any).reportType === 'X';
+            const copies = resolveConfiguredPrintCopies(runtimeConfig, isXReport ? 'xReport' : 'zReport');
+            const buildReceiptHtml = () => generateZReportReceipt(report, hiddenModules, config);
 
             let printedSilently = false;
 
@@ -37,6 +40,7 @@ export const ThermalPrinterService = {
                     jobType: options?.jobType || 'Z_REPORT',
                     referenceId: report.id,
                     preferredPrinterId: options?.preferredPrinterId,
+                    copies,
                 });
             }
 
@@ -49,6 +53,7 @@ export const ThermalPrinterService = {
                     jobType: options?.jobType || 'Z_REPORT',
                     referenceId: report.id,
                     preferredPrinterId: options?.preferredPrinterId,
+                    copies,
                 });
             }
 

@@ -1,6 +1,11 @@
-import { ZReport } from '../../../types';
+import { BusinessConfig, ZReport } from '../../../types';
+import { resolveTerminalDisplayName } from '../../../utils/transactionHistoryPresentation';
 
-export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] = []): string => {
+export const generateZReportReceipt = (
+  report: ZReport,
+  hiddenModules: string[] = [],
+  config?: BusinessConfig,
+): string => {
   const width = '80mm'; // Standard thermal paper width
   const isXReport = (report as any).reportType === 'X';
   const reportTitle = isXReport ? 'CIERRE X (ARQUEO)' : 'REPORTE DE CIERRE (Z)';
@@ -13,6 +18,7 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
   const rawCurrency = String(report.baseCurrency || '').trim();
   const currencyCode = /^[A-Z]{3}$/.test(rawCurrency) ? rawCurrency : '';
   const currencyPrefix = currencyCode ? '' : (rawCurrency || '$');
+  const terminalName = resolveTerminalDisplayName(report.terminalId, config?.terminals || []);
 
   const formatCurrency = (amount: number) => {
     const value = Number(amount || 0);
@@ -88,7 +94,7 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
       </div>
       <div class="row" style="font-size: 14px; margin-top: 4px;">
         <span class="bold">CAJA/TERMINAL:</span>
-        <span class="bold">${report.terminalId || 'POS-01'}</span>
+        <span class="bold">${terminalName}</span>
       </div>
 
       <div class="divider"></div>

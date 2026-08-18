@@ -40,6 +40,19 @@ const PREVIEW_ITEMS = [
    },
 ];
 
+const COPY_FIELDS: Array<{
+   key: keyof NonNullable<ReceiptConfig['documentCopies']>;
+   label: string;
+   description: string;
+}> = [
+   { key: 'invoice', label: 'Factura', description: 'Tickets y facturas de venta' },
+   { key: 'creditNote', label: 'Nota de crédito', description: 'Devoluciones y comprobantes B04' },
+   { key: 'kitchenOrder', label: 'Ticket de comanda', description: 'Órdenes enviadas a producción' },
+   { key: 'xReport', label: 'Cierre X', description: 'Arqueos parciales' },
+   { key: 'zReport', label: 'Cierre Z', description: 'Cierres definitivos' },
+   { key: 'other', label: 'Otros documentos', description: 'Precuentas, reservas y documentos auxiliares' },
+];
+
 const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfig }) => {
    // Estado local para Empresa (para no guardar cambios parciales accidentalmente)
    const [localCompany, setLocalCompany] = useState<CompanyInfo>({
@@ -57,6 +70,14 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
       showSerialNumbers: config.receiptConfig?.showSerialNumbers ?? false,
       showLotNumbers: config.receiptConfig?.showLotNumbers ?? false,
       showOrderNumber: config.receiptConfig?.showOrderNumber ?? false,
+      documentCopies: {
+         invoice: config.receiptConfig?.documentCopies?.invoice ?? 1,
+         creditNote: config.receiptConfig?.documentCopies?.creditNote ?? 1,
+         kitchenOrder: config.receiptConfig?.documentCopies?.kitchenOrder ?? 1,
+         xReport: config.receiptConfig?.documentCopies?.xReport ?? 1,
+         zReport: config.receiptConfig?.documentCopies?.zReport ?? 1,
+         other: config.receiptConfig?.documentCopies?.other ?? 1,
+      },
    });
 
    const [isSaving, setIsSaving] = useState(false);
@@ -92,6 +113,21 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
          reader.onloadend = () => setLocalReceipt(prev => ({ ...prev, logo: reader.result as string }));
          reader.readAsDataURL(file);
       }
+   };
+
+   const handleCopiesChange = (
+      key: keyof NonNullable<ReceiptConfig['documentCopies']>,
+      rawValue: string,
+   ) => {
+      const parsed = Number(rawValue);
+      const copies = Number.isFinite(parsed) ? Math.min(10, Math.max(1, Math.trunc(parsed))) : 1;
+      setLocalReceipt(prev => ({
+         ...prev,
+         documentCopies: {
+            ...prev.documentCopies,
+            [key]: copies,
+         },
+      }));
    };
 
    const ToggleSwitch: React.FC<{ label: string; checked: boolean; onChange: (val: boolean) => void }> = ({ label, checked, onChange }) => (
@@ -208,6 +244,41 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                      className="w-full p-4 border border-gray-200 rounded-2xl text-sm focus:ring-4 focus:ring-purple-50 outline-none resize-none bg-gray-50 transition-all"
                      placeholder="Ej. Gracias por su visita."
                   />
+               </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+               <h2 className="text-lg font-bold text-gray-800 mb-2 flex items-center gap-2">
+                  <Receipt size={20} className="text-emerald-500" />
+                  Cantidad de impresiones
+               </h2>
+               <p className="text-xs text-gray-500 mb-5">
+                  Define de 1 a 10 copias por cada tipo de documento.
+               </p>
+
+               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {COPY_FIELDS.map(field => (
+                     <label
+                        key={field.key}
+                        className="flex items-center justify-between gap-4 p-3 bg-gray-50 rounded-xl border border-gray-200"
+                     >
+                        <span className="min-w-0">
+                           <span className="block text-sm font-bold text-gray-700">{field.label}</span>
+                           <span className="block text-[10px] text-gray-500">{field.description}</span>
+                        </span>
+                        <input
+                           type="number"
+                           inputMode="numeric"
+                           min={1}
+                           max={10}
+                           step={1}
+                           aria-label={`Copias de ${field.label}`}
+                           value={localReceipt.documentCopies?.[field.key] ?? 1}
+                           onChange={event => handleCopiesChange(field.key, event.target.value)}
+                           className="w-16 shrink-0 rounded-lg border border-gray-300 bg-white px-2 py-2 text-center text-base font-black text-slate-800 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 outline-none"
+                        />
+                     </label>
+                  ))}
                </div>
             </div>
 
