@@ -14,6 +14,7 @@ import { db } from '../../utils/db';
 import { terminalConfigRequestCoordinator } from '../sync/TerminalConfigRequestCoordinator';
 import { persistSyncDeviceToken } from '../sync/deviceToken';
 import { saveTerminalCredentialsSync } from '../sync/TerminalCredentialStore';
+import { isArchivedTerminalBindingRecord } from '../../utils/terminalBindingHierarchy';
 
 export interface RuntimeTerminalCard {
   id: string;
@@ -1246,15 +1247,7 @@ export const materializeErpTerminalCards = (input: {
   posDeviceId: string;
 }): RuntimeTerminalCard[] => {
   const activeTerminals = (Array.isArray(input.terminals) ? input.terminals : []).filter((terminal: any) => {
-    const config = asObject(terminal?.config);
-    const metadata = asObject(config.metadata || terminal?.metadata);
-    const terminalName = resolveTerminalName(terminal, asString(terminal?.id));
-    return !(
-      terminalName.toUpperCase().startsWith('ARCHIVED-')
-      || metadata.archived === true
-      || config.active === false
-      || terminal?.active === false
-    );
+    return !isArchivedTerminalBindingRecord(terminal);
   });
   const rawTerminals = dedupeErpTerminals(
     activeTerminals,
@@ -1391,6 +1384,9 @@ export const bindTerminalFromErp = async (input: {
 
   if (!targetTerminal) {
     throw new Error('La terminal no existe en el ERP para este tenant.');
+  }
+  if (isArchivedTerminalBindingRecord(targetTerminal)) {
+    throw new Error('La terminal seleccionada fue archivada en el ERP. Actualiza la lista y selecciona su identidad activa.');
   }
 
   const targetErpTerminalId = resolveRegisterErpTerminalId(targetTerminal);

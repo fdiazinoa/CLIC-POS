@@ -43,6 +43,7 @@ import {
   formatTerminalBindingLabel,
   formatTerminalBindingStatus,
   groupTerminalBindingRecords,
+  isArchivedTerminalBindingRecord,
   isTerminalBindingSelectable,
   normalizeTerminalBindingRecord,
 } from '../utils/terminalBindingHierarchy';
@@ -967,24 +968,15 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           .filter(Boolean)
       );
       const visibleRawTerminals = rawTerminals.filter((terminal: any) => {
-        const config = terminal?.config && typeof terminal.config === 'object' ? terminal.config : {};
-        const metadata = config?.metadata && typeof config.metadata === 'object'
-          ? config.metadata
-          : (terminal?.metadata && typeof terminal.metadata === 'object' ? terminal.metadata : {});
         const terminalId = String(terminal?.id || terminal?.terminal_id || terminal?.erp_terminal_id || '').trim();
         const terminalName = String(terminal?.name || terminal?.terminalName || terminal?.terminal_name || terminal?.nombre || '').trim();
-        const archived =
-          terminalName.toUpperCase().startsWith('ARCHIVED-')
-          || metadata?.archived === true
-          || config?.active === false
-          || terminal?.active === false;
+        const archived = isArchivedTerminalBindingRecord(terminal);
 
         if (archived) {
           console.info('ghost_terminal_ignored', {
             terminalId,
             terminalName,
-            archived: metadata?.archived === true,
-            active: terminal?.active ?? config?.active ?? null,
+            status: terminal?.status || terminal?.binding_status || null,
           });
         }
 
