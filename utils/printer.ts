@@ -4,6 +4,7 @@ import { buildEscPosComandaPayload, buildEscPosReservationPayload, buildEscPosSu
 import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRuntime';
 import { dbAdapter } from '../services/db';
 import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, formatTaxLineLabel } from './fiscalBreakdown';
+import { resolveLineDiscountPresentation } from './lineDiscountPresentation';
 import { buildPaymentSettlementSummary, resolveCurrencySymbol } from './paymentSettlement';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from './terminalSnapshotSellers';
 
@@ -355,11 +356,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
             const taxLineHtml = itemTaxBreakdown.length > 0
                 ? `<br/>${itemTaxBreakdown.map(tax => `${formatTaxLineLabel(tax)}: ${currencySymbol}${Number(tax.amount || 0).toFixed(2)}`).join('<br/>')}`
                 : '';
-            const originalPrice = item.originalPrice || item.price;
-            const hasDiscount = originalPrice > item.price;
-            const lineDiscount = hasDiscount
-                ? Math.max(0, (originalPrice - item.price) * item.quantity)
-                : 0;
+            const lineDiscount = resolveLineDiscountPresentation(item);
 
             const trackingHtml = [];
             if (item.trackingData && item.trackingData.length > 0) {
@@ -388,9 +385,9 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                             <td style="width: 70%;">
                                 <span class="item-name">${item.name}</span>
                                 <span class="item-meta">
-                                    ${item.quantity} x ${currencySymbol}${item.price.toFixed(2)}
-                                    ${hasDiscount ? `<span style="text-decoration: line-through; color: #999; margin-left: 5px;">${currencySymbol}${originalPrice.toFixed(2)}</span>` : ''}
-                                    ${lineDiscount > 0 ? `<br/><strong>Descuento artículo: -${currencySymbol}${lineDiscount.toFixed(2)}</strong>` : ''}
+                                    ${item.quantity} x ${currencySymbol}${(lineDiscount.hasDiscount ? lineDiscount.originalUnitPrice : lineDiscount.finalUnitPrice).toFixed(2)}
+                                    ${lineDiscount.hasDiscount ? `<br/><strong>Descuento artículo (${lineDiscount.discountPercentageLabel}): -${currencySymbol}${lineDiscount.discountAmount.toFixed(2)}</strong>` : ''}
+                                    ${lineDiscount.hasDiscount ? `<br/><strong>Precio final: ${currencySymbol}${lineDiscount.finalLineTotal.toFixed(2)}</strong>` : ''}
                                     ${item.modifiers ? `<br/>Op: ${item.modifiers.join(', ')}` : ''}
                                     ${taxLineHtml || `<br/>Impuestos: ${currencySymbol}${iTax.toFixed(2)}`}
                                     ${sellerNameHtml}

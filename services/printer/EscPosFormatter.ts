@@ -3,6 +3,7 @@ import { findTaxByIdentifier } from '../../utils/taxIdentity';
 import { buildPaymentSettlementSummary } from '../../utils/paymentSettlement';
 import { resolveTerminalSellerName } from '../../utils/terminalSnapshotSellers';
 import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../../utils/fiscalBreakdown';
+import { resolveLineDiscountPresentation } from '../../utils/lineDiscountPresentation';
 
 export interface EscPosLabelRecord {
   productId: string;
@@ -421,16 +422,23 @@ export const buildEscPosTicketPayload = (
   chunks.push(divider(width));
   transaction.items.forEach(item => {
     pushTextLines(chunks, splitLines(item.name || 'Articulo', width));
-    const qtyText = `${Number(item.quantity || 0).toFixed(item.quantity % 1 === 0 ? 0 : 3)} x ${formatMoney(config.currencySymbol || '$', item.price)}`;
-    const lineTotal = formatMoney(config.currencySymbol || '$', item.price * item.quantity);
+    const discount = resolveLineDiscountPresentation(item);
+    const displayedUnitPrice = discount.hasDiscount ? discount.originalUnitPrice : discount.finalUnitPrice;
+    const displayedLineTotal = discount.hasDiscount ? discount.originalLineTotal : discount.finalLineTotal;
+    const qtyText = `${Number(item.quantity || 0).toFixed(item.quantity % 1 === 0 ? 0 : 3)} x ${formatMoney(config.currencySymbol || '$', displayedUnitPrice)}`;
+    const lineTotal = formatMoney(config.currencySymbol || '$', displayedLineTotal);
     pushPair(chunks, qtyText, lineTotal, width);
-    const originalPrice = Number(item.originalPrice || item.price);
-    const lineDiscount = Math.max(0, (originalPrice - Number(item.price || 0)) * Number(item.quantity || 0));
-    if (lineDiscount > 0) {
+    if (discount.hasDiscount) {
       pushPair(
         chunks,
-        '  Descuento articulo',
-        `-${formatMoney(config.currencySymbol || '$', lineDiscount)}`,
+        `  Descuento articulo (${discount.discountPercentageLabel})`,
+        `-${formatMoney(config.currencySymbol || '$', discount.discountAmount)}`,
+        width
+      );
+      pushPair(
+        chunks,
+        '  Precio final',
+        formatMoney(config.currencySymbol || '$', discount.finalLineTotal),
         width
       );
     }
