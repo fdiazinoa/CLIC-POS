@@ -4,6 +4,7 @@ import {
   buildTerminalBindIdentityPayload,
   formatTerminalBindingLabel,
   groupTerminalBindingRecords,
+  isArchivedTerminalBindingRecord,
   isTerminalBindingSelectable,
   normalizeTerminalBindingRecord,
 } from '../utils/terminalBindingHierarchy';
@@ -61,6 +62,37 @@ test('conserva el UUID seleccionado en el payload autoritativo de vinculación',
     new_device_id: 'DEV-M22EYU81',
     device_name: 'Tablet recepción',
   });
+});
+
+test('prioriza id autoritativo aunque un alias ERP heredado apunte a una identidad archivada', () => {
+  const [terminal] = normalize([{
+    id: '461837f1-67d1-4ce6-b394-bf9e7b79dc8c',
+    erpTerminalId: '685cb867-70b6-4f63-aed4-8bc9e706377b',
+    terminal_name: 'Mast-01',
+    terminal_code: 'POS-001',
+  }]);
+
+  assert.equal(terminal.id, '461837f1-67d1-4ce6-b394-bf9e7b79dc8c');
+  assert.equal(terminal.erpTerminalId, terminal.id);
+  assert.equal(
+    buildTerminalBindIdentityPayload(terminal, 'DEV-MASTER').terminal_id,
+    '461837f1-67d1-4ce6-b394-bf9e7b79dc8c',
+  );
+});
+
+test('reconoce terminales archivadas aunque el nombre visible no tenga prefijo ARCHIVED', () => {
+  const archivedRecords = [
+    { id: 'a', terminal_name: 'Mast-01', status: 'ARCHIVED' },
+    { id: 'b', terminal_name: 'Mast-01', is_archived: true },
+    { id: 'c', terminal_name: 'Mast-01', archived_at: '2026-08-18T00:00:00Z' },
+    { id: 'd', terminal_name: 'Mast-01', metadata: { deleted_at: '2026-08-18T00:00:00Z' } },
+    { id: 'e', terminal_name: 'Mast-01', terminal_config: { active: false } },
+    { id: 'f', terminal_name: 'Mast-01', status: 'ACTIVE', binding_status: 'ARCHIVED' },
+    { id: 'g', terminal_name: 'Mast-01', config: {}, terminal_config: { archived: true } },
+  ];
+
+  archivedRecords.forEach(record => assert.equal(isArchivedTerminalBindingRecord(record), true));
+  assert.equal(isArchivedTerminalBindingRecord({ id: 'active', terminal_name: 'Mast-01', status: 'ACTIVE' }), false);
 });
 
 test('bloquea una terminal ocupada sin permiso de reautorización', () => {

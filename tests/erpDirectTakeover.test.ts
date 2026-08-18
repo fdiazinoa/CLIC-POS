@@ -50,6 +50,7 @@ const installErpMock = (options: {
   authorizedDeviceId?: string;
   takeoverError?: { status: number; code: string; message: string };
   registerUnauthorized?: boolean;
+  terminalOverrides?: Record<string, unknown>;
 } = {}) => {
   const requests: RequestRecord[] = [];
   const authorizedDeviceId = options.authorizedDeviceId ?? OLD_DEVICE_ID;
@@ -86,6 +87,7 @@ const installErpMock = (options: {
           company_id: 'company-1',
           store_id: 'store-1',
           currency_code: 'DOP',
+          ...(options.terminalOverrides || {}),
         }],
       });
     }
@@ -253,4 +255,19 @@ test('SLAVE no llama takeover ERP aunque forceTransfer sea true', async () => {
 
   await assert.rejects(bind({ forceTransfer: true, bindingMode: 'SLAVE' }), SetupDeviceAuthorizationError);
   assert.equal(requests.filter(({ path }) => path.endsWith('/takeover')).length, 0);
+});
+
+test('una identidad archivada se rechaza antes de takeover, profile o register', async () => {
+  storage.clear();
+  const requests = installErpMock({
+    terminalOverrides: { status: 'ARCHIVED', terminal_name: 'Mast-01' },
+  });
+
+  await assert.rejects(
+    bind({ forceTransfer: true }),
+    /terminal seleccionada fue archivada/i,
+  );
+  assert.equal(requests.filter(({ path }) => path.endsWith('/takeover')).length, 0);
+  assert.equal(requests.filter(({ path }) => path.includes('terminal-profile')).length, 0);
+  assert.equal(requests.filter(({ path }) => path === '/api/sync/terminals/register').length, 0);
 });

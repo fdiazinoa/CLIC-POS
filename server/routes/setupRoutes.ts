@@ -3,6 +3,7 @@ import { getCollection, getSetting, saveSetting } from '../db';
 import { applyTerminalConfigSnapshot, extractTerminalConfigSnapshot } from '../../utils/terminalConfigSnapshot';
 import { TerminalConfigSnapshot } from '../../types';
 import { persistOperationalDocumentState } from '../services/terminalOperationalState';
+import { isArchivedTerminalBindingRecord } from '../../utils/terminalBindingHierarchy';
 
 const router = express.Router();
 
@@ -774,7 +775,9 @@ router.get('/terminals', async (req, res) => {
 
       const erpTerminals = Array.isArray(resolvedContext.terminals) ? resolvedContext.terminals : [];
 
-      const terminals = erpTerminals.map((terminal: any) => {
+      const terminals = erpTerminals
+        .filter((terminal: any) => !isArchivedTerminalBindingRecord(terminal))
+        .map((terminal: any) => {
         const erpTerminalId = asString(terminal.id);
         const terminalCode = resolveOperationalTerminalId(terminal) || erpTerminalId;
         const terminalName = asString(terminal.terminal_name) || asString(terminal.nombre) || asString(terminal.name) || `Caja ${terminalCode}`;
@@ -922,6 +925,13 @@ router.post('/bind-terminal', async (req, res) => {
       return res.status(404).json({
         status: 'error',
         message: 'La terminal no existe en el ERP para este tenant.',
+      });
+    }
+    if (isArchivedTerminalBindingRecord(targetTerminal)) {
+      return res.status(409).json({
+        status: 'error',
+        code: 'TERMINAL_ARCHIVED',
+        message: 'La terminal seleccionada fue archivada en el ERP. Actualiza la lista y selecciona su identidad activa.',
       });
     }
 

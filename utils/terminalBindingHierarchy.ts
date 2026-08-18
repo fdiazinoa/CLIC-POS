@@ -39,8 +39,9 @@ const cleanText = (value: unknown): string => (
 
 const readBoolean = (value: unknown): boolean | undefined => {
   if (typeof value === 'boolean') return value;
-  if (value === 1 || value === '1' || value === 'true') return true;
-  if (value === 0 || value === '0' || value === 'false') return false;
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : value;
+  if (normalized === 1 || normalized === '1' || normalized === 'true') return true;
+  if (normalized === 0 || normalized === '0' || normalized === 'false') return false;
   return undefined;
 };
 
@@ -54,12 +55,82 @@ const firstText = (...values: unknown[]): string => {
   return '';
 };
 
+const asRecord = (value: unknown): Record<string, any> => (
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, any>
+    : {}
+);
+
+export const isArchivedTerminalBindingRecord = (raw: Record<string, any>): boolean => {
+  const config = {
+    ...asRecord(raw.terminal_config),
+    ...asRecord(raw.terminalConfig),
+    ...asRecord(raw.config),
+  };
+  const metadata = {
+    ...asRecord(config.metadata),
+    ...asRecord(raw.metadata),
+  };
+  const terminalNames = [raw.terminal_name, raw.terminalName, raw.nombre, raw.name]
+    .map(cleanText)
+    .filter(Boolean);
+  const lifecycleStatuses = [
+    raw.status,
+    raw.lifecycle_status,
+    raw.lifecycleStatus,
+    raw.record_status,
+    raw.recordStatus,
+    raw.profile_status,
+    raw.profileStatus,
+    raw.binding_status,
+    raw.bindingStatus,
+    config.status,
+    config.profile_status,
+    metadata.status,
+  ].map(value => cleanText(value).toUpperCase()).filter(Boolean);
+  const explicitlyArchived = [
+    raw.is_archived,
+    raw.isArchived,
+    raw.archived,
+    config.is_archived,
+    config.isArchived,
+    config.archived,
+    metadata.is_archived,
+    metadata.isArchived,
+    metadata.archived,
+  ].some(value => readBoolean(value) === true);
+  const explicitlyInactive = [raw.active, config.active, metadata.active]
+    .some(value => readBoolean(value) === false);
+  const hasArchiveTimestamp = Boolean(firstText(
+    raw.archived_at,
+    raw.archivedAt,
+    raw.deleted_at,
+    raw.deletedAt,
+    config.archived_at,
+    config.archivedAt,
+    config.deleted_at,
+    config.deletedAt,
+    metadata.archived_at,
+    metadata.archivedAt,
+    metadata.deleted_at,
+    metadata.deletedAt,
+  ));
+
+  return terminalNames.some(name => name.toUpperCase().startsWith('ARCHIVED-'))
+    || explicitlyArchived
+    || explicitlyInactive
+    || hasArchiveTimestamp
+    || lifecycleStatuses.some(status => status.includes('ARCHIV') || status.includes('DELET'));
+};
+
 export const normalizeTerminalBindingRecord = (
   raw: Record<string, any>,
   options: { deviceId?: string; tenantId?: string } = {},
 ): TerminalBindingRecord => {
   const config = raw?.config && typeof raw.config === 'object' ? raw.config : {};
-  const id = firstText(raw.erpTerminalId, raw.erp_terminal_id, raw.id, raw.terminal_id);
+  // GET /api/setup/terminals defines id/terminal_id as the authoritative UUID.
+  // ERP aliases are accepted only as a fallback for legacy responses.
+  const id = firstText(raw.id, raw.terminal_id, raw.erpTerminalId, raw.erp_terminal_id);
   const currentDeviceId = firstText(raw.currentDeviceId, raw.current_device_id, raw.device_id) || undefined;
   const bindingStatus = firstText(raw.binding_status, raw.bindingStatus).toUpperCase() || undefined;
   const explicitOccupied = readBoolean(raw.is_occupied ?? raw.occupied);
@@ -72,7 +143,7 @@ export const normalizeTerminalBindingRecord = (
   return {
     ...raw,
     id,
-    erpTerminalId: firstText(raw.erpTerminalId, raw.erp_terminal_id, id),
+    erpTerminalId: id,
     tenantId: firstText(raw.tenant_id, raw.tenantId, options.tenantId) || undefined,
     companyId: firstText(raw.company_id, raw.companyId) || undefined,
     companyName: firstText(raw.company_name, raw.companyName) || UNIDENTIFIED_COMPANY_NAME,

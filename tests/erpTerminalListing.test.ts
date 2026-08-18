@@ -109,6 +109,32 @@ test('filters archived ERP rows without hiding the active terminal with the same
   assert.equal(terminals[0].id, 'active-pos-003');
 });
 
+test('filters an archived Mast-01 even when ERP keeps its normal display name', () => {
+  const currentConfig = getInitialConfig('Restaurante' as any);
+  const terminals = materializeErpTerminalCards({
+    currentConfig,
+    posDeviceId: 'DEV-NEW-MASTER',
+    terminals: [
+      {
+        id: '461837f1-67d1-4ce6-b394-bf9e7b79dc8c',
+        terminal_code: 'POS-001',
+        terminal_name: 'Mast-01',
+        status: 'ACTIVE',
+      },
+      {
+        id: '685cb867-70b6-4f63-aed4-8bc9e706377b',
+        terminal_code: 'Mast-01',
+        terminal_name: 'Mast-01',
+        status: 'ARCHIVED',
+      },
+    ],
+  });
+
+  assert.deepEqual(terminals.map(terminal => terminal.id), [
+    '461837f1-67d1-4ce6-b394-bf9e7b79dc8c',
+  ]);
+});
+
 test('keeps a valid Master whose display name matches another terminal code', () => {
   const currentConfig = getInitialConfig('Restaurante' as any);
   const terminals = materializeErpTerminalCards({
