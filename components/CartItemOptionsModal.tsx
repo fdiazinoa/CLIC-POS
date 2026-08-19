@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { CartItem, BusinessConfig, User as UserType, RoleDefinition } from '../types';
 import { TerminalSnapshotSeller } from '../utils/terminalSnapshotSellers';
+import { canStepCartQuantity } from '../utils/cartQuantity';
 
 interface CartItemOptionsModalProps {
   item: CartItem;
@@ -59,7 +60,8 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   }, [incomingSalesUsers, users, roles]);
 
   const handleQuantityChange = (delta: number) => {
-    const newQty = Math.max(0.001, quantity + delta);
+    if (!canStepCartQuantity(quantity, delta)) return;
+    const newQty = quantity + delta;
     setQuantity(parseFloat(newQty.toFixed(3)));
   };
 
@@ -203,7 +205,8 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
           <div className="bg-white p-4 rounded-[2rem] border border-gray-100 shadow-sm flex items-center justify-between">
             <button
               onClick={() => handleQuantityChange(-1)}
-              className="w-16 h-16 rounded-2xl bg-gray-50 hover:bg-gray-100 text-gray-400 flex items-center justify-center active:scale-90 transition-all"
+              disabled={!canStepCartQuantity(quantity, -1)}
+              className="w-16 h-16 rounded-2xl bg-gray-50 hover:bg-gray-100 text-gray-400 flex items-center justify-center active:scale-90 transition-all disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Minus size={28} strokeWidth={3} />
             </button>
@@ -215,7 +218,8 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
 
             <button
               onClick={() => handleQuantityChange(1)}
-              className={`w-16 h-16 rounded-2xl text-white shadow-lg shadow-blue-100 flex items-center justify-center active:scale-90 transition-all ${themeClasses}`}
+              disabled={!canStepCartQuantity(quantity, 1)}
+              className={`w-16 h-16 rounded-2xl text-white shadow-lg shadow-blue-100 flex items-center justify-center active:scale-90 transition-all disabled:cursor-not-allowed disabled:opacity-40 ${themeClasses}`}
             >
               <Plus size={28} strokeWidth={3} />
             </button>

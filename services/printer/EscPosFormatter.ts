@@ -5,6 +5,7 @@ import { resolveTerminalSellerName } from '../../utils/terminalSnapshotSellers';
 import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../../utils/fiscalBreakdown';
 import { resolveLineDiscountPresentation } from '../../utils/lineDiscountPresentation';
 import { resolveTerminalDisplayName } from '../../utils/transactionHistoryPresentation';
+import { resolveGlobalDiscountLabel } from '../../utils/globalDiscountPresentation';
 
 export interface EscPosLabelRecord {
   productId: string;
@@ -419,9 +420,12 @@ export const buildEscPosTicketPayload = (
     B15: 'GUBERNAMENTAL'
   };
 
-  const documentTitle = transaction.ncfType
-    ? (ncfTypeLabels[transaction.ncfType] || 'FACTURA DE VENTA')
-    : 'TICKET DE VENTA';
+  const isCreditNote = transaction.ncfType === 'B04' || transaction.documentType === 'REFUND';
+  const documentTitle = isCreditNote
+    ? 'NOTA DE CREDITO'
+    : transaction.ncfType
+      ? (ncfTypeLabels[transaction.ncfType] || 'FACTURA DE VENTA')
+      : 'TICKET DE VENTA';
   const qrPayload = String(transaction.displayId || transaction.id || '').trim();
   const foreignCurrencyLines = config.receiptConfig?.showForeignCurrencyTotals && config.currencies
     ? config.currencies
@@ -502,7 +506,13 @@ export const buildEscPosTicketPayload = (
     pushPair(chunks, 'IMPUESTOS', formatMoney(config.currencySymbol || '$', receiptTaxTotal), width);
   }
   if (totals.globalDiscountTotal > 0) {
-    pushPair(chunks, 'DESCUENTO GENERAL', formatMoney(config.currencySymbol || '$', totals.globalDiscountTotal), width);
+    pushPair(chunks, resolveGlobalDiscountLabel({
+      discountAmount: totals.globalDiscountTotal,
+      subtotalBeforeDiscount: receiptSubtotal,
+      discountType: transaction.discountType,
+      discountValue: transaction.discountValue,
+      baseLabel: 'DESCUENTO GENERAL',
+    }), formatMoney(config.currencySymbol || '$', totals.globalDiscountTotal), width);
   }
   chunks.push(bold(true));
   pushPair(chunks, 'TOTAL', formatMoney(config.currencySymbol || '$', receiptTotal), width);
@@ -796,6 +806,8 @@ export const buildEscPosSubtotalPayload = (
     items: CartItem[];
     subtotal: number;
     discountTotal: number;
+    discountType?: 'PERCENT' | 'FIXED';
+    discountValue?: number;
     taxTotal: number;
     finalTotal: number;
     table?: Table | null;
@@ -843,7 +855,12 @@ export const buildEscPosSubtotalPayload = (
   chunks.push(divider(width));
   pushPair(chunks, 'SUBTOTAL', formatMoney(config.currencySymbol || '$', params.subtotal), width);
   if (params.discountTotal > 0) {
-    pushPair(chunks, 'DESCUENTO', `-${formatMoney(config.currencySymbol || '$', params.discountTotal)}`, width);
+    pushPair(chunks, resolveGlobalDiscountLabel({
+      discountAmount: params.discountTotal,
+      subtotalBeforeDiscount: params.subtotal,
+      discountType: params.discountType,
+      discountValue: params.discountValue,
+    }), `-${formatMoney(config.currencySymbol || '$', params.discountTotal)}`, width);
   }
   pushPair(chunks, 'IMPUESTOS', formatMoney(config.currencySymbol || '$', params.taxTotal), width);
   chunks.push(bold(true));

@@ -63,6 +63,7 @@ import { requestJson } from '../services/network/httpClient';
 import ProductTableSupermarket from './ProductTableSupermarket';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { printComanda, printPrecuenta } from '../utils/printer';
+import { canStepCartQuantity, isValidCartQuantity, isValidCartQuantityTransition } from '../utils/cartQuantity';
 import ModifierModal from './ModifierModal';
 import { productHasRestaurantConfiguration, resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
 import { visorSync } from '../utils/visorSync';
@@ -3115,7 +3116,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const existingTaxSignature = resolveEffectiveTaxIds(i.appliedTaxIds, activeTerminalConfig).slice().sort().join('|');
          const existingIdentityKey = String((i as any).cartIdentityKey || productLineIdentityKey(i, i.price));
          const existingConsignmentKey = i.consignmentLineId || '';
-         return existingIdentityKey === lineIdentityKey && existingConsignmentKey === consignmentIdentityKey && (i.variantSku || '') === (variantSku || '') && iMods === modifiersString && i.price === finalPrice && existingTaxSignature === taxSignature;
+         return existingIdentityKey === lineIdentityKey
+            && Math.sign(Number(i.quantity || 0)) === Math.sign(quantity)
+            && existingConsignmentKey === consignmentIdentityKey
+            && (i.variantSku || '') === (variantSku || '')
+            && iMods === modifiersString
+            && i.price === finalPrice
+            && existingTaxSignature === taxSignature;
       });
 
       let targetCartId: string;
@@ -3129,6 +3136,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                subtotalizedAt: undefined,
                subtotalizedBy: undefined,
                quantity: existing.quantity + quantity,
+               isReturnLine: existing.isReturnLine || quantity < 0,
                appliedTaxIds: effectiveTaxIds,
                createdAt: existing.createdAt || new Date().toISOString(),
                production_area_id: resolveProductionAreaId(existing) || productionAreaId || undefined,
@@ -3144,6 +3152,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             cartId: newCartId,
             createdAt: new Date().toISOString(),
             quantity,
+            isReturnLine: quantity < 0,
             price: finalPrice,
             modifiers,
             note,
@@ -4480,6 +4489,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // Update Check (Price Override / Discount)
          const originalItem = (cart || []).find(i => i.cartId === updatedItem.cartId);
 
+         if (!originalItem || !isValidCartQuantityTransition(originalItem.quantity, updatedItem.quantity)) {
+            setErrorToast('La cantidad no puede llegar a cero ni cambiar una venta en devolución. Use Eliminar o el modo Devolución.');
+            window.setTimeout(() => setErrorToast(null), 4000);
+            return;
+         }
+
          if (isKitchenDispatchedCartItem(originalItem)) {
             const originalQty = Number(originalItem.quantity || 0);
             const nextQty = Number(updatedItem.quantity || 0);
@@ -4693,6 +4708,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       };
 
       try {
+         const invalidQuantityItem = processedCart.find(item => !isValidCartQuantity(item.quantity));
+         if (invalidQuantityItem) {
+            alert(`La cantidad de "${invalidQuantityItem.name}" no es válida. Elimine la línea y agréguela nuevamente.`);
+            return null;
+         }
+         const unclassifiedReturnItem = processedCart.find(item => Number(item.quantity) < 0 && item.isReturnLine !== true);
+         if (unclassifiedReturnItem && !refundAuthorizedBy) {
+            alert(`La línea negativa "${unclassifiedReturnItem.name}" no fue creada desde el modo Devolución. Corrija el ticket antes de cobrar.`);
+            return null;
+         }
+
          const fractionPlan = activeParkedTicket?.paymentFraction;
          const currentFractionPart = isPaymentFractionPlanCurrent(fractionPlan, cartTotal)
             ? fractionPlan?.parts.find(part => part.status === 'PENDING')
@@ -5124,6 +5150,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   taxAmount: taxAmount,
                   netAmount: netAmount,
                   discountAmount: discountAmount,
+                  discountType: globalDiscount.type,
+                  discountValue: globalDiscount.value,
                   ...(isRefundOnly ? {} : couponSyncFields),
                   customerSnapshot: customerForCheckout ? {
                      name: customerForCheckout.name,
@@ -5370,6 +5398,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const proceedToCheckout = async () => {
       if (isOrderTakerMode) {
          await handleSendAndExit();
+         return;
+      }
+      const invalidQuantityItem = cart.find(item => !isValidCartQuantity(item.quantity));
+      if (invalidQuantityItem) {
+         alert(`La cantidad de "${invalidQuantityItem.name}" no es válida. Elimine la línea y agréguela nuevamente.`);
+         return;
+      }
+      const unclassifiedReturnItem = cart.find(item => Number(item.quantity) < 0 && item.isReturnLine !== true);
+      if (unclassifiedReturnItem && !refundAuthorizedBy) {
+         alert(`La línea negativa "${unclassifiedReturnItem.name}" no fue creada desde el modo Devolución. Corrija el ticket antes de cobrar.`);
          return;
       }
       const hasSaleLines = cart.some(item => Number(item.quantity || 0) > 0);
@@ -5900,6 +5938,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             items: processedCart.filter(item => Number(item.quantity || 0) > 0),
             subtotal: cartSubtotal,
             discountTotal: discountAmount,
+            discountType: globalDiscount.type,
+            discountValue: globalDiscount.value,
             taxTotal: cartTax,
             finalTotal: cartTotal,
             table: activeTable,
@@ -6340,6 +6380,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   setShowSupervisorAuth(true);
                   return;
                }
+               setRefundAuthorizedBy({ id: currentUser.id, name: currentUser.name });
             }
             if (isReturnMode) setRefundAuthorizedBy(null);
             setIsReturnMode(!isReturnMode);
@@ -7571,7 +7612,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                       }
                                                       updateCartItem({ ...item, cartId: item.cartId, quantity: item.quantity - 1 });
                                                    }}
-                                                   disabled={isDispatchedToKds}
+                                                   disabled={isDispatchedToKds || !canStepCartQuantity(item.quantity, -1)}
                                                    className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-all hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
                                                 >
                                                    <Minus size={13} strokeWidth={3} />
@@ -7587,7 +7628,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                       }
                                                       updateCartItem({ ...item, cartId: item.cartId, quantity: item.quantity + 1 });
                                                    }}
-                                                   disabled={isDispatchedToKds}
+                                                   disabled={isDispatchedToKds || !canStepCartQuantity(item.quantity, 1)}
                                                    className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
                                                 >
                                                    <Plus size={13} strokeWidth={3} />
@@ -7716,7 +7757,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                    }
                                                    updateCartItem({ ...item, quantity: item.quantity - 1 });
                                                 }}
-                                                disabled={isDispatchedToKds}
+                                                disabled={isDispatchedToKds || !canStepCartQuantity(item.quantity, -1)}
                                                 className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
                                                 title="Restar cantidad"
                                              >
@@ -7732,7 +7773,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                    }
                                                    updateCartItem({ ...item, quantity: item.quantity + 1 });
                                                 }}
-                                                disabled={isDispatchedToKds}
+                                                disabled={isDispatchedToKds || !canStepCartQuantity(item.quantity, 1)}
                                                 className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
                                                 title="Sumar cantidad"
                                              >
