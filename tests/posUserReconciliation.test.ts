@@ -3,8 +3,11 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   explicitlyRemovesPosUser,
+  isDefaultSeedPosUser,
+  posUserRostersMatch,
   reconcilePosUsers,
   resolvePosUserId,
+  withoutDefaultSeedPosUsers,
   type SyncedPosUser,
 } from '../utils/posUserReconciliation';
 
@@ -69,6 +72,45 @@ test('un snapshot global autoritativo reemplaza solo usuarios ERP anteriores', (
   assert.deepEqual(result.map((entry) => entry.id), ['local', 'erp-new']);
 });
 
+test('identifica semillas actuales y heredadas sin confundir usuarios ERP', () => {
+  const legacySeed = user('u1', 'Admin Master', { role: 'ADMIN', roleId: 'ADMIN' });
+  const taggedSeed = user('custom', 'Demo', { syncSource: 'LOCAL_SEED' });
+  const erpUserWithLegacyIdentity = user('u1', 'Admin Master', {
+    role: 'ADMIN',
+    roleId: 'ADMIN',
+    syncSource: 'ERP_SNAPSHOT',
+  });
+
+  assert.equal(isDefaultSeedPosUser(legacySeed), true);
+  assert.equal(isDefaultSeedPosUser(taggedSeed), true);
+  assert.equal(isDefaultSeedPosUser(erpUserWithLegacyIdentity), false);
+  assert.deepEqual(withoutDefaultSeedPosUsers([legacySeed, user('erp', 'ERP')]).map((entry) => entry.id), ['erp']);
+});
+
+test('un padrón ERP válido retira semillas pero una respuesta vacía no las borra', () => {
+  const legacySeed = user('u2', 'Cajero Principal', { role: 'CASHIER', roleId: 'CASHIER' });
+  const erpUser = user('erp', 'Operador ERP', { syncSource: 'ERP_SNAPSHOT' });
+
+  const refreshed = reconcilePosUsers({
+    existingUsers: [legacySeed],
+    incomingUsers: [erpUser],
+    removeDefaultSeedUsers: true,
+  });
+  assert.deepEqual(refreshed.map((entry) => entry.id), ['erp']);
+
+  const offline = reconcilePosUsers({
+    existingUsers: [legacySeed],
+    incomingUsers: [],
+    removeDefaultSeedUsers: true,
+  });
+  assert.deepEqual(offline, [legacySeed]);
+});
+
+test('la comparación del padrón detecta cambios aunque la cantidad sea igual', () => {
+  assert.equal(posUserRostersMatch([user('erp', 'Ana')], [user('erp', 'Ana')]), true);
+  assert.equal(posUserRostersMatch([user('erp', 'Ana')], [user('erp', 'Ana actualizada')]), false);
+});
+
 test('resuelve identificadores de contratos ERP por alias conocidos', () => {
   assert.equal(resolvePosUserId({ user_id: 'erp-user' }), 'erp-user');
   assert.equal(resolvePosUserId({ email: 'user@example.com' }), 'user@example.com');
@@ -80,4 +122,7 @@ test('pairing y full pull usan la reconciliación protegida', () => {
   assert.doesNotMatch(appSource, /setUsers\(setupResult\.boundUsers\)/);
   assert.match(syncSource, /safeItems = await this\.reconcileFullDownloadPosUsers\(safeItems, items\)/);
   assert.match(syncSource, /safeItems = await this\.reconcileFullDownloadPosUsers\(safeItems, fullItems\)/);
+  assert.match(syncSource, /removeDefaultSeedUsers: true/);
+  assert.match(appSource, /refreshErpPosUserRoster\(finalConfig\)/);
+  assert.match(appSource, /removeDefaultSeedUsers: isErpDirectBinding/);
 });
