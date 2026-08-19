@@ -179,9 +179,9 @@ export const DEFAULT_TERMINAL_CONFIG = {
 };
 
 export const MOCK_USERS: User[] = [
-  { id: 'u1', name: 'Admin Master', pin: '1234', role: 'ADMIN', roleId: 'ADMIN' },
-  { id: 'u2', name: 'Cajero Principal', pin: '0000', role: 'CASHIER', roleId: 'CASHIER' },
-  { id: 'u3', name: 'Supervisor Turno', pin: '9999', role: 'SUPERVISOR', roleId: 'SUPERVISOR' }
+  { id: 'u1', name: 'Admin Master', pin: '1234', role: 'ADMIN', roleId: 'ADMIN', syncSource: 'LOCAL_SEED' },
+  { id: 'u2', name: 'Cajero Principal', pin: '0000', role: 'CASHIER', roleId: 'CASHIER', syncSource: 'LOCAL_SEED' },
+  { id: 'u3', name: 'Supervisor Turno', pin: '9999', role: 'SUPERVISOR', roleId: 'SUPERVISOR', syncSource: 'LOCAL_SEED' }
 ];
 
 export const DEFAULT_ROLES: RoleDefinition[] = [
