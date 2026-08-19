@@ -993,7 +993,15 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    if (editingTariff) return <TariffForm initialData={editingTariff === 'NEW' ? null : editingTariff} products={products} config={config} availableTariffs={tariffs} onSave={handleSaveTariff} onUpdateProducts={onUpdateProducts} onClose={() => setEditingTariff(null)} />;
    if (editingGroup) return <GroupForm initialData={editingGroup === 'NEW' ? null : editingGroup} products={products} onSave={handleSaveGroup} onClose={() => setEditingGroup(null)} />;
    if (editingSeason) return <SeasonForm initialData={editingSeason === 'NEW' ? null : editingSeason} products={products} onSave={handleSaveSeason} onClose={() => setEditingSeason(null)} />;
-   if (viewMode === 'CLASSIFICATIONS') return <ClassificationManager config={config} onUpdateConfig={onUpdateConfig} onClose={() => setViewMode('PRODUCTS')} />;
+   if (viewMode === 'CLASSIFICATIONS') return (
+      <ClassificationManager
+         config={config}
+         products={products}
+         onUpdateProducts={onUpdateProducts}
+         onUpdateConfig={onUpdateConfig}
+         onClose={() => setViewMode('PRODUCTS')}
+      />
+   );
 
    async function handleSaveProduct(savedProduct: Product) {
       try {

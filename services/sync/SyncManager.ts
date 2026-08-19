@@ -4652,17 +4652,31 @@ class SyncManager {
                 if (!name) continue;
                 const id = normalizeName(record.id || record.uuid || record.code || `${fallbackPrefix}-${index + 1}`);
                 const code = normalizeName(record.code || record.codigo || id || name);
+                const rawSortOrder = record.sortOrder ?? record.sort_order ?? record.displayOrder ?? record.display_order ?? record.posSortOrder ?? record.pos_sort_order;
+                const numericSortOrder = rawSortOrder === '' || rawSortOrder === null || rawSortOrder === undefined
+                    ? undefined
+                    : Number(rawSortOrder);
+                const rawIsActive = record.isActive ?? record.is_active ?? record.isEnabled ?? record.is_enabled ?? record.enabled ?? record.active;
                 byId.set(id || code || name, {
                     id: id || code || name,
                     code: code || id || name,
                     name,
                     parentId: normalizeName(record.parentId || record.parent_id || record.parent || record.parentCode || record.parent_code) || undefined,
+                    color: normalizeName(record.color || record.hexColor || record.hex_color || record.posColor || record.pos_color) || undefined,
+                    sortOrder: Number.isFinite(numericSortOrder) ? numericSortOrder : undefined,
+                    isActive: rawIsActive === undefined || rawIsActive === null
+                        ? true
+                        : rawIsActive !== false && rawIsActive !== 0 && rawIsActive !== 'false',
                     source: 'ERP_TERMINAL_CONFIG',
                     syncSource: 'ERP_SNAPSHOT',
                     updatedAt: new Date().toISOString(),
                 });
             }
-            return Array.from(byId.values()).sort((left, right) => String(left.name).localeCompare(String(right.name)));
+            return Array.from(byId.values()).sort((left, right) => {
+                const leftOrder = Number.isFinite(left.sortOrder) ? left.sortOrder : Number.MAX_SAFE_INTEGER;
+                const rightOrder = Number.isFinite(right.sortOrder) ? right.sortOrder : Number.MAX_SAFE_INTEGER;
+                return leftOrder - rightOrder || String(left.name).localeCompare(String(right.name));
+            });
         };
         const normalizeRefs = (value: unknown): string[] => {
             const rawItems = Array.isArray(value) ? value : [];
@@ -4745,11 +4759,21 @@ class SyncManager {
             const name = normalizeName(record.name || record.nombre || record.label || record.description || record.descripcion || entry);
             if (!name) continue;
             const code = normalizeName(record.code || record.id || name);
+            const rawSortOrder = record.sortOrder ?? record.sort_order ?? record.displayOrder ?? record.display_order ?? record.posSortOrder ?? record.pos_sort_order;
+            const numericSortOrder = rawSortOrder === '' || rawSortOrder === null || rawSortOrder === undefined
+                ? undefined
+                : Number(rawSortOrder);
+            const rawIsActive = record.isActive ?? record.is_active ?? record.isEnabled ?? record.is_enabled ?? record.enabled ?? record.active;
             await db.saveDocument('categories' as any, {
                 id: normalizeName(record.id) || code || `erp-category-${index + 1}`,
                 code: code || name,
                 name,
                 description: normalizeName(record.description || record.descripcion) || undefined,
+                color: normalizeName(record.color || record.hexColor || record.hex_color || record.posColor || record.pos_color) || undefined,
+                sortOrder: Number.isFinite(numericSortOrder) ? numericSortOrder : undefined,
+                isActive: rawIsActive === undefined || rawIsActive === null
+                    ? true
+                    : rawIsActive !== false && rawIsActive !== 0 && rawIsActive !== 'false',
                 source: 'ERP_TERMINAL_CONFIG',
                 syncSource: 'ERP_SNAPSHOT',
                 updatedAt: new Date().toISOString(),

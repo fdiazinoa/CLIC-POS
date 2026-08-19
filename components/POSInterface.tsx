@@ -111,6 +111,13 @@ import {
    selectProductionRoutingStrategy,
    shouldRefreshClientProductionRouting,
 } from '../utils/productionRoutingAssignment';
+import {
+   comparePosProducts,
+   readableTextColor,
+   resolveClassificationActive,
+   resolveClassificationColor,
+   resolveClassificationSortOrder,
+} from '../utils/posCatalogPresentation';
 
 // ... existing imports
 
@@ -1550,8 +1557,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const categoryLookup = useMemo(() => {
       const aliasToCanonical = new Map<string, string>();
       const canonicalToDisplay = new Map<string, string>();
+      const presentationByCanonical = new Map<string, { color?: string; sortOrder: number; isActive: boolean }>();
 
-      for (const category of config.posCategories || []) {
+      const categoryPresentationSources = [
+         ...(config.families || []),
+         ...(config.posCategories || []),
+      ];
+      for (const [index, category] of categoryPresentationSources.entries()) {
          const aliases = [category.id, category.code, category.name]
             .map((value) => normalizeScopeKey(value))
             .filter(Boolean);
@@ -1560,11 +1572,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (!canonical || !displayName) continue;
 
          canonicalToDisplay.set(canonical, displayName);
+         presentationByCanonical.set(canonical, {
+            color: resolveClassificationColor(category),
+            sortOrder: resolveClassificationSortOrder(category, index),
+            isActive: resolveClassificationActive(category),
+         });
          aliases.forEach((alias) => aliasToCanonical.set(alias, canonical));
       }
 
-      return { aliasToCanonical, canonicalToDisplay };
-   }, [config.posCategories, normalizeScopeKey]);
+      return { aliasToCanonical, canonicalToDisplay, presentationByCanonical };
+   }, [config.families, config.posCategories, normalizeScopeKey]);
    const canonicalizeCategory = useCallback((value: unknown) => {
       const normalized = normalizeScopeKey(value);
       return categoryLookup.aliasToCanonical.get(normalized) || normalized;
@@ -3880,19 +3897,28 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          const matchCat = Boolean(normalizedSearch) || normalizedCategoryFilter === 'ALL' || entry.normalizedCategory === normalizedCategoryFilter;
          const matchAllowedCat = effectiveAllowedCategorySet.size === 0 || effectiveAllowedCategorySet.has(entry.normalizedCategory);
+         const categoryIsVisible = categoryLookup.presentationByCanonical.get(entry.normalizedCategory)?.isActive !== false;
 
          // La grilla no debe quedar vacía mientras llegan bloques de stock/precios; el bloqueo duro ocurre al agregar al carrito.
-         return matchSearch && matchCat && matchAllowedCat && entry.isSellable && entry.hasActiveTariff;
+         return matchSearch && matchCat && matchAllowedCat && categoryIsVisible && entry.isSellable && entry.hasActiveTariff;
       });
 
       // Defensive: Ensure unique IDs to prevent React key warnings
       const seenIds = new Set();
-         return filtered.map((entry) => entry.product).filter(p => {
+         return filtered.sort((left, right) => {
+            const leftCategoryOrder = categoryLookup.presentationByCanonical.get(left.normalizedCategory)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
+            const rightCategoryOrder = categoryLookup.presentationByCanonical.get(right.normalizedCategory)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
+            if (leftCategoryOrder !== rightCategoryOrder) return leftCategoryOrder - rightCategoryOrder;
+            if (left.normalizedCategory !== right.normalizedCategory) {
+               return left.displayCategory.localeCompare(right.displayCategory, 'es', { sensitivity: 'base' });
+            }
+            return comparePosProducts(left.product, right.product);
+         }).map((entry) => entry.product).filter(p => {
             if (seenIds.has(p.id)) return false;
             seenIds.add(p.id);
             return true;
          });
-   }, [salesCatalogProductEntries, categoryFilter, searchTerm, canonicalizeCategory, effectiveAllowedCategorySet]);
+   }, [salesCatalogProductEntries, categoryFilter, searchTerm, canonicalizeCategory, effectiveAllowedCategorySet, categoryLookup.presentationByCanonical]);
 
    const submitProductTextSearch = useCallback((rawValue: string, focusTarget?: React.RefObject<HTMLInputElement>): boolean => {
       const normalizedTextSearch = normalizeSearchToken(rawValue);
@@ -3902,7 +3928,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const textMatch = normalizedTextSearch
          ? salesCatalogProductEntries.find((entry) => {
             const allowedCategory = effectiveAllowedCategorySet.size === 0 || effectiveAllowedCategorySet.has(entry.normalizedCategory);
-            return entry.searchText.includes(normalizedTextSearch) && allowedCategory && entry.isSellable && entry.hasActiveTariff;
+            const categoryIsVisible = categoryLookup.presentationByCanonical.get(entry.normalizedCategory)?.isActive !== false;
+            return entry.searchText.includes(normalizedTextSearch) && allowedCategory && categoryIsVisible && entry.isSellable && entry.hasActiveTariff;
          })
          : null;
 
@@ -3913,7 +3940,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       return Boolean(normalizedTextSearch);
-   }, [salesCatalogProductEntries, effectiveAllowedCategorySet, filteredProducts, handleProductClick]);
+   }, [salesCatalogProductEntries, effectiveAllowedCategorySet, filteredProducts, handleProductClick, categoryLookup.presentationByCanonical]);
 
    submitProductTextSearchRef.current = submitProductTextSearch;
 
@@ -3947,13 +3974,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const categoryOptions = useMemo(() => {
       const allowedCategoryOptions = Array.from(effectiveAllowedCategorySet)
-         .map((category) => ({
-            id: canonicalizeCategory(category),
-            label: displayCategory(category),
-         }))
-         .filter((category) => category.id && category.label);
+         .map((category) => {
+            const id = canonicalizeCategory(category);
+            const presentation = categoryLookup.presentationByCanonical.get(id);
+            return {
+               id,
+               label: displayCategory(category),
+               color: presentation?.color,
+               sortOrder: presentation?.sortOrder ?? Number.MAX_SAFE_INTEGER,
+               isActive: presentation?.isActive !== false,
+            };
+         })
+         .filter((category) => category.id && category.label && category.isActive);
       const availableProducts = salesCatalogProductEntries.filter((entry) => {
          if (!entry.isSellable || !entry.hasActiveTariff) return false;
+         if (categoryLookup.presentationByCanonical.get(entry.normalizedCategory)?.isActive === false) return false;
          if (effectiveAllowedCategorySet.size > 0) {
             if (!effectiveAllowedCategorySet.has(entry.normalizedCategory)) return false;
          }
@@ -3969,21 +4004,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       const productCategories = Array.from(availableCategoryMap.entries())
-         .map(([id, label]) => ({ id, label }))
-         .sort((a, b) => a.label.localeCompare(b.label, 'es', { sensitivity: 'base' }));
+         .map(([id, label]) => {
+            const presentation = categoryLookup.presentationByCanonical.get(id);
+            return {
+               id,
+               label,
+               color: presentation?.color,
+               sortOrder: presentation?.sortOrder ?? Number.MAX_SAFE_INTEGER,
+               isActive: presentation?.isActive !== false,
+            };
+         })
+         .filter(category => category.isActive)
+         .sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label, 'es', { sensitivity: 'base' }));
 
       const scopedCategories = productCategories.length > 0
          ? productCategories
          : allowedCategoryOptions;
 
-      const dedupedCategoryOptions = new Map<string, { id: string; label: string }>();
+      const dedupedCategoryOptions = new Map<string, { id: string; label: string; color?: string; sortOrder: number; isActive: boolean }>();
       for (const category of scopedCategories) {
          if (!category.id || dedupedCategoryOptions.has(category.id)) continue;
          dedupedCategoryOptions.set(category.id, category);
       }
 
-      return [{ id: 'ALL', label: 'Todas' }, ...Array.from(dedupedCategoryOptions.values())];
-   }, [canonicalizeCategory, displayCategory, effectiveAllowedCategorySet, salesCatalogProductEntries]);
+      return [{ id: 'ALL', label: 'Todas', sortOrder: -1, isActive: true }, ...Array.from(dedupedCategoryOptions.values())];
+   }, [canonicalizeCategory, displayCategory, effectiveAllowedCategorySet, salesCatalogProductEntries, categoryLookup.presentationByCanonical]);
 
    const categoryOptionIds = useMemo(() => categoryOptions.map((option) => option.id), [categoryOptions]);
 
@@ -6860,6 +6905,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                {categoryOptions.map((categoryOption, idx) => {
                   const selectedCategoryKey = categoryFilter === 'ALL' ? 'ALL' : canonicalizeCategory(categoryFilter);
                   const isActiveCategory = selectedCategoryKey === categoryOption.id;
+                  const configuredColor = categoryOption.color;
                   const categoryTone = [
                      { idle: 'bg-indigo-100 border-indigo-200 text-indigo-800 hover:bg-indigo-200', active: 'bg-indigo-600 border-indigo-600 text-white shadow-indigo-200' },
                      { idle: 'bg-emerald-100 border-emerald-200 text-emerald-800 hover:bg-emerald-200', active: 'bg-emerald-600 border-emerald-600 text-white shadow-emerald-200' },
@@ -6868,13 +6914,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      { idle: 'bg-sky-100 border-sky-200 text-sky-800 hover:bg-sky-200', active: 'bg-sky-600 border-sky-600 text-white shadow-sky-200' },
                      { idle: 'bg-amber-100 border-amber-200 text-amber-900 hover:bg-amber-200', active: 'bg-amber-500 border-amber-500 text-slate-950 shadow-amber-200' },
                   ][idx % 6];
+                  const configuredStyle = configuredColor ? {
+                     backgroundColor: isActiveCategory ? configuredColor : `${configuredColor}1F`,
+                     borderColor: configuredColor,
+                     color: isActiveCategory ? readableTextColor(configuredColor) : configuredColor,
+                  } : undefined;
                   return (
                   <button
                      key={categoryOption.id || `cat-${idx}`}
                      onClick={() => setCategoryFilter(categoryOption.id)}
+                     style={configuredStyle}
                      className={`h-[48px] min-w-[116px] px-6 rounded-xl text-[12px] font-black uppercase tracking-[0.1em] transition-all whitespace-nowrap border shadow-sm active:scale-95 ${isActiveCategory
-                        ? `${categoryTone.active} shadow-lg -translate-y-0.5`
-                        : `${categoryTone.idle} hover:-translate-y-0.5 hover:shadow-md`
+                        ? `${configuredColor ? '' : categoryTone.active} shadow-lg -translate-y-0.5`
+                        : `${configuredColor ? '' : categoryTone.idle} hover:-translate-y-0.5 hover:shadow-md`
                         }`}
                   >
                      {categoryOption.label}

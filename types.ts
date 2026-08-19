@@ -1147,6 +1147,10 @@ export interface ClassificationItem {
   name: string;
   code?: string;
   parentId?: string; // For hierarchy (e.g. Section -> Department)
+  /** Presentación y disponibilidad de la clasificación en el catálogo POS. */
+  color?: string;
+  sortOrder?: number;
+  isActive?: boolean;
 }
 
 export interface BusinessConfig {
@@ -1391,6 +1395,8 @@ export interface Product {
   name: string;
   price: number;
   category: string;
+  /** Orden visual del artículo dentro de su categoría en el POS. */
+  posSortOrder?: number;
   stock?: number;
   qty_committed?: number; // Committed for events/bookings
   image?: string;
