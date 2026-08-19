@@ -8,6 +8,7 @@ import {
 import { Product, BusinessConfig, Promotion, PromotionType, PromotionRecommendation, Transaction } from '../types';
 import { calculateEffectiveness, generateRecommendations } from '../utils/promotionAnalytics';
 import CouponManager from './CouponManager';
+import { isValidRemoteMediaUrl } from '../utils/media';
 
 interface PromotionBuilderProps {
    products: Product[];
@@ -124,6 +125,8 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
    const [isActive, setIsActive] = useState(true);
    const [priority, setPriority] = useState<number>(1);
    const [selectedTerminals, setSelectedTerminals] = useState<string[]>([]); // Empty = All
+   const [videoUrl, setVideoUrl] = useState('');
+   const [videoPosterUrl, setVideoPosterUrl] = useState('');
 
    // Computed Lists
    const categories = Array.from(new Set(products.map(p => p.category)));
@@ -175,6 +178,8 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
       setIsActive(true);
       setPriority(1);
       setSelectedTerminals([]);
+      setVideoUrl('');
+      setVideoPosterUrl('');
       setViewMode('EDIT');
    };
 
@@ -196,6 +201,9 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
       setIsActive(isPromotionActive(promo));
       setPriority(promo.priority || 1);
       setSelectedTerminals(promo.terminalIds || []);
+      const promoVideo = promo.media?.find(media => media.type === 'VIDEO');
+      setVideoUrl(promoVideo?.url || '');
+      setVideoPosterUrl(promoVideo?.posterUrl || '');
       setViewMode('EDIT');
    };
 
@@ -222,6 +230,10 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
    const handleSave = () => {
       if (!promoName || (targetType !== 'ALL' && !targetValue)) {
          alert("Por favor completa los campos requeridos");
+         return;
+      }
+      if (videoUrl && !isValidRemoteMediaUrl(videoUrl)) {
+         alert('La URL del video debe comenzar con http:// o https://.');
          return;
       }
 
@@ -261,6 +273,14 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
             ? editingPromotion.targetRefs
             : undefined,
          priority
+         ,media: videoUrl ? [{
+            id: 'promotion-primary-video',
+            type: 'VIDEO',
+            url: videoUrl.trim(),
+            posterUrl: videoPosterUrl.trim() || undefined,
+            active: true,
+            sortOrder: 0,
+         }] : undefined
       };
 
       let updatedPromotions;
@@ -725,6 +745,20 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
                         </div>
                      </div>
                   </div>
+               </div>
+            </section>
+
+            <section>
+               <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">5. Multimedia de la oferta</label>
+               <div className="bg-white p-5 rounded-2xl border border-gray-200 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-3">
+                     <input type="url" value={videoUrl} onChange={event => setVideoUrl(event.target.value)} placeholder="URL HTTPS del video (MP4/WebM)" className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:border-blue-400" />
+                     <input type="url" value={videoPosterUrl} onChange={event => setVideoPosterUrl(event.target.value)} placeholder="URL de portada (opcional)" className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:border-blue-400" />
+                     <p className="text-xs text-gray-400">Compatible con productos, promociones y ofertas. El archivo debe vivir en el ERP/CDN.</p>
+                  </div>
+                  {videoUrl && isValidRemoteMediaUrl(videoUrl) && (
+                     <video src={videoUrl} poster={videoPosterUrl || undefined} controls playsInline className="w-full aspect-video rounded-xl bg-black object-contain" />
+                  )}
                </div>
             </section>
 

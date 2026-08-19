@@ -1,4 +1,5 @@
 import { CustomerDisplayConfig } from '../types';
+import { normalizeMediaAsset } from './media';
 
 const DISPLAY_QUERY_PARAM = 'view=VISOR';
 const DISPLAY_SURFACE_PARAM = 'surface';
@@ -69,7 +70,12 @@ export const normalizeCustomerDisplayConfig = (
   ...raw,
   connectionType: normalizeCustomerDisplayConnectionType(raw?.connectionType) as CustomerDisplayConfig['connectionType'],
   ipAddress: typeof raw?.ipAddress === 'string' ? raw.ipAddress.trim() : '',
-  ads: Array.isArray(raw?.ads) ? raw.ads : DEFAULT_DISPLAY_CONFIG.ads,
+  ads: Array.isArray(raw?.ads)
+    ? raw.ads
+      .map((ad, index) => normalizeMediaAsset(ad, index))
+      .filter((ad): ad is NonNullable<typeof ad> => Boolean(ad))
+      .map(ad => ({ ...ad, active: ad.active !== false }))
+    : DEFAULT_DISPLAY_CONFIG.ads,
 });
 
 const buildNetworkVisorUrl = (ipAddress: string): string => {
