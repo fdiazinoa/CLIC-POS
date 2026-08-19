@@ -42,6 +42,7 @@ import {
   DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS,
   DEFAULT_LABEL_TEMPLATES,
   FOOD_PRODUCTS,
+  MOCK_USERS,
   RETAIL_PRODUCTS,
   getInitialConfig
 } from './constants';
@@ -110,6 +111,7 @@ import { markPosInteractionActivity, setPosSaleActivity } from './utils/posSaleA
 import {
   posUserRostersMatch,
   reconcilePosUsers,
+  selectPosUsersForRuntime,
   withoutDefaultSeedPosUsers,
 } from './utils/posUserReconciliation';
 
@@ -1452,11 +1454,10 @@ const isErpManagedPosUserRuntime = (): boolean => (
   || localStorage.getItem('clic_sync_mode') === 'POS_ERP'
 );
 
-const visiblePosUsersForRuntime = (users: unknown): User[] => (
-  isErpManagedPosUserRuntime()
-    ? withoutDefaultSeedPosUsers(users)
-    : Array.isArray(users) ? users as User[] : []
-);
+const visiblePosUsersForRuntime = (users: unknown): User[] => selectPosUsersForRuntime(users, {
+  erpManaged: isErpManagedPosUserRuntime(),
+  fallbackUsers: MOCK_USERS,
+});
 
 const getTerminalSetupIntegrationMode = (setupMode: TerminalSetupMode | null): TerminalIntegrationMode => {
   return setupMode === 'SERVER_ERP' ? 'ERP_DIRECT' : 'LOCAL_ONLY';
@@ -6229,14 +6230,23 @@ const AppContent: React.FC = () => {
 
             // --- CRITICAL SECURITY BOOTSTRAP ---
             try {
-              // ERP terminals must never unlock with demo seed users while their roster is pending.
+              // Prefer ERP users, but keep the default roster when ERP has no POS users yet.
               const localUsers = await db.get('users') as User[];
               let usableUsers = visiblePosUsersForRuntime(localUsers);
+              const hasLocalErpUsers = withoutDefaultSeedPosUsers(localUsers).length > 0;
 
-              if (isErpSetupMode && usableUsers.length === 0) {
+              if (isErpSetupMode && !hasLocalErpUsers) {
                 console.log('🔒 Security Bootstrap: ERP roster unavailable. Refreshing authorized POS users...');
                 const refreshedUsers = await syncManager.refreshErpPosUserRoster(finalConfig);
                 usableUsers = visiblePosUsersForRuntime(refreshedUsers);
+                const hasRefreshedErpUsers = withoutDefaultSeedPosUsers(refreshedUsers).length > 0;
+
+                if (!hasRefreshedErpUsers && usableUsers.length > 0) {
+                  console.warn('[SYNC_USERS] ERP returned no POS users; activating default local roster.');
+                  if (!posUserRostersMatch(refreshedUsers, usableUsers)) {
+                    await db.save('users', usableUsers);
+                  }
+                }
               } else if (!Array.isArray(localUsers) || localUsers.length === 0) {
                 console.log('🔒 Security Bootstrap: No users found. Starting Fast Sync...');
                 await syncManager.fastSyncCoreData();

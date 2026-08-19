@@ -51,6 +51,31 @@ export const withoutDefaultSeedPosUsers = (users: unknown): SyncedPosUser[] => (
     : []
 );
 
+export interface SelectPosUsersForRuntimeOptions {
+  erpManaged: boolean;
+  fallbackUsers?: SyncedPosUser[];
+}
+
+/**
+ * ERP users take precedence over demo seeds. When ERP has no POS users yet,
+ * keep the local seed roster available instead of locking a new terminal out.
+ */
+export const selectPosUsersForRuntime = (
+  users: unknown,
+  { erpManaged, fallbackUsers = [] }: SelectPosUsersForRuntimeOptions,
+): SyncedPosUser[] => {
+  const localUsers = Array.isArray(users) ? users as SyncedPosUser[] : [];
+  if (!erpManaged) return localUsers;
+
+  const operationalUsers = withoutDefaultSeedPosUsers(localUsers);
+  if (operationalUsers.length > 0) return operationalUsers;
+
+  const preservedSeeds = localUsers.filter(isDefaultSeedPosUser);
+  if (preservedSeeds.length > 0) return preservedSeeds;
+
+  return fallbackUsers.filter(isDefaultSeedPosUser);
+};
+
 export const posUserRostersMatch = (left: unknown, right: unknown): boolean => {
   const normalize = (value: unknown) => (Array.isArray(value) ? value : [])
     .map((entry) => {
