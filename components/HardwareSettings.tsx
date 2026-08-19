@@ -21,6 +21,7 @@ import {
    normalizeCustomerDisplayConnectionType,
    resetCustomerDisplayAutoLaunch,
 } from '../utils/customerDisplay';
+import { inferMediaType, isValidRemoteMediaUrl } from '../utils/media';
 
 // Perfiles predefinidos de balanzas populares
 const SCALE_PRESETS = [
@@ -40,8 +41,8 @@ const DEFAULT_DISPLAY_CONFIG: CustomerDisplayConfig = {
    layout: 'SPLIT',
    connectionType: 'ANDROID_SECONDARY',
    ads: [
-      { id: 'ad1', url: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=600&auto=format&fit=crop', active: true },
-      { id: 'ad2', url: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?q=80&w=600&auto=format&fit=crop', active: true }
+      { id: 'ad1', type: 'IMAGE', url: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=600&auto=format&fit=crop', active: true },
+      { id: 'ad2', type: 'IMAGE', url: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?q=80&w=600&auto=format&fit=crop', active: true }
    ]
 };
 
@@ -966,11 +967,15 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    const addAd = (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      const url = prompt("Introduce la URL de la imagen publicitaria (JPG/PNG):");
-      if (url && url.trim().startsWith('http')) {
+      const url = prompt("Introduce la URL de la imagen o video publicitario (JPG/PNG/MP4/WebM):");
+      if (url && isValidRemoteMediaUrl(url.trim())) {
+         const type = inferMediaType(url);
+         const posterUrl = type === 'VIDEO'
+            ? (prompt('URL del póster del video (opcional):') || '').trim() || undefined
+            : undefined;
          setDisplayConfig(prev => ({
             ...prev,
-            ads: [...(prev.ads || []), { id: `ad_${Date.now()}`, url, active: true }]
+            ads: [...(prev.ads || []), { id: `ad_${Date.now()}`, type, url: url.trim(), posterUrl, active: true }]
          }));
       } else if (url) {
          alert("Por favor introduce una URL válida");
@@ -1135,7 +1140,11 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                   <div className="grid grid-cols-2 gap-4">
                      {(displayConfig.ads || []).map(ad => (
                         <div key={ad.id} className="relative group rounded-2xl overflow-hidden aspect-video border border-gray-200 bg-gray-100">
-                           <img src={ad.url} className="w-full h-full object-cover" alt="Ad" />
+                           {ad.type === 'VIDEO' ? (
+                              <video src={ad.url} poster={ad.posterUrl} className="w-full h-full object-cover" muted playsInline />
+                           ) : (
+                              <img src={ad.url} className="w-full h-full object-cover" alt="Ad" />
+                           )}
                            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
                               <button
                                  onClick={() => toggleAdActive(ad.id)}
@@ -1181,7 +1190,17 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                         <div className="flex-1 flex flex-col">
                            <div className="flex-1 relative overflow-hidden">
                               {displayConfig.ads?.[currentPreviewAdIndex] ? (
-                                 <img src={displayConfig.ads[currentPreviewAdIndex].url} className="w-full h-full object-cover opacity-90 transition-all duration-500" alt="Ad" />
+                                 displayConfig.ads[currentPreviewAdIndex].type === 'VIDEO' ? (
+                                    <video
+                                       key={displayConfig.ads[currentPreviewAdIndex].id}
+                                       src={displayConfig.ads[currentPreviewAdIndex].url}
+                                       poster={displayConfig.ads[currentPreviewAdIndex].posterUrl}
+                                       className="w-full h-full object-cover opacity-90"
+                                       autoPlay muted loop playsInline
+                                    />
+                                 ) : (
+                                    <img src={displayConfig.ads[currentPreviewAdIndex].url} className="w-full h-full object-cover opacity-90 transition-all duration-500" alt="Ad" />
+                                 )
                               ) : (
                                  <div className="w-full h-full bg-slate-100 flex items-center justify-center"><ImageIcon size={48} className="text-slate-200" /></div>
                               )}

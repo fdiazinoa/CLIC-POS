@@ -42,6 +42,7 @@ import {
     ERP_CRITICAL_MASTER_COLLECTIONS,
     ERP_SUPPORTED_MASTER_COLLECTIONS,
 } from './ErpMasterSyncContract';
+import { assertOperationalAcknowledgement } from './operationalAcknowledgement';
 
 /**
  * API Sync Adapter
@@ -170,6 +171,8 @@ const ERP_OPERATION_PUSH_COLLECTIONS = new Set([
     'purchaseOrders',
     'activities',
     'crmOpportunities',
+    'customers',
+    'customerMutations',
     'erp_sales_documents',
 ]);
 const isErpMasterPullCollection = (collection: string): boolean =>
@@ -2977,7 +2980,17 @@ class ApiSyncAdapter {
         };
     }
 
-    private async postOperationalPayload(path: string, body: Record<string, unknown>): Promise<void> {
+    private async parseOperationalResponse(response: Response): Promise<any> {
+        const text = await response.clone().text().catch(() => '');
+        if (!text.trim()) return null;
+        try {
+            return JSON.parse(text);
+        } catch {
+            return { raw: text.slice(0, 400) };
+        }
+    }
+
+    private async postOperationalPayload(path: string, body: Record<string, unknown>): Promise<any> {
         const target = await this.authenticateOperationalTarget(false, 'sales', 'PUSH_OPERATIONS');
         const requestBody = this.buildOperationalPostBody(target, body);
         const response = await this.fetchWithRetry(`${target.baseUrl}${path}`, {
@@ -3013,7 +3026,7 @@ class ApiSyncAdapter {
                 throw new Error(`Operational sync failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}${retryText ? ` — ${retryText.slice(0, 400)}` : ''}`);
             }
 
-            return;
+            return this.parseOperationalResponse(retryResponse);
         }
 
         if (!response.ok) {
@@ -3021,6 +3034,7 @@ class ApiSyncAdapter {
             await this.handleDeviceSupersededResponse(response, target.terminalId);
             throw new Error(`Operational sync failed: ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 400)}` : ''}`);
         }
+        return this.parseOperationalResponse(response);
     }
 
     private async getOperationalPayload<T = any>(
@@ -5080,13 +5094,66 @@ class ApiSyncAdapter {
     async pushInventoryMovement(movement: any): Promise<void> {
         try {
             const payload = buildErpInventoryLedgerPayload(movement);
-            await this.postOperationalPayload('/inventory/movements', { items: [payload] });
+            const acknowledgement = await this.postOperationalPayload('/inventory/movements', { items: [payload] });
+            assertOperationalAcknowledgement(
+                acknowledgement,
+                String(payload.source_inventory_movement_id || payload.id),
+                'INVENTORY',
+            );
             console.log(`📤 ApiSyncAdapter: Pushed inventory movement ${payload.source_inventory_movement_id || payload.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing inventory movement:', error);
             this.isOnline = false;
             throw error;
         }
+    }
+
+    async pushCustomerMutation(mutation: any): Promise<void> {
+        try {
+            const customerId = String(mutation?.customerId || mutation?.customer?.id || '').trim();
+            if (!customerId) throw new Error('CUSTOMER_ID_MISSING');
+            const acknowledgement = await this.postOperationalPayload('/customers/upsert', {
+                items: [{
+                    source_customer_mutation_id: mutation.id,
+                    source_customer_id: customerId,
+                    source_terminal_id: mutation.terminalId,
+                    operation: mutation.operation || 'UPSERT',
+                    customer: mutation.customer,
+                    created_at: mutation.createdAt,
+                }],
+            });
+            assertOperationalAcknowledgement(acknowledgement, String(mutation.id), 'CUSTOMER');
+            console.log(`📤 ApiSyncAdapter: Pushed customer mutation ${mutation.id}`);
+        } catch (error) {
+            console.error('❌ ApiSyncAdapter: Error pushing customer mutation:', error);
+            this.isOnline = false;
+            throw error;
+        }
+    }
+
+    async saveCurrencies(currencies: any[], actor: { userId: string; userName: string; terminalId?: string }): Promise<any> {
+        const mutationId = `currency-upsert-${Date.now()}`;
+        const acknowledgement = await this.postOperationalPayload('/currencies/upsert', {
+            mutationId,
+            currencies,
+            actor,
+        });
+        assertOperationalAcknowledgement(acknowledgement, mutationId, 'CURRENCY');
+        return acknowledgement;
+    }
+
+    async scheduleCurrencyRate(schedule: Record<string, unknown>): Promise<any> {
+        const scheduleId = String(schedule.id || `currency-schedule-${Date.now()}`);
+        const acknowledgement = await this.postOperationalPayload('/currencies/schedules', {
+            items: [{ ...schedule, id: scheduleId }],
+        });
+        assertOperationalAcknowledgement(acknowledgement, scheduleId, 'CURRENCY_SCHEDULE');
+        return acknowledgement;
+    }
+
+    async getCurrencyAudit(currencyCode: string): Promise<any[]> {
+        const payload = await this.getOperationalPayload<any>(`/currencies/audit/${encodeURIComponent(currencyCode)}`);
+        return Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
     }
 
     /**

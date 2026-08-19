@@ -1,4 +1,4 @@
-import { CartItem } from '../types';
+import { CartItem, CustomerDisplayAd } from '../types';
 
 export interface VisorCartItem {
     id?: string;
@@ -20,7 +20,7 @@ export interface VisorState {
     discountAmount: number;
     total: number;
     welcomeMessage?: string;
-    ads?: { id: string; url: string; active: boolean }[];
+    ads?: CustomerDisplayAd[];
     currencySymbol: string;
 }
 
@@ -74,7 +74,15 @@ const stripStateForVisor = (state: VisorStateInput): VisorState => ({
     total: toNumber(state.total),
     welcomeMessage: state.welcomeMessage,
     ads: Array.isArray(state.ads)
-        ? state.ads.map((ad) => ({ id: ad.id, url: ad.url, active: Boolean(ad.active) }))
+        ? state.ads.map((ad) => ({
+            id: ad.id,
+            type: ad.type,
+            url: ad.url,
+            posterUrl: ad.posterUrl,
+            mimeType: ad.mimeType,
+            sortOrder: ad.sortOrder,
+            active: Boolean(ad.active),
+        }))
         : undefined,
     currencySymbol: state.currencySymbol || '$',
 });

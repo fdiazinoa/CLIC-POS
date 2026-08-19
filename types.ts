@@ -867,6 +867,23 @@ export interface CurrencyAuditLog {
   changedBy: string;               // User ID
   changedByName: string;           // User name
   terminalId?: string;             // Terminal donde se hizo el cambio
+  source?: 'MANUAL' | 'SCHEDULED' | 'ERP';
+}
+
+export interface CurrencyRateSchedule {
+  id: string;
+  currencyCode: string;
+  rate: number;
+  buyRate?: number;
+  sellRate?: number;
+  executeAt: string;
+  status: 'PENDING' | 'APPLIED' | 'CANCELLED' | 'FAILED';
+  createdAt: string;
+  createdBy: string;
+  createdByName: string;
+  terminalId?: string;
+  appliedAt?: string;
+  error?: string;
 }
 
 export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'WALLET' | 'ADVANCE' | 'OTHER' | 'CREDIT' | 'STORE_CREDIT' | 'UBER_EATS';
@@ -1389,6 +1406,7 @@ export interface Product {
   kitInventoryMode?: KitInventoryMode;
   recipeDetails?: RecipeDetail[]; // The BOM
   images: string[];
+  media?: MediaAsset[];
   attributes: ProductAttribute[];
   variants: ProductVariant[];
   tariffs: TariffPrice[];
@@ -1955,6 +1973,7 @@ export interface Promotion {
   name: string;
   type: PromotionType;
   priority: number;
+  media?: MediaAsset[];
   trigger_config?: Record<string, any>;
   triggerConfig?: Record<string, any>;
 
@@ -2338,6 +2357,24 @@ export interface VariantTemplate {
   valueIds: string[];
 }
 
+export type MediaType = 'IMAGE' | 'VIDEO';
+
+export interface MediaAsset {
+  id: string;
+  type?: MediaType;
+  url: string;
+  posterUrl?: string;
+  mimeType?: string;
+  storagePath?: string;
+  version?: string;
+  sortOrder?: number;
+  active?: boolean;
+}
+
+export interface CustomerDisplayAd extends MediaAsset {
+  active: boolean;
+}
+
 export interface CustomerDisplayConfig {
   isEnabled: boolean;
   welcomeMessage: string;
@@ -2346,7 +2383,7 @@ export interface CustomerDisplayConfig {
   layout: 'SPLIT' | 'FULL_TOTAL' | 'MARKETING_ONLY';
   connectionType: 'NETWORK' | 'USB' | 'VIRTUAL' | 'HDMI' | 'ANDROID_SECONDARY';
   ipAddress?: string;
-  ads: { id: string; url: string; active: boolean }[];
+  ads: CustomerDisplayAd[];
 }
 
 export interface ScaleDevice {

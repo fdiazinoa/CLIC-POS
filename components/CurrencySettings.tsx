@@ -4,11 +4,21 @@ import {
   Check, X, TrendingUp, DollarSign, ArrowRight, Save,
   Crown, Plus, Search
 } from 'lucide-react';
-import { CurrencyConfig, BusinessConfig } from '../types';
+import { CurrencyConfig, BusinessConfig, CurrencyRateSchedule, User } from '../types';
+import { apiSyncAdapter } from '../services/sync/ApiSyncAdapter';
+import { syncPolicy } from '../services/sync/SyncProfile';
+import {
+  getLocalCurrencyAudit,
+  getLocalCurrencySchedules,
+  recordCurrencyChanges,
+  scheduleLocalCurrencyRate,
+} from '../services/currency/CurrencyService';
 
 interface CurrencySettingsProps {
   config?: BusinessConfig;
   onUpdateConfig?: (newConfig: BusinessConfig) => void;
+  currentUser?: User | null;
+  terminalId?: string;
   onClose: () => void;
 }
 
@@ -34,7 +44,7 @@ const COMMON_CURRENCIES = [
   { code: 'BRL', name: 'Real Brasileño', symbol: 'R$' },
 ];
 
-const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateConfig, onClose }) => {
+const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateConfig, currentUser, terminalId, onClose }) => {
   const initialCurrencies = Array.isArray(config?.currencies) ? config.currencies : [];
 
   const [currencies, setCurrencies] = useState<CurrencyConfig[]>(initialCurrencies);
@@ -46,6 +56,10 @@ const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateCon
   const [showAuditHistory, setShowAuditHistory] = useState(false);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [loadingAudit, setLoadingAudit] = useState(false);
+  const [scheduledRate, setScheduledRate] = useState('');
+  const [scheduledAt, setScheduledAt] = useState('');
+  const [schedules, setSchedules] = useState<CurrencyRateSchedule[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
 
   const baseCurrency = currencies.find(c => c.isBase) || currencies[0] || {
     code: '',
@@ -61,6 +75,10 @@ const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateCon
       setSelectedCode(baseCurrency.code);
     }
   }, [currencies, selectedCode, baseCurrency]);
+
+  useEffect(() => {
+    void getLocalCurrencySchedules().then(setSchedules).catch(console.error);
+  }, []);
 
   const activeCurrency = currencies.find(c => c.code === selectedCode) || baseCurrency;
 
@@ -235,9 +253,10 @@ const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateCon
     setLoadingAudit(true);
     setShowAuditHistory(true);
     try {
-      const response = await fetch(`/api/currencies/audit/${activeCurrency.code}`);
-      const data = await response.json();
-      setAuditLogs(data);
+      const data = syncPolicy.targetKind() === 'ERP_ACTIVE'
+        ? await apiSyncAdapter.getCurrencyAudit(activeCurrency.code)
+        : await getLocalCurrencyAudit(activeCurrency.code);
+      setAuditLogs(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Error loading audit history:', error);
       setAuditLogs([]);
@@ -246,15 +265,73 @@ const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateCon
     }
   };
 
-  const handleSave = () => {
+  const actor = currentUser || { id: 'system', name: 'Sistema', pin: '', role: 'system' };
+
+  const handleScheduleRate = async () => {
+    const rate = Number(scheduledRate);
+    const executeAt = new Date(scheduledAt);
+    if (!activeCurrency.code || activeCurrency.isBase || !Number.isFinite(rate) || rate <= 0) {
+      alert('Seleccione una moneda secundaria e indique una tasa mayor que cero.');
+      return;
+    }
+    if (!scheduledAt || Number.isNaN(executeAt.getTime()) || executeAt.getTime() <= Date.now()) {
+      alert('La fecha y hora programadas deben estar en el futuro.');
+      return;
+    }
+    try {
+      const payload = {
+        id: `currency-schedule-${activeCurrency.code}-${Date.now()}`,
+        currencyCode: activeCurrency.code,
+        rate,
+        executeAt: executeAt.toISOString(),
+        createdBy: actor.id,
+        createdByName: actor.name,
+        terminalId,
+      };
+      if (syncPolicy.targetKind() === 'ERP_ACTIVE') {
+        await apiSyncAdapter.scheduleCurrencyRate(payload);
+      } else {
+        await scheduleLocalCurrencyRate(payload);
+        setSchedules(await getLocalCurrencySchedules());
+      }
+      setScheduledRate('');
+      setScheduledAt('');
+      alert('Cambio de tasa programado correctamente.');
+    } catch (error: any) {
+      alert(`No se pudo programar la tasa: ${error?.message || 'error desconocido'}`);
+    }
+  };
+
+  const handleSave = async () => {
     if (config && onUpdateConfig) {
       if (currencies.length === 0) {
         alert("No hay monedas configuradas. En POS+ERP las monedas deben venir desde ERP.");
         return;
       }
-      onUpdateConfig({ ...config, currencies, currencySymbol: baseCurrency.symbol });
-      alert("Configuración guardada.");
-      onClose();
+      setIsSaving(true);
+      try {
+        const now = new Date().toISOString();
+        const stampedCurrencies = currencies.map(currency => ({
+          ...currency,
+          lastModified: now,
+          lastModifiedBy: actor.name,
+        }));
+        if (syncPolicy.targetKind() === 'ERP_ACTIVE') {
+          await apiSyncAdapter.saveCurrencies(stampedCurrencies, {
+            userId: actor.id,
+            userName: actor.name,
+            terminalId,
+          });
+        }
+        await recordCurrencyChanges(initialCurrencies, stampedCurrencies, actor, terminalId, syncPolicy.targetKind() === 'ERP_ACTIVE' ? 'ERP' : 'MANUAL');
+        await Promise.resolve(onUpdateConfig({ ...config, currencies: stampedCurrencies, currencySymbol: baseCurrency.symbol }));
+        alert("Configuración guardada y auditada.");
+        onClose();
+      } catch (error: any) {
+        alert(`No se pudo guardar la configuración: ${error?.message || 'error desconocido'}`);
+      } finally {
+        setIsSaving(false);
+      }
     }
   };
 
@@ -482,7 +559,7 @@ const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateCon
                             className="w-full bg-white border-2 border-slate-200 rounded-xl p-3 font-bold text-lg"
                           />
                           <p className="text-xs text-slate-400 mt-1">
-                            La terminal se actualizará diariamente a esta hora
+                            Hora preferida para proveedores de tasa configurados por ERP.
                           </p>
                         </div>
 
@@ -500,6 +577,24 @@ const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateCon
                       </>
                     )}
                   </div>
+                </div>
+              )}
+
+              {!activeCurrency.isBase && (
+                <div className="mb-8 bg-indigo-50 rounded-2xl p-6 border border-indigo-200">
+                  <h4 className="font-bold text-indigo-900 mb-4 flex items-center gap-2">
+                    <Calculator size={18} /> Programar cambio puntual
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <input type="number" min="0" step="0.0001" value={scheduledRate} onChange={event => setScheduledRate(event.target.value)} placeholder="Nueva tasa" className="p-3 rounded-xl border border-indigo-200 bg-white font-bold" />
+                    <input type="datetime-local" value={scheduledAt} onChange={event => setScheduledAt(event.target.value)} className="p-3 rounded-xl border border-indigo-200 bg-white font-bold" />
+                    <button onClick={handleScheduleRate} className="p-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700">Programar</button>
+                  </div>
+                  {schedules.filter(schedule => schedule.currencyCode === activeCurrency.code && schedule.status === 'PENDING').map(schedule => (
+                    <p key={schedule.id} className="mt-3 text-xs text-indigo-700">
+                      Pendiente: {schedule.rate.toFixed(4)} el {new Date(schedule.executeAt).toLocaleString('es-DO')}
+                    </p>
+                  ))}
                 </div>
               )}
 
@@ -593,7 +688,7 @@ const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateCon
 
             <div className="p-6 bg-gray-50 border-t border-gray-200 flex justify-end gap-4 shrink-0">
               <button onClick={onClose} className="px-6 py-3 text-gray-500 font-bold hover:bg-gray-200 rounded-xl transition-colors">Cancelar</button>
-              <button onClick={handleSave} className="px-8 py-3 bg-emerald-600 text-white font-bold rounded-xl shadow-lg hover:bg-emerald-700 transition-all flex items-center gap-2"><Save size={20} /> Guardar Cambios</button>
+              <button onClick={handleSave} disabled={isSaving} className="px-8 py-3 bg-emerald-600 text-white font-bold rounded-xl shadow-lg hover:bg-emerald-700 transition-all flex items-center gap-2 disabled:opacity-60"><Save size={20} /> {isSaving ? 'Guardando...' : 'Guardar Cambios'}</button>
             </div>
           </div>
         </div>

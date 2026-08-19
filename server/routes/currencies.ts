@@ -4,6 +4,85 @@ import type { CurrencyAuditLog, CurrencyConfig } from '../../types';
 
 const router = express.Router();
 
+const readBusinessConfig = (): any => {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('config') as any;
+    return row ? JSON.parse(row.value) : null;
+};
+
+const writeBusinessConfig = (config: any) => {
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)')
+        .run('config', JSON.stringify(config));
+};
+
+const auditCurrencies = (
+    previous: CurrencyConfig[],
+    next: CurrencyConfig[],
+    actor: { userId: string; userName: string; terminalId?: string },
+) => {
+    const previousByCode = new Map(previous.map(currency => [currency.code, currency]));
+    const fields = ['rate', 'buyRate', 'sellRate'];
+    const now = new Date().toISOString();
+    const entries: CurrencyAuditLog[] = [];
+    next.forEach(currency => fields.forEach(field => {
+        const oldValue = (previousByCode.get(currency.code) as any)?.[field] ?? null;
+        const newValue = (currency as any)[field] ?? null;
+        if (oldValue === newValue) return;
+        const entry: CurrencyAuditLog = {
+            id: `AUDIT-${currency.code}-${field}-${Date.now()}-${entries.length}`,
+            currencyCode: currency.code,
+            field,
+            oldValue,
+            newValue,
+            changedAt: now,
+            changedBy: actor.userId,
+            changedByName: actor.userName,
+            terminalId: actor.terminalId,
+            source: 'MANUAL',
+        };
+        db.prepare(`INSERT INTO currency_audit_logs
+            (id, currencyCode, field, oldValue, newValue, changedAt, changedBy, changedByName, terminalId, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(entry.id, entry.currencyCode, entry.field, String(entry.oldValue), String(entry.newValue), entry.changedAt, entry.changedBy, entry.changedByName, entry.terminalId || null, entry.source);
+        entries.push(entry);
+    }));
+    return entries;
+};
+
+router.post('/upsert', (req, res) => {
+    const { currencies, actor, mutationId } = req.body || {};
+    if (!Array.isArray(currencies) || !actor?.userId || !actor?.userName) {
+        return res.status(400).json({ success: false, error: 'currencies y actor son requeridos' });
+    }
+    try {
+        const config = readBusinessConfig();
+        if (!config) return res.status(404).json({ success: false, error: 'Business config not found' });
+        const previous = Array.isArray(config.currencies) ? config.currencies : [];
+        const auditEntries = auditCurrencies(previous, currencies, actor);
+        writeBusinessConfig({ ...config, currencies });
+        return res.json({ success: true, processedIds: mutationId ? [mutationId] : [], auditEntries, currencies });
+    } catch (error: any) {
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+router.post('/schedules', (req, res) => {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (items.length === 0) return res.status(400).json({ success: false, error: 'items es requerido' });
+    try {
+        const insert = db.prepare(`INSERT OR REPLACE INTO currency_rate_schedules
+            (id, currencyCode, rate, buyRate, sellRate, executeAt, status, createdAt, createdBy, createdByName, terminalId)
+            VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)`);
+        items.forEach((item: any) => insert.run(
+            item.id, item.currencyCode, item.rate, item.buyRate || null, item.sellRate || null,
+            item.executeAt, item.createdAt || new Date().toISOString(), item.createdBy,
+            item.createdByName, item.terminalId || null,
+        ));
+        return res.json({ success: true, processedIds: items.map((item: any) => item.id) });
+    } catch (error: any) {
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 /**
  * GET /api/currencies/audit/:currencyCode
  * Obtiene el histórico de cambios de una moneda específica
@@ -49,13 +128,13 @@ router.post('/update', (req, res) => {
 
     try {
         // 1. Obtener configuración actual desde settings
-        const settingsRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('currencies') as any;
+        const config = readBusinessConfig();
 
-        if (!settingsRow) {
+        if (!config) {
             return res.status(404).json({ error: 'Currency configuration not found' });
         }
 
-        const currentConfig: CurrencyConfig[] = JSON.parse(settingsRow.value);
+        const currentConfig: CurrencyConfig[] = Array.isArray(config.currencies) ? config.currencies : [];
         const currentCurrency = currentConfig.find(c => c.code === currencyCode);
 
         if (!currentCurrency) {
@@ -118,8 +197,7 @@ router.post('/update', (req, res) => {
         );
 
         // Guardar en settings
-        db.prepare('UPDATE settings SET value = ? WHERE key = ?')
-            .run(JSON.stringify(updatedConfig), 'currencies');
+        writeBusinessConfig({ ...config, currencies: updatedConfig });
 
         res.json({
             success: true,

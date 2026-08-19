@@ -547,7 +547,24 @@ CREATE TABLE IF NOT EXISTS currency_audit_logs (
     changedBy TEXT NOT NULL,
     changedByName TEXT NOT NULL,
     terminalId TEXT,
+    source TEXT,
     FOREIGN KEY (changedBy) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS currency_rate_schedules (
+    id TEXT PRIMARY KEY,
+    currencyCode TEXT NOT NULL,
+    rate REAL NOT NULL,
+    buyRate REAL,
+    sellRate REAL,
+    executeAt TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    createdAt TEXT NOT NULL,
+    createdBy TEXT NOT NULL,
+    createdByName TEXT NOT NULL,
+    terminalId TEXT,
+    appliedAt TEXT,
+    error TEXT
 );
 
 -- Indexes for performance
@@ -575,6 +592,7 @@ CREATE INDEX IF NOT EXISTS idx_z_reports_terminal ON z_reports(terminalId);
 CREATE INDEX IF NOT EXISTS idx_cash_movements_zreport ON cash_movements(zReportId);
 CREATE INDEX IF NOT EXISTS idx_currency_audit_currency ON currency_audit_logs(currencyCode);
 CREATE INDEX IF NOT EXISTS idx_currency_audit_date ON currency_audit_logs(changedAt);
+CREATE INDEX IF NOT EXISTS idx_currency_schedule_due ON currency_rate_schedules(status, executeAt);
 CREATE INDEX IF NOT EXISTS idx_sync_changes_collection_version ON sync_changes(collection, version);
 CREATE INDEX IF NOT EXISTS idx_reservations_customer ON reservations(customer_id);
 CREATE INDEX IF NOT EXISTS idx_reservations_status ON reservations(status);

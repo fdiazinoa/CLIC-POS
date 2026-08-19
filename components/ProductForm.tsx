@@ -15,6 +15,7 @@ import { calculateOptimalInventoryLevels, InventoryCalculation } from '../utils/
 import {
   Product, ProductAttribute, ProductVariant, ProductFractionRule, ModifierGroup, ComboGroup, BusinessConfig, Tariff, TariffPrice, TaxDefinition, Warehouse, ProductOperationalFlags, InventoryLedgerEntry, ProductStock, StockTransfer, Season, Supplier
 } from '../types';
+import { isValidRemoteMediaUrl } from '../utils/media';
 import ProfitCalculator from './ProfitCalculator';
 import RecipeManager from './RecipeManager';
 import ProductionAreaManager from './ProductionAreaManager';
@@ -1650,6 +1651,29 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     typeof (window as Window & { AndroidPrinter?: { readClipboard?: () => string } }).AndroidPrinter?.readClipboard === 'function';
   const canUseExplicitPaste = canUseNativeClipboardBridge || canReadClipboardProgrammatically;
   const imagePlaceholderText = isNativeAndroidRuntime ? 'Toca para subir imagen' : 'Click o Pegar (Ctrl+V)';
+  const productVideo = formData.media?.find(media => media.type === 'VIDEO');
+  const updateProductVideo = (field: 'url' | 'posterUrl', value: string) => {
+    const cleanValue = value.trim();
+    setFormData(prev => {
+      const media = (prev.media || []).filter(item => item.id !== 'product-primary-video');
+      const current = prev.media?.find(item => item.id === 'product-primary-video' || item.type === 'VIDEO');
+      if (field === 'url' && !cleanValue) return { ...prev, media };
+      return {
+        ...prev,
+        media: [
+          ...media.filter(item => item.id !== current?.id),
+          {
+            id: 'product-primary-video',
+            type: 'VIDEO',
+            url: field === 'url' ? cleanValue : String(current?.url || ''),
+            posterUrl: field === 'posterUrl' ? cleanValue || undefined : current?.posterUrl,
+            active: true,
+            sortOrder: 0,
+          },
+        ],
+      };
+    });
+  };
 
   const applyImageDataUrl = (dataUrl: string) => {
     if (!dataUrl?.startsWith('data:image/')) {
@@ -1990,6 +2014,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const handleFinalSave = async () => {
     if (isSaving) return;
     if (!formData.name.trim()) return alert("Debe asignar un nombre al artículo.");
+    if (productVideo?.url && !isValidRemoteMediaUrl(productVideo.url)) {
+      alert('La URL del video debe comenzar con http:// o https://.');
+      return;
+    }
     if (formData.image && estimateDataUrlBytes(formData.image) > MAX_IMAGE_BYTES) { // rough bytes estimate
       alert(`La imagen pegada/suelta supera el límite (~${(MAX_IMAGE_BYTES / 1024).toFixed(0)} KB). Súbela reducida o quítala e inténtalo de nuevo.`);
       return;
@@ -2526,6 +2554,27 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       {config.terminals.map(t => <option key={t.id} value={t.id}>{t.id}</option>)}
                       <option value="LOCAL">Local (Legacy)</option>
                     </select>
+                  </div>
+                  <div className="bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm space-y-3">
+                    <label className="block text-[10px] font-black text-gray-500 uppercase">Video del producto (opcional)</label>
+                    <input
+                      type="url"
+                      value={productVideo?.url || ''}
+                      onChange={event => updateProductVideo('url', event.target.value)}
+                      placeholder="https://cdn.ejemplo.com/producto.mp4"
+                      className="w-full p-3 bg-gray-50 border-2 border-transparent rounded-xl text-sm focus:bg-white focus:border-blue-200 outline-none"
+                    />
+                    <input
+                      type="url"
+                      value={productVideo?.posterUrl || ''}
+                      onChange={event => updateProductVideo('posterUrl', event.target.value)}
+                      placeholder="URL de imagen de portada (opcional)"
+                      className="w-full p-3 bg-gray-50 border-2 border-transparent rounded-xl text-sm focus:bg-white focus:border-blue-200 outline-none"
+                    />
+                    {productVideo?.url && isValidRemoteMediaUrl(productVideo.url) && (
+                      <video src={productVideo.url} poster={productVideo.posterUrl} controls playsInline className="w-full aspect-video rounded-xl bg-black object-contain" />
+                    )}
+                    <p className="text-[10px] text-gray-400">Use una URL HTTPS de almacenamiento/CDN. El POS guarda la referencia, no el archivo pesado.</p>
                   </div>
                 </div>
               </div>

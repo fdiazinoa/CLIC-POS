@@ -54,6 +54,8 @@ import { syncManager } from './services/sync/SyncManager';
 import { apiSyncAdapter } from './services/sync/ApiSyncAdapter';
 import { requestJson } from './services/network/httpClient';
 import { backgroundSyncManager } from './services/sync/BackgroundSyncManager';
+import { queueCustomerMutation } from './services/sync/CustomerSyncQueue';
+import { currencyScheduleExecutor } from './services/currency/CurrencyService';
 import { productImageCacheService } from './services/sync/ProductImageCacheService';
 import { posCloudStagingService } from './services/sync/PosCloudStagingService';
 import { calculateZReportStats } from './utils/analytics';
@@ -3954,7 +3956,7 @@ const AppContent: React.FC = () => {
             : []),
         ]);
         customersCreatedByClients.forEach((customer: Customer) => {
-          syncManager.broadcastChange('customers', customer, 'CREATE').catch(error => {
+          queueCustomerMutation('UPSERT', customer).then(() => backgroundSyncManager.triggerSync()).catch(error => {
             console.warn('[MASTER_LAN] No se pudo colocar cliente nuevo en la cola ERP:', error);
           });
         });
@@ -6312,6 +6314,7 @@ const AppContent: React.FC = () => {
 
             // NOTE: NetworkSyncService deprecated. SyncManager/ApiSyncAdapter handles sync now.
             backgroundSyncManager.initialize().catch(console.error);
+            currencyScheduleExecutor.initialize();
 
             console.log('🎉 Setting isDataLoaded = true');
             setIsDataLoaded(true);
@@ -8002,7 +8005,8 @@ const AppContent: React.FC = () => {
       }
     }
 
-    syncManager.broadcastChange('customers', customer, 'CREATE').catch(console.error);
+    await queueCustomerMutation('UPSERT', customer);
+    backgroundSyncManager.triggerSync().catch(console.error);
   };
 
   const handleRepairLegacyReceivables = useCallback(async (): Promise<ReceivableRepairSummary> => {
@@ -10940,7 +10944,8 @@ const AppContent: React.FC = () => {
               const updated = customers.map(cust => cust.id === c.id ? c : cust);
               setCustomers(updated);
               await db.save('customers', updated);
-              syncManager.broadcastChange('customers', c, 'UPDATE').catch(console.error);
+              await queueCustomerMutation('UPSERT', c);
+              backgroundSyncManager.triggerSync().catch(console.error);
             }}
             onUpdateCollections={(cols) => {
               setCollections(cols);
@@ -10949,7 +10954,8 @@ const AppContent: React.FC = () => {
               const updated = customers.filter(cust => cust.id !== id);
               setCustomers(updated);
               await db.save('customers', updated);
-              syncManager.broadcastChange('customers', { id }, 'DELETE').catch(console.error);
+              await queueCustomerMutation('DELETE', id);
+              backgroundSyncManager.triggerSync().catch(console.error);
             }}
             onSelect={(c) => {
               setSelectedCustomer(c);

@@ -59,11 +59,24 @@ const CustomerVisor: React.FC = () => {
                 <div className="flex-1 flex items-center justify-center p-4">
                     {ads && ads.length > 0 ? (
                         <div className="w-full h-full max-h-[85vh] relative rounded-2xl overflow-hidden shadow-2xl bg-black">
-                            <img
-                                src={ads[currentAdIndex].url}
-                                alt="Publicidad"
-                                className="w-full h-full object-contain"
-                            />
+                            {ads[currentAdIndex].type === 'VIDEO' ? (
+                                <video
+                                    key={ads[currentAdIndex].id}
+                                    src={ads[currentAdIndex].url}
+                                    poster={ads[currentAdIndex].posterUrl}
+                                    className="w-full h-full object-contain"
+                                    autoPlay
+                                    muted
+                                    loop
+                                    playsInline
+                                />
+                            ) : (
+                                <img
+                                    src={ads[currentAdIndex].url}
+                                    alt="Publicidad"
+                                    className="w-full h-full object-contain"
+                                />
+                            )}
                             <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2">
                                 {ads.map((_, i) => (
                                     <div
