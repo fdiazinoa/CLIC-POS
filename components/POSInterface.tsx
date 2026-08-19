@@ -34,6 +34,7 @@ import {
 import TicketOptionsModal from './TicketOptionsModal';
 import CartItemOptionsModal from './CartItemOptionsModal';
 import ProductVariantSelector from './ProductVariantSelector';
+import { resolveVariantSalesPrice } from '../utils/variantSalesPrice';
 import ScaleModal from './ScaleModal';
 import GlobalDiscountModal from './GlobalDiscountModal';
 import LoyaltyScanModal from './LoyaltyScanModal';
@@ -2926,7 +2927,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                .join(' · ');
             const variantMatch = {
                product,
-               price: variant.price || baseMatch.price,
+               price: resolveVariantSalesPrice(variant, baseMatch.price),
                modifiers: modifiersList,
                selectedVariant: variant,
                variantInfo,
@@ -3090,7 +3091,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return;
       }
 
-      const finalPrice = priceOverride ?? selectedVariant?.price ?? getProductPrice(product);
+      const finalPrice = priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product));
       const lineIdentityKey = productLineIdentityKey(product, finalPrice);
       const consignmentIdentityKey = consignmentPatch?.consignmentLineId || '';
       const modifiersString = buildModifierSignature(modifiers);
@@ -3448,7 +3449,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   const variantInfo = Object.entries(v.attributeValues || {})
                      .map(([key, value]) => `${key}: ${value}`)
                      .join(' · ');
-                  return { product: p, quantity, price: v.price || getProductPrice(p), modifiers: modifiersList, selectedVariant: v, variantInfo };
+                  return { product: p, quantity, price: resolveVariantSalesPrice(v, getProductPrice(p)), modifiers: modifiersList, selectedVariant: v, variantInfo };
                }
             }
          }
@@ -8209,7 +8210,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} salesUsers={salesUsers} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={!isKdsReturnedCartItem(editingItem)} canVoidItem={!editingItem.dispatched} />}
-         {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, selectedVariant, variantInfo) => { addToCart(p, 1, pr, m, undefined, selectedVariant, variantInfo); setSelectedProductForVariants(null); }} />}
+         {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} productSalesPrice={getProductPrice(selectedProductForVariants)} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, selectedVariant, variantInfo) => { addToCart(p, 1, pr, m, undefined, selectedVariant, variantInfo); setSelectedProductForVariants(null); }} />}
          {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(w) => { addToCart(productForScale, w); setProductForScale(null); }} />}
          {
             showGlobalDiscount && <GlobalDiscountModal currentSubtotal={cartSubtotal} currencySymbol={baseCurrency.symbol} initialValue={globalDiscount.value.toString()} initialType={globalDiscount.type} themeColor={config.themeColor} onClose={() => setShowGlobalDiscount(false)} onConfirm={async (val, type) => {

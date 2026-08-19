@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { X, ShoppingCart, Check, AlertCircle, Layers } from 'lucide-react';
 import { Product, ProductVariant } from '../types';
+import { resolveVariantSalesPrice } from '../utils/variantSalesPrice';
 
 // Mapeo de colores en español para visualización CSS
 const COLOR_MAP: Record<string, string> = {
@@ -38,6 +39,7 @@ interface VariantGroup {
 
 interface ProductVariantSelectorProps {
    product: Product | null;
+   productSalesPrice?: number;
    currencySymbol: string;
    onClose: () => void;
    onConfirm: (product: Product, selectedModifiers: string[], finalPrice: number, selectedVariant?: ProductVariant, variantInfo?: string) => void;
@@ -45,6 +47,7 @@ interface ProductVariantSelectorProps {
 
 const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
    product,
+   productSalesPrice,
    currencySymbol,
    onClose,
    onConfirm
@@ -151,7 +154,7 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
    const calculateTotal = () => {
       if (!product) return 0;
       const selectedVariant = getSelectedVariant();
-      const basePrice = selectedVariant?.price ?? product.price;
+      const basePrice = resolveVariantSalesPrice(selectedVariant, productSalesPrice ?? product.price);
       const modifiersPrice = Object.values(selections).reduce((acc: number, opt: VariantOption) => acc + opt.priceModifier, 0);
       return basePrice + modifiersPrice;
    };
