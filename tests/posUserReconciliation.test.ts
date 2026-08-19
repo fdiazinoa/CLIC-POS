@@ -7,6 +7,7 @@ import {
   posUserRostersMatch,
   reconcilePosUsers,
   resolvePosUserId,
+  selectPosUsersForRuntime,
   withoutDefaultSeedPosUsers,
   type SyncedPosUser,
 } from '../utils/posUserReconciliation';
@@ -106,6 +107,39 @@ test('un padrón ERP válido retira semillas pero una respuesta vacía no las bo
   assert.deepEqual(offline, [legacySeed]);
 });
 
+test('un tenant ERP sin usuarios conserva el roster por defecto', () => {
+  const defaultUsers = [
+    user('u1', 'Admin Master', { role: 'ADMIN', roleId: 'ADMIN', syncSource: 'LOCAL_SEED' }),
+    user('u2', 'Cajero Principal', { syncSource: 'LOCAL_SEED' }),
+  ];
+
+  assert.deepEqual(selectPosUsersForRuntime(defaultUsers, {
+    erpManaged: true,
+    fallbackUsers: defaultUsers,
+  }), defaultUsers);
+  assert.deepEqual(selectPosUsersForRuntime([], {
+    erpManaged: true,
+    fallbackUsers: defaultUsers,
+  }), defaultUsers);
+});
+
+test('los usuarios ERP sustituyen visualmente los defaults cuando existen', () => {
+  const defaultUser = user('u1', 'Admin Master', {
+    role: 'ADMIN',
+    roleId: 'ADMIN',
+    syncSource: 'LOCAL_SEED',
+  });
+  const erpUser = user('erp-1', 'Operador ERP', { syncSource: 'ERP_SNAPSHOT' });
+
+  assert.deepEqual(selectPosUsersForRuntime([defaultUser, erpUser], {
+    erpManaged: true,
+    fallbackUsers: [defaultUser],
+  }), [erpUser]);
+  assert.deepEqual(selectPosUsersForRuntime([defaultUser, erpUser], {
+    erpManaged: false,
+  }), [defaultUser, erpUser]);
+});
+
 test('la comparación del padrón detecta cambios aunque la cantidad sea igual', () => {
   assert.equal(posUserRostersMatch([user('erp', 'Ana')], [user('erp', 'Ana')]), true);
   assert.equal(posUserRostersMatch([user('erp', 'Ana')], [user('erp', 'Ana actualizada')]), false);
@@ -125,4 +159,5 @@ test('pairing y full pull usan la reconciliación protegida', () => {
   assert.match(syncSource, /removeDefaultSeedUsers: true/);
   assert.match(appSource, /refreshErpPosUserRoster\(finalConfig\)/);
   assert.match(appSource, /removeDefaultSeedUsers: isErpDirectBinding/);
+  assert.match(appSource, /ERP returned no POS users; activating default local roster/);
 });
