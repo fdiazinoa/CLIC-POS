@@ -192,6 +192,32 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
             ...config,
             [activeDef.prop]: nextItems,
         });
+
+        if (activeType === 'POS_CATEGORIES') {
+            const previousById = new Map(items.map(item => [item.id, item]));
+            const nextIds = new Set(nextItems.map(item => item.id));
+            void (async () => {
+                try {
+                    for (const item of nextItems) {
+                        await db.saveDocument('categories' as any, item);
+                        void syncManager.broadcastChange(
+                            'categories',
+                            item,
+                            previousById.has(item.id) ? 'UPDATE' : 'CREATE',
+                        ).catch(error => console.warn('[ClassificationManager] No se pudo sincronizar la categoría:', error));
+                    }
+                    for (const previousItem of items) {
+                        if (nextIds.has(previousItem.id)) continue;
+                        await db.deleteDocument('categories' as any, previousItem.id);
+                        void syncManager.broadcastChange('categories', previousItem, 'DELETE')
+                            .catch(error => console.warn('[ClassificationManager] No se pudo sincronizar la eliminación de categoría:', error));
+                    }
+                    window.dispatchEvent(new CustomEvent('categoriesUpdated'));
+                } catch (error) {
+                    console.error('[ClassificationManager] No se pudo persistir la organización de categorías:', error);
+                }
+            })();
+        }
     };
 
     const handleSave = () => {

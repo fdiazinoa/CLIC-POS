@@ -17,4 +17,5 @@ test('Artículos permite ordenar y ocultar categorías y reordenar sus productos
   assert.match(classificationsSource, /handleToggleClassification/);
   assert.match(classificationsSource, /handleMoveProduct/);
   assert.match(classificationsSource, /posSortOrder/);
+  assert.match(classificationsSource, /broadcastChange\(\s*'categories'/);
 });
