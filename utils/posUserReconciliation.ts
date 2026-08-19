@@ -1,6 +1,6 @@
 import type { User } from '../types';
 
-export type SyncedPosUser = User & { syncSource?: 'ERP_SNAPSHOT' };
+export type SyncedPosUser = User;
 
 type PosUserRow = Record<string, unknown>;
 
@@ -22,6 +22,53 @@ const asBoolean = (value: unknown): boolean | null => {
     if (['false', '0', 'no', 'n'].includes(normalized)) return false;
   }
   return null;
+};
+
+const LEGACY_DEFAULT_POS_USERS = new Map([
+  ['u1', { name: 'Admin Master', role: 'ADMIN' }],
+  ['u2', { name: 'Cajero Principal', role: 'CASHIER' }],
+  ['u3', { name: 'Supervisor Turno', role: 'SUPERVISOR' }],
+]);
+
+/** Detect both newly tagged seeds and the same users persisted by older APKs. */
+export const isDefaultSeedPosUser = (user: unknown): boolean => {
+  if (!user || typeof user !== 'object' || Array.isArray(user)) return false;
+  const candidate = user as SyncedPosUser;
+  if (candidate.syncSource === 'ERP_SNAPSHOT') return false;
+  if (candidate.syncSource === 'LOCAL_SEED') return true;
+
+  const legacySeed = LEGACY_DEFAULT_POS_USERS.get(asText(candidate.id));
+  return Boolean(
+    legacySeed
+    && asText(candidate.name) === legacySeed.name
+    && asText(candidate.roleId ?? candidate.role).toUpperCase() === legacySeed.role
+  );
+};
+
+export const withoutDefaultSeedPosUsers = (users: unknown): SyncedPosUser[] => (
+  Array.isArray(users)
+    ? (users as SyncedPosUser[]).filter((user) => !isDefaultSeedPosUser(user))
+    : []
+);
+
+export const posUserRostersMatch = (left: unknown, right: unknown): boolean => {
+  const normalize = (value: unknown) => (Array.isArray(value) ? value : [])
+    .map((entry) => {
+      const user = entry as SyncedPosUser;
+      return {
+        id: asText(user?.id),
+        name: asText(user?.name),
+        pin: asText(user?.pin),
+        role: asText(user?.role),
+        roleId: asText(user?.roleId),
+        photo: asText(user?.photo),
+        syncSource: asText(user?.syncSource),
+        biometrics: user?.biometrics ?? null,
+      };
+    })
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
 };
 
 export const resolvePosUserId = (raw: unknown): string => {
@@ -67,6 +114,7 @@ export interface ReconcilePosUsersOptions {
   incomingUsers: SyncedPosUser[];
   explicitlyRemovedIds?: Iterable<string>;
   allowAuthoritativeReplacement?: boolean;
+  removeDefaultSeedUsers?: boolean;
 }
 
 /** Preserve offline POS credentials when ERP returns a terminal-scoped or partial roster. */
@@ -75,6 +123,7 @@ export const reconcilePosUsers = ({
   incomingUsers,
   explicitlyRemovedIds = [],
   allowAuthoritativeReplacement = false,
+  removeDefaultSeedUsers = false,
 }: ReconcilePosUsersOptions): SyncedPosUser[] => {
   const existing = Array.isArray(existingUsers) ? existingUsers : [];
   const incoming = Array.isArray(incomingUsers) ? incomingUsers : [];
@@ -96,6 +145,7 @@ export const reconcilePosUsers = ({
   const nextById = new Map<string, SyncedPosUser>();
   existingById.forEach((user, id) => {
     if (incomingById.has(id) || removedIds.has(id)) return;
+    if (removeDefaultSeedUsers && incomingById.size > 0 && isDefaultSeedPosUser(user)) return;
     if (allowAuthoritativeReplacement && user.syncSource === 'ERP_SNAPSHOT') return;
     nextById.set(id, user);
   });

@@ -1087,6 +1087,26 @@ class SyncManager {
         console.log('✨ [AUTH_SYNC] Bootstrap Complete.');
     }
 
+    public async refreshErpPosUserRoster(baseConfig: BusinessConfig | null): Promise<User[]> {
+        if (syncPolicy.resolve().kind !== 'ERP_ACTIVE') {
+            const localUsers = await db.get('users');
+            return Array.isArray(localUsers) ? localUsers as User[] : [];
+        }
+
+        await this.refreshTerminalResolvedConfig(undefined, {
+            baseConfig,
+            dispatchEvent: false,
+            forceRemoteFetch: true,
+            forceFullCatalog: true,
+            masterScopes: ['pos_users', 'users', 'pos_roles', 'roles'],
+            resolvedScopes: ['identity', 'role'],
+            supplementalMode: 'skip',
+        });
+
+        const refreshedUsers = await db.get('users');
+        return Array.isArray(refreshedUsers) ? refreshedUsers as User[] : [];
+    }
+
     private ensureDeviceToken() {
         const syncMode = String(localStorage.getItem('clic_sync_mode') || '').trim().toUpperCase();
         const invalidated = getInvalidatedSyncDeviceTokenInfo();
@@ -4136,6 +4156,7 @@ class SyncManager {
             incomingUsers: normalizedUsers,
             explicitlyRemovedIds,
             allowAuthoritativeReplacement: canReplaceSnapshotSet,
+            removeDefaultSeedUsers: true,
         });
 
         await db.save('users', reconciledUsers);
@@ -4161,13 +4182,18 @@ class SyncManager {
                 .map(resolvePosUserId)
                 .filter(Boolean)
         );
+        const isErpRoster = syncPolicy.resolve().kind === 'ERP_ACTIVE';
         const activeIncomingUsers = (Array.isArray(incomingUsers) ? incomingUsers : [])
             .filter((user) => !explicitlyRemovesPosUser(user))
-            .filter((user) => Boolean(resolvePosUserId(user))) as SyncedPosUser[];
+            .filter((user) => Boolean(resolvePosUserId(user)))
+            .map((user) => isErpRoster
+                ? { ...(user as SyncedPosUser), syncSource: 'ERP_SNAPSHOT' as const }
+                : user as SyncedPosUser);
         const reconciledUsers = reconcilePosUsers({
             existingUsers: Array.isArray(existingUsers) ? existingUsers : [],
             incomingUsers: activeIncomingUsers,
             explicitlyRemovedIds,
+            removeDefaultSeedUsers: isErpRoster,
         });
 
         console.info('[SYNC_USERS] full_download_roster_reconciled', {

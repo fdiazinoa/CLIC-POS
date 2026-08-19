@@ -1255,6 +1255,7 @@ export interface User {
   roleId?: string; // Link to RoleDefinition
   photo?: string;
   biometrics?: UserBiometrics; // NEW: Biometric methods
+  syncSource?: 'LOCAL' | 'LOCAL_SEED' | 'ERP_SNAPSHOT';
 }
 
 export interface UserBiometrics {

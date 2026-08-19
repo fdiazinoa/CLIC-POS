@@ -107,7 +107,11 @@ import {
   recoverNativePrimaryDisplayUrl,
 } from './utils/customerDisplay';
 import { markPosInteractionActivity, setPosSaleActivity } from './utils/posSaleActivity';
-import { reconcilePosUsers } from './utils/posUserReconciliation';
+import {
+  posUserRostersMatch,
+  reconcilePosUsers,
+  withoutDefaultSeedPosUsers,
+} from './utils/posUserReconciliation';
 
 // Layout imports
 import StandardPOSLayout from './components/layouts/StandardPOSLayout';
@@ -1443,6 +1447,17 @@ const getStoredTerminalSetupMode = (): TerminalSetupMode | null => {
   return null;
 };
 
+const isErpManagedPosUserRuntime = (): boolean => (
+  getStoredTerminalSetupMode() === 'SERVER_ERP'
+  || localStorage.getItem('clic_sync_mode') === 'POS_ERP'
+);
+
+const visiblePosUsersForRuntime = (users: unknown): User[] => (
+  isErpManagedPosUserRuntime()
+    ? withoutDefaultSeedPosUsers(users)
+    : Array.isArray(users) ? users as User[] : []
+);
+
 const getTerminalSetupIntegrationMode = (setupMode: TerminalSetupMode | null): TerminalIntegrationMode => {
   return setupMode === 'SERVER_ERP' ? 'ERP_DIRECT' : 'LOCAL_ONLY';
 };
@@ -2104,7 +2119,7 @@ const AppContent: React.FC = () => {
 
         const refreshedUsers = await db.get('users') as User[];
         if (Array.isArray(refreshedUsers)) {
-          setUsers(refreshedUsers);
+          setUsers(visiblePosUsersForRuntime(refreshedUsers));
         }
 
         const refreshedRoles = await db.get('roles') as RoleDefinition[];
@@ -2144,7 +2159,7 @@ const AppContent: React.FC = () => {
 
         const refreshedUsers = await db.get('users') as User[];
         if (Array.isArray(refreshedUsers)) {
-          setUsers(refreshedUsers);
+          setUsers(visiblePosUsersForRuntime(refreshedUsers));
         }
 
         const refreshedRoles = await db.get('roles') as RoleDefinition[];
@@ -5894,6 +5909,7 @@ const AppContent: React.FC = () => {
         }
 
         if (data) {
+          const isErpSetupMode = isErpManagedPosUserRuntime();
           const hydrateDeferredCollections = async () => {
             // Avoid long full scans of transactions during startup for history, 
             // but ALWAYS load active transactions to ensure Monitor X / Finance Dashboard accuracy.
@@ -5935,7 +5951,7 @@ const AppContent: React.FC = () => {
             coupons: (data.coupons && data.coupons.length > 0) ? data.coupons : (finalConfig.coupons || config.coupons || [])
           });
 
-          setUsers(data.users || []);
+          setUsers(visiblePosUsersForRuntime(data.users));
           setRoles(data.roles || DEFAULT_ROLES);
           // Android defers customers during db.init(); prefer the persisted
           // collection so the bootstrap fallback cannot overwrite a synced
@@ -6041,10 +6057,6 @@ const AppContent: React.FC = () => {
             }
           }
           const terminalBindingStatus = localStorage.getItem(TERMINAL_BINDING_STATUS_KEY);
-          const isErpSetupMode =
-            setupMode === 'SERVER_ERP'
-            || localStorage.getItem('clic_sync_mode') === 'POS_ERP';
-
           if (
             !pairedTerminal
             && !isVisorMode
@@ -6196,7 +6208,7 @@ const AppContent: React.FC = () => {
               if (Array.isArray(dbProducts) && dbProducts.length > 0) {
                 setProducts(dbProducts);
               }
-              if (Array.isArray(dbUsers)) setUsers(dbUsers);
+              if (Array.isArray(dbUsers)) setUsers(visiblePosUsersForRuntime(dbUsers));
               if (Array.isArray(dbRoles)) setRoles(dbRoles);
               if (Array.isArray(dbSequences)) setInternalSequences(dbSequences);
             } catch (rehydrationError) {
@@ -6217,22 +6229,30 @@ const AppContent: React.FC = () => {
 
             // --- CRITICAL SECURITY BOOTSTRAP ---
             try {
-              // Check if we have users. If not, we must fast-sync before allowing Login
+              // ERP terminals must never unlock with demo seed users while their roster is pending.
               const localUsers = await db.get('users') as User[];
-              if (!Array.isArray(localUsers) || localUsers.length === 0) {
+              let usableUsers = visiblePosUsersForRuntime(localUsers);
+
+              if (isErpSetupMode && usableUsers.length === 0) {
+                console.log('🔒 Security Bootstrap: ERP roster unavailable. Refreshing authorized POS users...');
+                const refreshedUsers = await syncManager.refreshErpPosUserRoster(finalConfig);
+                usableUsers = visiblePosUsersForRuntime(refreshedUsers);
+              } else if (!Array.isArray(localUsers) || localUsers.length === 0) {
                 console.log('🔒 Security Bootstrap: No users found. Starting Fast Sync...');
                 await syncManager.fastSyncCoreData();
-
-                const syncedUsers = await db.get('users') as User[];
-                if (Array.isArray(syncedUsers) && syncedUsers.length > 0) {
-                  setIsSecurityLoaded(true);
-                  setUsers(syncedUsers);
-                } else {
-                  throw new Error('No users received from Master. Check terminal pairing.');
-                }
-              } else {
-                setIsSecurityLoaded(true);
+                usableUsers = visiblePosUsersForRuntime(await db.get('users') as User[]);
               }
+
+              if (usableUsers.length === 0) {
+                throw new Error(
+                  isErpSetupMode
+                    ? 'El ERP no devolvió usuarios POS autorizados para esta terminal.'
+                    : 'No users received from Master. Check terminal pairing.'
+                );
+              }
+
+              setUsers(usableUsers);
+              setIsSecurityLoaded(true);
             } catch (bootstrapErr: any) {
               console.error('❌ Security Bootstrap Failed:', bootstrapErr);
               setBootstrapError(bootstrapErr.message || 'Error loading security data.');
@@ -6327,8 +6347,8 @@ const AppContent: React.FC = () => {
 
       try {
         // Refresh users
-        const syncedUsers = await db.get('users') as User[];
-        if (syncedUsers && syncedUsers.length > 0 && syncedUsers.length !== users.length) {
+        const syncedUsers = visiblePosUsersForRuntime(await db.get('users') as User[]);
+        if (!posUserRostersMatch(syncedUsers, users) && (syncedUsers.length > 0 || isErpManagedPosUserRuntime())) {
           console.log(`🔄 Refreshing users list after sync: ${syncedUsers.length} users found`);
           setUsers(syncedUsers);
         }
@@ -6506,7 +6526,7 @@ const AppContent: React.FC = () => {
           break;
         case 'customers': setCustomers(freshData as Customer[]); break;
         case 'suppliers': setSuppliers(freshData as Supplier[]); break;
-        case 'users': setUsers(Array.isArray(freshData) ? freshData as User[] : []); break;
+        case 'users': setUsers(visiblePosUsersForRuntime(freshData)); break;
         case 'roles': setRoles(Array.isArray(freshData) ? freshData as RoleDefinition[] : DEFAULT_ROLES); break;
         case 'purchaseOrders': setPurchaseOrders(Array.isArray(freshData) ? freshData as PurchaseOrder[] : []); break;
         case 'transfers': setTransfers(Array.isArray(freshData) ? freshData as StockTransfer[] : []); break;
@@ -7152,16 +7172,22 @@ const AppContent: React.FC = () => {
           message: 'Actualizando usuarios autorizados para esta terminal...',
         });
         const persistedUsers = await db.get('users') as User[];
+        const incomingBoundUsers = setupResult.boundUsers.map((user: User) => (
+          isErpDirectBinding
+            ? { ...user, syncSource: 'ERP_SNAPSHOT' as const }
+            : user
+        ));
         const reconciledUsers = reconcilePosUsers({
           existingUsers: Array.isArray(persistedUsers) ? persistedUsers : [],
-          incomingUsers: setupResult.boundUsers,
+          incomingUsers: incomingBoundUsers,
+          removeDefaultSeedUsers: isErpDirectBinding,
         });
         console.info('[SYNC_USERS] pairing_roster_reconciled', {
-          incoming: setupResult.boundUsers.length,
-          preserved: Math.max(0, reconciledUsers.length - setupResult.boundUsers.length),
+          incoming: incomingBoundUsers.length,
+          preserved: Math.max(0, reconciledUsers.length - incomingBoundUsers.length),
           total: reconciledUsers.length,
         });
-        setUsers(reconciledUsers);
+        setUsers(visiblePosUsersForRuntime(reconciledUsers));
         await db.save('users', reconciledUsers);
       }
 
@@ -7424,7 +7450,7 @@ const AppContent: React.FC = () => {
         await db.save('config', resolvedHydratedConfig);
       }
       setConfig(resolvedHydratedConfig);
-      if (Array.isArray(freshData.users)) setUsers(freshData.users);
+      if (Array.isArray(freshData.users)) setUsers(visiblePosUsersForRuntime(freshData.users));
       if (Array.isArray(freshData.roles)) setRoles(freshData.roles);
       if (Array.isArray(freshData.customers)) setCustomers(freshData.customers);
       if (Array.isArray(freshData.transactions)) setTransactions(freshData.transactions);
