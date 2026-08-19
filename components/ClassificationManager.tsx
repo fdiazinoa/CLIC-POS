@@ -1,14 +1,26 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-    ListTree, Plus, Edit2, Trash2, Save, X, ChevronRight, Check, FolderOpen, Tag, Layers, Grid, ArrowLeft
+    ListTree, Plus, Edit2, Trash2, ChevronRight, FolderOpen, Tag, Layers, Grid, ArrowLeft,
+    ArrowUp, ArrowDown, Eye, EyeOff, Package
 } from 'lucide-react';
-import { BusinessConfig, ClassificationItem } from '../types';
+import { BusinessConfig, ClassificationItem, Product } from '../types';
 import { db } from '../utils/db';
+import { syncManager } from '../services/sync/SyncManager';
+import {
+    categoryAliases,
+    comparePosProducts,
+    normalizeCatalogKey,
+    resolveClassificationActive,
+    resolveClassificationColor,
+    resolveClassificationSortOrder,
+} from '../utils/posCatalogPresentation';
 
 interface ClassificationManagerProps {
     config: BusinessConfig;
     onUpdateConfig: (config: BusinessConfig) => void;
+    products?: Product[];
+    onUpdateProducts?: (products: Product[]) => void;
     onClose: () => void;
 }
 
@@ -52,14 +64,25 @@ const normalizeClassificationItem = (entry: unknown, fallbackPrefix = 'POS-CAT')
             : typeof record.parent_id === 'string'
                 ? record.parent_id
                 : undefined,
+        color: resolveClassificationColor(record),
+        sortOrder: resolveClassificationSortOrder(record, 0),
+        isActive: resolveClassificationActive(record),
     };
 };
 
-const ClassificationManager: React.FC<ClassificationManagerProps> = ({ config, onUpdateConfig, onClose }) => {
+const ClassificationManager: React.FC<ClassificationManagerProps> = ({
+    config,
+    onUpdateConfig,
+    products = [],
+    onUpdateProducts,
+    onClose,
+}) => {
     const [activeType, setActiveType] = useState<ClassificationType>('DEPARTMENTS');
     const [editingItem, setEditingItem] = useState<ClassificationItem | null>(null);
     const [isCreating, setIsCreating] = useState(false);
     const [localPosCategories, setLocalPosCategories] = useState<ClassificationItem[]>([]);
+    const [selectedCategoryId, setSelectedCategoryId] = useState('');
+    const [isSavingProductOrder, setIsSavingProductOrder] = useState(false);
 
     const activeDef = CLASSIFICATION_TYPES.find(t => t.id === activeType)!;
     const posCategoryItems = useMemo(() => {
@@ -72,11 +95,40 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({ config, o
         };
         ((config.posCategories || []) as ClassificationItem[]).forEach(addItem);
         localPosCategories.forEach(addItem);
-        return Array.from(byName.values()).sort((left, right) => left.name.localeCompare(right.name));
+        return Array.from(byName.values()).sort((left, right) => {
+            const orderDifference = resolveClassificationSortOrder(left) - resolveClassificationSortOrder(right);
+            return orderDifference || left.name.localeCompare(right.name, 'es', { sensitivity: 'base' });
+        });
     }, [config.posCategories, localPosCategories]);
-    const items: ClassificationItem[] = activeType === 'POS_CATEGORIES'
+    const rawItems: ClassificationItem[] = activeType === 'POS_CATEGORIES'
         ? posCategoryItems
         : ((config[activeDef.prop] as ClassificationItem[]) || []);
+    const supportsPosPresentation = activeType === 'POS_CATEGORIES' || activeType === 'FAMILIES';
+    const items = useMemo(() => [...rawItems].sort((left, right) => {
+        if (supportsPosPresentation) {
+            const orderDifference = resolveClassificationSortOrder(left) - resolveClassificationSortOrder(right);
+            if (orderDifference) return orderDifference;
+        }
+        return left.name.localeCompare(right.name, 'es', { sensitivity: 'base' });
+    }), [rawItems, supportsPosPresentation]);
+
+    const selectedCategory = activeType === 'POS_CATEGORIES'
+        ? items.find(item => item.id === selectedCategoryId) || items[0]
+        : undefined;
+    const selectedCategoryAliases = useMemo(
+        () => new Set(selectedCategory ? categoryAliases(selectedCategory) : []),
+        [selectedCategory],
+    );
+    const orderedCategoryProducts = useMemo(() => products
+        .filter(product => selectedCategoryAliases.has(normalizeCatalogKey(product.category)))
+        .sort(comparePosProducts), [products, selectedCategoryAliases]);
+
+    useEffect(() => {
+        if (activeType !== 'POS_CATEGORIES') return;
+        if (!selectedCategoryId || !items.some(item => item.id === selectedCategoryId)) {
+            setSelectedCategoryId(items[0]?.id || '');
+        }
+    }, [activeType, items, selectedCategoryId]);
 
     useEffect(() => {
         let cancelled = false;
@@ -135,22 +187,59 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({ config, o
         activeType === 'FAMILIES' ? 'Sección' :
             activeType === 'SUBFAMILIES' ? 'Familia' : '';
 
+    const persistItems = (nextItems: ClassificationItem[]) => {
+        onUpdateConfig({
+            ...config,
+            [activeDef.prop]: nextItems,
+        });
+
+        if (activeType === 'POS_CATEGORIES') {
+            const previousById = new Map(items.map(item => [item.id, item]));
+            const nextIds = new Set(nextItems.map(item => item.id));
+            void (async () => {
+                try {
+                    for (const item of nextItems) {
+                        await db.saveDocument('categories' as any, item);
+                        void syncManager.broadcastChange(
+                            'categories',
+                            item,
+                            previousById.has(item.id) ? 'UPDATE' : 'CREATE',
+                        ).catch(error => console.warn('[ClassificationManager] No se pudo sincronizar la categoría:', error));
+                    }
+                    for (const previousItem of items) {
+                        if (nextIds.has(previousItem.id)) continue;
+                        await db.deleteDocument('categories' as any, previousItem.id);
+                        void syncManager.broadcastChange('categories', previousItem, 'DELETE')
+                            .catch(error => console.warn('[ClassificationManager] No se pudo sincronizar la eliminación de categoría:', error));
+                    }
+                    window.dispatchEvent(new CustomEvent('categoriesUpdated'));
+                } catch (error) {
+                    console.error('[ClassificationManager] No se pudo persistir la organización de categorías:', error);
+                }
+            })();
+        }
+    };
+
     const handleSave = () => {
         if (!editingItem) return;
         if (!editingItem.name.trim()) return alert("El nombre es requerido");
 
         const newItems = [...items];
         if (isCreating) {
-            newItems.push({ ...editingItem, id: editingItem.id || `${activeType.toLowerCase().substring(0, 3)}_${Date.now()}` });
+            newItems.push({
+                ...editingItem,
+                id: editingItem.id || `${activeType.toLowerCase().substring(0, 3)}_${Date.now()}`,
+                sortOrder: supportsPosPresentation
+                    ? Math.max(-1, ...newItems.map((item, index) => resolveClassificationSortOrder(item, index))) + 1
+                    : editingItem.sortOrder,
+                isActive: supportsPosPresentation ? editingItem.isActive !== false : editingItem.isActive,
+            });
         } else {
             const idx = newItems.findIndex(i => i.id === editingItem.id);
             if (idx >= 0) newItems[idx] = editingItem;
         }
 
-        onUpdateConfig({
-            ...config,
-            [activeDef.prop]: newItems
-        });
+        persistItems(newItems);
 
         setEditingItem(null);
         setIsCreating(false);
@@ -159,14 +248,58 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({ config, o
     const handleDelete = (id: string) => {
         if (!confirm("¿Está seguro de eliminar este elemento?")) return;
         const newItems = items.filter(i => i.id !== id);
-        onUpdateConfig({
-            ...config,
-            [activeDef.prop]: newItems
-        });
+        persistItems(newItems);
+    };
+
+    const handleMoveClassification = (id: string, direction: -1 | 1) => {
+        const currentIndex = items.findIndex(item => item.id === id);
+        const targetIndex = currentIndex + direction;
+        if (currentIndex < 0 || targetIndex < 0 || targetIndex >= items.length) return;
+        const reordered = [...items];
+        [reordered[currentIndex], reordered[targetIndex]] = [reordered[targetIndex], reordered[currentIndex]];
+        persistItems(reordered.map((item, index) => ({ ...item, sortOrder: index })));
+    };
+
+    const handleToggleClassification = (id: string) => {
+        persistItems(items.map(item => item.id === id
+            ? { ...item, isActive: !resolveClassificationActive(item) }
+            : item));
+    };
+
+    const handleMoveProduct = async (productId: string, direction: -1 | 1) => {
+        const currentIndex = orderedCategoryProducts.findIndex(product => product.id === productId);
+        const targetIndex = currentIndex + direction;
+        if (currentIndex < 0 || targetIndex < 0 || targetIndex >= orderedCategoryProducts.length || isSavingProductOrder) return;
+
+        const reordered = [...orderedCategoryProducts];
+        [reordered[currentIndex], reordered[targetIndex]] = [reordered[targetIndex], reordered[currentIndex]];
+        const orderById = new Map(reordered.map((product, index) => [product.id, index]));
+        const changedProducts = products
+            .filter(product => orderById.has(product.id))
+            .map(product => ({ ...product, posSortOrder: orderById.get(product.id)! }));
+        const changedById = new Map(changedProducts.map(product => [product.id, product]));
+        const nextProducts = products.map(product => changedById.get(product.id) || product);
+
+        setIsSavingProductOrder(true);
+        try {
+            await Promise.all(changedProducts.map(product => db.saveDocument('products', product)));
+            onUpdateProducts?.(nextProducts);
+            window.dispatchEvent(new CustomEvent('productsUpdated'));
+            for (const product of changedProducts) {
+                void syncManager.broadcastChange('products', product, 'UPDATE').catch(error =>
+                    console.warn('[ClassificationManager] No se pudo sincronizar el orden del artículo:', error)
+                );
+            }
+        } catch (error) {
+            console.error('[ClassificationManager] No se pudo guardar el orden de los artículos:', error);
+            alert('No se pudo guardar el orden de los artículos. Intente nuevamente.');
+        } finally {
+            setIsSavingProductOrder(false);
+        }
     };
 
     return (
-        <div className="flex bg-white rounded-2xl border border-gray-100 h-[600px] overflow-hidden shadow-sm">
+        <div className="flex bg-white rounded-2xl border border-gray-100 h-[680px] overflow-hidden shadow-sm">
             {/* Sidebar */}
             <div className="w-64 bg-white border-r border-gray-100 flex flex-col">
                 <div className="p-4 border-b border-gray-100 flex items-center gap-2">
@@ -203,11 +336,15 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({ config, o
                 <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-white">
                     <div>
                         <h2 className="text-xl font-black text-gray-800">{activeDef.label}</h2>
-                        <p className="text-sm text-gray-500">Gestión de maestro de {activeDef.label.toLowerCase()}</p>
+                        <p className="text-sm text-gray-500">
+                            {supportsPosPresentation
+                                ? 'Configure nombre, orden, color y visibilidad en el POS.'
+                                : `Gestión de maestro de ${activeDef.label.toLowerCase()}`}
+                        </p>
                     </div>
                     <button
                         onClick={() => {
-                            setEditingItem({ id: '', name: '', code: '' });
+                            setEditingItem({ id: '', name: '', code: '', color: '#2563EB', isActive: true });
                             setIsCreating(true);
                         }}
                         className="px-4 py-2 bg-blue-600 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all flex items-center gap-2"
@@ -265,6 +402,35 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({ config, o
                                     </div>
                                 )}
 
+                                {supportsPosPresentation && (
+                                    <div className="grid grid-cols-[1fr_auto] gap-4 items-end">
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">Color en el POS</label>
+                                            <div className="flex items-center gap-3 rounded-xl border border-gray-200 bg-gray-50 p-2">
+                                                <input
+                                                    type="color"
+                                                    value={resolveClassificationColor(editingItem) || '#2563EB'}
+                                                    onChange={event => setEditingItem({ ...editingItem, color: event.target.value.toUpperCase() })}
+                                                    className="h-9 w-12 cursor-pointer rounded-lg border-0 bg-transparent p-0"
+                                                    aria-label="Color de la categoría"
+                                                />
+                                                <span className="font-mono text-sm font-bold text-gray-600">
+                                                    {resolveClassificationColor(editingItem) || '#2563EB'}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => setEditingItem({ ...editingItem, isActive: editingItem.isActive === false })}
+                                            className={`h-[54px] rounded-xl border px-4 text-sm font-black transition-colors ${editingItem.isActive !== false
+                                                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                                : 'border-gray-200 bg-gray-100 text-gray-500'}`}
+                                        >
+                                            {editingItem.isActive !== false ? 'Visible' : 'Oculta'}
+                                        </button>
+                                    </div>
+                                )}
+
                                 <div className="flex gap-3 pt-4">
                                     <button
                                         onClick={() => { setEditingItem(null); setIsCreating(false); }}
@@ -282,6 +448,7 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({ config, o
                             </div>
                         </div>
                     ) : (
+                        <div className="space-y-6">
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             {items.length === 0 && (
                                 <div className="col-span-full py-12 text-center text-gray-400 flex flex-col items-center">
@@ -289,13 +456,21 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({ config, o
                                     <p>No hay elementos registrados en esta clasificación.</p>
                                 </div>
                             )}
-                            {items.map(item => {
+                            {items.map((item, itemIndex) => {
                                 const parent = parentOptions.find(p => p.id === item.parentId);
+                                const itemColor = resolveClassificationColor(item);
+                                const isItemActive = resolveClassificationActive(item);
                                 return (
-                                    <div key={item.id} className="bg-white p-4 rounded-xl border border-gray-100 hover:border-blue-200 hover:shadow-md transition-all group relative">
+                                    <div
+                                        key={item.id}
+                                        className={`bg-white p-4 rounded-xl border hover:shadow-md transition-all group relative ${isItemActive ? 'border-gray-100 hover:border-blue-200' : 'border-gray-200 opacity-70'}`}
+                                    >
+                                        {supportsPosPresentation && itemColor && (
+                                            <div className="absolute inset-x-0 top-0 h-1 rounded-t-xl" style={{ backgroundColor: itemColor }} />
+                                        )}
                                         <div className="flex justify-between items-start">
-                                            <div>
-                                                <h4 className="font-bold text-gray-800">{item.name}</h4>
+                                            <div className="min-w-0 pr-2">
+                                                <h4 className="font-bold text-gray-800 truncate">{item.name}</h4>
                                                 <div className="flex items-center gap-2 mt-1">
                                                     {item.code && <span className="text-[10px] font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-500">{item.code}</span>}
                                                     {parent && (
@@ -303,9 +478,44 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({ config, o
                                                             <ChevronRight size={10} /> {parent.name}
                                                         </span>
                                                     )}
+                                                    {supportsPosPresentation && (
+                                                        <span className={`text-[10px] rounded px-1.5 py-0.5 font-bold ${isItemActive ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-500'}`}>
+                                                            {isItemActive ? 'Visible' : 'Oculta'}
+                                                        </span>
+                                                    )}
                                                 </div>
                                             </div>
-                                            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <div className="flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
+                                                {supportsPosPresentation && (
+                                                    <>
+                                                        <button
+                                                            type="button"
+                                                            disabled={itemIndex === 0}
+                                                            onClick={() => handleMoveClassification(item.id, -1)}
+                                                            className="p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 rounded-lg disabled:opacity-20"
+                                                            title="Subir"
+                                                        >
+                                                            <ArrowUp size={15} />
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            disabled={itemIndex === items.length - 1}
+                                                            onClick={() => handleMoveClassification(item.id, 1)}
+                                                            className="p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 rounded-lg disabled:opacity-20"
+                                                            title="Bajar"
+                                                        >
+                                                            <ArrowDown size={15} />
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleToggleClassification(item.id)}
+                                                            className="p-1.5 text-gray-400 hover:bg-amber-50 hover:text-amber-600 rounded-lg"
+                                                            title={isItemActive ? 'Ocultar en el POS' : 'Mostrar en el POS'}
+                                                        >
+                                                            {isItemActive ? <Eye size={15} /> : <EyeOff size={15} />}
+                                                        </button>
+                                                    </>
+                                                )}
                                                 <button onClick={() => { setEditingItem(item); setIsCreating(false); }} className="p-1.5 text-gray-400 hover:bg-blue-50 hover:text-blue-600 rounded-lg">
                                                     <Edit2 size={16} />
                                                 </button>
@@ -317,6 +527,63 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({ config, o
                                     </div>
                                 );
                             })}
+                        </div>
+
+                        {activeType === 'POS_CATEGORIES' && items.length > 0 && (
+                            <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                                    <div>
+                                        <h3 className="flex items-center gap-2 font-black text-gray-800">
+                                            <Package size={18} className="text-blue-600" /> Orden de artículos
+                                        </h3>
+                                        <p className="mt-1 text-xs text-gray-500">Defina la posición de cada artículo dentro de su categoría.</p>
+                                    </div>
+                                    <label className="min-w-[240px] text-xs font-bold uppercase text-gray-500">
+                                        Categoría
+                                        <select
+                                            value={selectedCategory?.id || ''}
+                                            onChange={event => setSelectedCategoryId(event.target.value)}
+                                            className="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 p-2.5 text-sm font-bold normal-case text-gray-700 outline-none focus:border-blue-500"
+                                        >
+                                            {items.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                                        </select>
+                                    </label>
+                                </div>
+
+                                <div className="mt-4 max-h-64 space-y-2 overflow-y-auto pr-1">
+                                    {orderedCategoryProducts.length === 0 ? (
+                                        <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 p-5 text-center text-sm text-gray-400">
+                                            Esta categoría no tiene artículos asignados.
+                                        </div>
+                                    ) : orderedCategoryProducts.map((product, productIndex) => (
+                                        <div key={product.id} className="flex items-center gap-3 rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
+                                            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white text-xs font-black text-gray-500 shadow-sm">
+                                                {productIndex + 1}
+                                            </span>
+                                            <span className="min-w-0 flex-1 truncate text-sm font-bold text-gray-700">{product.name}</span>
+                                            <button
+                                                type="button"
+                                                disabled={productIndex === 0 || isSavingProductOrder}
+                                                onClick={() => void handleMoveProduct(product.id, -1)}
+                                                className="rounded-lg p-2 text-gray-400 hover:bg-white hover:text-blue-600 disabled:opacity-20"
+                                                title="Subir artículo"
+                                            >
+                                                <ArrowUp size={16} />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                disabled={productIndex === orderedCategoryProducts.length - 1 || isSavingProductOrder}
+                                                onClick={() => void handleMoveProduct(product.id, 1)}
+                                                className="rounded-lg p-2 text-gray-400 hover:bg-white hover:text-blue-600 disabled:opacity-20"
+                                                title="Bajar artículo"
+                                            >
+                                                <ArrowDown size={16} />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </section>
+                        )}
                         </div>
                     )}
                 </div>
