@@ -21,6 +21,7 @@ import {
     Sigma,
     PieChart,
     Activity,
+    ClipboardCheck,
     X
 } from 'lucide-react';
 import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from 'framer-motion';
@@ -57,6 +58,8 @@ interface TableMapProps {
     onParkedOrderSplitResult?: (orderId: string, remainingItems: CartItem[], newTicketItems: CartItem[], extraNewTickets?: CartItem[][], splitCount?: number) => void | Promise<void>;
     /** Restaurante: abrir diseñador de plano de mesas */
     onOpenTableLayoutDesigner?: () => void;
+    /** Abre el mismo flujo funcional de Cierre X disponible en Finanzas/Configuración. */
+    onOpenXReport?: () => void;
     /** Conserva la sala seleccionada aunque el mapa se desmonte. */
     onChangeRoom?: (roomId: string) => void;
 }
@@ -461,6 +464,7 @@ const TableMap: React.FC<TableMapProps> = ({
     onPrintPrecheck,
     onParkedOrderSplitResult,
     onOpenTableLayoutDesigner,
+    onOpenXReport,
     onChangeRoom
 }) => {
     const [activeRoomId, setActiveRoomId] = useState<string>(initialRoomId || rooms[0]?.id || '');
@@ -563,6 +567,14 @@ const TableMap: React.FC<TableMapProps> = ({
         isAdmin ||
         currentRolePermissions.includes('ALL') ||
         currentRolePermissions.includes(TABLE_CONTROL_CENTER_PERMISSION)
+    );
+    const canOpenXReport = Boolean(
+        onOpenXReport && (
+            isAdmin ||
+            currentRolePermissions.includes('ALL') ||
+            currentRolePermissions.includes('POS_VIEW_X_REPORT') ||
+            currentRolePermissions.includes('POS_CLOSE_X')
+        )
     );
 
     const roomTables = useMemo(
@@ -1616,12 +1628,24 @@ const TableMap: React.FC<TableMapProps> = ({
                     <Pencil size={iconSize} className="opacity-95" />
                     Editar layout
                 </button>
+                {canOpenXReport && (
+                    <button
+                        type="button"
+                        onClick={onOpenXReport}
+                        className={buttonClass}
+                    >
+                        <ClipboardCheck size={iconSize} className="opacity-95" />
+                        Cierre X
+                    </button>
+                )}
             </>
         );
     }, [
         freeForTools,
         isRestaurantMode,
         occupiedForTools,
+        canOpenXReport,
+        onOpenXReport,
         onOpenTableLayoutDesigner,
         parkedTickets
     ]);

@@ -10508,6 +10508,10 @@ const AppContent: React.FC = () => {
                   }
                 }}
                 onParkedOrderSplitResult={handleParkedOrderSplitFromMap}
+                onOpenXReport={() => handleViewChange('FINANCE', {
+                  initialCashMovementType: 'X_REPORT',
+                  returnView: 'TABLE_MAP',
+                })}
                 onOpenTableLayoutDesigner={isClientTerminalMode() ? undefined : () => {
                   tableDesignerReturnViewRef.current = 'TABLE_MAP';
                   handleViewChange('TABLE_DESIGNER');
@@ -11070,7 +11074,7 @@ const AppContent: React.FC = () => {
               onCloseXReport={handleXReport}
               onPrintXReport={handlePrintXReport}
               onOpenZReport={() => setCurrentView('Z_REPORT')}
-              onClose={() => setCurrentView('POS')}
+              onClose={() => setCurrentView(viewData?.returnView === 'TABLE_MAP' ? 'TABLE_MAP' : 'POS')}
             />
           );
         }
