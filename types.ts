@@ -1600,6 +1600,7 @@ export interface Table {
 export interface CartItem extends Product {
   quantity: number;
   cartId: string;
+  isReturnLine?: boolean;
   createdAt?: string;
   modifiers?: string[];
   restaurantConfig?: {
@@ -1706,6 +1707,8 @@ export interface Transaction {
   netAmount?: number;               // Net amount (before tax)
   taxBreakdown?: any[];             // Fiscal tax lines persisted for provider retries
   discountAmount?: number;
+  discountType?: 'PERCENT' | 'FIXED';
+  discountValue?: number;
   isTaxIncluded?: boolean;
   couponCode?: string;
   coupons?: RedeemedCouponRef[];

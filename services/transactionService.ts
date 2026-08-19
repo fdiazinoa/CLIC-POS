@@ -378,6 +378,8 @@ class TransactionService {
             taxAmount: normalizedFiscalAmounts.taxAmount,
             netAmount: normalizedFiscalAmounts.netAmount,
             discountAmount: data.discountAmount,
+            discountType: data.discountType,
+            discountValue: data.discountValue,
             isTaxIncluded: data.isTaxIncluded,
             couponCode: data.couponCode,
             coupons: data.coupons,

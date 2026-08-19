@@ -8,6 +8,7 @@ import { resolveLineDiscountPresentation } from './lineDiscountPresentation';
 import { buildPaymentSettlementSummary, resolveCurrencySymbol } from './paymentSettlement';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from './terminalSnapshotSellers';
 import { normalizePrintCopies, resolveConfiguredPrintCopies, resolveTransactionPrintKind } from './printCopies';
+import { resolveGlobalDiscountLabel } from './globalDiscountPresentation';
 
 const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -203,8 +204,17 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
         'B15': 'Gubernamental'
     };
 
-    const documentTitle = transaction.ncfType ? (ncfTypeLabels[transaction.ncfType] || 'FACTURA DE VENTA') : 'TICKET DE VENTA';
     const isCreditNote = transaction.ncfType === 'B04' || transaction.documentType === 'REFUND';
+    const documentTitle = isCreditNote
+        ? 'NOTA DE CRÉDITO'
+        : transaction.ncfType ? (ncfTypeLabels[transaction.ncfType] || 'FACTURA DE VENTA') : 'TICKET DE VENTA';
+    const globalDiscountLabel = resolveGlobalDiscountLabel({
+        discountAmount: discountTotal,
+        subtotalBeforeDiscount: subtotal,
+        discountType: transaction.discountType,
+        discountValue: transaction.discountValue,
+        baseLabel: 'DESCUENTO TOTAL',
+    });
     const copies = resolveConfiguredPrintCopies(config, resolveTransactionPrintKind(transaction));
     const qrPayload = String(transaction.displayId || transaction.id || '').trim();
 
@@ -413,7 +423,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 </div>
                 ${discountTotal > 0 ? `
                 <div class="total-row">
-                    <span>DESCUENTO TOTAL</span>
+                    <span>${globalDiscountLabel}</span>
                     <span>-${currencySymbol}${(discountTotal || 0).toFixed(2)}</span>
                 </div>` : ''}
                 <div class="total-row">
@@ -868,6 +878,8 @@ export const printPrecuenta = async (
         items: CartItem[];
         subtotal: number;
         discountTotal: number;
+        discountType?: 'PERCENT' | 'FIXED';
+        discountValue?: number;
         taxTotal: number;
         finalTotal: number;
         table?: Table | null;
@@ -881,6 +893,12 @@ export const printPrecuenta = async (
     const { companyInfo, currencySymbol } = config;
     const dateStr = new Date().toLocaleDateString();
     const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const discountLabel = resolveGlobalDiscountLabel({
+        discountAmount: params.discountTotal,
+        subtotalBeforeDiscount: params.subtotal,
+        discountType: params.discountType,
+        discountValue: params.discountValue,
+    });
 
     const receiptHtml = `
         <!DOCTYPE html>
@@ -974,7 +992,7 @@ export const printPrecuenta = async (
                 </div>
                 ${params.discountTotal > 0 ? `
                 <div class="total-row">
-                    <span>DESCUENTO</span>
+                    <span>${discountLabel}</span>
                     <span>-${currencySymbol}${params.discountTotal.toFixed(2)}</span>
                 </div>` : ''}
                 <div class="total-row">

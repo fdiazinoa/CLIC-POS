@@ -10469,6 +10469,8 @@ const AppContent: React.FC = () => {
                       items: order.items,
                       subtotal: subtotal,
                       discountTotal: Number(order.discountAmount || 0),
+                      discountType: order.discountType,
+                      discountValue: order.discountValue,
                       taxTotal: 0,      // Simplified for now
                       finalTotal: order.total || subtotal,
                       table: table,
