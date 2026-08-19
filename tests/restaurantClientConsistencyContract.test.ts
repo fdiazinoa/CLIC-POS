@@ -36,7 +36,8 @@ test('la Master permite persistir comensales y clientes creados por una terminal
   assert.match(serverSource, /\.put\("customers", getSyncCollection\("customers"\)\)/);
   assert.match(serverSource, /hasInitializedCatalogs && acknowledgedRevision < restaurantRevision\.get\(\)/);
   assert.match(appSource, /fetch\(resolveOperationalApiUrl\('\/api\/customers'\)/);
-  assert.match(appSource, /syncManager\.broadcastChange\('customers', customer, 'CREATE'\)/);
+  assert.match(appSource, /await queueCustomerMutation\('UPSERT', customer\)/);
+  assert.match(appSource, /backgroundSyncManager\.triggerSync\(\)\.catch\(console\.error\)/);
 });
 
 test('asignar un cliente persiste el ticket sin perder el lock ni la selección al volver al POS', () => {
