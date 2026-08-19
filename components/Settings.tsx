@@ -404,6 +404,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
           <CurrencySettings
             config={props.config}
             onUpdateConfig={props.onUpdateConfig}
+            currentUser={props.currentUser}
+            terminalId={props.terminalId}
             onClose={() => setCurrentView('HOME')}
           />
         );

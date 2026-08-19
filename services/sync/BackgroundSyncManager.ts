@@ -14,6 +14,7 @@ export interface SyncState {
 }
 
 class BackgroundSyncManager {
+    private readonly operationalCollections = ['customerMutations', 'inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'wallet_transactions', 'loyalty_events'];
     private isProcessing = false;
     private interval: any = null;
     private retryTimeout: any = null;
@@ -226,6 +227,7 @@ class BackgroundSyncManager {
         if (!currentTerminalId) return true;
 
         const terminalScopedCollections = new Set([
+            'customerMutations',
             'inventoryLedger',
             'cashMovements',
             'zReports',
@@ -306,7 +308,14 @@ class BackgroundSyncManager {
                 return;
             }
 
-            // 2) Inventory Ledger
+            // 2) Customer mutations
+            await this.processCollection<any>('customerMutations', async (item) => {
+                await apiSyncAdapter.pushCustomerMutation(item);
+            }).catch((error: any) => {
+                collectionErrors.push(`customerMutations: ${error?.message || 'unknown error'}`);
+            });
+
+            // 3) Inventory Ledger
             await this.processCollection<InventoryLedgerEntry>('inventoryLedger', async (item) => {
                 await apiSyncAdapter.pushInventoryMovement(item);
             }).catch((error: any) => {
@@ -496,7 +505,7 @@ class BackgroundSyncManager {
 
     private async updatePendingCount(collectionOverride?: string[]) {
         let count = 0;
-        const collections = collectionOverride || ['inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'wallet_transactions', 'loyalty_events'];
+        const collections = collectionOverride || this.operationalCollections;
 
         for (const col of collections) {
             const data = await db.get(col as any) || [];
@@ -548,7 +557,7 @@ class BackgroundSyncManager {
     }
 
     async requeueBlockedOperationalDocuments(collectionOverride?: string[]): Promise<number> {
-        const collections = collectionOverride || ['inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'wallet_transactions', 'loyalty_events'];
+        const collections = collectionOverride || this.operationalCollections;
         let changed = 0;
 
         for (const colName of collections) {
@@ -590,7 +599,7 @@ class BackgroundSyncManager {
      * This handles abrupt browser/tab shutdowns during sync.
      */
     private async recoverStuckSyncItems() {
-        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'wallet_transactions', 'loyalty_events'];
+        const collections = this.operationalCollections;
         for (const colName of collections) {
             try {
                 const data = await db.get(colName as any) as any[];
@@ -686,7 +695,7 @@ class BackgroundSyncManager {
 
         console.log(`🧹 BackgroundSyncManager: Pruning synced items older than ${RETENTION_DAYS} days (Cutoff: ${cutoff.toISOString()})`);
 
-        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'wallet_transactions', 'loyalty_events'];
+        const collections = this.operationalCollections;
 
         for (const colName of collections) {
             try {

@@ -239,6 +239,38 @@ export const backfillAuditColumns = () => {
 
 // Ensure sync change log exists (for versioned delta sync)
 db.exec(`
+    CREATE TABLE IF NOT EXISTS currency_audit_logs (
+        id TEXT PRIMARY KEY,
+        currencyCode TEXT NOT NULL,
+        field TEXT NOT NULL,
+        oldValue TEXT,
+        newValue TEXT,
+        changedAt TEXT NOT NULL,
+        changedBy TEXT NOT NULL,
+        changedByName TEXT NOT NULL,
+        terminalId TEXT,
+        source TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_currency_audit_currency ON currency_audit_logs(currencyCode);
+    CREATE INDEX IF NOT EXISTS idx_currency_audit_date ON currency_audit_logs(changedAt);
+
+    CREATE TABLE IF NOT EXISTS currency_rate_schedules (
+        id TEXT PRIMARY KEY,
+        currencyCode TEXT NOT NULL,
+        rate REAL NOT NULL,
+        buyRate REAL,
+        sellRate REAL,
+        executeAt TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        createdAt TEXT NOT NULL,
+        createdBy TEXT NOT NULL,
+        createdByName TEXT NOT NULL,
+        terminalId TEXT,
+        appliedAt TEXT,
+        error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_currency_schedule_due ON currency_rate_schedules(status, executeAt);
+
     CREATE TABLE IF NOT EXISTS sync_changes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         collection TEXT NOT NULL,
@@ -327,6 +359,8 @@ db.exec(`
     -- Try/Catch is not possible in .exec(), so we use a safe approach or separate statements
     -- For better-sqlite3, we can just run these separately and ignore errors if column exists
 `);
+
+ensureColumn('currency_audit_logs', 'source', 'TEXT');
 
 try {
     db.exec(`ALTER TABLE products ADD COLUMN version INTEGER DEFAULT 0`);

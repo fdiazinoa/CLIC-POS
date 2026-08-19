@@ -379,8 +379,15 @@ export const normalizeInventoryLedgerForSync = (entry: InventoryLedgerEntry): In
         source_inventory_movement_id: sourceInventoryMovementId,
         source_terminal_id: sourceTerminalId,
         device_id: deviceId,
-        created_at: createdAt
-    };
+        created_at: createdAt,
+        product_id: entry.productId,
+        warehouse_id: entry.warehouseId,
+        movement_type: entry.concept,
+        document_ref: entry.documentRef,
+        qty_in: entry.qtyIn,
+        qty_out: entry.qtyOut,
+        unit_cost: entry.unitCost,
+    } as InventoryLedgerEntry;
 };
 
 /** Wallet row from `wallet_transactions`: stable `id` is the technical source_event_id. */
