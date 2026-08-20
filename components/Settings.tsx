@@ -525,7 +525,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
         return (
           <div className="relative h-full">
             <EmailSettings
-              onSave={(emailConfig) => console.log('Email config saved locally', emailConfig)}
+              onSave={() => undefined}
               onBack={() => setCurrentView('HOME')}
             />
           </div>

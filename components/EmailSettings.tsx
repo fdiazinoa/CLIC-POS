@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Mail, Save, RefreshCw, CheckCircle2, AlertTriangle, Lock, Key, ArrowLeft } from 'lucide-react';
 import { EmailConfig } from '../types';
+import { isNativeAndroidRuntime } from '../utils/erpBaseUrl';
 
 interface EmailSettingsProps {
    onSave: (config: EmailConfig) => void;
@@ -8,6 +9,7 @@ interface EmailSettingsProps {
 }
 
 const EmailSettings: React.FC<EmailSettingsProps> = ({ onSave, onBack }) => {
+   const managedByErp = isNativeAndroidRuntime();
    const [config, setConfig] = useState<EmailConfig>({
       provider: 'resend',
       apiKey: '',
@@ -18,6 +20,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ onSave, onBack }) => {
    const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
    useEffect(() => {
+      if (managedByErp) return;
       // Load config from backend
       fetch('/smtp/config')
          .then(async res => {
@@ -29,13 +32,17 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ onSave, onBack }) => {
             if (data?.apiKey) setConfig(data);
          })
          .catch(err => console.error('Error loading email config:', err));
-   }, []);
+   }, [managedByErp]);
 
    const handleChange = (field: keyof EmailConfig, value: string) => {
       setConfig(prev => ({ ...prev, [field]: value }));
    };
 
    const handleSave = async () => {
+      if (managedByErp) {
+         setTestResult({ success: false, message: 'La clave de Resend se configura de forma segura en el ERP.' });
+         return;
+      }
       onSave(config);
 
       try {
@@ -59,6 +66,10 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ onSave, onBack }) => {
    };
 
    const handleTest = async () => {
+      if (managedByErp) {
+         setTestResult({ success: false, message: 'La conexión de correo debe probarse desde el ERP.' });
+         return;
+      }
       setIsTesting(true);
       setTestResult(null);
 
@@ -109,6 +120,16 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ onSave, onBack }) => {
          {/* Content */}
          <div className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full space-y-6">
 
+            {managedByErp && (
+               <div className="bg-amber-50 p-5 rounded-2xl border border-amber-200 flex items-start gap-3 text-amber-900">
+                  <Lock className="mt-0.5 shrink-0" size={20} />
+                  <div>
+                     <p className="font-bold">Configuración protegida por el ERP</p>
+                     <p className="text-sm mt-1">Por seguridad, el APK no almacena claves de Resend. Configura <code>RESEND_API_KEY</code> y el remitente en el ERP; el POS usa la autorización de esta terminal para solicitar el envío.</p>
+                  </div>
+               </div>
+            )}
+
             <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm space-y-6">
                <h3 className="font-bold text-gray-800 text-lg border-b border-gray-100 pb-2">Credenciales de Resend</h3>
 
@@ -121,8 +142,9 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ onSave, onBack }) => {
                         type="password"
                         value={config.apiKey}
                         onChange={(e) => handleChange('apiKey', e.target.value)}
+                        disabled={managedByErp}
                         className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="re_123456789..."
+                        placeholder={managedByErp ? 'Administrada por el ERP' : 're_123456789...'}
                      />
                      <Lock size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   </div>
@@ -135,6 +157,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ onSave, onBack }) => {
                      type="text"
                      value={config.from}
                      onChange={(e) => handleChange('from', e.target.value)}
+                     disabled={managedByErp}
                      className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm outline-none focus:ring-2 focus:ring-blue-500"
                      placeholder="CLIC POS <no-reply@mercasend.net>"
                   />
@@ -147,6 +170,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ onSave, onBack }) => {
                      type="email"
                      value={config.defaultRecipient || ''}
                      onChange={(e) => handleChange('defaultRecipient', e.target.value)}
+                     disabled={managedByErp}
                      className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm outline-none focus:ring-2 focus:ring-blue-500"
                      placeholder="admin@tuempresa.com"
                   />
@@ -165,7 +189,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ onSave, onBack }) => {
 
                <button
                   onClick={handleTest}
-                  disabled={isTesting || !config.apiKey}
+                  disabled={managedByErp || isTesting || !config.apiKey}
                   className="px-6 py-3 bg-white border border-gray-300 text-gray-700 rounded-xl font-bold hover:bg-gray-50 transition-all flex items-center gap-2 disabled:opacity-50"
                >
                   {isTesting ? <RefreshCw size={20} className="animate-spin" /> : <RefreshCw size={20} />}
@@ -174,7 +198,8 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ onSave, onBack }) => {
 
                <button
                   onClick={handleSave}
-                  className="px-8 py-3 bg-gray-900 text-white rounded-xl font-bold shadow-lg hover:scale-105 active:scale-95 transition-all flex items-center gap-2"
+                  disabled={managedByErp}
+                  className="px-8 py-3 bg-gray-900 text-white rounded-xl font-bold shadow-lg hover:scale-105 active:scale-95 transition-all flex items-center gap-2 disabled:opacity-50 disabled:hover:scale-100"
                >
                   <Save size={20} />
                   Guardar Configuración
