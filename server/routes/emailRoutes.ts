@@ -1,5 +1,5 @@
 import express from 'express';
-import { getSetting, saveSetting } from '../db.js';
+import { db, getSetting, saveSetting } from '../db.js';
 import { EmailService } from '../services/emailService.js';
 import { EmailConfig } from '../../types.js';
 
@@ -49,19 +49,34 @@ router.post('/test', async (req, res) => {
 // Send Receipt
 router.post('/receipt', async (req, res) => {
     const { email, cart } = req.body;
+    const syncToken = String(req.header('x-sync-token') || '').trim();
 
-    if (!email || !cart) {
+    if (!syncToken) {
+        return res.status(401).json({ success: false, message: 'Missing terminal authorization' });
+    }
+
+    const terminal = db.prepare('SELECT terminalId FROM sync_tokens WHERE token = ?').get(syncToken) as { terminalId?: string } | undefined;
+    if (!terminal?.terminalId) {
+        return res.status(401).json({ success: false, message: 'Invalid terminal authorization' });
+    }
+
+    if (typeof email !== 'string' || !email.includes('@') || !Array.isArray(cart) || cart.length === 0) {
         return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
 
     const emailService = new EmailService();
 
     try {
-        await emailService.sendReceipt(email, {
+        const delivery = await emailService.sendReceipt(email.trim(), {
             ...req.body,
             items: cart
         });
-        res.json({ success: true, message: 'Receipt sent successfully' });
+        res.json({
+            success: true,
+            id: delivery.id,
+            status: delivery.status,
+            message: 'Receipt accepted by Resend'
+        });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message || 'Failed to send receipt' });
     }
@@ -93,4 +108,3 @@ router.post('/purchase-order', async (req, res) => {
 });
 
 export default router;
-
