@@ -638,6 +638,9 @@ export interface TerminalConfig {
 
   fiscal: {
     enabled?: boolean;
+    mode?: FiscalMode;
+    fiscalMode?: FiscalMode;
+    fiscal_mode?: FiscalMode;
     providerId?: FiscalProviderId;
     environment?: FiscalProviderEnvironment;
     deliveryMode?: FiscalProviderDeliveryMode;
