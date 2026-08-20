@@ -11,7 +11,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ onSave, onBack }) => {
    const [config, setConfig] = useState<EmailConfig>({
       provider: 'resend',
       apiKey: '',
-      from: 'onboarding@resend.dev'
+      from: 'CLIC POS <no-reply@mercasend.net>'
    });
 
    const [isTesting, setIsTesting] = useState(false);
@@ -136,9 +136,9 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ onSave, onBack }) => {
                      value={config.from}
                      onChange={(e) => handleChange('from', e.target.value)}
                      className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                     placeholder="onboarding@resend.dev"
+                     placeholder="CLIC POS <no-reply@mercasend.net>"
                   />
-                  <p className="text-[10px] text-gray-400 mt-1">Si no tienes dominio propio, usa <code>onboarding@resend.dev</code> (solo envía a tu propio email de registro).</p>
+                  <p className="text-[10px] text-gray-400 mt-1">Usa un remitente de un dominio verificado en Resend.</p>
                </div>
 
                <div>

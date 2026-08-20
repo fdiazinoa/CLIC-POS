@@ -42,6 +42,7 @@ import {
    buildPaymentSettlementSummary,
    resolveCurrencySymbol,
 } from '../utils/paymentSettlement';
+import { sendReceiptEmailViaErp } from '../services/email/receiptEmailService';
 
 interface PaymentModalProps {
    total: number;
@@ -198,20 +199,7 @@ const sendReceiptEmailRequest = async (
    config: BusinessConfig | undefined,
    currencySymbol: string
 ): Promise<{ success: boolean; message?: string }> => {
-   const response = await fetch('/api/email/receipt', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildReceiptEmailPayload(transaction, email, config, currencySymbol))
-   });
-
-   const data = await response.json().catch(() => ({}));
-   if (!response.ok || data.success === false) {
-      return {
-         success: false,
-         message: data.message || `HTTP ${response.status}`
-      };
-   }
-   return { success: true, message: data.message };
+   return sendReceiptEmailViaErp(buildReceiptEmailPayload(transaction, email, config, currencySymbol));
 };
 
 const roundPaymentAmountByMethod = (
@@ -971,7 +959,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                         : `Venta aprobada. No se pudo enviar automáticamente el ticket a ${preferredReceiptEmail}: ${emailResult.message || 'error desconocido'}.`;
                   } catch (emailError) {
                      console.error('❌ Auto receipt email failed:', emailError);
-                     autoPrintNotice = `Venta aprobada. No se pudo enviar automáticamente el ticket a ${preferredReceiptEmail}.`;
+                     const reason = emailError instanceof Error ? emailError.message : 'error de conexión';
+                     autoPrintNotice = `Venta aprobada. No se pudo enviar automáticamente el ticket a ${preferredReceiptEmail}: ${reason}.`;
                   }
                } else if (!isInstallmentPayment && config && gatewayPayments.length > 0) {
                   const matchedIntegration = config.integrations?.find(
@@ -1089,7 +1078,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          }
       } catch (error) {
          console.error('Error sending email:', error);
-         alert('Error de conexión al enviar el correo');
+         alert(`Error al enviar: ${error instanceof Error ? error.message : 'error de conexión'}`);
       } finally {
          setIsSendingEmail(false);
       }

@@ -7,6 +7,12 @@ import { db, getSetting } from '../db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const DEFAULT_RECEIPT_FROM = 'CLIC POS <no-reply@mercasend.net>';
+
+export type EmailDeliveryResult = {
+    id: string;
+    status: 'accepted';
+};
 
 export class EmailService {
     private templatePath: string;
@@ -23,6 +29,16 @@ export class EmailService {
     }
 
     private loadConfig() {
+        const environmentApiKey = String(process.env.RESEND_API_KEY || '').trim();
+        if (environmentApiKey) {
+            this.configure({
+                provider: 'resend',
+                apiKey: environmentApiKey,
+                from: String(process.env.RESEND_FROM || DEFAULT_RECEIPT_FROM).trim(),
+            });
+            return;
+        }
+
         const config = getSetting('emailConfig');
         if (config && config.apiKey) {
             this.configure(config);
@@ -213,7 +229,7 @@ export class EmailService {
     /**
      * Sends a digital receipt for a purchase.
      */
-    async sendReceipt(to: string, receiptData: any): Promise<void> {
+    async sendReceipt(to: string, receiptData: any): Promise<EmailDeliveryResult> {
         console.log(`[EmailService] Sending receipt to: ${to}`);
 
         if (!this.resend) {
@@ -332,8 +348,9 @@ export class EmailService {
 
         // 5. Send Email
         if (this.resend && this.config) {
+            const from = String(process.env.RESEND_RECEIPT_FROM || process.env.RESEND_FROM || DEFAULT_RECEIPT_FROM).trim();
             const { data, error } = await this.resend.emails.send({
-                from: this.config.from,
+                from,
                 to: [to],
                 subject: `Ticket de Compra #${transactionId} - ${companyInfo?.name || 'CLIC POS'}`,
                 html: html
@@ -343,12 +360,13 @@ export class EmailService {
                 console.error('[EmailService] Failed to send receipt:', error);
                 throw new Error(error.message);
             }
+            if (!data?.id) {
+                throw new Error('Resend did not return an email identifier');
+            }
             console.log(`[EmailService] Receipt sent successfully. ID: ${data?.id}`);
+            return { id: data.id, status: 'accepted' };
         } else {
-            console.log('---------------------------------------------------');
-            console.log(`[SIMULATION] Sending Receipt to: ${to}`);
-            console.log(`SUBJECT: Ticket de Compra #${transactionId}`);
-            console.log('---------------------------------------------------');
+            throw new Error('Email service not configured');
         }
     }
 }
