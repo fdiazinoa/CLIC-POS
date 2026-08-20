@@ -2329,8 +2329,23 @@ export const applyTerminalConfigSnapshot = (
     },
     fiscal: {
       ...terminalTemplate.fiscal,
-      enabled: isNoFiscalMode ? false : terminalTemplate.fiscal.enabled,
-      providerId: isNoFiscalMode ? 'NONE' : terminalTemplate.fiscal.providerId,
+      enabled:
+        isNoFiscalMode
+          ? false
+          : fiscalModeFromSnapshot === 'LEGACY_B'
+            ? true
+            : terminalTemplate.fiscal.enabled,
+      providerId:
+        isNoFiscalMode
+          ? 'NONE'
+          : fiscalModeFromSnapshot === 'LEGACY_B'
+            ? undefined
+            : terminalTemplate.fiscal.providerId,
+      ...(fiscalModeFromSnapshot ? {
+        mode: fiscalModeFromSnapshot,
+        fiscalMode: fiscalModeFromSnapshot,
+        fiscal_mode: fiscalModeFromSnapshot,
+      } : {}),
       defaultFiscalRangeId:
         isNoFiscalMode
           ? undefined

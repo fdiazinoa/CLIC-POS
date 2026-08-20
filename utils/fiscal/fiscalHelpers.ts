@@ -142,6 +142,82 @@ const normalizeOptionalBoolean = (value: unknown): boolean | undefined => {
   return undefined;
 };
 
+const asFiscalRecord = (value: unknown): Record<string, any> => (
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, any>
+    : {}
+);
+
+const firstExplicitFiscalMode = (...values: unknown[]): FiscalMode | null => {
+  for (const value of values) {
+    if (value === undefined || value === null || value === '') continue;
+    return normalizeFiscalMode(value);
+  }
+  return null;
+};
+
+export const resolveTerminalFiscalMode = (
+  terminalConfig?: TerminalConfig | null
+): FiscalMode | null => {
+  const fiscal = asFiscalRecord(terminalConfig?.fiscal);
+  const snapshot = asFiscalRecord(terminalConfig?.erpSnapshot);
+  const resolved = asFiscalRecord(snapshot.resolved);
+  const terminalFiscalConfig = asFiscalRecord(
+    resolved.terminalFiscalConfig ?? resolved.terminal_fiscal_config
+  );
+  const resolvedFiscal = asFiscalRecord(resolved.fiscal);
+  const snapshotConfigFiscal = asFiscalRecord(asFiscalRecord(snapshot.config).fiscal);
+  const snapshotTerminalFiscal = asFiscalRecord(
+    asFiscalRecord(asFiscalRecord(snapshot.terminal).config).fiscal
+    ?? asFiscalRecord(snapshot.terminal).fiscal
+  );
+
+  // El modo fiscal resuelto por el ERP es autoritativo. En LEGACY_B,
+  // providerId=NONE significa "sin proveedor e-CF", no "sin NCF".
+  return firstExplicitFiscalMode(
+    snapshot.fiscalMode,
+    snapshot.fiscal_mode,
+    terminalFiscalConfig.fiscalMode,
+    terminalFiscalConfig.fiscal_mode,
+    terminalFiscalConfig.mode,
+    resolvedFiscal.fiscalMode,
+    resolvedFiscal.fiscal_mode,
+    resolvedFiscal.mode,
+    snapshotConfigFiscal.fiscalMode,
+    snapshotConfigFiscal.fiscal_mode,
+    snapshotConfigFiscal.mode,
+    snapshotTerminalFiscal.fiscalMode,
+    snapshotTerminalFiscal.fiscal_mode,
+    snapshotTerminalFiscal.mode,
+    fiscal.fiscalMode,
+    fiscal.fiscal_mode,
+    fiscal.mode
+  );
+};
+
+export const isTerminalFiscalReceiptRequired = (
+  terminalConfig?: TerminalConfig | null
+): boolean => {
+  const explicitMode = resolveTerminalFiscalMode(terminalConfig);
+  if (explicitMode) return explicitMode !== 'NONE';
+
+  const snapshot = asFiscalRecord(terminalConfig?.erpSnapshot);
+  const resolved = asFiscalRecord(snapshot.resolved);
+  const terminalFiscalConfig = asFiscalRecord(
+    resolved.terminalFiscalConfig ?? resolved.terminal_fiscal_config
+  );
+  const flags = [
+    terminalFiscalConfig.requiresFiscalReceipt,
+    terminalFiscalConfig.requires_fiscal_receipt,
+    terminalFiscalConfig.canIssueFiscalDocuments,
+    terminalFiscalConfig.can_issue_fiscal_documents,
+    snapshot.requiresFiscalReceipt,
+    snapshot.requires_fiscal_receipt,
+  ];
+
+  return flags.some((value) => normalizeOptionalBoolean(value) === true);
+};
+
 export const normalizeFiscalProviderDeliveryMode = (value: unknown): FiscalProviderDeliveryMode | undefined => {
   const normalized = typeof value === 'string'
     ? value.trim().toUpperCase().replace(/[\s-]+/g, '_')
@@ -156,6 +232,14 @@ const getTerminalFiscalProviderConfig = (
 ): FiscalProviderConfig | null => {
   const fiscal = terminalConfig?.fiscal as (TerminalConfig['fiscal'] & Record<string, unknown>) | undefined;
   if (!fiscal) return null;
+
+  const explicitMode = resolveTerminalFiscalMode(terminalConfig);
+  if (explicitMode === 'NONE') {
+    return { id: 'NONE', enabled: true, environment: 0, displayName: 'Sin proveedor' };
+  }
+  if (explicitMode === 'LEGACY_B') {
+    return null;
+  }
 
   const hasProviderField =
     fiscal.providerId !== undefined ||

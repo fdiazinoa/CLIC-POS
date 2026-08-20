@@ -23,7 +23,7 @@ import {
    PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, RedeemedCouponRef, ProductVariant
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
-import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, mapElectronicFiscalCodeToLegacy, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
+import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, isTerminalFiscalReceiptRequired, mapElectronicFiscalCodeToLegacy, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
 import { calculateTransactionTaxSummary } from '../utils/taxSummary';
 import UnifiedPaymentModal from './PaymentModal';
 import {
@@ -4900,6 +4900,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          let finalNcf: string | undefined;
          let finalNcfType: FiscalDocumentCode | undefined;
+
+         if (
+            !isOrderTakerMode
+            && isFiscalModeDisabledForCheckout
+            && isTerminalFiscalReceiptRequired(activeTerminalConfig)
+         ) {
+            alert(
+               'CRÍTICO: La terminal está configurada para emitir comprobantes fiscales, pero el modo fiscal efectivo está deshabilitado.\n\n' +
+               'La venta fue bloqueada para evitar una factura sin NCF. Sincronice la configuración o contacte a soporte.'
+            );
+            return null;
+         }
 
          if (isFiscalModeDisabledForCheckout) {
             finalNcf = undefined;
