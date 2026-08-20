@@ -9,6 +9,7 @@
 import React, { useMemo, useState } from 'react';
 import { CreditCard, Banknote, ArrowLeft, CheckCircle, User, Smartphone, Printer, Mail, XCircle, QrCode, Wallet, DollarSign, Zap, Search, Ticket, X } from 'lucide-react';
 import { CartItem, Customer, PaymentMethod, RedeemedCouponRef, Transaction } from '../../types';
+import { sendReceiptEmailViaErp } from '../../services/email/receiptEmailService';
 
 export type KioskResolvedPaymentMethod = {
     key: string;
@@ -287,20 +288,15 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
         setSendingEmail(true);
 
         try {
-            const response = await fetch('/api/email/receipt', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    email,
-                    cart,
-                    total,
-                    paymentMethod: selectedMethod || 'CARD'
-                })
+            const result = await sendReceiptEmailViaErp({
+                email,
+                cart,
+                total,
+                paymentMethod: selectedMethod || 'CARD'
             });
-
-            if (!response.ok) throw new Error('Failed to send email');
+            if (!result.success) {
+                throw new Error(result.message || 'Resend no confirmo el envio.');
+            }
 
             setEmailSent(true);
             setTimeout(() => {
@@ -308,11 +304,8 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
             }, 2000);
         } catch (error) {
             console.error('Error sending receipt:', error);
-            // Fallback to success anyway to not block the user
-            setEmailSent(true);
-            setTimeout(() => {
-                handleFinish();
-            }, 2000);
+            setEmailSent(false);
+            alert(error instanceof Error ? error.message : 'No se pudo enviar el ticket.');
         } finally {
             setSendingEmail(false);
         }
