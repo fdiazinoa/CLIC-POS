@@ -1,4 +1,5 @@
 import { readTerminalCredentialsSync } from '../sync/TerminalCredentialStore';
+import { requestJson, type RequestJsonResult } from '../network/httpClient';
 import { resolveErpBaseUrl } from '../../utils/erpBaseUrl';
 
 export type ReceiptEmailPayload = {
@@ -16,30 +17,37 @@ export type ReceiptEmailResult = {
 
 const RECEIPT_EMAIL_TIMEOUT_MS = 15_000;
 
+type ReceiptEmailApiResponse = {
+  success?: unknown;
+  id?: unknown;
+  status?: unknown;
+  message?: unknown;
+};
+
+type ReceiptEmailRequest = typeof requestJson<ReceiptEmailApiResponse>;
+
 const asNonEmptyString = (value: unknown): string | undefined => {
   const normalized = typeof value === 'string' ? value.trim() : '';
   return normalized || undefined;
 };
 
-export const parseReceiptEmailResponse = async (response: Response): Promise<ReceiptEmailResult> => {
-  const contentType = String(response.headers.get('content-type') || '').toLowerCase();
-  if (!contentType.includes('application/json')) {
+const getResponseContentType = (headers: Record<string, string>): string => {
+  const entry = Object.entries(headers).find(([key]) => key.toLowerCase() === 'content-type');
+  return String(entry?.[1] || '').toLowerCase();
+};
+
+export const parseReceiptEmailResponse = (
+  response: Pick<RequestJsonResult<ReceiptEmailApiResponse>, 'ok' | 'status' | 'headers' | 'data' | 'text'>,
+): ReceiptEmailResult => {
+  const contentType = getResponseContentType(response.headers);
+  const payload = response.data && typeof response.data === 'object' && !Array.isArray(response.data)
+    ? response.data
+    : null;
+
+  if (!payload || (!contentType.includes('application/json') && response.text.trim().startsWith('<'))) {
     return {
       success: false,
       message: 'El ERP no devolvio JSON. El endpoint de correo no esta disponible.',
-    };
-  }
-
-  let payload: Record<string, unknown>;
-  try {
-    const parsed = await response.json();
-    payload = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {};
-  } catch {
-    return {
-      success: false,
-      message: 'El ERP devolvio una respuesta JSON invalida.',
     };
   }
 
@@ -71,7 +79,7 @@ export const parseReceiptEmailResponse = async (response: Response): Promise<Rec
 
 export const sendReceiptEmailViaErp = async (
   payload: ReceiptEmailPayload,
-  fetchImpl: typeof fetch = fetch,
+  request: ReceiptEmailRequest = requestJson,
 ): Promise<ReceiptEmailResult> => {
   const erpBaseUrl = resolveErpBaseUrl();
   if (!erpBaseUrl) {
@@ -90,29 +98,31 @@ export const sendReceiptEmailViaErp = async (
     };
   }
 
-  const controller = new AbortController();
-  const timeoutId = globalThis.setTimeout(() => controller.abort(), RECEIPT_EMAIL_TIMEOUT_MS);
-
   try {
-    const response = await fetchImpl(`${erpBaseUrl}/api/email/receipt`, {
+    const response = await request({
+      url: `${erpBaseUrl}/api/email/receipt`,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        Authorization: `Bearer ${syncToken}`,
         'X-Sync-Token': syncToken,
+        'X-Terminal-Id': asNonEmptyString(credentials.erpTerminalId || credentials.terminalId),
+        'X-Device-Id': asNonEmptyString(credentials.deviceId),
+        'X-Device-Token': asNonEmptyString(credentials.deviceToken),
+        'X-Tenant-Id': asNonEmptyString(credentials.erpTenantId || credentials.tenantId),
       },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
+      body: payload,
+      timeoutMs: RECEIPT_EMAIL_TIMEOUT_MS,
+      diagnosticContext: { operation: 'SEND_RECEIPT_EMAIL' },
     });
 
-    return await parseReceiptEmailResponse(response);
+    return parseReceiptEmailResponse(response);
   } catch (error) {
     return {
       success: false,
-      message: error instanceof Error && error.name === 'AbortError'
+      message: error instanceof Error && /timeout|timed out|abort/i.test(error.message)
         ? 'El ERP no respondio a tiempo al intentar enviar el ticket.'
         : 'No fue posible conectar con el endpoint de correo del ERP.',
     };
-  } finally {
-    globalThis.clearTimeout(timeoutId);
   }
 };
