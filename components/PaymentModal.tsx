@@ -43,6 +43,7 @@ import {
    resolveCurrencySymbol,
 } from '../utils/paymentSettlement';
 import { sendReceiptEmailViaErp } from '../services/email/receiptEmailService';
+import { buildReceiptEmailPayload } from '../services/email/receiptEmailPayload';
 
 interface PaymentModalProps {
    total: number;
@@ -169,37 +170,14 @@ const resolveSuggestedTipAmount = (baseTotal: number, percentage: number): numbe
    return roundToTwo(baseTotal * (percentage / 100));
 };
 
-const buildReceiptEmailPayload = (
-   transaction: Transaction,
-   email: string,
-   config: BusinessConfig | undefined,
-   currencySymbol: string
-) => ({
-   email,
-   cart: transaction.items || [],
-   total: transaction.total || 0,
-   paymentMethod: transaction.payments?.[0]?.method || 'CASH',
-   transactionId: transaction.displayId || transaction.id || 'PENDING-ID',
-   ncf: transaction.ncf,
-   date: transaction.date,
-   customerName: transaction.customerSnapshot?.name || transaction.customerName,
-   companyInfo: config?.companyInfo,
-   currencySymbol,
-   subtotal: (transaction.netAmount || 0) + (transaction.discountAmount || 0),
-   tax: transaction.taxAmount,
-   discount: transaction.discountAmount,
-   totalSavings: (transaction.items || []).reduce((sum, item) =>
-      sum + ((item.originalPrice || item.price) - item.price) * item.quantity, 0) + (transaction.discountAmount || 0),
-   showSavings: config?.receiptConfig?.showSavings || false
-});
-
 const sendReceiptEmailRequest = async (
    transaction: Transaction,
    email: string,
    config: BusinessConfig | undefined,
-   currencySymbol: string
+   currencySymbol: string,
+   users: User[],
 ): Promise<{ success: boolean; message?: string }> => {
-   return sendReceiptEmailViaErp(buildReceiptEmailPayload(transaction, email, config, currencySymbol));
+   return sendReceiptEmailViaErp(buildReceiptEmailPayload(transaction, email, config, currencySymbol, users));
 };
 
 const roundPaymentAmountByMethod = (
@@ -953,7 +931,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
 
                if (!isInstallmentPayment && shouldEmailReceiptOnly && preferredReceiptEmail) {
                   try {
-                     const emailResult = await sendReceiptEmailRequest(finalizedTransaction, preferredReceiptEmail, config, currencySymbol);
+                     const emailResult = await sendReceiptEmailRequest(finalizedTransaction, preferredReceiptEmail, config, currencySymbol, users);
                      autoPrintNotice = emailResult.success
                         ? `Ticket enviado automáticamente a ${preferredReceiptEmail}.`
                         : `Venta aprobada. No se pudo enviar automáticamente el ticket a ${preferredReceiptEmail}: ${emailResult.message || 'error desconocido'}.`;
@@ -1069,7 +1047,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
       setIsSendingEmail(true);
       console.log('Sending Receipt Email. Transaction:', completedTransaction);
       try {
-         const data = await sendReceiptEmailRequest(completedTransaction, email, config, currencySymbol);
+         const data = await sendReceiptEmailRequest(completedTransaction, email, config, currencySymbol, users);
          if (data.success) {
             alert(`Ticket enviado a ${email}`);
             setShowEmailInput(false);
