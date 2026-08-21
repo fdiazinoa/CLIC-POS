@@ -15,6 +15,7 @@ import { terminalConfigRequestCoordinator } from '../sync/TerminalConfigRequestC
 import { persistSyncDeviceToken } from '../sync/deviceToken';
 import { saveTerminalCredentialsSync } from '../sync/TerminalCredentialStore';
 import { isArchivedTerminalBindingRecord } from '../../utils/terminalBindingHierarchy';
+import { enforceClientTerminalBinding, isGovernedClientTerminal } from '../../utils/terminalBindingConsistency';
 
 export interface RuntimeTerminalCard {
   id: string;
@@ -1200,8 +1201,15 @@ const buildBoundConfig = (input: {
         : occupiedDeviceId === posDeviceId
           ? undefined
           : occupiedDeviceId;
+    const isSelectedTerminal = erpTerminalId === selectedTerminalErpId;
+    const isGovernedClient = isGovernedClientTerminal(baseConfig, terminal);
+    const effectiveBindingMode = isSelectedTerminal
+      ? bindingMode
+      : isGovernedClient
+        ? 'SLAVE'
+        : baseConfig?.syncConfig?.mode || 'MASTER';
 
-    const nextConfig = {
+    const nextConfigCandidate = {
       ...baseConfig,
       erpTerminalId,
       terminalName,
@@ -1210,12 +1218,12 @@ const buildBoundConfig = (input: {
       primaryCurrencyCode,
       currency: primaryCurrencyCode,
       currentDeviceId: nextCurrentDeviceId || undefined,
-      lastPairingDate: erpTerminalId === selectedTerminalErpId ? now : existingTerminal?.config?.lastPairingDate,
-      isPrimaryNode: erpTerminalId === selectedTerminalErpId ? bindingMode === 'MASTER' : Boolean(baseConfig.isPrimaryNode),
-      governedByMaster: erpTerminalId === selectedTerminalErpId ? bindingMode === 'SLAVE' : Boolean(baseConfig.governedByMaster),
+      lastPairingDate: isSelectedTerminal ? now : existingTerminal?.config?.lastPairingDate,
+      isPrimaryNode: isSelectedTerminal ? bindingMode === 'MASTER' : isGovernedClient ? false : Boolean(baseConfig.isPrimaryNode),
+      governedByMaster: isSelectedTerminal ? bindingMode === 'SLAVE' : isGovernedClient ? true : Boolean(baseConfig.governedByMaster),
       syncConfig: {
         ...asObject(baseConfig.syncConfig),
-        mode: erpTerminalId === selectedTerminalErpId ? bindingMode : baseConfig?.syncConfig?.mode || 'MASTER',
+        mode: effectiveBindingMode,
         autoSyncIntervalMs: Number(baseConfig?.syncConfig?.autoSyncIntervalMs) || 30000,
         isEnabled: true,
       },
@@ -1223,11 +1231,14 @@ const buildBoundConfig = (input: {
         ...asObject(baseConfig.erpBinding),
         terminalId: erpTerminalId,
         terminalName,
-        deviceId: erpTerminalId === selectedTerminalErpId ? posDeviceId : nextCurrentDeviceId || undefined,
+        deviceId: isSelectedTerminal ? posDeviceId : nextCurrentDeviceId || undefined,
         currencyCode: primaryCurrencyCode,
         primaryCurrencyCode,
       },
     };
+    const nextConfig = effectiveBindingMode === 'SLAVE'
+      ? enforceClientTerminalBinding(nextConfigCandidate, nextCurrentDeviceId || (isSelectedTerminal ? posDeviceId : undefined))
+      : nextConfigCandidate;
 
     return {
       id: terminalId,
