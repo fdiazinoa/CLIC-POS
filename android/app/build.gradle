@@ -16,8 +16,8 @@ android {
         applicationId "com.clicpos.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1132
-        versionName "1.1.132"
+        versionCode 1133
+        versionName "1.1.133"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
