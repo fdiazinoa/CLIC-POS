@@ -7,6 +7,8 @@ import {
 import { CartItem, BusinessConfig, User as UserType, RoleDefinition } from '../types';
 import { TerminalSnapshotSeller } from '../utils/terminalSnapshotSellers';
 import { canStepCartQuantity } from '../utils/cartQuantity';
+import { Capacitor } from '@capacitor/core';
+import NumericKeypad from './NumericKeypad';
 
 interface CartItemOptionsModalProps {
   item: CartItem;
@@ -40,6 +42,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   const [discountType, setDiscountType] = useState<'PERCENT' | 'FIXED'>('PERCENT');
   const [discountValue, setDiscountValue] = useState<string>('');
   const [isDeleting, setIsDeleting] = useState(false);
+  const isAndroid = Capacitor.getPlatform() === 'android';
 
   const originalPrice = item.originalPrice || item.price;
   const adjustmentBasePrice = (item.adjustmentSource === 'PROMOTION' || item.adjustmentSource === 'TARIFF')
@@ -65,20 +68,30 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
     setQuantity(parseFloat(newQty.toFixed(3)));
   };
 
-  const handleApplyDiscount = () => {
-    const val = parseFloat(discountValue);
+  const applyDiscount = (rawValue: string, type: 'PERCENT' | 'FIXED') => {
+    const val = parseFloat(rawValue);
     if (isNaN(val) || val <= 0) {
       setPrice(adjustmentBasePrice);
       return;
     }
 
     let newPrice = adjustmentBasePrice;
-    if (discountType === 'PERCENT') {
+    if (type === 'PERCENT') {
       newPrice = adjustmentBasePrice - (adjustmentBasePrice * (val / 100));
     } else {
       newPrice = Math.max(0, adjustmentBasePrice - val);
     }
     setPrice(parseFloat(newPrice.toFixed(2)));
+  };
+
+  const handleDiscountValueChange = (nextValue: string) => {
+    setDiscountValue(nextValue);
+    applyDiscount(nextValue, discountType);
+  };
+
+  const handleDiscountTypeChange = (nextType: 'PERCENT' | 'FIXED') => {
+    setDiscountType(nextType);
+    applyDiscount(discountValue, nextType);
   };
 
   const handlePriceManualChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -260,28 +273,38 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
               <div className="flex gap-1">
                 <div className="relative flex-1">
                   <input
-                    type="number"
+                    type={isAndroid ? 'text' : 'number'}
+                    inputMode={isAndroid ? 'none' : 'decimal'}
+                    readOnly={isAndroid}
+                    data-disable-native-soft-keyboard={isAndroid ? 'true' : undefined}
                     placeholder="0"
                     value={discountValue}
-                    onChange={(e) => setDiscountValue(e.target.value)}
-                    onBlur={handleApplyDiscount}
+                    onChange={(e) => handleDiscountValueChange(e.target.value)}
                     disabled={!canApplyDiscount}
                     className="w-full bg-gray-50 border-none rounded-l-2xl pl-4 pr-2 py-4 font-black text-gray-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all disabled:opacity-50"
                   />
                 </div>
                 <button
-                  onClick={() => { setDiscountType('PERCENT'); setTimeout(handleApplyDiscount, 0); }}
+                  onClick={() => handleDiscountTypeChange('PERCENT')}
                   className={`px-4 py-4 border-none font-black text-sm transition-all ${discountType === 'PERCENT' ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-400'}`}
                 >
                   %
                 </button>
                 <button
-                  onClick={() => { setDiscountType('FIXED'); setTimeout(handleApplyDiscount, 0); }}
+                  onClick={() => handleDiscountTypeChange('FIXED')}
                   className={`px-4 py-4 rounded-r-2xl border-none font-black text-sm transition-all ${discountType === 'FIXED' ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-400'}`}
                 >
                   $
                 </button>
               </div>
+              {isAndroid && (
+                <NumericKeypad
+                  value={discountValue}
+                  onChange={handleDiscountValueChange}
+                  maxValue={discountType === 'PERCENT' ? 100 : adjustmentBasePrice}
+                  disabled={!canApplyDiscount}
+                />
+              )}
             </div>
           </div>
 
