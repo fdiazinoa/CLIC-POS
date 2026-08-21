@@ -221,3 +221,31 @@ test('MainActivity recupera la superficie primaria después de que Capacitor ter
     'la ventana principal debe conservar explícitamente su capacidad táctil',
   );
 });
+
+test('el Presentation del visor omite bootstrap y bloqueadores del POS', () => {
+  const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  const bootstrapBypassIndex = appSource.indexOf(
+    "Customer visor surface: skipping POS data and security bootstrap.",
+  );
+  const loadDataIndex = appSource.indexOf('const loadData = async () =>');
+  const visorRenderIndex = appSource.indexOf(
+    'if (isCustomerDisplaySurface()) {\n    return <CustomerVisor />;',
+  );
+  const dataBlockerIndex = appSource.indexOf('if (!isDataLoaded) {', visorRenderIndex);
+  const securityBlockerIndex = appSource.indexOf('if (!isSecurityLoaded) {', visorRenderIndex);
+
+  assert.ok(bootstrapBypassIndex >= 0, 'el visor debe declarar el bypass de bootstrap');
+  assert.ok(
+    bootstrapBypassIndex < loadDataIndex,
+    'el bypass debe ejecutarse antes de inicializar la base de datos del POS',
+  );
+  assert.ok(visorRenderIndex >= 0, 'el visor debe tener un render dedicado');
+  assert.ok(
+    visorRenderIndex < dataBlockerIndex,
+    'el visor debe renderizar antes del bloqueador de datos',
+  );
+  assert.ok(
+    visorRenderIndex < securityBlockerIndex,
+    'el visor debe renderizar antes del bloqueador de seguridad',
+  );
+});

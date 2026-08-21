@@ -5499,6 +5499,15 @@ const AppContent: React.FC = () => {
     if (initLoadStartedRef.current) return;
     initLoadStartedRef.current = true;
 
+    // The secondary Presentation WebView only renders the customer visor and
+    // shares its state with MainActivity through localStorage/BroadcastChannel.
+    // It has no Capacitor bridge, so running the POS bootstrap here would use
+    // the web database and attempt a redundant security sync.
+    if (isCustomerDisplaySurface()) {
+      console.log('📺 Customer visor surface: skipping POS data and security bootstrap.');
+      return;
+    }
+
     const loadData = async () => {
       console.log('🚀 loadData started');
       try {
@@ -11919,6 +11928,12 @@ const AppContent: React.FC = () => {
         );
     }
   };
+
+  // The dedicated Presentation surface must not be gated by the main POS
+  // database or security bootstrap. Its only input is the shared visor state.
+  if (isCustomerDisplaySurface()) {
+    return <CustomerVisor />;
+  }
 
   if (!isDataLoaded) {
     if (initialConnError) {
