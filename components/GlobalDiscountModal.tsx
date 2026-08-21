@@ -1,6 +1,8 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { X, Percent, DollarSign, Check, Trash2 } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
+import NumericKeypad from './NumericKeypad';
 
 interface GlobalDiscountModalProps {
   currentSubtotal: number;
@@ -25,6 +27,7 @@ const GlobalDiscountModal: React.FC<GlobalDiscountModalProps> = ({
 }) => {
   const [value, setValue] = useState(initialValue);
   const [type, setType] = useState<'PERCENT' | 'FIXED'>(initialType);
+  const isAndroid = Capacitor.getPlatform() === 'android';
 
   // Helper to get numeric value safely
   const numValue = parseFloat(value) || 0;
@@ -58,7 +61,7 @@ const GlobalDiscountModal: React.FC<GlobalDiscountModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl overflow-hidden flex flex-col">
+      <div className="bg-white w-full max-w-sm max-h-[95vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col">
         
         {/* Header */}
         <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
@@ -68,7 +71,7 @@ const GlobalDiscountModal: React.FC<GlobalDiscountModalProps> = ({
           </button>
         </div>
 
-        <div className="p-6 space-y-6">
+        <div className="p-6 space-y-6 overflow-y-auto custom-scrollbar">
           
           {/* Type Toggle */}
           <div className="flex bg-gray-100 p-1 rounded-xl">
@@ -89,8 +92,11 @@ const GlobalDiscountModal: React.FC<GlobalDiscountModalProps> = ({
           {/* Input */}
           <div className="relative">
             <input 
-              type="number" 
-              autoFocus
+              type={isAndroid ? 'text' : 'number'}
+              inputMode={isAndroid ? 'none' : 'decimal'}
+              readOnly={isAndroid}
+              data-disable-native-soft-keyboard={isAndroid ? 'true' : undefined}
+              autoFocus={!isAndroid}
               value={value}
               onChange={(e) => setValue(e.target.value)}
               placeholder="0"
@@ -100,6 +106,14 @@ const GlobalDiscountModal: React.FC<GlobalDiscountModalProps> = ({
               {type === 'PERCENT' ? '%' : currencySymbol}
             </span>
           </div>
+
+          {isAndroid && (
+            <NumericKeypad
+              value={value}
+              onChange={setValue}
+              maxValue={type === 'PERCENT' ? 100 : currentSubtotal}
+            />
+          )}
 
           {/* Quick Presets (Only for Percent) */}
           {type === 'PERCENT' && (
