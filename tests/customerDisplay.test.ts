@@ -231,8 +231,16 @@ test('el Presentation del visor omite bootstrap y bloqueadores del POS', () => {
   const visorRenderIndex = appSource.indexOf(
     'if (isCustomerDisplaySurface()) {\n    return <CustomerVisor />;',
   );
-  const dataBlockerIndex = appSource.indexOf('if (!isDataLoaded) {', visorRenderIndex);
-  const securityBlockerIndex = appSource.indexOf('if (!isSecurityLoaded) {', visorRenderIndex);
+  const visorRenderMatches = appSource.match(
+    /if \(isCustomerDisplaySurface\(\)\) \{\s*return <CustomerVisor \/>;\s*\}/g,
+  ) || [];
+  const blockerIndices = [
+    ['autorización de terminal', appSource.indexOf('if (terminalAuthorizationBlock) {')],
+    ['licencia', appSource.indexOf('if (licenseError) {')],
+    ['carga inicial', appSource.indexOf('if (!isDataLoaded || restoringHistory) {')],
+    ['datos', appSource.indexOf('if (!isDataLoaded) {')],
+    ['seguridad', appSource.indexOf('if (!isSecurityLoaded) {')],
+  ] as const;
 
   assert.ok(bootstrapBypassIndex >= 0, 'el visor debe declarar el bypass de bootstrap');
   assert.ok(
@@ -240,12 +248,12 @@ test('el Presentation del visor omite bootstrap y bloqueadores del POS', () => {
     'el bypass debe ejecutarse antes de inicializar la base de datos del POS',
   );
   assert.ok(visorRenderIndex >= 0, 'el visor debe tener un render dedicado');
-  assert.ok(
-    visorRenderIndex < dataBlockerIndex,
-    'el visor debe renderizar antes del bloqueador de datos',
-  );
-  assert.ok(
-    visorRenderIndex < securityBlockerIndex,
-    'el visor debe renderizar antes del bloqueador de seguridad',
-  );
+  assert.equal(visorRenderMatches.length, 1, 'debe existir un solo render dedicado del visor');
+  blockerIndices.forEach(([name, blockerIndex]) => {
+    assert.ok(blockerIndex >= 0, `debe existir el bloqueador de ${name}`);
+    assert.ok(
+      visorRenderIndex < blockerIndex,
+      `el visor debe renderizar antes del bloqueador de ${name}`,
+    );
+  });
 });

@@ -9769,6 +9769,13 @@ const AppContent: React.FC = () => {
   };
 
   // --- VIEW RENDERING LOGIC ---
+  // The dedicated Presentation surface must render before every main-POS
+  // blocker. Its only input is the shared visor state, so terminal licensing,
+  // database hydration and security bootstrap belong exclusively to MainActivity.
+  if (isCustomerDisplaySurface()) {
+    return <CustomerVisor />;
+  }
+
   if (terminalAuthorizationBlock) {
     return (
       <div className="fixed inset-0 z-[200000] flex items-center justify-center overflow-y-auto bg-slate-950/70 p-4 backdrop-blur-md">
@@ -11928,12 +11935,6 @@ const AppContent: React.FC = () => {
         );
     }
   };
-
-  // The dedicated Presentation surface must not be gated by the main POS
-  // database or security bootstrap. Its only input is the shared visor state.
-  if (isCustomerDisplaySurface()) {
-    return <CustomerVisor />;
-  }
 
   if (!isDataLoaded) {
     if (initialConnError) {
