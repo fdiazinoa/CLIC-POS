@@ -6,6 +6,7 @@ const isEditableTextField = (target: EventTarget | null): target is HTMLInputEle
   if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return false;
   if (target.disabled || target.readOnly) return false;
   if (target.closest('[data-disable-global-virtual-keyboard="true"]')) return false;
+  if (target.closest('[data-disable-native-soft-keyboard="true"]')) return false;
 
   if (target instanceof HTMLTextAreaElement) return true;
 
@@ -45,8 +46,33 @@ const GlobalVirtualKeyboard: React.FC = () => {
   const activeFieldRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
-    // Android/iOS must use the native keyboard. The POS keyboard remains only
-    // as a browser fallback for touch kiosks without a system IME.
+    if (Capacitor.getPlatform() === 'android') {
+      const handlePointerUp = (event: PointerEvent) => {
+        if (!isEditableTextField(event.target)) return;
+        const field = event.target;
+
+        // Wait until Chromium completes its own focus handling for the touched field.
+        window.setTimeout(() => {
+          if (!field.isConnected) return;
+          if (document.activeElement !== field) {
+            field.focus({ preventScroll: true });
+          }
+
+          const bridge = (window as typeof window & {
+            ClicPOSAppBridge?: { showSoftKeyboard?: () => void };
+          }).ClicPOSAppBridge;
+          bridge?.showSoftKeyboard?.();
+        }, 0);
+      };
+
+      // A pointer gesture is required so programmatic autofocus and barcode
+      // scanners can keep the search field active without opening the IME.
+      document.addEventListener('pointerup', handlePointerUp, true);
+      return () => document.removeEventListener('pointerup', handlePointerUp, true);
+    }
+
+    // iOS uses its native keyboard. The POS keyboard remains only as a browser
+    // fallback for touch kiosks without a system IME.
     if (Capacitor.isNativePlatform()) return;
     const isTouchRuntime = window.matchMedia('(pointer: coarse)').matches;
     if (!isTouchRuntime) return;

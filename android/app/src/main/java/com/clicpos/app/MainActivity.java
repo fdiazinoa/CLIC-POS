@@ -1,11 +1,16 @@
 package com.clicpos.app;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebSettings;
@@ -119,6 +124,33 @@ public class MainActivity extends BridgeActivity {
     }
 
     private class AndroidAppBridge {
+        @JavascriptInterface
+        public void showSoftKeyboard() {
+            runOnUiThread(() -> {
+                if (getBridge() == null || getBridge().getWebView() == null) {
+                    return;
+                }
+
+                WebView webView = getBridge().getWebView();
+                webView.requestFocus(View.FOCUS_DOWN);
+                webView.post(() -> {
+                    InputMethodManager inputMethodManager =
+                            (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+                    if (inputMethodManager != null) {
+                        inputMethodManager.restartInput(webView);
+                        inputMethodManager.showSoftInput(webView, InputMethodManager.SHOW_IMPLICIT);
+                    }
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        WindowInsetsController controller = webView.getWindowInsetsController();
+                        if (controller != null) {
+                            controller.show(WindowInsets.Type.ime());
+                        }
+                    }
+                });
+            });
+        }
+
         @JavascriptInterface
         public void exitApp() {
             runOnUiThread(() -> {
