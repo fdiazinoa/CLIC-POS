@@ -40,6 +40,13 @@ test('el servidor Master Android conserva el contrato ORDER_TAKER', () => {
   assert.match(serverSource, /\.put\("restrictions"/);
 });
 
+test('el Master Android restaura identidad y jerarquía Cliente como una unidad', () => {
+  assert.match(serverSource, /erpBinding\.put\("deviceId", deviceId\)/);
+  assert.match(serverSource, /erpBinding\.put\("deviceId", persistedDeviceId\)/);
+  assert.match(serverSource, /\.put\("isPrimaryNode", false\)/);
+  assert.match(serverSource, /syncConfig\.put\("mode", "SLAVE"\)\.put\("isEnabled", true\)/);
+});
+
 test('la Cliente recibe mesas y productos desde el snapshot operativo de la Master', () => {
   assert.match(serverSource, /\.put\("rooms", JSONArray\(roomsSnapshot\.toString\(\)\)\)/);
   assert.match(serverSource, /\.put\("tables", buildTablesWithEditLocks\(\)\)/);

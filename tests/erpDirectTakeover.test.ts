@@ -51,6 +51,7 @@ const installErpMock = (options: {
   takeoverError?: { status: number; code: string; message: string };
   registerUnauthorized?: boolean;
   terminalOverrides?: Record<string, unknown>;
+  additionalTerminals?: Array<Record<string, unknown>>;
 } = {}) => {
   const requests: RequestRecord[] = [];
   const authorizedDeviceId = options.authorizedDeviceId ?? OLD_DEVICE_ID;
@@ -88,14 +89,19 @@ const installErpMock = (options: {
           store_id: 'store-1',
           currency_code: 'DOP',
           ...(options.terminalOverrides || {}),
-        }],
+        }, ...(options.additionalTerminals || [])],
       });
     }
     if (url.pathname === '/api/sync/bootstrap/terminal-profile' && method === 'GET') {
+      const requestedTerminalId = url.searchParams.get('terminal_id');
+      const additionalTerminal = options.additionalTerminals?.find((terminal) => (
+        terminal.id === requestedTerminalId
+      ));
+      const profileDeviceId = String(additionalTerminal?.device_id || authorizedDeviceId);
       return Response.json({
         profile: {
           currency_code: 'DOP',
-          metadata: { bound_device_id: authorizedDeviceId },
+          metadata: { bound_device_id: profileDeviceId },
         },
       });
     }
@@ -270,4 +276,35 @@ test('una identidad archivada se rechaza antes de takeover, profile o register',
   assert.equal(requests.filter(({ path }) => path.endsWith('/takeover')).length, 0);
   assert.equal(requests.filter(({ path }) => path.includes('terminal-profile')).length, 0);
   assert.equal(requests.filter(({ path }) => path === '/api/sync/terminals/register').length, 0);
+});
+
+test('MASTER conserva las terminales ORDER_TAKER dependientes como SLAVE', async () => {
+  storage.clear();
+  installErpMock({
+    authorizedDeviceId: NEW_DEVICE_ID,
+    additionalTerminals: [{
+      id: 'c50f243e-be52-431c-8f48-03742a49bec5',
+      terminal_code: 'PED-001',
+      terminal_name: 'PED-001',
+      device_id: 'DEV-CLIENT-001',
+      company_id: 'company-1',
+      store_id: 'store-1',
+      currency_code: 'DOP',
+      terminal_type: 'ORDER_TAKER',
+      master_terminal_id: ERP_UUID,
+    }],
+  });
+
+  const result = await bind({ forceTransfer: false });
+  const client = result.config.terminals.find((terminal) => (
+    terminal.id === 'c50f243e-be52-431c-8f48-03742a49bec5'
+  ));
+
+  assert.ok(client);
+  assert.equal(client.config.currentDeviceId, 'DEV-CLIENT-001');
+  assert.equal(client.config.erpBinding?.deviceId, 'DEV-CLIENT-001');
+  assert.equal(client.config.erpBinding?.terminalId, 'c50f243e-be52-431c-8f48-03742a49bec5');
+  assert.equal(client.config.isPrimaryNode, false);
+  assert.equal(client.config.governedByMaster, true);
+  assert.equal(client.config.syncConfig?.mode, 'SLAVE');
 });

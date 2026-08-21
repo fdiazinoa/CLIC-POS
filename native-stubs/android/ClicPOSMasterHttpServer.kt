@@ -445,6 +445,11 @@ object ClicPOSMasterHttpServer {
             val syncConfig = config.optJSONObject("syncConfig") ?: JSONObject()
             syncConfig.put("mode", "SLAVE").put("isEnabled", true)
             config.put("syncConfig", syncConfig)
+            val erpBinding = config.optJSONObject("erpBinding")
+            if (erpBinding != null) {
+                erpBinding.put("deviceId", deviceId)
+                config.put("erpBinding", erpBinding)
+            }
             persistTerminalBinding(id, deviceId)
             selectedTerminal = terminal
             break
@@ -1607,7 +1612,16 @@ object ClicPOSMasterHttpServer {
             }
             config
                 .put("currentDeviceId", persistedDeviceId)
+                .put("isPrimaryNode", false)
                 .put("governedByMaster", true)
+            val syncConfig = config.optJSONObject("syncConfig") ?: JSONObject()
+            syncConfig.put("mode", "SLAVE").put("isEnabled", true)
+            config.put("syncConfig", syncConfig)
+            val erpBinding = config.optJSONObject("erpBinding")
+            if (erpBinding != null) {
+                erpBinding.put("deviceId", persistedDeviceId)
+                config.put("erpBinding", erpBinding)
+            }
         }
         return snapshot
     }

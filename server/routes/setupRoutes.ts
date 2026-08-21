@@ -4,6 +4,7 @@ import { applyTerminalConfigSnapshot, extractTerminalConfigSnapshot } from '../.
 import { TerminalConfigSnapshot } from '../../types';
 import { persistOperationalDocumentState } from '../services/terminalOperationalState';
 import { isArchivedTerminalBindingRecord } from '../../utils/terminalBindingHierarchy';
+import { enforceClientTerminalBinding, isGovernedClientTerminal } from '../../utils/terminalBindingConsistency';
 
 const router = express.Router();
 
@@ -254,9 +255,16 @@ const buildLocalBoundConfig = (input: {
         isEnabled: true,
       };
 
+      const consistentConfig = (
+        (terminalId === selectedTerminalId && bindingMode === 'SLAVE')
+        || isGovernedClientTerminal(nextConfig, terminal)
+      )
+        ? enforceClientTerminalBinding(nextConfig, nextConfig.currentDeviceId)
+        : nextConfig;
+
       return {
         ...cloneDeep(terminal),
-        config: nextConfig,
+        config: consistentConfig,
       };
     }),
   };
@@ -700,19 +708,29 @@ const buildBoundConfig = (input: {
         : occupiedDeviceId === posDeviceId
           ? undefined
           : occupiedDeviceId;
+    const isSelectedTerminal = terminalId === selectedTerminalId;
+    const isGovernedClient = isGovernedClientTerminal(baseConfig, terminal);
+    const effectiveBindingMode = isSelectedTerminal
+      ? bindingMode
+      : isGovernedClient
+        ? 'SLAVE'
+        : asString(baseConfig?.syncConfig?.mode) || 'MASTER';
 
-    const nextConfig = {
+    const nextConfigCandidate = {
       ...baseConfig,
       currentDeviceId: nextCurrentDeviceId || undefined,
-      lastPairingDate: terminalId === selectedTerminalId ? now : existingTerminal?.config?.lastPairingDate,
-      isPrimaryNode: terminalId === selectedTerminalId ? bindingMode === 'MASTER' : Boolean(baseConfig.isPrimaryNode),
-      governedByMaster: terminalId === selectedTerminalId ? bindingMode === 'SLAVE' : Boolean(baseConfig.governedByMaster),
+      lastPairingDate: isSelectedTerminal ? now : existingTerminal?.config?.lastPairingDate,
+      isPrimaryNode: isSelectedTerminal ? bindingMode === 'MASTER' : isGovernedClient ? false : Boolean(baseConfig.isPrimaryNode),
+      governedByMaster: isSelectedTerminal ? bindingMode === 'SLAVE' : isGovernedClient ? true : Boolean(baseConfig.governedByMaster),
       syncConfig: {
         ...asObject(baseConfig.syncConfig),
-        mode: terminalId === selectedTerminalId ? bindingMode : asString(baseConfig?.syncConfig?.mode) || 'MASTER',
+        mode: effectiveBindingMode,
         isEnabled: true,
       },
     };
+    const nextConfig = effectiveBindingMode === 'SLAVE'
+      ? enforceClientTerminalBinding(nextConfigCandidate, nextCurrentDeviceId || (isSelectedTerminal ? posDeviceId : undefined))
+      : nextConfigCandidate;
 
     return {
       id: terminalId,
