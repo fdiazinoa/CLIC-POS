@@ -55,6 +55,12 @@ import { syncManager } from './services/sync/SyncManager';
 import { apiSyncAdapter } from './services/sync/ApiSyncAdapter';
 import { requestJson } from './services/network/httpClient';
 import { backgroundSyncManager } from './services/sync/BackgroundSyncManager';
+import { realtimeNotificationService } from './services/sync/RealtimeNotificationService';
+import { createAdaptivePollingScheduler } from './services/sync/AdaptivePollingScheduler';
+import { authenticatedActivityTracker } from './services/sync/AuthenticatedActivityTracker';
+import { isSyncFeatureEnabled } from './services/sync/SyncFeatureFlags';
+import { syncMetrics } from './services/sync/SyncMetrics';
+import { syncTriggerCoordinator, type SyncTriggerReason } from './services/sync/SyncTriggerCoordinator';
 import { queueCustomerMutation } from './services/sync/CustomerSyncQueue';
 import { currencyScheduleExecutor } from './services/currency/CurrencyService';
 import { productImageCacheService } from './services/sync/ProductImageCacheService';
@@ -1894,7 +1900,7 @@ const AppContent: React.FC = () => {
   const lastSyncActivityAtRef = useRef<number>(Date.now());
   const appBackgroundSinceRef = useRef<number | null>(null);
   const isAppInBackgroundRef = useRef(false);
-  const lifecycleSyncInFlightRef = useRef<Promise<void> | null>(null);
+  const lifecycleSyncInFlightRef = useRef<Promise<boolean> | null>(null);
   const erpHeartbeatInFlightRef = useRef<Promise<void> | null>(null);
 
   // Security bootstrap logic moved to loadData
@@ -2264,6 +2270,7 @@ const AppContent: React.FC = () => {
       .filter((key) => key.startsWith('sb-'))
       .forEach((key) => localStorage.removeItem(key));
     clearPersistedSupabaseSession();
+    void realtimeNotificationService.disconnect('DISABLED');
     void supabase.auth.signOut().catch(error => {
       console.warn('Failed to clear Supabase session during lockdown', error);
     });
@@ -3191,16 +3198,18 @@ const AppContent: React.FC = () => {
     setCurrentView('TERMINAL_PAIRING');
   }, []);
 
+  const erpLifecycleReady = ![
+    'ACTIVATION',
+    'VERTICAL_SELECTOR',
+    'TERMINAL_PAIRING',
+  ].includes(currentView);
+
   useEffect(() => {
     const setupPending = hasPendingTerminalSetup();
-    const isSetupView =
-      currentView === 'ACTIVATION'
-      || currentView === 'VERTICAL_SELECTOR'
-      || currentView === 'TERMINAL_PAIRING';
     const currentTerminal = getCurrentTerminal();
     const tenantIdentity = getStoredTenantIdentity();
 
-    if (setupPending || isSetupView) return;
+    if (setupPending || !erpLifecycleReady) return;
     if (!deviceId || !currentTerminal?.id) return;
     if (!tenantIdentity.tenantId && !tenantIdentity.tenantSlug && !tenantIdentity.tenantEmail) return;
 
@@ -3226,7 +3235,9 @@ const AppContent: React.FC = () => {
       }
     };
 
-    const HEARTBEAT_INTERVAL_MS = 60000;
+    const LEGACY_HEARTBEAT_INTERVAL_MS = 60_000;
+    const ACTIVE_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+    const BACKGROUND_HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;
     const OUTBOX_POLL_BASE_MS = 30000;
     const OUTBOX_POLL_MAX_MS = 300000;
     const MANIFEST_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
@@ -3242,6 +3253,8 @@ const AppContent: React.FC = () => {
     let outboxPollTimeoutId: number | null = null;
     let configSafetyCheckTimeoutId: number | null = null;
     let outboxPollFailures = 0;
+    const adaptivePollingEnabled = isSyncFeatureEnabled('adaptive_polling');
+    const heartbeatV2Enabled = isSyncFeatureEnabled('heartbeat_v2');
 
     const requestConditionalTerminalConfig = async (
       reason: 'startup' | 'connection_restored' | 'safety_check',
@@ -3327,7 +3340,13 @@ const AppContent: React.FC = () => {
     };
 
     const heartbeatScheduler = createErpHeartbeatScheduler({
-      intervalMs: HEARTBEAT_INTERVAL_MS,
+      intervalMs: LEGACY_HEARTBEAT_INTERVAL_MS,
+      getIntervalMs: () => heartbeatV2Enabled
+        ? (document.hidden ? BACKGROUND_HEARTBEAT_INTERVAL_MS : ACTIVE_HEARTBEAT_INTERVAL_MS)
+        : LEGACY_HEARTBEAT_INTERVAL_MS,
+      getLastAuthenticatedActivityAt: () => heartbeatV2Enabled
+        ? authenticatedActivityTracker.getSnapshot().lastAuthenticatedActivityAt
+        : 0,
       getJitterMs: getTimerJitterMs,
       flightRef: erpHeartbeatInFlightRef,
       shouldRun: () => !disposed && navigator.onLine && !isPosOnlyCloudStagingTarget(),
@@ -3335,6 +3354,8 @@ const AppContent: React.FC = () => {
         // La publicación Cloud es complementaria y nunca sustituye ni bloquea el heartbeat ERP.
         void publishEndpoint();
         await sendPeriodicErpHeartbeat();
+        authenticatedActivityTracker.record('HEARTBEAT');
+        syncMetrics.increment('heartbeat_total');
       },
       onError: (error) => {
         console.warn('[ERP HEARTBEAT] periodic /terminals/heartbeat failed; next interval remains scheduled.', error);
@@ -3354,7 +3375,7 @@ const AppContent: React.FC = () => {
 
       const operation = (async () => {
       if (isPosOnlyCloudStagingTarget()) {
-        return;
+        return false;
       }
 
       try {
@@ -3371,7 +3392,7 @@ const AppContent: React.FC = () => {
         const blockingActivation = result?.heartbeat?.activation || result?.registered?.activation || result?.bootstrap?.activation;
         if (!disposed && isLifecycleActivationBlocked(blockingActivation)) {
           await triggerLockdownAfterAuthorizationCheck(getLifecycleActivationBlockMessage(blockingActivation), deviceId);
-          return;
+          return false;
         }
 
         if (!disposed && result?.heartbeat?.terminal?.id) {
@@ -3409,13 +3430,15 @@ const AppContent: React.FC = () => {
             sessionStorage.setItem(bootManifestSyncKey, 'true');
           }
         }
+        return true;
       } catch (error) {
         const blockingMessage = getLifecycleBlockingMessageFromError(error);
         if (!disposed && blockingMessage) {
           await triggerLockdownAfterAuthorizationCheck(blockingMessage, deviceId);
-          return;
+          return false;
         }
         console.warn('[ERP SYNC] lifecycle registration skipped:', error);
+        return false;
       }
       })();
 
@@ -3429,10 +3452,58 @@ const AppContent: React.FC = () => {
       }
     };
 
+    const lifecycleReasons = new Set<SyncTriggerReason>([
+      'STARTUP',
+      'ONLINE',
+      'FOREGROUND',
+      'REALTIME_RECONNECTED',
+    ]);
+
+    syncTriggerCoordinator.configure(async ({ reasons }) => {
+      if (disposed || !navigator.onLine || isPosOnlyCloudStagingTarget()) return;
+      const needsLifecycle = reasons.some((reason) => lifecycleReasons.has(reason));
+      syncMetrics.increment('polls_total');
+      let authenticatedRequestSucceeded = false;
+
+      if (needsLifecycle) {
+        const isStartup = reasons.includes('STARTUP');
+        const reason = isStartup
+          ? 'startup'
+          : reasons.includes('ONLINE') || reasons.includes('REALTIME_RECONNECTED')
+            ? 'connection_restored'
+            : 'app_resumed';
+        authenticatedRequestSucceeded = await syncLifecycle({ forceManifestRefresh: isStartup, reason });
+      } else {
+        const triggerReason = reasons.includes('REALTIME_HINT')
+          ? 'force_sync'
+          : reasons.includes('MANUAL')
+            ? 'manual_sync'
+            : 'periodic';
+        authenticatedRequestSucceeded = await triggerErpSyncOutbox(triggerReason) !== null;
+      }
+
+      if (authenticatedRequestSucceeded) {
+        authenticatedActivityTracker.record('PULL');
+        syncMetrics.markSuccessfulSync();
+      }
+    });
+
+    const adaptivePollingScheduler = createAdaptivePollingScheduler({
+      isOnline: () => navigator.onLine,
+      requestReconciliation: () => syncTriggerCoordinator.request({ reason: 'RECONCILIATION' }),
+      onError: (error) => {
+        syncMetrics.increment('retry_count');
+        console.warn('[ERP SYNC] adaptive reconciliation failed; retrying with backoff.', error);
+      },
+    });
+    const unsubscribeRealtimeState = realtimeNotificationService.subscribeState((state) => {
+      adaptivePollingScheduler.updateRealtimeState(state);
+    });
+
     const handleErpOnline = () => {
       if (!disposed) {
-        void triggerErpSyncOutbox('online');
-        void syncLifecycle({ reason: 'connection_restored' });
+        adaptivePollingScheduler.notifyOnline();
+        void syncTriggerCoordinator.request({ reason: 'ONLINE' });
         void requestConditionalTerminalConfig('connection_restored').catch((error) => {
           console.warn('[CONFIG_SYNC] connection recovery check failed; local config preserved.', error);
         });
@@ -3440,16 +3511,14 @@ const AppContent: React.FC = () => {
     };
     const handleErpAppResume = () => {
       if (!disposed && !document.hidden && navigator.onLine) {
-        void triggerErpSyncOutbox('app_resumed');
-        void syncLifecycle({ reason: 'app_resumed' });
+        void syncTriggerCoordinator.request({ reason: 'FOREGROUND' });
       }
     };
 
     // Boot: publica endpoint; lifecycle ERP/manifest solo en contratos ERP o legacy con pull.
     void publishEndpoint();
     if (!isPosOnlyCloudStagingTarget()) {
-      void triggerErpSyncOutbox('startup');
-      void syncLifecycle({ forceManifestRefresh: true, reason: 'startup' });
+      void syncTriggerCoordinator.request({ reason: 'STARTUP' });
     } else {
       console.log('[CLOUD STAGING] ERP lifecycle and manifest refresh disabled for POS_CLOUD_STAGING.');
     }
@@ -3484,7 +3553,11 @@ const AppContent: React.FC = () => {
       }, delayMs);
     };
 
-    scheduleNextOutboxPoll();
+    if (adaptivePollingEnabled) {
+      adaptivePollingScheduler.start(realtimeNotificationService.getState());
+    } else {
+      scheduleNextOutboxPoll();
+    }
 
     const scheduleNextConfigSafetyCheck = () => {
       if (disposed || isPosOnlyCloudStagingTarget()) return;
@@ -3511,6 +3584,9 @@ const AppContent: React.FC = () => {
     return () => {
       disposed = true;
       heartbeatScheduler.stop();
+      adaptivePollingScheduler.stop();
+      unsubscribeRealtimeState();
+      syncTriggerCoordinator.clear();
       if (outboxPollTimeoutId !== null) {
         window.clearTimeout(outboxPollTimeoutId);
       }
@@ -3526,7 +3602,7 @@ const AppContent: React.FC = () => {
       window.removeEventListener('online', handleErpOnline);
       document.removeEventListener('visibilitychange', handleErpAppResume);
     };
-  }, [currentView, deviceId, getCurrentTerminal]);
+  }, [erpLifecycleReady, deviceId, getCurrentTerminal]);
 
   // --- RECONNECTION BANNER ---
   const renderReconnectionBanner = () => {

@@ -21,7 +21,8 @@ test('heartbeat remains independent and configuration safety polling is at least
   const lifecycleStart = appSource.indexOf('const syncLifecycle = async', schedulerStart);
   const heartbeatSchedulerBlock = appSource.slice(schedulerStart, lifecycleStart);
 
-  assert.match(appSource, /const HEARTBEAT_INTERVAL_MS = 60000/);
+  assert.match(appSource, /const ACTIVE_HEARTBEAT_INTERVAL_MS = 5 \* 60 \* 1000/);
+  assert.match(appSource, /const BACKGROUND_HEARTBEAT_INTERVAL_MS = 15 \* 60 \* 1000/);
   assert.match(appSource, /const CONFIG_SAFETY_CHECK_INTERVAL_MS = 15 \* 60 \* 1000/);
   assert.match(appSource, /requestConditionalTerminalConfig\('safety_check'\)/);
   assert.doesNotMatch(
@@ -30,6 +31,7 @@ test('heartbeat remains independent and configuration safety polling is at least
   );
   assert.match(appSource, /sendPeriodicErpHeartbeat[\s\S]*heartbeatErpSyncTerminal\(/);
   assert.match(appSource, /flightRef: erpHeartbeatInFlightRef/);
+  assert.match(appSource, /getLastAuthenticatedActivityAt:/);
   assert.match(appSource, /endpoint: '\/terminals\/heartbeat'/);
   assert.match(heartbeatSchedulerSource, /\.finally\(scheduleNext\)/);
 });
@@ -55,4 +57,7 @@ test('Realtime reuses one channel for the same store and terminal', () => {
   );
   assert.match(realtimeSource, /if \(this\.initializePromise && this\.initializeKey === key\)/);
   assert.match(realtimeSource, /await existing\.unsubscribe\(\)/);
+  assert.match(realtimeSource, /event: 'SYNC_HINT'/);
+  assert.match(realtimeSource, /private: true/);
+  assert.doesNotMatch(realtimeSource, /channel\.track\(/);
 });

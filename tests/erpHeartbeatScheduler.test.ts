@@ -169,3 +169,38 @@ test('un heartbeat fallido agenda el siguiente intervalo desde finally', async (
   assert.equal(attempts, 2);
   scheduler.stop();
 });
+
+test('actividad autenticada reciente convierte heartbeat en presencia residual', async () => {
+  const timers = new FakeTimers();
+  let now = 10_000;
+  let lastActivityAt = now;
+  let heartbeats = 0;
+  const scheduler = createErpHeartbeatScheduler({
+    intervalMs: 60_000,
+    getIntervalMs: () => 5 * 60_000,
+    getLastAuthenticatedActivityAt: () => lastActivityAt,
+    now: () => now,
+    timerApi: timers,
+    sendHeartbeat: async () => {
+      heartbeats += 1;
+      lastActivityAt = now;
+    },
+  });
+
+  scheduler.start();
+  assert.equal(timers.scheduledDelays.at(-1), 5 * 60_000);
+
+  // Another authenticated request happened shortly before the heartbeat was due.
+  lastActivityAt = now + 4 * 60_000;
+  now += 5 * 60_000;
+  timers.tick(5 * 60_000);
+  await flushPromises();
+  assert.equal(heartbeats, 0);
+  assert.equal(timers.scheduledDelays.at(-1), 4 * 60_000);
+
+  now += 4 * 60_000;
+  timers.tick(4 * 60_000);
+  await flushPromises();
+  assert.equal(heartbeats, 1);
+  scheduler.stop();
+});

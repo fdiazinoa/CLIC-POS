@@ -10,6 +10,7 @@ import { loadSyncProfile, resolveSyncTarget, SyncProfile, ResolvedSyncTarget } f
 import { posCloudStagingService } from '../services/sync/PosCloudStagingService';
 import { resetDeviceIdentityBySupport } from '../utils/deviceRevocation';
 import { getConfigPushV2Diagnostics, triggerErpSyncOutbox } from '../utils/erpSyncLifecycle';
+import { syncTriggerCoordinator } from '../services/sync/SyncTriggerCoordinator';
 
 interface SyncSettingsProps {
     config: BusinessConfig;
@@ -464,7 +465,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const handleSync = async () => {
         setIsSyncing(true);
         try {
-            await triggerErpSyncOutbox('manual_sync');
+            await syncTriggerCoordinator.request({ reason: 'MANUAL' });
             if (syncManager.isUsingConfigPushV2Primary()) {
                 await syncManager.syncTerminalManifestInBackground(undefined, { reason: 'manual_sync' });
             } else {
