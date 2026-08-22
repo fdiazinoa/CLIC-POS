@@ -89,22 +89,31 @@ export class DurableOutboxRepository {
         return Number(result?.changes?.changes ?? result?.changes ?? 0);
     }
 
-    async repairLegacyEventIds(now = new Date()): Promise<number> {
+    async repairLegacyEventContracts(now = new Date()): Promise<number> {
         const sql = this.requireSql();
         const result = await sql(
-            `SELECT local_sequence, event_id
+            `SELECT local_sequence, event_id, event_type, aggregate_type
              FROM sync_outbox_v2
              WHERE status IN ('PENDING','RETRY_WAIT')
              ORDER BY local_sequence ASC`
         );
-        const legacyRows = rowsFromResult(result).filter(row => !isUuid(String(row.event_id || '')));
+        const legacyRows = rowsFromResult(result).filter(row =>
+            !isUuid(String(row.event_id || ''))
+            || (String(row.aggregate_type || '').toUpperCase() === 'TRANSACTION'
+                && String(row.event_type || '').toUpperCase() === 'TRANSACTION_CREATED')
+        );
         const timestamp = now.toISOString();
 
         for (const row of legacyRows) {
             await sql(
                 `UPDATE sync_outbox_v2
-                 SET event_id = ?, next_retry_at = ?, updated_at = ?,
-                     last_error = 'EVENT_ID_MIGRATED_TO_UUID'
+                 SET event_id = ?,
+                     event_type = CASE
+                         WHEN UPPER(aggregate_type) = 'TRANSACTION' THEN 'SALE_POSTED'
+                         ELSE event_type
+                     END,
+                     next_retry_at = ?, updated_at = ?,
+                     last_error = 'EVENT_CONTRACT_MIGRATED'
                  WHERE local_sequence = ? AND event_id = ?
                    AND status IN ('PENDING','RETRY_WAIT')`,
                 [uuidv4(), timestamp, timestamp, Number(row.local_sequence), String(row.event_id)]

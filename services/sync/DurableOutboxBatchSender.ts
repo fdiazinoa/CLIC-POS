@@ -141,7 +141,7 @@ export class DurableOutboxBatchSender {
     async sendNext(now = new Date()): Promise<DurableBatchSendSummary> {
         const owner = `pos-2b:${now.getTime()}:${Math.random().toString(36).slice(2, 10)}`;
         await this.repository.recoverExpiredLeases(now);
-        await this.repository.repairLegacyEventIds?.(now);
+        await this.repository.repairLegacyEventContracts?.(now);
         const leased = await this.repository.leaseDue({
             owner,
             limit: POS_2B_MAX_EVENTS,
