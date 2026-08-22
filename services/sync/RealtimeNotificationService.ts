@@ -6,6 +6,10 @@ import { isSyncFeatureEnabled } from './SyncFeatureFlags';
 import { syncTriggerCoordinator, type SyncDomainVersions } from './SyncTriggerCoordinator';
 import { syncMetrics } from './SyncMetrics';
 import { isSyncHintV2Payload, payloadAppliesToRealtimeScope } from './RealtimeHintScope';
+import {
+    buildPrivateSyncTopic,
+    ensurePrivateRealtimeAuthorization,
+} from './PrivateRealtimeAuthorization';
 
 export type RealtimeConnectionState = 'DISABLED' | 'CONNECTING' | 'HEALTHY' | 'DEGRADED' | 'DISCONNECTED';
 
@@ -95,7 +99,7 @@ const persistLightweightSyncNotice = (payload: unknown, collections: string[]) =
 };
 
 class RealtimeNotificationService {
-    private channel: RealtimeChannel | null = null;
+    private channels: RealtimeChannel[] = [];
     private storeId: string | null = null;
     private terminalId: string | null = null;
     private initializePromise: Promise<void> | null = null;
@@ -139,7 +143,7 @@ class RealtimeNotificationService {
         });
     }
 
-    async initialize(_masterUrl: string, terminalId: string) {
+    async initialize(masterUrl: string, terminalId: string) {
         const { isConfigured } = resolveSupabaseConfig();
         const binding = getStoredErpSyncBinding();
         const storeId = binding.storeId || null;
@@ -150,15 +154,15 @@ class RealtimeNotificationService {
         }
 
         const key = `${storeId}:${terminalId}`;
-        if (this.channel && this.storeId === storeId && this.terminalId === terminalId) {
-            console.log(`📡 RealtimeNotificationService: Reusing store_${storeId} channel.`);
+        if (this.channels.length > 0 && this.storeId === storeId && this.terminalId === terminalId) {
+            console.log('📡 RealtimeNotificationService: Reusing active sync channels.');
             return;
         }
         if (this.initializePromise && this.initializeKey === key) {
             return this.initializePromise;
         }
 
-        const operation = this.connect(storeId, terminalId);
+        const operation = this.connect(masterUrl, binding.tenantId || '', storeId, terminalId);
         this.initializeKey = key;
         this.initializePromise = operation;
         try {
@@ -171,20 +175,39 @@ class RealtimeNotificationService {
         }
     }
 
-    private async connect(storeId: string, terminalId: string) {
+    private async connect(masterUrl: string, tenantId: string, storeId: string, terminalId: string) {
         await this.disconnect('CONNECTING');
         this.storeId = storeId;
         this.terminalId = terminalId;
         this.setState('CONNECTING');
-        console.log(`📡 RealtimeNotificationService: Connecting to Supabase Realtime store_${storeId}...`);
+        const privateRealtime = isSyncFeatureEnabled('private_realtime');
+        let channelClient = supabase;
+        let channelNames = [`store_${storeId}`];
+        if (privateRealtime) {
+            const authorization = await ensurePrivateRealtimeAuthorization({
+                tenantId,
+                storeId,
+                terminalId,
+            }, masterUrl);
+            channelClient = authorization.client;
+            const terminalTopic = buildPrivateSyncTopic(authorization.scope);
+            channelNames = [
+                `sync:${authorization.scope.tenantId}:${authorization.scope.storeId}`,
+                terminalTopic,
+            ];
+        } else {
+            await ensureSupabaseSessionRestored();
+        }
+        console.log(`📡 RealtimeNotificationService: Connecting to ${privateRealtime ? 'private sync scope' : `store_${storeId}`}...`);
 
-        await ensureSupabaseSessionRestored();
-
-        const channel = supabase.channel(`store_${storeId}`, {
-            config: isSyncFeatureEnabled('private_realtime')
+        const channels = channelNames.map((channelName) => channelClient.channel(channelName, {
+            config: privateRealtime
                 ? { private: true, broadcast: { self: false } }
                 : { broadcast: { self: false } },
-        });
+        }));
+        const subscribedChannels = new Set<string>();
+
+        channels.forEach((channel, channelIndex) => {
 
         if (isSyncFeatureEnabled('sync_hint_v2')) {
             channel.on('broadcast', { event: 'SYNC_HINT' }, ({ payload }) => {
@@ -254,16 +277,21 @@ class RealtimeNotificationService {
 
         channel.subscribe(async (status) => {
             if (status === 'SUBSCRIBED') {
-                console.log(`📡 RealtimeNotificationService: Subscribed to store_${storeId}.`);
-                const reconnected = this.hasSubscribed;
-                this.hasSubscribed = true;
-                this.setState('HEALTHY');
-                if (reconnected) {
-                    syncMetrics.increment('realtime_reconnects');
-                    void syncTriggerCoordinator.request({ reason: 'REALTIME_RECONNECTED' });
+                subscribedChannels.add(channelNames[channelIndex]);
+                console.log(`📡 RealtimeNotificationService: Subscribed to ${privateRealtime ? 'private sync scope' : `store_${storeId}`}.`);
+                if (subscribedChannels.size === channels.length) {
+                    const reconnected = this.hasSubscribed;
+                    this.hasSubscribed = true;
+                    this.setState('HEALTHY');
+                    if (reconnected) {
+                        syncMetrics.increment('realtime_reconnects');
+                        void syncTriggerCoordinator.request({ reason: 'REALTIME_RECONNECTED' });
+                    }
                 }
                 return;
             }
+
+            subscribedChannels.delete(channelNames[channelIndex]);
 
             if (status === 'CHANNEL_ERROR') {
                 this.setState('DEGRADED');
@@ -276,16 +304,17 @@ class RealtimeNotificationService {
                 console.warn('📡 RealtimeNotificationService: Channel closed.');
             }
         });
+        });
 
-        this.channel = channel;
+        this.channels = channels;
     }
 
     async disconnect(nextState: RealtimeConnectionState = 'DISCONNECTED') {
-        if (this.channel) {
-            const existing = this.channel;
-            this.channel = null;
+        if (this.channels.length > 0) {
+            const existing = this.channels;
+            this.channels = [];
             try {
-                await existing.unsubscribe();
+                await Promise.all(existing.map((channel) => channel.unsubscribe()));
             } catch (error) {
                 console.warn('📡 RealtimeNotificationService: Failed to unsubscribe channel.', error);
             }
