@@ -694,7 +694,8 @@ class TransactionService {
             refundTransaction?: Partial<Transaction>,
             walletDeposit?: { customerId: string, amount: number },
             walletPayment?: { customerId: string, amount: number }
-        }
+        },
+        options: { deferDurableSalePersistence?: boolean } = {},
     ): Promise<{ sale?: Transaction, refund?: Transaction }> {
         const results: { sale?: Transaction, refund?: Transaction } = {};
 
@@ -712,7 +713,9 @@ class TransactionService {
                 data.saleTransaction.affectedNCF = results.refund.ncf;
                 data.saleTransaction.affectedInvoiceNumber = results.refund.displayId;
             }
-            results.sale = await this.createTransaction(data.saleTransaction);
+            results.sale = await this.createTransaction(data.saleTransaction, {
+                deferDurablePersistence: options.deferDurableSalePersistence === true,
+            });
         }
 
         // 3. Update Wallet if applicable

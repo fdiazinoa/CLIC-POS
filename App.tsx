@@ -62,6 +62,7 @@ import { authenticatedActivityTracker } from './services/sync/AuthenticatedActiv
 import { isSyncFeatureEnabled } from './services/sync/SyncFeatureFlags';
 import { syncMetrics } from './services/sync/SyncMetrics';
 import { durableOutboxRepository } from './services/sync/DurableOutboxRepository';
+import { buildSalePostedPayload } from './services/sync/SalePostedContract';
 import { paymentIntentService } from './services/payments/PaymentIntentService';
 import { syncTriggerCoordinator, type SyncTriggerReason } from './services/sync/SyncTriggerCoordinator';
 import { queueCustomerMutation } from './services/sync/CustomerSyncQueue';
@@ -8958,11 +8959,10 @@ const AppContent: React.FC = () => {
           aggregateType: 'TRANSACTION',
           aggregateId: txn.id,
           schemaVersion: 1,
-          payload: {
-            transaction: txn,
+          payload: buildSalePostedPayload(txn, {
             inventoryMovementIds: ledgerEntriesForCommit.map(entry => entry.id),
             paymentIntentIds,
-          },
+          }),
           createdAt,
         },
         paymentIntentIds,
