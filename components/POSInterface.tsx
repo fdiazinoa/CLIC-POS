@@ -5092,18 +5092,28 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   };
 
                if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+                  const durableSplitSaleCommit = isSyncFeatureEnabled('sqlite_outbox_v2');
                   const result = await withTimeout(
-                     transactionService.createSplitTransaction(splitPayload),
+                     transactionService.createSplitTransaction(splitPayload, {
+                        deferDurableSalePersistence: durableSplitSaleCommit,
+                     }),
                      25000,
                      'TIMEOUT_SPLIT_LOCAL'
                   );
 
                   if (result.sale) {
-                     result.sale = await syncConsignmentSettlement(result.sale);
-                     await persistStandaloneSaleHistory({
-                        ...result.sale,
-                        syncStatus: 'PENDING'
-                     });
+                     if (durableSplitSaleCommit) {
+                        await Promise.resolve(onTransactionComplete(result.sale));
+                        if (result.sale.consignmentId) {
+                           result.sale = await syncConsignmentSettlement(result.sale);
+                        }
+                     } else {
+                        result.sale = await syncConsignmentSettlement(result.sale);
+                        await persistStandaloneSaleHistory({
+                           ...result.sale,
+                           syncStatus: 'PENDING'
+                        });
+                     }
                   }
 
                   if (result.refund) {

@@ -19,7 +19,7 @@ const record = (index: number, options: {
 } = {}): DurableOutboxRecord => ({
     localSequence: index,
     eventId: `event-${index}`,
-    eventType: options.aggregateType === 'INVENTORY' ? 'INVENTORY_CHANGED' : 'TRANSACTION_CREATED',
+    eventType: options.aggregateType === 'INVENTORY' ? 'INVENTORY_CHANGED' : 'SALE_POSTED',
     aggregateType: options.aggregateType || 'TRANSACTION',
     aggregateId: options.aggregateId || `sale-${index}`,
     schemaVersion: 1,
@@ -113,8 +113,8 @@ test('individual results apply, durably receive, retry and reject without replay
     );
 });
 
-test('ERP-2B eventResults contract maps APPLIED and DUPLICATE_APPLIED to APPLIED_ERP', async () => {
-    const leased = [record(1), record(2)];
+test('ERP-2B eventResults contract maps APPLIED, DUPLICATE_APPLIED and ALREADY_APPLIED to APPLIED_ERP', async () => {
+    const leased = [record(1), record(2), record(3)];
     const applied: string[] = [];
     const repository = {
         recoverExpiredLeases: async () => 0,
@@ -132,13 +132,42 @@ test('ERP-2B eventResults contract maps APPLIED and DUPLICATE_APPLIED to APPLIED
         eventResults: [
             { eventId: 'event-1', disposition: 'APPLIED', inboxStatus: 'APPLIED', retryable: false },
             { eventId: 'event-2', disposition: 'DUPLICATE_APPLIED', inboxStatus: 'APPLIED', retryable: false },
+            { eventId: 'event-3', disposition: 'ALREADY_APPLIED', inboxStatus: 'APPLIED', retryable: false },
         ],
         retryableEventIds: [],
     }));
 
     const summary = await sender.sendNext(new Date('2026-08-22T18:00:00.000Z'));
-    assert.deepEqual(applied, ['event-1', 'event-2']);
-    assert.equal(summary.applied, 2);
+    assert.deepEqual(applied, ['event-1', 'event-2', 'event-3']);
+    assert.equal(summary.applied, 3);
+    assert.equal(summary.retrying, 0);
+});
+
+test('FAILED with retryable false becomes terminal REJECTED and is not retried', async () => {
+    const leased = [record(1)];
+    const calls: string[] = [];
+    const repository = {
+        recoverExpiredLeases: async () => 0,
+        repairLegacyEventContracts: async () => 0,
+        leaseDue: async () => leased,
+        releaseUnsent: async () => undefined,
+        markRejected: async (eventId: string) => { calls.push(`rejected:${eventId}`); },
+        markRetry: async (eventId: string) => { calls.push(`retry:${eventId}`); },
+        markAppliedErp: async () => undefined,
+        markSyncedMaster: async () => undefined,
+    };
+    const sender = new DurableOutboxBatchSender(repository as any, async () => ({
+        eventResults: [{
+            eventId: 'event-1',
+            disposition: 'FAILED',
+            retryable: false,
+            error: 'POS_SALE_FINANCIAL_INVARIANT_FAILED',
+        }],
+    }));
+
+    const summary = await sender.sendNext(new Date('2026-08-22T18:00:00.000Z'));
+    assert.deepEqual(calls, ['rejected:event-1']);
+    assert.equal(summary.rejected, 1);
     assert.equal(summary.retrying, 0);
 });
 
@@ -163,6 +192,41 @@ test('transport failures retry the same durable eventIds and never acknowledge t
     assert.deepEqual(retried, ['event-1', 'event-2']);
     assert.equal(summary.retrying, 2);
     assert.equal(summary.applied, 0);
+});
+
+test('offline retry sends the exact persisted UUID and payload without rebuilding the event', async () => {
+    const persistedPayload = {
+        transaction: { id: 'sale-1', total: 125 },
+        summary: { transaction_id: 'sale-1', total: 125 },
+        occurred_at: '2026-08-22T18:00:00.000Z',
+    };
+    const persisted = record(1, { payload: persistedPayload });
+    const sent: DurableOutboxWireEvent[][] = [];
+    let attempt = 0;
+    const repository = {
+        recoverExpiredLeases: async () => 0,
+        repairLegacyEventContracts: async () => 0,
+        leaseDue: async () => [{ ...persisted, attemptCount: ++attempt }],
+        releaseUnsent: async () => undefined,
+        markRejected: async () => undefined,
+        markRetry: async () => undefined,
+        markAppliedErp: async () => undefined,
+        markSyncedMaster: async () => undefined,
+    };
+    const sender = new DurableOutboxBatchSender(repository as any, async events => {
+        sent.push(structuredClone(events));
+        if (sent.length === 1) throw new Error('offline');
+        return { eventResults: [{ eventId: persisted.eventId, disposition: 'APPLIED' }] };
+    });
+
+    const first = await sender.sendNext(new Date('2026-08-22T18:00:00.000Z'));
+    const second = await sender.sendNext(new Date('2026-08-22T18:01:00.000Z'));
+
+    assert.equal(first.retrying, 1);
+    assert.equal(second.applied, 1);
+    assert.equal(sent[0][0].eventId, sent[1][0].eventId);
+    assert.deepEqual(sent[0][0].payload, sent[1][0].payload);
+    assert.deepEqual(sent[0][0].payload, persistedPayload);
 });
 
 test('a global success without per-event results retries every event', async () => {
