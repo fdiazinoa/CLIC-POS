@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
+import { v4 as uuidv4 } from 'uuid';
 import { Layout, LockKeyhole, Monitor, RefreshCw } from 'lucide-react';
 import {
   User,
@@ -8950,7 +8951,9 @@ const AppContent: React.FC = () => {
           ...(durableCustomerUpdate ? [{ collectionName: 'customers', document: durableCustomerUpdate }] : []),
         ],
         outboxEvent: {
-          eventId: `OUTBOX-${txn.id}`,
+          // ERP-2B validates eventId as UUID. Keep transactionId in aggregateId;
+          // eventId is the stable idempotency key for every retry of this row.
+          eventId: uuidv4(),
           eventType: 'TRANSACTION_CREATED',
           aggregateType: 'TRANSACTION',
           aggregateId: txn.id,

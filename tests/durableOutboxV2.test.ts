@@ -265,6 +265,8 @@ test('production enables POS-2A/POS-2B while the safe default remains dark', asy
     assert.match(adapter, /await this\.executeSetOrRun\(statements\)/);
     assert.match(transactionService, /options\.deferDurablePersistence === true[\s\S]*?isSyncFeatureEnabled\('sqlite_outbox_v2'\)/);
     assert.match(app, /durableOutboxRepository\.commitFinancialTransaction/);
+    assert.match(app, /eventId: uuidv4\(\)/);
+    assert.doesNotMatch(app, /eventId: `OUTBOX-\$\{txn\.id\}`/);
     assert.match(app, /collectionName: 'transactions'/);
     assert.match(app, /collectionName: 'inventoryLedger'/);
     assert.match(app, /collectionName: 'customers'/);
