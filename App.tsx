@@ -3236,7 +3236,9 @@ const AppContent: React.FC = () => {
     };
 
     const LEGACY_HEARTBEAT_INTERVAL_MS = 60_000;
-    const ACTIVE_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+    // Keep the active heartbeat ahead of the five-minute healthy reconciliation.
+    // Equal cadences let a no-op reconciliation continually suppress heartbeat.
+    const ACTIVE_HEARTBEAT_INTERVAL_MS = 4 * 60 * 1000;
     const BACKGROUND_HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;
     const OUTBOX_POLL_BASE_MS = 30000;
     const OUTBOX_POLL_MAX_MS = 300000;

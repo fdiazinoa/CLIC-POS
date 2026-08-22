@@ -21,7 +21,8 @@ test('heartbeat remains independent and configuration safety polling is at least
   const lifecycleStart = appSource.indexOf('const syncLifecycle = async', schedulerStart);
   const heartbeatSchedulerBlock = appSource.slice(schedulerStart, lifecycleStart);
 
-  assert.match(appSource, /const ACTIVE_HEARTBEAT_INTERVAL_MS = 5 \* 60 \* 1000/);
+  assert.match(appSource, /const ACTIVE_HEARTBEAT_INTERVAL_MS = 4 \* 60 \* 1000/);
+  assert.match(appSource, /healthy reconciliation/);
   assert.match(appSource, /const BACKGROUND_HEARTBEAT_INTERVAL_MS = 15 \* 60 \* 1000/);
   assert.match(appSource, /const CONFIG_SAFETY_CHECK_INTERVAL_MS = 15 \* 60 \* 1000/);
   assert.match(appSource, /requestConditionalTerminalConfig\('safety_check'\)/);
@@ -58,13 +59,14 @@ test('lifecycle HTTP requests have a bounded AbortController timeout', () => {
   assert.match(lifecycleSource, /code = 'ERP_SYNC_TIMEOUT'/);
 });
 
-test('Realtime reuses one channel for the same store and terminal', () => {
+test('Realtime reuses one private channel pair for the same store and terminal', () => {
   assert.match(
     realtimeSource,
-    /this\.channel && this\.storeId === storeId && this\.terminalId === terminalId/,
+    /this\.channels\.length > 0 && this\.storeId === storeId && this\.terminalId === terminalId/,
   );
   assert.match(realtimeSource, /if \(this\.initializePromise && this\.initializeKey === key\)/);
-  assert.match(realtimeSource, /await existing\.unsubscribe\(\)/);
+  assert.match(realtimeSource, /Promise\.all\(existing\.map\(\(channel\) => channel\.unsubscribe\(\)\)\)/);
+  assert.match(realtimeSource, /channelNames = \[[\s\S]*terminalTopic/);
   assert.match(realtimeSource, /event: 'SYNC_HINT'/);
   assert.match(realtimeSource, /private: true/);
   assert.doesNotMatch(realtimeSource, /channel\.track\(/);
