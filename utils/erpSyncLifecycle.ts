@@ -38,6 +38,8 @@ import {
     TerminalConfig,
     TerminalConfigSnapshot,
 } from '../types';
+import { authenticatedActivityTracker } from '../services/sync/AuthenticatedActivityTracker';
+import { syncMetrics } from '../services/sync/SyncMetrics';
 
 type TenantIdentity = {
     tenantId?: string | null;
@@ -1079,6 +1081,7 @@ const processConfigPushV2Event = async (
                 domain_versions: nextDomainVersions,
             });
             await dispatchConfigPushV2CollectionUpdates(touchedCollections);
+            syncMetrics.markApplyFinished();
             await ackErpOutboxEvent(eventId, 'APPLIED');
             clearConfigPushV2InFlight();
             configPushV2Log('config_push_v2_acknowledged', {
@@ -2249,6 +2252,9 @@ const ackErpOutboxEvent = async (
             http_status: 200,
             duration_ms: Date.now() - startedAt,
         });
+        authenticatedActivityTracker.record('ACK');
+        syncMetrics.increment('ack_total');
+        syncMetrics.markAckFinished();
         return response;
     } catch (error) {
         const requestError = error as SyncRequestError;
@@ -2557,6 +2563,7 @@ export const processErpSyncOutbox = async (
                     );
                     persistPendingTerminalConfigSnapshot(event);
                     persistTerminalConfigRestartNotice(event);
+                    syncMetrics.markApplyFinished();
                     await ackErpOutboxEvent(event.id, 'APPLIED');
                     applied += 1;
                     continue;

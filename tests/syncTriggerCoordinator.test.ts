@@ -52,3 +52,38 @@ test('debounces a realtime burst before starting work', async () => {
     assert.equal(executions, 1);
     coordinator.clear();
 });
+
+test('100 simultaneous hints during one active pull produce one consolidated follow-up', async () => {
+    const coordinator = new SyncTriggerCoordinator({ debounceMs: 0 });
+    const executions: SyncExecution[] = [];
+    let releaseFirst!: () => void;
+    let markStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    const firstPending = new Promise<void>((resolve) => { releaseFirst = resolve; });
+
+    coordinator.configure(async (execution) => {
+        executions.push(execution);
+        if (executions.length === 1) {
+            markStarted();
+            await firstPending;
+        }
+    });
+
+    const first = coordinator.request({ reason: 'STARTUP' });
+    await firstStarted;
+    const hints = Array.from({ length: 100 }, (_, index) => coordinator.request({
+        reason: 'REALTIME_HINT',
+        domainVersions: { catalog: index + 1, prices: index % 9 },
+        collections: [index % 2 === 0 ? 'products' : 'productPrices'],
+    }));
+
+    assert.equal(coordinator.getSnapshot().pendingHintCount, 100);
+    releaseFirst();
+    await Promise.all([first, ...hints]);
+
+    assert.equal(executions.length, 2);
+    assert.equal(executions[1].pendingHintCount, 100);
+    assert.deepEqual(executions[1].domainVersions, { catalog: 100, prices: 8 });
+    assert.deepEqual(new Set(executions[1].collections), new Set(['products', 'productPrices']));
+    coordinator.clear();
+});

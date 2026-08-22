@@ -3357,6 +3357,7 @@ const AppContent: React.FC = () => {
         authenticatedActivityTracker.record('HEARTBEAT');
         syncMetrics.increment('heartbeat_total');
       },
+      onSuppressed: () => syncMetrics.increment('heartbeat_suppressed_total'),
       onError: (error) => {
         console.warn('[ERP HEARTBEAT] periodic /terminals/heartbeat failed; next interval remains scheduled.', error);
       },
@@ -3459,10 +3460,11 @@ const AppContent: React.FC = () => {
       'REALTIME_RECONNECTED',
     ]);
 
-    syncTriggerCoordinator.configure(async ({ reasons }) => {
+    syncTriggerCoordinator.configure(async ({ reasons, collections, imageOnly, domainVersions }) => {
       if (disposed || !navigator.onLine || isPosOnlyCloudStagingTarget()) return;
       const needsLifecycle = reasons.some((reason) => lifecycleReasons.has(reason));
       syncMetrics.increment('polls_total');
+      syncMetrics.markPullStarted();
       let authenticatedRequestSucceeded = false;
 
       if (needsLifecycle) {
@@ -3480,10 +3482,38 @@ const AppContent: React.FC = () => {
             ? 'manual_sync'
             : 'periodic';
         authenticatedRequestSucceeded = await triggerErpSyncOutbox(triggerReason) !== null;
+
+        if (reasons.includes('REALTIME_HINT')) {
+          if (syncManager.isUsingConfigPushV2Primary() && !imageOnly) {
+            console.info('[SYNC_STRATEGY]', {
+              target: 'ERP_ACTIVE',
+              strategy: 'CONFIG_PUSH_V2_PRIMARY',
+              action: 'realtime_legacy_catalog_pull_skipped',
+              requested_collections: collections.length,
+              hinted_domains: Object.keys(domainVersions),
+            });
+          } else if (imageOnly || collections.length > 0) {
+            const requestedCollections = collections.length > 0 ? collections : ['products'];
+            for (const collection of requestedCollections) {
+              await syncManager.pullCatalog(collection as any, false, { ignoreThrottle: true });
+            }
+            authenticatedRequestSucceeded = true;
+          } else {
+            await syncManager.refreshTerminalResolvedConfig(undefined, {
+              forceRemoteFetch: true,
+              forceFullCatalog: false,
+              dispatchEvent: true,
+            });
+            await syncManager.syncAllCatalogs();
+            authenticatedRequestSucceeded = true;
+          }
+        }
       }
 
       if (authenticatedRequestSucceeded) {
         authenticatedActivityTracker.record('PULL');
+        syncMetrics.increment('pulls_total');
+        syncMetrics.markPullFinished();
         syncMetrics.markSuccessfulSync();
       }
     });

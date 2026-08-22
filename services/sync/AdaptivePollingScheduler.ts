@@ -31,19 +31,13 @@ export const createAdaptivePollingScheduler = (options: AdaptivePollingScheduler
     let degradedAttempt = 0;
     let requestFailureAttempt = 0;
 
-    const withJitter = (baseMs: number, minMs = 0, maxMs = Number.POSITIVE_INFINITY) => {
-        const factor = 0.8 + random() * 0.4;
-        return Math.round(Math.min(maxMs, Math.max(minMs, baseMs * factor)));
-    };
-
     const nextDelay = (): number => {
-        if (realtimeState === 'HEALTHY') return withJitter(healthyIntervalMs);
-        if (realtimeState === 'CONNECTING') return withJitter(20_000);
+        if (realtimeState === 'HEALTHY') return healthyIntervalMs;
+        if (realtimeState === 'CONNECTING') return 20_000;
         if (degradedAttempt < DEGRADED_DELAYS_MS.length) {
-            return withJitter(DEGRADED_DELAYS_MS[degradedAttempt++]);
+            return DEGRADED_DELAYS_MS[degradedAttempt++];
         }
-        const longBackoffMs = 60_000 + Math.round(random() * 60_000);
-        return withJitter(longBackoffMs, 60_000, 120_000);
+        return 60_000 + Math.round(random() * 60_000);
     };
 
     const schedule = (delayMs = nextDelay()) => {
@@ -61,7 +55,7 @@ export const createAdaptivePollingScheduler = (options: AdaptivePollingScheduler
             }, (error) => {
                 options.onError?.(error);
                 const retryIndex = Math.min(requestFailureAttempt++, DEGRADED_DELAYS_MS.length - 1);
-                schedule(withJitter(DEGRADED_DELAYS_MS[retryIndex]));
+                schedule(DEGRADED_DELAYS_MS[retryIndex]);
             });
         }, delayMs);
     };

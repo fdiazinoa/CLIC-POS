@@ -1,18 +1,16 @@
 import { RealtimeChannel } from '@supabase/supabase-js';
-import { syncManager } from './SyncManager';
 import { ensureSupabaseSessionRestored, supabase } from '../../utils/supabase';
 import { getStoredErpSyncBinding } from '../../utils/erpSyncLifecycle';
 import { dispatchDeviceRevoked, resolveLocalDeviceId } from '../../utils/deviceRevocation';
 import { isSyncFeatureEnabled } from './SyncFeatureFlags';
 import { syncTriggerCoordinator, type SyncDomainVersions } from './SyncTriggerCoordinator';
 import { syncMetrics } from './SyncMetrics';
+import { isSyncHintV2Payload, payloadAppliesToRealtimeScope } from './RealtimeHintScope';
 
 export type RealtimeConnectionState = 'DISABLED' | 'CONNECTING' | 'HEALTHY' | 'DEGRADED' | 'DISCONNECTED';
 
 const FORCE_SYNC_NOTICE_KEY = 'clic_pos_force_sync_notice';
 const LIGHTWEIGHT_SYNC_NOTICE_KEY = 'clic_pos_lightweight_sync_notice';
-const LIGHTWEIGHT_SYNC_DEBOUNCE_MS = 1800;
-const LIGHTWEIGHT_SYNC_JITTER_MS = 2200;
 const LIGHTWEIGHT_COLLECTIONS = new Set([
     'products',
     'productStocks',
@@ -81,24 +79,8 @@ const normalizeDomainVersions = (payload: unknown): SyncDomainVersions => {
     }, {});
 };
 
-const payloadAppliesToBinding = (payload: unknown, strict: boolean): boolean => {
-    const eventPayload = asObject(payload);
-    const binding = getStoredErpSyncBinding();
-    const tenantId = asString(eventPayload.tenantId || eventPayload.tenant_id);
-    const storeId = asString(eventPayload.storeId || eventPayload.store_id);
-    const terminalId = asString(eventPayload.terminalId || eventPayload.terminal_id);
-
-    if (strict && (!tenantId || !storeId || !binding.tenantId || !binding.storeId)) return false;
-    if (tenantId && binding.tenantId && tenantId !== binding.tenantId) return false;
-    if (storeId && binding.storeId && storeId !== binding.storeId) return false;
-    if (
-        terminalId
-        && terminalId !== '*'
-        && terminalId !== binding.terminalId
-        && terminalId !== binding.localTerminalId
-    ) return false;
-    return true;
-};
+const payloadAppliesToBinding = (payload: unknown, strict: boolean): boolean =>
+    payloadAppliesToRealtimeScope(payload, getStoredErpSyncBinding(), strict);
 
 const persistLightweightSyncNotice = (payload: unknown, collections: string[]) => {
     const eventPayload = asObject(payload);
@@ -118,8 +100,6 @@ class RealtimeNotificationService {
     private terminalId: string | null = null;
     private initializePromise: Promise<void> | null = null;
     private initializeKey: string | null = null;
-    private lightweightSyncTimer: ReturnType<typeof setTimeout> | null = null;
-    private pendingCollections = new Set<string>();
     private state: RealtimeConnectionState = 'DISABLED';
     private stateListeners = new Set<(state: RealtimeConnectionState) => void>();
     private hasSubscribed = false;
@@ -141,38 +121,22 @@ class RealtimeNotificationService {
         this.stateListeners.forEach((listener) => listener(state));
     }
 
-    private scheduleLightweightSync(payload: unknown, fallbackCollections: string[]) {
+    private requestRealtimeSync(payload: unknown, fallbackCollections: string[] = []) {
         const collections = normalizeCollections(payload, fallbackCollections);
-        if (collections.length === 0) return;
-
-        collections.forEach((collection) => this.pendingCollections.add(collection));
-        persistLightweightSyncNotice(payload, Array.from(this.pendingCollections));
-
-        if (this.lightweightSyncTimer) {
-            clearTimeout(this.lightweightSyncTimer);
-        }
-
-        const jitter = Math.floor(Math.random() * LIGHTWEIGHT_SYNC_JITTER_MS);
-        this.lightweightSyncTimer = setTimeout(async () => {
-            this.lightweightSyncTimer = null;
-            const collectionsToSync = Array.from(this.pendingCollections);
-            this.pendingCollections.clear();
-
-            if (syncManager.getIsInternalSyncing()) {
-                console.log('📡 RealtimeNotificationService: Sync already running, delaying lightweight sync.');
-                this.scheduleLightweightSync({ collections: collectionsToSync, reason: 'RETRY_AFTER_BUSY' }, collectionsToSync);
-                return;
-            }
-
-            try {
-                console.log('📡 RealtimeNotificationService: Running lightweight sync.', { collections: collectionsToSync });
-                for (const collection of collectionsToSync) {
-                    await syncManager.pullCatalog(collection as any, false, { ignoreThrottle: true });
-                }
-            } catch (error) {
-                console.error('❌ RealtimeNotificationService: Error during lightweight sync handling:', error);
-            }
-        }, LIGHTWEIGHT_SYNC_DEBOUNCE_MS + jitter);
+        if (collections.length > 0) persistLightweightSyncNotice(payload, collections);
+        const eventPayload = asObject(payload);
+        void syncTriggerCoordinator.request({
+            reason: 'REALTIME_HINT',
+            domainVersions: normalizeDomainVersions(payload),
+            collections,
+            imageOnly: Boolean(
+                eventPayload.imageOnly
+                || eventPayload.image_only
+                || eventPayload.reason === 'PRODUCT_IMAGE_UPDATED'
+            ),
+        }).catch((error) => {
+            console.error('❌ RealtimeNotificationService: Realtime hint processing failed.', error);
+        });
     }
 
     async initialize(_masterUrl: string, terminalId: string) {
@@ -224,7 +188,7 @@ class RealtimeNotificationService {
 
         if (isSyncFeatureEnabled('sync_hint_v2')) {
             channel.on('broadcast', { event: 'SYNC_HINT' }, ({ payload }) => {
-                if (!payloadAppliesToBinding(payload, true)) {
+                if (!isSyncHintV2Payload(payload) || !payloadAppliesToBinding(payload, true)) {
                     console.warn('📡 RealtimeNotificationService: Ignoring out-of-scope SYNC_HINT.');
                     return;
                 }
@@ -237,69 +201,29 @@ class RealtimeNotificationService {
             });
         }
 
-        channel.on('broadcast', { event: 'force_sync' }, async ({ payload }) => {
+        channel.on('broadcast', { event: 'force_sync' }, ({ payload }) => {
             if (!payloadAppliesToBinding(payload, false)) return;
             console.log('📡 RealtimeNotificationService: Received force_sync broadcast.', payload);
             persistForceSyncNotice(payload);
-            void syncTriggerCoordinator.request({
-                reason: 'REALTIME_HINT',
-                domainVersions: normalizeDomainVersions(payload),
-            }).catch((error) => {
-                console.error('❌ RealtimeNotificationService: ERP outbox failed during force_sync.', error);
-            });
-            const eventPayload = asObject(payload);
-            const specificCollections = normalizeCollections(eventPayload);
-            const imageOnly = Boolean(eventPayload.imageOnly || eventPayload.image_only || eventPayload.reason === 'PRODUCT_IMAGE_UPDATED');
-
-            if (syncManager.isUsingConfigPushV2Primary() && !imageOnly) {
-                await syncManager.syncTerminalManifestInBackground(undefined, { reason: 'realtime' });
-                console.info('[SYNC_STRATEGY]', {
-                    target: 'ERP_ACTIVE',
-                    strategy: 'CONFIG_PUSH_V2_PRIMARY',
-                    action: 'realtime_legacy_catalog_pull_skipped',
-                    requested_collections: specificCollections.length,
-                });
-                return;
-            }
-
-            if (imageOnly || specificCollections.length > 0) {
-                this.scheduleLightweightSync(eventPayload, imageOnly ? ['products'] : specificCollections);
-                return;
-            }
-
-            if (syncManager.getIsInternalSyncing()) {
-                console.log('📡 RealtimeNotificationService: Sync already running, skipping force_sync.');
-                return;
-            }
-
-            try {
-                await syncManager.refreshTerminalResolvedConfig(undefined, {
-                    forceRemoteFetch: true,
-                    forceFullCatalog: false,
-                    dispatchEvent: true,
-                });
-                await syncManager.syncAllCatalogs();
-            } catch (error) {
-                console.error('❌ RealtimeNotificationService: Error during force_sync handling:', error);
-            }
+            this.requestRealtimeSync(payload);
         });
 
         channel.on('broadcast', { event: 'catalog_changed' }, ({ payload }) => {
             if (!payloadAppliesToBinding(payload, false)) return;
             console.log('📡 RealtimeNotificationService: Received catalog_changed broadcast.', payload);
-            this.scheduleLightweightSync(payload, normalizeCollections(payload));
+            this.requestRealtimeSync(payload);
         });
 
         channel.on('broadcast', { event: 'products_changed' }, ({ payload }) => {
             if (!payloadAppliesToBinding(payload, false)) return;
             console.log('📡 RealtimeNotificationService: Received products_changed broadcast.', payload);
-            this.scheduleLightweightSync(payload, ['products']);
+            this.requestRealtimeSync(payload, ['products']);
         });
 
         channel.on('broadcast', { event: 'product_images_changed' }, ({ payload }) => {
             if (!payloadAppliesToBinding(payload, false)) return;
             console.log('📡 RealtimeNotificationService: Received product_images_changed broadcast.', payload);
-            this.scheduleLightweightSync(payload, ['products']);
+            this.requestRealtimeSync(payload, ['products']);
         });
 
         channel.on('broadcast', { event: 'device_revoked' }, ({ payload }) => {
@@ -366,11 +290,6 @@ class RealtimeNotificationService {
                 console.warn('📡 RealtimeNotificationService: Failed to unsubscribe channel.', error);
             }
         }
-        if (this.lightweightSyncTimer) {
-            clearTimeout(this.lightweightSyncTimer);
-            this.lightweightSyncTimer = null;
-        }
-        this.pendingCollections.clear();
         this.storeId = null;
         this.terminalId = null;
         this.hasSubscribed = false;

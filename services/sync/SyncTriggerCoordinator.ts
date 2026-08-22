@@ -1,3 +1,5 @@
+import { syncMetrics } from './SyncMetrics';
+
 export type SyncTriggerReason =
     | 'REALTIME_HINT'
     | 'STARTUP'
@@ -13,11 +15,16 @@ export type SyncDomainVersions = Record<string, number | string>;
 export type SyncTriggerRequest = {
     reason: SyncTriggerReason;
     domainVersions?: SyncDomainVersions;
+    collections?: string[];
+    imageOnly?: boolean;
 };
 
 export type SyncExecution = {
     reasons: SyncTriggerReason[];
     domainVersions: SyncDomainVersions;
+    collections: string[];
+    imageOnly: boolean;
+    pendingHintCount: number;
 };
 
 export type SyncTriggerCoordinatorOptions = {
@@ -39,6 +46,9 @@ export class SyncTriggerCoordinator {
     private executor: ((execution: SyncExecution) => Promise<void>) | null = null;
     private reasons = new Set<SyncTriggerReason>();
     private domainVersions = new Map<string, number | string>();
+    private collections = new Set<string>();
+    private imageOnly = false;
+    private pendingHintCount = 0;
     private running = false;
     private pending = false;
     private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -64,6 +74,10 @@ export class SyncTriggerCoordinator {
         this.debounceTimer = null;
         this.reasons.clear();
         this.domainVersions.clear();
+        this.collections.clear();
+        this.imageOnly = false;
+        this.pendingHintCount = 0;
+        syncMetrics.setPendingHints(0);
         this.pending = false;
         this.resolveWaiters();
     }
@@ -71,6 +85,13 @@ export class SyncTriggerCoordinator {
     request(request: SyncTriggerRequest): Promise<void> {
         this.reasons.add(request.reason);
         this.mergeDomainVersions(request.domainVersions || {});
+        (request.collections || []).filter(Boolean).forEach((collection) => this.collections.add(collection));
+        this.imageOnly ||= Boolean(request.imageOnly);
+        if (request.reason === 'REALTIME_HINT') {
+            this.pendingHintCount += 1;
+            syncMetrics.markHintReceived();
+            syncMetrics.setPendingHints(this.pendingHintCount);
+        }
         this.pending = true;
 
         const promise = new Promise<void>((resolve, reject) => this.waiters.push({ resolve, reject }));
@@ -87,6 +108,9 @@ export class SyncTriggerCoordinator {
             pending: this.pending,
             reasons: Array.from(this.reasons),
             domainVersions: Object.fromEntries(this.domainVersions),
+            collections: Array.from(this.collections),
+            imageOnly: this.imageOnly,
+            pendingHintCount: this.pendingHintCount,
         };
     }
 
@@ -121,9 +145,16 @@ export class SyncTriggerCoordinator {
                 const execution: SyncExecution = {
                     reasons: Array.from(this.reasons),
                     domainVersions: Object.fromEntries(this.domainVersions),
+                    collections: Array.from(this.collections),
+                    imageOnly: this.imageOnly,
+                    pendingHintCount: this.pendingHintCount,
                 };
                 this.reasons.clear();
                 this.domainVersions.clear();
+                this.collections.clear();
+                this.imageOnly = false;
+                this.pendingHintCount = 0;
+                syncMetrics.setPendingHints(0);
                 try {
                     await this.executor(execution);
                 } catch (error) {
