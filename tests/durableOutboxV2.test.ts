@@ -177,12 +177,13 @@ test('legacy non-UUID event ids are repaired without replacing the durable sale 
     await repository.leaseDue({ owner: 'worker-a', limit: 1, leaseMs: 5_000 });
     await repository.markRetry('OUTBOX-TXN-legacy', 'SYNC_BATCH_INVALID_EVENT_ID', new Date('2026-08-22T18:30:00.000Z'));
 
-    assert.equal(await repository.repairLegacyEventIds(new Date('2026-08-22T18:10:00.000Z')), 1);
+    assert.equal(await repository.repairLegacyEventContracts(new Date('2026-08-22T18:10:00.000Z')), 1);
     const repaired = adapter.sqlite.prepare(
-        'SELECT local_sequence, event_id, aggregate_id, status, next_retry_at FROM sync_outbox_v2'
+        'SELECT local_sequence, event_id, event_type, aggregate_id, status, next_retry_at FROM sync_outbox_v2'
     ).get() as any;
     assert.equal(repaired.local_sequence, 1);
     assert.equal(repaired.aggregate_id, 'sale-1');
+    assert.equal(repaired.event_type, 'SALE_POSTED');
     assert.equal(repaired.status, 'RETRY_WAIT');
     assert.equal(repaired.next_retry_at, '2026-08-22T18:10:00.000Z');
     assert.match(repaired.event_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
@@ -287,6 +288,7 @@ test('production enables POS-2A/POS-2B while the safe default remains dark', asy
     assert.match(app, /durableOutboxRepository\.commitFinancialTransaction/);
     assert.match(app, /eventId: uuidv4\(\)/);
     assert.doesNotMatch(app, /eventId: `OUTBOX-\$\{txn\.id\}`/);
+    assert.match(app, /eventType: 'SALE_POSTED'/);
     assert.match(app, /collectionName: 'transactions'/);
     assert.match(app, /collectionName: 'inventoryLedger'/);
     assert.match(app, /collectionName: 'customers'/);

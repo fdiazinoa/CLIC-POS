@@ -118,7 +118,7 @@ test('ERP-2B eventResults contract maps APPLIED and DUPLICATE_APPLIED to APPLIED
     const applied: string[] = [];
     const repository = {
         recoverExpiredLeases: async () => 0,
-        repairLegacyEventIds: async () => 0,
+        repairLegacyEventContracts: async () => 0,
         leaseDue: async () => leased,
         releaseUnsent: async () => undefined,
         markRejected: async () => undefined,

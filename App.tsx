@@ -8954,7 +8954,7 @@ const AppContent: React.FC = () => {
           // ERP-2B validates eventId as UUID. Keep transactionId in aggregateId;
           // eventId is the stable idempotency key for every retry of this row.
           eventId: uuidv4(),
-          eventType: 'TRANSACTION_CREATED',
+          eventType: 'SALE_POSTED',
           aggregateType: 'TRANSACTION',
           aggregateId: txn.id,
           schemaVersion: 1,
