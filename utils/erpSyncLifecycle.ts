@@ -15,6 +15,10 @@ import { DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS } from '../constants';
 import { getDefaultRoleConfig, normalizeDeviceRoleValue, resolveDeviceRoleValue } from './deviceRoleHelpers';
 import { resolveOrderTakerContract } from './orderTakerPolicy';
 import {
+    POS_SYNC_CAPABILITY_VERSIONS,
+    VARIANT_PROMOTIONS_CAPABILITY,
+} from './syncCapabilities';
+import {
     ERP_CONFIG_PUSH_V2_DOMAIN_COLLECTIONS,
     ERP_CONFIG_PUSH_V2_DOMAINS,
     type ErpMasterDomain,
@@ -275,7 +279,10 @@ export const isConfigPushV2Enabled = (): boolean => {
 };
 
 const getSyncCapabilities = (): string[] => (
-    isConfigPushV2Enabled() ? [CONFIG_PUSH_V2_CAPABILITY] : []
+    [
+        ...(isConfigPushV2Enabled() ? [CONFIG_PUSH_V2_CAPABILITY] : []),
+        VARIANT_PROMOTIONS_CAPABILITY,
+    ]
 );
 
 const readConfigPushV2State = (): ConfigPushV2State => {
@@ -2339,6 +2346,7 @@ export const registerErpSyncTerminal = async (params: EnsureLifecycleParams): Pr
 	        ip_address: runtimeTelemetry.ipAddress || null,
         sync_capabilities: syncCapabilities,
         capabilities: syncCapabilities,
+	        capability_versions: POS_SYNC_CAPABILITY_VERSIONS,
 	        metadata: {
 	            source: 'CLIC_POS_APK',
             terminal_id: existingCanonicalTerminalId || undefined,
@@ -2431,6 +2439,7 @@ export const heartbeatErpSyncTerminal = (
 	            pending_events: Math.max(params.pendingEvents || 0, getConfigPushV2PendingEventCount()),
             sync_capabilities: syncCapabilities,
             capabilities: syncCapabilities,
+	            capability_versions: POS_SYNC_CAPABILITY_VERSIONS,
 	        });
 	    } catch (error) {
 	        if (isDeviceSupersededError(error)) {

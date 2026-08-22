@@ -17,6 +17,97 @@ const normalizeMatchToken = (value: unknown): string => {
         .toLowerCase();
 };
 
+const normalizeVariantToken = (value: unknown): string => (
+    normalizeMatchToken(value).replace(/\s+/g, '')
+);
+
+type VariantReferenceType = 'SKU' | 'VARIANT_ID' | 'BARCODE';
+type VariantPromotionMatch = {
+    matchedVariantRef: string;
+    matchedTargetRef: string;
+    matchedVariantRefType: VariantReferenceType;
+};
+
+const collectVariantLineReferences = (item: CartItem): Array<{ value: string; type: VariantReferenceType }> => {
+    const record = item as CartItem & Record<string, any>;
+    const selectedVariant = record.selectedVariant && typeof record.selectedVariant === 'object'
+        ? record.selectedVariant as Record<string, any>
+        : {};
+    const values: Array<{ value: unknown; type: VariantReferenceType }> = [
+        { value: record.variantSku, type: 'SKU' },
+        { value: selectedVariant.sku, type: 'SKU' },
+        { value: record.variantId ?? record.variant_id, type: 'VARIANT_ID' },
+        { value: selectedVariant.id ?? selectedVariant.variantId ?? selectedVariant.variant_id, type: 'VARIANT_ID' },
+        { value: record.variantBarcode ?? record.variant_barcode, type: 'BARCODE' },
+        ...([record.variantBarcodes, record.variant_barcodes, selectedVariant.barcode, selectedVariant.barcodes]
+            .flatMap((value) => Array.isArray(value) ? value : [value])
+            .map((value) => ({ value, type: 'BARCODE' as const }))),
+    ];
+    const seen = new Set<string>();
+
+    return values.flatMap(({ value, type }) => {
+        const normalized = normalizeVariantToken(value);
+        if (!normalized || seen.has(normalized)) return [];
+        seen.add(normalized);
+        return [{ value: String(value).trim(), type }];
+    });
+};
+
+const parentProductIdentityMatches = (item: CartItem, targetValue: unknown): boolean => {
+    const record = item as CartItem & Record<string, any>;
+    const nestedProduct = record.product && typeof record.product === 'object'
+        ? record.product as Record<string, any>
+        : {};
+    const target = normalizeMatchToken(targetValue);
+    if (!target) return false;
+
+    return [
+        record.id,
+        record.itemId,
+        record.item_id,
+        record.productId,
+        record.product_id,
+        record.sourceProductId,
+        record.source_product_id,
+        record.erpProductId,
+        record.erp_product_id,
+        nestedProduct.id,
+        nestedProduct.itemId,
+        nestedProduct.item_id,
+        nestedProduct.productId,
+        nestedProduct.product_id,
+        nestedProduct.sourceProductId,
+        nestedProduct.source_product_id,
+        nestedProduct.erpProductId,
+        nestedProduct.erp_product_id,
+    ].some((candidate) => normalizeMatchToken(candidate) === target);
+};
+
+const resolveVariantPromotionMatch = (promotion: Promotion, item: CartItem): VariantPromotionMatch | null => {
+    if (promotion.targetType !== 'VARIANT') return null;
+    if (!promotion.targetValue || !parentProductIdentityMatches(item, promotion.targetValue)) return null;
+
+    const targetRefs = Array.isArray(promotion.targetRefs) ? promotion.targetRefs : [];
+    const normalizedTargets = new Map<string, string>();
+    targetRefs.forEach((targetRef) => {
+        const token = normalizeVariantToken(targetRef);
+        if (token && !normalizedTargets.has(token)) normalizedTargets.set(token, String(targetRef).trim());
+    });
+    if (normalizedTargets.size === 0) return null;
+
+    for (const candidate of collectVariantLineReferences(item)) {
+        const matchedTargetRef = normalizedTargets.get(normalizeVariantToken(candidate.value));
+        if (!matchedTargetRef) continue;
+        return {
+            matchedVariantRef: candidate.value,
+            matchedTargetRef,
+            matchedVariantRefType: candidate.type,
+        };
+    }
+
+    return null;
+};
+
 const extractReferenceStrings = (value: unknown): string[] => {
     if (Array.isArray(value)) {
         return value.flatMap((entry) => extractReferenceStrings(entry));
@@ -445,6 +536,7 @@ const promotionIsCurrentlyEligible = (promotion: Promotion, config: BusinessConf
 const promotionTargetsProduct = (promotion: Promotion, product: any, config: BusinessConfig): boolean => {
     if (promotion.targetType === 'ALL') return true;
     if (promotion.targetType === 'PRODUCT') return promotionMatchesTargetReference(promotion, product);
+    if (promotion.targetType === 'VARIANT') return Boolean(resolveVariantPromotionMatch(promotion, product));
     if (promotion.targetType === 'CATEGORY') return promotionMatchesCategoryTarget(promotion, product);
 
     if (promotion.targetType === 'GROUP') {
@@ -711,6 +803,7 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
             const safeRate = promotionBasePrice > 0
                 ? round4((promotionBasePrice - newPrice) / promotionBasePrice)
                 : undefined;
+            const variantMatch = resolveVariantPromotionMatch(applicablePromo, item);
             return {
                 ...item,
                 price: round2(newPrice),
@@ -720,7 +813,13 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
                 adjustmentSource: 'PROMOTION',
                 appliedPromotionId: applicablePromo.id,
                 appliedPromotionCode: applicablePromo.id,
-                appliedPromotionName: applicablePromo.name
+                appliedPromotionName: applicablePromo.name,
+                promotionTrace: {
+                    promotionId: applicablePromo.id,
+                    targetType: applicablePromo.targetType,
+                    targetValue: applicablePromo.targetValue,
+                    ...(variantMatch || {}),
+                },
             };
         }
 

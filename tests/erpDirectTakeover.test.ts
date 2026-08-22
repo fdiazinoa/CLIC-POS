@@ -170,6 +170,9 @@ test('MASTER ERP directo ejecuta takeover canónico una vez antes de register y 
   assert.equal(takeoverRequests.length, 1);
   assert.equal(registerRequests.length, 1);
   assert.ok(requests.indexOf(takeoverRequests[0]) < requests.indexOf(registerRequests[0]));
+  assert.deepEqual(registerRequests[0].body.sync_capabilities, ['VARIANT_PROMOTIONS']);
+  assert.deepEqual(registerRequests[0].body.capabilities, ['VARIANT_PROMOTIONS']);
+  assert.deepEqual(registerRequests[0].body.capability_versions, { VARIANT_PROMOTIONS: 1 });
 
   const takeover = takeoverRequests[0];
   assert.equal(takeover.path, `/api/sync/terminals/${ERP_UUID}/takeover`);
