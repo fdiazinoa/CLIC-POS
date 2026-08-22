@@ -38,6 +38,7 @@ import {
    createPaymentIntegrationAuditEvent,
    dispatchAuditEventConfigUpdate,
 } from '../services/payments/paymentIntegrationAudit';
+import { paymentIntentService } from '../services/payments/PaymentIntentService';
 import {
    buildPaymentSettlementSummary,
    resolveCurrencySymbol,
@@ -583,6 +584,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
       );
       const proportionalTax = calculateGatewayTaxAmount(amountInBase);
       const orderNumber = createAzulOrderNumber();
+      const intent = await paymentIntentService.create({
+         paymentId: payment.id,
+         provider: integration.provider,
+         integrationId: integration.id,
+         amount: amountInBase,
+         currencyCode: payment.currencyCode || baseCurrency.code,
+      });
+      if (intent) await paymentIntentService.markAuthorizing(intent.intentId);
 
       setIsProcessingGateway(true);
       setFinalizeError(null);
@@ -620,6 +629,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
             ? gatewayResult.referenceNumber
             : ('transactionReference' in gatewayResult ? gatewayResult.transactionReference : undefined);
 
+         if (intent) {
+            await paymentIntentService.markAuthorized(intent.intentId, {
+               providerReference: gatewayReference,
+               authorizationCode: gatewayResult.authorizationCode,
+               responseCode: gatewayResult.responseCode,
+            });
+         }
+
          if (config) {
             await dispatchAuditEventConfigUpdate(
                config,
@@ -655,6 +672,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
             ...payment,
             gatewayProvider: integration.provider,
             gatewayIntegrationId: integration.id,
+            paymentIntentId: intent?.intentId,
+            gatewayIdempotencyKey: intent?.idempotencyKey,
             gatewayTransactionType: 'SALE',
             gatewayStatus: gatewayResult.approved ? 'APPROVED' : 'DECLINED',
             gatewayResponseCode: gatewayResult.responseCode,
@@ -681,9 +700,17 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
             gatewayRawResponse: gatewayResult.rawResponse,
          };
       } catch (error) {
+         const gatewayError = error instanceof AzulGatewayError ? error : null;
+         const ingenicoError = error instanceof IngenicoAzulWebApiError ? error : null;
+         if (intent) {
+            const normalized = gatewayError?.normalized || ingenicoError?.normalized;
+            await paymentIntentService.markFailed(intent.intentId, {
+               declined: Boolean(normalized && normalized.approved === false),
+               error: error instanceof Error ? error.message : 'Resultado desconocido del procesador.',
+               responseCode: normalized?.responseCode,
+            });
+         }
          if (config) {
-            const gatewayError = error instanceof AzulGatewayError ? error : null;
-            const ingenicoError = error instanceof IngenicoAzulWebApiError ? error : null;
             await dispatchAuditEventConfigUpdate(
                config,
                integration.id,

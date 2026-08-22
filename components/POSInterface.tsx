@@ -59,6 +59,7 @@ import ReturnModal from './ReturnModal';
 import PromoBottomSheet from './PromoBottomSheet';
 import { backgroundSyncManager, SyncState } from '../services/sync/BackgroundSyncManager';
 import { syncManager } from '../services/sync/SyncManager';
+import { isSyncFeatureEnabled } from '../services/sync/SyncFeatureFlags';
 import { requestJson } from '../services/network/httpClient';
 import ProductTableSupermarket from './ProductTableSupermarket';
 import BarcodeScannerModal from './BarcodeScannerModal';
@@ -167,7 +168,7 @@ export interface POSInterfaceProps {
    onOpenAudit?: () => void;
    onOpenTableMap?: () => void;
    onOpenAgenda?: () => void;
-   onTransactionComplete: (txn: Transaction) => void;
+   onTransactionComplete: (txn: Transaction) => void | Promise<void>;
    onAddCustomer: (customer: Customer) => void;
    onUpdateConfig: (newConfig: BusinessConfig) => void;
    activeTerminalId: string;
@@ -5249,14 +5250,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   observations: uberRecoveredOrder
                      ? `Uber Eats ${uberRecoveredOrder.code} / ${uberRecoveredOrder.sourceOrderId}`
                      : undefined
-               }), 25000, 'TIMEOUT_CREATE_TRANSACTION');
+               }, { deferDurablePersistence: !isRefundOnly }), 25000, 'TIMEOUT_CREATE_TRANSACTION');
 
                // Ensure seriesId is preserved (Backend might not return it in the root object)
                const finalTxn = {
                   ...txn,
                   seriesId: txn.seriesId || (isRefundOnly ? refundSeriesId : assignedSequenceId)
                };
-               const settledFinalTxn = await syncConsignmentSettlement(finalTxn);
+               const durableSaleCommit = !isRefundOnly && isSyncFeatureEnabled('sqlite_outbox_v2');
+               let settledFinalTxn = durableSaleCommit
+                  ? finalTxn
+                  : await syncConsignmentSettlement(finalTxn);
 
                if (isRefundOnly) {
                   await persistStandaloneRefundTransaction(
@@ -5279,7 +5283,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      }
                   );
                } else {
-                  onTransactionComplete(settledFinalTxn);
+                  await Promise.resolve(onTransactionComplete(settledFinalTxn));
+                  if (durableSaleCommit && settledFinalTxn.consignmentId) {
+                     settledFinalTxn = await syncConsignmentSettlement(settledFinalTxn);
+                  }
                }
 
                if (activeRecoveredReservation && !uberRecoveredOrder) {

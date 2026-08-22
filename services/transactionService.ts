@@ -1,6 +1,7 @@
 import { Customer, Transaction, DocumentType, DocumentSeries } from '../types';
 import { db } from '../utils/db';
 import { normalizeTransactionForSync } from './sync/sourceIdentity';
+import { isSyncFeatureEnabled } from './sync/SyncFeatureFlags';
 import {
   isDocumentSeriesCompatibleWithType,
   mergeDocumentSeriesCollection,
@@ -331,7 +332,8 @@ class TransactionService {
      * Create a new transaction with auto-generated IDs
      */
     async createTransaction(
-        data: Partial<Transaction>
+        data: Partial<Transaction>,
+        options: { deferDurablePersistence?: boolean } = {},
     ): Promise<Transaction> {
         // Validate required fields
         if (!data.documentType) {
@@ -450,15 +452,19 @@ class TransactionService {
 
         const normalizedTransaction = normalizeTransactionForSync(transaction);
 
-        // Save only the new document to avoid full-collection rewrites that can block checkout.
-        await db.saveDocument('transactions', normalizedTransaction);
-        try {
-            await db.saveDocument('transactionHistory', {
-                ...normalizedTransaction,
-                syncStatus: normalizedTransaction.syncStatus || 'PENDING'
-            } as any);
-        } catch (historyMirrorError) {
-            console.warn('⚠️ Transaction history mirror skipped:', historyMirrorError);
+        const deferToFinancialCommit = options.deferDurablePersistence === true
+            && isSyncFeatureEnabled('sqlite_outbox_v2');
+        if (!deferToFinancialCommit) {
+            // Legacy persistence remains unchanged while POS-2A is dark.
+            await db.saveDocument('transactions', normalizedTransaction);
+            try {
+                await db.saveDocument('transactionHistory', {
+                    ...normalizedTransaction,
+                    syncStatus: normalizedTransaction.syncStatus || 'PENDING'
+                } as any);
+            } catch (historyMirrorError) {
+                console.warn('⚠️ Transaction history mirror skipped:', historyMirrorError);
+            }
         }
 
         return normalizedTransaction;
