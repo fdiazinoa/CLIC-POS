@@ -170,6 +170,32 @@ test('SYNCED_MASTER remains distinct from APPLIED_ERP and retry preserves the ev
     await adapter.disconnect();
 });
 
+test('unselected leases return to FIFO without consuming an attempt and final rejects stop retrying', async () => {
+    const adapter = new SQLiteTestAdapter();
+    const repository = new DurableOutboxRepository(adapter);
+    await repository.commitFinancialTransaction(financialInput('event-release'));
+    await repository.commitFinancialTransaction({
+        ...financialInput('event-reject'),
+        outboxEvent: { ...financialInput('event-reject').outboxEvent, aggregateId: 'sale-reject' },
+    });
+    await repository.leaseDue({ owner: 'worker-a', limit: 2, leaseMs: 5_000 });
+
+    await repository.releaseUnsent(['event-release']);
+    assert.deepEqual(
+        adapter.sqlite.prepare('SELECT status, attempt_count, lease_owner FROM sync_outbox_v2 WHERE event_id = ?').get('event-release'),
+        { status: 'PENDING', attempt_count: 0, lease_owner: null },
+    );
+
+    await repository.markRejected('event-reject', 'invalid payload');
+    assert.deepEqual(
+        adapter.sqlite.prepare('SELECT status, last_error FROM sync_outbox_v2 WHERE event_id = ?').get('event-reject'),
+        { status: 'REJECTED', last_error: 'invalid payload' },
+    );
+    const next = await repository.leaseDue({ owner: 'worker-b', limit: 2, leaseMs: 5_000 });
+    assert.deepEqual(next.map(event => event.eventId), ['event-release']);
+    await adapter.disconnect();
+});
+
 test('authorized payment intent is linked only inside the financial commit', async () => {
     const adapter = new SQLiteTestAdapter();
     const repository = new DurableOutboxRepository(adapter);

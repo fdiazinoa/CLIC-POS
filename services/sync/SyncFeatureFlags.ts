@@ -11,7 +11,7 @@ const DEFAULTS: Record<SyncFeatureFlagName, boolean> = {
     heartbeat_v2: true,
     // Requires matching Supabase channel authorization before rollout.
     private_realtime: false,
-    // POS-2A is deployed dark until the ERP batch receiver and POS-2B sender are ready.
+    // POS-2A/POS-2B stay dark until the ERP batch receiver is deployed.
     sqlite_outbox_v2: false,
 };
 

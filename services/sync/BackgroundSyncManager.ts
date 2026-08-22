@@ -7,6 +7,9 @@ import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from '../../utils/posSaleAct
 import { syncPolicy } from './SyncProfile';
 import { authenticatedActivityTracker } from './AuthenticatedActivityTracker';
 import { syncMetrics } from './SyncMetrics';
+import { isSyncFeatureEnabled } from './SyncFeatureFlags';
+import { durableOutboxBatchSender } from './DurableOutboxBatchSender';
+import { durableOutboxRepository } from './DurableOutboxRepository';
 
 export interface SyncState {
     pendingCount: number;
@@ -293,12 +296,21 @@ class BackgroundSyncManager {
         let pausedForSaleActivity = false;
 
         try {
-            // 1) Transactions first to prioritize sales visibility at central terminal.
-            await this.processCollection<any>('transactions', async (item) => {
-                await apiSyncAdapter.pushTransaction(item);
-            }).catch((error: any) => {
-                collectionErrors.push(`transactions: ${error?.message || 'unknown error'}`);
-            });
+            const durableBatchActive = isSyncFeatureEnabled('sqlite_outbox_v2');
+            if (durableBatchActive) {
+                const batch = await durableOutboxBatchSender.sendNext();
+                if (batch.retrying > 0) {
+                    collectionErrors.push(`sync_outbox_v2: ${batch.retrying} event(s) scheduled for retry`);
+                }
+                console.log('[POS-2B] durable batch completed', batch);
+            } else {
+                // Legacy path remains available while POS-2B is dark.
+                await this.processCollection<any>('transactions', async (item) => {
+                    await apiSyncAdapter.pushTransaction(item);
+                }).catch((error: any) => {
+                    collectionErrors.push(`transactions: ${error?.message || 'unknown error'}`);
+                });
+            }
 
             if (isPosSaleActive()) {
                 pausedForSaleActivity = true;
@@ -318,12 +330,15 @@ class BackgroundSyncManager {
                 collectionErrors.push(`customerMutations: ${error?.message || 'unknown error'}`);
             });
 
-            // 3) Inventory Ledger
-            await this.processCollection<InventoryLedgerEntry>('inventoryLedger', async (item) => {
-                await apiSyncAdapter.pushInventoryMovement(item);
-            }).catch((error: any) => {
-                collectionErrors.push(`inventoryLedger: ${error?.message || 'unknown error'}`);
-            });
+            // The SALE_COMMITTED durable event owns its inventory movements.
+            // Sending the legacy ledger as well would duplicate the operation.
+            if (!durableBatchActive) {
+                await this.processCollection<InventoryLedgerEntry>('inventoryLedger', async (item) => {
+                    await apiSyncAdapter.pushInventoryMovement(item);
+                }).catch((error: any) => {
+                    collectionErrors.push(`inventoryLedger: ${error?.message || 'unknown error'}`);
+                });
+            }
 
             // 3) Cash Movements
             await this.processCollection<CashMovement>('cashMovements', async (item) => {
@@ -518,9 +533,20 @@ class BackgroundSyncManager {
     }
 
     private async updatePendingCount(collectionOverride?: string[]) {
+        const durableBatchActive = isSyncFeatureEnabled('sqlite_outbox_v2');
         let count = 0;
         let oldestCreatedAt: number | null = null;
-        const collections = collectionOverride || this.operationalCollections;
+        if (durableBatchActive && durableOutboxRepository.isSupported()) {
+            await durableOutboxRepository.refreshMetrics();
+            const durableMetrics = syncMetrics.getSnapshot();
+            count = durableMetrics.outbox_pending_count;
+            oldestCreatedAt = durableMetrics.outbox_oldest_age > 0
+                ? Date.now() - durableMetrics.outbox_oldest_age
+                : null;
+        }
+        const collections = (collectionOverride || this.operationalCollections).filter(collection =>
+            !durableBatchActive || (collection !== 'transactions' && collection !== 'inventoryLedger')
+        );
 
         for (const col of collections) {
             const data = await db.get(col as any) || [];

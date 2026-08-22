@@ -2997,16 +2997,27 @@ class ApiSyncAdapter {
         }
     }
 
-    private async postOperationalPayload(path: string, body: Record<string, unknown>): Promise<any> {
+    private async postOperationalPayload(
+        path: string,
+        body: Record<string, unknown>,
+        options: { maxRequestBytes?: number; acceptCompressedResponse?: boolean } = {},
+    ): Promise<any> {
         const target = await this.authenticateOperationalTarget(false, 'sales', 'PUSH_OPERATIONS');
         const requestBody = this.buildOperationalPostBody(target, body);
+        const serializedBody = JSON.stringify(requestBody);
+        if (options.maxRequestBytes && new TextEncoder().encode(serializedBody).byteLength > options.maxRequestBytes) {
+            throw new Error(`BATCH_PAYLOAD_TOO_LARGE: request exceeds ${options.maxRequestBytes} bytes`);
+        }
         const response = await this.fetchWithRetry(`${target.baseUrl}${path}`, {
             method: 'POST',
             headers: {
                 ...this.buildOperationalHeaders(target, target.token, true),
                 ...this.getLocalDeviceHeaders(),
+                ...(options.acceptCompressedResponse && this.resolveCapacitorPlatform() !== 'web'
+                    ? { 'Accept-Encoding': 'gzip' }
+                    : {}),
             },
-            body: JSON.stringify(requestBody)
+            body: serializedBody
         }, 2, 500, 'sales', 'PUSH_OPERATIONS');
 
         if (response.status === 401) {
@@ -3018,13 +3029,20 @@ class ApiSyncAdapter {
 
             const retriedTarget = await this.authenticateOperationalTarget(true, 'sales', 'PUSH_OPERATIONS');
             const retryBody = this.buildOperationalPostBody(retriedTarget, body);
+            const serializedRetryBody = JSON.stringify(retryBody);
+            if (options.maxRequestBytes && new TextEncoder().encode(serializedRetryBody).byteLength > options.maxRequestBytes) {
+                throw new Error(`BATCH_PAYLOAD_TOO_LARGE: request exceeds ${options.maxRequestBytes} bytes after re-auth`);
+            }
             const retryResponse = await this.fetchWithRetry(`${retriedTarget.baseUrl}${path}`, {
                 method: 'POST',
                 headers: {
                     ...this.buildOperationalHeaders(retriedTarget, retriedTarget.token, true),
                     ...this.getLocalDeviceHeaders(),
+                    ...(options.acceptCompressedResponse && this.resolveCapacitorPlatform() !== 'web'
+                        ? { 'Accept-Encoding': 'gzip' }
+                        : {}),
                 },
-                body: JSON.stringify(retryBody)
+                body: serializedRetryBody
             }, 2, 500, 'sales', 'PUSH_OPERATIONS');
 
             if (!retryResponse.ok) {
@@ -5244,6 +5262,19 @@ class ApiSyncAdapter {
             this.isOnline = false;
             throw error;
         }
+    }
+
+    /**
+     * POS-2B durable batch. The ERP responds with one result per stable eventId,
+     * allowing the caller to retry only failed events.
+     */
+    async pushDurableOutboxBatch(events: object[]): Promise<any> {
+        if (!events.length) return { results: [] };
+        if (events.length > 50) throw new Error('BATCH_EVENT_LIMIT_EXCEEDED');
+        return this.postOperationalPayload('/inbox/batch', { events }, {
+            maxRequestBytes: 512 * 1024,
+            acceptCompressedResponse: true,
+        });
     }
 
     /**
