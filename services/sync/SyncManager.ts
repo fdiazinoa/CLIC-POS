@@ -56,7 +56,8 @@ import { protectsLocalCatalogFromCloud, syncPolicy } from './SyncProfile';
 import { isPosCloudStagingPushCollection } from './PosCloudStagingService';
 import { reportSyncErrorDiagnostic, setCatalogDiagnosticStatus } from './SyncErrorDiagnostic';
 import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked } from '../../utils/deviceRevocation';
-import { isConfigPushV2Enabled, triggerErpSyncOutbox } from '../../utils/erpSyncLifecycle';
+import { isConfigPushV2Enabled } from '../../utils/erpSyncLifecycle';
+import { syncTriggerCoordinator } from './SyncTriggerCoordinator';
 import { normalizeCanonicalErpTerminalId, resolveCanonicalErpTerminalId } from './terminalIdentity';
 import { isPosSaleActive } from '../../utils/posSaleActivity';
 import { POS_MASTER_OPERATIONAL_CATALOGS } from '../../utils/posMasterCatalogContract';
@@ -1007,7 +1008,7 @@ class SyncManager {
         // Subscribe to connection restoration to relaunch recovery immediately
         apiSyncAdapter.setOnConnectionRestored(async () => {
             console.log('🔄 SyncManager: Connection restored, re-triggering recovery/sync...');
-            await triggerErpSyncOutbox('connection_restored');
+            await syncTriggerCoordinator.request({ reason: 'ONLINE' });
             if (this.isUsingConfigPushV2Primary()) {
                 await this.syncTerminalManifestInBackground(undefined, { reason: 'connection_restored' });
                 return;
@@ -4962,7 +4963,7 @@ class SyncManager {
         setTimeout(async () => {
             console.log('🔄 SyncManager: Triggering immediate post-recovery sync.');
             if (this.isUsingConfigPushV2Primary()) {
-                await triggerErpSyncOutbox('connection_restored');
+                await syncTriggerCoordinator.request({ reason: 'ONLINE' });
                 await this.syncTerminalManifestInBackground(undefined, { reason: 'connection_restored' });
                 return;
             }

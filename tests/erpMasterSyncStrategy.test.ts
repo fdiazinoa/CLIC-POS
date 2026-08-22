@@ -69,11 +69,12 @@ test('SyncManager does not schedule the legacy timer for CONFIG_PUSH_V2 primary'
 });
 
 test('startup, reconnect, manifest and manual fallbacks remain available', () => {
-    assert.match(appSource, /syncLifecycle\(\{ forceManifestRefresh: true, reason: 'startup' \}\)/);
+    assert.match(appSource, /syncTriggerCoordinator\.request\(\{ reason: 'STARTUP' \}\)/);
+    assert.match(appSource, /forceManifestRefresh: isStartup/);
     assert.match(appSource, /requestConditionalTerminalConfig\('connection_restored'\)/);
     assert.match(appSource, /MANIFEST_REFRESH_INTERVAL_MS = 15 \* 60 \* 1000/);
-    assert.match(syncSettingsSource, /triggerErpSyncOutbox\('manual_sync'\)/);
-    assert.match(syncStatusSource, /triggerErpSyncOutbox\('manual_sync'\)/);
+    assert.match(syncSettingsSource, /syncTriggerCoordinator\.request\(\{ reason: 'MANUAL' \}\)/);
+    assert.match(syncStatusSource, /syncTriggerCoordinator\.request\(\{ reason: 'MANUAL' \}\)/);
 });
 
 test('ERP-declared unsupported collections are disabled for the runtime session', () => {

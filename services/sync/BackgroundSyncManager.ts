@@ -5,6 +5,8 @@ import { permissionService } from './PermissionService';
 import { InventoryLedgerEntry, CashMovement, ZReport, SyncStatus } from '../../types';
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from '../../utils/posSaleActivity';
 import { syncPolicy } from './SyncProfile';
+import { authenticatedActivityTracker } from './AuthenticatedActivityTracker';
+import { syncMetrics } from './SyncMetrics';
 
 export interface SyncState {
     pendingCount: number;
@@ -192,6 +194,7 @@ class BackgroundSyncManager {
             status === 'SYNCED_CLOUD' ||
             status === 'SYNCED_ACTIVE' ||
             status === 'SYNCED_MASTER' ||
+            status === 'APPLIED_ERP' ||
             status === 'BLOCKED_FUNCTIONAL' ||
             status === 'FAILED_FINAL'
         ) return false;
@@ -432,13 +435,15 @@ class BackgroundSyncManager {
 
                 // Attempt push
                 await pushFn(item);
+                authenticatedActivityTracker.record('PUSH');
 
                 const targetKind = syncPolicy.targetKind();
+                if (targetKind === 'ERP_ACTIVE') syncMetrics.markErpApplied();
                 // Mark as completed
                 item.syncStatus = targetKind === 'POS_CLOUD_STAGING'
                     ? 'SYNCED_CLOUD'
                     : targetKind === 'ERP_ACTIVE'
-                        ? 'SYNCED_ACTIVE'
+                        ? 'APPLIED_ERP'
                         : targetKind === 'POS_MASTER'
                             ? 'SYNCED_MASTER'
                             : 'COMPLETED';
@@ -464,6 +469,7 @@ class BackgroundSyncManager {
                         error?.message || error
                     );
                     item.syncStatus = 'RETRY_WAIT';
+                    syncMetrics.increment('retry_count');
                     item.syncError = undefined;
                     item._forceSyncReplay = true;
                     (item as any).syncRetryAfter = new Date(Date.now() + this.RECOVERABLE_TRANSACTION_RETRY_DELAY_MS).toISOString();
@@ -492,6 +498,7 @@ class BackgroundSyncManager {
 
                 console.error(`❌ BackgroundSyncManager: Failed to sync ${collectionName} item ${item.id}:`, error);
                 item.syncStatus = 'RETRY_WAIT';
+                syncMetrics.increment('retry_count');
                 item.syncError = error.message;
                 (item as any).syncRetryAfter = new Date(Date.now() + this.RECOVERABLE_TRANSACTION_RETRY_DELAY_MS).toISOString();
                 delete (item as any).syncStartedAt;
@@ -505,18 +512,26 @@ class BackgroundSyncManager {
 
     private async updatePendingCount(collectionOverride?: string[]) {
         let count = 0;
+        let oldestCreatedAt: number | null = null;
         const collections = collectionOverride || this.operationalCollections;
 
         for (const col of collections) {
             const data = await db.get(col as any) || [];
             if (Array.isArray(data)) {
-                count += data.filter((item: any) =>
+                const pendingItems = data.filter((item: any) =>
                     this.shouldSyncItem(col, item) &&
                     this.isOperationalSyncPending(item, col)
-                ).length;
+                );
+                count += pendingItems.length;
+                pendingItems.forEach((item: any) => {
+                    const itemTime = this.resolveItemDate(item)?.getTime();
+                    if (itemTime === undefined || !Number.isFinite(itemTime)) return;
+                    oldestCreatedAt = oldestCreatedAt === null ? itemTime : Math.min(oldestCreatedAt, itemTime);
+                });
             }
         }
 
+        syncMetrics.setOutboxState(count, oldestCreatedAt);
         this.updateState({ pendingCount: count });
     }
 
@@ -595,8 +610,9 @@ class BackgroundSyncManager {
     }
 
     /**
-     * Convert stale SYNCING records to ERROR so they are retried automatically.
-     * This handles abrupt browser/tab shutdowns during sync.
+     * Return interrupted or legacy ERROR records to a worker-consumable state.
+     * This handles abrupt browser/tab shutdowns, process death and older builds
+     * that recovered SYNCING as a terminal ERROR.
      */
     private async recoverStuckSyncItems() {
         const collections = this.operationalCollections;
@@ -610,16 +626,18 @@ class BackgroundSyncManager {
                     if (!this.shouldSyncItem(colName, item)) {
                         continue;
                     }
-                    if (item?.syncStatus === 'SYNCING') {
-                        item.syncStatus = 'ERROR';
-                        item.syncError = item.syncError || 'Recovered interrupted sync session';
+                    if (item?.syncStatus === 'SYNCING' || item?.syncStatus === 'ERROR') {
+                        item.syncStatus = 'RETRY_WAIT';
+                        item.syncError = undefined;
+                        item.syncRetryAfter = new Date().toISOString();
+                        delete item.syncStartedAt;
                         changed = true;
                     }
                 }
 
                 if (changed) {
                     await db.save(colName as any, data);
-                    console.log(`♻️ BackgroundSyncManager: Recovered interrupted SYNCING items in ${colName}`);
+                    console.log(`♻️ BackgroundSyncManager: Re-queued interrupted sync items in ${colName}`);
                 }
             } catch (error) {
                 console.warn(`⚠️ Failed recovering stuck sync items in ${colName}:`, error);
@@ -708,7 +726,13 @@ class BackgroundSyncManager {
                 data.forEach(item => {
                     const itemDate = this.resolveItemDate(item);
                     const isOld = !!itemDate && itemDate < cutoff;
-                    const isSynced = item.syncStatus === 'COMPLETED' || item.syncStatus === 'SYNCED_CLOUD';
+                    const isSynced = [
+                        'COMPLETED',
+                        'SYNCED_CLOUD',
+                        'SYNCED_ACTIVE',
+                        'SYNCED_MASTER',
+                        'APPLIED_ERP',
+                    ].includes(item.syncStatus);
 
                     if (isSynced && isOld) {
                         toPruneIds.push(item.id);

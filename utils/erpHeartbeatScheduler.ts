@@ -9,6 +9,9 @@ export type ErpHeartbeatTimerApi = {
 
 export type ErpHeartbeatSchedulerOptions = {
   intervalMs: number;
+  getIntervalMs?: () => number;
+  getLastAuthenticatedActivityAt?: () => number;
+  now?: () => number;
   getJitterMs?: () => number;
   shouldRun?: () => boolean;
   sendHeartbeat: () => Promise<void>;
@@ -33,12 +36,16 @@ export const createErpHeartbeatScheduler = (
 ): ErpHeartbeatScheduler => {
   const timerApi = options.timerApi || defaultTimerApi;
   const flightRef = options.flightRef || { current: null };
+  const now = options.now || Date.now;
   let timerId: unknown = null;
   let stopped = true;
 
   const trigger = (): Promise<void> => {
     if (flightRef.current) return flightRef.current;
     if (options.shouldRun && !options.shouldRun()) return Promise.resolve();
+    const intervalMs = options.getIntervalMs?.() ?? options.intervalMs;
+    const lastActivityAt = options.getLastAuthenticatedActivityAt?.() || 0;
+    if (lastActivityAt > 0 && now() - lastActivityAt < intervalMs) return Promise.resolve();
 
     const operation = Promise.resolve().then(options.sendHeartbeat);
     flightRef.current = operation;
@@ -54,7 +61,12 @@ export const createErpHeartbeatScheduler = (
     if (stopped) return;
     if (timerId !== null) timerApi.clearTimeout(timerId);
 
-    const delayMs = options.intervalMs + Math.max(0, options.getJitterMs?.() || 0);
+    const intervalMs = options.getIntervalMs?.() ?? options.intervalMs;
+    const lastActivityAt = options.getLastAuthenticatedActivityAt?.() || 0;
+    const remainingMs = lastActivityAt > 0
+      ? Math.max(1_000, intervalMs - Math.max(0, now() - lastActivityAt))
+      : intervalMs;
+    const delayMs = remainingMs + Math.max(0, options.getJitterMs?.() || 0);
     timerId = timerApi.setTimeout(() => {
       timerId = null;
       void trigger()
