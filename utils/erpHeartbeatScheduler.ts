@@ -15,6 +15,7 @@ export type ErpHeartbeatSchedulerOptions = {
   getJitterMs?: () => number;
   shouldRun?: () => boolean;
   sendHeartbeat: () => Promise<void>;
+  onSuppressed?: () => void;
   onError?: (error: unknown) => void;
   flightRef?: ErpHeartbeatFlightRef;
   timerApi?: ErpHeartbeatTimerApi;
@@ -45,7 +46,10 @@ export const createErpHeartbeatScheduler = (
     if (options.shouldRun && !options.shouldRun()) return Promise.resolve();
     const intervalMs = options.getIntervalMs?.() ?? options.intervalMs;
     const lastActivityAt = options.getLastAuthenticatedActivityAt?.() || 0;
-    if (lastActivityAt > 0 && now() - lastActivityAt < intervalMs) return Promise.resolve();
+    if (lastActivityAt > 0 && now() - lastActivityAt < intervalMs) {
+      options.onSuppressed?.();
+      return Promise.resolve();
+    }
 
     const operation = Promise.resolve().then(options.sendHeartbeat);
     flightRef.current = operation;

@@ -175,6 +175,7 @@ test('actividad autenticada reciente convierte heartbeat en presencia residual',
   let now = 10_000;
   let lastActivityAt = now;
   let heartbeats = 0;
+  let suppressed = 0;
   const scheduler = createErpHeartbeatScheduler({
     intervalMs: 60_000,
     getIntervalMs: () => 5 * 60_000,
@@ -185,6 +186,7 @@ test('actividad autenticada reciente convierte heartbeat en presencia residual',
       heartbeats += 1;
       lastActivityAt = now;
     },
+    onSuppressed: () => { suppressed += 1; },
   });
 
   scheduler.start();
@@ -196,6 +198,7 @@ test('actividad autenticada reciente convierte heartbeat en presencia residual',
   timers.tick(5 * 60_000);
   await flushPromises();
   assert.equal(heartbeats, 0);
+  assert.equal(suppressed, 1);
   assert.equal(timers.scheduledDelays.at(-1), 4 * 60_000);
 
   now += 4 * 60_000;

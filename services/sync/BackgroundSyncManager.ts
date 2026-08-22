@@ -436,9 +436,16 @@ class BackgroundSyncManager {
                 // Attempt push
                 await pushFn(item);
                 authenticatedActivityTracker.record('PUSH');
+                syncMetrics.increment('pushes_total');
+                authenticatedActivityTracker.record('ACK');
+                syncMetrics.increment('ack_total');
+                syncMetrics.markAckFinished();
 
                 const targetKind = syncPolicy.targetKind();
-                if (targetKind === 'ERP_ACTIVE') syncMetrics.markErpApplied();
+                if (targetKind === 'ERP_ACTIVE') {
+                    syncMetrics.markErpApplied();
+                    syncMetrics.markApplyFinished();
+                }
                 // Mark as completed
                 item.syncStatus = targetKind === 'POS_CLOUD_STAGING'
                     ? 'SYNCED_CLOUD'

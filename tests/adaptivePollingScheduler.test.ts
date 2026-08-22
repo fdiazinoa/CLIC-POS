@@ -41,7 +41,7 @@ test('uses five-minute reconciliation while Realtime is healthy', async () => {
     let pulls = 0;
     const scheduler = createAdaptivePollingScheduler({
         timerApi: timers,
-        random: () => 0.5,
+        random: () => 0,
         isOnline: () => true,
         requestReconciliation: async () => { pulls += 1; },
     });
@@ -71,6 +71,29 @@ test('backs off through 5, 10, 20, 40 and 60 seconds when Realtime is down', asy
         await flush();
     }
     assert.equal(timers.delays.at(-1), 90_000);
+    scheduler.stop();
+});
+
+test('offline timers never issue HTTP work', async () => {
+    const timers = new FakeTimers();
+    let online = false;
+    let pulls = 0;
+    const scheduler = createAdaptivePollingScheduler({
+        timerApi: timers,
+        random: () => 0,
+        isOnline: () => online,
+        requestReconciliation: async () => { pulls += 1; },
+    });
+
+    scheduler.start('DISCONNECTED');
+    timers.tick(5_000);
+    await flush();
+    assert.equal(pulls, 0);
+
+    online = true;
+    scheduler.notifyOnline();
+    await Promise.resolve();
+    assert.equal(pulls, 0);
     scheduler.stop();
 });
 

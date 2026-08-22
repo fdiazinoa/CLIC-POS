@@ -42,6 +42,14 @@ test('runtime cleanup clears config timer and aborts the active conditional requ
   assert.match(appSource, /terminalConfigRequestCoordinator\.cancel\(erpTerminalId\)/);
 });
 
+test('changing currentView does not recreate the ERP lifecycle timers', () => {
+  const lifecycleEffectStart = appSource.lastIndexOf('useEffect(() => {', appSource.indexOf('const setupPending = hasPendingTerminalSetup'));
+  const lifecycleEffectEnd = appSource.indexOf('// --- RECONNECTION BANNER ---', lifecycleEffectStart);
+  const lifecycleEffect = appSource.slice(lifecycleEffectStart, lifecycleEffectEnd);
+  assert.match(lifecycleEffect, /\}, \[erpLifecycleReady, deviceId, getCurrentTerminal\]\);/);
+  assert.doesNotMatch(lifecycleEffect, /\[[^\]]*currentView[^\]]*\]/);
+});
+
 test('lifecycle HTTP requests have a bounded AbortController timeout', () => {
   assert.match(lifecycleSource, /ERP_SYNC_LIFECYCLE_REQUEST_TIMEOUT_MS = 15_000/);
   assert.match(lifecycleSource, /const controller = new AbortController\(\)/);
