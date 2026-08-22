@@ -7,7 +7,7 @@ import type { DatabaseAdapter, FinancialCommitInput } from '../services/db/Datab
 import { DURABLE_OUTBOX_SCHEMA_SQL } from '../services/sync/DurableOutboxSchema';
 import { DurableOutboxRepository } from '../services/sync/DurableOutboxRepository';
 import { PaymentIntentService } from '../services/payments/PaymentIntentService';
-import { buildSalePostedPayload } from '../services/sync/SalePostedContract';
+import { buildPaymentPostedPayload, buildSalePostedPayload } from '../services/sync/SalePostedContract';
 
 const readCount = (row: unknown): number => Number((row as { count?: number } | undefined)?.count || 0);
 
@@ -59,14 +59,17 @@ class SQLiteTestAdapter implements DatabaseAdapter {
                      ON CONFLICT(collection_name, doc_id) DO UPDATE SET data = excluded.data, updatedAt = excluded.updatedAt`
                 ).run(mutation.collectionName, mutation.document.id, JSON.stringify(mutation.document), now);
             }
+            const events = [input.outboxEvent, ...(input.additionalOutboxEvents || [])];
+            for (const event of events) {
+                this.sqlite.prepare(
+                    `INSERT INTO sync_outbox_v2 (
+                        event_id, event_type, aggregate_type, aggregate_id, schema_version,
+                        payload_json, status, attempt_count, created_at, updated_at
+                     ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)`
+                ).run(event.eventId, event.eventType, event.aggregateType, event.aggregateId,
+                    event.schemaVersion, JSON.stringify(event.payload), event.createdAt, now);
+            }
             const event = input.outboxEvent;
-            this.sqlite.prepare(
-                `INSERT INTO sync_outbox_v2 (
-                    event_id, event_type, aggregate_type, aggregate_id, schema_version,
-                    payload_json, status, attempt_count, created_at, updated_at
-                 ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)`
-            ).run(event.eventId, event.eventType, event.aggregateType, event.aggregateId,
-                event.schemaVersion, JSON.stringify(event.payload), event.createdAt, now);
             for (const intentId of input.paymentIntentIds || []) {
                 this.sqlite.prepare(
                     `UPDATE payment_intents_v2 SET status = 'COMMITTED', transaction_id = ?, committed_at = ?, updated_at = ?
@@ -163,6 +166,83 @@ test('online SALE_POSTED persists the canonical contract in the same financial c
     assert.equal(payload.summary.total, transaction.total);
     assert.equal(payload.occurred_at, transaction.date);
     await adapter.disconnect();
+});
+
+test('paid sale persists SALE_POSTED then PAYMENT_POSTED atomically with stable payloads', async () => {
+    const adapter = new SQLiteTestAdapter();
+    const repository = new DurableOutboxRepository(adapter);
+    const transaction = { ...saleTransaction(), settlementAppliedBase: 125, pendingBalance: 0 };
+    const salePayload = buildSalePostedPayload(transaction);
+    const paymentPayload = buildPaymentPostedPayload(transaction);
+    assert.ok(paymentPayload);
+
+    await repository.commitFinancialTransaction({
+        ...financialInput('11111111-1111-4111-8111-111111111111'),
+        outboxEvent: {
+            ...financialInput().outboxEvent,
+            eventId: '11111111-1111-4111-8111-111111111111',
+            eventType: 'SALE_POSTED',
+            payload: salePayload,
+        },
+        additionalOutboxEvents: [{
+            ...financialInput().outboxEvent,
+            eventId: '22222222-2222-4222-8222-222222222222',
+            eventType: 'PAYMENT_POSTED',
+            payload: paymentPayload,
+        }],
+    });
+
+    const events = adapter.sqlite.prepare(
+        'SELECT local_sequence, event_id, event_type, aggregate_id, payload_json FROM sync_outbox_v2 ORDER BY local_sequence'
+    ).all() as any[];
+    assert.deepEqual(events.map(event => event.event_type), ['SALE_POSTED', 'PAYMENT_POSTED']);
+    assert.deepEqual(events.map(event => event.aggregate_id), [transaction.id, transaction.id]);
+    assert.deepEqual(JSON.parse(events[1].payload_json).payments, transaction.payments);
+    assert.equal(JSON.parse(events[1].payload_json).summary.transaction_id, transaction.id);
+    await adapter.disconnect();
+});
+
+test('a failure inserting PAYMENT_POSTED rolls back the sale and every financial document', async () => {
+    const adapter = new SQLiteTestAdapter();
+    const repository = new DurableOutboxRepository(adapter);
+    const transaction = { ...saleTransaction(), settlementAppliedBase: 125, pendingBalance: 0 };
+
+    await assert.rejects(() => repository.commitFinancialTransaction({
+        ...financialInput('33333333-3333-4333-8333-333333333333'),
+        documents: [{ collectionName: 'transactions', document: transaction }],
+        outboxEvent: {
+            ...financialInput().outboxEvent,
+            eventId: '33333333-3333-4333-8333-333333333333',
+            eventType: 'SALE_POSTED',
+            payload: buildSalePostedPayload(transaction),
+        },
+        additionalOutboxEvents: [{
+            ...financialInput().outboxEvent,
+            eventId: '44444444-4444-4444-8444-444444444444',
+            eventType: 'PAYMENT_POSTED',
+            schemaVersion: null as unknown as number,
+            payload: buildPaymentPostedPayload(transaction)!,
+        }],
+    }));
+    assert.equal(readCount(adapter.sqlite.prepare('SELECT COUNT(*) count FROM documents').get()), 0);
+    assert.equal(readCount(adapter.sqlite.prepare('SELECT COUNT(*) count FROM sync_outbox_v2').get()), 0);
+    await adapter.disconnect();
+});
+
+test('credit-only sale does not enqueue a settlement event and payment retry payload is immutable', async () => {
+    const creditTransaction = {
+        ...saleTransaction(),
+        payments: [{ id: 'credit-1', method: 'CREDIT', methodLabel: 'Pendiente', amount: 125 }],
+        settlementAppliedBase: 0,
+        pendingBalance: 125,
+    };
+    assert.equal(buildPaymentPostedPayload(creditTransaction), null);
+
+    const paidTransaction = { ...saleTransaction(), settlementAppliedBase: 125, pendingBalance: 0 };
+    const payload = buildPaymentPostedPayload(paidTransaction)!;
+    const persisted = JSON.stringify(payload);
+    paidTransaction.payments[0].amount = 999;
+    assert.equal(JSON.stringify(payload), persisted);
 });
 
 test('invalid SALE_POSTED is rejected before sale documents or outbox are persisted', async () => {
@@ -426,6 +506,8 @@ test('production enables POS-2A/POS-2B while the safe default remains dark', asy
     assert.doesNotMatch(app, /eventId: `OUTBOX-\$\{txn\.id\}`/);
     assert.match(app, /eventType: 'SALE_POSTED'/);
     assert.match(app, /payload: buildSalePostedPayload\(txn,/);
+    assert.match(app, /eventType: 'PAYMENT_POSTED'/);
+    assert.match(app, /payload: paymentPostedPayload/);
     assert.match(app, /collectionName: 'transactions'/);
     assert.match(app, /collectionName: 'inventoryLedger'/);
     assert.match(app, /collectionName: 'customers'/);
