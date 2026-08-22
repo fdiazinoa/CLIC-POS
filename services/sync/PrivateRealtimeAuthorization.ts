@@ -74,15 +74,7 @@ export const ensurePrivateRealtimeAuthorization = async (
     const client = getPrivateClient();
     let { data: { session } } = await client.auth.getSession();
 
-    if (!session?.access_token || session.user?.is_anonymous !== true) {
-        const anonymous = await client.auth.signInAnonymously();
-        if (anonymous.error || !anonymous.data.session) {
-            throw new Error(`No se pudo crear la identidad dedicada de Realtime: ${anonymous.error?.message || 'sesión ausente'}`);
-        }
-        session = anonymous.data.session;
-    }
-
-    if (!tokenHasPrivateRealtimeScope(session.access_token, scope)) {
+    if (!session?.access_token || !tokenHasPrivateRealtimeScope(session.access_token, scope)) {
         const credentials = readTerminalCredentialsSync();
         const syncToken = clean(credentials.syncToken);
         const deviceToken = clean(getSyncDeviceToken() || credentials.deviceToken);
@@ -95,7 +87,6 @@ export const ensurePrivateRealtimeAuthorization = async (
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                Authorization: `Bearer ${session.access_token}`,
                 'X-Sync-Token': syncToken,
                 ...(deviceToken ? { 'X-Device-Token': deviceToken } : {}),
                 'X-Device-Id': scope.deviceId,
@@ -113,10 +104,18 @@ export const ensurePrivateRealtimeAuthorization = async (
             throw new Error(`ERP rechazó la autorización privada de Realtime (${payload?.code || response.status}).`);
         }
 
-        const refreshed = await client.auth.refreshSession();
-        session = refreshed.data.session;
-        if (refreshed.error || !session?.access_token || !tokenHasPrivateRealtimeScope(session.access_token, scope)) {
-            throw new Error('La sesión renovada no contiene el scope privado autorizado.');
+        const tokenHash = clean(payload?.token_hash);
+        const verificationType = clean(payload?.verification_type) || 'magiclink';
+        if (!tokenHash || !['magiclink', 'email'].includes(verificationType)) {
+            throw new Error('ERP no emitió un intercambio de sesión Realtime válido.');
+        }
+        const exchanged = await client.auth.verifyOtp({
+            token_hash: tokenHash,
+            type: verificationType as 'magiclink' | 'email',
+        });
+        session = exchanged.data.session;
+        if (exchanged.error || !session?.access_token || !tokenHasPrivateRealtimeScope(session.access_token, scope)) {
+            throw new Error('La sesión intercambiada no contiene el scope privado autorizado.');
         }
     }
 
