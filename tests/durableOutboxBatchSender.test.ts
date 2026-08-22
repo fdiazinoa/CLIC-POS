@@ -194,6 +194,7 @@ test('runtime wiring uses the ERP batch endpoint and disables duplicate legacy s
     ]);
 
     assert.match(api, /postOperationalPayload\('\/inbox\/batch',[\s\S]*?512 \* 1024/);
+    assert.doesNotMatch(api, /pushDurableOutboxBatch[\s\S]*?acceptCompressedResponse: true/);
     assert.match(background, /durableOutboxBatchSender\.sendNext/);
     assert.match(background, /} else \{[\s\S]*?pushTransaction/);
     assert.match(background, /if \(!durableBatchActive\)[\s\S]*?pushInventoryMovement/);

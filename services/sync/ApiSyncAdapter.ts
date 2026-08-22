@@ -5273,7 +5273,6 @@ class ApiSyncAdapter {
         if (events.length > 50) throw new Error('BATCH_EVENT_LIMIT_EXCEEDED');
         return this.postOperationalPayload('/inbox/batch', { events }, {
             maxRequestBytes: 512 * 1024,
-            acceptCompressedResponse: true,
         });
     }
 
