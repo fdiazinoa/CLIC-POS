@@ -59,8 +59,8 @@ export class SyncTriggerCoordinator {
 
     constructor(options: SyncTriggerCoordinatorOptions = {}) {
         this.debounceMs = options.debounceMs ?? 350;
-        this.setTimeoutFn = options.setTimeoutFn || globalThis.setTimeout;
-        this.clearTimeoutFn = options.clearTimeoutFn || globalThis.clearTimeout;
+        this.setTimeoutFn = (options.setTimeoutFn || globalThis.setTimeout).bind(globalThis);
+        this.clearTimeoutFn = (options.clearTimeoutFn || globalThis.clearTimeout).bind(globalThis);
     }
 
     configure(executor: (execution: SyncExecution) => Promise<void>): void {

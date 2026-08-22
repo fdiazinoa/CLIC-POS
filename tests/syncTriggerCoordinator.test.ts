@@ -5,6 +5,31 @@ import { SyncTriggerCoordinator, type SyncExecution } from '../services/sync/Syn
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+test('binds timer callbacks to the browser global object', async () => {
+    const strictSetTimeout = function (
+        this: typeof globalThis,
+        callback: TimerHandler,
+        delay?: number,
+        ...args: any[]
+    ): number {
+        assert.equal(this, globalThis);
+        return globalThis.setTimeout(callback, delay, ...args);
+    } as typeof setTimeout;
+    const strictClearTimeout = function (this: typeof globalThis, timer?: number): void {
+        assert.equal(this, globalThis);
+        globalThis.clearTimeout(timer);
+    } as typeof clearTimeout;
+    const coordinator = new SyncTriggerCoordinator({
+        debounceMs: 0,
+        setTimeoutFn: strictSetTimeout,
+        clearTimeoutFn: strictClearTimeout,
+    });
+
+    coordinator.configure(async () => undefined);
+    await coordinator.request({ reason: 'STARTUP' });
+    coordinator.clear();
+});
+
 test('coalesces triggers received during a running sync into one follow-up', async () => {
     const coordinator = new SyncTriggerCoordinator({ debounceMs: 0 });
     const executions: SyncExecution[] = [];
