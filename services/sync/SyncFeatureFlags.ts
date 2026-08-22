@@ -37,6 +37,9 @@ export const isSyncFeatureEnabled = (name: SyncFeatureFlagName): boolean => {
 
     const env = (import.meta as any)?.env || {};
     const envValue = parseBoolean(env[ENV_KEYS[name]]);
+    if (name === 'private_realtime') {
+        return envValue ?? parseBoolean(env.VITE_SYNC_PRIVATE_REALTIME_ENABLED) ?? DEFAULTS[name];
+    }
     return envValue ?? DEFAULTS[name];
 };
 
