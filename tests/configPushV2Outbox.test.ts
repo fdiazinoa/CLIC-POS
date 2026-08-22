@@ -203,7 +203,7 @@ test('an explicit false keeps CONFIG_PUSH_V2 disabled as an emergency switch', (
     assert.equal(lifecycle.isConfigPushV2Enabled(), false);
 });
 
-test('register and heartbeat advertise explicit empty capabilities when CONFIG_PUSH_V2 is disabled', async () => {
+test('register and heartbeat keep VARIANT_PROMOTIONS when CONFIG_PUSH_V2 is disabled', async () => {
     resetRuntime({ configPushV2: 'false' });
 
     const requestBodies = new Map<string, Record<string, unknown>>();
@@ -225,13 +225,14 @@ test('register and heartbeat advertise explicit empty capabilities when CONFIG_P
     await lifecycle.heartbeatErpSyncTerminal({ deviceId, terminalId, pendingEvents: 0 });
 
     for (const body of requestBodies.values()) {
-        assert.deepEqual(body.sync_capabilities, []);
-        assert.deepEqual(body.capabilities, []);
+        assert.deepEqual(body.sync_capabilities, ['VARIANT_PROMOTIONS']);
+        assert.deepEqual(body.capabilities, ['VARIANT_PROMOTIONS']);
+        assert.deepEqual(body.capability_versions, { VARIANT_PROMOTIONS: 1 });
     }
     assert.equal(requestBodies.size, 2);
 });
 
-test('register and heartbeat advertise CONFIG_PUSH_V2 by default', async () => {
+test('register and heartbeat advertise CONFIG_PUSH_V2 and VARIANT_PROMOTIONS by default', async () => {
     resetRuntime({ configPushV2: null });
 
     const requestBodies = new Map<string, Record<string, unknown>>();
@@ -253,8 +254,9 @@ test('register and heartbeat advertise CONFIG_PUSH_V2 by default', async () => {
     await lifecycle.heartbeatErpSyncTerminal({ deviceId, terminalId, pendingEvents: 0 });
 
     for (const body of requestBodies.values()) {
-        assert.deepEqual(body.sync_capabilities, ['CONFIG_PUSH_V2']);
-        assert.deepEqual(body.capabilities, ['CONFIG_PUSH_V2']);
+        assert.deepEqual(body.sync_capabilities, ['CONFIG_PUSH_V2', 'VARIANT_PROMOTIONS']);
+        assert.deepEqual(body.capabilities, ['CONFIG_PUSH_V2', 'VARIANT_PROMOTIONS']);
+        assert.deepEqual(body.capability_versions, { VARIANT_PROMOTIONS: 1 });
     }
     assert.equal(requestBodies.size, 2);
 });

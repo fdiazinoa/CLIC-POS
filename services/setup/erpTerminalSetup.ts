@@ -15,6 +15,10 @@ import { terminalConfigRequestCoordinator } from '../sync/TerminalConfigRequestC
 import { persistSyncDeviceToken } from '../sync/deviceToken';
 import { saveTerminalCredentialsSync } from '../sync/TerminalCredentialStore';
 import { isArchivedTerminalBindingRecord } from '../../utils/terminalBindingHierarchy';
+import {
+  POS_SYNC_CAPABILITY_VERSIONS,
+  VARIANT_PROMOTIONS_CAPABILITY,
+} from '../../utils/syncCapabilities';
 
 export interface RuntimeTerminalCard {
   id: string;
@@ -1503,6 +1507,9 @@ export const bindTerminalFromErp = async (input: {
         terminal_name: targetTerminalName,
         terminal_code: targetTerminalCode,
         app_version: asString(localStorage.getItem('clic_pos_app_version')) || asString(localStorage.getItem('apk_version_name')) || null,
+        sync_capabilities: [VARIANT_PROMOTIONS_CAPABILITY],
+        capabilities: [VARIANT_PROMOTIONS_CAPABILITY],
+        capability_versions: POS_SYNC_CAPABILITY_VERSIONS,
         metadata: {
           source: 'CLIC_POS_SETUP',
           terminal_id: targetErpTerminalId,

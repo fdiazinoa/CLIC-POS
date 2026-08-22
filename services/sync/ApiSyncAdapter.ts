@@ -43,6 +43,10 @@ import {
     ERP_SUPPORTED_MASTER_COLLECTIONS,
 } from './ErpMasterSyncContract';
 import { assertOperationalAcknowledgement } from './operationalAcknowledgement';
+import {
+    POS_SYNC_CAPABILITY_VERSIONS,
+    VARIANT_PROMOTIONS_CAPABILITY,
+} from '../../utils/syncCapabilities';
 
 /**
  * API Sync Adapter
@@ -1828,6 +1832,9 @@ class ApiSyncAdapter {
                 erp_tenant_id: tenantId,
                 cloud_admin_tenant_id: cloudAdminTenantId,
                 app_version: safeLocalStorageGet('CLIC_POS_APP_VERSION') || safeLocalStorageGet('app_version') || null,
+                sync_capabilities: [VARIANT_PROMOTIONS_CAPABILITY],
+                capabilities: [VARIANT_PROMOTIONS_CAPABILITY],
+                capability_versions: POS_SYNC_CAPABILITY_VERSIONS,
                 metadata: {
                     source: 'CLIC_POS_APK_REAUTH',
                     reauth: true,
