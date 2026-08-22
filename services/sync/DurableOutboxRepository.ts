@@ -1,0 +1,188 @@
+import type {
+    DatabaseAdapter,
+    DurableOutboxStatus,
+    FinancialCommitInput,
+} from '../db/DatabaseAdapter';
+import { dbAdapter } from '../db';
+import { syncMetrics } from './SyncMetrics';
+
+export interface DurableOutboxRecord {
+    localSequence: number;
+    eventId: string;
+    eventType: string;
+    aggregateType: string;
+    aggregateId: string;
+    schemaVersion: number;
+    payload: Record<string, any>;
+    status: DurableOutboxStatus;
+    attemptCount: number;
+    nextRetryAt: string | null;
+    leaseOwner: string | null;
+    leaseExpiresAt: string | null;
+    createdAt: string;
+    updatedAt: string;
+    lastError: string | null;
+}
+
+const rowsFromResult = (result: any): Record<string, any>[] => {
+    if (!Array.isArray(result) || result.length === 0) return [];
+    const first = result[0];
+    if (!Array.isArray(first?.columns) || !Array.isArray(first?.values)) return [];
+    return first.values.map((values: any[]) => first.columns.reduce((row: Record<string, any>, column: string, index: number) => {
+        row[column] = values[index];
+        return row;
+    }, {}));
+};
+
+const mapRecord = (row: Record<string, any>): DurableOutboxRecord => ({
+    localSequence: Number(row.local_sequence || 0),
+    eventId: String(row.event_id || ''),
+    eventType: String(row.event_type || ''),
+    aggregateType: String(row.aggregate_type || ''),
+    aggregateId: String(row.aggregate_id || ''),
+    schemaVersion: Number(row.schema_version || 0),
+    payload: JSON.parse(String(row.payload_json || '{}')),
+    status: row.status as DurableOutboxStatus,
+    attemptCount: Number(row.attempt_count || 0),
+    nextRetryAt: row.next_retry_at || null,
+    leaseOwner: row.lease_owner || null,
+    leaseExpiresAt: row.lease_expires_at || null,
+    createdAt: String(row.created_at || ''),
+    updatedAt: String(row.updated_at || ''),
+    lastError: row.last_error || null,
+});
+
+export class DurableOutboxRepository {
+    constructor(private readonly database: DatabaseAdapter = dbAdapter) {}
+
+    isSupported(): boolean {
+        return typeof this.database.commitFinancialTransaction === 'function'
+            && typeof this.database.executeSQL === 'function';
+    }
+
+    async commitFinancialTransaction(input: FinancialCommitInput): Promise<void> {
+        if (!this.database.commitFinancialTransaction) {
+            throw new Error('El adaptador activo no soporta commit financiero SQLite atómico.');
+        }
+        await this.database.commitFinancialTransaction(input);
+        await this.refreshMetrics();
+    }
+
+    async recoverExpiredLeases(now = new Date()): Promise<number> {
+        const sql = this.requireSql();
+        const timestamp = now.toISOString();
+        const result = await sql(
+            `UPDATE sync_outbox_v2
+             SET status = 'RETRY_WAIT',
+                 lease_owner = NULL,
+                 lease_expires_at = NULL,
+                 next_retry_at = ?,
+                 updated_at = ?,
+                 last_error = COALESCE(last_error, 'LEASE_EXPIRED')
+             WHERE status = 'SENDING'
+               AND lease_expires_at IS NOT NULL
+               AND lease_expires_at <= ?`,
+            [timestamp, timestamp, timestamp]
+        );
+        await this.refreshMetrics();
+        return Number(result?.changes?.changes ?? result?.changes ?? 0);
+    }
+
+    async leaseDue(options: {
+        owner: string;
+        limit: number;
+        leaseMs: number;
+        now?: Date;
+    }): Promise<DurableOutboxRecord[]> {
+        const sql = this.requireSql();
+        const now = options.now || new Date();
+        const nowIso = now.toISOString();
+        const expiresAt = new Date(now.getTime() + Math.max(1_000, options.leaseMs)).toISOString();
+        const limit = Math.max(1, Math.min(100, Math.floor(options.limit)));
+        await sql(
+            `UPDATE sync_outbox_v2
+             SET status = 'SENDING',
+                 attempt_count = attempt_count + 1,
+                 lease_owner = ?,
+                 lease_expires_at = ?,
+                 updated_at = ?
+             WHERE local_sequence IN (
+                 SELECT local_sequence
+                 FROM sync_outbox_v2
+                 WHERE status IN ('PENDING','RETRY_WAIT')
+                   AND (next_retry_at IS NULL OR next_retry_at <= ?)
+                 ORDER BY local_sequence ASC
+                 LIMIT ?
+             )`,
+            [options.owner, expiresAt, nowIso, nowIso, limit]
+        );
+        const result = await sql(
+            `SELECT * FROM sync_outbox_v2
+             WHERE status = 'SENDING' AND lease_owner = ? AND lease_expires_at = ?
+             ORDER BY local_sequence ASC`,
+            [options.owner, expiresAt]
+        );
+        const records = rowsFromResult(result).map(mapRecord).sort((left, right) => left.localSequence - right.localSequence);
+        await this.refreshMetrics();
+        return records;
+    }
+
+    async markRetry(eventId: string, error: string, nextRetryAt: Date): Promise<void> {
+        const now = new Date().toISOString();
+        await this.requireSql()(
+            `UPDATE sync_outbox_v2
+             SET status = 'RETRY_WAIT', next_retry_at = ?, lease_owner = NULL,
+                 lease_expires_at = NULL, updated_at = ?, last_error = ?
+             WHERE event_id = ? AND status = 'SENDING'`,
+            [nextRetryAt.toISOString(), now, error.slice(0, 1_000), eventId]
+        );
+        syncMetrics.increment('retry_count');
+        await this.refreshMetrics();
+    }
+
+    async markSyncedMaster(eventId: string, at = new Date()): Promise<void> {
+        const timestamp = at.toISOString();
+        await this.requireSql()(
+            `UPDATE sync_outbox_v2
+             SET status = 'SYNCED_MASTER', master_synced_at = ?, lease_owner = NULL,
+                 lease_expires_at = NULL, next_retry_at = NULL, updated_at = ?, last_error = NULL
+             WHERE event_id = ? AND status IN ('SENDING','SYNCED_MASTER')`,
+            [timestamp, timestamp, eventId]
+        );
+        await this.refreshMetrics();
+    }
+
+    async markAppliedErp(eventId: string, at = new Date()): Promise<void> {
+        const timestamp = at.toISOString();
+        await this.requireSql()(
+            `UPDATE sync_outbox_v2
+             SET status = 'APPLIED_ERP', erp_applied_at = ?, lease_owner = NULL,
+                 lease_expires_at = NULL, next_retry_at = NULL, updated_at = ?, last_error = NULL
+             WHERE event_id = ? AND status IN ('SENDING','SYNCED_MASTER','APPLIED_ERP')`,
+            [timestamp, timestamp, eventId]
+        );
+        syncMetrics.markErpApplied(timestamp);
+        await this.refreshMetrics();
+    }
+
+    async refreshMetrics(): Promise<void> {
+        if (!this.database.executeSQL) return;
+        const result = await this.database.executeSQL(
+            `SELECT COUNT(*) AS pending_count, MIN(created_at) AS oldest_created_at
+             FROM sync_outbox_v2
+             WHERE status IN ('PENDING','SENDING','RETRY_WAIT','SYNCED_MASTER')`
+        );
+        const row = rowsFromResult(result)[0];
+        const oldest = row?.oldest_created_at ? Date.parse(String(row.oldest_created_at)) : null;
+        syncMetrics.setOutboxState(Number(row?.pending_count || 0), Number.isFinite(oldest) ? oldest : null);
+    }
+
+    private requireSql(): (query: string, params?: any[]) => Promise<any> {
+        if (!this.database.executeSQL) {
+            throw new Error('El adaptador activo no permite consultas SQLite para Outbox V2.');
+        }
+        return this.database.executeSQL.bind(this.database);
+    }
+}
+
+export const durableOutboxRepository = new DurableOutboxRepository();

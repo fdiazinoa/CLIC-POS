@@ -2,7 +2,8 @@ export type SyncFeatureFlagName =
     | 'adaptive_polling'
     | 'sync_hint_v2'
     | 'heartbeat_v2'
-    | 'private_realtime';
+    | 'private_realtime'
+    | 'sqlite_outbox_v2';
 
 const DEFAULTS: Record<SyncFeatureFlagName, boolean> = {
     adaptive_polling: true,
@@ -10,6 +11,8 @@ const DEFAULTS: Record<SyncFeatureFlagName, boolean> = {
     heartbeat_v2: true,
     // Requires matching Supabase channel authorization before rollout.
     private_realtime: false,
+    // POS-2A is deployed dark until the ERP batch receiver and POS-2B sender are ready.
+    sqlite_outbox_v2: false,
 };
 
 const ENV_KEYS: Record<SyncFeatureFlagName, string> = {
@@ -17,6 +20,7 @@ const ENV_KEYS: Record<SyncFeatureFlagName, string> = {
     sync_hint_v2: 'VITE_SYNC_HINT_V2_ENABLED',
     heartbeat_v2: 'VITE_HEARTBEAT_V2_ENABLED',
     private_realtime: 'VITE_PRIVATE_REALTIME_ENABLED',
+    sqlite_outbox_v2: 'VITE_SQLITE_OUTBOX_V2_ENABLED',
 };
 
 const LOCAL_PREFIX = 'clic_pos_feature_';

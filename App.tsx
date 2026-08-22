@@ -60,6 +60,8 @@ import { createAdaptivePollingScheduler } from './services/sync/AdaptivePollingS
 import { authenticatedActivityTracker } from './services/sync/AuthenticatedActivityTracker';
 import { isSyncFeatureEnabled } from './services/sync/SyncFeatureFlags';
 import { syncMetrics } from './services/sync/SyncMetrics';
+import { durableOutboxRepository } from './services/sync/DurableOutboxRepository';
+import { paymentIntentService } from './services/payments/PaymentIntentService';
 import { syncTriggerCoordinator, type SyncTriggerReason } from './services/sync/SyncTriggerCoordinator';
 import { queueCustomerMutation } from './services/sync/CustomerSyncQueue';
 import { currencyScheduleExecutor } from './services/currency/CurrencyService';
@@ -5630,6 +5632,20 @@ const AppContent: React.FC = () => {
         ]);
         console.log('✅ db.init() returned:', data ? Object.keys(data) : 'null');
 
+        if (isSyncFeatureEnabled('sqlite_outbox_v2')) {
+          if (!durableOutboxRepository.isSupported()) {
+            throw new Error('POS-2A requiere el adaptador SQLite nativo.');
+          }
+          const recoveredLeases = await durableOutboxRepository.recoverExpiredLeases();
+          const recoveredPaymentIntents = await paymentIntentService.recoverAbandoned();
+          if (recoveredLeases > 0) {
+            console.warn(`[POS-2A] Recovered ${recoveredLeases} abandoned outbox lease(s).`);
+          }
+          if (recoveredPaymentIntents > 0) {
+            console.warn(`[POS-2A] Flagged ${recoveredPaymentIntents} interrupted payment intent(s) for reconciliation.`);
+          }
+        }
+
         // RECOVERY: Run in background so startup never blocks on heavy history stores.
         void ZReportRecoveryService
           .recoverOrphanedReports({ notifyUser: false })
@@ -8867,35 +8883,43 @@ const AppContent: React.FC = () => {
     // Add sync status
     txn.syncStatus = 'PENDING';
 
-    // Save transaction locally (Optimized: Append only)
-    const newTransactions = [...transactions, txn];
-
-    setTransactions(newTransactions);
-    // setFilteredTransactions(newTransactions); // Assuming this is meant to be here if filtered transactions are used
-    await db.saveDocument('transactions', txn);
-    syncFiscalDocument(txn).catch(console.error);
-
-    // Trigger background sync
-    backgroundSyncManager.triggerSync().catch(console.error);
-
     // Update inventory locally (simple stock tracking) AND Record Ledger
     const defaultWarehouseId =
       currentTerminal?.config?.inventoryScope?.defaultSalesWarehouseId ||
       config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId ||
       'wh_central';
 
+    const durableEnabled = isSyncFeatureEnabled('sqlite_outbox_v2');
+    if (durableEnabled && !durableOutboxRepository.isSupported()) {
+      throw new Error('POS-2A está activo, pero el runtime no soporta commit financiero SQLite atómico.');
+    }
+
+    const ledgerEntriesForCommit: any[] = [];
+    const trackingUpdatesById = new Map<string, any>();
+    const allTracking = txn.items.some(item => item.trackingData && item.trackingData.length > 0)
+      ? ((await db.get('inventoryTracking')) as any[] || [])
+      : [];
+    let durableCustomerUpdate: Customer | null = null;
+    if (durableEnabled && txn.pendingBalance && txn.pendingBalance > 0 && txn.customerId) {
+      const customer = customers.find(candidate => candidate.id === txn.customerId);
+      if (customer) {
+        durableCustomerUpdate = {
+          ...customer,
+          currentDebt: parseFloat(((customer.currentDebt || 0) + txn.pendingBalance).toFixed(2)),
+          updatedAt: new Date().toISOString(),
+        };
+      }
+    }
+
     // Calculate and Record Inventory Deductions (Recursive & UOM Aware)
     for (const item of txn.items) {
       // 1. Traceability Status Update (Mark as SOLD)
       if (item.trackingData && item.trackingData.length > 0) {
-        const allTracking = await db.get('inventoryTracking') as any[] || [];
-        const updatedTracking = allTracking.map((t: any) => {
+        allTracking.forEach((t: any) => {
           if (item.trackingData?.some((sel: any) => sel.id === t.id)) {
-            return { ...t, status: 'SOLD', saleId: txn.id };
+            trackingUpdatesById.set(t.id, { ...t, status: 'SOLD', saleId: txn.id });
           }
-          return t;
         });
-        await db.save('inventoryTracking', updatedTracking);
       }
 
       // 2. Process Deduction (Handles Recipes, Yields, and Simple Items)
@@ -8906,22 +8930,61 @@ const AppContent: React.FC = () => {
         terminalId,
         products // Pass current products list for recipe lookups
       );
+      ledgerEntriesForCommit.push(...ledgerEntries);
+    }
 
-      // 3. Save Entries
-      // 3. Save Entries
-      for (const entry of ledgerEntries) {
+    if (durableEnabled) {
+      const createdAt = new Date().toISOString();
+      const paymentIntentIds = (txn.payments || [])
+        .map(payment => String((payment as PaymentEntry).paymentIntentId || '').trim())
+        .filter(Boolean);
+      await durableOutboxRepository.commitFinancialTransaction({
+        documents: [
+          { collectionName: 'transactions', document: txn as any },
+          {
+            collectionName: 'transactionHistory',
+            document: { ...txn, syncStatus: txn.syncStatus || 'PENDING' } as any,
+          },
+          ...ledgerEntriesForCommit.map(entry => ({ collectionName: 'inventoryLedger', document: entry })),
+          ...Array.from(trackingUpdatesById.values()).map(document => ({ collectionName: 'inventoryTracking', document })),
+          ...(durableCustomerUpdate ? [{ collectionName: 'customers', document: durableCustomerUpdate }] : []),
+        ],
+        outboxEvent: {
+          eventId: `OUTBOX-${txn.id}`,
+          eventType: 'TRANSACTION_CREATED',
+          aggregateType: 'TRANSACTION',
+          aggregateId: txn.id,
+          schemaVersion: 1,
+          payload: {
+            transaction: txn,
+            inventoryMovementIds: ledgerEntriesForCommit.map(entry => entry.id),
+            paymentIntentIds,
+          },
+          createdAt,
+        },
+        paymentIntentIds,
+      });
+    } else {
+      await db.saveDocument('transactions', txn);
+      for (const entry of ledgerEntriesForCommit) {
         await db.saveDocument('inventoryLedger', entry);
       }
-
-      // 4. Recalculate Stock for affected products immediately
-      // This ensures the product document Is updated before we refresh the UI
-      const affectedPairs = new Set<string>();
-      ledgerEntries.forEach(e => affectedPairs.add(`${e.productId}|${e.warehouseId}`));
-
-      for (const pair of affectedPairs) {
-        const [pId, wId] = pair.split('|');
-        await db.recalculateProductStock(pId, wId);
+      if (trackingUpdatesById.size > 0) {
+        const updatedTracking = allTracking.map((tracking: any) => trackingUpdatesById.get(tracking.id) || tracking);
+        await db.save('inventoryTracking', updatedTracking);
       }
+    }
+
+    // Publish UI state only after the durable commit succeeds.
+    setTransactions([...transactions, txn]);
+    syncFiscalDocument(txn).catch(console.error);
+    backgroundSyncManager.triggerSync().catch(console.error);
+
+    const affectedPairs = new Set<string>();
+    ledgerEntriesForCommit.forEach(entry => affectedPairs.add(`${entry.productId}|${entry.warehouseId}`));
+    for (const pair of affectedPairs) {
+      const [pId, wId] = pair.split('|');
+      await db.recalculateProductStock(pId, wId);
     }
 
     // Refresh products to reflect changes made by recordInventoryMovement
@@ -8970,7 +9033,11 @@ const AppContent: React.FC = () => {
     if (txn.pendingBalance && txn.pendingBalance > 0 && txn.customerId) {
       console.log(`💰 Increasing debt for customer ${txn.customerId} by ${txn.pendingBalance}`);
       const customerIndex = customers.findIndex(c => c.id === txn.customerId);
-      if (customerIndex !== -1) {
+      if (durableEnabled && durableCustomerUpdate) {
+        const updatedCustomers = customers.map(customer => customer.id === durableCustomerUpdate!.id ? durableCustomerUpdate! : customer);
+        setCustomers(updatedCustomers);
+        console.log(`✅ Customer debt committed atomically: ${durableCustomerUpdate.name} -> ${durableCustomerUpdate.currentDebt}`);
+      } else if (customerIndex !== -1) {
         const updatedCustomers = [...customers];
         const customer = updatedCustomers[customerIndex];
         const newDebt = (customer.currentDebt || 0) + txn.pendingBalance;

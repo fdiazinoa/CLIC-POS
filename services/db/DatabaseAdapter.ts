@@ -1,4 +1,33 @@
 
+export type DurableOutboxStatus =
+    | 'PENDING'
+    | 'SENDING'
+    | 'RETRY_WAIT'
+    | 'SYNCED_MASTER'
+    | 'APPLIED_ERP'
+    | 'REJECTED';
+
+export interface DurableDocumentMutation {
+    collectionName: string;
+    document: { id: string; [key: string]: any };
+}
+
+export interface DurableOutboxEventInput {
+    eventId: string;
+    eventType: string;
+    aggregateType: string;
+    aggregateId: string;
+    schemaVersion: number;
+    payload: Record<string, any>;
+    createdAt: string;
+}
+
+export interface FinancialCommitInput {
+    documents: DurableDocumentMutation[];
+    outboxEvent: DurableOutboxEventInput;
+    paymentIntentIds?: string[];
+}
+
 export interface DatabaseAdapter {
     connect(): Promise<void>;
     disconnect(): Promise<void>;
@@ -17,6 +46,10 @@ export interface DatabaseAdapter {
 
     // Raw Query (for SQLite specific optimizations later)
     executeSQL?(query: string, params?: any[]): Promise<any>;
+
+    // Android SQLite only. POS-2A uses this boundary to commit the financial
+    // documents and their durable outbox event in one database transaction.
+    commitFinancialTransaction?(input: FinancialCommitInput): Promise<void>;
 
     // Stats
     getStats?(): Promise<{ type: string; size: number; tables: number }>;
