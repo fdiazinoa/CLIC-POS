@@ -35,7 +35,8 @@ export const isSyncFeatureEnabled = (name: SyncFeatureFlagName): boolean => {
         : null;
     if (localValue !== null) return localValue;
 
-    const env = (import.meta as any)?.env || {};
+    // Keep the access statically analyzable so Vite replaces production flags in the bundle.
+    const env = import.meta.env;
     const envValue = parseBoolean(env[ENV_KEYS[name]]);
     if (name === 'private_realtime') {
         return envValue ?? parseBoolean(env.VITE_SYNC_PRIVATE_REALTIME_ENABLED) ?? DEFAULTS[name];
