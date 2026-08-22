@@ -113,6 +113,35 @@ test('individual results apply, durably receive, retry and reject without replay
     );
 });
 
+test('ERP-2B eventResults contract maps APPLIED and DUPLICATE_APPLIED to APPLIED_ERP', async () => {
+    const leased = [record(1), record(2)];
+    const applied: string[] = [];
+    const repository = {
+        recoverExpiredLeases: async () => 0,
+        repairLegacyEventIds: async () => 0,
+        leaseDue: async () => leased,
+        releaseUnsent: async () => undefined,
+        markRejected: async () => undefined,
+        markRetry: async () => undefined,
+        markAppliedErp: async (eventId: string) => { applied.push(eventId); },
+        markSyncedMaster: async () => undefined,
+    };
+    const sender = new DurableOutboxBatchSender(repository as any, async () => ({
+        success: true,
+        status: 'accepted',
+        eventResults: [
+            { eventId: 'event-1', disposition: 'APPLIED', inboxStatus: 'APPLIED', retryable: false },
+            { eventId: 'event-2', disposition: 'DUPLICATE_APPLIED', inboxStatus: 'APPLIED', retryable: false },
+        ],
+        retryableEventIds: [],
+    }));
+
+    const summary = await sender.sendNext(new Date('2026-08-22T18:00:00.000Z'));
+    assert.deepEqual(applied, ['event-1', 'event-2']);
+    assert.equal(summary.applied, 2);
+    assert.equal(summary.retrying, 0);
+});
+
 test('transport failures retry the same durable eventIds and never acknowledge the batch globally', async () => {
     const leased = [record(1), record(2)];
     const retried: string[] = [];

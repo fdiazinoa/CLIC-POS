@@ -111,7 +111,8 @@ export const selectDurableBatch = (
 };
 
 const normalizeStatus = (result: any): string => String(
-    result?.status || result?.state || result?.appliedStatus || result?.applied_status || ''
+    result?.disposition || result?.inboxStatus || result?.inbox_status
+    || result?.status || result?.state || result?.appliedStatus || result?.applied_status || ''
 ).trim().toUpperCase();
 
 const resultEventId = (result: any): string => String(
@@ -119,6 +120,7 @@ const resultEventId = (result: any): string => String(
 ).trim();
 
 const responseResults = (response: any): any[] => {
+    if (Array.isArray(response?.eventResults)) return response.eventResults;
     if (Array.isArray(response?.results)) return response.results;
     if (Array.isArray(response?.events)) return response.events;
     if (Array.isArray(response?.items)) return response.items;
@@ -185,7 +187,7 @@ export class DurableOutboxBatchSender {
         for (const record of selection.events) {
             const result = results.get(record.eventId);
             const status = normalizeStatus(result);
-            if (['APPLIED', 'APPLIED_ERP', 'DUPLICATE', 'ALREADY_APPLIED'].includes(status)) {
+            if (['APPLIED', 'APPLIED_ERP', 'DUPLICATE', 'DUPLICATE_APPLIED', 'ALREADY_APPLIED'].includes(status)) {
                 await this.repository.markAppliedErp(record.eventId, now);
                 summary.applied++;
                 syncMetrics.increment('ack_total');
