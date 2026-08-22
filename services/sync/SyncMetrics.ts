@@ -136,5 +136,10 @@ export const syncMetrics = {
         snapshot.batch_size = 1;
         write(snapshot);
     },
+    setBatchSize(size: number): void {
+        const snapshot = read();
+        snapshot.batch_size = Math.max(0, Math.floor(size));
+        write(snapshot);
+    },
     getSnapshot: read,
 };

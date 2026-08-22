@@ -140,6 +140,32 @@ export class DurableOutboxRepository {
         await this.refreshMetrics();
     }
 
+    async releaseUnsent(eventIds: string[]): Promise<void> {
+        if (eventIds.length === 0) return;
+        const now = new Date().toISOString();
+        const placeholders = eventIds.map(() => '?').join(',');
+        await this.requireSql()(
+            `UPDATE sync_outbox_v2
+             SET status = 'PENDING', attempt_count = MAX(0, attempt_count - 1),
+                 lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+             WHERE event_id IN (${placeholders}) AND status = 'SENDING'`,
+            [now, ...eventIds]
+        );
+        await this.refreshMetrics();
+    }
+
+    async markRejected(eventId: string, error: string): Promise<void> {
+        const now = new Date().toISOString();
+        await this.requireSql()(
+            `UPDATE sync_outbox_v2
+             SET status = 'REJECTED', lease_owner = NULL, lease_expires_at = NULL,
+                 next_retry_at = NULL, updated_at = ?, last_error = ?
+             WHERE event_id = ? AND status IN ('SENDING','RETRY_WAIT','PENDING')`,
+            [now, error.slice(0, 1_000), eventId]
+        );
+        await this.refreshMetrics();
+    }
+
     async markSyncedMaster(eventId: string, at = new Date()): Promise<void> {
         const timestamp = at.toISOString();
         await this.requireSql()(
@@ -170,7 +196,7 @@ export class DurableOutboxRepository {
         const result = await this.database.executeSQL(
             `SELECT COUNT(*) AS pending_count, MIN(created_at) AS oldest_created_at
              FROM sync_outbox_v2
-             WHERE status IN ('PENDING','SENDING','RETRY_WAIT','SYNCED_MASTER')`
+             WHERE status IN ('PENDING','SENDING','RETRY_WAIT')`
         );
         const row = rowsFromResult(result)[0];
         const oldest = row?.oldest_created_at ? Date.parse(String(row.oldest_created_at)) : null;
