@@ -7,6 +7,7 @@ import type { DatabaseAdapter, FinancialCommitInput } from '../services/db/Datab
 import { DURABLE_OUTBOX_SCHEMA_SQL } from '../services/sync/DurableOutboxSchema';
 import { DurableOutboxRepository } from '../services/sync/DurableOutboxRepository';
 import { PaymentIntentService } from '../services/payments/PaymentIntentService';
+import { buildSalePostedPayload } from '../services/sync/SalePostedContract';
 
 const readCount = (row: unknown): number => Number((row as { count?: number } | undefined)?.count || 0);
 
@@ -77,9 +78,25 @@ class SQLiteTestAdapter implements DatabaseAdapter {
     }
 }
 
+const saleTransaction = () => ({
+    id: 'sale-1',
+    displayId: 'TCK-1',
+    documentType: 'TICKET',
+    status: 'COMPLETED',
+    date: '2026-08-22T17:00:00.000Z',
+    total: 125,
+    taxAmount: 0,
+    netAmount: 125,
+    discountAmount: 0,
+    items: [{ id: 'item-1', price: 125, quantity: 1 }],
+    payments: [{ id: 'payment-1', method: 'CASH', amount: 125 }],
+    userId: 'user-1',
+    userName: 'Caja Uno',
+});
+
 const financialInput = (eventId = 'event-sale-1'): FinancialCommitInput => ({
     documents: [
-        { collectionName: 'transactions', document: { id: 'sale-1', total: 125 } },
+        { collectionName: 'transactions', document: saleTransaction() },
         { collectionName: 'inventoryLedger', document: { id: 'movement-1', qtyOut: 1 } },
     ],
     outboxEvent: {
@@ -88,7 +105,7 @@ const financialInput = (eventId = 'event-sale-1'): FinancialCommitInput => ({
         aggregateType: 'TRANSACTION',
         aggregateId: 'sale-1',
         schemaVersion: 1,
-        payload: { transactionId: 'sale-1' },
+        payload: { transaction: saleTransaction(), inventoryMovementIds: ['movement-1'] },
         createdAt: '2026-08-22T17:00:00.000Z',
     },
 });
@@ -117,6 +134,56 @@ test('a failed outbox insert rolls back financial documents', async () => {
         outboxEvent: { ...financialInput('event-invalid').outboxEvent, schemaVersion: null as unknown as number },
     }));
     assert.equal(readCount(adapter.sqlite.prepare('SELECT COUNT(*) count FROM documents WHERE doc_id = ?').get('sale-2')), 0);
+    await adapter.disconnect();
+});
+
+test('online SALE_POSTED persists the canonical contract in the same financial commit', async () => {
+    const adapter = new SQLiteTestAdapter();
+    const repository = new DurableOutboxRepository(adapter);
+    const transaction = saleTransaction();
+    const input: FinancialCommitInput = {
+        ...financialInput('11111111-1111-4111-8111-111111111111'),
+        outboxEvent: {
+            ...financialInput().outboxEvent,
+            eventId: '11111111-1111-4111-8111-111111111111',
+            eventType: 'SALE_POSTED',
+            payload: buildSalePostedPayload(transaction, { inventoryMovementIds: ['movement-1'] }),
+        },
+    };
+
+    await repository.commitFinancialTransaction(input);
+    const persisted = adapter.sqlite.prepare(
+        'SELECT event_id, aggregate_id, payload_json, status FROM sync_outbox_v2 WHERE event_id = ?'
+    ).get(input.outboxEvent.eventId) as any;
+    const payload = JSON.parse(persisted.payload_json);
+
+    assert.equal(persisted.aggregate_id, transaction.id);
+    assert.equal(persisted.status, 'PENDING');
+    assert.equal(payload.summary.transaction_id, transaction.id);
+    assert.equal(payload.summary.total, transaction.total);
+    assert.equal(payload.occurred_at, transaction.date);
+    await adapter.disconnect();
+});
+
+test('invalid SALE_POSTED is rejected before sale documents or outbox are persisted', async () => {
+    const adapter = new SQLiteTestAdapter();
+    const repository = new DurableOutboxRepository(adapter);
+    const transaction = saleTransaction();
+    const payload = buildSalePostedPayload(transaction);
+
+    await assert.rejects(
+        () => repository.commitFinancialTransaction({
+            ...financialInput(),
+            outboxEvent: {
+                ...financialInput().outboxEvent,
+                eventType: 'SALE_POSTED',
+                payload: { ...payload, summary: { ...payload.summary, total: 124 } },
+            },
+        }),
+        /contrato financiero SALE_POSTED no cuadra/,
+    );
+    assert.equal(readCount(adapter.sqlite.prepare('SELECT COUNT(*) count FROM documents').get()), 0);
+    assert.equal(readCount(adapter.sqlite.prepare('SELECT COUNT(*) count FROM sync_outbox_v2').get()), 0);
     await adapter.disconnect();
 });
 
@@ -188,6 +255,74 @@ test('legacy non-UUID event ids are repaired without replacing the durable sale 
     assert.equal(repaired.next_retry_at, '2026-08-22T18:10:00.000Z');
     assert.match(repaired.event_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
     assert.equal(readCount(adapter.sqlite.prepare("SELECT COUNT(*) count FROM documents WHERE doc_id = 'sale-1'").get()), 1);
+    const repairedPayload = JSON.parse((adapter.sqlite.prepare(
+        'SELECT payload_json FROM sync_outbox_v2 WHERE local_sequence = 1'
+    ).get() as any).payload_json);
+    assert.equal(repairedPayload.summary.transaction_id, 'sale-1');
+    assert.equal(repairedPayload.occurred_at, '2026-08-22T17:00:00.000Z');
+    await adapter.disconnect();
+});
+
+test('pending SALE_POSTED is upgraded once without changing its UUID, aggregate or FIFO sequence', async () => {
+    const adapter = new SQLiteTestAdapter();
+    const repository = new DurableOutboxRepository(adapter);
+    const eventId = '22222222-2222-4222-8222-222222222222';
+    await repository.commitFinancialTransaction({
+        ...financialInput(eventId),
+        outboxEvent: {
+            ...financialInput(eventId).outboxEvent,
+            eventType: 'TRANSACTION_CREATED',
+        },
+    });
+    adapter.sqlite.prepare(
+        "UPDATE sync_outbox_v2 SET event_type = 'SALE_POSTED' WHERE event_id = ?"
+    ).run(eventId);
+
+    assert.equal(await repository.repairLegacyEventContracts(new Date('2026-08-22T17:05:00.000Z')), 1);
+    const repaired = adapter.sqlite.prepare(
+        'SELECT local_sequence, event_id, aggregate_id, event_type, payload_json FROM sync_outbox_v2'
+    ).get() as any;
+    assert.equal(repaired.local_sequence, 1);
+    assert.equal(repaired.event_id, eventId);
+    assert.equal(repaired.aggregate_id, 'sale-1');
+    assert.equal(repaired.event_type, 'SALE_POSTED');
+    const payload = JSON.parse(repaired.payload_json);
+    assert.equal(payload.summary.transaction_id, 'sale-1');
+    assert.equal(payload.occurred_at, '2026-08-22T17:00:00.000Z');
+    assert.equal(await repository.repairLegacyEventContracts(new Date('2026-08-22T17:06:00.000Z')), 0);
+    await adapter.disconnect();
+});
+
+test('invalid persisted SALE_POSTED becomes terminal REJECTED instead of entering an infinite retry', async () => {
+    const adapter = new SQLiteTestAdapter();
+    const repository = new DurableOutboxRepository(adapter);
+    const eventId = '33333333-3333-4333-8333-333333333333';
+    const payload = buildSalePostedPayload(saleTransaction());
+    await repository.commitFinancialTransaction({
+        ...financialInput(eventId),
+        outboxEvent: {
+            ...financialInput(eventId).outboxEvent,
+            eventId,
+            eventType: 'SALE_POSTED',
+            payload,
+        },
+    });
+    adapter.sqlite.prepare(
+        'UPDATE sync_outbox_v2 SET payload_json = ? WHERE event_id = ?'
+    ).run(JSON.stringify({
+        ...payload,
+        summary: { ...payload.summary, total: 100 },
+    }), eventId);
+
+    assert.equal(await repository.repairLegacyEventContracts(new Date('2026-08-22T17:07:00.000Z')), 1);
+    assert.deepEqual(
+        adapter.sqlite.prepare('SELECT status, next_retry_at FROM sync_outbox_v2 WHERE event_id = ?').get(eventId),
+        { status: 'REJECTED', next_retry_at: null },
+    );
+    assert.deepEqual(
+        await repository.leaseDue({ owner: 'worker-after-reject', limit: 1, leaseMs: 5_000 }),
+        [],
+    );
     await adapter.disconnect();
 });
 
@@ -271,7 +406,7 @@ test('payment intents are idempotent and ambiguous gateway failures require reco
 });
 
 test('production enables POS-2A/POS-2B while the safe default remains dark', async () => {
-    const [env, exampleEnv, flags, adapter, transactionService, app, paymentModal] = await Promise.all([
+    const [env, exampleEnv, flags, adapter, transactionService, app, paymentModal, posInterface] = await Promise.all([
         readFile(new URL('../.env.production', import.meta.url), 'utf8'),
         readFile(new URL('../.env.example', import.meta.url), 'utf8'),
         readFile(new URL('../services/sync/SyncFeatureFlags.ts', import.meta.url), 'utf8'),
@@ -279,6 +414,7 @@ test('production enables POS-2A/POS-2B while the safe default remains dark', asy
         readFile(new URL('../services/transactionService.ts', import.meta.url), 'utf8'),
         readFile(new URL('../App.tsx', import.meta.url), 'utf8'),
         readFile(new URL('../components/PaymentModal.tsx', import.meta.url), 'utf8'),
+        readFile(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8'),
     ]);
     assert.match(env, /^VITE_SQLITE_OUTBOX_V2_ENABLED=true$/m);
     assert.match(exampleEnv, /^VITE_SQLITE_OUTBOX_V2_ENABLED=false$/m);
@@ -289,9 +425,13 @@ test('production enables POS-2A/POS-2B while the safe default remains dark', asy
     assert.match(app, /eventId: uuidv4\(\)/);
     assert.doesNotMatch(app, /eventId: `OUTBOX-\$\{txn\.id\}`/);
     assert.match(app, /eventType: 'SALE_POSTED'/);
+    assert.match(app, /payload: buildSalePostedPayload\(txn,/);
     assert.match(app, /collectionName: 'transactions'/);
     assert.match(app, /collectionName: 'inventoryLedger'/);
     assert.match(app, /collectionName: 'customers'/);
     assert.match(paymentModal, /paymentIntentService\.create[\s\S]*?await azulMcmService\.sale/);
     assert.match(paymentModal, /paymentIntentService\.markAuthorized/);
+    assert.match(transactionService, /deferDurableSalePersistence[\s\S]*?deferDurablePersistence/);
+    assert.match(posInterface, /deferDurableSalePersistence: durableSplitSaleCommit/);
+    assert.match(posInterface, /durableSplitSaleCommit[\s\S]*?onTransactionComplete\(result\.sale\)/);
 });
