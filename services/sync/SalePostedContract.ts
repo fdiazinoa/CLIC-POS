@@ -23,6 +23,12 @@ export interface SalePostedPayload extends UnknownRecord {
     occurred_at: string;
 }
 
+export interface PaymentPostedPayload extends UnknownRecord {
+    summary: SalePostedSummary;
+    payments: UnknownRecord[];
+    occurred_at: string;
+}
+
 export class SalePostedContractError extends Error {
     readonly code = 'POS_SALE_FINANCIAL_INVARIANT_FAILED';
     readonly retryable = false;
@@ -98,6 +104,38 @@ const readLoyaltyPointsUsed = (transaction: UnknownRecord): number => {
         ?? loyalty.points_used,
     );
 };
+
+const paymentMethodSignature = (payment: UnknownRecord): string => [
+    payment.method,
+    payment.paymentMethod,
+    payment.payment_method,
+    payment.methodId,
+    payment.method_id,
+    payment.methodLabel,
+    payment.method_label,
+    payment.type,
+    payment.label,
+].map(value => asString(value).toUpperCase()).filter(Boolean).join(' ');
+
+const paymentAppliedAmount = (payment: UnknownRecord): number => numberOrZero(
+    payment.applied_amount
+    ?? payment.appliedAmount
+    ?? payment.amountApplied
+    ?? payment.amount,
+);
+
+const isDeferredCreditPayment = (payment: UnknownRecord): boolean => {
+    const signature = paymentMethodSignature(payment);
+    return ['CREDIT', 'CREDITO', 'CRÉDITO', 'PENDING', 'PENDIENTE', 'CXC', 'DEFERRED']
+        .some(token => signature.includes(token));
+};
+
+export const getSaleSettlementPayments = (transaction: Transaction | UnknownRecord): UnknownRecord[] => (
+    asArray(asRecord(transaction).payments)
+        .map(payment => asRecord(payment))
+        .filter(payment => paymentAppliedAmount(payment) > 0)
+        .filter(payment => !isDeferredCreditPayment(payment))
+);
 
 const toOccurredAt = (transaction: UnknownRecord): string => {
     const effectiveDate = firstString(
@@ -325,4 +363,43 @@ export const buildSalePostedPayload = (
     };
     assertSalePostedPayload(payload);
     return payload;
+};
+
+export const buildPaymentPostedPayload = (
+    transaction: Transaction | UnknownRecord,
+    additionalPayload: UnknownRecord = {},
+): PaymentPostedPayload | null => {
+    const record = asRecord(transaction);
+    const payments = getSaleSettlementPayments(record);
+    if (payments.length === 0) return null;
+
+    const {
+        summary: _summary,
+        payments: _payments,
+        occurred_at: _occurredAt,
+        occurredAt: _legacyOccurredAt,
+        transaction: _transaction,
+        ...additionalFields
+    } = additionalPayload;
+    const summary = buildSalePostedSummary(record);
+    const settlementApplied = finiteNumber(
+        record.settlementAppliedBase ?? record.settlement_applied_base,
+    );
+    const paymentTotal = roundAmount(payments.reduce(
+        (sum, payment) => sum + paymentAppliedAmount(payment),
+        0,
+    ));
+    if (settlementApplied !== null
+        && Math.abs(paymentTotal - roundAmount(settlementApplied)) > SALE_POSTED_MONEY_TOLERANCE) {
+        throw new SalePostedContractError([
+            `PAYMENT_POSTED payments.total=${paymentTotal} vs settlement_applied_base=${roundAmount(settlementApplied)}`,
+        ]);
+    }
+
+    return {
+        ...additionalFields,
+        summary,
+        payments: payments.map(payment => JSON.parse(JSON.stringify(payment)) as UnknownRecord),
+        occurred_at: toOccurredAt(record),
+    };
 };

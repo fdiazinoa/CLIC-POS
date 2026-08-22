@@ -62,7 +62,7 @@ import { authenticatedActivityTracker } from './services/sync/AuthenticatedActiv
 import { isSyncFeatureEnabled } from './services/sync/SyncFeatureFlags';
 import { syncMetrics } from './services/sync/SyncMetrics';
 import { durableOutboxRepository } from './services/sync/DurableOutboxRepository';
-import { buildSalePostedPayload } from './services/sync/SalePostedContract';
+import { buildPaymentPostedPayload, buildSalePostedPayload } from './services/sync/SalePostedContract';
 import { paymentIntentService } from './services/payments/PaymentIntentService';
 import { syncTriggerCoordinator, type SyncTriggerReason } from './services/sync/SyncTriggerCoordinator';
 import { queueCustomerMutation } from './services/sync/CustomerSyncQueue';
@@ -8940,6 +8940,7 @@ const AppContent: React.FC = () => {
       const paymentIntentIds = (txn.payments || [])
         .map(payment => String((payment as PaymentEntry).paymentIntentId || '').trim())
         .filter(Boolean);
+      const paymentPostedPayload = buildPaymentPostedPayload(txn, { paymentIntentIds });
       await durableOutboxRepository.commitFinancialTransaction({
         documents: [
           { collectionName: 'transactions', document: txn as any },
@@ -8965,6 +8966,15 @@ const AppContent: React.FC = () => {
           }),
           createdAt,
         },
+        additionalOutboxEvents: paymentPostedPayload ? [{
+          eventId: uuidv4(),
+          eventType: 'PAYMENT_POSTED',
+          aggregateType: 'TRANSACTION',
+          aggregateId: txn.id,
+          schemaVersion: 1,
+          payload: paymentPostedPayload,
+          createdAt,
+        }] : [],
         paymentIntentIds,
       });
     } else {

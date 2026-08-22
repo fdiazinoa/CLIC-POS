@@ -25,6 +25,7 @@ export interface DurableOutboxEventInput {
 export interface FinancialCommitInput {
     documents: DurableDocumentMutation[];
     outboxEvent: DurableOutboxEventInput;
+    additionalOutboxEvents?: DurableOutboxEventInput[];
     paymentIntentIds?: string[];
 }
 
@@ -48,7 +49,7 @@ export interface DatabaseAdapter {
     executeSQL?(query: string, params?: any[]): Promise<any>;
 
     // Android SQLite only. POS-2A uses this boundary to commit the financial
-    // documents and their durable outbox event in one database transaction.
+    // documents and their durable outbox events in one database transaction.
     commitFinancialTransaction?(input: FinancialCommitInput): Promise<void>;
 
     // Stats
