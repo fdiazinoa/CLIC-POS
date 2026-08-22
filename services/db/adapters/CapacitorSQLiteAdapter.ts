@@ -238,25 +238,28 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             });
         }
 
-        const event = input.outboxEvent;
-        statements.push({
-            statement: `INSERT INTO sync_outbox_v2 (
-                event_id, event_type, aggregate_type, aggregate_id, schema_version,
-                payload_json, status, attempt_count, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)
-            ON CONFLICT(event_id) DO NOTHING`,
-            values: [
-                event.eventId,
-                event.eventType,
-                event.aggregateType,
-                event.aggregateId,
-                event.schemaVersion,
-                JSON.stringify(event.payload),
-                event.createdAt,
-                now,
-            ],
-        });
+        const outboxEvents = [input.outboxEvent, ...(input.additionalOutboxEvents || [])];
+        for (const event of outboxEvents) {
+            statements.push({
+                statement: `INSERT INTO sync_outbox_v2 (
+                    event_id, event_type, aggregate_type, aggregate_id, schema_version,
+                    payload_json, status, attempt_count, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)
+                ON CONFLICT(event_id) DO NOTHING`,
+                values: [
+                    event.eventId,
+                    event.eventType,
+                    event.aggregateType,
+                    event.aggregateId,
+                    event.schemaVersion,
+                    JSON.stringify(event.payload),
+                    event.createdAt,
+                    now,
+                ],
+            });
+        }
 
+        const event = input.outboxEvent;
         for (const intentId of input.paymentIntentIds || []) {
             statements.push({
                 statement: `UPDATE payment_intents_v2

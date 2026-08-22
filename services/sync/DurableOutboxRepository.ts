@@ -70,13 +70,14 @@ export class DurableOutboxRepository {
         if (!this.database.commitFinancialTransaction) {
             throw new Error('El adaptador activo no soporta commit financiero SQLite atómico.');
         }
-        if (input.outboxEvent.eventType.trim().toUpperCase() === 'SALE_POSTED') {
+        const outboxEvents = [input.outboxEvent, ...(input.additionalOutboxEvents || [])];
+        for (const event of outboxEvents.filter(candidate => candidate.eventType.trim().toUpperCase() === 'SALE_POSTED')) {
             try {
-                assertSalePostedPayload(input.outboxEvent.payload);
+                assertSalePostedPayload(event.payload);
             } catch (error) {
                 console.error('[SALE_POSTED_CONTRACT_INVALID] Evento financiero no persistido.', {
-                    eventId: input.outboxEvent.eventId,
-                    aggregateId: input.outboxEvent.aggregateId,
+                    eventId: event.eventId,
+                    aggregateId: event.aggregateId,
                     code: error instanceof SalePostedContractError ? error.code : 'SALE_POSTED_VALIDATION_FAILED',
                     details: error instanceof SalePostedContractError ? error.details : [String(error)],
                 });
