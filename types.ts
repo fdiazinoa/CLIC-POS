@@ -105,6 +105,7 @@ export type SyncStatus =
   | 'SYNCED_CLOUD'
   | 'SYNCED_ACTIVE'
   | 'SYNCED_MASTER'
+  | 'APPLIED_ERP'
   | 'RETRY_WAIT'
   | 'BLOCKED_FUNCTIONAL'
   | 'FAILED_FINAL';

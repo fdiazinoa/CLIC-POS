@@ -4,6 +4,10 @@ apply plugin: 'org.jetbrains.kotlin.android'
 def keystorePropertiesFile = rootProject.file('key.properties')
 def keystoreProperties = new Properties()
 def hasReleaseKeystore = keystorePropertiesFile.exists()
+def allowReleaseCleartext = providers.gradleProperty('clicPosAllowReleaseCleartext')
+        .orElse('false')
+        .get()
+        .toBoolean()
 
 if (hasReleaseKeystore) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
@@ -12,12 +16,20 @@ if (hasReleaseKeystore) {
 android {
     namespace = "com.clicpos.app"
     compileSdk = rootProject.ext.compileSdkVersion
+    buildFeatures {
+        buildConfig = true
+    }
     defaultConfig {
         applicationId "com.clicpos.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1136
         versionName "1.1.136"
+        manifestPlaceholders = [
+                usesCleartextTraffic: "true",
+                networkSecurityConfig: "@xml/network_security_config"
+        ]
+        buildConfigField "boolean", "ALLOW_CLEARTEXT_WEBVIEW", "true"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -38,6 +50,13 @@ android {
     buildTypes {
         release {
             minifyEnabled false
+            manifestPlaceholders = [
+                    usesCleartextTraffic: allowReleaseCleartext ? "true" : "false",
+                    networkSecurityConfig: allowReleaseCleartext
+                            ? "@xml/network_security_config"
+                            : "@xml/network_security_config_strict"
+            ]
+            buildConfigField "boolean", "ALLOW_CLEARTEXT_WEBVIEW", allowReleaseCleartext ? "true" : "false"
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
             if (hasReleaseKeystore) {
                 signingConfig signingConfigs.release
