@@ -1,5 +1,6 @@
 import { Capacitor } from '@capacitor/core';
-import type { DatabaseAdapter } from '../DatabaseAdapter';
+import type { DatabaseAdapter, FinancialCommitInput } from '../DatabaseAdapter';
+import { DURABLE_OUTBOX_SCHEMA_SQL } from '../../sync/DurableOutboxSchema';
 
 const DB_NAME = 'clic_pos_native';
 const DB_VERSION = 1;
@@ -214,6 +215,60 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         return db.run(normalized, params);
     }
 
+    async commitFinancialTransaction(input: FinancialCommitInput): Promise<void> {
+        const now = new Date().toISOString();
+        const statements: Array<{ statement: string; values: any[] }> = [];
+
+        for (const mutation of input.documents) {
+            const document = mutation.document;
+            if (!document?.id || !mutation.collectionName) {
+                throw new Error('Financial commit contains a document without collection or id.');
+            }
+            statements.push({
+                statement: DOCUMENT_UPSERT_SQL,
+                values: [
+                    mutation.collectionName,
+                    String(document.id),
+                    JSON.stringify(document),
+                    mutation.collectionName,
+                    String(document.id),
+                    mutation.collectionName,
+                    now,
+                ],
+            });
+        }
+
+        const event = input.outboxEvent;
+        statements.push({
+            statement: `INSERT INTO sync_outbox_v2 (
+                event_id, event_type, aggregate_type, aggregate_id, schema_version,
+                payload_json, status, attempt_count, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)
+            ON CONFLICT(event_id) DO NOTHING`,
+            values: [
+                event.eventId,
+                event.eventType,
+                event.aggregateType,
+                event.aggregateId,
+                event.schemaVersion,
+                JSON.stringify(event.payload),
+                event.createdAt,
+                now,
+            ],
+        });
+
+        for (const intentId of input.paymentIntentIds || []) {
+            statements.push({
+                statement: `UPDATE payment_intents_v2
+                    SET status = 'COMMITTED', transaction_id = ?, committed_at = ?, updated_at = ?, last_error = NULL
+                    WHERE intent_id = ? AND status = 'AUTHORIZED'`,
+                values: [event.aggregateId, now, now, intentId],
+            });
+        }
+
+        await this.executeSetOrRun(statements);
+    }
+
     async getStats(): Promise<{ type: string; size: number; tables: number }> {
         const db = this.ensureDb();
         const tablesResult = await db.query(
@@ -270,6 +325,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             );
             CREATE INDEX IF NOT EXISTS idx_sync_queue_status_created_at
             ON sync_queue(status, createdAt);
+            ${DURABLE_OUTBOX_SCHEMA_SQL}
         `);
         await this.migrateLegacyCollectionsBlobTable();
     }

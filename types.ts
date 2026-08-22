@@ -2271,6 +2271,8 @@ export interface PaymentEntry {
   device_id?: string;
   gatewayProvider?: PaymentIntegrationProvider;
   gatewayIntegrationId?: string;
+  paymentIntentId?: string;
+  gatewayIdempotencyKey?: string;
   gatewayTransactionType?: 'SALE' | 'VOID' | 'REFUND' | 'GET_LAST_TRX';
   gatewayStatus?: string;
   gatewayResponseCode?: string;
