@@ -10524,10 +10524,6 @@ const AppContent: React.FC = () => {
                   }
                 }}
                 onParkedOrderSplitResult={handleParkedOrderSplitFromMap}
-                onOpenXReport={() => handleViewChange('FINANCE', {
-                  initialCashMovementType: 'X_REPORT',
-                  returnView: 'TABLE_MAP',
-                })}
                 onOpenTableLayoutDesigner={isClientTerminalMode() ? undefined : () => {
                   tableDesignerReturnViewRef.current = 'TABLE_MAP';
                   handleViewChange('TABLE_DESIGNER');
