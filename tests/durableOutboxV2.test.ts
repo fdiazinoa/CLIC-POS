@@ -249,16 +249,18 @@ test('payment intents are idempotent and ambiguous gateway failures require reco
     await adapter.disconnect();
 });
 
-test('production keeps POS-2A dark and runtime wiring preserves the atomic boundary', async () => {
-    const [env, flags, adapter, transactionService, app, paymentModal] = await Promise.all([
+test('production enables POS-2A/POS-2B while the safe default remains dark', async () => {
+    const [env, exampleEnv, flags, adapter, transactionService, app, paymentModal] = await Promise.all([
         readFile(new URL('../.env.production', import.meta.url), 'utf8'),
+        readFile(new URL('../.env.example', import.meta.url), 'utf8'),
         readFile(new URL('../services/sync/SyncFeatureFlags.ts', import.meta.url), 'utf8'),
         readFile(new URL('../services/db/adapters/CapacitorSQLiteAdapter.ts', import.meta.url), 'utf8'),
         readFile(new URL('../services/transactionService.ts', import.meta.url), 'utf8'),
         readFile(new URL('../App.tsx', import.meta.url), 'utf8'),
         readFile(new URL('../components/PaymentModal.tsx', import.meta.url), 'utf8'),
     ]);
-    assert.match(env, /^VITE_SQLITE_OUTBOX_V2_ENABLED=false$/m);
+    assert.match(env, /^VITE_SQLITE_OUTBOX_V2_ENABLED=true$/m);
+    assert.match(exampleEnv, /^VITE_SQLITE_OUTBOX_V2_ENABLED=false$/m);
     assert.match(flags, /sqlite_outbox_v2: false/);
     assert.match(adapter, /await this\.executeSetOrRun\(statements\)/);
     assert.match(transactionService, /options\.deferDurablePersistence === true[\s\S]*?isSyncFeatureEnabled\('sqlite_outbox_v2'\)/);
