@@ -129,6 +129,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
       delete nextItem.appliedPromotionId;
       delete nextItem.appliedPromotionCode;
       delete nextItem.appliedPromotionName;
+      delete nextItem.promotionTrace;
     } else if (Math.abs(price - adjustmentBasePrice) > EPSILON) {
       nextItem.originalPrice = adjustmentBasePrice;
       nextItem.discountAmount = undefined;
@@ -137,6 +138,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
       delete nextItem.appliedPromotionId;
       delete nextItem.appliedPromotionCode;
       delete nextItem.appliedPromotionName;
+      delete nextItem.promotionTrace;
     } else if (item.adjustmentSource === 'TARIFF') {
       nextItem.originalPrice = item.originalPrice;
       nextItem.discountAmount = item.discountAmount;
@@ -150,6 +152,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
       nextItem.appliedPromotionId = item.appliedPromotionId;
       nextItem.appliedPromotionCode = item.appliedPromotionCode;
       nextItem.appliedPromotionName = item.appliedPromotionName;
+      nextItem.promotionTrace = item.promotionTrace;
     } else {
       nextItem.originalPrice = originalPrice;
       nextItem.discountAmount = undefined;
@@ -158,6 +161,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
       delete nextItem.appliedPromotionId;
       delete nextItem.appliedPromotionCode;
       delete nextItem.appliedPromotionName;
+      delete nextItem.promotionTrace;
     }
 
     onUpdate({

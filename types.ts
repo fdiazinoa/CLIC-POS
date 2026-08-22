@@ -1346,6 +1346,8 @@ export interface ProductAttribute {
 }
 
 export interface ProductVariant {
+  id?: string;
+  variantId?: string;
   sku: string;
   barcode: string[];
   attributeValues: Record<string, string>;
@@ -1637,6 +1639,7 @@ export interface CartItem extends Product {
   adjustmentSource?: 'PROMOTION' | 'MANUAL_DISCOUNT' | 'MANUAL_PRICE_OVERRIDE' | 'TARIFF';
   appliedPromotionCode?: string;
   appliedPromotionName?: string;
+  promotionTrace?: PromotionApplicationTrace;
   salespersonId?: string;
   ncf?: string; // NCF asignado a esta línea o al ticket
   appliedPromotionId?: string;
@@ -1645,6 +1648,8 @@ export interface CartItem extends Product {
   trackingData?: any[]; // NEW: Detailed tracking records selected
   variantInfo?: string; // NEW: Human readable variant detail
   variantSku?: string; // NEW: Variant SKU for inventory/receipts
+  variantId?: string;
+  variantBarcodes?: string[];
   dispatched?: boolean; // NEW: Track if item was sent to kitchen
   orderNumber?: string;
   tableDisplayLabel?: string;
@@ -1972,8 +1977,17 @@ export type PromotionType =
   | 'PAYMENT_METHOD_DISCOUNT'
   | 'PREPAID_PACKAGE'
   | 'NEXT_PURCHASE_COUPON';
-export type PromotionTargetType = 'ALL' | 'PRODUCT' | 'CATEGORY' | 'GROUP' | 'SEASON';
+export type PromotionTargetType = 'ALL' | 'PRODUCT' | 'VARIANT' | 'CATEGORY' | 'GROUP' | 'SEASON';
 export type PromotionBenefitType = 'DISCOUNT_PERCENT' | 'FIXED_PRICE' | 'CASHBACK' | 'POINTS_MULTIPLIER';
+
+export interface PromotionApplicationTrace {
+  promotionId: string;
+  targetType: PromotionTargetType;
+  targetValue?: string;
+  matchedVariantRef?: string;
+  matchedTargetRef?: string;
+  matchedVariantRefType?: 'SKU' | 'VARIANT_ID' | 'BARCODE';
+}
 
 export interface PromotionCondition {
   type: 'HAS_WALLET' | 'CUSTOMER_TIER' | 'HAS_POINTS_MIN';
@@ -2002,7 +2016,7 @@ export interface Promotion {
 
   // Target
   targetType: PromotionTargetType;
-  targetValue?: string; // ID of Product, Category, Group, Season
+  targetValue?: string; // ID of Product (parent for VARIANT), Category, Group, Season
   targetLabel?: string;
   targetRefs?: string[];
   targetStrategy?: {

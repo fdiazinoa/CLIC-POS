@@ -92,6 +92,7 @@ const describePromotionTarget = (promotion: Promotion) => {
 
    const typeLabelMap: Record<Exclude<Promotion['targetType'], 'ALL'>, string> = {
       PRODUCT: 'Producto',
+      VARIANT: 'Variante',
       CATEGORY: 'Categoría',
       GROUP: 'Grupo',
       SEASON: 'Temporada',
@@ -108,7 +109,7 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
    // Form State
    const [promoName, setPromoName] = useState('');
    const [selectedType, setSelectedType] = useState<PromotionType>('DISCOUNT');
-   const [targetType, setTargetType] = useState<'PRODUCT' | 'CATEGORY' | 'SEASON' | 'GROUP' | 'ALL'>('PRODUCT');
+   const [targetType, setTargetType] = useState<Promotion['targetType']>('PRODUCT');
    const [targetValue, setTargetValue] = useState('');
    const [benefitValue, setBenefitValue] = useState<number>(0);
    const [activeDays, setActiveDays] = useState<string[]>(['L', 'M', 'X', 'J', 'V', 'S', 'D']);
@@ -230,6 +231,10 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
    const handleSave = () => {
       if (!promoName || (targetType !== 'ALL' && !targetValue)) {
          alert("Por favor completa los campos requeridos");
+         return;
+      }
+      if (targetType === 'VARIANT' && (!editingPromotion?.targetRefs || editingPromotion.targetRefs.length === 0)) {
+         alert('Las promociones por variante se administran desde ERP y requieren targetRefs.');
          return;
       }
       if (videoUrl && !isValidRemoteMediaUrl(videoUrl)) {
@@ -512,6 +517,10 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
                                  className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm font-bold text-gray-700 outline-none focus:ring-2 focus:ring-blue-100"
                               >
                                  <option value="PRODUCT">Producto Específico</option>
+                                 <option
+                                    value="VARIANT"
+                                    disabled={editingPromotion?.targetType !== 'VARIANT'}
+                                 >Variantes específicas (ERP)</option>
                                  <option value="CATEGORY">Categoría Completa</option>
                                  <option value="SEASON">Por Temporada</option>
                                  <option value="GROUP">Por Grupo/Colección</option>
@@ -526,6 +535,7 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
                                  >
                                     <option value="">Seleccionar...</option>
                                     {targetType === 'PRODUCT' && productOptions.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                                    {targetType === 'VARIANT' && productOptions.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                                     {targetType === 'CATEGORY' && categoryOptions.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
                                     {targetType === 'SEASON' && seasonOptions.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                                     {targetType === 'GROUP' && groupOptions.map((g) => <option key={g.value} value={g.value}>{g.label}</option>)}

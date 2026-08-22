@@ -858,6 +858,11 @@ const collectPromotionRefs = (value: unknown): string[] => {
       obj.code,
       obj.sku,
       obj.barcode,
+      obj.barcodes,
+      obj.variantSku,
+      obj.variant_sku,
+      obj.variantId,
+      obj.variant_id,
       obj.itemId,
       obj.item_id,
       obj.productId,
@@ -879,11 +884,12 @@ const collectPromotionRefs = (value: unknown): string[] => {
   return ref ? [ref] : [];
 };
 
-const uniquePromotionRefs = (values: string[]): string[] => {
+const uniquePromotionRefs = (values: string[], compactWhitespace = false): string[] => {
   const seen = new Set<string>();
   const refs: string[] = [];
   values.forEach((value) => {
-    const key = value.trim().toLowerCase();
+    const normalized = value.trim().toLowerCase();
+    const key = compactWhitespace ? normalized.replace(/\s+/g, '') : normalized;
     if (!key || seen.has(key)) return;
     seen.add(key);
     refs.push(value.trim());
@@ -891,10 +897,11 @@ const uniquePromotionRefs = (values: string[]): string[] => {
   return refs;
 };
 
-const normalizePromotionTargetType = (raw: unknown): PromotionTargetType => {
+const normalizePromotionTargetType = (raw: unknown, explicit = false): PromotionTargetType | null => {
   const t = asString(raw).toUpperCase();
-  const allowed: PromotionTargetType[] = ['ALL', 'PRODUCT', 'CATEGORY', 'GROUP', 'SEASON'];
-  return (allowed.includes(t as PromotionTargetType) ? t : 'PRODUCT') as PromotionTargetType;
+  const allowed: PromotionTargetType[] = ['ALL', 'PRODUCT', 'VARIANT', 'CATEGORY', 'GROUP', 'SEASON'];
+  if (allowed.includes(t as PromotionTargetType)) return t as PromotionTargetType;
+  return explicit ? null : 'PRODUCT';
 };
 
 /** Payload ya en forma POS (camelCase) desde ERP `resolved.promotions`. */
@@ -952,6 +959,11 @@ const normalizePromotionFromErpPayload = (raw: unknown): Promotion | null => {
         : data.seasonId != null || data.season_id != null
           ? 'SEASON'
           : undefined);
+  const targetType = normalizePromotionTargetType(
+    targetTypeRaw,
+    data.targetType != null || data.target_type != null,
+  );
+  if (!targetType) return null;
   const targetValueRaw =
     data.targetValue ??
     data.target_value ??
@@ -973,6 +985,9 @@ const normalizePromotionFromErpPayload = (raw: unknown): Promotion | null => {
     data.categoryNames ?? data.category_names,
     data.targetIds ?? data.target_ids,
     data.targetValues ?? data.target_values,
+    data.variantSkus ?? data.variant_skus,
+    data.variantIds ?? data.variant_ids,
+    data.variantBarcodes ?? data.variant_barcodes,
     data.targets,
   ].flatMap((entry) => collectPromotionRefs(entry));
 
@@ -984,10 +999,10 @@ const normalizePromotionFromErpPayload = (raw: unknown): Promotion | null => {
     trigger_config: triggerConfigRaw,
     triggerConfig: triggerConfigRaw,
     trigger,
-    targetType: normalizePromotionTargetType(targetTypeRaw),
+    targetType,
     targetValue: targetValueRaw != null ? asRefString(targetValueRaw) : undefined,
     targetLabel: asString(data.targetLabel || data.target_label) || undefined,
-    targetRefs: uniquePromotionRefs(targetRefs),
+    targetRefs: uniquePromotionRefs(targetRefs, targetType === 'VARIANT'),
     targetStrategy,
     benefitType: (asString(data.benefitType ?? data.benefit_type) || undefined) as Promotion['benefitType'],
     benefitValue: asNumber(

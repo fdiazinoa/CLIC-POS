@@ -3114,6 +3114,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const consignmentIdentityKey = consignmentPatch?.consignmentLineId || '';
       const modifiersString = buildModifierSignature(modifiers);
       const variantSku = selectedVariant?.sku;
+      const variantId = selectedVariant?.id || selectedVariant?.variantId;
+      const variantBarcodes = Array.isArray(selectedVariant?.barcode)
+         ? selectedVariant.barcode.map((value) => String(value || '').trim()).filter(Boolean)
+         : [];
       const effectiveTaxIds = resolveEffectiveTaxIds(product.appliedTaxIds, activeTerminalConfig);
       const taxSignature = effectiveTaxIds.slice().sort().join('|');
       const productRestaurantConfig = resolveRestaurantProductConfig(product);
@@ -3179,6 +3183,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             selected_combo_items: lineRestaurantConfig?.selected_combo_items,
             product_type: productRestaurantConfig.product_type || product.product_type,
             variantSku,
+            variantId,
+            variantBarcodes,
             variantInfo,
             appliedTaxIds: effectiveTaxIds,
             production_area_id: productionAreaId || undefined,
