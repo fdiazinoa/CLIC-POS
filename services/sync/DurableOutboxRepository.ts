@@ -3,6 +3,7 @@ import type {
     DurableOutboxStatus,
     FinancialCommitInput,
 } from '../db/DatabaseAdapter';
+import { v4 as uuidv4, validate as isUuid } from 'uuid';
 import { dbAdapter } from '../db';
 import { syncMetrics } from './SyncMetrics';
 
@@ -86,6 +87,32 @@ export class DurableOutboxRepository {
         );
         await this.refreshMetrics();
         return Number(result?.changes?.changes ?? result?.changes ?? 0);
+    }
+
+    async repairLegacyEventIds(now = new Date()): Promise<number> {
+        const sql = this.requireSql();
+        const result = await sql(
+            `SELECT local_sequence, event_id
+             FROM sync_outbox_v2
+             WHERE status IN ('PENDING','RETRY_WAIT')
+             ORDER BY local_sequence ASC`
+        );
+        const legacyRows = rowsFromResult(result).filter(row => !isUuid(String(row.event_id || '')));
+        const timestamp = now.toISOString();
+
+        for (const row of legacyRows) {
+            await sql(
+                `UPDATE sync_outbox_v2
+                 SET event_id = ?, next_retry_at = ?, updated_at = ?,
+                     last_error = 'EVENT_ID_MIGRATED_TO_UUID'
+                 WHERE local_sequence = ? AND event_id = ?
+                   AND status IN ('PENDING','RETRY_WAIT')`,
+                [uuidv4(), timestamp, timestamp, Number(row.local_sequence), String(row.event_id)]
+            );
+        }
+
+        if (legacyRows.length > 0) await this.refreshMetrics();
+        return legacyRows.length;
     }
 
     async leaseDue(options: {

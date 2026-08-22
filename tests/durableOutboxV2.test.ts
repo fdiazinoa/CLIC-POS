@@ -170,6 +170,26 @@ test('SYNCED_MASTER remains distinct from APPLIED_ERP and retry preserves the ev
     await adapter.disconnect();
 });
 
+test('legacy non-UUID event ids are repaired without replacing the durable sale or sequence', async () => {
+    const adapter = new SQLiteTestAdapter();
+    const repository = new DurableOutboxRepository(adapter);
+    await repository.commitFinancialTransaction(financialInput('OUTBOX-TXN-legacy'));
+    await repository.leaseDue({ owner: 'worker-a', limit: 1, leaseMs: 5_000 });
+    await repository.markRetry('OUTBOX-TXN-legacy', 'SYNC_BATCH_INVALID_EVENT_ID', new Date('2026-08-22T18:30:00.000Z'));
+
+    assert.equal(await repository.repairLegacyEventIds(new Date('2026-08-22T18:10:00.000Z')), 1);
+    const repaired = adapter.sqlite.prepare(
+        'SELECT local_sequence, event_id, aggregate_id, status, next_retry_at FROM sync_outbox_v2'
+    ).get() as any;
+    assert.equal(repaired.local_sequence, 1);
+    assert.equal(repaired.aggregate_id, 'sale-1');
+    assert.equal(repaired.status, 'RETRY_WAIT');
+    assert.equal(repaired.next_retry_at, '2026-08-22T18:10:00.000Z');
+    assert.match(repaired.event_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    assert.equal(readCount(adapter.sqlite.prepare("SELECT COUNT(*) count FROM documents WHERE doc_id = 'sale-1'").get()), 1);
+    await adapter.disconnect();
+});
+
 test('unselected leases return to FIFO without consuming an attempt and final rejects stop retrying', async () => {
     const adapter = new SQLiteTestAdapter();
     const repository = new DurableOutboxRepository(adapter);
