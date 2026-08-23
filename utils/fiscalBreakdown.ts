@@ -58,6 +58,12 @@ interface TaxBreakdownOptions {
   multiplier?: number;
 }
 
+interface AuthoritativeLineOptions extends TaxBreakdownOptions {
+  transactionNetAmount?: number;
+  transactionTaxAmount?: number;
+  transactionTotal?: number;
+}
+
 type TaxableTransaction = Pick<Transaction, 'items' | 'discountAmount' | 'isTaxIncluded' | 'taxAmount' | 'total'> & {
   taxBreakdown?: FiscalTaxBreakdownLine[];
 };
@@ -295,6 +301,47 @@ export const calculateLineFiscalValuesForTransaction = (
       totalAmount,
       taxRate: round2(totalTaxRate),
       discountAmount: round2(lineDiscount),
+    };
+  });
+};
+
+/**
+ * Freezes the fiscal amounts used by the checkout into the persisted lines.
+ * Header residuals (including cent rounding and non-taxed service charges) are
+ * assigned deterministically to the final line so the persisted transaction
+ * and its SALE_POSTED event share the exact same financial source of truth.
+ */
+export const freezeAuthoritativeLineFiscalAmounts = <T extends TaxableLineItem>(
+  items: T[],
+  config: BusinessConfig,
+  options: AuthoritativeLineOptions = {}
+): Array<T & Omit<FiscalLineAmounts, 'lineIndex' | 'discountAmount'>> => {
+  const calculated = calculateLineFiscalValuesForTransaction(items, config, options);
+  if (calculated.length === 0) return [];
+
+  const expectedNet = Number.isFinite(Number(options.transactionNetAmount))
+    ? round2(Number(options.transactionNetAmount))
+    : round2(calculated.reduce((sum, line) => sum + line.netAmount, 0));
+  const expectedTax = Number.isFinite(Number(options.transactionTaxAmount))
+    ? round2(Number(options.transactionTaxAmount))
+    : round2(calculated.reduce((sum, line) => sum + line.taxAmount, 0));
+  const expectedTotal = Number.isFinite(Number(options.transactionTotal))
+    ? round2(Number(options.transactionTotal))
+    : round2(expectedNet + expectedTax);
+  const lastIndex = calculated.length - 1;
+  const currentNet = round2(calculated.reduce((sum, line) => sum + line.netAmount, 0));
+  const currentTax = round2(calculated.reduce((sum, line) => sum + line.taxAmount, 0));
+  const currentTotal = round2(calculated.reduce((sum, line) => sum + line.totalAmount, 0));
+
+  return items.map((item, index) => {
+    const line = calculated[index];
+    const isLastLine = index === lastIndex;
+    return {
+      ...item,
+      netAmount: round2(line.netAmount + (isLastLine ? expectedNet - currentNet : 0)),
+      taxAmount: round2(line.taxAmount + (isLastLine ? expectedTax - currentTax : 0)),
+      totalAmount: round2(line.totalAmount + (isLastLine ? expectedTotal - currentTotal : 0)),
+      taxRate: line.taxRate,
     };
   });
 };

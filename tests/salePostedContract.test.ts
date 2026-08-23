@@ -7,6 +7,7 @@ import {
     buildSalePostedSummary,
     SalePostedContractError,
 } from '../services/sync/SalePostedContract';
+import { freezeAuthoritativeLineFiscalAmounts } from '../utils/fiscalBreakdown';
 
 const transactionFixture = () => ({
     id: 'TXN-200',
@@ -150,8 +151,75 @@ test('uses authoritative line totals instead of price times quantity for adjuste
         settlementAppliedBase: 95,
         pendingBalance: 0,
     };
-    assert.throws(
-        () => buildSalePostedPayload(missingAuthoritativeTotal),
-        /sin total financiero autoritativo/,
-    );
+    assert.throws(() => buildSalePostedPayload(missingAuthoritativeTotal), (error: unknown) => {
+        assert.ok(error instanceof SalePostedContractError);
+        assert.match(error.message, /sin total financiero autoritativo/);
+        assert.doesNotMatch(error.message, /lines\.total=0/);
+        return true;
+    });
+});
+
+test('freezes two-payment checkout lines before building SALE_POSTED', () => {
+    const items = freezeAuthoritativeLineFiscalAmounts([
+        { id: 'item-1', quantity: 1, price: 500 },
+        { id: 'item-2', quantity: 1, price: 1750, discountAmount: 0 },
+    ], { taxes: [], taxRate: 0 } as any, {
+        transactionNetAmount: 2250,
+        transactionTaxAmount: 0,
+        transactionTotal: 2250,
+    });
+    const transaction = {
+        id: 'TXN-SPLIT-PAYMENT',
+        displayId: 'TCK-SPLIT-PAYMENT',
+        documentType: 'TICKET',
+        status: 'COMPLETED',
+        date: '2026-08-23T08:42:12-04:00',
+        total: 2250,
+        netAmount: 2250,
+        taxAmount: 0,
+        discountAmount: 0,
+        settlementAppliedBase: 2250,
+        pendingBalance: 0,
+        items,
+        payments: [
+            { id: 'cash', method: 'CASH', amount: 500 },
+            { id: 'card', method: 'CARD', amount: 1750 },
+        ],
+    };
+
+    assert.deepEqual(items.map(item => ({
+        netAmount: item.netAmount,
+        taxAmount: item.taxAmount,
+        totalAmount: item.totalAmount,
+    })), [
+        { netAmount: 500, taxAmount: 0, totalAmount: 500 },
+        { netAmount: 1750, taxAmount: 0, totalAmount: 1750 },
+    ]);
+    assert.deepEqual(assertSalePostedPayload(buildSalePostedPayload(transaction)), {
+        transactionId: 'TXN-SPLIT-PAYMENT',
+        total: 2250,
+        lineTotal: 2250,
+        itemCount: 2,
+        paymentCount: 2,
+    });
+});
+
+test('reconciles fiscal rounding and non-taxed charges on the final persisted line', () => {
+    const items = freezeAuthoritativeLineFiscalAmounts([
+        { id: 'item-1', quantity: 1, price: 50, appliedTaxIds: ['itbis'] },
+        { id: 'item-2', quantity: 1, price: 50, appliedTaxIds: ['itbis'] },
+    ], {
+        taxes: [{ id: 'itbis', name: 'ITBIS', rate: 0.18, type: 'VAT' }],
+        taxRate: 0.18,
+    } as any, {
+        isTaxIncluded: true,
+        transactionNetAmount: 89.75,
+        transactionTaxAmount: 15.25,
+        transactionTotal: 105,
+    });
+
+    assert.equal(items.reduce((sum, item) => sum + item.netAmount, 0), 89.75);
+    assert.equal(items.reduce((sum, item) => sum + item.taxAmount, 0), 15.25);
+    assert.equal(items.reduce((sum, item) => sum + item.totalAmount, 0), 105);
+    assert.equal(items[1].totalAmount, 55);
 });

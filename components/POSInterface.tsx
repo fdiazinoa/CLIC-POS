@@ -76,7 +76,12 @@ import VirtualKeyboard from './VirtualKeyboard';
 import SafetyGateModal from './SafetyGateModal';
 import { printReservation } from '../utils/printer';
 import MobileCartButton from './MobileCartButton';
-import { calculateTaxBreakdownFromItems, formatTaxLineLabel, resolveEffectiveTaxIds } from '../utils/fiscalBreakdown';
+import {
+   calculateTaxBreakdownFromItems,
+   formatTaxLineLabel,
+   freezeAuthoritativeLineFiscalAmounts,
+   resolveEffectiveTaxIds,
+} from '../utils/fiscalBreakdown';
 import { formatCurrency } from '../utils/format';
 import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from '../services/localRefundPersistence';
 import { resolveCustomerImageSrc, resolveProductImageSrc } from '../utils/entityImage';
@@ -4992,14 +4997,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          try {
             // If it's a mixed transaction, use the split endpoint
             if (hasReturns && hasSales) {
-               const saleItems = processedCart.filter(i => i.quantity > 0);
+               const rawSaleItems = processedCart.filter(i => i.quantity > 0);
                const returnItems = processedCart.filter(i => i.quantity < 0);
 
                // Calculate totals for each part
-               const saleTotal = saleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+               const saleTotal = rawSaleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
                const normalizedSplitRefundItems = returnItems.map(item => ({ ...item, quantity: Math.abs(item.quantity) }));
                const returnTotal = normalizedSplitRefundItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-               const saleTaxBreakdown = calculateTaxBreakdownFromItems(saleItems, config, {
+               const saleTaxBreakdown = calculateTaxBreakdownFromItems(rawSaleItems, config, {
                   isTaxIncluded,
                   terminalConfig: activeTerminalConfig,
                });
@@ -5010,6 +5015,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const saleNetAmount = isTaxIncluded
                   ? Math.round(((saleTotal - saleTaxAmount) + Number.EPSILON) * 100) / 100
                   : saleTotal;
+               const saleItems = freezeAuthoritativeLineFiscalAmounts(rawSaleItems, config, {
+                  isTaxIncluded,
+                  terminalConfig: activeTerminalConfig,
+                  transactionNetAmount: saleNetAmount,
+                  transactionTaxAmount: saleTaxAmount,
+                  transactionTotal: saleTotal,
+               });
                const salePayments = payments.filter(p => !['WALLET', 'ADVANCE'].includes(p.method));
                const salePayableTotal = saleTotal + (voluntaryTip || 0);
                const saleSettlement = buildTransactionSettlementFields(salePayments, salePayableTotal, baseCurrency.code);
@@ -5172,11 +5184,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
             } else {
                // Standard single transaction logic
-               const taxAmount = cartTax;
-               const netAmount = isTaxIncluded
-                  ? (grossLineTotal - discountAmount - taxAmount)
-                  : (grossLineTotal - discountAmount);
-
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
                const refundDocumentTotal = normalizedRefundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
@@ -5184,11 +5191,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const saleOrderNumber = !isRefundOnly
                   ? (readCartOrderNumber(processedCart) || reserveNextOrderNumber())
                   : undefined;
-               const documentItems = !isRefundOnly
+               const contextualDocumentItems = !isRefundOnly
                   ? applyOrderContextToItems(rawDocumentItems, saleOrderNumber)
                   : rawDocumentItems;
-               const documentConsignmentFields = getConsignmentTicketFields(documentItems);
                const documentTotal = isRefundOnly ? refundDocumentTotal : cartTotal;
+               const taxAmount = cartTax;
+               const netAmount = Math.round(((documentTotal - taxAmount) + Number.EPSILON) * 100) / 100;
+               const documentItems = !isRefundOnly
+                  ? freezeAuthoritativeLineFiscalAmounts(contextualDocumentItems, config, {
+                     discountAmount,
+                     isTaxIncluded,
+                     terminalConfig: activeTerminalConfig,
+                     transactionNetAmount: netAmount,
+                     transactionTaxAmount: taxAmount,
+                     transactionTotal: documentTotal,
+                  })
+                  : contextualDocumentItems;
+               const documentConsignmentFields = getConsignmentTicketFields(documentItems);
                const payableTotal = documentTotal + (voluntaryTip || 0);
                const transactionSettlement = buildTransactionSettlementFields(paymentsForTransaction, payableTotal, baseCurrency.code);
 

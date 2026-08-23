@@ -298,13 +298,17 @@ export const assertSalePostedPayload = (
     const transactionTotal = roundAmount(transactionTotalValue);
     const summaryTotal = roundAmount(summaryTotalValue);
     let lineTotal = 0;
+    let hasInvalidLineTotal = false;
     try {
         lineTotal = roundAmount(items.reduce(
             (sum, item, index) => sum + readAuthoritativeLineTotal(asRecord(item), index, transaction),
             0,
         ));
     } catch (error) {
-        if (error instanceof SalePostedContractError) details.push(...error.details);
+        if (error instanceof SalePostedContractError) {
+            hasInvalidLineTotal = true;
+            details.push(...error.details);
+        }
         else throw error;
     }
 
@@ -312,7 +316,7 @@ export const assertSalePostedPayload = (
         && Math.abs(summaryTotal - transactionTotal) > tolerance) {
         details.push(`summary.total=${summaryTotal} vs transaction.total=${transactionTotal}`);
     }
-    if (summaryTotalValue !== null && Math.abs(summaryTotal - lineTotal) > tolerance) {
+    if (!hasInvalidLineTotal && summaryTotalValue !== null && Math.abs(summaryTotal - lineTotal) > tolerance) {
         details.push(`summary.total=${summaryTotal} vs lines.total=${lineTotal}`);
     }
     if (Number(summary.item_count) !== items.length) {
