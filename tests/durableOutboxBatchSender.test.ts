@@ -194,6 +194,37 @@ test('transport failures retry the same durable eventIds and never acknowledge t
     assert.equal(summary.applied, 0);
 });
 
+test('authentication rejection preserves outbox UUIDs and schedules a non-aggressive retry', async () => {
+    const leased = [record(1), record(2)];
+    const retries: Array<{ eventId: string; nextRetryAt: Date }> = [];
+    const repository = {
+        recoverExpiredLeases: async () => 0,
+        leaseDue: async () => leased,
+        releaseUnsent: async () => undefined,
+        markRejected: async () => undefined,
+        markRetry: async (eventId: string, _message: string, nextRetryAt: Date) => {
+            retries.push({ eventId, nextRetryAt });
+        },
+        markAppliedErp: async () => undefined,
+        markSyncedMaster: async () => undefined,
+    };
+    const sender = new DurableOutboxBatchSender(repository as any, async events => {
+        assert.deepEqual(events.map(event => event.eventId), ['event-1', 'event-2']);
+        const error = new Error('SYNC_TOKEN_INVALID') as Error & { retryAfterMs: number };
+        error.retryAfterMs = 5 * 60_000;
+        throw error;
+    });
+    const now = new Date('2026-08-22T18:00:00.000Z');
+
+    const summary = await sender.sendNext(now);
+
+    assert.deepEqual(retries.map(retry => retry.eventId), ['event-1', 'event-2']);
+    assert.ok(retries.every(retry => retry.nextRetryAt.toISOString() === '2026-08-22T18:05:00.000Z'));
+    assert.equal(summary.retrying, 2);
+    assert.equal(summary.applied, 0);
+    assert.equal(summary.rejected, 0);
+});
+
 test('offline retry sends the exact persisted UUID and payload without rebuilding the event', async () => {
     const persistedPayload = {
         transaction: { id: 'sale-1', total: 125 },
