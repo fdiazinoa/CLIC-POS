@@ -7,7 +7,18 @@ import {
     resolveCanonicalErpTerminalId,
 } from '../services/sync/terminalIdentity';
 import { getSyncDeviceToken, persistSyncDeviceToken } from '../services/sync/deviceToken';
-import { readTerminalCredentialsSync, saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
+import {
+    buildTerminalSyncAuthHeaders,
+    clearStoredSyncToken,
+    readTerminalCredentialsSync,
+    saveTerminalCredentialsSync,
+} from '../services/sync/TerminalCredentialStore';
+import {
+    setCatalogDiagnosticStatus,
+    setSalesPushDiagnosticStatus,
+    setSyncAuthDiagnosticStatus,
+    setTerminalBindingDiagnosticStatus,
+} from '../services/sync/SyncErrorDiagnostic';
 import { extractTerminalConfigRequestedScopes } from './terminalConfigPushScopes';
 import { applyTerminalConfigSnapshot, mergeTerminalConfigSnapshots } from './terminalConfigSnapshot';
 import { db } from './db';
@@ -1302,6 +1313,39 @@ const readJson = async <T>(response: Response): Promise<T> => {
         error.status = response.status;
         error.code = typeof payload?.code === 'string' ? payload.code : null;
         error.payload = payload;
+        const backendCode = normalizeOptional(error.code || null).toUpperCase();
+        if (
+            (response.status === 401 || response.status === 403)
+            && ['SYNC_TOKEN_MISSING', 'SYNC_TOKEN_INVALID', 'SYNC_SCOPE_FORBIDDEN'].includes(backendCode)
+        ) {
+            if (backendCode !== 'SYNC_SCOPE_FORBIDDEN') {
+                clearStoredSyncToken();
+            }
+            const credentials = readTerminalCredentialsSync();
+            saveTerminalCredentialsSync({
+                terminalId: credentials.terminalId || null,
+                erpTerminalId: credentials.erpTerminalId || credentials.terminalId || null,
+                deviceId: credentials.deviceId || resolveLocalDeviceId() || null,
+                authStatus: 'NEEDS_REAUTH',
+                lastAuthError: backendCode,
+            });
+            localStorage.setItem('clic_sync_auth_status', 'NEEDS_REAUTH');
+            localStorage.setItem('clic_sync_last_auth_error', backendCode);
+            setTerminalBindingDiagnosticStatus('NEEDS_REAUTH');
+            setCatalogDiagnosticStatus('AUTH_ERROR');
+            setSalesPushDiagnosticStatus('LOCKED_AUTH_REQUIRED');
+            setSyncAuthDiagnosticStatus('NEEDS_REAUTH');
+            error.retryable = true;
+            error.retryAfterMs = 5 * 60_000;
+            window.dispatchEvent(new CustomEvent('clic-pos-sync-auth-required', {
+                detail: {
+                    code: backendCode,
+                    nextAction: backendCode === 'SYNC_SCOPE_FORBIDDEN'
+                        ? 'REPAIR_TERMINAL_SCOPE'
+                        : 'REPAIR_TERMINAL_PAIRING',
+                },
+            }));
+        }
         throw error;
     }
 
@@ -1393,6 +1437,13 @@ const persistBinding = (
     if (terminal.status) {
         localStorage.setItem(SYNC_BINDING_STATUS_KEY, terminal.status);
     }
+    saveTerminalCredentialsSync({
+        terminalId: canonicalTerminalId,
+        erpTerminalId: canonicalTerminalId,
+        ...(tenantId ? { tenantId, erpTenantId: tenantId } : {}),
+        ...(terminal.company_id ? { companyId: terminal.company_id } : {}),
+        ...(terminal.store_id ? { storeId: terminal.store_id } : {}),
+    });
 };
 
 export const persistStoredErpSyncBinding = (input: {
@@ -1455,6 +1506,12 @@ export const persistStoredErpSyncBinding = (input: {
     if (status) {
         localStorage.setItem(SYNC_BINDING_STATUS_KEY, status);
     }
+    saveTerminalCredentialsSync({
+        ...(terminalId ? { terminalId, erpTerminalId: terminalId } : {}),
+        ...(tenantId ? { tenantId, erpTenantId: tenantId } : {}),
+        ...(companyId ? { companyId } : {}),
+        ...(storeId ? { storeId } : {}),
+    });
 };
 
 export type ErpSyncAuthIdentity = {
@@ -1606,10 +1663,9 @@ const clearBindingIfTenantChanged = (identity: TenantIdentity) => {
 const buildDeviceHeaders = (deviceId?: unknown): Record<string, string> => {
     const resolvedDeviceId = normalizeOptional(String(deviceId || resolveLocalDeviceId() || ''));
     const credentials = readTerminalCredentialsSync();
-    const syncToken = normalizeOptional(credentials.syncToken || localStorage.getItem('clic_erp_sync_token') || '');
     const deviceToken = normalizeOptional(getSyncDeviceToken() || credentials.deviceToken || '');
     return {
-        ...(syncToken ? { 'X-Sync-Token': syncToken } : {}),
+        ...buildTerminalSyncAuthHeaders(),
         ...(deviceToken ? { 'X-Device-Token': deviceToken } : {}),
         ...(resolvedDeviceId
         ? {
@@ -2438,6 +2494,9 @@ export const heartbeatErpSyncTerminal = (
 	    let payload: SyncHeartbeatResponse;
 	    try {
 	        payload = await postJson<SyncHeartbeatResponse>('/terminals/heartbeat', {
+	            tenant_id: storedBinding.tenantId || undefined,
+	            company_id: storedBinding.companyId || params.companyId || undefined,
+	            store_id: storedBinding.storeId || params.storeId || undefined,
 	            terminal_id: terminalRef || undefined,
 	            device_id: resolvedDeviceId || undefined,
 	            app_version: runtimeTelemetry.appVersion || null,

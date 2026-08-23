@@ -172,9 +172,7 @@ export const getInvalidatedSyncDeviceTokenInfo = (): { tokenPreview: string | nu
 
 export const previewSyncDeviceToken = (token?: string | null): string | null => {
     const cleaned = cleanToken(token || null);
-    if (!cleaned) return null;
-    if (cleaned.length <= 10) return `${cleaned.slice(0, 2)}...${cleaned.slice(-2)}`;
-    return `${cleaned.slice(0, 6)}...${cleaned.slice(-4)}`;
+    return cleaned ? '(redacted)' : null;
 };
 
 export const ensureSyncDeviceToken = (createToken: () => string): EnsureSyncDeviceTokenResult => {

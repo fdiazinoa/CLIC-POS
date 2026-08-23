@@ -38,6 +38,7 @@ Object.assign(globalThis, {
 const terminalId = '9ffc6771-7845-4976-afd3-20cebc3cc6e8';
 const deviceId = 'DEV-QA-CONFIG-PUSH';
 const versionHash = 'version-already-installed';
+const syncToken = 'persisted-terminal-sync-token';
 
 const resetRuntime = (options: { configPushV2?: string | null } = {}) => {
     localStorage.clear();
@@ -191,6 +192,85 @@ test('heartbeat reports an unacknowledged CONFIG_PUSH_V2 event', async () => {
     });
 
     assert.equal(heartbeatBody?.pending_events, 1);
+});
+
+test('heartbeat authenticates with the persisted terminal token and matching scope', async () => {
+    resetRuntime();
+    localStorage.setItem('clic_erp_sync_token', syncToken);
+    localStorage.setItem('clic_erp_sync_company_id', 'company-config-push');
+    localStorage.setItem('clic_erp_sync_store_id', 'store-config-push');
+    let headers: Record<string, string> = {};
+    let body: Record<string, unknown> = {};
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+        headers = init?.headers as Record<string, string>;
+        body = JSON.parse(String(init?.body || '{}'));
+        return Response.json({ status: 'success' });
+    }) as typeof fetch;
+
+    await lifecycle.heartbeatErpSyncTerminal({ deviceId, terminalId, pendingEvents: 0 });
+
+    assert.equal(headers['X-Sync-Token'], syncToken);
+    assert.equal(body.tenant_id, 'tenant-config-push');
+    assert.equal(body.company_id, 'company-config-push');
+    assert.equal(body.store_id, 'store-config-push');
+    assert.equal(body.terminal_id, terminalId);
+    assert.equal(body.device_id, deviceId);
+    assert.equal('syncToken' in body || 'sync_token' in body || 'token' in body, false);
+});
+
+test('heartbeat does not invent a sync token when pairing credentials are absent', async () => {
+    resetRuntime();
+    let headers: Record<string, string> = {};
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+        headers = init?.headers as Record<string, string>;
+        return Response.json({ code: 'SYNC_TOKEN_MISSING' }, { status: 401 });
+    }) as typeof fetch;
+
+    await assert.rejects(
+        lifecycle.heartbeatErpSyncTerminal({ deviceId, terminalId, pendingEvents: 0 }),
+        (error: any) => error.code === 'SYNC_TOKEN_MISSING' && error.retryAfterMs === 5 * 60_000,
+    );
+
+    assert.equal(headers['X-Sync-Token'], undefined);
+    assert.equal(localStorage.getItem('clic_sync_auth_status'), 'NEEDS_REAUTH');
+});
+
+test('invalid heartbeat token is cleared and exposes a pairing action without aggressive retry', async () => {
+    resetRuntime();
+    localStorage.setItem('clic_erp_sync_token', syncToken);
+    let authEvent: CustomEvent<Record<string, unknown>> | null = null;
+    (globalThis.window as any).dispatchEvent = (event: CustomEvent<Record<string, unknown>>) => {
+        if (event.type === 'clic-pos-sync-auth-required') authEvent = event;
+        return true;
+    };
+    globalThis.fetch = (async () => Response.json({ code: 'SYNC_TOKEN_INVALID' }, { status: 401 })) as typeof fetch;
+
+    await assert.rejects(
+        lifecycle.heartbeatErpSyncTerminal({ deviceId, terminalId, pendingEvents: 0 }),
+        (error: any) => error.code === 'SYNC_TOKEN_INVALID' && error.retryAfterMs === 5 * 60_000,
+    );
+
+    assert.equal(localStorage.getItem('clic_erp_sync_token'), null);
+    assert.equal(authEvent?.detail.nextAction, 'REPAIR_TERMINAL_PAIRING');
+});
+
+test('scope rejection preserves the persisted credential and exposes a scope repair action', async () => {
+    resetRuntime();
+    localStorage.setItem('clic_erp_sync_token', syncToken);
+    let authEvent: CustomEvent<Record<string, unknown>> | null = null;
+    (globalThis.window as any).dispatchEvent = (event: CustomEvent<Record<string, unknown>>) => {
+        if (event.type === 'clic-pos-sync-auth-required') authEvent = event;
+        return true;
+    };
+    globalThis.fetch = (async () => Response.json({ code: 'SYNC_SCOPE_FORBIDDEN' }, { status: 403 })) as typeof fetch;
+
+    await assert.rejects(
+        lifecycle.heartbeatErpSyncTerminal({ deviceId, terminalId, pendingEvents: 0 }),
+        (error: any) => error.code === 'SYNC_SCOPE_FORBIDDEN' && error.retryAfterMs === 5 * 60_000,
+    );
+
+    assert.equal(localStorage.getItem('clic_erp_sync_token'), syncToken);
+    assert.equal(authEvent?.detail.nextAction, 'REPAIR_TERMINAL_SCOPE');
 });
 
 test('CONFIG_PUSH_V2 is enabled by default without a local flag or environment override', () => {

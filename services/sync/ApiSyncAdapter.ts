@@ -29,7 +29,13 @@ import {
     type SyncFetchDiagnostic,
 } from './SyncErrorDiagnostic';
 import { requestJson } from '../network/httpClient';
-import { clearStoredSyncToken, readTerminalCredentialsSync, saveTerminalCredentialsSync } from './TerminalCredentialStore';
+import {
+    buildTerminalSyncAuthHeaders,
+    clearStoredSyncToken,
+    readTerminalCredentialsSync,
+    resolvePersistedTerminalSyncToken,
+    saveTerminalCredentialsSync,
+} from './TerminalCredentialStore';
 import { extractErpRegisterAuth } from './erpRegisterResponse';
 import { isLoopbackHost, isNativeAndroidRuntime } from '../../utils/erpBaseUrl';
 import {
@@ -247,9 +253,7 @@ const normalizeIdentityValue = (value?: unknown): string => String(value || '').
 
 const previewSyncToken = (token?: string | null): string | null => {
     const normalized = String(token || '').trim();
-    if (!normalized) return null;
-    if (normalized.length <= 10) return `${normalized.slice(0, 2)}...${normalized.slice(-2)}`;
-    return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
+    return normalized ? '(redacted)' : null;
 };
 
 const sanitizeSyncToken = (token?: string | null): string | null => {
@@ -1214,7 +1218,7 @@ class ApiSyncAdapter {
 
     private resolveStoredErpSyncTokenDiagnostic(): { token: string | null; source: string | null; updatedAt: string | null; length: number } {
         const storedCredentials = readTerminalCredentialsSync();
-        const credentialToken = sanitizeSyncToken(storedCredentials.syncToken || null);
+        const credentialToken = sanitizeSyncToken(resolvePersistedTerminalSyncToken());
         if (credentialToken) {
             return {
                 token: credentialToken,
@@ -1349,7 +1353,12 @@ class ApiSyncAdapter {
             headers['Content-Type'] = 'application/json';
         }
 
-        const normalizedToken = sanitizeSyncToken(token);
+        const sharedAuthHeaders = target.useLocalTarget
+            ? {}
+            : buildTerminalSyncAuthHeaders();
+        const normalizedToken = target.useLocalTarget
+            ? sanitizeSyncToken(token)
+            : sanitizeSyncToken(sharedAuthHeaders['X-Sync-Token']);
         if (normalizedToken) {
             headers.Authorization = `Bearer ${normalizedToken}`;
             headers['X-Sync-Token'] = normalizedToken;
@@ -1962,6 +1971,39 @@ class ApiSyncAdapter {
         );
     }
 
+    private async buildOperationalSyncAuthRejection(input: {
+        response: Response;
+        endpoint: string;
+        target: { terminalId: string; baseUrl?: string | null };
+    }): Promise<Error | null> {
+        if (input.response.status !== 401 && input.response.status !== 403) return null;
+        const parsed = await this.parseJsonResponseSafely(input.response);
+        const backendCode = String(this.normalizeBackendCode(parsed.data) || '').toUpperCase();
+        if (!['SYNC_TOKEN_MISSING', 'SYNC_TOKEN_INVALID', 'SYNC_SCOPE_FORBIDDEN'].includes(backendCode)) {
+            return null;
+        }
+
+        const nextAction = backendCode === 'SYNC_SCOPE_FORBIDDEN'
+            ? 'REPAIR_TERMINAL_SCOPE'
+            : 'REPAIR_TERMINAL_PAIRING';
+        const error = new Error(`${backendCode}: La sincronización requiere reautenticar o volver a vincular esta terminal.`);
+        Object.defineProperties(error, {
+            retryAfterMs: { value: 5 * 60_000, configurable: true },
+            retryable: { value: true, configurable: true },
+            backendCode: { value: backendCode, configurable: true },
+        });
+        return this.markOperationalAuthNeedsReauth({
+            operation: 'PUSH_OPERATIONS',
+            endpoint: input.endpoint,
+            responseBody: parsed.text,
+            httpStatus: input.response.status,
+            error,
+            backendCode,
+            nextAction,
+            target: input.target,
+        });
+    }
+
     private attachSyncErrorMetadata(error: Error, collection: string, backendCode: string, status?: number): Error {
         const taggedError = error as Error & {
             __syncBackendCode?: string;
@@ -2395,12 +2437,17 @@ class ApiSyncAdapter {
 
         const deviceId = this.resolveCurrentDeviceId();
         const tenantId = this.resolveCurrentTenantId();
+        const credentials = readTerminalCredentialsSync();
+        const companyId = pickFirstString(credentials.companyId, safeLocalStorageGet('clic_erp_sync_company_id'));
+        const storeId = pickFirstString(credentials.storeId, safeLocalStorageGet('clic_erp_sync_store_id'));
 
         const normalizedBody: Record<string, unknown> = {
             ...body,
             terminalId: target.terminalId,
             terminal_id: target.terminalId,
             ...(tenantId ? { tenantId, tenant_id: tenantId } : {}),
+            ...(companyId ? { companyId, company_id: companyId } : {}),
+            ...(storeId ? { storeId, store_id: storeId } : {}),
             ...(target.kind ? { sync_channel: target.kind } : {}),
             ...(deviceId ? { device_id: deviceId, deviceId } : {})
         };
@@ -3048,6 +3095,12 @@ class ApiSyncAdapter {
             if (!retryResponse.ok) {
                 const retryText = await retryResponse.clone().text().catch(() => '');
                 await this.handleDeviceSupersededResponse(retryResponse, retriedTarget.terminalId);
+                const authRejection = await this.buildOperationalSyncAuthRejection({
+                    response: retryResponse,
+                    endpoint: `${retriedTarget.baseUrl}${path}`,
+                    target: retriedTarget,
+                });
+                if (authRejection) throw authRejection;
                 throw new Error(`Operational sync failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}${retryText ? ` — ${retryText.slice(0, 400)}` : ''}`);
             }
 
@@ -3057,6 +3110,12 @@ class ApiSyncAdapter {
         if (!response.ok) {
             const text = await response.clone().text().catch(() => '');
             await this.handleDeviceSupersededResponse(response, target.terminalId);
+            const authRejection = await this.buildOperationalSyncAuthRejection({
+                response,
+                endpoint: `${target.baseUrl}${path}`,
+                target,
+            });
+            if (authRejection) throw authRejection;
             throw new Error(`Operational sync failed: ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 400)}` : ''}`);
         }
         return this.parseOperationalResponse(response);
@@ -4784,12 +4843,6 @@ class ApiSyncAdapter {
         }
     }
 
-    private maskSyncToken(token: string | null): string {
-        if (!token) return 'none';
-        if (token.length <= 10) return '(short)';
-        return `${token.slice(0, 4)}…${token.slice(-4)}`;
-    }
-
     private logCriticalSalesRequest(input: {
         authUrl: string;
         postUrl: string;
@@ -4799,7 +4852,7 @@ class ApiSyncAdapter {
         txId?: string;
     }) {
         console.log(
-            `[SYNC_SALES_HTTP] authUrl=${input.authUrl} postUrl=${input.postUrl} terminalId=${input.terminalId} retryCount=${input.retryCount} token=${this.maskSyncToken(input.token)} tx=${input.txId || 'n/a'}`
+            `[SYNC_SALES_HTTP] authUrl=${input.authUrl} postUrl=${input.postUrl} terminalId=${input.terminalId} retryCount=${input.retryCount} tokenPresent=${Boolean(input.token)} tx=${input.txId || 'n/a'}`
         );
     }
 
