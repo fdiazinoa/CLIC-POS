@@ -65,6 +65,7 @@ const BLOCKED_STATUSES = new Set([
 
 const POS_LICENSE_CACHE_KEY = 'clic:license:last-success';
 const POS_LICENSE_GRACE_PERIOD_MS = 15 * 60_000;
+const LICENSE_VALIDATION_UNAVAILABLE_MESSAGE = 'No se pudo validar la licencia. Verifique la conexión y reintente.';
 
 const normalizeBaseUrl = (value?: string | null): string | null => {
     const raw = normalizeValue(value);
@@ -85,7 +86,7 @@ const normalizeBaseUrl = (value?: string | null): string | null => {
 };
 
 const resolveLicenseEndpointBaseUrl = (): string | null => {
-    const env = import.meta.env as Record<string, string | boolean | undefined>;
+    const env = (import.meta.env || {}) as Record<string, string | boolean | undefined>;
     const candidates = [
         localStorage.getItem('CLIC_ERP_BASE_URL'),
         localStorage.getItem('erp_base_url'),
@@ -182,7 +183,7 @@ const fetchLicenseStatusFromErp = async (
         `${erpBaseUrl}/api/license/status?${buildLicenseQuery(tenantId, deviceId)}`,
         {
             method: 'GET',
-            credentials: 'include',
+            credentials: 'omit',
             headers: { Accept: 'application/json' },
         },
         timeoutMs
@@ -201,7 +202,7 @@ const fetchLicenseStatusFromErp = async (
 };
 
 const getCloudConfig = () => {
-    const env = import.meta.env as Record<string, string | boolean | undefined>;
+    const env = (import.meta.env || {}) as Record<string, string | boolean | undefined>;
     return {
         supabaseUrl: (env['VITE_SUPABASE_URL'] as string | undefined) || localStorage.getItem('CLIC_POS_MASTER_URL'),
         supabaseKey: env['VITE_SUPABASE_ANON_KEY'] as string | undefined,
@@ -543,7 +544,24 @@ export const checkLicenseStatus = async (
         return mapErpLicenseStatus(status);
     } catch (error) {
         const cached = readCachedLicenseStatus();
-        if (cached && isWithinGracePeriod(cached.lastSuccessfulAt)) {
+        if (cached && cached.licensed === false) {
+            console.warn('[licenseGuard] CACHED_LICENSE_BLOCK_ACTIVE', {
+                reason: cached.reason,
+                lastSuccessfulAt: cached.lastSuccessfulAt,
+                lastCloudError: error instanceof Error ? error.message : String(error),
+            });
+
+            return mapErpLicenseStatus({
+                ...cached,
+                source: 'pos-cache',
+                inGracePeriod: false,
+                cloudReachable: false,
+                checkedAt: new Date().toISOString(),
+                lastCloudError: error instanceof Error ? error.message : String(error),
+            });
+        }
+
+        if (cached?.licensed === true && isWithinGracePeriod(cached.lastSuccessfulAt)) {
             const lastSuccessfulTs = toTimestamp(cached.lastSuccessfulAt);
             const gracePeriodRemainingMs = lastSuccessfulTs
                 ? Math.max(0, POS_LICENSE_GRACE_PERIOD_MS - (Date.now() - lastSuccessfulTs))
@@ -567,11 +585,14 @@ export const checkLicenseStatus = async (
             });
         }
 
-        console.warn('[licenseGuard] ERP license endpoint unavailable, allowing offline-safe fallback.', error);
+        console.warn('[licenseGuard] LICENSE_VALIDATION_UNAVAILABLE_BLOCKING', {
+            lastSuccessfulAt: cached?.lastSuccessfulAt || null,
+            lastCloudError: error instanceof Error ? error.message : String(error),
+        });
         return {
-            isValid: true,
+            isValid: false,
             tenantId: normalizeValue(tenantId) || normalizeValue(localStorage.getItem('clic_tenant_id')) || undefined,
-            reason: undefined,
+            reason: LICENSE_VALIDATION_UNAVAILABLE_MESSAGE,
             source: 'pos-cache',
             inGracePeriod: false,
             cloudReachable: false,

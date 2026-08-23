@@ -2492,7 +2492,7 @@ const AppContent: React.FC = () => {
         }
 
         if (!res.isValid) {
-          await triggerLockdownAfterAuthorizationCheck(res.reason || fallbackMessage, deviceId);
+          triggerLockdown(res.reason || fallbackMessage);
         }
       } catch {
         // Offline tolerance: avoid false positives on transient connectivity issues.
@@ -2522,7 +2522,7 @@ const AppContent: React.FC = () => {
         window.clearTimeout(timeoutId);
       }
     };
-  }, [isDataLoaded, deviceId, triggerLockdownAfterAuthorizationCheck]);
+  }, [isDataLoaded, deviceId, triggerLockdown]);
 
   // --- AUTO-RETRY ON BOOT ERROR ---
   useEffect(() => {
@@ -3320,10 +3320,7 @@ const AppContent: React.FC = () => {
         }, deviceId);
 
         if (!disposed && isLifecycleActivationBlocked(result?.activation)) {
-          await triggerLockdownAfterAuthorizationCheck(
-            getLifecycleActivationBlockMessage(result?.activation),
-            deviceId,
-          );
+          triggerLockdown(getLifecycleActivationBlockMessage(result?.activation));
           return;
         }
 
@@ -3338,7 +3335,11 @@ const AppContent: React.FC = () => {
       } catch (error) {
         const blockingMessage = getLifecycleBlockingMessageFromError(error);
         if (!disposed && blockingMessage) {
-          await triggerLockdownAfterAuthorizationCheck(blockingMessage, deviceId);
+          if (blockingMessage === DEVICE_SUPERSEDED_MESSAGE) {
+            await triggerLockdownAfterAuthorizationCheck(blockingMessage, deviceId);
+          } else {
+            triggerLockdown(blockingMessage);
+          }
           return;
         }
         throw error;
@@ -3398,7 +3399,7 @@ const AppContent: React.FC = () => {
 
         const blockingActivation = result?.heartbeat?.activation || result?.registered?.activation || result?.bootstrap?.activation;
         if (!disposed && isLifecycleActivationBlocked(blockingActivation)) {
-          await triggerLockdownAfterAuthorizationCheck(getLifecycleActivationBlockMessage(blockingActivation), deviceId);
+          triggerLockdown(getLifecycleActivationBlockMessage(blockingActivation));
           return false;
         }
 
@@ -3441,7 +3442,11 @@ const AppContent: React.FC = () => {
       } catch (error) {
         const blockingMessage = getLifecycleBlockingMessageFromError(error);
         if (!disposed && blockingMessage) {
-          await triggerLockdownAfterAuthorizationCheck(blockingMessage, deviceId);
+          if (blockingMessage === DEVICE_SUPERSEDED_MESSAGE) {
+            await triggerLockdownAfterAuthorizationCheck(blockingMessage, deviceId);
+          } else {
+            triggerLockdown(blockingMessage);
+          }
           return false;
         }
         console.warn('[ERP SYNC] lifecycle registration skipped:', error);
@@ -5717,7 +5722,7 @@ const AppContent: React.FC = () => {
         // --- LICENSE / KILL-SWITCH VALIDATION ---
         const license = await checkLicenseStatus(persistedTenantId, storedDeviceId);
         if (!license.isValid) {
-          await triggerLockdownAfterAuthorizationCheck(license.reason || 'Servicio Suspendido.', storedDeviceId);
+          triggerLockdown(license.reason || 'Servicio Suspendido.');
           return;
         }
 
@@ -10352,7 +10357,7 @@ const AppContent: React.FC = () => {
                   try {
                     const license = await checkLicenseStatus(activatedTenantId, resolvedDeviceId);
                     if (!license.isValid) {
-                      await triggerLockdownAfterAuthorizationCheck(license.reason || 'Servicio Suspendido.', resolvedDeviceId);
+                      triggerLockdown(license.reason || 'Servicio Suspendido.');
                       return;
                     }
                   } catch (error) {
