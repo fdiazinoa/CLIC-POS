@@ -13,12 +13,41 @@ const asText = (value: unknown): string => {
     .find(Boolean) || '';
 };
 
+const normalizeOptionKey = (value: string): string => value
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toLocaleLowerCase();
+
+const resolveVariantValueKeys = (variantInfo: string): Set<string> => {
+  const values = variantInfo
+    .split(/[\/|·]/)
+    .map(part => part.includes(':') ? part.slice(part.indexOf(':') + 1) : part)
+    .map(part => normalizeOptionKey(part))
+    .filter(Boolean);
+
+  return new Set(values);
+};
+
+const normalizeDiscountPercentage = (value: unknown, fallback: number): number => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.abs(numeric) <= 1 ? numeric * 100 : numeric;
+};
+
 export const resolveReceiptItemOptions = (item: CartItem): string[] => {
-  const candidates: unknown[] = [
+  const variantInfo = asText(item.variantInfo);
+  const variantValueKeys = resolveVariantValueKeys(variantInfo);
+  const modifierCandidates: unknown[] = [
     ...(item.modifiers || []),
     ...(item.selected_modifiers || []),
     ...(item.restaurantConfig?.selected_modifiers || []),
-    item.variantInfo,
+  ];
+  const candidates: unknown[] = [
+    ...modifierCandidates
+      .map(asText)
+      .filter(value => value && !variantValueKeys.has(normalizeOptionKey(value))),
+    variantInfo,
     item.note || item.restaurantConfig?.note,
   ];
 
@@ -48,7 +77,7 @@ export const buildReceiptEmailPayload = (
       originalUnitPrice: discount.originalUnitPrice,
       lineTotal: Number(item.totalAmount ?? discount.finalLineTotal),
       itemDiscountAmount,
-      itemDiscountRate: Number(item.discountRate ?? discount.discountPercentage),
+      itemDiscountRate: normalizeDiscountPercentage(item.discountRate, discount.discountPercentage),
       itemTaxAmount: Number(item.taxAmount || 0),
       options: resolveReceiptItemOptions(item),
       sellerName: sellerName || undefined,
@@ -60,6 +89,21 @@ export const buildReceiptEmailPayload = (
     cart,
     total: Number(transaction.total || 0),
     paymentMethod: transaction.payments?.[0]?.method || 'CASH',
+    payments: (transaction.payments || []).map(payment => ({
+      method: payment.method || payment.payment_method,
+      methodLabel: payment.methodLabel,
+      amount: Number(payment.amount || 0),
+      amountOriginal: payment.amountOriginal == null ? undefined : Number(payment.amountOriginal),
+      appliedAmount: Number(payment.appliedAmount ?? payment.applied_amount ?? payment.amountApplied ?? payment.amount ?? 0),
+      currencyCode: payment.currencyCode || payment.currency_code,
+      exchangeRate: payment.exchangeRate == null && payment.exchange_rate == null
+        ? undefined
+        : Number(payment.exchangeRate ?? payment.exchange_rate),
+      changeAmount: payment.changeAmount == null && payment.change_amount == null
+        ? undefined
+        : Number(payment.changeAmount ?? payment.change_amount),
+      changeCurrencyCode: payment.changeCurrencyCode || payment.change_currency_code,
+    })),
     transactionId: transaction.displayId || transaction.id || 'PENDING-ID',
     ncf: transaction.ncf,
     ncfType: fiscalCode || undefined,
@@ -84,6 +128,29 @@ export const buildReceiptEmailPayload = (
     showSavings: config?.receiptConfig?.showSavings || false,
     footerMessage: config?.receiptConfig?.footerMessage,
     showQr: config?.receiptConfig?.showQr !== false,
+    showForeignCurrencyTotals: config?.receiptConfig?.showForeignCurrencyTotals || false,
+    showOrderNumber: config?.receiptConfig?.showOrderNumber || false,
+    orderNumber: transaction.orderNumber,
+    currencies: (config?.currencies || [])
+      .filter(currency => currency.isBase || currency.isEnabled)
+      .map(currency => ({
+        code: currency.code,
+        name: currency.name,
+        symbol: currency.symbol,
+        rate: Number(currency.rate || 0),
+        isBase: Boolean(currency.isBase),
+        isEnabled: Boolean(currency.isEnabled),
+      })),
+    receiptDesign: {
+      showCustomerInfo: config?.receiptConfig?.showCustomerInfo || false,
+      showSavings: config?.receiptConfig?.showSavings || false,
+      showQr: config?.receiptConfig?.showQr !== false,
+      showForeignCurrencyTotals: config?.receiptConfig?.showForeignCurrencyTotals || false,
+      showSerialNumbers: config?.receiptConfig?.showSerialNumbers || false,
+      showLotNumbers: config?.receiptConfig?.showLotNumbers || false,
+      showOrderNumber: config?.receiptConfig?.showOrderNumber || false,
+      footerMessage: config?.receiptConfig?.footerMessage,
+    },
     terminalName: transaction.terminalName,
     tableLabel: transaction.tableDisplayLabel,
   };
