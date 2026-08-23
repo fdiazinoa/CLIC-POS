@@ -53,6 +53,7 @@ import {
     POS_SYNC_CAPABILITY_VERSIONS,
     VARIANT_PROMOTIONS_CAPABILITY,
 } from '../../utils/syncCapabilities';
+import { classifyMasterPullFailure } from './masterPullFailure';
 
 /**
  * API Sync Adapter
@@ -1931,7 +1932,7 @@ class ApiSyncAdapter {
         return new Error(detail ? `${message} ${detail}` : message);
     }
 
-    private buildProtectedPullAuthError(input: {
+    private buildProtectedPullError(input: {
         collection: string;
         endpoint: string;
         status: number;
@@ -1939,9 +1940,18 @@ class ApiSyncAdapter {
         headers: Record<string, string>;
         backendCode?: string | null;
     }): Error {
-        const backendCode = input.backendCode
-            || (input.status === 401 ? 'AUTH_REQUIRED' : 'AUTH_FAILED');
-        const error = new Error(`AUTH_REQUIRED: Falta autenticación/syncToken para descargar ${input.collection}.`);
+        const classification = classifyMasterPullFailure({
+            collection: input.collection,
+            status: input.status,
+            backendCode: input.backendCode,
+            responseBody: input.responseBody,
+        });
+        const error = this.attachSyncErrorMetadata(
+            new Error(classification.message),
+            input.collection,
+            classification.backendCode,
+            input.status,
+        );
         reportSyncErrorDiagnostic({
             operation: 'PULL_MASTERS',
             collection: input.collection,
@@ -1949,15 +1959,15 @@ class ApiSyncAdapter {
             httpStatus: input.status,
             responseBody: input.responseBody,
             error,
-            authStatus: backendCode,
-            backendCode,
+            authStatus: classification.authStatus,
+            backendCode: classification.backendCode,
             requestAuth: this.buildRequestAuthDiagnostic(input.headers),
             isMasterCollection: true,
             isOperationCollection: false,
             isCriticalMaster: ERP_CRITICAL_MASTER_COLLECTIONS.has(input.collection),
             userVisibleSeverity: 'critical',
         });
-        return error;
+        return this.markDiagnosticReported(error);
     }
 
     private normalizeBackendCode(payload: any): string | null {
@@ -3808,7 +3818,7 @@ class ApiSyncAdapter {
             } catch {
                 backendCode = null;
             }
-            throw this.buildProtectedPullAuthError({
+            throw this.buildProtectedPullError({
                 collection,
                 endpoint: fullEndpoint,
                 status: fullResponse.status,
@@ -4168,7 +4178,7 @@ class ApiSyncAdapter {
                             };
                         }
                         if (retryResponse.status === 401) {
-                            const error = this.buildProtectedPullAuthError({
+                            const error = this.buildProtectedPullError({
                                 collection,
                                 endpoint: url.toString(),
                                 status: retryResponse.status,
@@ -4179,7 +4189,7 @@ class ApiSyncAdapter {
                             throw error;
                         }
                         if (retryResponse.status === 403) {
-                            throw this.buildProtectedPullAuthError({
+                            throw this.buildProtectedPullError({
                                 collection,
                                 endpoint: url.toString(),
                                 status: retryResponse.status,
@@ -4222,7 +4232,7 @@ class ApiSyncAdapter {
                 if (!response.ok) {
                     if (response.status === 403) {
                         const responseBody = await response.text().catch(() => '');
-                        throw this.buildProtectedPullAuthError({
+                        throw this.buildProtectedPullError({
                             collection,
                             endpoint: url.toString(),
                             status: response.status,
