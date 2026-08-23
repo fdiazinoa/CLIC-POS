@@ -652,7 +652,7 @@ const buildTerminalSyncProfile = (params: {
   };
 };
 
-const DEFAULT_PUBLIC_ERP_BASE_URL = 'https://clic-erp.vercel.app';
+const DEFAULT_PUBLIC_ERP_BASE_URL = 'https://clic-erp.clicsuite.com';
 
 const resolveErpBaseUrl = (): string | null => {
   const current = new URL(window.location.origin);

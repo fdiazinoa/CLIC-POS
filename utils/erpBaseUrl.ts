@@ -1,6 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 
-export const DEFAULT_PUBLIC_ERP_BASE_URL = 'https://clic-erp.vercel.app';
+export const DEFAULT_PUBLIC_ERP_BASE_URL = 'https://clic-erp.clicsuite.com';
 
 export const isNativeAndroidRuntime = (): boolean => {
     try {

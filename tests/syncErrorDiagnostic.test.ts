@@ -22,7 +22,7 @@ const installLocalStorage = (initial: Record<string, string> = {}) => {
 test('classifies CapacitorHttp connection failure after a network change as recoverable', () => {
   assert.equal(
     isRecoverableNetworkConnectivityMessage(
-      'Failed to connect to clic-erp.vercel.app/64.29.17.3:443',
+      'Failed to connect to clic-erp.clicsuite.com/64.29.17.3:443',
     ),
     true,
   );
@@ -44,7 +44,7 @@ test('discards a persisted native connection diagnostic when the terminal is alr
 
   assert.equal(
     isRecoverableStaleSyncDiagnostic({
-      errorMessage: 'Failed to connect to clic-erp.vercel.app/64.29.17.3:443',
+      errorMessage: 'Failed to connect to clic-erp.clicsuite.com/64.29.17.3:443',
     } as any),
     true,
   );
