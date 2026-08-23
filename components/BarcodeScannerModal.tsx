@@ -92,7 +92,9 @@ const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({ isOpen, onClo
                 aspectRatio: 1.0,
                 formatsToSupport: formatsToSupport,
                 experimentalFeatures: {
-                    useBarCodeDetectorIfSupported: true
+                    // Android WebView's experimental detector can terminate the app
+                    // when its bundled Google Play Services version does not match.
+                    useBarCodeDetectorIfSupported: false
                 }
             };
 
