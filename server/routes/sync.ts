@@ -1018,10 +1018,20 @@ async function flushPendingErpForwards() {
                 const error = summary.skipped
                     ? `SKIPPED:${summary.reason || 'UNKNOWN'}`
                     : JSON.stringify(summary.results || []).slice(0, 1000);
-                throw new Error(error);
+                const forwardError = new Error(error) as Error & { retryAfterMs?: number };
+                const authRejected = summary.results?.some((result) =>
+                    result.httpStatus === 401 || result.httpStatus === 403
+                );
+                if (authRejected) {
+                    forwardError.retryAfterMs = 5 * 60_000;
+                }
+                throw forwardError;
             } catch (error: any) {
                 const attempts = (entry.attempts || 0) + 1;
-                const backoffMs = Math.min(5 * 60_000, 15_000 * Math.max(1, attempts));
+                const requestedBackoffMs = Number(error?.retryAfterMs);
+                const backoffMs = Number.isFinite(requestedBackoffMs) && requestedBackoffMs > 0
+                    ? Math.min(5 * 60_000, requestedBackoffMs)
+                    : Math.min(5 * 60_000, 15_000 * Math.max(1, attempts));
                 const updated: PendingErpForward = {
                     ...entry,
                     attempts,

@@ -121,6 +121,15 @@ export interface BuildSaleInboxBodyOptions {
     fallbackTerminalId?: string | null;
 }
 
+function resolvePersistedErpScope() {
+    const context = asObject(getSetting('erp_setup_context'));
+    return {
+        tenantId: asString(context.tenantId || context.tenant_id || getSetting('active_tenant_id') || getSetting('tenant_id')),
+        companyId: asString(context.companyId || context.company_id),
+        storeId: asString(context.storeId || context.store_id),
+    };
+}
+
 export function buildSalePostedInboxBody(txn: any, options?: BuildSaleInboxBodyOptions) {
     const txnForErp = coerceTransactionItemsForErp(txn);
     const summary = buildTransactionSummary(txnForErp);
@@ -137,7 +146,7 @@ export function buildSalePostedInboxBody(txn: any, options?: BuildSaleInboxBodyO
         asString(txnForErp.terminal_id) ||
         asString(options?.fallbackTerminalId);
 
-    const tenantRaw = asString(getSetting('active_tenant_id')) || asString(getSetting('tenant_id'));
+    const scope = resolvePersistedErpScope();
     const payload: Record<string, unknown> = {
         occurred_at: asString(txnForErp.date) || new Date().toISOString(),
         summary,
@@ -146,14 +155,17 @@ export function buildSalePostedInboxBody(txn: any, options?: BuildSaleInboxBodyO
     if (settlement) {
         payload.settlement = settlement;
     }
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(tenantRaw)) {
-        payload.tenant_id = tenantRaw;
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(scope.tenantId)) {
+        payload.tenant_id = scope.tenantId;
     }
 
     return {
         event_id: eventId,
         terminal_id: terminalId,
         event_type: eventType,
+        ...(scope.tenantId ? { tenant_id: scope.tenantId } : {}),
+        ...(scope.companyId ? { company_id: scope.companyId } : {}),
+        ...(scope.storeId ? { store_id: scope.storeId } : {}),
         payload
     };
 }
@@ -286,6 +298,13 @@ function resolveErpSyncToken(terminalRef?: string | null): string | null {
     return null;
 }
 
+function buildErpInboxAuthHeaders(syncToken: string, includeContentType = true): Record<string, string> {
+    return {
+        ...(includeContentType ? { 'Content-Type': 'application/json' } : {}),
+        'X-Sync-Token': syncToken,
+    };
+}
+
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -337,13 +356,14 @@ function validateErpApplyResponse(
 async function applyErpInboxRow(
     baseUrl: string,
     syncId: string,
-    eventType: string
+    eventType: string,
+    syncToken: string,
 ): Promise<{ ok: boolean; status: number; text: string; documentId?: string; applyError?: string }> {
     const applyUrl = `${normalizeBaseUrl(baseUrl)}/api/sync/inbox/apply/${encodeURIComponent(syncId)}`;
     console.log(`[ERP_INBOX] POST ${applyUrl} (immediate apply after inbox) event_type=${eventType}`);
     const applyRes = await fetchWithTimeout(applyUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildErpInboxAuthHeaders(syncToken),
         body: '{}'
     });
     const applyText = await applyRes.text();
@@ -421,8 +441,7 @@ export async function forwardTransactionsToErpInbox(
             const res = await fetchWithTimeout(transactionsUrl, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'X-Sync-Token': syncToken
+                    ...buildErpInboxAuthHeaders(syncToken),
                 },
                 body: JSON.stringify({ items: [txn] })
             });
@@ -470,7 +489,10 @@ export async function forwardTransactionsToErpInbox(
                     httpStatus: res.status,
                     error: text.slice(0, 400)
                 });
-                if (res.status !== 401 && res.status !== 403 && res.status !== 404) {
+                if (res.status === 401 || res.status === 403) {
+                    return { skipped: false, failed: true, results, erpBaseUrlUsed: baseUrl };
+                }
+                if (res.status !== 404) {
                     continue;
                 }
                 console.warn(`[ERP_SYNC_TX] falling back to raw inbox for tx=${txId}`);
@@ -498,7 +520,7 @@ export async function forwardTransactionsToErpInbox(
 
             const res = await fetchWithTimeout(inboxUrl, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: buildErpInboxAuthHeaders(syncToken),
                 body: JSON.stringify(body)
             });
             const text = await res.text();
@@ -565,7 +587,7 @@ export async function forwardTransactionsToErpInbox(
                     return { skipped: false, failed: true, results, erpBaseUrlUsed: baseUrl };
                 }
 
-                const applied = await applyErpInboxRow(baseUrl, syncId, body.event_type);
+                const applied = await applyErpInboxRow(baseUrl, syncId, body.event_type, syncToken);
                 if (!applied.ok) {
                     const errDetail =
                         applied.applyError ||

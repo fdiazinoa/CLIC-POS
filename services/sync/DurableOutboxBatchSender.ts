@@ -172,11 +172,15 @@ export class DurableOutboxBatchSender {
             syncMetrics.increment('pushes_total');
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error || 'BATCH_TRANSPORT_FAILED');
+            const requestedRetryAfterMs = Number((error as { retryAfterMs?: unknown } | null)?.retryAfterMs);
+            const retryAfterMs = Number.isFinite(requestedRetryAfterMs) && requestedRetryAfterMs > 0
+                ? Math.min(MAX_RETRY_MS, requestedRetryAfterMs)
+                : null;
             for (const record of selection.events) {
                 await this.repository.markRetry(
                     record.eventId,
                     message,
-                    new Date(now.getTime() + retryDelay(record.attemptCount)),
+                    new Date(now.getTime() + (retryAfterMs || retryDelay(record.attemptCount))),
                 );
                 summary.retrying++;
             }

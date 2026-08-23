@@ -12,6 +12,8 @@ export interface TerminalCredentials {
     tenantId?: string | null;
     erpTenantId?: string | null;
     cloudAdminTenantId?: string | null;
+    companyId?: string | null;
+    storeId?: string | null;
     deviceToken?: string | null;
     deviceTokenSource?: string | null;
     deviceTokenUpdatedAt?: string | null;
@@ -92,6 +94,8 @@ const buildFromLegacyKeys = (storage: Storage): TerminalCredentials => compactCr
     tenantId: cleanString(storage.getItem('clic_erp_sync_tenant_id') || storage.getItem('active_tenant_id') || storage.getItem('clic_tenant_id')),
     erpTenantId: cleanString(storage.getItem('clic_erp_sync_tenant_id') || storage.getItem('active_tenant_id')),
     cloudAdminTenantId: cleanString(storage.getItem('cloud_admin_tenant_id') || storage.getItem('clic_cloud_admin_tenant_id') || storage.getItem('clic_tenant_id')),
+    companyId: cleanString(storage.getItem('clic_erp_sync_company_id')),
+    storeId: cleanString(storage.getItem('clic_erp_sync_store_id') || storage.getItem('active_store_id') || storage.getItem('clic_store_id')),
     deviceToken: cleanToken(storage.getItem('CLIC_POS_DEVICE_TOKEN') || storage.getItem('POS_DEVICE_TOKEN') || storage.getItem('pos_device_token') || storage.getItem('clic_erp_device_token') || storage.getItem('terminalToken') || storage.getItem('activationToken')),
     deviceTokenSource: cleanString(storage.getItem('CLIC_POS_DEVICE_TOKEN_SOURCE')),
     deviceTokenUpdatedAt: cleanString(storage.getItem('CLIC_POS_DEVICE_TOKEN_UPDATED_AT')),
@@ -170,6 +174,12 @@ const writeLegacyMirrors = (credentials: TerminalCredentials): void => {
             storage.setItem('cloud_admin_tenant_id', credentials.cloudAdminTenantId);
             storage.setItem('clic_cloud_admin_tenant_id', credentials.cloudAdminTenantId);
         }
+        if (credentials.companyId) {
+            storage.setItem('clic_erp_sync_company_id', credentials.companyId);
+        }
+        if (credentials.storeId) {
+            storage.setItem('clic_erp_sync_store_id', credentials.storeId);
+        }
         if (credentials.deviceToken) {
             storage.setItem('CLIC_POS_DEVICE_TOKEN', credentials.deviceToken);
             storage.setItem('CLIC_POS_DEVICE_TOKEN_SOURCE', credentials.deviceTokenSource || 'TERMINAL_CREDENTIAL_STORE');
@@ -229,6 +239,18 @@ export const readTerminalCredentialsSync = (): TerminalCredentials => {
         }
     }
     return normalized;
+};
+
+/**
+ * Canonical terminal sync credential. All ERP sync callers must use this
+ * persisted pairing/binding value instead of trusting request payload fields.
+ */
+export const resolvePersistedTerminalSyncToken = (): string | null =>
+    cleanToken(readTerminalCredentialsSync().syncToken || null);
+
+export const buildTerminalSyncAuthHeaders = (): Record<string, string> => {
+    const syncToken = resolvePersistedTerminalSyncToken();
+    return syncToken ? { 'X-Sync-Token': syncToken } : {};
 };
 
 export const readTerminalCredentials = async (): Promise<TerminalCredentials> => {

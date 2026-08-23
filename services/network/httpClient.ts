@@ -76,9 +76,7 @@ export const sanitizeHeaders = (headers?: Record<string, unknown>): Record<strin
 
 const previewToken = (token?: string | null): string | null => {
     const normalized = String(token || '').trim();
-    if (!normalized) return null;
-    if (normalized.length <= 10) return `${normalized.slice(0, 2)}...${normalized.slice(-2)}`;
-    return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
+    return normalized ? '(redacted)' : null;
 };
 
 const summarizeHeaders = (headers: Record<string, string>) => {
@@ -294,4 +292,3 @@ export async function requestJson<T = unknown>(input: RequestJsonInput): Promise
         throw error;
     }
 }
-
