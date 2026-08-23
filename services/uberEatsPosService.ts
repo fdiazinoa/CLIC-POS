@@ -1,6 +1,6 @@
 import { BusinessConfig, Transaction } from '../types';
 
-const DEFAULT_ERP_BASE_URL = 'https://clic-erp.vercel.app';
+const DEFAULT_ERP_BASE_URL = 'https://clic-erp.clicsuite.com';
 
 const normalizeString = (value: unknown): string => {
   if (typeof value !== 'string') return '';
