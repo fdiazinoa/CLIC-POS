@@ -7,7 +7,7 @@ import { db, getSetting } from '../db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DEFAULT_RECEIPT_FROM = 'CLIC POS <no-reply@mercasend.net>';
+const DEFAULT_RECEIPT_FROM = 'CLIC POS <no-reply@clicsuite.com>';
 
 export type EmailDeliveryResult = {
     id: string;
