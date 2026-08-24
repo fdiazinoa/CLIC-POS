@@ -120,6 +120,7 @@ import {
   recoverNativePrimaryDisplayUrl,
 } from './utils/customerDisplay';
 import { markPosInteractionActivity, setPosSaleActivity } from './utils/posSaleActivity';
+import { ORDER_TAKER_TERMINAL_TYPE, STANDARD_POS_TERMINAL_TYPE } from './utils/orderTakerPolicy';
 import {
   posUserRostersMatch,
   reconcilePosUsers,
@@ -1424,7 +1425,7 @@ const normalizeMasterHost = (value: string | null | undefined) =>
     .replace(/^https?:\/\//i, '')
     .replace(/\/.*$/, '');
 
-type TerminalSetupMode = 'SERVER_LOCAL' | 'SERVER_ERP' | 'CLIENT';
+type TerminalSetupMode = 'SERVER_LOCAL' | 'SERVER_ERP' | 'CLIENT' | 'ORDER_TAKER';
 type TerminalIntegrationMode = 'LOCAL_ONLY' | 'ERP_DIRECT';
 
 type TerminalConfigRestartNotice = {
@@ -1452,7 +1453,7 @@ const readTerminalConfigRestartNotice = (): TerminalConfigRestartNotice | null =
 
 const getStoredTerminalSetupMode = (): TerminalSetupMode | null => {
   const storedMode = localStorage.getItem(TERMINAL_SETUP_MODE_KEY);
-  if (storedMode === 'SERVER_LOCAL' || storedMode === 'SERVER_ERP' || storedMode === 'CLIENT') {
+  if (storedMode === 'SERVER_LOCAL' || storedMode === 'SERVER_ERP' || storedMode === 'CLIENT' || storedMode === 'ORDER_TAKER') {
     return storedMode;
   }
 
@@ -1476,8 +1477,16 @@ const getTerminalSetupIntegrationMode = (setupMode: TerminalSetupMode | null): T
 };
 
 const getTerminalBindingMode = (setupMode: TerminalSetupMode | null): 'MASTER' | 'SLAVE' => {
-  return setupMode === 'CLIENT' ? 'SLAVE' : 'MASTER';
+  return setupMode === 'CLIENT' || setupMode === 'ORDER_TAKER' ? 'SLAVE' : 'MASTER';
 };
+
+const getExpectedSetupTerminalType = (setupMode: TerminalSetupMode | null) => (
+  setupMode === 'ORDER_TAKER'
+    ? ORDER_TAKER_TERMINAL_TYPE
+    : setupMode === 'CLIENT'
+      ? STANDARD_POS_TERMINAL_TYPE
+      : null
+);
 
 const coerceOptionalBoolean = (...values: unknown[]): boolean | undefined => {
   for (const value of values) {
@@ -1501,7 +1510,7 @@ const isNativeStandaloneTerminalRuntime = (terminal?: { config?: TerminalConfig 
   if (terminal && !isEligibleOperationalMasterTerminal(terminal)) return false;
 
   const setupMode = getStoredTerminalSetupMode();
-  if (setupMode === 'CLIENT') return false;
+  if (setupMode === 'CLIENT' || setupMode === 'ORDER_TAKER') return false;
 
   const terminalConfig = terminal?.config;
   if (terminalConfig?.isPrimaryNode === false && terminalConfig?.governedByMaster) {
@@ -3091,6 +3100,7 @@ const AppContent: React.FC = () => {
     const canForceStandaloneRebind =
       !hasPendingTerminalSetup() &&
       setupMode !== 'CLIENT' &&
+      setupMode !== 'ORDER_TAKER' &&
       setupMode !== 'SERVER_ERP' &&
       !localStorage.getItem('pos_master_ip') &&
       primaryTerminal?.config?.governedByMaster !== true;
@@ -3179,7 +3189,7 @@ const AppContent: React.FC = () => {
     clearStoredErpSyncBinding();
     localStorage.removeItem('active_terminal_id');
     localStorage.removeItem('initial_terminal_config');
-    localStorage.setItem('clic_sync_mode', mode === 'SERVER_ERP' ? 'POS_ERP' : mode === 'CLIENT' ? 'POS_SLAVE' : 'POS_LOCAL');
+    localStorage.setItem('clic_sync_mode', mode === 'SERVER_ERP' ? 'POS_ERP' : (mode === 'CLIENT' || mode === 'ORDER_TAKER') ? 'POS_SLAVE' : 'POS_LOCAL');
     localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
     localStorage.setItem(TERMINAL_SETUP_MODE_KEY, mode);
 
@@ -5881,7 +5891,7 @@ const AppContent: React.FC = () => {
         const shouldPairAsClient =
           terminalSetupPending &&
           !isVisorMode &&
-          setupMode === 'CLIENT' &&
+          (setupMode === 'CLIENT' || setupMode === 'ORDER_TAKER') &&
           !localPairedTerminal;
 
         const shouldResolveMasterFromCloud = !masterIp && (
@@ -10427,6 +10437,7 @@ const AppContent: React.FC = () => {
             tenantId={resolveSetupTenantId()}
             erpBaseUrl={resolveSetupErpBaseUrl() || undefined}
             initialBindingMode={getTerminalBindingMode(getStoredTerminalSetupMode())}
+            initialExpectedTerminalType={getExpectedSetupTerminalType(getStoredTerminalSetupMode())}
             integrationMode={getTerminalSetupIntegrationMode(getStoredTerminalSetupMode())}
             onPair={handlePairTerminal}
             onConfigUpdate={handleConfigUpdate}

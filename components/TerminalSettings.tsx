@@ -15,7 +15,7 @@ import {
    Package, Layers, Crown, ListOrdered, Link2, Sparkles, Palette, MousePointer2, Banknote, ListChecks,
    Sun, ScanBarcode, Layout, Minus, ArrowDownCircle, ArrowUpCircle, Wallet, UserCheck, User, CreditCard, Fingerprint, UserCircle
 } from 'lucide-react';
-import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice, Product, DeviceRole, AuthLevel, Room, User as PosUser, CloseReportSection } from '../types';
+import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice, Product, DeviceRole, AuthLevel, Room, User as PosUser, CloseReportSection, DeviceFormFactor, DeviceOrientation } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG } from '../constants';
 import { db } from '../utils/db';
 import { syncManager } from '../services/sync/SyncManager';
@@ -25,6 +25,7 @@ import SettingsOperational from './SettingsOperational';
 import { mergeDocumentSeriesCollection } from '../utils/documentSeriesIdentity';
 import { isPartialXReportAllowed } from '../utils/seriesValidation';
 import { CLOSE_REPORT_SECTION_OPTIONS, type CloseReportType } from '../utils/closeReportOptions';
+import { resolveDeviceProfile } from '../utils/deviceProfile';
 
 interface TerminalSettingsProps {
    config: BusinessConfig;
@@ -168,10 +169,18 @@ const DOCUMENT_ROLES = [
 
 const DEVICE_ROLE_OPTIONS = [
    { role: DeviceRole.STANDARD_POS, label: 'POS estándar', description: 'Caja de venta completa.', icon: Monitor },
+   { role: DeviceRole.ORDER_TAKER, label: 'Toma de pedidos', description: 'Registra comandas conectada a una caja maestra.', icon: ListOrdered },
    { role: DeviceRole.KITCHEN_DISPLAY, label: 'Pantalla cocina', description: 'KDS para órdenes y preparación.', icon: Tv },
    { role: DeviceRole.SELF_CHECKOUT, label: 'SelfCheckout', description: 'Kiosco de autoservicio.', icon: ShoppingBag },
    { role: DeviceRole.PRICE_CHECKER, label: 'Verificador precio', description: 'Consulta de precios por código.', icon: ScanBarcode },
    { role: DeviceRole.HANDHELD_INVENTORY, label: 'Inventario móvil', description: 'Conteo, recepción y etiquetas.', icon: Smartphone },
+];
+
+const DEVICE_FORM_FACTOR_OPTIONS = [
+   { value: DeviceFormFactor.DESKTOP_POS, label: 'POS normal', description: 'Equipo fijo, teclado o pantalla táctil.', icon: Monitor },
+   { value: DeviceFormFactor.TABLET, label: 'Tablet', description: 'Interfaz táctil adaptable en vertical u horizontal.', icon: Smartphone },
+   { value: DeviceFormFactor.HANDHELD, label: 'Móvil / PDA', description: 'Pantalla compacta para operación de mano.', icon: Smartphone },
+   { value: DeviceFormFactor.KIOSK, label: 'Kiosco', description: 'Pantalla fija de autoservicio.', icon: Tv },
 ];
 
 type TerminalTab = 'IDENTITY' | 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'DOCUMENTS' | 'OFFLINE' | 'INVENTORY' | 'LAN_BINDING' | 'CATALOG' | 'DEVICE_ROLE';
@@ -338,6 +347,41 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
       };
 
       handleUpdateActiveConfig('', 'deviceRole', nextRoleConfig);
+   };
+
+   const handleUpdateDeviceProfile = (
+      updates: Partial<{ formFactor: DeviceFormFactor; orientation: DeviceOrientation; touchOptimized: boolean }>,
+   ) => {
+      if (!activeTerminal || isReadOnly) return;
+      const role = activeTerminal.config.deviceRole?.role || DeviceRole.STANDARD_POS;
+      const currentProfile = resolveDeviceProfile([activeTerminal.config], role);
+      const nextProfile = { ...currentProfile, ...updates };
+      setTerminals(prev => prev.map(terminal => {
+         if (terminal.id !== selectedTerminalId) return terminal;
+         const currentRole = terminal.config.deviceRole || getDefaultRoleConfig(role);
+         const currentTouchTarget = Number(currentRole.uiSettings?.touchTargetSize || 0);
+         const recommendedTouchTarget = nextProfile.formFactor === DeviceFormFactor.TABLET
+            ? 52
+            : nextProfile.formFactor === DeviceFormFactor.HANDHELD
+               ? 48
+               : getDefaultRoleConfig(role).uiSettings.touchTargetSize || 44;
+         return {
+            ...terminal,
+            config: {
+               ...terminal.config,
+               deviceProfile: nextProfile,
+               deviceRole: {
+                  ...currentRole,
+                  uiSettings: {
+                     ...currentRole.uiSettings,
+                     touchTargetSize: nextProfile.touchOptimized
+                        ? Math.max(currentTouchTarget, recommendedTouchTarget)
+                        : recommendedTouchTarget,
+                  },
+               },
+            },
+         };
+      }));
    };
 
    const handleToggleMasterNode = (enabled: boolean) => {
@@ -584,6 +628,67 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                           </button>
                                        );
                                     })}
+                                 </div>
+                              </div>
+                              <div className="p-6 bg-slate-50 rounded-[2rem] border border-slate-100 space-y-5">
+                                 <div className="flex items-start gap-4">
+                                    <div className="p-3 rounded-2xl bg-white text-indigo-600 shadow-sm">
+                                       <Smartphone size={20} />
+                                    </div>
+                                    <div>
+                                       <h4 className="text-sm font-black text-slate-800 uppercase tracking-[0.18em]">Tipo de dispositivo</h4>
+                                       <p className="text-xs font-medium text-slate-500 mt-1">
+                                          Define el formato físico sin cambiar las funciones del tipo de terminal.
+                                       </p>
+                                    </div>
+                                 </div>
+                                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                                    {DEVICE_FORM_FACTOR_OPTIONS.map(option => {
+                                       const profile = resolveDeviceProfile([activeTerminal.config], activeTerminal.config.deviceRole?.role);
+                                       const selected = profile.formFactor === option.value;
+                                       return (
+                                          <button
+                                             type="button"
+                                             key={option.value}
+                                             onClick={() => handleUpdateDeviceProfile({ formFactor: option.value })}
+                                             disabled={isReadOnly}
+                                             className={`p-4 rounded-2xl border-2 text-left transition-all ${selected ? 'bg-indigo-50 border-indigo-500 text-indigo-900 shadow-sm' : 'bg-white border-slate-100 text-slate-600 hover:border-slate-300'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                          >
+                                             <div className="flex items-start gap-3">
+                                                <option.icon size={18} className={selected ? 'text-indigo-600' : 'text-slate-400'} />
+                                                <div>
+                                                   <p className="text-sm font-black">{option.label}</p>
+                                                   <p className="text-[11px] font-bold opacity-70 mt-1">{option.description}</p>
+                                                </div>
+                                             </div>
+                                          </button>
+                                       );
+                                    })}
+                                 </div>
+                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <label className="space-y-2">
+                                       <span className="block text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">Orientación</span>
+                                       <select
+                                          value={resolveDeviceProfile([activeTerminal.config], activeTerminal.config.deviceRole?.role).orientation}
+                                          onChange={(event) => handleUpdateDeviceProfile({ orientation: event.target.value as DeviceOrientation })}
+                                          disabled={isReadOnly}
+                                          className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-sm font-black text-slate-700 outline-none focus:border-indigo-500 disabled:opacity-60"
+                                       >
+                                          <option value={DeviceOrientation.AUTO}>Automática</option>
+                                          <option value={DeviceOrientation.PORTRAIT}>Vertical</option>
+                                          <option value={DeviceOrientation.LANDSCAPE}>Horizontal</option>
+                                       </select>
+                                    </label>
+                                    <div className="rounded-2xl border border-slate-200 bg-white px-4">
+                                       <Toggle
+                                          label="Optimizado para táctil"
+                                          description="Amplía los objetivos táctiles y activa el corte adaptable para tablets."
+                                          checked={resolveDeviceProfile([activeTerminal.config], activeTerminal.config.deviceRole?.role).touchOptimized}
+                                          onChange={(value: boolean) => handleUpdateDeviceProfile({ touchOptimized: value })}
+                                          icon={MousePointer2}
+                                          disabled={isReadOnly}
+                                       />
+                                    </div>
                                  </div>
                               </div>
                               <SettingsOperational config={activeTerminal.config} onUpdate={handleUpdateActiveConfig} isReadOnly={isReadOnly} />

@@ -18,7 +18,7 @@ import {
 import { Html5Qrcode } from "html5-qrcode";
 import {
    BusinessConfig, User as UserType, RoleDefinition,
-   DeviceRole,
+   DeviceRole, DeviceFormFactor, DeviceOrientation,
    Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType, FiscalDocumentCode,
    PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, RedeemedCouponRef, ProductVariant
 } from '../types';
@@ -106,6 +106,7 @@ import {
    type ErpConsignmentLine,
 } from '../services/sync/ConsignmentSyncService';
 import { resolveDeviceRoleValue } from '../utils/deviceRoleHelpers';
+import { resolveTerminalDeviceProfile } from '../utils/deviceProfile';
 import { normalizeProductionOutputMode, resolveProductionOutputTargets } from '../utils/productionOutputMode';
 import { isClientTerminalMode, resolveOperationalApiUrl } from '../utils/masterOperationalApi';
 import ProductionRoutingAssignmentModal, {
@@ -1809,6 +1810,29 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       activeTerminalConfigRaw?.roleCode,
       activeTerminalConfigRaw?.role_code,
    ], DeviceRole.STANDARD_POS) === DeviceRole.ORDER_TAKER;
+   const activeDeviceProfile = useMemo(() => resolveTerminalDeviceProfile(
+      activeTerminal,
+      isOrderTakerMode ? DeviceRole.ORDER_TAKER : activeTerminalConfig?.deviceRole?.role,
+   ), [activeTerminal, activeTerminalConfig?.deviceRole?.role, isOrderTakerMode]);
+   const isTabletProfile = activeDeviceProfile.formFactor === DeviceFormFactor.TABLET;
+
+   useEffect(() => {
+      if (!(Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android')) return;
+      const orientation = screen.orientation as ScreenOrientation & {
+         lock?: (orientation: 'portrait' | 'landscape') => Promise<void>;
+         unlock?: () => void;
+      };
+      if (activeDeviceProfile.orientation === DeviceOrientation.AUTO) {
+         orientation.unlock?.();
+         return;
+      }
+      const requestedOrientation = activeDeviceProfile.orientation === DeviceOrientation.PORTRAIT
+         ? 'portrait'
+         : 'landscape';
+      void orientation.lock?.(requestedOrientation).catch(error => {
+         console.warn('[DEVICE_PROFILE] No se pudo fijar la orientación:', error);
+      });
+   }, [activeDeviceProfile.orientation]);
 
    // --- AUTO-HYDRATION FOR TABLES ---
    // --- SMART TABLE HYDRATION ---
@@ -1872,7 +1896,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       onSelectCustomer
    ]);
 
-   const isMobile = useIsMobile();
+   const isMobile = useIsMobile(isTabletProfile ? 900 : 768);
    const tariffSelectorRef = useRef<HTMLDivElement>(null);
 
    const userPermissions = useMemo(() => {
@@ -6601,8 +6625,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    return (
       <div
          ref={posRootRef}
-         className="fixed inset-0 w-full overflow-hidden bg-gray-50 flex font-sans select-none text-gray-900"
-         style={posShellStyle}
+         className={`clic-pos-device-shell fixed inset-0 w-full overflow-hidden bg-gray-50 flex font-sans select-none text-gray-900 ${isTabletProfile ? 'clic-pos-tablet-shell' : ''}`}
+         data-device-form-factor={activeDeviceProfile.formFactor}
+         data-device-orientation={activeDeviceProfile.orientation}
+         data-touch-optimized={activeDeviceProfile.touchOptimized ? 'true' : 'false'}
+         style={{
+            ...posShellStyle,
+            '--clic-touch-target-size': `${Math.max(
+               Number(activeTerminalConfig?.deviceRole?.uiSettings?.touchTargetSize || 0),
+               activeDeviceProfile.touchOptimized ? (isTabletProfile ? 52 : 48) : 44,
+            )}px`,
+         } as React.CSSProperties}
       >
          {productionRoutingPrompt && (
             <ProductionRoutingAssignmentModal

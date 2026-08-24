@@ -209,6 +209,11 @@ test('keeps Mast-01 and Slav-01 visible when ERP reuses POS-001 across terminal 
         device_id: 'DEV-JJP90FCP',
         terminal_type: 'ORDER_TAKER',
         master_terminal_id: '461837f1-67d1-4ce6-b394-bf9e7b79dc8c',
+        device_profile: {
+          form_factor: 'TABLET',
+          orientation: 'AUTO',
+          touch_optimized: true,
+        },
         company_name: 'Restaurante POS',
       },
       {
@@ -227,5 +232,8 @@ test('keeps Mast-01 and Slav-01 visible when ERP reuses POS-001 across terminal 
   assert.deepEqual(terminals.map(terminal => terminal.config.stationNumber), ['POS-001', 'POS-001']);
   assert.equal(terminals[0].terminalType, 'STANDARD_POS');
   assert.equal(terminals[1].terminalType, 'ORDER_TAKER');
+  assert.equal(terminals[1].deviceProfile?.formFactor, 'TABLET');
+  assert.equal(terminals[1].config.deviceProfile?.formFactor, 'TABLET');
+  assert.equal(terminals[1].config.deviceProfile?.touchOptimized, true);
   assert.equal(terminals[0].occupied, true);
 });

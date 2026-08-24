@@ -25,6 +25,7 @@ import { db } from './db';
 import { DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS } from '../constants';
 import { getDefaultRoleConfig, normalizeDeviceRoleValue, resolveDeviceRoleValue } from './deviceRoleHelpers';
 import { resolveOrderTakerContract } from './orderTakerPolicy';
+import { resolveDeviceProfile, toDeviceProfileContract } from './deviceProfile';
 import {
     POS_SYNC_CAPABILITY_VERSIONS,
     VARIANT_PROMOTIONS_CAPABILITY,
@@ -2170,8 +2171,21 @@ const applyErpConfigPushToLocalTerminal = async ({
             ...incomingTerminal,
         },
     });
+    const deviceProfileContract = toDeviceProfileContract(resolveDeviceProfile([
+        incomingTerminal.deviceProfile,
+        incomingTerminal.device_profile,
+        incomingIdentity.deviceProfile,
+        incomingIdentity.device_profile,
+        incomingResolved.deviceProfile,
+        incomingResolved.device_profile,
+        incomingConfig.deviceProfile,
+        incomingConfig.device_profile,
+        currentConfig.deviceProfile,
+        currentConfig.device_profile,
+    ], resolveDeviceRole(incomingDeviceRole.role)));
     const nextTerminalConfig: TerminalConfig = {
         ...currentConfig,
+        ...deviceProfileContract,
         terminalType: String(incomingDeviceRole.role || terminalTypeContract.terminalType),
         terminal_type: String(incomingDeviceRole.role || terminalTypeContract.terminalType),
         masterTerminalId: terminalTypeContract.masterTerminalId || currentConfig.masterTerminalId,

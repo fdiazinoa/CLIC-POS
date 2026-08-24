@@ -1,8 +1,8 @@
 import React from 'react';
-import { ArrowRight, MonitorSmartphone, Server, Wifi, Building2 } from 'lucide-react';
+import { ArrowRight, MonitorSmartphone, Server, Wifi, Building2, ClipboardList } from 'lucide-react';
 
 interface TerminalModeSelectorProps {
-    onSelect: (mode: 'SERVER_LOCAL' | 'SERVER_ERP' | 'CLIENT') => void;
+    onSelect: (mode: 'SERVER_LOCAL' | 'SERVER_ERP' | 'CLIENT' | 'ORDER_TAKER') => void;
 }
 
 const TerminalModeSelector: React.FC<TerminalModeSelectorProps> = ({ onSelect }) => {
@@ -23,7 +23,7 @@ const TerminalModeSelector: React.FC<TerminalModeSelectorProps> = ({ onSelect })
                         </p>
                     </div>
 
-                    <div className="grid grid-cols-1 gap-3 sm:gap-5 md:grid-cols-3">
+                    <div className="grid grid-cols-1 gap-3 sm:gap-5 md:grid-cols-2">
                         <button
                             type="button"
                             onClick={() => onSelect('SERVER_LOCAL')}
@@ -72,6 +72,23 @@ const TerminalModeSelector: React.FC<TerminalModeSelectorProps> = ({ onSelect })
                             </p>
                             <div className="inline-flex items-center gap-2 text-cyan-300 font-bold">
                                 Vincular a una maestra <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
+                            </div>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => onSelect('ORDER_TAKER')}
+                            className="group text-left rounded-[1.5rem] sm:rounded-[2rem] border border-slate-800 bg-slate-950/70 hover:bg-slate-900 p-4 sm:p-6 transition-all hover:border-violet-500/50 hover:-translate-y-0.5"
+                        >
+                            <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-violet-500/15 text-violet-300 flex items-center justify-center mb-3 sm:mb-5 group-hover:bg-violet-500 group-hover:text-white transition-colors">
+                                <ClipboardList size={26} />
+                            </div>
+                            <h2 className="text-xl sm:text-2xl font-black text-white mb-2">Toma de pedidos</h2>
+                            <p className="text-slate-400 text-sm leading-relaxed mb-4 sm:mb-6">
+                                Tablet o estación para mesas y comandas. Se conecta a una caja maestra y no procesa cobros.
+                            </p>
+                            <div className="inline-flex items-center gap-2 text-violet-300 font-bold">
+                                Vincular toma de pedidos <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
                             </div>
                         </button>
                     </div>

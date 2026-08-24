@@ -109,3 +109,24 @@ input[type='number'] {
   -moz-appearance: textfield;
   appearance: textfield;
 }
+
+.clic-pos-device-shell[data-touch-optimized='true'] {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.clic-pos-device-shell[data-touch-optimized='true'] input:not([type='checkbox']):not([type='radio']),
+.clic-pos-device-shell[data-touch-optimized='true'] select,
+.clic-pos-device-shell[data-touch-optimized='true'] textarea {
+  min-height: var(--clic-touch-target-size, 48px);
+}
+
+.clic-pos-tablet-shell {
+  --clic-tablet-content-gutter: clamp(0.75rem, 2vw, 1.5rem);
+}
+
+@media (orientation: portrait) and (min-width: 768px) and (max-width: 900px) {
+  .clic-pos-tablet-shell {
+    font-size: 16px;
+  }
+}

@@ -1,5 +1,5 @@
 
-import { RoleDefinition, User, Customer, Product, BusinessConfig, SubVertical, DocumentSeries, Tariff, TaxDefinition, DeviceRole, AuthLevel, LabelTemplate } from './types';
+import { RoleDefinition, User, Customer, Product, BusinessConfig, SubVertical, DocumentSeries, Tariff, TaxDefinition, DeviceRole, AuthLevel, LabelTemplate, DeviceFormFactor, DeviceOrientation } from './types';
 
 export const DEFAULT_DOCUMENT_SERIES: DocumentSeries[] = [
   { id: 'TICKET', documentType: 'TICKET', name: 'Ticket de Venta', description: 'Comprobante estándar para todas las ventas.', prefix: 'TCK', nextNumber: 1, padding: 6, icon: 'Receipt', color: 'blue' },
@@ -52,6 +52,11 @@ export const INITIAL_TARIFFS: Tariff[] = [
 export const DEFAULT_TERMINAL_CONFIG = {
   deviceBindingToken: 'dev_token_init',
   isPrimaryNode: true,
+  deviceProfile: {
+    formFactor: DeviceFormFactor.DESKTOP_POS,
+    orientation: DeviceOrientation.AUTO,
+    touchOptimized: false,
+  },
   fiscal: {
     batchSize: 100,
     lowBatchThreshold: 20,

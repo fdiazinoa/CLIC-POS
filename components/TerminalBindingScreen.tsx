@@ -58,6 +58,7 @@ interface TerminalBindingScreenProps {
   tenantId?: string;
   erpBaseUrl?: string;
   initialBindingMode?: 'MASTER' | 'SLAVE';
+  initialExpectedTerminalType?: PosTerminalType | null;
   integrationMode?: 'LOCAL_ONLY' | 'ERP_DIRECT';
   onPair: (terminalId: string, result?: PairingResult, options?: PairingOptions) => Promise<void>;
   onConfigUpdate?: (newConfig: BusinessConfig) => void | Promise<void>;
@@ -74,6 +75,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   tenantId,
   erpBaseUrl,
   initialBindingMode,
+  initialExpectedTerminalType = null,
   integrationMode = 'LOCAL_ONLY',
   onPair,
   onConfigUpdate,
@@ -100,17 +102,17 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   const [masterAdmins, setMasterAdmins] = useState<UserType[]>([]);
   const [localIps, setLocalIps] = useState<string[]>([]);
   const [bindingMode, setBindingMode] = useState<'MASTER' | 'SLAVE'>(initialBindingMode || 'MASTER');
-  // El modo persistido CLIENT agrupa cajas adicionales y tomas de pedidos.
-  // El contrato de la terminal seleccionada define el rol final.
-  const [expectedTerminalType, setExpectedTerminalType] = useState<PosTerminalType | null>(null);
+  // El modo inicial separa cajas adicionales y tomas de pedidos para que la
+  // lista de activación no ofrezca un tipo de terminal incompatible.
+  const [expectedTerminalType, setExpectedTerminalType] = useState<PosTerminalType | null>(initialExpectedTerminalType);
   const automaticDiscoveryRef = React.useRef('');
 
   React.useEffect(() => {
     if (initialBindingMode) {
       setBindingMode(initialBindingMode);
-      setExpectedTerminalType(null);
+      setExpectedTerminalType(initialExpectedTerminalType);
     }
-  }, [initialBindingMode]);
+  }, [initialBindingMode, initialExpectedTerminalType]);
 
   const resolveReachableMaster = async (host: string) => {
     const normalizedHost = normalizeMasterHost(host);
