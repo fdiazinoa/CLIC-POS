@@ -411,7 +411,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
                {availableTabs.includes('CLOCK') && (
                <button
                   onClick={() => setActiveTab('CLOCK')}
-                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'CLOCK' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'CLOCK' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-900 hover:text-black'}`}
                >
                   <Clock size={18} /> Fichaje
                </button>
@@ -419,7 +419,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
                {availableTabs.includes('USERS') && (
                <button
                   onClick={() => setActiveTab('USERS')}
-                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'USERS' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'USERS' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-slate-900 hover:text-black'}`}
                >
                   <Users size={18} /> Equipo
                </button>
@@ -427,7 +427,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
                {availableTabs.includes('SCHEDULE') && (
                <button
                   onClick={() => setActiveTab('SCHEDULE')}
-                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'SCHEDULE' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'SCHEDULE' ? 'border-orange-500 text-orange-600' : 'border-transparent text-slate-900 hover:text-black'}`}
                >
                   <Calendar size={18} /> Turnos & Horarios
                </button>
@@ -435,7 +435,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
                {availableTabs.includes('REPORTS') && (
                <button
                   onClick={() => setActiveTab('REPORTS')}
-                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'REPORTS' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'REPORTS' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-900 hover:text-black'}`}
                >
                   <FileBarChart size={18} /> Reporte de Horas
                </button>
@@ -443,7 +443,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
                {availableTabs.includes('ROLES') && (
                <button
                   onClick={() => setActiveTab('ROLES')}
-                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'ROLES' ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'ROLES' ? 'border-purple-500 text-purple-600' : 'border-transparent text-slate-900 hover:text-black'}`}
                >
                   <ShieldCheck size={18} /> Roles & Permisos
                </button>
@@ -539,9 +539,9 @@ const TeamHub: React.FC<TeamHubProps> = ({
                                        <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full uppercase tracking-wide">{role?.name || user.role}</span>
                                     </div>
                                  </div>
-                                 <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button onClick={() => openUserModal(user)} className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"><Edit2 size={16} /></button>
-                                    <button onClick={() => handleDeleteUser(user.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={16} /></button>
+                                 <div className="relative z-10 flex gap-2">
+                                    <button aria-label={`Editar ${user.name}`} title="Editar usuario" onClick={() => openUserModal(user)} className="p-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors"><Edit2 size={16} /></button>
+                                    <button aria-label={`Eliminar ${user.name}`} title="Eliminar usuario" onClick={() => handleDeleteUser(user.id)} className="p-2 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"><Trash2 size={16} /></button>
                                  </div>
                               </div>
                               <div className="flex items-center gap-2 text-xs text-gray-400 font-mono bg-gray-50 p-2 rounded-lg">

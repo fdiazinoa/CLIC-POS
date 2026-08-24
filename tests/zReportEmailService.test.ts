@@ -112,3 +112,41 @@ test('muestra un error en español cuando no puede renovar la autorización', as
     message: 'La autorización de la terminal venció y no pudo renovarse automáticamente.',
   });
 });
+
+test('envía al ERP los anexos seleccionados y calculados del cierre Z', async () => {
+  let sentBody: any;
+  const report = {
+    id: 'z-003',
+    enabledSections: ['SELLER_SUMMARY', 'ITEM_SUMMARY'],
+    reportDetails: {
+      sellerSummary: [{ userName: 'Ana', transactionCount: 2, netSales: 500 }],
+      itemSummary: [{ productName: 'Café', quantity: 2, netSales: 500 }],
+    },
+    denominationBreakdown: { DOP: [{ denomination: 500, quantity: 1, total: 500 }] },
+  } as never;
+
+  const result = await sendZReportEmailViaErp({
+    recipients: 'cierres@example.com',
+    report,
+    config: { companyInfo: { name: 'Mercasend' }, currencySymbol: 'RD$' } as never,
+  }, {
+    readCredentials: () => ({ syncToken: 'valid-token' }),
+    request: async (input) => {
+      sentBody = input.body;
+      return {
+        ok: true,
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        data: { success: true, id: 'resend-id', status: 'accepted' },
+        text: '',
+        networkEngine: 'fetch',
+        fetchStage: 'response',
+      };
+    },
+  });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(sentBody.report.enabledSections, ['SELLER_SUMMARY', 'ITEM_SUMMARY']);
+  assert.equal(sentBody.report.reportDetails.sellerSummary[0].userName, 'Ana');
+  assert.equal(sentBody.report.denominationBreakdown.DOP[0].total, 500);
+});
