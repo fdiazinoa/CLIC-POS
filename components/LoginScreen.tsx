@@ -22,8 +22,10 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
   const [biometricError, setBiometricError] = useState(false);
   const [biometricFailCount, setBiometricFailCount] = useState(0);
   const [isHardwareAvailable, setIsHardwareAvailable] = useState(false);
+  const [isExternalReaderListening, setIsExternalReaderListening] = useState(false);
   const [buildVersion, setBuildVersion] = useState<string>('');
   const pinInputRef = useRef<HTMLInputElement>(null);
+  const biometricScanInFlightRef = useRef(false);
   const usersByPin = React.useMemo(() => {
     const map = new Map<string, UserType>();
     for (const user of availableUsers) {
@@ -170,6 +172,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
       return;
     }
 
+    if (biometricScanInFlightRef.current) return;
+    biometricScanInFlightRef.current = true;
+
     try {
       setBiometricError(false);
       // We iterate through available users to find those with registered credentials
@@ -199,6 +204,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
       }
     } catch (e) {
       handleBioFail();
+    } finally {
+      biometricScanInFlightRef.current = false;
     }
   };
 
@@ -207,6 +214,60 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
     setBiometricError(true);
     setTimeout(() => setBiometricError(false), 2000);
   };
+
+  React.useEffect(() => {
+    if (!config.security?.allowBiometrics || !isHardwareAvailable) {
+      setIsExternalReaderListening(false);
+      return;
+    }
+
+    const enrolledUsers = availableUsers.filter(user => user.biometrics?.publicKey?.startsWith('sourceafis:'));
+    if (enrolledUsers.length === 0) {
+      setIsExternalReaderListening(false);
+      return;
+    }
+
+    let cancelled = false;
+    const wait = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms));
+
+    const listenForFingerprint = async () => {
+      const externalReaderAvailable = await biometricService.isExternalReaderAvailable();
+      if (cancelled || !externalReaderAvailable) return;
+
+      setIsExternalReaderListening(true);
+      const credentials = enrolledUsers.map(user => user.biometrics!);
+
+      while (!cancelled) {
+        if (biometricScanInFlightRef.current) {
+          await wait(250);
+          continue;
+        }
+
+        biometricScanInFlightRef.current = true;
+        try {
+          const matchedID = await biometricService.verify(credentials);
+          if (cancelled) return;
+
+          const targetUser = enrolledUsers.find(user => user.biometrics?.credentialID === matchedID);
+          if (targetUser) {
+            setIsExternalReaderListening(false);
+            onLogin(targetUser);
+            return;
+          }
+        } finally {
+          biometricScanInFlightRef.current = false;
+        }
+
+        if (!cancelled) await wait(500);
+      }
+    };
+
+    void listenForFingerprint();
+    return () => {
+      cancelled = true;
+      setIsExternalReaderListening(false);
+    };
+  }, [availableUsers, config.security?.allowBiometrics, isHardwareAvailable, onLogin]);
 
   const handleUserClick = (user: UserType) => {
     setSelectedUser(user);
@@ -279,6 +340,11 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
             {biometricError && (
               <div className="absolute mt-24 text-red-400 text-xs font-bold animate-in fade-in">
                 No reconocido ({biometricFailCount}/3)
+              </div>
+            )}
+            {isExternalReaderListening && !biometricError && (
+              <div className="absolute mt-24 text-blue-300 text-xs font-bold animate-in fade-in">
+                Lector listo: coloque el dedo
               </div>
             )}
           </div>
