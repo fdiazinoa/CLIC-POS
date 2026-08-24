@@ -241,15 +241,15 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
          setFpTestFeedback({ ok: false, message: 'Indique un puerto, seleccione un dispositivo detectado o use «Usar» primero.' });
          return;
       }
-      const status = await nativePrintBridge.testFingerprintReader({
+      const result = await nativePrintBridge.testFingerprintReader({
          address: addr || undefined,
          id: id || undefined,
          connection: 'USB'
       });
-      const ok = status === 'ONLINE';
+      const ok = result.status === 'ONLINE' && result.captured;
       setFpTestFeedback({
          ok,
-         message: ok ? 'El sistema puede abrir el lector USB (permiso concedido).' : 'No se pudo abrir el lector. Revise permiso USB o cable.'
+         message: result.message
       });
    };
 

@@ -23,6 +23,18 @@ export interface NativeHtmlPayload extends NativePrintPayload {
   html: string;
 }
 
+export interface FingerprintReaderTestResult {
+  status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN';
+  success: boolean;
+  captured: boolean;
+  message: string;
+  width?: number;
+  height?: number;
+  capturedLines?: number;
+  encrypted?: boolean;
+  contrast?: number;
+}
+
 interface NativeBridgeContext {
   runtime: NativePrintRuntime;
   bridge: NativePrinterBridge;
@@ -183,6 +195,23 @@ const normalizeConnectionHealth = (result: any): 'ONLINE' | 'OFFLINE' | 'UNKNOWN
   return 'UNKNOWN';
 };
 
+const normalizeFingerprintTestResult = (result: any): FingerprintReaderTestResult => {
+  const status = normalizeConnectionHealth(result);
+  return {
+    status,
+    success: result?.success === true,
+    captured: result?.captured === true,
+    message: String(result?.message || (status === 'ONLINE'
+      ? 'Lector disponible.'
+      : 'No se pudo completar la prueba del lector.')),
+    width: typeof result?.width === 'number' ? result.width : undefined,
+    height: typeof result?.height === 'number' ? result.height : undefined,
+    capturedLines: typeof result?.capturedLines === 'number' ? result.capturedLines : undefined,
+    encrypted: typeof result?.encrypted === 'boolean' ? result.encrypted : undefined,
+    contrast: typeof result?.contrast === 'number' ? result.contrast : undefined,
+  };
+};
+
 export const nativePrintBridge = {
   getRuntime(): NativePrintRuntime {
     const resolved = resolveBridge();
@@ -287,16 +316,19 @@ export const nativePrintBridge = {
     }
   },
 
-  async testFingerprintReader(payload: { address?: string; id?: string; connection?: string }): Promise<'ONLINE' | 'OFFLINE' | 'UNKNOWN'> {
+  async testFingerprintReader(payload: { address?: string; id?: string; connection?: string }): Promise<FingerprintReaderTestResult> {
     const resolved = resolveBridge();
-    if (!resolved) return 'UNKNOWN';
+    if (!resolved) return normalizeFingerprintTestResult(null);
 
     try {
       const result = await runBridgeMethod(resolved.bridge, ['testFingerprintReader'], payload);
-      return normalizeConnectionHealth(result);
+      return normalizeFingerprintTestResult(result);
     } catch (error) {
       console.warn('Native fingerprint reader test failed:', error);
-      return 'OFFLINE';
+      return {
+        status: 'OFFLINE', success: false, captured: false,
+        message: error instanceof Error ? error.message : 'No se pudo completar la prueba del lector.',
+      };
     }
   },
 

@@ -309,6 +309,10 @@ class AndroidPrinterBridge(context: Context) {
             }
 
             val capture = DigitalPersonaUru4500(usbManager, device).use { reader -> reader.capture() }
+            Log.i(
+                "ClicPOSFingerprint",
+                "capture_ok width=${capture.width} height=${capture.height} lines=${capture.capturedLines} encrypted=${capture.encrypted} contrast=${capture.contrast}",
+            )
             JSONObject()
                 .put("status", "ONLINE")
                 .put("success", true)
@@ -321,6 +325,7 @@ class AndroidPrinterBridge(context: Context) {
                 .put("message", "Huella capturada correctamente (${capture.width}×${capture.height}, ${capture.capturedLines} líneas).")
                 .toString()
         } catch (e: Exception) {
+            Log.e("ClicPOSFingerprint", "capture_failed: ${e.message}", e)
             JSONObject()
                 .put("status", "OFFLINE")
                 .put("success", false)
