@@ -202,8 +202,8 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
       const enrolledUsers = availableUsers.filter((user) => user.biometrics?.credentialID);
       if (enrolledUsers.length === 0) return;
 
-      const credentialIDs = enrolledUsers.map((user) => user.biometrics!.credentialID);
-      const matchedId = await biometricService.verify(credentialIDs);
+      const credentials = enrolledUsers.map((user) => user.biometrics!);
+      const matchedId = await biometricService.verify(credentials);
 
       if (matchedId) {
         const targetUser = enrolledUsers.find((user) => user.biometrics?.credentialID === matchedId);

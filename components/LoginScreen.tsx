@@ -181,10 +181,10 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
       }
 
       // Collect all credential IDs for multi-user verification
-      const credentialIDs = enrolledUsers.map(u => u.biometrics!.credentialID);
+      const credentials = enrolledUsers.map(u => u.biometrics!);
 
       // Verify and get the matched credentialID back
-      const matchedID = await biometricService.verify(credentialIDs);
+      const matchedID = await biometricService.verify(credentials);
 
       if (matchedID) {
         // Find the user that corresponds to the matched ID

@@ -27,6 +27,7 @@ import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.util.UUID
 import java.net.Socket
 import java.net.URL
 import java.net.URLEncoder
@@ -103,7 +104,9 @@ class AndroidPrinterBridge(context: Context) {
                     discoverMasterServers: function (payload) { return call('discoverMasterServers', payload); },
                     discoverFingerprintReaders: function (payload) { return call('discoverFingerprintReaders', payload); },
                     scanFingerprintReaders: function (payload) { return call('scanFingerprintReaders', payload); },
-                    testFingerprintReader: function (payload) { return call('testFingerprintReader', payload); }
+                    testFingerprintReader: function (payload) { return call('testFingerprintReader', payload); },
+                    enrollFingerprint: function (payload) { return call('enrollFingerprint', payload); },
+                    verifyFingerprint: function (payload) { return call('verifyFingerprint', payload); }
                   };
                 })();
             """.trimIndent()
@@ -330,6 +333,72 @@ class AndroidPrinterBridge(context: Context) {
                 .put("status", "OFFLINE")
                 .put("success", false)
                 .put("message", e.message ?: "FP_TEST_ERROR")
+                .toString()
+        }
+    }
+
+    @JavascriptInterface
+    fun enrollFingerprint(payloadJson: String?): String {
+        return try {
+            val payload = JSONObject(payloadJson ?: "{}")
+            val capture = captureDigitalPersona(payload)
+            val template = ClicPOSFingerprintEngine.createTemplate(capture)
+            val credentialId = "dp4500:${UUID.randomUUID()}"
+            Log.i("ClicPOSFingerprint", "enroll_ok credential=$credentialId templateBytes=${template.length}")
+            JSONObject()
+                .put("status", "SUCCESS")
+                .put("success", true)
+                .put("credentialID", credentialId)
+                .put("publicKey", template)
+                .put("message", "Huella registrada correctamente.")
+                .toString()
+        } catch (e: Exception) {
+            Log.e("ClicPOSFingerprint", "enroll_failed: ${e.message}", e)
+            JSONObject()
+                .put("status", "ERROR")
+                .put("success", false)
+                .put("message", e.message ?: "FP_ENROLL_ERROR")
+                .toString()
+        }
+    }
+
+    @JavascriptInterface
+    fun verifyFingerprint(payloadJson: String?): String {
+        return try {
+            val payload = JSONObject(payloadJson ?: "{}")
+            val templates = payload.optJSONArray("templates") ?: JSONArray()
+            val candidates = buildList {
+                for (index in 0 until templates.length()) {
+                    val item = templates.optJSONObject(index) ?: continue
+                    val credentialId = item.optString("credentialID", "")
+                    val template = item.optString("publicKey", "")
+                    if (credentialId.isNotBlank() && template.isNotBlank()) {
+                        add(FingerprintCandidate(credentialId, template))
+                    }
+                }
+            }
+            if (candidates.isEmpty()) throw IllegalArgumentException("No hay plantillas de huella compatibles.")
+
+            val capture = captureDigitalPersona(payload)
+            val match = ClicPOSFingerprintEngine.identify(capture, candidates)
+            Log.i(
+                "ClicPOSFingerprint",
+                "verify_done matched=${match.credentialId != null} score=${match.score} threshold=${match.threshold}",
+            )
+            JSONObject()
+                .put("status", if (match.credentialId != null) "MATCH" else "NO_MATCH")
+                .put("success", match.credentialId != null)
+                .put("credentialID", match.credentialId ?: JSONObject.NULL)
+                .put("score", match.score)
+                .put("threshold", match.threshold)
+                .put("message", if (match.credentialId != null) "Huella reconocida." else "Huella no reconocida. Intente nuevamente.")
+                .toString()
+        } catch (e: Exception) {
+            Log.e("ClicPOSFingerprint", "verify_failed: ${e.message}", e)
+            JSONObject()
+                .put("status", "ERROR")
+                .put("success", false)
+                .put("message", e.message ?: "FP_VERIFY_ERROR")
                 .toString()
         }
     }
@@ -1229,6 +1298,27 @@ class AndroidPrinterBridge(context: Context) {
             if (wantAddr != null && usbDeviceAddress(d).equals(wantAddr, ignoreCase = true)) return d
         }
         return null
+    }
+
+    private fun captureDigitalPersona(payload: JSONObject): Uru4500Capture {
+        val usbManager = appContext.getSystemService(Context.USB_SERVICE) as? UsbManager
+            ?: throw IllegalStateException("USB host no disponible.")
+        val device = findUsbFingerprintDeviceForTest(
+            payload.optString("address", "").trim(),
+            payload.optString("id", "").trim(),
+        ) ?: usbManager.deviceList.values.firstOrNull {
+            it.vendorId == DigitalPersonaUru4500.VENDOR_ID && it.productId == DigitalPersonaUru4500.PRODUCT_ID
+        } ?: throw IllegalStateException("No se encontró el lector DigitalPersona U.are.U 4500.")
+
+        if (device.vendorId != DigitalPersonaUru4500.VENDOR_ID ||
+            device.productId != DigitalPersonaUru4500.PRODUCT_ID) {
+            throw IllegalArgumentException("El dispositivo seleccionado no es un DigitalPersona U.are.U 4500 (05ba:000a).")
+        }
+        if (!usbManager.hasPermission(device)) requestUsbPermission(usbManager, device)
+        if (!usbManager.hasPermission(device)) {
+            throw IllegalStateException("Permiso USB pendiente. Acepte el diálogo del sistema e intente nuevamente.")
+        }
+        return DigitalPersonaUru4500(usbManager, device).use { it.capture() }
     }
 
     private fun discoverUsbPrinters(): List<JSONObject> {
