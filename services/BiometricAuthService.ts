@@ -46,20 +46,33 @@ const isSourceAfisCredential = (credential: UserBiometrics): boolean =>
 
 export const biometricService = {
     /**
+     * Check specifically for the supported external USB reader. This is kept
+     * separate from platform WebAuthn so login screens can safely enable
+     * passive listening without opening an operating-system biometric prompt.
+     */
+    isExternalReaderAvailable: async (): Promise<boolean> => {
+        const nativeBridge = nativeFingerprintBridge();
+        if (!nativeBridge?.discoverFingerprintReaders || !nativeBridge?.verifyFingerprint) return false;
+
+        try {
+            const result = await nativeBridge.discoverFingerprintReaders({ connection: 'USB' });
+            const devices = Array.isArray(result) ? result : (result?.devices || []);
+            return devices.some((device: any) =>
+                Number(device.vendorId) === 0x05ba && Number(device.productId) === 0x000a
+            );
+        } catch (error) {
+            console.warn('External fingerprint availability check failed', error);
+            return false;
+        }
+    },
+
+    /**
      * Check if biometrics are available on this device
      */
     isAvailable: async (): Promise<boolean> => {
         const nativeBridge = nativeFingerprintBridge();
         if (nativeBridge?.discoverFingerprintReaders && nativeBridge?.enrollFingerprint && nativeBridge?.verifyFingerprint) {
-            try {
-                const result = await nativeBridge.discoverFingerprintReaders({ connection: 'USB' });
-                const devices = Array.isArray(result) ? result : (result?.devices || []);
-                if (devices.some((device: any) => Number(device.vendorId) === 0x05ba && Number(device.productId) === 0x000a)) {
-                    return true;
-                }
-            } catch (error) {
-                console.warn('External fingerprint availability check failed', error);
-            }
+            if (await biometricService.isExternalReaderAvailable()) return true;
         }
 
         if (!window.PublicKeyCredential) return false;
