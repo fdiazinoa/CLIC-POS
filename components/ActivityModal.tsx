@@ -249,7 +249,7 @@ const ActivityModal: React.FC<ActivityModalProps> = ({
     };
 
     const handleDelete = async () => {
-        if (activity && confirm('¿Estás seguro de eliminar esta actividad?')) {
+        if (activity && await clicConfirm('¿Estás seguro de eliminar esta actividad?')) {
             await onDelete(activity.id);
             onClose();
         }

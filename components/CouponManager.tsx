@@ -104,8 +104,8 @@ const CouponManager: React.FC<CouponManagerProps> = ({ config, onUpdateConfig })
         setViewMode('LIST');
     };
 
-    const handleDelete = (id: string) => {
-        if (confirm('¿Eliminar esta campaña? Los cupones existentes seguirán funcionando hasta que expiren.')) {
+    const handleDelete = async (id: string) => {
+        if (await clicConfirm('¿Eliminar esta campaña? Los cupones existentes seguirán funcionando hasta que expiren.')) {
             onUpdateConfig({
                 ...config,
                 campaigns: campaigns.filter(c => c.id !== id)

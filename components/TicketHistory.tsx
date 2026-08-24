@@ -2185,7 +2185,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       });
       if (!authorized) return;
 
-      if (confirm("¿Confirmar devolución de los artículos seleccionados?")) {
+      if (await clicConfirm("¿Confirmar devolución de los artículos seleccionados?")) {
          // Build items with adjusted quantities
          const itemsToRefund = transaction.items
             .filter(item => selectedItemsQty.has(item.cartId))

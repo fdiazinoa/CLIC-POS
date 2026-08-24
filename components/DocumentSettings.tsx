@@ -861,7 +861,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
    };
 
    const handleDeleteSeries = async (id: string) => {
-      if (!confirm("¿Desea eliminar este tipo de documento? Las transacciones existentes no se verán afectadas pero no podrá emitir nuevos bajo esta serie.")) return;
+      if (!await clicConfirm("¿Desea eliminar este tipo de documento? Las transacciones existentes no se verán afectadas pero no podrá emitir nuevos bajo esta serie.")) return;
 
       const updated = seriesList.filter(s => s.id !== id);
       setSeriesList(updated);
@@ -980,7 +980,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
          return;
       }
 
-      if (!window.confirm(`¿Desea eliminar la autorización ${range.type} ${range.prefix}-${range.startNumber} a ${range.endNumber}?`)) {
+      if (!await clicConfirm(`¿Desea eliminar la autorización ${range.type} ${range.prefix}-${range.startNumber} a ${range.endNumber}?`)) {
          return;
       }
 
@@ -1184,7 +1184,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
          return;
       }
 
-      if (!confirm('¿Deseas eliminar la credencial local? Si existe una en Supabase o ENV, esa pasará a ser la fuente activa.')) {
+      if (!await clicConfirm('¿Deseas eliminar la credencial local? Si existe una en Supabase o ENV, esa pasará a ser la fuente activa.')) {
          return;
       }
 
@@ -1225,7 +1225,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
          return;
       }
 
-      if (!confirm('¿Deseas eliminar la credencial de Supabase para esta empresa/proveedor?')) {
+      if (!await clicConfirm('¿Deseas eliminar la credencial de Supabase para esta empresa/proveedor?')) {
          return;
       }
 

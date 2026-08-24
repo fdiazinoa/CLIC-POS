@@ -437,8 +437,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       setIsEditModalOpen(false);
    };
 
-   const handleDelete = (id: string) => {
-      if (confirm('¿Eliminar cliente permanentemente?')) {
+   const handleDelete = async (id: string) => {
+      if (await clicConfirm('¿Eliminar cliente permanentemente?')) {
          onDeleteCustomer(id);
          if (selectedCustomerId === id) setSelectedCustomerId(null);
       }
@@ -942,8 +942,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       setIsAddressFormOpen(false);
    };
 
-   const handleDeleteAddress = (id: string) => {
-      if (confirm("¿Eliminar dirección?")) {
+   const handleDeleteAddress = async (id: string) => {
+      if (await clicConfirm("¿Eliminar dirección?")) {
          setFormData({
             ...formData,
             addresses: formData.addresses?.filter(a => a.id !== id)
@@ -965,9 +965,9 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       setCardLinkType('LOYALTY');
    };
 
-   const handleUnlinkCard = (cardId: string) => {
+   const handleUnlinkCard = async (cardId: string) => {
       if (!selectedCustomer) return;
-      if (confirm('¿Estás seguro de desvincular esta tarjeta?')) {
+      if (await clicConfirm('¿Estás seguro de desvincular esta tarjeta?')) {
          const updatedCards = (selectedCustomer.cards || []).filter(c => c.id !== cardId);
          onUpdateCustomer({ ...selectedCustomer, cards: updatedCards });
       }
@@ -2347,7 +2347,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                   fetchActivities();
                }}
                onDelete={async (id) => {
-                  if (confirm('¿Eliminar actividad?')) {
+                  if (await clicConfirm('¿Eliminar actividad?')) {
                      await agendaService.deleteActivity(id);
                      setIsActivityModalOpen(false);
                      setSelectedActivity(null);

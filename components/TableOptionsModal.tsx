@@ -125,11 +125,11 @@ const TableOptionsModal: React.FC<TableOptionsModalProps> = ({
               availableTables.map(t => (
                 <button
                   key={t.id}
-                  onClick={() => {
+                  onClick={async () => {
                     if (moveMode === 'PARTIAL') {
                       if (!onMoveTablePartial || selectedPartialItems.length === 0) return;
-                      if (confirm(`¿Mover ${selectedPartialItems.length} artículo(s) a ${getTableRoomLabel(t, rooms)}?`)) onMoveTablePartial(t.id, selectedPartialItems);
-                    } else if (confirm(`¿Mover a ${getTableRoomLabel(t, rooms)}?`)) onMoveTable(t.id);
+                      if (await clicConfirm(`¿Mover ${selectedPartialItems.length} artículo(s) a ${getTableRoomLabel(t, rooms)}?`)) onMoveTablePartial(t.id, selectedPartialItems);
+                    } else if (await clicConfirm(`¿Mover a ${getTableRoomLabel(t, rooms)}?`)) onMoveTable(t.id);
                   }}
                   disabled={moveMode === 'PARTIAL' && selectedPartialItems.length === 0}
                   className="p-4 rounded-xl border border-gray-200 bg-white hover:border-blue-500 hover:bg-blue-50 hover:shadow-md disabled:opacity-40 disabled:cursor-not-allowed transition-all text-center group flex flex-col items-center gap-1"
@@ -211,8 +211,8 @@ const TableOptionsModal: React.FC<TableOptionsModalProps> = ({
           </button>
 
           {onMergeTables && (
-            <button onClick={() => {
-              const target = prompt('Ingrese ID de mesa a unir (Desarrollo: ID interna)');
+            <button onClick={async () => {
+              const target = await clicPrompt('Ingrese ID de mesa a unir (Desarrollo: ID interna)');
               if (target) onMergeTables([target]);
             }} className="flex items-center gap-4 w-full p-3 rounded-xl hover:bg-gray-50 active:bg-gray-100 transition-all text-left group">
               <div className="p-2.5 bg-gray-100 text-gray-500 rounded-lg group-hover:bg-gray-200 group-hover:text-gray-700 transition-colors">
@@ -257,7 +257,7 @@ const TableOptionsModal: React.FC<TableOptionsModalProps> = ({
           {isOccupied && onFree && (
             <>
               <div className="h-px bg-gray-100 my-1 mx-4" />
-              <button onClick={() => { if (confirm('¿Liberar mesa? Se perderán cambios no guardados.')) onFree(); }} className="flex items-center gap-4 w-full p-3 rounded-xl hover:bg-red-50 active:bg-red-100 transition-all text-left group">
+              <button onClick={async () => { if (await clicConfirm('¿Liberar mesa? Se perderán cambios no guardados.')) onFree(); }} className="flex items-center gap-4 w-full p-3 rounded-xl hover:bg-red-50 active:bg-red-100 transition-all text-left group">
                 <div className="p-2.5 bg-red-50 text-red-500 rounded-lg group-hover:bg-red-100 group-hover:text-red-600 transition-colors">
                   <X size={20} />
                 </div>

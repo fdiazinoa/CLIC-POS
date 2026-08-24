@@ -664,7 +664,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
 
         // Mixed Content / Proxy Warning
         if (isHttpsOrigin && isTargetPort3001) {
-            const usePort3000 = confirm(
+            const usePort3000 = await clicConfirm(
                 '⚠️ Estás usando HTTPS en el puerto 3001.\n\n' +
                 'Debido a restricciones de seguridad (Mixed Content), es probable que la conexión falle directamente al puerto 3001.\n\n' +
                 '¿Deseas intentar usar el puerto 3000? (Recomendado para usar el proxy de seguridad)'
@@ -760,7 +760,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     }, []);
 
     const handleForcePull = async () => {
-        if (!confirm('⚠️ ¿Estás seguro? Esto reiniciará la sincronización y descargará TODO del servidor nuevamente.')) return;
+        if (!await clicConfirm('⚠️ ¿Estás seguro? Esto reiniciará la sincronización y descargará TODO del servidor nuevamente.')) return;
 
         // Modal will open via event listener
         try {
@@ -939,7 +939,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                 <div className="mt-10 pt-6 border-t border-blue-100">
                                     <button
                                         onClick={async () => {
-                                            if (confirm('⚠️ SOPORTE: ¿Deseas resetear la identidad física de este dispositivo?\n\nAl hacerlo:\n- Se generará un nuevo device_id DEV-*.\n- Cloud-Admin deberá reautorizar este equipo.\n- Se borrará la IP de la Maestra guardada.\n- Se reseteará la configuración local.\n\nNo uses esta opción para limpiar solo la BD local.')) {
+                                            if (await clicConfirm('⚠️ SOPORTE: ¿Deseas resetear la identidad física de este dispositivo?\n\nAl hacerlo:\n- Se generará un nuevo device_id DEV-*.\n- Cloud-Admin deberá reautorizar este equipo.\n- Se borrará la IP de la Maestra guardada.\n- Se reseteará la configuración local.\n\nNo uses esta opción para limpiar solo la BD local.')) {
                                                 try {
                                                     // 1. Explicit support-only identity reset
                                                     await resetDeviceIdentityBySupport();

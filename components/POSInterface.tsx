@@ -2024,7 +2024,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
    }, [activeTerminalConfig, transactions, terminalId, zReports]);
 
-   const canProceedWithOperationalSession = useCallback((): boolean => {
+   const canProceedWithOperationalSession = useCallback(async (): Promise<boolean> => {
       if (!activeTerminalConfig || terminalTransactions.length === 0) return true;
 
       const sessionStartDate = terminalTransactions[0]?.date;
@@ -2032,7 +2032,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       if (!isSessionExpired(sessionStartDate, activeTerminalConfig)) return true;
 
-      return confirm(
+      return await clicConfirm(
          "⚠️ ADVERTENCIA DE JORNADA\n\n" +
          "El sistema detecta que la jornada operativa ha cambiado (hay transacciones pendientes de jornadas anteriores).\n\n" +
          "¿Desea continuar facturando de todos modos?\n" +
@@ -4590,7 +4590,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const handleClearFreshCartItems = async () => {
       if (blockRecoveredUberOrderMutation('limpiar los artículos nuevos del ticket')) return;
       if (hasSubtotalizedCart) {
-         if (!window.confirm('¿Eliminar por completo este ticket subtotalizado? Esta acción liberará la mesa.')) return;
+         if (!await clicConfirm('¿Eliminar por completo este ticket subtotalizado? Esta acción liberará la mesa.')) return;
          const authorized = await requestApproval({
             permission: 'POS_VOID_SUBTOTALIZED_TICKET',
             actionDescription: 'Eliminar ticket subtotalizado',
@@ -4624,7 +4624,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          ? `Se borrarán ${freshItems.length} artículo(s) nuevo(s). ${dispatchedItems.length} artículo(s) ya enviados a cocina se mantendrán en el ticket.`
          : `Se borrarán todos los artículos nuevos del ticket (${freshItems.length}).`;
 
-      if (!window.confirm(`${confirmMessage}\n\n¿Continuar?`)) return;
+      if (!await clicConfirm(`${confirmMessage}\n\n¿Continuar?`)) return;
 
       const authorized = await requestApproval({
          permission: 'POS_VOID_ITEM',
@@ -5967,7 +5967,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       });
       if (!authorized) return;
 
-      const confirmed = window.confirm(`¿Marcar "${item.name}" como devuelto en cocina? El plato no debe prepararse y la línea quedará en el ticket como auditoría.`);
+      const confirmed = await clicConfirm(`¿Marcar "${item.name}" como devuelto en cocina? El plato no debe prepararse y la línea quedará en el ticket como auditoría.`);
       if (!confirmed) return;
 
       try {
@@ -8036,14 +8036,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  <span>Salir</span>
                               </button>
                               <button
-                                 onClick={() => {
+                                 onClick={async () => {
                                     if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
                                        const validation = validateTerminalDocument(config, terminalId, 'TICKET');
                                        if (!validation.isValid) {
                                           alert(validation.error);
                                           return;
                                        }
-                                       if (!canProceedWithOperationalSession()) return;
+                                       if (!await canProceedWithOperationalSession()) return;
                                        proceedToCheckout();
                                     } else if (!canCheckoutWithFiscalPolicy) {
                                        alert("No hay secuencias fiscales disponibles.");
@@ -8173,14 +8173,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           <span>Salir</span>
                                        </button>
                                        <button
-                                          onClick={() => {
+                                          onClick={async () => {
                                              if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
                                                 const validation = validateTerminalDocument(config, terminalId, 'TICKET');
                                                 if (!validation.isValid) {
                                                    alert(validation.error);
                                                    return;
                                                 }
-                                                if (!canProceedWithOperationalSession()) return;
+                                                if (!await canProceedWithOperationalSession()) return;
                                                 proceedToCheckout();
                                              } else if (!canCheckoutWithFiscalPolicy) {
                                                 alert("No hay secuencias fiscales disponibles.");
@@ -8203,9 +8203,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           <span>Salir</span>
                                        </button>
                                        <button
-                                          onClick={() => {
+                                          onClick={async () => {
                                              if (cart.length > 0) {
-                                                if (!canProceedWithOperationalSession()) return;
+                                                if (!await canProceedWithOperationalSession()) return;
                                                 proceedToCheckout();
                                              }
                                           }}
@@ -8311,9 +8311,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <span className="text-3xl font-black text-gray-900 tracking-tighter leading-none">{baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                      </div>
                      <button
-                        onClick={() => {
+                        onClick={async () => {
                            if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
-                              if (!canProceedWithOperationalSession()) return;
+                              if (!await canProceedWithOperationalSession()) return;
                               proceedToCheckout();
                            }
                         }}

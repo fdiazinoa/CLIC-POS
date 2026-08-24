@@ -164,7 +164,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
             return;
         }
 
-        if (confirm(`¿Guardar conteo de ${counts.length} productos para ${warehouseName || 'el almacén seleccionado'}?`)) {
+        if (await clicConfirm(`¿Guardar conteo de ${counts.length} productos para ${warehouseName || 'el almacén seleccionado'}?`)) {
             const payload = {
                 id: sessionId,
                 warehouseId: warehouseId || '',

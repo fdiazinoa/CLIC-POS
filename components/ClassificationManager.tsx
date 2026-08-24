@@ -245,8 +245,8 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
         setIsCreating(false);
     };
 
-    const handleDelete = (id: string) => {
-        if (!confirm("¿Está seguro de eliminar este elemento?")) return;
+    const handleDelete = async (id: string) => {
+        if (!await clicConfirm("¿Está seguro de eliminar este elemento?")) return;
         const newItems = items.filter(i => i.id !== id);
         persistItems(newItems);
     };

@@ -134,8 +134,8 @@ const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
     setShowAddProductsModal(false);
   };
 
-  const handleDeleteList = (id: string) => {
-    if (confirm("¿Eliminar este tablero de seguimiento?")) {
+  const handleDeleteList = async (id: string) => {
+    if (await clicConfirm("¿Eliminar este tablero de seguimiento?")) {
       const filtered = watchlists.filter(w => w.id !== id);
       onUpdateWatchlists(filtered);
       if (selectedListId === id) setSelectedListId(filtered[0]?.id || '');

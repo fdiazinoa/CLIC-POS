@@ -3044,6 +3044,13 @@ class ApiSyncAdapter {
         };
     }
 
+    async refreshOperationalAuthorization(): Promise<void> {
+        const target = await this.authenticateOperationalTarget(true, 'background', 'PUSH_OPERATIONS');
+        if (!target.token) {
+            throw new Error('Operational sync token unavailable after refresh');
+        }
+    }
+
     private async parseOperationalResponse(response: Response): Promise<any> {
         const text = await response.clone().text().catch(() => '');
         if (!text.trim()) return null;

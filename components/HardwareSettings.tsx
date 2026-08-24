@@ -350,8 +350,8 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       });
    };
 
-   const handleDeleteScale = (id: string) => {
-      if (confirm('¿Eliminar esta balanza?')) {
+   const handleDeleteScale = async (id: string) => {
+      if (await clicConfirm('¿Eliminar esta balanza?')) {
          setScales(scales.filter(s => s.id !== id));
       }
    };
@@ -964,14 +964,14 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       setManualTestResult(result);
    };
 
-   const addAd = (e: React.MouseEvent) => {
+   const addAd = async (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      const url = prompt("Introduce la URL de la imagen o video publicitario (JPG/PNG/MP4/WebM):");
+      const url = await clicPrompt("Introduce la URL de la imagen o video publicitario (JPG/PNG/MP4/WebM):");
       if (url && isValidRemoteMediaUrl(url.trim())) {
          const type = inferMediaType(url);
          const posterUrl = type === 'VIDEO'
-            ? (prompt('URL del póster del video (opcional):') || '').trim() || undefined
+            ? (await clicPrompt('URL del póster del video (opcional):') || '').trim() || undefined
             : undefined;
          setDisplayConfig(prev => ({
             ...prev,

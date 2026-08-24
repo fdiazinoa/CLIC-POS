@@ -5588,7 +5588,7 @@ const AppContent: React.FC = () => {
     const handleEmergencyReset = async (e: KeyboardEvent) => {
       // Shortcut: Ctrl + Shift + Alt + U (Unbind)
       if (e.ctrlKey && e.shiftKey && e.altKey && e.code === 'KeyU') {
-        if (confirm('🚨 EMERGENCY RESET: This will unbind this terminal and clear local database config. Continue?')) {
+        if (await clicConfirm('🚨 EMERGENCY RESET: This will unbind this terminal and clear local database config. Continue?')) {
           try {
             console.warn("🧺 EMERGENCY UNBIND TRIGGERED");
             localStorage.removeItem('pos_master_ip');
@@ -6852,7 +6852,7 @@ const AppContent: React.FC = () => {
 
   // --- GLOBAL KEYBOARD SHORTCUT FOR ADMIN ACCESS ---
   useEffect(() => {
-   const handleGlobalKeyboard = (e: KeyboardEvent) => {
+   const handleGlobalKeyboard = async (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
       }
@@ -6872,7 +6872,7 @@ const AppContent: React.FC = () => {
           role === DeviceRole.PRICE_CHECKER ||
           role === DeviceRole.KITCHEN_DISPLAY) {
           // Trigger escape hatch
-          const pin = prompt('🔐 Ingrese PIN de Administrador:');
+          const pin = await clicPrompt('🔐 Ingrese PIN de Administrador:');
           if (pin && authLevelService.validateEscapeHatch(pin)) {
             console.log('✅ PIN correcto - Navegando a Settings');
             setIsAdminMode(true);  // Enable admin mode to prevent auto-redirect
@@ -11626,8 +11626,8 @@ const AppContent: React.FC = () => {
               handleViewChange('KIOSK_BROWSER');
             }}
             storeName={config.companyInfo?.name}
-            onAdminAccess={() => {
-              const rawPin = prompt('Ingrese PIN de administrador:');
+            onAdminAccess={async () => {
+              const rawPin = await clicPrompt('Ingrese PIN de administrador:');
               if (!rawPin) return;
 
               const pin = rawPin.trim();
@@ -12048,8 +12048,8 @@ const AppContent: React.FC = () => {
     const content = renderView();
 
     // Handle escape hatch for kiosk modes
-    const handleEscapeHatch = () => {
-      const rawPin = prompt('Ingrese PIN de administrador:');
+    const handleEscapeHatch = async () => {
+      const rawPin = await clicPrompt('Ingrese PIN de administrador:');
       if (!rawPin) return;
 
       const pin = rawPin.trim();

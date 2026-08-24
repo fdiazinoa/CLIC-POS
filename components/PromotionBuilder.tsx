@@ -208,8 +208,8 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
       setViewMode('EDIT');
    };
 
-   const handleDelete = (id: string) => {
-      if (confirm('¿Estás seguro de eliminar esta promoción?')) {
+   const handleDelete = async (id: string) => {
+      if (await clicConfirm('¿Estás seguro de eliminar esta promoción?')) {
          const updatedPromotions = promotions.filter(p => p.id !== id);
          if (onUpdateConfig) {
             onUpdateConfig({ ...config, promotions: updatedPromotions });

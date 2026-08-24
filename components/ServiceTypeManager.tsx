@@ -118,7 +118,7 @@ const ServiceTypeManager: React.FC<ServiceTypeManagerProps> = ({ onClose, onUpda
     };
 
     const handleDelete = async (id: string) => {
-        if (confirm('¿Seguro que desea eliminar este tipo?')) {
+        if (await clicConfirm('¿Seguro que desea eliminar este tipo?')) {
             await agendaService.deleteServiceType(id);
             await loadTypes();
             onUpdate();

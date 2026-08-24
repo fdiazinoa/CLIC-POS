@@ -147,7 +147,7 @@ const InventoryOptimizer: React.FC<InventoryOptimizerProps> = ({
 
     const handleApplyChanges = async () => {
         if (results.length === 0) return;
-        if (!confirm(`¿Está seguro que desea aplicar ${results.length} cambios de niveles de inventario?`)) return;
+        if (!await clicConfirm(`¿Está seguro que desea aplicar ${results.length} cambios de niveles de inventario?`)) return;
 
         setIsCalculating(true);
         try {

@@ -960,7 +960,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    };
 
    const handleBulkRecalculate = async (season: Season) => {
-      if (!confirm(`¿Recalcular niveles mínimos y máximos para los ${season.productIds.length} productos de "${season.name}"?`)) return;
+      if (!await clicConfirm(`¿Recalcular niveles mínimos y máximos para los ${season.productIds.length} productos de "${season.name}"?`)) return;
 
       const updatedProducts = [...products];
       let updatedCount = 0;
@@ -1090,7 +1090,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    async function handleDeleteProduct(product: Product) {
       if (!canManage || !product?.id) return;
       const label = product.name || product.id;
-      if (!confirm(`¿Eliminar el artículo "${label}" del catálogo local?`)) return;
+      if (!await clicConfirm(`¿Eliminar el artículo "${label}" del catálogo local?`)) return;
 
       try {
          await db.deleteDocument('products' as any, product.id);
@@ -1135,10 +1135,10 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       setEditingSeason(null);
    }
 
-   function handleDeleteGroup(groupId: string) {
+   async function handleDeleteGroup(groupId: string) {
       const group = currentProductGroups.find((entry) => entry.id === groupId);
       if (!group) return;
-      if (!confirm(`¿Eliminar el grupo "${group.name}"?`)) return;
+      if (!await clicConfirm(`¿Eliminar el grupo "${group.name}"?`)) return;
       const nextConfig = {
          ...config,
          productGroups: currentProductGroups.filter((entry) => entry.id !== groupId),
@@ -1147,10 +1147,10 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       onUpdateConfig(nextConfig);
    }
 
-   function handleDeleteSeason(seasonId: string) {
+   async function handleDeleteSeason(seasonId: string) {
       const season = currentSeasons.find((entry) => entry.id === seasonId);
       if (!season) return;
-      if (!confirm(`¿Eliminar la temporada "${season.name}"?`)) return;
+      if (!await clicConfirm(`¿Eliminar la temporada "${season.name}"?`)) return;
       const nextConfig = {
          ...config,
          seasons: currentSeasons.filter((entry) => entry.id !== seasonId),

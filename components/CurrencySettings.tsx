@@ -88,8 +88,8 @@ const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateCon
     setCurrencies(prev => prev.map(c => c.code === activeCurrency.code ? { ...c, rate: newRate } : c));
   };
 
-  const handleSetAsBase = (targetCode: string) => {
-    if (!confirm(`¿Cambiar moneda base a ${targetCode}? Esto reseteará su tasa a 1.00.`)) return;
+  const handleSetAsBase = async (targetCode: string) => {
+    if (!await clicConfirm(`¿Cambiar moneda base a ${targetCode}? Esto reseteará su tasa a 1.00.`)) return;
     setCurrencies(prev => prev.map(c => {
       if (c.code === targetCode) return { ...c, isBase: true, rate: 1, isEnabled: true };
       if (c.isBase) return { ...c, isBase: false };

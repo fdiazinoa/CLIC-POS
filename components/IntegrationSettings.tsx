@@ -147,8 +147,8 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
     setIsEditorOpen(true);
   };
 
-  const handleDelete = (integrationId: string) => {
-    if (!window.confirm('¿Eliminar esta integración de pago?')) return;
+  const handleDelete = async (integrationId: string) => {
+    if (!await clicConfirm('¿Eliminar esta integración de pago?')) return;
     setHasPendingIntegrationChanges(true);
     setIntegrations(prev => prev.filter(integration => integration.id !== integrationId));
   };

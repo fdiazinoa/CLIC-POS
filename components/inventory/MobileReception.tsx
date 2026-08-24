@@ -370,7 +370,7 @@ const MobileReception: React.FC<MobileReceptionProps> = ({
     let discrepancyReason = '';
 
     if (missingItems.length > 0) {
-      discrepancyReason = window.prompt('Se detectaron faltantes. Indica motivo de ajuste (ej: Diferencia de despacho):', 'Diferencia de despacho')?.trim() || '';
+      discrepancyReason = (await clicPrompt('Se detectaron faltantes. Indica motivo de ajuste (ej: Diferencia de despacho):', 'Diferencia de despacho'))?.trim() || '';
       if (!discrepancyReason) {
         alert('Debes indicar un motivo para registrar faltantes.');
         return;

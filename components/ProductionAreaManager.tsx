@@ -173,8 +173,8 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
         });
     };
 
-    const handleDeleteArea = (id: string) => {
-        if (confirm("¿Está seguro de eliminar esta área de producción?")) {
+    const handleDeleteArea = async (id: string) => {
+        if (await clicConfirm("¿Está seguro de eliminar esta área de producción?")) {
             const nextAreas = areas.filter(a => a.id !== id);
             setAreas(nextAreas);
             db.save('productionAreas' as any, nextAreas)
