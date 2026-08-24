@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseZReportEmailResponse } from '../services/email/zReportEmailService';
+import { parseZReportEmailResponse, sendZReportEmailViaErp } from '../services/email/zReportEmailService';
 
 test('rechaza HTML aunque la respuesta sea HTTP 200', () => {
   const result = parseZReportEmailResponse({
@@ -38,5 +38,77 @@ test('solo confirma respuestas con identificador de Resend', () => {
     id: '49a3999c-0ce1-4ea6-ab68-afcd6dc2e794',
     status: 'accepted',
     message: undefined,
+  });
+});
+
+test('renueva la autorización y reintenta una sola vez ante HTTP 401', async () => {
+  const tokens: string[] = [];
+  const deliveryIds: string[] = [];
+  let currentToken = 'expired-token';
+  let refreshCount = 0;
+  const result = await sendZReportEmailViaErp({
+    recipients: 'cierres@example.com',
+    report: { id: 'z-001' } as never,
+    config: { companyInfo: {}, currencySymbol: 'RD$' } as never,
+  }, {
+    readCredentials: () => ({
+      syncToken: currentToken,
+      erpTerminalId: 'terminal-1',
+      deviceId: 'device-1',
+      deviceToken: 'device-token',
+      erpTenantId: 'tenant-1',
+    }),
+    refreshAuthorization: async () => {
+      refreshCount += 1;
+      currentToken = 'fresh-token';
+    },
+    request: async (input) => {
+      tokens.push(String(input.headers?.['X-Sync-Token']));
+      deliveryIds.push(String((input.body as { deliveryId: string }).deliveryId));
+      const authorized = tokens.length > 1;
+      return {
+        ok: authorized,
+        status: authorized ? 200 : 401,
+        headers: { 'content-type': 'application/json' },
+        data: authorized
+          ? { success: true, id: 'resend-id', status: 'accepted' }
+          : { success: false, message: 'The terminal authorization has expired.' },
+        text: '',
+        networkEngine: 'fetch',
+        fetchStage: 'response',
+      };
+    },
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(refreshCount, 1);
+  assert.deepEqual(tokens, ['expired-token', 'fresh-token']);
+  assert.equal(deliveryIds[0], deliveryIds[1]);
+});
+
+test('muestra un error en español cuando no puede renovar la autorización', async () => {
+  const result = await sendZReportEmailViaErp({
+    recipients: 'cierres@example.com',
+    report: { id: 'z-002' } as never,
+    config: { companyInfo: {}, currencySymbol: 'RD$' } as never,
+  }, {
+    readCredentials: () => ({ syncToken: 'expired-token' }),
+    refreshAuthorization: async () => {
+      throw new Error('refresh failed');
+    },
+    request: async () => ({
+      ok: false,
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+      data: { success: false, message: 'The terminal authorization has expired.' },
+      text: '',
+      networkEngine: 'fetch',
+      fetchStage: 'response',
+    }),
+  });
+
+  assert.deepEqual(result, {
+    success: false,
+    message: 'La autorización de la terminal venció y no pudo renovarse automáticamente.',
   });
 });
