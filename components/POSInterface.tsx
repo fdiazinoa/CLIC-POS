@@ -871,16 +871,16 @@ const ProductGridCard = React.memo(({
                : usesExpandedCatalog
                   ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[214px] grid grid-rows-[56%_44%]'
                   : isCompactMobileCard
-                     ? `rounded-[2rem] p-3.5 min-h-[230px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`
+                     ? `rounded-[1.5rem] p-2.5 min-h-[194px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`
                      : `rounded-[2rem] p-3 min-h-[214px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`
             : usesExpandedCatalog
                ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[168px] flex flex-col'
                : isCompactMobileCard
-                  ? `rounded-[1.6rem] p-3 min-h-[176px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`
+                  ? `rounded-[1.4rem] p-2.5 min-h-[148px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`
                   : `rounded-[1.6rem] p-3 min-h-[166px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
       >
          {showProductImages && (
-            <div className={`${usesSupermarketLayout ? 'h-full rounded-[1.35rem] mb-0 p-2.5' : usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-[8.5rem] rounded-[1.5rem] mb-2.5 p-2.5' : 'h-28 md:h-32 rounded-[1.5rem] mb-2.5'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
+            <div className={`${usesSupermarketLayout ? 'h-full rounded-[1.35rem] mb-0 p-2.5' : usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-[6.75rem] rounded-[1.15rem] mb-1.5 p-2' : 'h-28 md:h-32 rounded-[1.5rem] mb-2.5'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
                {imageSrc ? <img src={imageSrc} className={`w-full h-full ${usesSupermarketLayout || usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={usesSupermarketLayout ? 56 : 48} strokeWidth={1} /></div>}
 
                {isWeighted && (
@@ -918,7 +918,7 @@ const ProductGridCard = React.memo(({
 
          {!showProductImages && (
             <div
-               className="relative flex h-[92px] shrink-0 items-center justify-center overflow-hidden rounded-[1.15rem] border px-4 py-3 text-center"
+               className={`relative flex shrink-0 items-center justify-center overflow-hidden border text-center ${isCompactMobileCard ? 'h-[74px] rounded-[1rem] px-3 py-2' : 'h-[92px] rounded-[1.15rem] px-4 py-3'}`}
                style={graphicTone}
             >
                <h3 className={`max-w-full break-words font-black uppercase leading-[1.05] line-clamp-3 ${graphicNameSize}`}>
@@ -961,9 +961,11 @@ const ProductGridCard = React.memo(({
                ? 'min-h-0 h-full pt-2 justify-between'
                : usesSupermarketLayout
                   ? 'flex-1 gap-1 pt-1.5'
-                  : 'flex-1 justify-between gap-2 pt-1'
+                  : isCompactMobileCard
+                     ? 'flex-1 justify-between gap-1 pt-0.5'
+                     : 'flex-1 justify-between gap-2 pt-1'
             : 'min-h-0 flex-1 justify-end gap-1 pt-2'}`}>
-            <div className={usesSupermarketLayout ? 'space-y-1.5' : usesExpandedCatalog ? 'space-y-1' : 'space-y-1.5'}>
+            <div className={usesSupermarketLayout ? 'space-y-1.5' : usesExpandedCatalog ? 'space-y-1' : isCompactMobileCard ? 'space-y-0.5' : 'space-y-1.5'}>
                <span className={`block font-black text-purple-500 uppercase opacity-70 line-clamp-1 ${usesSupermarketLayout ? 'text-[11px]' : usesExpandedCatalog ? 'text-[10px]' : isCompactMobileCard ? 'text-[10px]' : 'text-[9px]'}`}>{product.category}</span>
                {showProductImages && (
                   <h3 className={`font-black text-gray-800 dark:text-white leading-[1.08] truncate tracking-[-0.02em] ${usesSupermarketLayout ? 'text-[1.22rem] min-h-[1.35rem]' : usesExpandedCatalog ? 'text-[1.16rem] min-h-[1.3rem]' : isCompactMobileCard ? 'text-[1.16rem] min-h-[1.3rem]' : 'text-[1rem] min-h-[1.15rem]'}`}>{product.name}</h3>
@@ -982,11 +984,13 @@ const ProductGridCard = React.memo(({
                      : usesExpandedCatalog
                         ? 'text-[1.5rem]'
                         : isCompactMobileCard
-                           ? 'text-[1.75rem]'
+                           ? 'text-[1.4rem]'
                            : 'text-lg'
                   : usesExpandedCatalog
                      ? 'text-[1.42rem]'
-                     : 'text-[1.5rem]'}`}>{baseCurrencySymbol}{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                     : isCompactMobileCard
+                        ? 'text-[1.3rem]'
+                        : 'text-[1.5rem]'}`}>{baseCurrencySymbol}{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
             </div>
          </div>
          {warehouseSaleBlocked && (
@@ -1934,20 +1938,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (usesExpandedCatalog) {
         return "grid grid-cols-4 gap-x-4 gap-y-4 content-start auto-rows-fr";
       }
+      if (isMobile) {
+         return "grid [grid-template-columns:repeat(auto-fill,minmax(138px,1fr))] gap-2.5 content-start";
+      }
       if (uxConfig.gridDensity === 'COMPACT') {
          return "grid [grid-template-columns:repeat(auto-fill,minmax(145px,1fr))] gap-3 content-start";
       }
       return "grid [grid-template-columns:repeat(auto-fill,minmax(160px,1fr))] gap-3 md:gap-4 content-start";
-   }, [usesExpandedCatalog, usesSupermarketLayout, uxConfig.gridDensity]);
+   }, [isMobile, usesExpandedCatalog, usesSupermarketLayout, uxConfig.gridDensity]);
 
    const categoryContainerClass = useMemo(() => {
       if (usesSupermarketLayout) {
          return "hidden";
       }
       if (uxConfig.quickKeysLayout === 'B') {
-         return "bg-white border-b border-gray-200 px-4 md:px-8 py-3 flex flex-wrap gap-2 shrink-0 max-h-32 overflow-y-auto custom-scrollbar";
+         return "bg-white border-b border-gray-200 px-3 md:px-8 py-2 md:py-3 flex flex-wrap gap-2 shrink-0 max-h-28 md:max-h-32 overflow-y-auto custom-scrollbar";
       }
-      return "bg-white border-b border-gray-200 px-4 md:px-8 py-3 flex gap-2 overflow-x-auto no-scrollbar shrink-0";
+      return "bg-white border-b border-gray-200 px-3 md:px-8 py-2 md:py-3 flex gap-2 overflow-x-auto no-scrollbar shrink-0";
    }, [usesSupermarketLayout, uxConfig.quickKeysLayout]);
 
    const allowedTariffs = useMemo(() => {
@@ -6831,9 +6838,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          {/* LEFT AREA: PRODUCTS */}
          <div className={`flex-1 min-h-0 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${mobileView === 'TICKET' ? 'hidden md:flex' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
-            <header className="bg-white px-3 md:px-8 py-3 md:py-4 border-b border-gray-200 flex flex-wrap items-center gap-2 md:gap-6 shadow-sm z-10 shrink-0">
+            <header className="bg-white px-3 md:px-8 py-2 md:py-4 border-b border-gray-200 flex flex-wrap items-center gap-1.5 md:gap-6 shadow-sm z-10 shrink-0">
                <div className="flex items-center gap-3 pr-0 md:pr-4 border-r-0 md:border-r border-gray-100 shrink-0">
-                  <div className="w-10 h-10 rounded-full bg-gray-50 overflow-hidden border border-gray-200 shadow-inner shrink-0">
+                  <div className="w-9 h-9 md:w-10 md:h-10 rounded-full bg-gray-50 overflow-hidden border border-gray-200 shadow-inner shrink-0">
                      {currentUser.photo ? <img src={currentUser.photo} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center bg-blue-50 text-blue-600 font-bold">{currentUser.name.charAt(0)}</div>}
                   </div>
                   <div className="flex flex-col leading-tight md:hidden min-w-0">
@@ -6848,7 +6855,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                </div>
 
-               <div className="flex items-center gap-2 px-3 md:px-4 py-2 rounded-2xl bg-gray-50 border border-gray-100 shadow-inner shrink-0">
+               <div className="flex h-9 md:h-auto items-center gap-2 px-2.5 md:px-4 py-1.5 md:py-2 rounded-xl md:rounded-2xl bg-gray-50 border border-gray-100 shadow-inner shrink-0">
                   {syncState.isSyncing ? (
                      <RefreshCw size={18} className="text-amber-500 animate-spin" />
                   ) : !navigator.onLine ? (
@@ -6887,7 +6894,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            if (!canChangeTariff) return;
                            setShowTariffSelector(!showTariffSelector);
                         }}
-                        className={`flex h-12 items-center justify-between gap-2 md:gap-3 min-w-[150px] md:min-w-[180px] px-3 md:px-4 rounded-2xl border-2 transition-all ${showTariffSelector ? 'border-purple-500 bg-purple-50' : 'bg-purple-50/80 border-purple-100'} ${canChangeTariff ? 'hover:border-purple-300' : 'opacity-75 cursor-not-allowed'}`}
+                        className={`flex h-11 md:h-12 items-center justify-between gap-2 md:gap-3 min-w-[138px] md:min-w-[180px] px-3 md:px-4 rounded-xl md:rounded-2xl border-2 transition-all ${showTariffSelector ? 'border-purple-500 bg-purple-50' : 'bg-purple-50/80 border-purple-100'} ${canChangeTariff ? 'hover:border-purple-300' : 'opacity-75 cursor-not-allowed'}`}
                         disabled={!canChangeTariff}
                         title={canChangeTariff ? 'Cambiar tarifa activa' : 'Tu rol no tiene permiso para cambiar la tarifa'}
                      >
@@ -6948,9 +6955,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         onInput={(e) => setSearchTerm(e.currentTarget.value)}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         onKeyDown={handleSearchKeyDown}
-                        className="w-full h-12 pl-10 md:pl-12 pr-10 md:pr-12 py-0 bg-gray-100 rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
+                        className="w-full h-11 md:h-12 pl-10 md:pl-12 pr-10 md:pr-12 py-0 bg-gray-100 rounded-xl md:rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
                      />
-                     <button onClick={() => setIsScannerOpen(true)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
+                     <button onClick={() => setIsScannerOpen(true)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-lg md:rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
                   </div>
 
                   {canReceiveConsignments && (
@@ -6960,7 +6967,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            setShowConsignmentModal(true);
                            setConsignmentError(null);
                         }}
-                        className="order-3 md:order-4 inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-cyan-100 bg-cyan-50 text-cyan-700 shadow-sm transition-all hover:border-cyan-200 hover:bg-cyan-100"
+                        className="order-3 md:order-4 inline-flex h-11 w-11 md:h-12 md:w-12 shrink-0 items-center justify-center rounded-xl md:rounded-2xl border border-cyan-100 bg-cyan-50 text-cyan-700 shadow-sm transition-all hover:border-cyan-200 hover:bg-cyan-100"
                         title="Buscar consignaciones ERP"
                      >
                         <Package size={19} />
@@ -6981,7 +6988,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   />
 
                   {/* MOBILE SETTINGS BUTTON */}
-                  <button onClick={() => onOpenSettings()} className="md:hidden order-4 h-12 w-12 bg-gray-100 rounded-2xl text-gray-600 hover:bg-gray-200 shrink-0 flex items-center justify-center">
+                  <button onClick={() => onOpenSettings()} className="md:hidden order-4 h-11 w-11 bg-gray-100 rounded-xl text-gray-600 hover:bg-gray-200 shrink-0 flex items-center justify-center">
                      <Settings size={20} />
                   </button>
                </div>
@@ -7011,7 +7018,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      key={categoryOption.id || `cat-${idx}`}
                      onClick={() => setCategoryFilter(categoryOption.id)}
                      style={configuredStyle}
-                     className={`h-[48px] min-w-[116px] px-6 rounded-xl text-[12px] font-black uppercase tracking-[0.1em] transition-all whitespace-nowrap border shadow-sm active:scale-95 ${isActiveCategory
+                     className={`h-[42px] md:h-[48px] min-w-[102px] md:min-w-[116px] px-4 md:px-6 rounded-xl text-[11px] md:text-[12px] font-black uppercase tracking-[0.1em] transition-all whitespace-nowrap border shadow-sm active:scale-95 ${isActiveCategory
                         ? `${configuredColor ? '' : categoryTone.active} shadow-lg -translate-y-0.5`
                         : `${configuredColor ? '' : categoryTone.idle} hover:-translate-y-0.5 hover:shadow-md`
                         }`}
@@ -7023,7 +7030,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div>
 
             <div
-               className={`flex-1 min-h-0 overflow-y-auto bg-[#eef2f6] ${usesExpandedCatalog ? 'p-3 pl-4 pr-2' : isMobile ? 'p-4' : 'p-8'} custom-scrollbar scrollbar-thin dark:bg-slate-900`}
+               className={`flex-1 min-h-0 overflow-y-auto bg-[#eef2f6] ${usesExpandedCatalog ? 'p-3 pl-4 pr-2' : isMobile ? 'p-3' : 'p-8'} custom-scrollbar scrollbar-thin dark:bg-slate-900`}
                style={bottomAwareScrollStyle}
             >
                <div className={gridClass}>
