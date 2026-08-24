@@ -79,7 +79,13 @@ const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({ isOpen, onClo
                 Html5QrcodeSupportedFormats.QR_CODE,
             ];
 
-            const html5QrCode = new Html5Qrcode(regionId);
+            const html5QrCode = new Html5Qrcode(regionId, {
+                formatsToSupport,
+                // Android WebView's experimental detector can terminate the app
+                // when its bundled Google Play Services version does not match.
+                useBarCodeDetectorIfSupported: false,
+                verbose: false,
+            });
             scannerRef.current = html5QrCode;
 
             const config = {
@@ -90,10 +96,6 @@ const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({ isOpen, onClo
                     return { width: qrboxSize, height: qrboxSize };
                 },
                 aspectRatio: 1.0,
-                formatsToSupport: formatsToSupport,
-                experimentalFeatures: {
-                    useBarCodeDetectorIfSupported: true
-                }
             };
 
             await html5QrCode.start(

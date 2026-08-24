@@ -15,6 +15,10 @@ test('el APK declara el permiso requerido por getUserMedia para escanear', () =>
   assert.match(manifestSource, /<uses-permission android:name="android\.permission\.CAMERA"\s*\/>/);
   assert.match(scannerSource, /html5QrCode\.start\(/);
   assert.match(scannerSource, /facingMode:\s*"environment"/);
+  assert.match(
+    scannerSource,
+    /new Html5Qrcode\(regionId,\s*\{[\s\S]*?useBarCodeDetectorIfSupported:\s*false/,
+  );
 });
 
 test('la cámara es opcional para mantener compatibles los POS sin cámara', () => {
