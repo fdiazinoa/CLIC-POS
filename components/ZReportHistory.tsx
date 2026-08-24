@@ -8,6 +8,7 @@ import { ZReport, BusinessConfig, User, RoleDefinition } from '../types';
 import { db } from '../utils/db';
 import { ThermalPrinterService } from '../services/printer/ThermalPrinterService';
 import { ZReportRecoveryService } from '../services/recovery/ZReportRecoveryService';
+import { sendZReportEmailViaErp } from '../services/email/zReportEmailService';
 
 interface ZReportHistoryProps {
     config: BusinessConfig;
@@ -27,6 +28,7 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
     const [endDate, setEndDate] = useState('');
     const [reprintingReportId, setReprintingReportId] = useState<string | null>(null);
     const [reprocessingReportId, setReprocessingReportId] = useState<string | null>(null);
+    const [emailingReportId, setEmailingReportId] = useState<string | null>(null);
 
     const sortReportsByDate = (data: ZReport[]) =>
         [...(data || [])].sort((a, b) =>
@@ -296,8 +298,9 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
                         )}
                         <button
                             onClick={async () => {
-                                // Try to get emails from the first terminal's workflow config or fallback to default
-                                let recipients = config.terminals?.[0]?.config?.workflow?.session?.zReportEmails || config.emailConfig?.defaultRecipient;
+                                const configuredTerminal = config.terminals?.find((terminal) => terminal.id === (activeTerminalId || r.terminalId))
+                                    || config.terminals?.[0];
+                                let recipients = configuredTerminal?.config?.workflow?.session?.zReportEmails || config.emailConfig?.defaultRecipient;
                                 if (!recipients) {
                                     recipients = window.prompt('Ingrese el correo electrónico para enviar este cierre Z:', '') || '';
                                     recipients = recipients.trim();
@@ -305,31 +308,22 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
                                 }
 
                                 if (confirm(`¿Reenviar reporte a ${recipients}?`)) {
+                                    setEmailingReportId(r.id);
                                     try {
-                                        const response = await fetch('/smtp/z-report', {
-                                            method: 'POST',
-                                            headers: { 'Content-Type': 'application/json' },
-                                            body: JSON.stringify({
-                                                to: recipients,
-                                                reportData: {
-                                                    ...r,
-                                                    companyName: config.companyInfo.name
-                                                }
-                                            })
-                                        });
-                                        if (response.ok) alert("Correo enviado exitosamente.");
-                                        else alert("Error al enviar correo (Servidor)");
-                                    } catch (e) {
-                                        alert("Error al enviar correo.");
-                                        console.error(e);
+                                        const result = await sendZReportEmailViaErp({ recipients, report: r, config });
+                                        if (result.success) alert('Cierre Z enviado exitosamente.');
+                                        else alert(`No se pudo enviar el cierre Z.\n\n${result.message || 'Error desconocido.'}`);
+                                    } finally {
+                                        setEmailingReportId(null);
                                     }
                                 }
                             }}
-                            className="px-4 py-2 bg-gray-100 hover:bg-indigo-600 hover:text-white rounded-xl text-gray-600 transition-all font-bold text-sm flex items-center gap-2 shadow-sm"
+                            disabled={emailingReportId === r.id}
+                            className="px-4 py-2 bg-gray-100 hover:bg-indigo-600 hover:text-white rounded-xl text-gray-600 transition-all font-bold text-sm flex items-center gap-2 shadow-sm disabled:opacity-60 disabled:cursor-wait"
                             title="Reenviar Email"
                         >
-                            <Mail size={18} />
-                            <span className="hidden sm:inline">Email</span>
+                            <Mail size={18} className={emailingReportId === r.id ? 'animate-pulse' : ''} />
+                            <span className="hidden sm:inline">{emailingReportId === r.id ? 'Enviando...' : 'Email'}</span>
                         </button>
                     </div>
                 </div>

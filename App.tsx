@@ -55,6 +55,7 @@ import { dbAdapter } from './services/db'; // Import Adapter for Healthcheck
 import { syncManager } from './services/sync/SyncManager';
 import { apiSyncAdapter } from './services/sync/ApiSyncAdapter';
 import { requestJson } from './services/network/httpClient';
+import { sendZReportEmailViaErp } from './services/email/zReportEmailService';
 import { backgroundSyncManager } from './services/sync/BackgroundSyncManager';
 import { realtimeNotificationService } from './services/sync/RealtimeNotificationService';
 import { createAdaptivePollingScheduler } from './services/sync/AdaptivePollingScheduler';
@@ -9879,26 +9880,17 @@ const AppContent: React.FC = () => {
       const shouldEmailZReport = Boolean(sessionConfig?.emailZReport);
       const zReportRecipients = (sessionConfig?.zReportEmails || config.emailConfig?.defaultRecipient || '').trim();
       if (shouldEmailZReport && zReportRecipients) {
-        try {
-          const response = await fetch('/smtp/z-report', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              to: zReportRecipients,
-              reportData: {
-                ...newZReport,
-                companyName: config.companyInfo?.name,
-                notes,
-              }
-            })
-          });
-          const emailResult = await response.json().catch(() => ({}));
-          if (!response.ok || emailResult.success === false) {
-            throw new Error(emailResult.message || `HTTP ${response.status}`);
-          }
+        const emailResult = await sendZReportEmailViaErp({
+          recipients: zReportRecipients,
+          report: newZReport,
+          config,
+        });
+        if (emailResult.success) {
           console.log(`[EMAIL] Cierre Z ${newZReport.sequenceNumber} enviado a: ${zReportRecipients}`);
-        } catch (emailError) {
-          console.error(`❌ No se pudo enviar el Cierre Z ${newZReport.sequenceNumber} por email:`, emailError);
+        } else {
+          const message = emailResult.message || 'No se pudo enviar el cierre Z por correo.';
+          console.error(`❌ No se pudo enviar el Cierre Z ${newZReport.sequenceNumber} por email: ${message}`);
+          window.alert(`El cierre Z se completó, pero no pudo enviarse por correo.\n\n${message}\n\nPuede reenviarlo desde el historial de cierres Z.`);
         }
       }
 
