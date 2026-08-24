@@ -892,6 +892,9 @@ export const buildEscPosZReportPayload = (
   const reportTitle = isXReport ? 'CIERRE X (ARQUEO)' : 'REPORTE DE CIERRE (Z)';
   const currencySymbol = resolveCurrencySymbol(config, report.baseCurrency);
   const totalCollected = Object.values(report.totalsByMethod || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+  const enabledSections = new Set(report.enabledSections || []);
+  const reportDetails = report.reportDetails || {};
+  const denominationBreakdown = report.denominationBreakdown || report.denomination_breakdown || {};
 
   chunks.push(initPrinter());
   chunks.push(align(1));
@@ -966,6 +969,63 @@ export const buildEscPosZReportPayload = (
     pushPair(chunks, 'Devoluciones', `${report.stats.returnsCount || 0}`, width);
     pushPair(chunks, 'Monto Dev.', formatMoney(currencySymbol, report.stats.returnsTotal || 0), width);
     pushPair(chunks, 'Descuentos', formatMoney(currencySymbol, report.stats.discountsTotal || 0), width);
+  }
+
+  if (enabledSections.has('SELLER_SUMMARY')) {
+    chunks.push(divider(width));
+    pushTextLines(chunks, splitLines('RESUMEN X VENDEDOR', width));
+    (reportDetails.sellerSummary || []).forEach(seller => {
+      pushTextLines(chunks, splitLines(`${seller.userName} (${seller.transactionCount})`, width));
+      pushPair(chunks, 'Venta neta', formatMoney(currencySymbol, seller.netSales), width);
+    });
+    if (!reportDetails.sellerSummary?.length) pushTextLines(chunks, splitLines('Sin ventas registradas.', width));
+  }
+
+  if (enabledSections.has('ITEM_SUMMARY')) {
+    chunks.push(divider(width));
+    pushTextLines(chunks, splitLines('RESUMEN X ARTICULO', width));
+    (reportDetails.itemSummary || []).forEach(item => {
+      pushTextLines(chunks, splitLines(`${item.productName} x ${item.quantity}`, width));
+      pushPair(chunks, 'Venta neta', formatMoney(currencySymbol, item.netSales), width);
+    });
+    if (!reportDetails.itemSummary?.length) pushTextLines(chunks, splitLines('Sin articulos registrados.', width));
+  }
+
+  if (enabledSections.has('TAX_SUMMARY')) {
+    chunks.push(divider(width));
+    pushTextLines(chunks, splitLines('IMPUESTOS', width));
+    (reportDetails.taxSummary || []).forEach(tax => {
+      const rate = Number(tax.rate || 0) <= 1 ? Number(tax.rate || 0) * 100 : Number(tax.rate || 0);
+      pushTextLines(chunks, splitLines(`${tax.taxName} (${rate.toFixed(2)}%)`, width));
+      pushPair(chunks, 'Base', formatMoney(currencySymbol, tax.taxableBase), width);
+      pushPair(chunks, 'Impuesto', formatMoney(currencySymbol, tax.taxAmount), width);
+    });
+    if (!reportDetails.taxSummary?.length) pushTextLines(chunks, splitLines('Sin impuestos registrados.', width));
+  }
+
+  if (enabledSections.has('CURRENCY_BREAKDOWN')) {
+    chunks.push(divider(width));
+    pushTextLines(chunks, splitLines('DESGLOSE DE MONEDA', width));
+    Object.entries(denominationBreakdown).forEach(([currency, lines]) => {
+      pushTextLines(chunks, splitLines(currency, width));
+      (lines || []).forEach(line => pushPair(
+        chunks,
+        `${line.denomination} x ${line.quantity}`,
+        Number(line.total || 0).toFixed(2),
+        width,
+      ));
+    });
+    if (Object.keys(denominationBreakdown).length === 0) pushTextLines(chunks, splitLines('Sin denominaciones registradas.', width));
+  }
+
+  if (enabledSections.has('HOURLY_SALES')) {
+    chunks.push(divider(width));
+    pushTextLines(chunks, splitLines('VENTAS X HORA', width));
+    (reportDetails.hourlySales || []).forEach(hour => {
+      pushTextLines(chunks, splitLines(`${hour.label} (${hour.transactionCount})`, width));
+      pushPair(chunks, 'Venta neta', formatMoney(currencySymbol, hour.netSales), width);
+    });
+    if (!reportDetails.hourlySales?.length) pushTextLines(chunks, splitLines('Sin ventas registradas.', width));
   }
 
   if (report.notes) {

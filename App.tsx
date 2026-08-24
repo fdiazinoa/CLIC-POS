@@ -71,6 +71,7 @@ import { currencyScheduleExecutor } from './services/currency/CurrencyService';
 import { productImageCacheService } from './services/sync/ProductImageCacheService';
 import { posCloudStagingService } from './services/sync/PosCloudStagingService';
 import { calculateZReportStats } from './utils/analytics';
+import { buildCloseReportDetails, resolveCloseReportSections } from './utils/closeReportOptions';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
 import { calculateTransactionTaxSummary } from './utils/taxSummary';
 import { calculateTransactionFiscalSummary } from './utils/fiscalBreakdown';
@@ -9523,6 +9524,8 @@ const AppContent: React.FC = () => {
         sequenceNumber = `X-${nextSeqNum}`;
       }
 
+      const enabledSections = resolveCloseReportSections(config, terminalId, currentUser?.id, 'X');
+      const reportDetails = buildCloseReportDetails(terminalTransactions, config, currentTerminal?.config, enabledSections);
       const newXReport: XReport = {
         id: `XR-${Date.now()}`,
         reportType: 'X',
@@ -9565,6 +9568,8 @@ const AppContent: React.FC = () => {
           last_ticket_id: orderedTicketRefs[orderedTicketRefs.length - 1] || null,
         },
         stats,
+        enabledSections,
+        reportDetails,
         syncStatus: 'PENDING' as const
       };
 
@@ -9811,6 +9816,8 @@ const AppContent: React.FC = () => {
         sequenceNumber = `Z-${nextSeqNum}`;
       }
 
+      const enabledSections = resolveCloseReportSections(config, terminalId, currentUser?.id, 'Z');
+      const reportDetails = buildCloseReportDetails(terminalTransactions, config, currentTerminal?.config, enabledSections);
       const newZReport: ZReport & Record<string, any> = {
         id: zReportId,
         terminalId,
@@ -9861,6 +9868,8 @@ const AppContent: React.FC = () => {
           last_ticket_id: lastTicketId,
         },
         stats,
+        enabledSections,
+        reportDetails,
         syncStatus: 'PENDING' as const,
         ...(replacementReportId ? {
           repeatedAt: new Date().toISOString(),

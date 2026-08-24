@@ -19,6 +19,9 @@ export const generateZReportReceipt = (
   const currencyCode = /^[A-Z]{3}$/.test(rawCurrency) ? rawCurrency : '';
   const currencyPrefix = currencyCode ? '' : (rawCurrency || '$');
   const terminalName = resolveTerminalDisplayName(report.terminalId, config?.terminals || []);
+  const enabledSections = new Set(report.enabledSections || []);
+  const reportDetails = report.reportDetails || {};
+  const denominationBreakdown = report.denominationBreakdown || report.denomination_breakdown || {};
 
   const formatCurrency = (amount: number) => {
     const value = Number(amount || 0);
@@ -207,6 +210,43 @@ export const generateZReportReceipt = (
           <span>Recaud. Anticipos:</span>
           <span class="bold">${formatCurrency(stats.advancementsTotal || 0)}</span>
         </div>
+      ` : ''}
+
+      ${enabledSections.has('SELLER_SUMMARY') ? `
+        <div class="section-title">RESUMEN X VENDEDOR</div>
+        ${(reportDetails.sellerSummary || []).map(seller => `
+          <div class="row"><span>${seller.userName} (${seller.transactionCount})</span><span>${formatCurrency(seller.netSales)}</span></div>
+        `).join('') || '<div>Sin ventas registradas.</div>'}
+      ` : ''}
+
+      ${enabledSections.has('ITEM_SUMMARY') ? `
+        <div class="section-title">RESUMEN X ARTÍCULO</div>
+        ${(reportDetails.itemSummary || []).map(item => `
+          <div class="row"><span>${item.productName} x ${item.quantity}</span><span>${formatCurrency(item.netSales)}</span></div>
+        `).join('') || '<div>Sin artículos registrados.</div>'}
+      ` : ''}
+
+      ${enabledSections.has('TAX_SUMMARY') ? `
+        <div class="section-title">IMPUESTOS</div>
+        ${(reportDetails.taxSummary || []).map(tax => {
+          const rate = Number(tax.rate || 0) <= 1 ? Number(tax.rate || 0) * 100 : Number(tax.rate || 0);
+          return `<div><div class="bold">${tax.taxName} (${rate.toFixed(2)}%)</div><div class="row"><span>Base:</span><span>${formatCurrency(tax.taxableBase)}</span></div><div class="row"><span>Impuesto:</span><span>${formatCurrency(tax.taxAmount)}</span></div></div>`;
+        }).join('') || '<div>Sin impuestos registrados.</div>'}
+      ` : ''}
+
+      ${enabledSections.has('CURRENCY_BREAKDOWN') ? `
+        <div class="section-title">DESGLOSE DE MONEDA</div>
+        ${Object.entries(denominationBreakdown).map(([currency, lines]) => `
+          <div class="bold">${currency}</div>
+          ${(lines || []).map(entry => `<div class="row"><span>${entry.denomination} x ${entry.quantity}</span><span>${Number(entry.total || 0).toFixed(2)}</span></div>`).join('')}
+        `).join('') || '<div>Sin denominaciones registradas.</div>'}
+      ` : ''}
+
+      ${enabledSections.has('HOURLY_SALES') ? `
+        <div class="section-title">VENTAS X HORA</div>
+        ${(reportDetails.hourlySales || []).map(hour => `
+          <div class="row"><span>${hour.label} (${hour.transactionCount})</span><span>${formatCurrency(hour.netSales)}</span></div>
+        `).join('') || '<div>Sin ventas registradas.</div>'}
       ` : ''}
 
       <br/><br/>

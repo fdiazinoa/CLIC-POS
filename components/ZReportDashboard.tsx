@@ -9,6 +9,7 @@ import { sendZReportEmail } from '../utils/email';
 import { db } from '../utils/db';
 import ZReportHistory from './ZReportHistory';
 import { calculateZReportStats } from '../utils/analytics';
+import { buildCloseReportDetails, resolveCloseReportSections } from '../utils/closeReportOptions';
 import { ThermalPrinterService } from '../services/printer/ThermalPrinterService';
 import {
    getPaymentAppliedBaseAmount,
@@ -254,6 +255,14 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                   transactionCount: filteredTransactions.length,
                   stats: calculateZReportStats(filteredTransactions, filteredCollections)
                };
+
+               tempReport.enabledSections = resolveCloseReportSections(config, currentTerminalId, currentUser?.id, 'Z');
+               tempReport.reportDetails = buildCloseReportDetails(
+                  filteredTransactions,
+                  config,
+                  activeTerminalConfig,
+                  tempReport.enabledSections,
+               );
 
                // Calculate totals by method
                const totalsByMethod: Record<string, number> = {};

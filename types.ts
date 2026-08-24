@@ -717,6 +717,11 @@ export interface TerminalConfig {
        * y las operaciones que validen `X_REPORT` fallan (ver `validateTerminalSeries`).
        */
       allowPartialXReport?: boolean;
+      /** Secciones opcionales que se incluyen en cada cierre, configuradas por usuario y tipo de reporte. */
+      closeReportOptionsByUser?: Record<string, {
+        X?: CloseReportSection[];
+        Z?: CloseReportSection[];
+      }>;
     };
     offline: {
       mode: 'OPTIMISTIC' | 'STRICT' | 'READ_ONLY';
@@ -2622,6 +2627,49 @@ export interface ZReportStats {
 
 export type ZReportModule = 'FINANCIAL' | 'PAYMENTS' | 'CASH_DETAILS' | 'KPIS' | 'AUDIT';
 
+export type CloseReportSection =
+  | 'SELLER_SUMMARY'
+  | 'ITEM_SUMMARY'
+  | 'TAX_SUMMARY'
+  | 'CURRENCY_BREAKDOWN'
+  | 'HOURLY_SALES';
+
+export interface CloseReportSellerSummaryLine {
+  userId: string;
+  userName: string;
+  transactionCount: number;
+  netSales: number;
+}
+
+export interface CloseReportItemSummaryLine {
+  productId: string;
+  productName: string;
+  quantity: number;
+  netSales: number;
+}
+
+export interface CloseReportTaxSummaryLine {
+  taxId: string;
+  taxName: string;
+  rate: number;
+  taxableBase: number;
+  taxAmount: number;
+}
+
+export interface CloseReportHourlySalesLine {
+  hour: number;
+  label: string;
+  transactionCount: number;
+  netSales: number;
+}
+
+export interface CloseReportDetails {
+  sellerSummary?: CloseReportSellerSummaryLine[];
+  itemSummary?: CloseReportItemSummaryLine[];
+  taxSummary?: CloseReportTaxSummaryLine[];
+  hourlySales?: CloseReportHourlySalesLine[];
+}
+
 export interface ZReportDeclaredTotals {
   cash: number;
   card: number;
@@ -2707,6 +2755,8 @@ export interface ZReport {
 
   // Analytics
   stats?: ZReportStats;
+  enabledSections?: CloseReportSection[];
+  reportDetails?: CloseReportDetails;
   syncStatus?: SyncStatus;
   syncError?: string;
 }

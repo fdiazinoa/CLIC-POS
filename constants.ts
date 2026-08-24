@@ -98,6 +98,7 @@ export const DEFAULT_TERMINAL_CONFIG = {
       forceZChange: false,
       businessStartHour: 0,
       allowPartialXReport: true,
+      closeReportOptionsByUser: {},
     },
     offline: {
       mode: 'OPTIMISTIC' as const,
