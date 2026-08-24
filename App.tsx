@@ -2502,8 +2502,13 @@ const AppContent: React.FC = () => {
           localStorage.setItem('clic_tenant_id', res.tenantId);
         }
 
-        if (!res.isValid) {
+        if (!res.isValid && res.cloudReachable !== false) {
           triggerLockdown(res.reason || fallbackMessage);
+        } else if (!res.isValid) {
+          console.warn('[LICENSE] Validation unavailable during polling; preserving recoverable POS access.', {
+            tenantId: persistedTenantId,
+            lastCloudError: res.lastCloudError || null,
+          });
         }
       } catch {
         // Offline tolerance: avoid false positives on transient connectivity issues.
@@ -5733,9 +5738,14 @@ const AppContent: React.FC = () => {
 
         // --- LICENSE / KILL-SWITCH VALIDATION ---
         const license = await checkLicenseStatus(persistedTenantId, storedDeviceId);
-        if (!license.isValid) {
+        if (!license.isValid && license.cloudReachable !== false) {
           triggerLockdown(license.reason || 'Servicio Suspendido.');
           return;
+        } else if (!license.isValid) {
+          console.warn('[BOOT] License validation unavailable; continuing without permanent lockdown.', {
+            tenantId: persistedTenantId,
+            lastCloudError: license.lastCloudError || null,
+          });
         }
 
         // IMPORTANT:

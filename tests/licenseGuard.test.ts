@@ -219,11 +219,13 @@ test('sin una licencia activa reciente la falla de red bloquea en vez de autoriz
   assert.equal(result.inGracePeriod, false);
 });
 
-test('el contrato App separa licencia suspendida de dispositivo reemplazado', () => {
+test('el contrato App bloquea suspensiones explícitas pero tolera fallas temporales de licencia', () => {
   const source = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 
-  assert.match(source, /if \(!res\.isValid\) \{\s*triggerLockdown\(res\.reason \|\| fallbackMessage\);/);
-  assert.match(source, /if \(!license\.isValid\) \{\s*triggerLockdown\(license\.reason \|\| 'Servicio Suspendido\.'\);/);
+  assert.match(source, /if \(!res\.isValid && res\.cloudReachable !== false\) \{\s*triggerLockdown\(res\.reason \|\| fallbackMessage\);/);
+  assert.match(source, /if \(!license\.isValid && license\.cloudReachable !== false\) \{\s*triggerLockdown\(license\.reason \|\| 'Servicio Suspendido\.'\);/);
+  assert.match(source, /\[BOOT\] License validation unavailable; continuing without permanent lockdown\./);
+  assert.match(source, /\[LICENSE\] Validation unavailable during polling; preserving recoverable POS access\./);
   assert.match(source, /if \(license\.cloudReachable === false\) \{[\s\S]*?alert\(license\.reason/);
   assert.match(source, /if \(blockingMessage === DEVICE_SUPERSEDED_MESSAGE\) \{\s*await triggerLockdownAfterAuthorizationCheck/);
   assert.doesNotMatch(source, /triggerLockdownAfterAuthorizationCheck\(license\.reason/);
