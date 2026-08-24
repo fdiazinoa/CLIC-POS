@@ -76,15 +76,16 @@ test('la activación cliente busca la Maestra automáticamente en el flujo visib
   assert.match(terminalBindingSource, /Puede ingresar la IP manualmente/);
 });
 
-test('el modo Cliente conserva visibles cajas adicionales y tomas de pedidos', () => {
+test('los modos Cliente y Toma de pedidos filtran el tipo de terminal esperado', () => {
   assert.match(
     terminalBindingSource,
-    /const \[expectedTerminalType, setExpectedTerminalType\] = useState<PosTerminalType \| null>\(null\)/,
+    /const \[expectedTerminalType, setExpectedTerminalType\] = useState<PosTerminalType \| null>\(initialExpectedTerminalType\)/,
   );
   assert.match(
     terminalBindingSource,
-    /if \(initialBindingMode\) \{[\s\S]*?setBindingMode\(initialBindingMode\);[\s\S]*?setExpectedTerminalType\(null\);/,
+    /if \(initialBindingMode\) \{[\s\S]*?setBindingMode\(initialBindingMode\);[\s\S]*?setExpectedTerminalType\(initialExpectedTerminalType\);/,
   );
+  assert.match(appSource, /initialExpectedTerminalType=\{getExpectedSetupTerminalType\(getStoredTerminalSetupMode\(\)\)\}/);
 });
 
 test('Master ERP lista terminales autoritativas del ERP y no acepta seeds del servidor embebido', () => {

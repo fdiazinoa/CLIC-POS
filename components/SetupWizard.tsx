@@ -2,13 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { 
   ArrowRight, ArrowLeft, Check, UploadCloud, FileSpreadsheet, 
   Map, DollarSign, Flag, Building2, Package, Percent, Wand2,
-  CheckCircle2, ChevronDown, AlertCircle, Monitor, ShoppingBag, ScanLine, Boxes
+  CheckCircle2, ChevronDown, AlertCircle, Monitor, ShoppingBag, ScanLine, Boxes, Tablet, Smartphone
 } from 'lucide-react';
-import { BusinessConfig, CompanyInfo, CurrencyConfig, DeviceRole, DocumentSeries, DocumentType, PaymentMethodDefinition, TaxDefinition, Tariff, TerminalConfig, Warehouse } from '../types';
+import { BusinessConfig, CompanyInfo, CurrencyConfig, DeviceFormFactor, DeviceOrientation, DeviceProfile, DeviceRole, DocumentSeries, DocumentType, PaymentMethodDefinition, TaxDefinition, Tariff, TerminalConfig, Warehouse } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG, INITIAL_TAXES, INITIAL_TARIFFS } from '../constants';
 import { db } from '../utils/db';
 import { PRODUCT_SEED_PACKS, ProductSeedPackId, buildSeedProducts, getProductSeedPack } from '../utils/productSeedPacks';
 import { getDefaultRoleConfig } from '../utils/deviceRoleHelpers';
+import { getDefaultDeviceProfile, resolveDeviceProfile } from '../utils/deviceProfile';
 
 interface SetupWizardProps {
   initialConfig: BusinessConfig;
@@ -142,6 +143,13 @@ const DEVICE_ROLE_OPTIONS: Array<{ role: DeviceRole; label: string; description:
   { role: DeviceRole.HANDHELD_INVENTORY, label: 'Inventario móvil', description: 'Conteos, ajustes y operaciones de almacén.', icon: Boxes },
 ];
 
+const DEVICE_PROFILE_OPTIONS: Array<{ formFactor: DeviceFormFactor; label: string; description: string; icon: any }> = [
+  { formFactor: DeviceFormFactor.DESKTOP_POS, label: 'POS normal', description: 'Equipo fijo o computadora.', icon: Monitor },
+  { formFactor: DeviceFormFactor.TABLET, label: 'Tablet', description: 'Pantalla táctil adaptable.', icon: Tablet },
+  { formFactor: DeviceFormFactor.HANDHELD, label: 'Móvil / PDA', description: 'Equipo compacto de mano.', icon: Smartphone },
+  { formFactor: DeviceFormFactor.KIOSK, label: 'Kiosco', description: 'Pantalla fija de autoservicio.', icon: ScanLine },
+];
+
 const makeId = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.round(Math.random() * 1000)}`;
 
@@ -185,6 +193,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
   const [terminalName, setTerminalName] = useState('Caja 1');
   const [stationNumber, setStationNumber] = useState('1');
   const [deviceRole, setDeviceRole] = useState<DeviceRole>(DeviceRole.STANDARD_POS);
+  const [deviceProfile, setDeviceProfile] = useState<DeviceProfile>(() => getDefaultDeviceProfile(DeviceRole.STANDARD_POS));
   
   // Catalog Import State
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -218,6 +227,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
     setTerminalName(terminalConfig.terminalName || 'Caja 1');
     setStationNumber(terminalConfig.stationNumber ? String(terminalConfig.stationNumber) : '1');
     setDeviceRole(terminalConfig.deviceRole?.role || DeviceRole.STANDARD_POS);
+    setDeviceProfile(resolveDeviceProfile([terminalConfig], terminalConfig.deviceRole?.role || DeviceRole.STANDARD_POS));
 
     const baseCurrency = (nextCurrencies || []).find((c) => c.isBase) || nextCurrencies[0];
     setDefaultCurrencyCode(baseCurrency?.code || '');
@@ -321,6 +331,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
       documentSeries: normalizedSeries,
       documentAssignments,
       deviceRole: getDefaultRoleConfig(deviceRole),
+      deviceProfile,
       operational: {
         ...DEFAULT_TERMINAL_CONFIG.operational,
         defaultTaxIds: primaryVat ? [primaryVat.id] : []
@@ -717,6 +728,61 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
           Esta terminal quedará como pantalla de cocina y el wizard saltará las configuraciones de venta.
         </div>
       )}
+
+      <div className="space-y-3 rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4">
+        <div>
+          <h3 className="font-black text-gray-800">Tipo de dispositivo</h3>
+          <p className="text-sm font-medium text-gray-500">Describe el equipo físico sin cambiar las funciones de la terminal.</p>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+          {DEVICE_PROFILE_OPTIONS.map(option => {
+            const Icon = option.icon;
+            const selected = deviceProfile.formFactor === option.formFactor;
+            return (
+              <button
+                key={option.formFactor}
+                type="button"
+                onClick={() => setDeviceProfile(current => ({
+                  ...current,
+                  formFactor: option.formFactor,
+                  touchOptimized: option.formFactor !== DeviceFormFactor.DESKTOP_POS,
+                }))}
+                className={`rounded-2xl border-2 p-3 text-left transition-all ${selected ? 'border-indigo-500 bg-white shadow-sm' : 'border-transparent bg-white/70 hover:border-indigo-200'}`}
+              >
+                <Icon size={20} className={selected ? 'text-indigo-600' : 'text-gray-400'} />
+                <p className="mt-2 text-sm font-black text-gray-800">{option.label}</p>
+                <p className="mt-1 text-xs font-medium text-gray-500">{option.description}</p>
+              </button>
+            );
+          })}
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <label className="space-y-2">
+            <span className="block text-xs font-black uppercase tracking-wider text-gray-500">Orientación</span>
+            <select
+              value={deviceProfile.orientation}
+              onChange={(event) => setDeviceProfile(current => ({ ...current, orientation: event.target.value as DeviceOrientation }))}
+              className="w-full rounded-xl border border-gray-200 bg-white p-3 font-bold text-gray-700 outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value={DeviceOrientation.AUTO}>Automática</option>
+              <option value={DeviceOrientation.PORTRAIT}>Vertical</option>
+              <option value={DeviceOrientation.LANDSCAPE}>Horizontal</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-3">
+            <input
+              type="checkbox"
+              checked={deviceProfile.touchOptimized}
+              onChange={(event) => setDeviceProfile(current => ({ ...current, touchOptimized: event.target.checked }))}
+              className="h-5 w-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <span>
+              <span className="block text-sm font-black text-gray-800">Optimizado para táctil</span>
+              <span className="block text-xs font-medium text-gray-500">Amplía controles y usa el corte adaptable.</span>
+            </span>
+          </label>
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div>
@@ -1400,6 +1466,10 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
         <div className="flex justify-between border-b border-gray-200 pb-2">
           <span className="text-gray-500 text-sm">Terminal</span>
           <span className="font-bold text-gray-800">{DEVICE_ROLE_OPTIONS.find(option => option.role === deviceRole)?.label || 'POS estándar'}</span>
+        </div>
+        <div className="flex justify-between border-b border-gray-200 pb-2">
+          <span className="text-gray-500 text-sm">Dispositivo</span>
+          <span className="font-bold text-gray-800">{DEVICE_PROFILE_OPTIONS.find(option => option.formFactor === deviceProfile.formFactor)?.label || 'POS normal'}</span>
         </div>
         <div className="flex justify-between border-b border-gray-200 pb-2">
           <span className="text-gray-500 text-sm">Moneda</span>
