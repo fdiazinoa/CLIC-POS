@@ -1,5 +1,5 @@
 
-import { User } from '../types';
+import { User, UserBiometrics } from '../types';
 
 /**
  * Service to handle WebAuthn Biometric Authentication
@@ -38,11 +38,30 @@ function base64ToBuffer(base64: string): ArrayBuffer {
     return bytes.buffer;
 }
 
+const nativeFingerprintBridge = (): any =>
+    (window as any).ClicPOSNativePrinter || (window as any).AndroidPrinter || null;
+
+const isSourceAfisCredential = (credential: UserBiometrics): boolean =>
+    credential.publicKey?.startsWith('sourceafis:') === true;
+
 export const biometricService = {
     /**
      * Check if biometrics are available on this device
      */
     isAvailable: async (): Promise<boolean> => {
+        const nativeBridge = nativeFingerprintBridge();
+        if (nativeBridge?.discoverFingerprintReaders && nativeBridge?.enrollFingerprint && nativeBridge?.verifyFingerprint) {
+            try {
+                const result = await nativeBridge.discoverFingerprintReaders({ connection: 'USB' });
+                const devices = Array.isArray(result) ? result : (result?.devices || []);
+                if (devices.some((device: any) => Number(device.vendorId) === 0x05ba && Number(device.productId) === 0x000a)) {
+                    return true;
+                }
+            } catch (error) {
+                console.warn('External fingerprint availability check failed', error);
+            }
+        }
+
         if (!window.PublicKeyCredential) return false;
         try {
             return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
@@ -57,6 +76,18 @@ export const biometricService = {
      */
     register: async (user: User): Promise<{ credentialID: string; publicKey: string } | null> => {
         try {
+            const nativeBridge = nativeFingerprintBridge();
+            if (nativeBridge?.enrollFingerprint) {
+                const result = await nativeBridge.enrollFingerprint({ userId: user.id, userName: user.name });
+                if (result?.success && result?.credentialID && result?.publicKey) {
+                    return {
+                        credentialID: String(result.credentialID),
+                        publicKey: String(result.publicKey),
+                    };
+                }
+                throw new Error(String(result?.message || 'No se pudo registrar la huella externa.'));
+            }
+
             // Generate random challenge
             const challenge = new Uint8Array(32);
             window.crypto.getRandomValues(challenge);
@@ -109,8 +140,25 @@ export const biometricService = {
      * Verify user identity (Login)
      * Supports multi-user identification by passing all allowed credential IDs
      */
-    verify: async (credentialIDs: string[]): Promise<string | null> => {
+    verify: async (credentials: UserBiometrics[]): Promise<string | null> => {
         try {
+            const nativeCredentials = credentials.filter(isSourceAfisCredential);
+            const nativeBridge = nativeFingerprintBridge();
+            if (nativeCredentials.length > 0 && nativeBridge?.verifyFingerprint) {
+                const result = await nativeBridge.verifyFingerprint({
+                    templates: nativeCredentials.map(credential => ({
+                        credentialID: credential.credentialID,
+                        publicKey: credential.publicKey,
+                    })),
+                });
+                return result?.success && result?.credentialID ? String(result.credentialID) : null;
+            }
+
+            const credentialIDs = credentials
+                .filter(credential => !isSourceAfisCredential(credential))
+                .map(credential => credential.credentialID);
+            if (credentialIDs.length === 0) return null;
+
             const challenge = new Uint8Array(32);
             window.crypto.getRandomValues(challenge);
 

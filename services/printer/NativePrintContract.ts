@@ -125,6 +125,8 @@ export interface NativePrinterBridge {
   discoverFingerprintReaders?: (payload?: { connection?: ConnectionType }) => Promise<unknown>;
   scanFingerprintReaders?: (payload?: { connection?: ConnectionType }) => Promise<unknown>;
   testFingerprintReader?: (payload?: { address?: string; id?: string; connection?: string }) => Promise<unknown>;
+  enrollFingerprint?: (payload?: { address?: string; id?: string }) => Promise<unknown>;
+  verifyFingerprint?: (payload?: { address?: string; id?: string; templates?: Array<{ credentialID: string; publicKey: string }> }) => Promise<unknown>;
 }
 
 export interface NativeBridgeContractStatus {
