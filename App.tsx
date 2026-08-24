@@ -10368,6 +10368,14 @@ const AppContent: React.FC = () => {
                   try {
                     const license = await checkLicenseStatus(activatedTenantId, resolvedDeviceId);
                     if (!license.isValid) {
+                      if (license.cloudReachable === false) {
+                        console.warn('[ACTIVATION] License validation unavailable; keeping activation recoverable.', {
+                          tenantId: activatedTenantId,
+                          lastCloudError: license.lastCloudError || null,
+                        });
+                        alert(license.reason || 'No se pudo validar la licencia. Verifique la conexión y reintente.');
+                        return;
+                      }
                       triggerLockdown(license.reason || 'Servicio Suspendido.');
                       return;
                     }
