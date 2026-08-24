@@ -38,6 +38,7 @@ import {
 import { getDefaultRoleConfig, resolveDeviceRoleValue } from './deviceRoleHelpers';
 import { resolveTariffId, resolveWarehouseId } from './masterIdentity';
 import { resolveOrderTakerContract } from './orderTakerPolicy';
+import { resolveDeviceProfile, toDeviceProfileContract } from './deviceProfile';
 
 const asObject = (value: unknown): Record<string, any> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -2239,6 +2240,16 @@ export const applyTerminalConfigSnapshot = (
       ...resolvedIdentity,
     },
   });
+  const deviceProfileContract = toDeviceProfileContract(resolveDeviceProfile([
+    resolvedIdentity.deviceProfile,
+    resolvedIdentity.device_profile,
+    effectiveResolved.deviceProfile,
+    effectiveResolved.device_profile,
+    effectiveFallbackConfig.deviceProfile,
+    effectiveFallbackConfig.device_profile,
+    terminalTemplate.deviceProfile,
+    terminalTemplate.device_profile,
+  ], effectiveDeviceRole));
 
   const effectiveDocumentSeries = mergeDocumentSeriesCollection(
     (
@@ -2278,6 +2289,7 @@ export const applyTerminalConfigSnapshot = (
 
   const nextTerminalConfig: TerminalConfig = {
     ...terminalTemplate,
+    ...deviceProfileContract,
     terminalType: effectiveDeviceRole,
     terminal_type: effectiveDeviceRole,
     masterTerminalId: terminalTypeContract.masterTerminalId || terminalTemplate.masterTerminalId,

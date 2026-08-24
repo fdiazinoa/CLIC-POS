@@ -1,4 +1,4 @@
-import { BusinessConfig, Product, TerminalConfig } from '../../types';
+import { BusinessConfig, DeviceProfile, Product, TerminalConfig } from '../../types';
 import { getDefaultRoleConfig, resolveDeviceRoleValue } from '../../utils/deviceRoleHelpers';
 import {
   extractErpRegisterAuth,
@@ -10,6 +10,7 @@ import type { SyncProfile } from '../sync/SyncProfile';
 import { supabase } from '../../utils/supabase';
 import { getNetworkEngine, requestJson } from '../network/httpClient';
 import { resolveOrderTakerContract } from '../../utils/orderTakerPolicy';
+import { resolveDeviceProfile, resolveTerminalDeviceProfile, toDeviceProfileContract } from '../../utils/deviceProfile';
 import { db } from '../../utils/db';
 import { terminalConfigRequestCoordinator } from '../sync/TerminalConfigRequestCoordinator';
 import { persistSyncDeviceToken } from '../sync/deviceToken';
@@ -42,6 +43,8 @@ export interface RuntimeTerminalCard {
   master_terminal_id?: string;
   capabilities?: string[];
   restrictions?: string[];
+  deviceProfile?: DeviceProfile;
+  device_profile?: Record<string, unknown>;
 }
 
 export interface RuntimeTerminalListResponse {
@@ -1070,8 +1073,33 @@ const resolveErpTerminalDeviceRole = (terminal: any) => {
 const applyErpTerminalDeviceRole = (terminalConfig: TerminalConfig, erpTerminal: any): TerminalConfig => {
   const role = resolveErpTerminalDeviceRole(erpTerminal);
   const orderTakerContract = resolveOrderTakerContract(erpTerminal);
+  const effectiveRole = role || terminalConfig.deviceRole?.role;
+  const erpConfig = asObject(erpTerminal?.config);
+  const erpMetadata = asObject(erpTerminal?.metadata ?? erpConfig.metadata);
+  const erpTerminalConfig = asObject(erpTerminal?.terminal_config ?? erpTerminal?.terminalConfig);
+  const erpResolved = asObject(erpTerminalConfig.resolved);
+  const erpIdentity = asObject(erpResolved.identity);
+  const erpResolvedTerminal = asObject(erpResolved.terminal);
+  const deviceProfile = resolveDeviceProfile([
+    erpTerminal?.deviceProfile,
+    erpTerminal?.device_profile,
+    erpConfig.deviceProfile,
+    erpConfig.device_profile,
+    erpMetadata.deviceProfile,
+    erpMetadata.device_profile,
+    erpIdentity.deviceProfile,
+    erpIdentity.device_profile,
+    erpResolvedTerminal.deviceProfile,
+    erpResolvedTerminal.device_profile,
+    erpResolved.deviceProfile,
+    erpResolved.device_profile,
+    terminalConfig.deviceProfile,
+    terminalConfig.device_profile,
+  ], effectiveRole);
+  const deviceProfileContract = toDeviceProfileContract(deviceProfile);
   if (!role) return {
     ...terminalConfig,
+    ...deviceProfileContract,
     terminalType: orderTakerContract.terminalType,
     terminal_type: orderTakerContract.terminalType,
     masterTerminalId: orderTakerContract.masterTerminalId,
@@ -1085,6 +1113,7 @@ const applyErpTerminalDeviceRole = (terminalConfig: TerminalConfig, erpTerminal:
 
   return {
     ...terminalConfig,
+    ...deviceProfileContract,
     terminalType: role,
     terminal_type: role,
     masterTerminalId: orderTakerContract.masterTerminalId,
@@ -1323,6 +1352,10 @@ export const materializeErpTerminalCards = (input: {
       master_terminal_id: orderTakerContract.masterTerminalId,
       capabilities: orderTakerContract.capabilities,
       restrictions: orderTakerContract.restrictions,
+      ...toDeviceProfileContract(resolveTerminalDeviceProfile({
+        ...terminal,
+        config: terminalConfig,
+      }, terminalConfig.deviceRole?.role)),
       config: terminalConfig,
     };
   });

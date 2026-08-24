@@ -371,11 +371,21 @@ test('persists ORDER_TAKER contract from CONFIG_PUSH_V2 across restart', async (
                     terminal_id: terminalId,
                     terminal_type: 'ORDER_TAKER',
                     master_terminal_id: 'master-terminal-001',
+                    device_profile: {
+                        form_factor: 'TABLET',
+                        orientation: 'PORTRAIT',
+                        touch_optimized: true,
+                    },
                     capabilities: ['TABLES', 'ORDERS', 'KDS_SEND'],
                     restrictions: ['NO_OFFLINE', 'NO_PAYMENTS', 'NO_FISCAL_DOCUMENTS', 'NO_CASH_SESSION', 'NO_Z_CLOSE'],
                     config: {
                         terminal_type: 'ORDER_TAKER',
                         master_terminal_id: 'master-terminal-001',
+                        device_profile: {
+                            form_factor: 'TABLET',
+                            orientation: 'PORTRAIT',
+                            touch_optimized: true,
+                        },
                         capabilities: ['TABLES', 'ORDERS', 'KDS_SEND'],
                         restrictions: ['NO_OFFLINE', 'NO_PAYMENTS', 'NO_FISCAL_DOCUMENTS', 'NO_CASH_SESSION', 'NO_Z_CLOSE'],
                     },
@@ -398,6 +408,12 @@ test('persists ORDER_TAKER contract from CONFIG_PUSH_V2 across restart', async (
     assert.equal(terminal.config.deviceRole.role, 'ORDER_TAKER');
     assert.equal(terminal.config.terminal_type, 'ORDER_TAKER');
     assert.equal(terminal.config.master_terminal_id, 'master-terminal-001');
+    assert.deepEqual(terminal.config.deviceProfile, {
+        formFactor: 'TABLET',
+        orientation: 'PORTRAIT',
+        touchOptimized: true,
+    });
+    assert.equal(terminal.config.device_profile.form_factor, 'TABLET');
     assert.deepEqual(terminal.config.capabilities, ['TABLES', 'ORDERS', 'KDS_SEND']);
     assert.ok(terminal.config.restrictions.includes('NO_OFFLINE'));
     assert.ok(terminal.config.restrictions.includes('NO_PAYMENTS'));
@@ -406,6 +422,7 @@ test('persists ORDER_TAKER contract from CONFIG_PUSH_V2 across restart', async (
     const reloadedTerminal = reloaded.terminals.find((entry: any) => entry.id === localTerminalId);
     assert.equal(reloadedTerminal.config.deviceRole.role, 'ORDER_TAKER');
     assert.equal(reloadedTerminal.config.master_terminal_id, 'master-terminal-001');
+    assert.equal(reloadedTerminal.config.deviceProfile.formFactor, 'TABLET');
 });
 
 test('same terminal_config version hash is idempotent and does not download or reapply', async () => {

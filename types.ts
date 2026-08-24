@@ -135,6 +135,25 @@ export enum AuthLevel {
   HEADLESS = 'HEADLESS'                // Level B: Autenticación automática vía API Token
 }
 
+export enum DeviceFormFactor {
+  DESKTOP_POS = 'DESKTOP_POS',
+  TABLET = 'TABLET',
+  HANDHELD = 'HANDHELD',
+  KIOSK = 'KIOSK'
+}
+
+export enum DeviceOrientation {
+  AUTO = 'AUTO',
+  PORTRAIT = 'PORTRAIT',
+  LANDSCAPE = 'LANDSCAPE'
+}
+
+export interface DeviceProfile {
+  formFactor: DeviceFormFactor;
+  orientation: DeviceOrientation;
+  touchOptimized: boolean;
+}
+
 export interface DeviceRoleConfig {
   role: DeviceRole;
   authLevel: AuthLevel;
@@ -628,6 +647,8 @@ export interface TerminalConfig {
   governedByMaster?: boolean; // NEW: If true, this terminal follows the configuration defined by the Master
   startWithAgenda?: boolean; // NEW: Boot directly into Agenda view
   deviceRole?: DeviceRoleConfig; // NEW: Configuración de rol de dispositivo
+  deviceProfile?: DeviceProfile; // Formato físico y comportamiento visual, independiente del rol
+  device_profile?: Partial<DeviceProfile> & Record<string, unknown>; // Contrato ERP snake_case
   terminalType?: 'STANDARD_POS' | 'ORDER_TAKER' | string;
   terminal_type?: 'STANDARD_POS' | 'ORDER_TAKER' | string;
   masterTerminalId?: string;
