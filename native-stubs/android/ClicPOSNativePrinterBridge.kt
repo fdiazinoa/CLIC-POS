@@ -299,14 +299,26 @@ class AndroidPrinterBridge(context: Context) {
                     .toString()
             }
 
-            val usbConnection = usbManager.openDevice(device)
-            val ok = usbConnection != null
-            usbConnection?.close()
+            if (device.vendorId != DigitalPersonaUru4500.VENDOR_ID ||
+                device.productId != DigitalPersonaUru4500.PRODUCT_ID) {
+                return JSONObject()
+                    .put("status", "UNKNOWN")
+                    .put("success", false)
+                    .put("message", "El lector fue detectado, pero la captura abierta solo está habilitada para DigitalPersona U.are.U 4500 (05ba:000a).")
+                    .toString()
+            }
 
+            val capture = DigitalPersonaUru4500(usbManager, device).use { reader -> reader.capture() }
             JSONObject()
-                .put("status", if (ok) "ONLINE" else "OFFLINE")
-                .put("success", ok)
-                .put("message", if (ok) "Dispositivo USB accesible (apertura correcta)." else "No se pudo abrir el dispositivo.")
+                .put("status", "ONLINE")
+                .put("success", true)
+                .put("captured", true)
+                .put("width", capture.width)
+                .put("height", capture.height)
+                .put("capturedLines", capture.capturedLines)
+                .put("encrypted", capture.encrypted)
+                .put("contrast", capture.contrast)
+                .put("message", "Huella capturada correctamente (${capture.width}×${capture.height}, ${capture.capturedLines} líneas).")
                 .toString()
         } catch (e: Exception) {
             JSONObject()
