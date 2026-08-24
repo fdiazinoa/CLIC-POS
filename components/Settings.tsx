@@ -444,6 +444,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
         return (
           <TerminalSettings
             config={props.config}
+            users={props.users}
             onUpdateConfig={props.onUpdateConfig}
             onClose={() => setCurrentView('HOME')}
             products={props.products}

@@ -15,7 +15,7 @@ import {
    Package, Layers, Crown, ListOrdered, Link2, Sparkles, Palette, MousePointer2, Banknote, ListChecks,
    Sun, ScanBarcode, Layout, Minus, ArrowDownCircle, ArrowUpCircle, Wallet, UserCheck, User, CreditCard, Fingerprint, UserCircle
 } from 'lucide-react';
-import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice, Product, DeviceRole, AuthLevel, Room } from '../types';
+import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice, Product, DeviceRole, AuthLevel, Room, User as PosUser, CloseReportSection } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG } from '../constants';
 import { db } from '../utils/db';
 import { syncManager } from '../services/sync/SyncManager';
@@ -24,6 +24,7 @@ import AccessibilityToggle from './AccessibilityToggle';
 import SettingsOperational from './SettingsOperational';
 import { mergeDocumentSeriesCollection } from '../utils/documentSeriesIdentity';
 import { isPartialXReportAllowed } from '../utils/seriesValidation';
+import { CLOSE_REPORT_SECTION_OPTIONS, type CloseReportType } from '../utils/closeReportOptions';
 
 interface TerminalSettingsProps {
    config: BusinessConfig;
@@ -33,6 +34,7 @@ interface TerminalSettingsProps {
    products?: Product[];
    isAdminMode?: boolean;
    currentDeviceId?: string;
+   users?: PosUser[];
 }
 
 type ConfiguredTerminal = BusinessConfig['terminals'][number];
@@ -182,7 +184,7 @@ const NCF_LABELS: Record<NCFType, string> = {
    'B15': 'Gubernamentales'
 };
 
-const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [], products = [], isAdminMode = false, currentDeviceId }) => {
+const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [], products = [], isAdminMode = false, currentDeviceId, users = [] }) => {
    const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
    const [terminals, setTerminals] = useState(() => dedupeConfiguredTerminals(config.terminals || []));
 
@@ -214,6 +216,17 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
    const [isSyncing, setIsSyncing] = useState(false);
    const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
    const [allRooms, setAllRooms] = useState<Room[]>([]);
+   const [closeOptionsUserId, setCloseOptionsUserId] = useState<string>(() => users[0]?.id || '');
+
+   useEffect(() => {
+      if (users.length === 0) {
+         setCloseOptionsUserId('');
+         return;
+      }
+      if (!users.some(user => user.id === closeOptionsUserId)) {
+         setCloseOptionsUserId(users[0].id);
+      }
+   }, [users, closeOptionsUserId]);
 
    useEffect(() => {
       const loadSequences = async () => {
@@ -285,6 +298,27 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
          }
          return t;
       }));
+   };
+
+   const handleToggleCloseReportSection = (
+      userId: string,
+      reportType: CloseReportType,
+      section: CloseReportSection,
+   ) => {
+      if (!activeTerminal || isReadOnly || !userId) return;
+      const currentByUser = activeTerminal.config.workflow.session.closeReportOptionsByUser || {};
+      const currentByType = currentByUser[userId] || {};
+      const currentSections = currentByType[reportType] || [];
+      const nextSections = currentSections.includes(section)
+         ? currentSections.filter(item => item !== section)
+         : [...currentSections, section];
+      handleUpdateActiveConfig('workflow.session', 'closeReportOptionsByUser', {
+         ...currentByUser,
+         [userId]: {
+            ...currentByType,
+            [reportType]: nextSections,
+         },
+      });
    };
 
    const handleUpdateDeviceRole = (role: DeviceRole) => {
@@ -705,6 +739,70 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     disabled={isReadOnly}
                                  />
                               </div>
+                              <section className="rounded-[2rem] border border-slate-200 bg-white p-5 md:p-6 shadow-sm space-y-5">
+                                 <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                                    <div>
+                                       <div className="flex items-center gap-3">
+                                          <div className="rounded-2xl bg-indigo-50 p-3 text-indigo-600"><BarChart3 size={22} /></div>
+                                          <div>
+                                             <h4 className="text-lg font-black text-slate-800">Contenido de cierres por usuario</h4>
+                                             <p className="text-xs font-medium text-slate-500">Selecciona qué anexos recibe cada usuario en sus reportes X y Z.</p>
+                                          </div>
+                                       </div>
+                                    </div>
+                                    <label className="min-w-64 space-y-2">
+                                       <span className="block text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">Usuario</span>
+                                       <select
+                                          value={closeOptionsUserId}
+                                          onChange={(event) => setCloseOptionsUserId(event.target.value)}
+                                          disabled={users.length === 0}
+                                          className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 font-bold text-slate-800 outline-none focus:border-indigo-500 disabled:opacity-50"
+                                       >
+                                          {users.length === 0 && <option value="">No hay usuarios configurados</option>}
+                                          {users.map(user => (
+                                             <option key={user.id} value={user.id}>{user.name} · {user.role}</option>
+                                          ))}
+                                       </select>
+                                    </label>
+                                 </div>
+
+                                 {closeOptionsUserId && (
+                                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+                                       {(['X', 'Z'] as CloseReportType[]).map(reportType => {
+                                          const selectedSections = activeTerminal.config.workflow.session.closeReportOptionsByUser?.[closeOptionsUserId]?.[reportType] || [];
+                                          return (
+                                             <div key={reportType} className="rounded-3xl border border-slate-200 bg-slate-50/80 p-4 space-y-3">
+                                                <div className="flex items-center justify-between px-1">
+                                                   <div>
+                                                      <p className="font-black text-slate-800">Cierre {reportType}</p>
+                                                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{reportType === 'X' ? 'Corte parcial' : 'Cierre definitivo'}</p>
+                                                   </div>
+                                                   <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-indigo-600 shadow-sm">{selectedSections.length} activos</span>
+                                                </div>
+                                                {CLOSE_REPORT_SECTION_OPTIONS.map(option => {
+                                                   const checked = selectedSections.includes(option.id);
+                                                   return (
+                                                      <label key={option.id} className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-3 transition ${checked ? 'border-indigo-300 bg-indigo-50' : 'border-slate-200 bg-white'} ${isReadOnly ? 'cursor-not-allowed opacity-60' : ''}`}>
+                                                         <input
+                                                            type="checkbox"
+                                                            checked={checked}
+                                                            onChange={() => handleToggleCloseReportSection(closeOptionsUserId, reportType, option.id)}
+                                                            disabled={isReadOnly}
+                                                            className="mt-1 h-5 w-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                                         />
+                                                         <span>
+                                                            <span className="block text-sm font-black text-slate-800">{option.label}</span>
+                                                            <span className="block text-[11px] leading-4 text-slate-500">{option.description}</span>
+                                                         </span>
+                                                      </label>
+                                                   );
+                                                })}
+                                             </div>
+                                          );
+                                       })}
+                                    </div>
+                                 )}
+                              </section>
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                  <label className="p-5 bg-slate-50 rounded-3xl border border-slate-100 space-y-3">
                                     <span className="block text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Fondo fijo de caja</span>
