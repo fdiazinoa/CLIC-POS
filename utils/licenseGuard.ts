@@ -155,17 +155,17 @@ const buildLicenseQuery = (tenantId: string, deviceId: string) => {
     const params = new URLSearchParams();
     const normalizedTenantId = normalizeValue(tenantId) || normalizeValue(localStorage.getItem('clic_tenant_id'));
     const normalizedDeviceId = normalizeValue(deviceId) || normalizeValue(localStorage.getItem('pos_device_id'));
-    const normalizedBranchId =
-        normalizeValue(localStorage.getItem('clic_branch_id'))
-        || normalizeValue(localStorage.getItem('clic_store_id'))
-        || normalizeValue(localStorage.getItem('clic_erp_sync_store_id'))
-        || normalizeValue(localStorage.getItem('active_terminal_id'))
-        || normalizeValue(deviceId)
-        || 'default';
+    const normalizedBranchId = [
+        localStorage.getItem('clic_branch_id'),
+        localStorage.getItem('clic_store_id'),
+        localStorage.getItem('clic_erp_sync_store_id'),
+    ]
+        .map(normalizeValue)
+        .find(isUuid);
 
     if (normalizedTenantId) params.set('tenantId', normalizedTenantId);
     if (normalizedDeviceId) params.set('deviceId', normalizedDeviceId);
-    params.set('branchId', normalizedBranchId);
+    if (normalizedBranchId) params.set('branchId', normalizedBranchId);
     return params.toString();
 };
 

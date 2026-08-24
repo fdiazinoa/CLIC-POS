@@ -44,6 +44,7 @@ const { checkLicenseStatus } = await import('../utils/licenseGuard');
 const tenantId = '9eda7d73-76e4-4432-ad13-4934fefe8f69';
 const deviceId = 'DEV-LICENSE-QA';
 const cacheKey = 'clic:license:last-success';
+const storeId = '0074089e-a648-4e98-8294-2ca350baf33e';
 
 const resetRuntime = () => {
   localStorage.clear();
@@ -82,6 +83,39 @@ test('consulta la licencia sin cookies y conserva una suspensión explícita', a
   assert.equal(requestCredentials, 'omit');
   assert.equal(result.isValid, false);
   assert.equal(result.reason, 'SUSPENDED');
+});
+
+test('omite branchId durante la primera activación cuando aún no existe una sucursal UUID', async () => {
+  resetRuntime();
+  let requestedUrl = '';
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requestedUrl = String(input);
+    return Response.json(cachedLicense());
+  }) as typeof fetch;
+
+  const result = await checkLicenseStatus(tenantId, deviceId);
+  const request = new URL(requestedUrl);
+
+  assert.equal(result.isValid, true);
+  assert.equal(request.searchParams.get('tenantId'), tenantId);
+  assert.equal(request.searchParams.get('deviceId'), deviceId);
+  assert.equal(request.searchParams.has('branchId'), false);
+});
+
+test('envía branchId cuando existe un UUID de sucursal válido', async () => {
+  resetRuntime();
+  localStorage.setItem('clic_erp_sync_store_id', storeId);
+  let requestedUrl = '';
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requestedUrl = String(input);
+    return Response.json(cachedLicense({ branchId: storeId }));
+  }) as typeof fetch;
+
+  const result = await checkLicenseStatus(tenantId, deviceId);
+  const request = new URL(requestedUrl);
+
+  assert.equal(result.isValid, true);
+  assert.equal(request.searchParams.get('branchId'), storeId);
 });
 
 test('una licencia activa reciente obtiene únicamente la gracia configurada ante una falla temporal', async () => {
