@@ -43,7 +43,9 @@ const { checkLicenseStatus } = await import('../utils/licenseGuard');
 
 const tenantId = '9eda7d73-76e4-4432-ad13-4934fefe8f69';
 const deviceId = 'DEV-LICENSE-QA';
-const cacheKey = 'clic:license:last-success';
+const legacyCacheKey = 'clic:license:last-success';
+const cacheKey = `${legacyCacheKey}:${tenantId}`;
+const storeId = '0074089e-a648-4e98-8294-2ca350baf33e';
 
 const resetRuntime = () => {
   localStorage.clear();
@@ -82,6 +84,95 @@ test('consulta la licencia sin cookies y conserva una suspensión explícita', a
   assert.equal(requestCredentials, 'omit');
   assert.equal(result.isValid, false);
   assert.equal(result.reason, 'SUSPENDED');
+});
+
+test('omite branchId durante la primera activación cuando aún no existe una sucursal UUID', async () => {
+  resetRuntime();
+  let requestedUrl = '';
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requestedUrl = String(input);
+    return Response.json(cachedLicense());
+  }) as typeof fetch;
+
+  const result = await checkLicenseStatus(tenantId, deviceId);
+  const request = new URL(requestedUrl);
+
+  assert.equal(result.isValid, true);
+  assert.equal(request.searchParams.get('tenantId'), tenantId);
+  assert.equal(request.searchParams.get('deviceId'), deviceId);
+  assert.equal(request.searchParams.has('branchId'), false);
+});
+
+test('envía branchId cuando existe un UUID de sucursal válido', async () => {
+  resetRuntime();
+  localStorage.setItem('clic_erp_sync_store_id', storeId);
+  let requestedUrl = '';
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requestedUrl = String(input);
+    return Response.json(cachedLicense({ branchId: storeId }));
+  }) as typeof fetch;
+
+  const result = await checkLicenseStatus(tenantId, deviceId);
+  const request = new URL(requestedUrl);
+
+  assert.equal(result.isValid, true);
+  assert.equal(request.searchParams.get('branchId'), storeId);
+});
+
+test('rechaza una licencia de otro tenant y reintenta sin caché', async () => {
+  resetRuntime();
+  const otherTenantId = '54c8df05-d28c-40ea-9ad4-38f37412acac';
+  let calls = 0;
+  let retryUrl = '';
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    calls += 1;
+    if (calls === 1) {
+      return Response.json(cachedLicense({ tenantId: otherTenantId }));
+    }
+    retryUrl = String(input);
+    return Response.json(cachedLicense());
+  }) as typeof fetch;
+
+  const result = await checkLicenseStatus(tenantId, deviceId);
+
+  assert.equal(result.isValid, true);
+  assert.equal(calls, 2);
+  assert.equal(new URL(retryUrl).searchParams.has('_licenseCheck'), true);
+});
+
+test('acepta el tenant Cloud Admin cuando la respuesta identifica su tenant ERP', async () => {
+  resetRuntime();
+  const cloudAdminTenantId = 'afb62bd5-a822-4238-b523-655ce4b901b8';
+  globalThis.fetch = (async () => Response.json(cachedLicense({
+    activation: {
+      cloud_admin_tenant_id: cloudAdminTenantId,
+      tenant_id: tenantId,
+    },
+  }))) as typeof fetch;
+
+  const result = await checkLicenseStatus(cloudAdminTenantId, deviceId);
+
+  assert.equal(result.isValid, true);
+  assert.equal(result.tenantId, tenantId);
+});
+
+test('ignora la caché heredada cuando pertenece a otro tenant', async () => {
+  resetRuntime();
+  const otherTenantId = '54c8df05-d28c-40ea-9ad4-38f37412acac';
+  localStorage.setItem(legacyCacheKey, JSON.stringify(cachedLicense({
+    tenantId: otherTenantId,
+    licensed: false,
+    reason: 'SUSPENDED',
+  })));
+  globalThis.fetch = (async () => {
+    throw new Error('network unavailable');
+  }) as typeof fetch;
+
+  const result = await checkLicenseStatus(tenantId, deviceId);
+
+  assert.equal(result.isValid, false);
+  assert.notEqual(result.reason, 'SUSPENDED');
+  assert.match(result.reason || '', /No se pudo validar la licencia/);
 });
 
 test('una licencia activa reciente obtiene únicamente la gracia configurada ante una falla temporal', async () => {
@@ -128,11 +219,14 @@ test('sin una licencia activa reciente la falla de red bloquea en vez de autoriz
   assert.equal(result.inGracePeriod, false);
 });
 
-test('el contrato App separa licencia suspendida de dispositivo reemplazado', () => {
+test('el contrato App bloquea suspensiones explícitas pero tolera fallas temporales de licencia', () => {
   const source = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 
-  assert.match(source, /if \(!res\.isValid\) \{\s*triggerLockdown\(res\.reason \|\| fallbackMessage\);/);
-  assert.match(source, /if \(!license\.isValid\) \{\s*triggerLockdown\(license\.reason \|\| 'Servicio Suspendido\.'\);/);
+  assert.match(source, /if \(!res\.isValid && res\.cloudReachable !== false\) \{\s*triggerLockdown\(res\.reason \|\| fallbackMessage\);/);
+  assert.match(source, /if \(!license\.isValid && license\.cloudReachable !== false\) \{\s*triggerLockdown\(license\.reason \|\| 'Servicio Suspendido\.'\);/);
+  assert.match(source, /\[BOOT\] License validation unavailable; continuing without permanent lockdown\./);
+  assert.match(source, /\[LICENSE\] Validation unavailable during polling; preserving recoverable POS access\./);
+  assert.match(source, /if \(license\.cloudReachable === false\) \{[\s\S]*?alert\(license\.reason/);
   assert.match(source, /if \(blockingMessage === DEVICE_SUPERSEDED_MESSAGE\) \{\s*await triggerLockdownAfterAuthorizationCheck/);
   assert.doesNotMatch(source, /triggerLockdownAfterAuthorizationCheck\(license\.reason/);
   assert.doesNotMatch(source, /triggerLockdownAfterAuthorizationCheck\(res\.reason/);

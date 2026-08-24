@@ -49,6 +49,17 @@ interface ErpLicenseStatusResponse {
     inGracePeriod: boolean;
     cloudReachable: boolean;
     lastCloudError?: string | null;
+    activation?: {
+        cloud_admin_tenant_id?: string | null;
+        tenant_id?: string | null;
+    } | null;
+}
+
+class LicenseTenantMismatchError extends Error {
+    constructor() {
+        super('ERP license response does not match the requested tenant');
+        this.name = 'LicenseTenantMismatchError';
+    }
 }
 
 const LANDLORD_PROFILE = 'landlord';
@@ -128,13 +139,44 @@ const isWithinGracePeriod = (lastSuccessfulAt?: string | null): boolean => {
     return Date.now() - ts <= POS_LICENSE_GRACE_PERIOD_MS;
 };
 
-const readCachedLicenseStatus = (): ErpLicenseStatusResponse | null => (
-    safeParseJson<ErpLicenseStatusResponse>(localStorage.getItem(POS_LICENSE_CACHE_KEY))
+const getTenantLicenseCacheKey = (tenantId: string) => (
+    `${POS_LICENSE_CACHE_KEY}:${normalizeValue(tenantId).toLowerCase()}`
 );
 
-const writeCachedLicenseStatus = (status: ErpLicenseStatusResponse) => {
-    if (!status.lastSuccessfulAt) return;
-    localStorage.setItem(POS_LICENSE_CACHE_KEY, JSON.stringify(status));
+const licenseStatusMatchesTenant = (status: ErpLicenseStatusResponse, tenantId: string): boolean => {
+    const normalizedTenantId = normalizeValue(tenantId).toLowerCase();
+    if (!normalizedTenantId) return false;
+
+    return [
+        status.tenantId,
+        status.activation?.tenant_id,
+        status.activation?.cloud_admin_tenant_id,
+    ]
+        .map((value) => normalizeValue(value).toLowerCase())
+        .filter(Boolean)
+        .includes(normalizedTenantId);
+};
+
+const readCachedLicenseStatus = (tenantId: string): ErpLicenseStatusResponse | null => {
+    const scoped = safeParseJson<ErpLicenseStatusResponse>(
+        localStorage.getItem(getTenantLicenseCacheKey(tenantId))
+    );
+    if (scoped && licenseStatusMatchesTenant(scoped, tenantId)) {
+        return scoped;
+    }
+
+    const legacy = safeParseJson<ErpLicenseStatusResponse>(localStorage.getItem(POS_LICENSE_CACHE_KEY));
+    if (legacy && licenseStatusMatchesTenant(legacy, tenantId)) {
+        localStorage.setItem(getTenantLicenseCacheKey(tenantId), JSON.stringify(legacy));
+        return legacy;
+    }
+
+    return null;
+};
+
+const writeCachedLicenseStatus = (tenantId: string, status: ErpLicenseStatusResponse) => {
+    if (!status.lastSuccessfulAt || !licenseStatusMatchesTenant(status, tenantId)) return;
+    localStorage.setItem(getTenantLicenseCacheKey(tenantId), JSON.stringify(status));
 };
 
 const mapErpLicenseStatus = (status: ErpLicenseStatusResponse): LicenseStatus => ({
@@ -155,36 +197,46 @@ const buildLicenseQuery = (tenantId: string, deviceId: string) => {
     const params = new URLSearchParams();
     const normalizedTenantId = normalizeValue(tenantId) || normalizeValue(localStorage.getItem('clic_tenant_id'));
     const normalizedDeviceId = normalizeValue(deviceId) || normalizeValue(localStorage.getItem('pos_device_id'));
-    const normalizedBranchId =
-        normalizeValue(localStorage.getItem('clic_branch_id'))
-        || normalizeValue(localStorage.getItem('clic_store_id'))
-        || normalizeValue(localStorage.getItem('clic_erp_sync_store_id'))
-        || normalizeValue(localStorage.getItem('active_terminal_id'))
-        || normalizeValue(deviceId)
-        || 'default';
+    const normalizedBranchId = [
+        localStorage.getItem('clic_branch_id'),
+        localStorage.getItem('clic_store_id'),
+        localStorage.getItem('clic_erp_sync_store_id'),
+    ]
+        .map(normalizeValue)
+        .find(isUuid);
 
     if (normalizedTenantId) params.set('tenantId', normalizedTenantId);
     if (normalizedDeviceId) params.set('deviceId', normalizedDeviceId);
-    params.set('branchId', normalizedBranchId);
+    if (normalizedBranchId) params.set('branchId', normalizedBranchId);
     return params.toString();
 };
 
 const fetchLicenseStatusFromErp = async (
     tenantId: string,
     deviceId: string,
-    timeoutMs = 3500
+    timeoutMs = 3500,
+    bypassCache = false,
 ): Promise<ErpLicenseStatusResponse> => {
     const erpBaseUrl = resolveLicenseEndpointBaseUrl();
     if (!erpBaseUrl) {
         throw new Error('ERP license endpoint base URL is not configured');
     }
 
+    const query = new URLSearchParams(buildLicenseQuery(tenantId, deviceId));
+    if (bypassCache) {
+        query.set('_licenseCheck', `${Date.now()}`);
+    }
+
     const response = await fetchWithTimeout(
-        `${erpBaseUrl}/api/license/status?${buildLicenseQuery(tenantId, deviceId)}`,
+        `${erpBaseUrl}/api/license/status?${query.toString()}`,
         {
             method: 'GET',
             credentials: 'omit',
-            headers: { Accept: 'application/json' },
+            cache: 'no-store',
+            headers: {
+                Accept: 'application/json',
+                'Cache-Control': 'no-cache',
+            },
         },
         timeoutMs
     );
@@ -194,8 +246,12 @@ const fetchLicenseStatusFromErp = async (
         throw new Error(`ERP license endpoint failed with HTTP ${response.status}`);
     }
 
+    if (!licenseStatusMatchesTenant(payload, tenantId)) {
+        throw new LicenseTenantMismatchError();
+    }
+
     if (payload.lastSuccessfulAt) {
-        writeCachedLicenseStatus(payload);
+        writeCachedLicenseStatus(tenantId, payload);
     }
 
     return payload;
@@ -526,7 +582,9 @@ export const resolveTenantRecord = async (identity?: string | TenantIdentity): P
 };
 
 export const resolveTenantId = async (preferredTenantId?: string): Promise<string | null> => {
-    const cached = readCachedLicenseStatus();
+    const requestedTenantId = normalizeValue(preferredTenantId)
+        || normalizeValue(localStorage.getItem('clic_tenant_id'));
+    const cached = requestedTenantId ? readCachedLicenseStatus(requestedTenantId) : null;
     if (cached?.tenantId) {
         return cached.tenantId;
     }
@@ -540,10 +598,19 @@ export const checkLicenseStatus = async (
     deviceId: string
 ): Promise<LicenseStatus> => {
     try {
-        const status = await fetchLicenseStatusFromErp(tenantId, deviceId);
+        let status: ErpLicenseStatusResponse;
+        try {
+            status = await fetchLicenseStatusFromErp(tenantId, deviceId);
+        } catch (error) {
+            if (!(error instanceof LicenseTenantMismatchError)) throw error;
+            console.warn('[licenseGuard] LICENSE_TENANT_MISMATCH_RETRY', {
+                requestedTenantId: normalizeValue(tenantId),
+            });
+            status = await fetchLicenseStatusFromErp(tenantId, deviceId, 3500, true);
+        }
         return mapErpLicenseStatus(status);
     } catch (error) {
-        const cached = readCachedLicenseStatus();
+        const cached = readCachedLicenseStatus(tenantId);
         if (cached && cached.licensed === false) {
             console.warn('[licenseGuard] CACHED_LICENSE_BLOCK_ACTIVE', {
                 reason: cached.reason,
