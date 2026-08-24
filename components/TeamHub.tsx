@@ -210,8 +210,8 @@ const TeamHub: React.FC<TeamHubProps> = ({
       setEditingUser(null);
    };
 
-   const handleDeleteUser = (id: string) => {
-      if (confirm("¿Eliminar usuario?")) {
+   const handleDeleteUser = async (id: string) => {
+      if (await clicConfirm("¿Eliminar usuario?")) {
          onUpdateUsers(users.filter(u => u.id !== id));
       }
    };
@@ -297,8 +297,8 @@ const TeamHub: React.FC<TeamHubProps> = ({
       window.setTimeout(() => setRoleSaveStatus('idle'), 1800);
    };
 
-   const handleDeleteRole = (roleId: string) => {
-      if (confirm("¿Eliminar este rol?")) {
+   const handleDeleteRole = async (roleId: string) => {
+      if (await clicConfirm("¿Eliminar este rol?")) {
          onUpdateRoles(roles.filter(r => r.id !== roleId));
          if (editingRole?.id === roleId) setEditingRole(null);
       }

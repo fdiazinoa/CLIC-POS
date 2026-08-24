@@ -74,8 +74,8 @@ const VariantManager: React.FC<VariantManagerProps> = ({ onClose }) => {
     setAttributes(prev => prev.map(a => a.id === id ? { ...a, ...updates } : a));
   };
 
-  const handleDeleteAttribute = (id: string) => {
-    if (confirm("¿Eliminar este atributo y todos sus valores?")) {
+  const handleDeleteAttribute = async (id: string) => {
+    if (await clicConfirm("¿Eliminar este atributo y todos sus valores?")) {
       setAttributes(prev => prev.filter(a => a.id !== id));
       if (selectedAttributeId === id) setSelectedAttributeId(null);
     }

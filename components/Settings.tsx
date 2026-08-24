@@ -220,7 +220,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
       return;
     }
 
-    const confirmed = window.confirm(
+    const confirmed = await clicConfirm(
       'Esto recalculará saldos pendientes CxC/deudas y recuperará Notas de Crédito faltantes desde movimientos de wallet.\n\n¿Desea continuar?'
     );
     if (!confirmed) return;
@@ -274,7 +274,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
       });
 
       if (result?.hasUpdate) {
-        const confirmed = window.confirm(
+        const confirmed = await clicConfirm(
           `Nueva versión disponible.\n\n` +
           `Versión actual: ${result.local.versionName || result.local.versionCode || 'desconocida'}\n` +
           `Versión disponible: ${result.release.version_name}\n\n` +
@@ -293,7 +293,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
       console.info('[posApkUpdate] Consulta manual fallida:', error);
       const endpointUrl = resolvePosApkLatestUrl(props.config);
       const portalUrl = resolvePosApkPortalUrl(props.config);
-      const shouldOpenPortal = window.confirm(
+      const shouldOpenPortal = await clicConfirm(
         `No se pudo consultar la actualización del APK.\n\n` +
         `El POS sigue operando normal. Esto suele pasar cuando el endpoint de Cloud-Admin todavía no está publicado, no tiene CORS habilitado o no hay conexión.\n\n` +
         `Endpoint consultado:\n${endpointUrl}\n\n` +

@@ -82,8 +82,8 @@ const DataSecurityHub: React.FC<DataSecurityHubProps> = ({ onClose, terminalId, 
       }
    };
 
-   const handleLock = () => {
-      if (confirm("¿Activar Modo Kiosco? El terminal quedará bloqueado.")) {
+   const handleLock = async () => {
+      if (await clicConfirm("¿Activar Modo Kiosco? El terminal quedará bloqueado.")) {
          setIsLocked(true);
       }
    };
@@ -105,7 +105,7 @@ const DataSecurityHub: React.FC<DataSecurityHubProps> = ({ onClose, terminalId, 
          ? `¿CONFIRMAR ELIMINACIÓN PARA TERMINAL ${terminalId}?\n\nSe eliminarán: ${categoryNames}\n\nSolo se borrarán los datos locales de esta terminal. Esta acción NO se puede deshacer.`
          : `¿CONFIRMAR ELIMINACIÓN GLOBAL?\n\nSe eliminarán: ${categoryNames}\n\nEsta acción NO se puede deshacer.`;
 
-      if (!confirm(confirmMsg)) {
+      if (!await clicConfirm(confirmMsg)) {
          return;
       }
 

@@ -260,7 +260,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
         ));
     };
 
-    const deleteTable = (id: string) => {
+    const deleteTable = async (id: string) => {
         const table = tables.find(candidate => String(candidate.id) === String(id));
         if (!table) return;
         const hasAssociatedOrders = Boolean(
@@ -275,7 +275,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
             alert('No se puede eliminar esta mesa porque tiene pedidos asociados. Finalice o mueva las cuentas antes de editar el layout.');
             return;
         }
-        if (!window.confirm(`¿Eliminar ${getTableLabel(table)} del layout?`)) return;
+        if (!await clicConfirm(`¿Eliminar ${getTableLabel(table)} del layout?`)) return;
         onUpdateTables(currentTables => currentTables.filter(t => t.id !== id));
         setSelectedTableId(null);
     };

@@ -147,9 +147,9 @@ const PurchaseOrderList: React.FC<PurchaseOrderListProps> = ({
                                                 <Mail size={20} />
                                             </button>
                                             <button
-                                                onClick={(e) => {
+                                                onClick={async (e) => {
                                                     e.stopPropagation();
-                                                    if (window.confirm('¿Estás seguro de que deseas eliminar esta orden?')) {
+                                                    if (await clicConfirm('¿Estás seguro de que deseas eliminar esta orden?')) {
                                                         onDeleteOrder(po.id);
                                                     }
                                                 }}

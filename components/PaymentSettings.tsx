@@ -154,8 +154,8 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
     setIsMethodModalOpen(true);
   };
 
-  const handleDeleteMethod = (id: string) => {
-    if (window.confirm('¿Eliminar este método de pago?')) {
+  const handleDeleteMethod = async (id: string) => {
+    if (await clicConfirm('¿Eliminar este método de pago?')) {
       setMethods((prev) => prev.filter((method) => method.id !== id));
     }
   };

@@ -770,7 +770,7 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
          setDiscrepancyModal(null);
          setReceptionQuantities({});
 
-         if (confirm(`✅ Traspaso #${transfer?.displayId || transferId} recibido correctamente ${discrepancyReason ? '(CON DIFERENCIAS)' : ''}.\n\nLa aplicación se recargará para actualizar los inventarios.`)) {
+         if (await clicConfirm(`✅ Traspaso #${transfer?.displayId || transferId} recibido correctamente ${discrepancyReason ? '(CON DIFERENCIAS)' : ''}.\n\nLa aplicación se recargará para actualizar los inventarios.`)) {
             window.location.reload();
          }
       } catch (error) {
@@ -985,8 +985,8 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
                                     {showProActions && (
                                        <div className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-gray-100 z-50 p-2 overflow-hidden animate-in zoom-in-95 duration-200">
                                           <button
-                                             onClick={() => {
-                                                const cat = prompt("Ingrese el nombre de la categoría:");
+                                             onClick={async () => {
+                                                const cat = await clicPrompt("Ingrese el nombre de la categoría:");
                                                 if (cat) handleLoadByCategory(cat);
                                                 setShowProActions(false);
                                              }}

@@ -115,7 +115,7 @@ const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config,
                                     </div>
 
                                     <button
-                                        onClick={(e) => {
+                                        onClick={async (e) => {
                                             e.stopPropagation();
                                             // View Details
                                             setSelectedReception(r);
@@ -125,9 +125,9 @@ const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config,
                                         Ver Detalle <ArrowRight size={14} />
                                     </button>
                                     <button
-                                        onClick={(e) => {
+                                        onClick={async (e) => {
                                             e.stopPropagation();
-                                            if (window.confirm('¿Estás seguro de que deseas anular esta recepción? Esta acción revertirá el inventario si el stock lo permite.')) {
+                                            if (await clicConfirm('¿Estás seguro de que deseas anular esta recepción? Esta acción revertirá el inventario si el stock lo permite.')) {
                                                 onDeleteReception(r.id);
                                             }
                                         }}

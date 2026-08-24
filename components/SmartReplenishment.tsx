@@ -177,7 +177,7 @@ const SmartReplenishment: React.FC<SmartReplenishmentProps> = ({
             return;
         }
 
-        if (!confirm(`¿Desea generar Órdenes de Pedido para ${itemsToOrder.length} artículos?`)) return;
+        if (!await clicConfirm(`¿Desea generar Órdenes de Pedido para ${itemsToOrder.length} artículos?`)) return;
 
         setIsGenerating(true);
         try {

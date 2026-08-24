@@ -194,7 +194,7 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
             alert('No se pudo abrir el formulario para repetir este cierre Z.');
             return;
         }
-        if (!confirm(`¿Repetir el cierre ${report.sequenceNumber}? Se abrirá el formulario para ingresar nuevamente los montos y reemplazar este Z.`)) return;
+        if (!await clicConfirm(`¿Repetir el cierre ${report.sequenceNumber}? Se abrirá el formulario para ingresar nuevamente los montos y reemplazar este Z.`)) return;
         setReprocessingReportId(report.id);
         try {
             onRepeatReport(report);
@@ -302,12 +302,12 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
                                     || config.terminals?.[0];
                                 let recipients = configuredTerminal?.config?.workflow?.session?.zReportEmails || config.emailConfig?.defaultRecipient;
                                 if (!recipients) {
-                                    recipients = window.prompt('Ingrese el correo electrónico para enviar este cierre Z:', '') || '';
+                                    recipients = await clicPrompt('Ingrese el correo electrónico para enviar este cierre Z:', '') || '';
                                     recipients = recipients.trim();
                                     if (!recipients) return;
                                 }
 
-                                if (confirm(`¿Reenviar reporte a ${recipients}?`)) {
+                                if (await clicConfirm(`¿Reenviar reporte a ${recipients}?`)) {
                                     setEmailingReportId(r.id);
                                     try {
                                         const result = await sendZReportEmailViaErp({ recipients, report: r, config });

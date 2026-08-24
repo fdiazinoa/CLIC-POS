@@ -64,7 +64,7 @@ const SpacesManager: React.FC<SpacesManagerProps> = ({
     };
 
     const handleDelete = async (id: string) => {
-        if (!confirm("¿Seguro que desea eliminar este espacio?")) return;
+        if (!await clicConfirm("¿Seguro que desea eliminar este espacio?")) return;
 
         try {
             const updatedRooms = rooms.filter(r => r.id !== id);

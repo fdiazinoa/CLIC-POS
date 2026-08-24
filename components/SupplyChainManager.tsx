@@ -1349,7 +1349,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                <div className="p-8 bg-gray-50 border-t border-gray-100 flex justify-between gap-4">
                   <button
                      onClick={async () => {
-                        if (window.confirm(`¿Está seguro que desea eliminar al proveedor "${editingSupplier.name}"?\n\nEsta acción no se puede deshacer.`)) {
+                        if (await clicConfirm(`¿Está seguro que desea eliminar al proveedor "${editingSupplier.name}"?\n\nEsta acción no se puede deshacer.`)) {
                            // Set loading or similar? No simple state for it.
                            await onDeleteSupplier(editingSupplier.id);
                            setEditingSupplier(null);
@@ -1477,7 +1477,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                            onClick={async (e) => {
                               e.preventDefault();
                               e.stopPropagation();
-                              if (window.confirm(`¿Eliminar proveedor "${supplier.name}"?`)) {
+                              if (await clicConfirm(`¿Eliminar proveedor "${supplier.name}"?`)) {
                                  await onDeleteSupplier(supplier.id);
                               }
                            }}
