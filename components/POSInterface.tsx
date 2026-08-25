@@ -49,6 +49,7 @@ import { resolveTerminalDocumentSeriesId, validateTerminalSeries } from '../util
 import { applyPromotions } from '../utils/promotionEngine';
 import { calculatePointsEarned, getPrimaryLoyaltyCard } from '../utils/loyaltyEngine';
 import { couponService } from '../utils/couponService';
+import { resolveScannedCouponCode } from '../utils/couponScan';
 import { calculateInventoryDeductions, resolveInventoryConsumptionMode, transferStockToCommitted } from '../utils/inventoryEngine';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import SupervisorModal from './SupervisorModal';
@@ -3545,9 +3546,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const submitProductTextSearchRef = useRef<((rawValue: string, focusTarget?: React.RefObject<HTMLInputElement>) => boolean) | null>(null);
 
+   const routeScannedCoupon = useCallback((rawCode: string): boolean => {
+      const scannedCouponCode = resolveScannedCouponCode(rawCode, config.coupons);
+      if (!scannedCouponCode) return false;
+
+      setCouponCode(scannedCouponCode);
+      setSearchTerm('');
+      setShowCouponModal(true);
+      setIsScannerOpen(false);
+      setErrorToast(null);
+      return true;
+   }, [config.coupons]);
+
    const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'Enter') {
          const rawValue = e.currentTarget.value || searchTerm || '';
+         if (routeScannedCoupon(rawValue)) return;
+
          const match = findProductByAnyCode(rawValue);
          if (match) {
             addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo);
@@ -3566,11 +3581,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }
       }
-   }, [searchTerm, findProductByAnyCode, addToCart, isReturnMode]);
+   }, [searchTerm, routeScannedCoupon, findProductByAnyCode, addToCart, isReturnMode]);
 
    // --- BARCODE SCANNER LOGIC ---
    const processBarcode = useCallback((code: string) => {
       const trimmed = code.trim();
+
+      if (routeScannedCoupon(trimmed)) return;
 
       // 0. Try Smart QR (JSON)
       try {
@@ -3648,7 +3665,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             setShowReturnModal(true);
          }
       }
-   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, transactionByScanCode]);
+   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, transactionByScanCode]);
 
    const isAnyModalOpen = !!(
       showPaymentModal ||
@@ -8606,6 +8623,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               <Check size={20} />
                               Validar y Aplicar
                            </button>
+
+                           {isMobile && (
+                              <button
+                                 type="button"
+                                 onClick={() => setIsScannerOpen(true)}
+                                 className="w-full py-3.5 border-2 border-blue-100 bg-blue-50 text-blue-700 rounded-xl font-bold transition-all hover:bg-blue-100 active:scale-95 flex items-center justify-center gap-2"
+                              >
+                                 <ScanBarcode size={20} />
+                                 Escanear QR
+                              </button>
+                           )}
                         </div>
                      </div>
                   </div>
@@ -9054,6 +9082,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             onScan={async (code) => {
                // 0. Try Smart QR (JSON)
                const trimmed = code.trim();
+               if (routeScannedCoupon(trimmed)) {
+                  return { success: true, message: 'Cupón leído. Valide para aplicarlo.' };
+               }
+
                try {
                   if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
                      const data = JSON.parse(trimmed);
