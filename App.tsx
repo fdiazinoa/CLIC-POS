@@ -10374,6 +10374,17 @@ const AppContent: React.FC = () => {
                   localPairedTerminal
                 );
 
+                // A full Android storage reset removes the ERP URL together with SQLite and WebView data.
+                // Restore the tenant and canonical ERP endpoint before the first license request so activation
+                // can reach the authoritative service and continue into terminal reauthorization.
+                if (activatedTenantId) {
+                  localStorage.setItem('active_tenant_id', activatedTenantId);
+                }
+
+                if (activatedErpBaseUrl) {
+                  persistSetupErpBaseUrls(activatedErpBaseUrl);
+                }
+
                 if (activatedTenantId) {
                   try {
                     const license = await checkLicenseStatus(activatedTenantId, resolvedDeviceId);
@@ -10398,14 +10409,6 @@ const AppContent: React.FC = () => {
                   console.log('[ACTIVATION] Se detectó una configuración previa. Reanudando flujo operativo...');
                   window.location.reload();
                   return;
-                }
-
-                if (activatedTenantId) {
-                  localStorage.setItem('active_tenant_id', activatedTenantId);
-                }
-
-                if (activatedErpBaseUrl) {
-                  persistSetupErpBaseUrls(activatedErpBaseUrl);
                 }
 
                 localStorage.removeItem(SETUP_WIZARD_COMPLETED_KEY);

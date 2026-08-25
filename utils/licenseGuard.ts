@@ -1,4 +1,5 @@
 import { clearStoredErpSyncBinding } from './erpSyncLifecycle';
+import { DEFAULT_PUBLIC_ERP_BASE_URL } from './erpBaseUrl';
 import { ensureSupabaseSessionRestored, supabase } from './supabase';
 
 export interface LicenseStatus {
@@ -105,6 +106,7 @@ const resolveLicenseEndpointBaseUrl = (): string | null => {
         env['VITE_ERP_BASE_URL'] as string | undefined,
         env['VITE_ERP_SYNC_API_URL'] as string | undefined,
         env['VITE_SYNC_API_URL'] as string | undefined,
+        DEFAULT_PUBLIC_ERP_BASE_URL,
     ];
 
     for (const candidate of candidates) {

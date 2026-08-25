@@ -103,6 +103,24 @@ test('omite branchId durante la primera activación cuando aún no existe una su
   assert.equal(request.searchParams.has('branchId'), false);
 });
 
+test('tras borrar el almacenamiento valida contra el ERP público sin configuración local previa', async () => {
+  localStorage.clear();
+  let requestedUrl = '';
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requestedUrl = String(input);
+    return Response.json(cachedLicense());
+  }) as typeof fetch;
+
+  const result = await checkLicenseStatus(tenantId, deviceId);
+  const request = new URL(requestedUrl);
+
+  assert.equal(result.isValid, true);
+  assert.equal(request.origin, 'https://clic-erp.clicsuite.com');
+  assert.equal(request.pathname, '/api/license/status');
+  assert.equal(request.searchParams.get('tenantId'), tenantId);
+  assert.equal(request.searchParams.get('deviceId'), deviceId);
+});
+
 test('envía branchId cuando existe un UUID de sucursal válido', async () => {
   resetRuntime();
   localStorage.setItem('clic_erp_sync_store_id', storeId);
@@ -221,6 +239,8 @@ test('sin una licencia activa reciente la falla de red bloquea en vez de autoriz
 
 test('el contrato App bloquea suspensiones explícitas pero tolera fallas temporales de licencia', () => {
   const source = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  const activationStart = source.indexOf("case 'ACTIVATION':");
+  const activationSource = source.slice(activationStart, source.indexOf("case 'TERMINAL_MODE_SELECTOR':", activationStart));
 
   assert.match(source, /if \(!res\.isValid && res\.cloudReachable !== false\) \{\s*triggerLockdown\(res\.reason \|\| fallbackMessage\);/);
   assert.match(source, /if \(!license\.isValid && license\.cloudReachable !== false\) \{\s*triggerLockdown\(license\.reason \|\| 'Servicio Suspendido\.'\);/);
@@ -230,4 +250,9 @@ test('el contrato App bloquea suspensiones explícitas pero tolera fallas tempor
   assert.match(source, /if \(blockingMessage === DEVICE_SUPERSEDED_MESSAGE\) \{\s*await triggerLockdownAfterAuthorizationCheck/);
   assert.doesNotMatch(source, /triggerLockdownAfterAuthorizationCheck\(license\.reason/);
   assert.doesNotMatch(source, /triggerLockdownAfterAuthorizationCheck\(res\.reason/);
+  assert.ok(
+    activationSource.indexOf('persistSetupErpBaseUrls(activatedErpBaseUrl)')
+      < activationSource.indexOf('checkLicenseStatus(activatedTenantId, resolvedDeviceId)'),
+    'la activación debe restaurar la URL ERP antes de validar la licencia'
+  );
 });
