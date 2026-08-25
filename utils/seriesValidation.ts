@@ -93,6 +93,7 @@ export function validateTerminalSeries(
             TICKET: 'Tickets de Venta',
             REFUND: 'Devoluciones',
             VOID: 'Anulaciones',
+            COMPLIMENTARY: 'Invitaciones',
 
             // Inventario
             TRANSFER: 'Traspasos',
@@ -137,6 +138,7 @@ export function getDocumentTypeLabel(documentType: DocumentType): string {
         TICKET: 'Ticket de Venta',
         REFUND: 'Devolución',
         VOID: 'Anulación',
+        COMPLIMENTARY: 'Invitación',
         TRANSFER: 'Traspaso',
         ADJUSTMENT_IN: 'Ajuste Positivo',
         ADJUSTMENT_OUT: 'Ajuste Negativo',

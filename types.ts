@@ -495,6 +495,7 @@ export type DocumentType =
   | 'TICKET'           // Regular sale
   | 'REFUND'           // Refund/Return
   | 'VOID'             // Voided transaction
+  | 'COMPLIMENTARY'    // Invitation/courtesy with inventory impact and no fiscal emission
 
   // Inventory
   | 'TRANSFER'         // Transfer between warehouses
@@ -2524,6 +2525,13 @@ export type Permission =
   | 'POS_NEW_SALE'
   | 'POS_CHECKOUT'
   | 'POS_CHANGE_TARIFF'
+  | 'POS_RESEND_INVOICE_EMAIL'
+  | 'POS_ADJUST_INVOICE_TIP'
+  | 'POS_CHANGE_INVOICE_CUSTOMER'
+  | 'POS_FLAG_INVOICE_REVIEW'
+  | 'POS_VIEW_INVOICE_AUDIT'
+  | 'POS_COMPLIMENTARY_SALE'
+  | 'POS_OVERRIDE_INVOICE_LIMIT'
   | 'POS_VIEW_X_REPORT'
   | 'POS_CLOSE_X'
   | 'POS_CLOSE_Z'
@@ -2550,6 +2558,8 @@ export type Permission =
   | 'CUSTOMER_MANAGE'
   | 'CUSTOMER_CREDIT_LIMIT'
   | 'CUSTOMER_VIEW_DEBT'
+  | 'CUSTOMER_ALERT_VIEW'
+  | 'CUSTOMER_ALERT_MANAGE'
 
   // --- FINANCE & REPORTS ---
   | 'REPORTS_VIEW_SALES'
@@ -2580,6 +2590,92 @@ export interface AuditLogEntry {
   reason?: string;
   details?: string;
   hash: string;
+}
+
+export type InvoiceReviewStatus = 'OPEN' | 'IN_REVIEW' | 'RESOLVED' | 'DISMISSED';
+export type InvoiceReviewPriority = 'LOW' | 'NORMAL' | 'HIGH';
+
+export interface InvoiceReviewFlag {
+  id: string;
+  transactionId: string;
+  transactionDisplayId?: string;
+  status: InvoiceReviewStatus;
+  category: 'PAYMENT_METHOD_ERROR' | 'CUSTOMER_DATA' | 'TIP' | 'FISCAL' | 'OTHER';
+  priority: InvoiceReviewPriority;
+  comment: string;
+  tenantId?: string;
+  companyId?: string;
+  storeId?: string;
+  terminalId: string;
+  createdById: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+  resolvedById?: string;
+  resolvedByName?: string;
+  resolvedAt?: string;
+  resolutionComment?: string;
+  syncStatus?: SyncStatus;
+  syncError?: string;
+}
+
+export type InvoiceAuditEventType =
+  | 'REVIEW_FLAGGED'
+  | 'REVIEW_STATUS_CHANGED'
+  | 'EMAIL_RESENT'
+  | 'EMAIL_RESEND_FAILED'
+  | 'VOLUNTARY_TIP_ADJUSTED'
+  | 'ECF_CUSTOMER_CORRECTED'
+  | 'COMPLIMENTARY_CREATED';
+
+export interface InvoiceAuditEvent {
+  id: string;
+  transactionId: string;
+  transactionDisplayId?: string;
+  eventType: InvoiceAuditEventType;
+  previousData?: Record<string, unknown>;
+  newData?: Record<string, unknown>;
+  reason?: string;
+  metadata?: Record<string, unknown>;
+  tenantId?: string;
+  companyId?: string;
+  storeId?: string;
+  terminalId: string;
+  actorId: string;
+  actorName: string;
+  authorizedById?: string;
+  authorizedByName?: string;
+  occurredAt: string;
+  idempotencyKey: string;
+  syncStatus?: SyncStatus;
+  syncError?: string;
+}
+
+export type InvoiceAdjustmentType = 'VOLUNTARY_TIP_ADJUSTMENT' | 'ECF_CUSTOMER_CHANGE';
+
+export interface InvoiceAdjustment {
+  id: string;
+  transactionId: string;
+  transactionDisplayId?: string;
+  type: InvoiceAdjustmentType;
+  previousData: Record<string, unknown>;
+  newData: Record<string, unknown>;
+  reasonCode: string;
+  reason: string;
+  requestedById: string;
+  requestedByName: string;
+  authorizedById?: string;
+  authorizedByName?: string;
+  tenantId?: string;
+  companyId?: string;
+  storeId?: string;
+  terminalId: string;
+  occurredAt: string;
+  baseRevision: number;
+  idempotencyKey: string;
+  fiscalImpact: 'NONE' | 'PENDING_FISCAL_RETRY';
+  syncStatus?: SyncStatus;
+  syncError?: string;
 }
 
 // --- LOYALTY & WALLET TYPES ---
