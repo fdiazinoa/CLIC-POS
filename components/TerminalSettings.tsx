@@ -553,7 +553,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                      className={`px-5 py-3 text-xs font-black flex items-center gap-2 rounded-2xl border-2 uppercase whitespace-nowrap transition-all shadow-sm ${
                         activeTab === tab.id
                            ? 'bg-white border-blue-200 text-blue-600 shadow-blue-100'
-                           : 'bg-white border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600'
+                           : 'bg-white border-slate-200 text-slate-900 hover:border-slate-400 hover:text-black'
                      }`}
                   >
                      <tab.icon size={16} /> {tab.label}
