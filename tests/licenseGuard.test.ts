@@ -250,6 +250,10 @@ test('el contrato App bloquea suspensiones explícitas pero tolera fallas tempor
   assert.match(source, /if \(blockingMessage === DEVICE_SUPERSEDED_MESSAGE\) \{\s*await triggerLockdownAfterAuthorizationCheck/);
   assert.doesNotMatch(source, /triggerLockdownAfterAuthorizationCheck\(license\.reason/);
   assert.doesNotMatch(source, /triggerLockdownAfterAuthorizationCheck\(res\.reason/);
+  assert.match(
+    activationSource,
+    /if \(hasKnownTerminalContext && activatedTenantId\) \{[\s\S]*?checkLicenseStatus\(activatedTenantId, resolvedDeviceId\)/
+  );
   assert.ok(
     activationSource.indexOf('persistSetupErpBaseUrls(activatedErpBaseUrl)')
       < activationSource.indexOf('checkLicenseStatus(activatedTenantId, resolvedDeviceId)'),

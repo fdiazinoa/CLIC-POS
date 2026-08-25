@@ -126,6 +126,22 @@ test('volver desde la autorización regresa al selector canónico del modo de di
   assert.match(appSource, /setCurrentView\('TERMINAL_MODE_SELECTOR'\)/);
 });
 
+test('una instalación sin modo elegido muestra el selector y reserva el wizard para LOCAL', () => {
+  assert.match(
+    appSource,
+    /const shouldChooseTerminalModeBeforeInitialSetup =[\s\S]*?!setupMode;[\s\S]*?if \(shouldChooseTerminalModeBeforeInitialSetup\) \{[\s\S]*?setCurrentView\('TERMINAL_MODE_SELECTOR'\)/
+  );
+  assert.match(
+    appSource,
+    /const shouldRunInitialSetupWizard =[\s\S]*?setupMode === 'SERVER_LOCAL';[\s\S]*?if \(shouldRunInitialSetupWizard\) \{[\s\S]*?setCurrentView\('VERTICAL_SELECTOR'\)/
+  );
+  assert.match(appSource, /if \(mode === 'SERVER_ERP'\) \{[\s\S]*?setCurrentView\('TERMINAL_PAIRING'\)/);
+  assert.match(
+    appSource,
+    /localStorage\.removeItem\(SETUP_FLOW_STAGE_KEY\);[\s\S]*?setCurrentView\('TERMINAL_PAIRING'\);[\s\S]*?\}, \[\]\);/
+  );
+});
+
 test('la activacion cliente cierra el progreso cuando la terminal esta ocupada', () => {
   assert.match(
     terminalSelectorSource,
