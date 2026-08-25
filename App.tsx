@@ -6248,15 +6248,31 @@ const AppContent: React.FC = () => {
             return;
           }
 
+          const shouldChooseTerminalModeBeforeInitialSetup =
+            !setupWizardCompleted &&
+            !masterIp &&
+            !pairedTerminal &&
+            !isVisorMode &&
+            !setupMode;
+
+          if (shouldChooseTerminalModeBeforeInitialSetup) {
+            console.log('[BOOT] First installation detected. Waiting for connection mode selection...');
+            localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
+            setCurrentView('TERMINAL_MODE_SELECTOR');
+            setIsDataLoaded(true);
+            setIsSecurityLoaded(true);
+            return;
+          }
+
           const shouldRunInitialSetupWizard =
             !setupWizardCompleted &&
             !masterIp &&
             !pairedTerminal &&
             !isVisorMode &&
-            !isErpSetupMode;
+            setupMode === 'SERVER_LOCAL';
 
           if (shouldRunInitialSetupWizard) {
-            console.log('[BOOT] First installation detected. Launching setup wizard...');
+            console.log('[BOOT] LOCAL mode selected. Launching local setup wizard...');
             setCurrentView('VERTICAL_SELECTOR');
             setIsDataLoaded(true);
             setIsSecurityLoaded(true);
@@ -10374,7 +10390,21 @@ const AppContent: React.FC = () => {
                   localPairedTerminal
                 );
 
+                // A full Android storage reset removes the ERP URL together with SQLite and WebView data.
+                // Restore the tenant and canonical ERP endpoint before the first license request so activation
+                // can reach the authoritative service and continue into terminal reauthorization.
                 if (activatedTenantId) {
+                  localStorage.setItem('active_tenant_id', activatedTenantId);
+                }
+
+                if (activatedErpBaseUrl) {
+                  persistSetupErpBaseUrls(activatedErpBaseUrl);
+                }
+
+                // A fresh activation has no connection mode or terminal context yet. Do not run a
+                // device-scoped ERP license request until the operator chooses LOCAL, MASTER + ERP
+                // or CLIENT; otherwise a missing/unreachable ERP blocks the mode selector itself.
+                if (hasKnownTerminalContext && activatedTenantId) {
                   try {
                     const license = await checkLicenseStatus(activatedTenantId, resolvedDeviceId);
                     if (!license.isValid) {
@@ -10398,14 +10428,6 @@ const AppContent: React.FC = () => {
                   console.log('[ACTIVATION] Se detectó una configuración previa. Reanudando flujo operativo...');
                   window.location.reload();
                   return;
-                }
-
-                if (activatedTenantId) {
-                  localStorage.setItem('active_tenant_id', activatedTenantId);
-                }
-
-                if (activatedErpBaseUrl) {
-                  persistSetupErpBaseUrls(activatedErpBaseUrl);
                 }
 
                 localStorage.removeItem(SETUP_WIZARD_COMPLETED_KEY);
