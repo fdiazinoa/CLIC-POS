@@ -2883,20 +2883,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       const cartSubtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-      const result = couponService.redeemCoupon(
+      if (!Number.isFinite(cartSubtotal) || cartSubtotal <= 0) {
+         alert('Agregue al menos un artículo antes de aplicar el cupón.');
+         return;
+      }
+
+      const result = couponService.validateCoupon(
          normalizedCouponCode,
-         `TICKET-${Date.now()}`,
-         terminalId,
          config,
          cartSubtotal,
          effectiveSelectedCustomer?.id
       );
 
       if (result.success) {
-         if (result.updatedConfig) {
-            onUpdateConfig(result.updatedConfig);
-         }
-
          if (result.benefit) {
             if (result.benefit.type === 'PERCENT') {
                setGlobalDiscount({ type: 'PERCENT', value: result.benefit.value });
@@ -2911,7 +2910,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   assignedTo: result.coupon.assignedTo
                });
             }
-            alert(`¡Cupón Canjeado!\n${result.benefit.description}`);
+            alert(`¡Cupón Aplicado!\n${result.benefit.description}`);
             setShowCouponModal(false);
             setCouponCode('');
          }
@@ -2919,6 +2918,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          alert(`Error: ${result.error}`);
       }
    };
+
+   const commitAppliedCoupon = useCallback((transaction?: Transaction | null) => {
+      if (!redeemedCoupon || !transaction) return;
+
+      onUpdateConfig(couponService.commitCouponRedemption(
+         redeemedCoupon.id,
+         transaction.displayId || transaction.id,
+         terminalId,
+         config
+      ));
+   }, [config, onUpdateConfig, redeemedCoupon, terminalId]);
 
    const activeTariffTokens = useMemo(
       () => new Set([activeTariffId, activeTariff?.id, (activeTariff as any)?.code].map(normalizeSearchToken).filter(Boolean)),
@@ -5197,6 +5207,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      );
                   }
 
+                  if (result.sale) commitAppliedCoupon(result.sale);
+
                   onUpdateCart([]);
                   if (redeemedCoupon) setGlobalDiscount({ type: 'PERCENT', value: 0 });
                   setRedeemedCoupon(null);
@@ -5217,6 +5229,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                if (data.success) {
                   if (data.result?.sale) {
                      data.result.sale = await syncConsignmentSettlement(data.result.sale);
+                     commitAppliedCoupon(data.result.sale);
                   }
                   onUpdateCart([]);
                   if (redeemedCoupon) setGlobalDiscount({ type: 'PERCENT', value: 0 });
@@ -5364,6 +5377,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   if (durableSaleCommit && settledFinalTxn.consignmentId) {
                      settledFinalTxn = await syncConsignmentSettlement(settledFinalTxn);
                   }
+                  commitAppliedCoupon(settledFinalTxn);
                }
 
                if (activeRecoveredReservation && !uberRecoveredOrder) {
