@@ -4,7 +4,8 @@ import {
    ArrowLeft, Search, Calendar, ChevronDown, ChevronUp,
    Printer, RotateCcw, AlertCircle, Check, X, FileText,
    User as UserIcon, DollarSign, Box, Filter, Gift, QrCode, StickyNote,
-   MoreVertical, CreditCard, Banknote, Wallet, TrendingUp, Hash, Percent
+   MoreVertical, CreditCard, Banknote, Wallet, TrendingUp, Hash, Percent,
+   Mail, Flag, Loader2
 } from 'lucide-react';
 import {
    Transaction,
@@ -17,6 +18,8 @@ import {
    RefundProcessingOptions,
    Customer,
    FiscalDocumentCorrectionInput,
+   InvoiceReviewFlag,
+   InvoiceReviewPriority,
 } from '../types';
 import { validateTerminalDocument } from '../utils/validation';
 import { printIntegratedPaymentArtifacts, printTicket } from '../utils/printer';
@@ -53,6 +56,12 @@ import {
    resolveHistoryDiscountTotal,
    resolveHistoryTerminalName,
 } from '../utils/transactionHistoryPresentation';
+import { sendReceiptEmailViaErp, type ReceiptEmailResult } from '../services/email/receiptEmailService';
+import { buildReceiptEmailPayload } from '../services/email/receiptEmailPayload';
+import {
+   createInvoiceReview,
+   recordInvoiceAuditEvent,
+} from '../services/invoices/InvoiceReviewService';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -418,7 +427,8 @@ const SalesHistoryTable: React.FC<{
    themeText: string;
    zReportMap?: Map<string, string>;
    zReports?: ZReport[];
-}> = ({ transactions, config, onRowClick, themeBg, themeText, zReportMap, zReports }) => {
+   reviewedTransactionIds?: Set<string>;
+}> = ({ transactions, config, onRowClick, themeBg, themeText, zReportMap, zReports, reviewedTransactionIds = new Set() }) => {
    const normalizeTerminalId = (value?: string | null) => (value || '').trim().toLowerCase();
    const toTimestamp = (value?: string) => {
       const ts = value ? new Date(value).getTime() : NaN;
@@ -582,6 +592,11 @@ const SalesHistoryTable: React.FC<{
                                     {displayNcf || 'Sin NCF'}
                                  </span>
                                  <FiscalSyncBadge transaction={tx} compact />
+                                 {reviewedTransactionIds.has(tx.id) && (
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-black uppercase text-amber-700">
+                                       <Flag size={10} /> Revisión
+                                    </span>
+                                 )}
                               </div>
                            </td>
                            <td className="px-4 py-3" onClick={openDetail}>
@@ -653,10 +668,17 @@ const TicketDetailDrawer: React.FC<{
    onRetryFiscalDocument?: (tx: Transaction) => Promise<string>;
    customers?: Customer[];
    onCorrectFiscalDocument?: (tx: Transaction, correction: FiscalDocumentCorrectionInput) => Promise<Transaction>;
+   reviewFlags: InvoiceReviewFlag[];
+   onSendEmail: (tx: Transaction, email: string) => Promise<ReceiptEmailResult>;
+   onFlagForReview: (tx: Transaction, input: {
+      category: InvoiceReviewFlag['category'];
+      priority: InvoiceReviewPriority;
+      comment: string;
+   }) => Promise<InvoiceReviewFlag>;
    themeText: string;
    themeBg: string;
    users: User[];
-}> = ({ tx, config, onClose, onPrint, onRequestRefund, onRequestAzulRefund, onRetryFiscalDocument, customers = [], onCorrectFiscalDocument, themeText, themeBg, users }) => {
+}> = ({ tx, config, onClose, onPrint, onRequestRefund, onRequestAzulRefund, onRetryFiscalDocument, customers = [], onCorrectFiscalDocument, reviewFlags, onSendEmail, onFlagForReview, themeText, themeBg, users }) => {
    const [isRetryingFiscal, setIsRetryingFiscal] = useState(false);
    const [retryFeedback, setRetryFeedback] = useState<string | null>(null);
    const [isCorrectionOpen, setIsCorrectionOpen] = useState(false);
@@ -666,6 +688,16 @@ const TicketDetailDrawer: React.FC<{
    const [shouldRecalculateTaxes, setShouldRecalculateTaxes] = useState(true);
    const [isCorrectingFiscal, setIsCorrectingFiscal] = useState(false);
    const [correctionFeedback, setCorrectionFeedback] = useState<string | null>(null);
+   const [isEmailOpen, setIsEmailOpen] = useState(false);
+   const [email, setEmail] = useState('');
+   const [isSendingEmail, setIsSendingEmail] = useState(false);
+   const [emailFeedback, setEmailFeedback] = useState<string | null>(null);
+   const [isReviewOpen, setIsReviewOpen] = useState(false);
+   const [reviewCategory, setReviewCategory] = useState<InvoiceReviewFlag['category']>('OTHER');
+   const [reviewPriority, setReviewPriority] = useState<InvoiceReviewPriority>('NORMAL');
+   const [reviewComment, setReviewComment] = useState('');
+   const [isSavingReview, setIsSavingReview] = useState(false);
+   const [reviewFeedback, setReviewFeedback] = useState<string | null>(null);
 
    if (!tx) return null;
    const cashierName = tx.userName || users.find(u => u.id === tx.userId)?.name || 'Sistema';
@@ -693,6 +725,66 @@ const TicketDetailDrawer: React.FC<{
    const selectedCorrectionCustomer = sortedCustomers.find(customer => customer.id === correctionCustomerId) || null;
    const selectedCustomerTaxDigits = (selectedCorrectionCustomer?.taxId || '').replace(/\D/g, '');
    const selectedCustomerHasValidTaxId = selectedCustomerTaxDigits.length === 9 || selectedCustomerTaxDigits.length === 11;
+   const activeReviewFlags = reviewFlags.filter(flag => (
+      flag.transactionId === tx.id && (flag.status === 'OPEN' || flag.status === 'IN_REVIEW')
+   ));
+
+   const openEmailDialog = () => {
+      setEmail(tx.customerSnapshot?.email || '');
+      setEmailFeedback(null);
+      setIsEmailOpen(true);
+   };
+
+   const handleSendEmail = async () => {
+      const normalizedEmail = email.trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+         setEmailFeedback('Introduce un correo electrónico válido.');
+         return;
+      }
+      setIsSendingEmail(true);
+      setEmailFeedback(null);
+      try {
+         const result = await onSendEmail(tx, normalizedEmail);
+         if (!result.success) {
+            setEmailFeedback(result.message || 'No se pudo enviar la factura.');
+            return;
+         }
+         setEmailFeedback(`Factura enviada a ${normalizedEmail}.`);
+      } catch (error: any) {
+         setEmailFeedback(error?.message || 'No se pudo enviar la factura.');
+      } finally {
+         setIsSendingEmail(false);
+      }
+   };
+
+   const openReviewDialog = () => {
+      setReviewCategory('OTHER');
+      setReviewPriority('NORMAL');
+      setReviewComment('');
+      setReviewFeedback(null);
+      setIsReviewOpen(true);
+   };
+
+   const handleFlagForReview = async () => {
+      if (!reviewComment.trim()) {
+         setReviewFeedback('Indica el motivo de la revisión.');
+         return;
+      }
+      setIsSavingReview(true);
+      setReviewFeedback(null);
+      try {
+         await onFlagForReview(tx, {
+            category: reviewCategory,
+            priority: reviewPriority,
+            comment: reviewComment.trim(),
+         });
+         setIsReviewOpen(false);
+      } catch (error: any) {
+         setReviewFeedback(error?.message || 'No se pudo marcar la factura.');
+      } finally {
+         setIsSavingReview(false);
+      }
+   };
 
    const handleRetryFiscal = async () => {
       if (!tx || !onRetryFiscalDocument || !canRetryFiscal) return;
@@ -1104,6 +1196,23 @@ const TicketDetailDrawer: React.FC<{
                <>
                   <div className="flex flex-wrap gap-3">
                      <button
+                        onClick={openEmailDialog}
+                        className="flex min-w-[160px] flex-1 items-center justify-center gap-2 py-3 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-sm"
+                     >
+                        <Mail size={18} /> Enviar por email
+                     </button>
+                     <button
+                        onClick={openReviewDialog}
+                        className="relative flex min-w-[170px] flex-1 items-center justify-center gap-2 py-3 bg-amber-500 text-white rounded-2xl font-bold hover:bg-amber-600 transition-all shadow-sm"
+                     >
+                        <Flag size={18} /> Marcar para revisión
+                        {activeReviewFlags.length > 0 && (
+                           <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-black text-white">
+                              {activeReviewFlags.length}
+                           </span>
+                        )}
+                     </button>
+                     <button
                         onClick={() => onPrint(tx)}
                         className="flex min-w-[140px] flex-1 items-center justify-center gap-2 py-3 bg-white border border-gray-200 text-gray-700 rounded-2xl font-bold hover:bg-gray-100 transition-all shadow-sm"
                      >
@@ -1128,6 +1237,99 @@ const TicketDetailDrawer: React.FC<{
                   </div>
                </>
             </footer>
+
+            {isEmailOpen && (
+               <div className="absolute inset-0 z-[120] bg-black/45 backdrop-blur-sm flex items-center justify-center p-4">
+                  <div className="w-full max-w-sm rounded-2xl bg-white shadow-2xl border border-slate-100 overflow-hidden">
+                     <div className="p-4 border-b border-slate-100 flex items-start justify-between gap-3">
+                        <div>
+                           <p className="text-[10px] font-black uppercase tracking-widest text-blue-500">Copia de factura</p>
+                           <h4 className="text-base font-black text-slate-900">Enviar por correo</h4>
+                           <p className="text-[11px] font-bold text-slate-400 mt-1">{tx.displayId || tx.id}</p>
+                        </div>
+                        <button onClick={() => setIsEmailOpen(false)} disabled={isSendingEmail} className="p-2 rounded-full hover:bg-slate-100 text-slate-400">
+                           <X size={18} />
+                        </button>
+                     </div>
+                     <div className="p-4 space-y-3">
+                        <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500">Correo electrónico</label>
+                        <input
+                           type="email"
+                           value={email}
+                           onChange={event => setEmail(event.target.value)}
+                           disabled={isSendingEmail}
+                           placeholder="cliente@correo.com"
+                           className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-200"
+                        />
+                        {emailFeedback && (
+                           <p className={`rounded-xl p-3 text-xs font-bold ${emailFeedback.startsWith('Factura enviada') ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                              {emailFeedback}
+                           </p>
+                        )}
+                     </div>
+                     <div className="p-4 border-t border-slate-100 flex justify-end gap-2">
+                        <button onClick={() => setIsEmailOpen(false)} disabled={isSendingEmail} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-600 disabled:opacity-60">
+                           Cerrar
+                        </button>
+                        <button onClick={handleSendEmail} disabled={isSendingEmail} className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-black text-white disabled:opacity-60">
+                           {isSendingEmail ? <Loader2 size={14} className="animate-spin" /> : <Mail size={14} />}
+                           {isSendingEmail ? 'Enviando...' : 'Enviar'}
+                        </button>
+                     </div>
+                  </div>
+               </div>
+            )}
+
+            {isReviewOpen && (
+               <div className="absolute inset-0 z-[120] bg-black/45 backdrop-blur-sm flex items-center justify-center p-4">
+                  <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl border border-slate-100 overflow-hidden">
+                     <div className="p-4 border-b border-slate-100 flex items-start justify-between gap-3">
+                        <div>
+                           <p className="text-[10px] font-black uppercase tracking-widest text-amber-500">Control interno</p>
+                           <h4 className="text-base font-black text-slate-900">Marcar para revisión</h4>
+                           <p className="text-[11px] font-bold text-slate-400 mt-1">{tx.displayId || tx.id}</p>
+                        </div>
+                        <button onClick={() => setIsReviewOpen(false)} disabled={isSavingReview} className="p-2 rounded-full hover:bg-slate-100 text-slate-400">
+                           <X size={18} />
+                        </button>
+                     </div>
+                     <div className="p-4 space-y-3">
+                        <div className="grid grid-cols-2 gap-3">
+                           <div>
+                              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Categoría</label>
+                              <select value={reviewCategory} onChange={event => setReviewCategory(event.target.value as InvoiceReviewFlag['category'])} disabled={isSavingReview} className="w-full rounded-xl border border-slate-200 px-3 py-3 text-xs font-bold">
+                                 <option value="PAYMENT_METHOD_ERROR">Medio de pago</option>
+                                 <option value="CUSTOMER_DATA">Datos del cliente</option>
+                                 <option value="TIP">Propina</option>
+                                 <option value="FISCAL">Fiscal</option>
+                                 <option value="OTHER">Otro</option>
+                              </select>
+                           </div>
+                           <div>
+                              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Prioridad</label>
+                              <select value={reviewPriority} onChange={event => setReviewPriority(event.target.value as InvoiceReviewPriority)} disabled={isSavingReview} className="w-full rounded-xl border border-slate-200 px-3 py-3 text-xs font-bold">
+                                 <option value="LOW">Baja</option>
+                                 <option value="NORMAL">Normal</option>
+                                 <option value="HIGH">Alta</option>
+                              </select>
+                           </div>
+                        </div>
+                        <div>
+                           <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Motivo</label>
+                           <textarea value={reviewComment} onChange={event => setReviewComment(event.target.value)} disabled={isSavingReview} rows={4} maxLength={500} className="w-full resize-none rounded-xl border border-slate-200 px-3 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-amber-200" placeholder="Describe la situación que debe revisar contabilidad o supervisión." />
+                        </div>
+                        {reviewFeedback && <p className="rounded-xl bg-red-50 p-3 text-xs font-bold text-red-700">{reviewFeedback}</p>}
+                     </div>
+                     <div className="p-4 border-t border-slate-100 flex justify-end gap-2">
+                        <button onClick={() => setIsReviewOpen(false)} disabled={isSavingReview} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-600 disabled:opacity-60">Cancelar</button>
+                        <button onClick={handleFlagForReview} disabled={isSavingReview} className="flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2 text-xs font-black text-white disabled:opacity-60">
+                           {isSavingReview ? <Loader2 size={14} className="animate-spin" /> : <Flag size={14} />}
+                           {isSavingReview ? 'Guardando...' : 'Marcar'}
+                        </button>
+                     </div>
+                  </div>
+               </div>
+            )}
 
             {isCorrectionOpen && (
                <div className="absolute inset-0 z-[120] bg-black/45 backdrop-blur-sm flex items-center justify-center p-4">
@@ -1260,6 +1462,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    const [filterCustomer, setFilterCustomer] = useState('');
    const [filterNcfType, setFilterNcfType] = useState('');
    const [filterPaymentMethod, setFilterPaymentMethod] = useState('');
+   const [filterReviewOnly, setFilterReviewOnly] = useState(false);
 
    // Return Mode State
    const [returnModeId, setReturnModeId] = useState<string | null>(null);
@@ -1274,6 +1477,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    const [zReportMap, setZReportMap] = useState<Map<string, string>>(new Map()); // Map zReportId -> Sequence
    const [zReports, setZReports] = useState<ZReport[]>([]);
    const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
+   const [reviewFlags, setReviewFlags] = useState<InvoiceReviewFlag[]>([]);
 
    // Refund Modal State
    const [isRefundModalOpen, setIsRefundModalOpen] = useState(false);
@@ -1424,13 +1628,15 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       const loadHistory = async () => {
          try {
             const { db } = await import('../utils/db');
-            const [activeTransactions, archivedTransactions, wallets, walletTxns, customers] = await Promise.all([
+            const [activeTransactions, archivedTransactions, wallets, walletTxns, customers, storedReviewFlags] = await Promise.all([
                db.get('transactions') as Promise<Transaction[]>,
                db.get('transactionHistory') as Promise<Transaction[]>,
                db.get('wallets' as any) as Promise<any[]>,
                db.get('wallet_transactions' as any) as Promise<any[]>,
-               db.get('customers') as Promise<any[]>
+               db.get('customers') as Promise<any[]>,
+               db.get('invoiceReviewFlags') as Promise<InvoiceReviewFlag[]>
             ]);
+            setReviewFlags(Array.isArray(storedReviewFlags) ? storedReviewFlags : []);
 
             const toTimestamp = (value?: string) => {
                const ts = value ? new Date(value).getTime() : NaN;
@@ -1807,8 +2013,15 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
          }));
       }
 
+      if (filterReviewOnly) {
+         const activeReviewIds = new Set(reviewFlags
+            .filter(flag => flag.status === 'OPEN' || flag.status === 'IN_REVIEW')
+            .map(flag => flag.transactionId));
+         data = data.filter(transaction => activeReviewIds.has(transaction.id));
+      }
+
       return data;
-   }, [transactions, historyTransactions, searchTerm, filterDateStart, filterDateEnd, filterTerminal, filterCashier, filterCustomer, filterNcfType, filterPaymentMethod, terminalAliasesByValue]);
+   }, [transactions, historyTransactions, searchTerm, filterDateStart, filterDateEnd, filterTerminal, filterCashier, filterCustomer, filterNcfType, filterPaymentMethod, filterReviewOnly, reviewFlags, terminalAliasesByValue]);
 
    // --- KPI CALCULATIONS ---
    const kpis = useMemo(() => {
@@ -1836,6 +2049,74 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
    // --- SUPERVISOR AUTH ---
    const { requestApproval, supervisorModalProps } = useSupervisorAuth({ config, currentUser, roles, onUpdateConfig });
+
+   const requireCurrentUser = (): User => {
+      if (!currentUser) throw new Error('Debes iniciar sesión para realizar esta acción.');
+      return currentUser;
+   };
+
+   const handleSendInvoiceEmail = async (transaction: Transaction, email: string): Promise<ReceiptEmailResult> => {
+      const actor = requireCurrentUser();
+      let authorizedBy: User | undefined;
+      const approved = await requestApproval({
+         permission: 'POS_RESEND_INVOICE_EMAIL',
+         actionDescription: 'Reenviar factura por correo electrónico',
+         context: { ticketId: transaction.displayId || transaction.id },
+         onAuthorized: supervisor => { authorizedBy = supervisor; },
+      });
+      if (!approved) throw new Error('La acción no fue autorizada.');
+
+      const result = await sendReceiptEmailViaErp(
+         buildReceiptEmailPayload(transaction, email, config, config.currencySymbol || 'RD$', users),
+      );
+      try {
+         await recordInvoiceAuditEvent({
+            transaction,
+            eventType: result.success ? 'EMAIL_RESENT' : 'EMAIL_RESEND_FAILED',
+            actor,
+            authorizedBy,
+            reason: result.message,
+            metadata: {
+               recipient: email,
+               deliveryId: result.id,
+               deliveryStatus: result.status,
+            },
+         });
+      } catch (auditError) {
+         console.error('No se pudo registrar la auditoría del reenvío de factura:', auditError);
+      }
+      return result;
+   };
+
+   const handleFlagInvoiceForReview = async (
+      transaction: Transaction,
+      input: {
+         category: InvoiceReviewFlag['category'];
+         priority: InvoiceReviewPriority;
+         comment: string;
+      },
+   ): Promise<InvoiceReviewFlag> => {
+      const actor = requireCurrentUser();
+      let authorizedBy: User | undefined;
+      const approved = await requestApproval({
+         permission: 'POS_FLAG_INVOICE_REVIEW',
+         actionDescription: 'Marcar factura para revisión',
+         context: { ticketId: transaction.displayId || transaction.id, reason: input.comment },
+         onAuthorized: supervisor => { authorizedBy = supervisor; },
+      });
+      if (!approved) throw new Error('La acción no fue autorizada.');
+
+      const { review } = await createInvoiceReview({
+         transaction,
+         actor,
+         authorizedBy,
+         category: input.category,
+         priority: input.priority,
+         comment: input.comment,
+      });
+      setReviewFlags(previous => [review, ...previous.filter(item => item.id !== review.id)]);
+      return review;
+   };
 
    // --- HANDLERS ---
    const toggleExpand = (id: string) => {
@@ -2397,7 +2678,11 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                         ))}
                      </select>
                   </div>
-                  <button onClick={() => { setSearchTerm(''); setFilterDateStart(''); setFilterDateEnd(''); setFilterTerminal(''); setFilterCashier(''); setFilterNcfType(''); setFilterPaymentMethod(''); }} className="text-[10px] font-bold text-red-500 ml-auto hover:underline uppercase">Reset</button>
+                  <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1 text-[10px] font-black uppercase text-amber-700">
+                     <input type="checkbox" checked={filterReviewOnly} onChange={event => setFilterReviewOnly(event.target.checked)} />
+                     <Flag size={12} /> Solo revisión
+                  </label>
+                  <button onClick={() => { setSearchTerm(''); setFilterDateStart(''); setFilterDateEnd(''); setFilterTerminal(''); setFilterCashier(''); setFilterNcfType(''); setFilterPaymentMethod(''); setFilterReviewOnly(false); }} className="text-[10px] font-bold text-red-500 ml-auto hover:underline uppercase">Reset</button>
                </div>
             )}
          </header>
@@ -2413,6 +2698,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                themeText={themeText}
                zReportMap={zReportMap}
                zReports={zReports}
+               reviewedTransactionIds={new Set(reviewFlags.filter(flag => flag.status === 'OPEN' || flag.status === 'IN_REVIEW').map(flag => flag.transactionId))}
             />
 
             {filteredTransactions.length === 0 && (
@@ -2446,6 +2732,9 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             }}
             onRetryFiscalDocument={onRetryFiscalDocument}
             customers={customers}
+            reviewFlags={reviewFlags}
+            onSendEmail={handleSendInvoiceEmail}
+            onFlagForReview={handleFlagInvoiceForReview}
             onCorrectFiscalDocument={onCorrectFiscalDocument ? async (tx, correction) => {
                const corrected = await onCorrectFiscalDocument(tx, correction);
                setHistoryTransactions(prev => prev.map(item => item.id === corrected.id ? corrected : item));

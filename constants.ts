@@ -419,6 +419,13 @@ export const AVAILABLE_PERMISSIONS = [
   { key: 'POS_MANAGE_PARKED', label: 'Gestionar Cuentas', description: 'Ver y recuperar cuentas de otros', category: 'SALES' },
   { key: 'POS_NEW_SALE', label: 'Nueva Venta sin Imprimir', description: 'Permite cerrar la pantalla de venta exitosa sin forzar ticket o email', category: 'SALES' },
   { key: 'POS_CHANGE_TARIFF', label: 'Cambiar Tarifa de Venta', description: 'Permite seleccionar la tarifa activa desde la pantalla de ventas', category: 'SALES' },
+  { key: 'POS_RESEND_INVOICE_EMAIL', label: 'Reenviar Factura por Email', description: 'Enviar nuevamente una factura histórica por correo', category: 'SALES' },
+  { key: 'POS_ADJUST_INVOICE_TIP', label: 'Ajustar Propina Voluntaria', description: 'Corregir únicamente la propina voluntaria de una factura', category: 'SALES' },
+  { key: 'POS_CHANGE_INVOICE_CUSTOMER', label: 'Corregir Cliente e-CF', description: 'Cambiar el cliente de un e-CF pendiente o con error', category: 'SALES' },
+  { key: 'POS_FLAG_INVOICE_REVIEW', label: 'Marcar Factura para Revisión', description: 'Reportar una factura para revisión administrativa o contable', category: 'SALES' },
+  { key: 'POS_VIEW_INVOICE_AUDIT', label: 'Ver Historial de Factura', description: 'Consultar eventos y correcciones de una factura', category: 'SALES' },
+  { key: 'POS_COMPLIMENTARY_SALE', label: 'Registrar Invitaciones', description: 'Crear documentos de cortesía sin emisión fiscal', category: 'SALES' },
+  { key: 'POS_OVERRIDE_INVOICE_LIMIT', label: 'Autorizar Límite de Factura', description: 'Autorizar ventas que superen el límite configurado', category: 'SALES' },
   { key: 'TABLE_CONTROL_CENTER', label: 'Ver Control de Salas', description: 'Muestra el centro en tiempo real del mapa de mesas', category: 'SALES' },
 
   // --- CASH & FINANCE ---
@@ -451,6 +458,8 @@ export const AVAILABLE_PERMISSIONS = [
   { key: 'CUSTOMER_MANAGE', label: 'Gestionar Clientes', description: 'Crear y editar clientes', category: 'CUSTOMERS' },
   { key: 'CUSTOMER_CREDIT_LIMIT', label: 'Límite de Crédito', description: 'Modificar cupo de crédito', category: 'CUSTOMERS' },
   { key: 'CUSTOMER_VIEW_DEBT', label: 'Ver Deudas', description: 'Acceso a estados de cuenta', category: 'CUSTOMERS' },
+  { key: 'CUSTOMER_ALERT_VIEW', label: 'Ver Alertas de Clientes', description: 'Consultar alertas internas restringidas', category: 'CUSTOMERS' },
+  { key: 'CUSTOMER_ALERT_MANAGE', label: 'Gestionar Alertas de Clientes', description: 'Crear, editar y desactivar alertas internas', category: 'CUSTOMERS' },
 
   // --- ADMIN ---
   { key: 'SETTINGS_ACCESS', label: 'Acceso Configuración', description: 'Entrar al panel de ajustes', category: 'ADMIN' },
