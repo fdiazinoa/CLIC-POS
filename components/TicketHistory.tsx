@@ -1197,17 +1197,17 @@ const TicketDetailDrawer: React.FC<{
                   <div className="flex flex-wrap gap-3">
                      <button
                         onClick={openEmailDialog}
-                        className="flex min-w-[160px] flex-1 items-center justify-center gap-2 py-3 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-sm"
+                        className="inline-flex h-9 flex-none items-center justify-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 text-xs font-black text-blue-700 transition-colors hover:bg-blue-100"
                      >
-                        <Mail size={18} /> Enviar por email
+                        <Mail size={15} /> Reenviar email
                      </button>
                      <button
                         onClick={openReviewDialog}
-                        className="relative flex min-w-[170px] flex-1 items-center justify-center gap-2 py-3 bg-amber-500 text-white rounded-2xl font-bold hover:bg-amber-600 transition-all shadow-sm"
+                        className="relative inline-flex h-9 flex-none items-center justify-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 text-xs font-black text-amber-700 transition-colors hover:bg-amber-100"
                      >
-                        <Flag size={18} /> Marcar para revisión
+                        <Flag size={15} /> Marcar revisión
                         {activeReviewFlags.length > 0 && (
-                           <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-black text-white">
+                           <span className="absolute -right-1.5 -top-1.5 min-w-4 rounded-full bg-red-600 px-1 py-0.5 text-[9px] font-black leading-none text-white shadow-sm">
                               {activeReviewFlags.length}
                            </span>
                         )}
