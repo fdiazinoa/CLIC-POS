@@ -1,7 +1,22 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { validate as isUuid } from 'uuid';
 
-import { parseReceiptEmailResponse } from '../services/email/receiptEmailService';
+import {
+  parseReceiptEmailResponse,
+  withReceiptDeliveryRequestId,
+} from '../services/email/receiptEmailService';
+
+test('genera una identidad nueva para cada intento de reenvío', () => {
+  const payload = { email: 'cliente@example.com', cart: [{ name: 'Producto' }] };
+  const first = withReceiptDeliveryRequestId(payload);
+  const second = withReceiptDeliveryRequestId(payload);
+
+  assert.equal(isUuid(first.deliveryRequestId || ''), true);
+  assert.equal(isUuid(second.deliveryRequestId || ''), true);
+  assert.notEqual(first.deliveryRequestId, second.deliveryRequestId);
+  assert.equal(Object.prototype.hasOwnProperty.call(payload, 'deliveryRequestId'), false);
+});
 
 test('rechaza HTTP 200 que contiene HTML de la aplicacion', async () => {
   const response = {

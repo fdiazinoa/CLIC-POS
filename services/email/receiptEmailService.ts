@@ -1,10 +1,12 @@
 import { readTerminalCredentialsSync } from '../sync/TerminalCredentialStore';
 import { requestJson, type RequestJsonResult } from '../network/httpClient';
 import { resolveErpBaseUrl } from '../../utils/erpBaseUrl';
+import { v4 as uuidv4 } from 'uuid';
 
 export type ReceiptEmailPayload = {
   email: string;
   cart: unknown[];
+  deliveryRequestId?: string;
   [key: string]: unknown;
 };
 
@@ -25,6 +27,11 @@ type ReceiptEmailApiResponse = {
 };
 
 type ReceiptEmailRequest = typeof requestJson<ReceiptEmailApiResponse>;
+
+export const withReceiptDeliveryRequestId = (payload: ReceiptEmailPayload): ReceiptEmailPayload => ({
+  ...payload,
+  deliveryRequestId: uuidv4(),
+});
 
 const asNonEmptyString = (value: unknown): string | undefined => {
   const normalized = typeof value === 'string' ? value.trim() : '';
@@ -99,6 +106,7 @@ export const sendReceiptEmailViaErp = async (
   }
 
   try {
+    const deliveryPayload = withReceiptDeliveryRequestId(payload);
     const response = await request({
       url: `${erpBaseUrl}/api/email/receipt`,
       method: 'POST',
@@ -111,7 +119,7 @@ export const sendReceiptEmailViaErp = async (
         'X-Device-Token': asNonEmptyString(credentials.deviceToken),
         'X-Tenant-Id': asNonEmptyString(credentials.erpTenantId || credentials.tenantId),
       },
-      body: payload,
+      body: deliveryPayload,
       timeoutMs: RECEIPT_EMAIL_TIMEOUT_MS,
       diagnosticContext: { operation: 'SEND_RECEIPT_EMAIL' },
     });
