@@ -11,6 +11,7 @@ interface UseSupervisorAuthProps {
 interface RequestApprovalParams {
     permission: Permission;
     actionDescription: string;
+    onAuthorized?: (supervisor: User) => void;
     context?: {
         ticketId?: string;
         itemId?: string;
@@ -48,6 +49,7 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig }
                 if (hasPermission && withinLimits) {
                     // Log self-authorization
                     logAction(currentUser!, currentUser!, params);
+                    params.onAuthorized?.(currentUser!);
                     resolve(true);
                     return;
                 }
@@ -62,6 +64,7 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig }
     const handleAuthorize = (supervisor: User) => {
         if (pendingRequest) {
             logAction(currentUser || supervisor, supervisor, pendingRequest.params);
+            pendingRequest.params.onAuthorized?.(supervisor);
             pendingRequest.resolve(true);
             setPendingRequest(null);
             setIsModalOpen(false);
