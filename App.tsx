@@ -4473,14 +4473,11 @@ const AppContent: React.FC = () => {
       };
     }
 
-    const currentTerminalId = getCurrentTerminal()?.id || 'T1';
     const cartGrossTotal = roundMoney(cart.reduce((sum, item) => {
       return sum + Math.abs((Number(item.price) || 0) * (Number(item.quantity) || 0));
     }, 0));
-    const result = couponService.redeemCoupon(
+    const result = couponService.validateCoupon(
       normalizedCode,
-      `KIOSK-${Date.now()}`,
-      currentTerminalId,
       config,
       cartGrossTotal,
       selectedCustomer?.id
@@ -4491,13 +4488,6 @@ const AppContent: React.FC = () => {
         success: false,
         message: result.error || 'No se pudo canjear el cupón.',
       };
-    }
-
-    if (result.updatedConfig) {
-      setConfig(result.updatedConfig);
-      db.save('config', result.updatedConfig).catch((error) => {
-        console.warn('No se pudo persistir el cupón canjeado en self-checkout:', error);
-      });
     }
 
     if (result.coupon) {
@@ -4516,7 +4506,7 @@ const AppContent: React.FC = () => {
       success: true,
       message: `OK: ${result.benefit?.description || 'Cupón aplicado'}`,
     };
-  }, [cart, config, getCurrentTerminal, kioskRedeemedCoupon, selectedCustomer?.id]);
+  }, [cart, config, kioskRedeemedCoupon, selectedCustomer?.id]);
 
   const getKioskCouponDiscountAmount = useCallback((cartTotal: number): number => {
     if (!kioskCouponBenefit) return 0;

@@ -39,19 +39,19 @@ export const couponService = {
         };
     },
 
-    /**
-     * Redeems a coupon code
-     */
-    redeemCoupon: (
+    validateCoupon: (
         code: string,
-        ticketId: string,
-        terminalId: string,
         config: BusinessConfig,
         cartTotal: number = 0,
         customerId?: string | null
     ): RedemptionResult => {
         const normalizedCode = code.trim().toUpperCase();
         const selectedCustomerId = customerId?.trim();
+
+        if (!Number.isFinite(cartTotal) || cartTotal <= 0) {
+            return { success: false, error: 'Agregue al menos un artículo antes de aplicar el cupón.' };
+        }
+
         // 1. Find Coupon
         const coupon = config.coupons?.find(c => c.code.trim().toUpperCase() === normalizedCode);
 
@@ -125,20 +125,6 @@ export const couponService = {
             }
         }
 
-        // 5. "Burn" Coupon (Return updated config)
-        const updatedCoupon: Coupon = {
-            ...coupon,
-            status: 'REDEEMED',
-            redeemedAt: now.toISOString(),
-            ticketRef: ticketId,
-            terminalId: terminalId
-        };
-
-        const updatedConfig: BusinessConfig = {
-            ...config,
-            coupons: config.coupons!.map(c => c.id === coupon.id ? updatedCoupon : c)
-        };
-
         return {
             success: true,
             benefit: {
@@ -146,6 +132,63 @@ export const couponService = {
                 value: campaign.benefitValue,
                 description: campaign.description || campaign.name
             },
+            coupon
+        };
+    },
+
+    commitCouponRedemption: (
+        couponId: string,
+        ticketRef: string,
+        terminalId: string,
+        config: BusinessConfig,
+        redeemedAt: string = new Date().toISOString()
+    ): BusinessConfig => ({
+        ...config,
+        coupons: (config.coupons || []).map(coupon => coupon.id === couponId
+            ? {
+                ...coupon,
+                status: 'REDEEMED',
+                redeemedAt,
+                ticketRef,
+                terminalId
+            }
+            : coupon)
+    }),
+
+    /**
+     * Validates and immediately redeems a coupon. Kept for callers that
+     * explicitly need the legacy atomic behavior.
+     */
+    redeemCoupon: (
+        code: string,
+        ticketId: string,
+        terminalId: string,
+        config: BusinessConfig,
+        cartTotal: number = 0,
+        customerId?: string | null
+    ): RedemptionResult => {
+        const validation = couponService.validateCoupon(code, config, cartTotal, customerId);
+        if (!validation.success || !validation.coupon) return validation;
+
+        const redeemedAt = new Date().toISOString();
+        const updatedCoupon: Coupon = {
+            ...validation.coupon,
+            status: 'REDEEMED',
+            redeemedAt,
+            ticketRef: ticketId,
+            terminalId: terminalId
+        };
+
+        const updatedConfig = couponService.commitCouponRedemption(
+            validation.coupon.id,
+            ticketId,
+            terminalId,
+            config,
+            redeemedAt
+        );
+
+        return {
+            ...validation,
             coupon: updatedCoupon,
             updatedConfig
         };

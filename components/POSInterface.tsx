@@ -49,6 +49,7 @@ import { resolveTerminalDocumentSeriesId, validateTerminalSeries } from '../util
 import { applyPromotions } from '../utils/promotionEngine';
 import { calculatePointsEarned, getPrimaryLoyaltyCard } from '../utils/loyaltyEngine';
 import { couponService } from '../utils/couponService';
+import { resolveScannedCouponCode } from '../utils/couponScan';
 import { calculateInventoryDeductions, resolveInventoryConsumptionMode, transferStockToCommitted } from '../utils/inventoryEngine';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import SupervisorModal from './SupervisorModal';
@@ -2882,20 +2883,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       const cartSubtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-      const result = couponService.redeemCoupon(
+      if (!Number.isFinite(cartSubtotal) || cartSubtotal <= 0) {
+         alert('Agregue al menos un artículo antes de aplicar el cupón.');
+         return;
+      }
+
+      const result = couponService.validateCoupon(
          normalizedCouponCode,
-         `TICKET-${Date.now()}`,
-         terminalId,
          config,
          cartSubtotal,
          effectiveSelectedCustomer?.id
       );
 
       if (result.success) {
-         if (result.updatedConfig) {
-            onUpdateConfig(result.updatedConfig);
-         }
-
          if (result.benefit) {
             if (result.benefit.type === 'PERCENT') {
                setGlobalDiscount({ type: 'PERCENT', value: result.benefit.value });
@@ -2910,7 +2910,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   assignedTo: result.coupon.assignedTo
                });
             }
-            alert(`¡Cupón Canjeado!\n${result.benefit.description}`);
+            alert(`¡Cupón Aplicado!\n${result.benefit.description}`);
             setShowCouponModal(false);
             setCouponCode('');
          }
@@ -2918,6 +2918,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          alert(`Error: ${result.error}`);
       }
    };
+
+   const commitAppliedCoupon = useCallback((transaction?: Transaction | null) => {
+      if (!redeemedCoupon || !transaction) return;
+
+      onUpdateConfig(couponService.commitCouponRedemption(
+         redeemedCoupon.id,
+         transaction.displayId || transaction.id,
+         terminalId,
+         config
+      ));
+   }, [config, onUpdateConfig, redeemedCoupon, terminalId]);
 
    const activeTariffTokens = useMemo(
       () => new Set([activeTariffId, activeTariff?.id, (activeTariff as any)?.code].map(normalizeSearchToken).filter(Boolean)),
@@ -3545,9 +3556,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const submitProductTextSearchRef = useRef<((rawValue: string, focusTarget?: React.RefObject<HTMLInputElement>) => boolean) | null>(null);
 
+   const routeScannedCoupon = useCallback((rawCode: string): boolean => {
+      const scannedCouponCode = resolveScannedCouponCode(rawCode, config.coupons);
+      if (!scannedCouponCode) return false;
+
+      setCouponCode(scannedCouponCode);
+      setSearchTerm('');
+      setShowCouponModal(true);
+      setIsScannerOpen(false);
+      setErrorToast(null);
+      return true;
+   }, [config.coupons]);
+
    const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'Enter') {
          const rawValue = e.currentTarget.value || searchTerm || '';
+         if (routeScannedCoupon(rawValue)) return;
+
          const match = findProductByAnyCode(rawValue);
          if (match) {
             addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo);
@@ -3566,11 +3591,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }
       }
-   }, [searchTerm, findProductByAnyCode, addToCart, isReturnMode]);
+   }, [searchTerm, routeScannedCoupon, findProductByAnyCode, addToCart, isReturnMode]);
 
    // --- BARCODE SCANNER LOGIC ---
    const processBarcode = useCallback((code: string) => {
       const trimmed = code.trim();
+
+      if (routeScannedCoupon(trimmed)) return;
 
       // 0. Try Smart QR (JSON)
       try {
@@ -3648,7 +3675,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             setShowReturnModal(true);
          }
       }
-   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, transactionByScanCode]);
+   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, transactionByScanCode]);
 
    const isAnyModalOpen = !!(
       showPaymentModal ||
@@ -5180,6 +5207,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      );
                   }
 
+                  if (result.sale) commitAppliedCoupon(result.sale);
+
                   onUpdateCart([]);
                   if (redeemedCoupon) setGlobalDiscount({ type: 'PERCENT', value: 0 });
                   setRedeemedCoupon(null);
@@ -5200,6 +5229,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                if (data.success) {
                   if (data.result?.sale) {
                      data.result.sale = await syncConsignmentSettlement(data.result.sale);
+                     commitAppliedCoupon(data.result.sale);
                   }
                   onUpdateCart([]);
                   if (redeemedCoupon) setGlobalDiscount({ type: 'PERCENT', value: 0 });
@@ -5347,6 +5377,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   if (durableSaleCommit && settledFinalTxn.consignmentId) {
                      settledFinalTxn = await syncConsignmentSettlement(settledFinalTxn);
                   }
+                  commitAppliedCoupon(settledFinalTxn);
                }
 
                if (activeRecoveredReservation && !uberRecoveredOrder) {
@@ -8606,6 +8637,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               <Check size={20} />
                               Validar y Aplicar
                            </button>
+
+                           {isMobile && (
+                              <button
+                                 type="button"
+                                 onClick={() => setIsScannerOpen(true)}
+                                 className="w-full py-3.5 border-2 border-blue-100 bg-blue-50 text-blue-700 rounded-xl font-bold transition-all hover:bg-blue-100 active:scale-95 flex items-center justify-center gap-2"
+                              >
+                                 <ScanBarcode size={20} />
+                                 Escanear QR
+                              </button>
+                           )}
                         </div>
                      </div>
                   </div>
@@ -9054,6 +9096,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             onScan={async (code) => {
                // 0. Try Smart QR (JSON)
                const trimmed = code.trim();
+               if (routeScannedCoupon(trimmed)) {
+                  return { success: true, message: 'Cupón leído. Valide para aplicarlo.' };
+               }
+
                try {
                   if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
                      const data = JSON.parse(trimmed);
