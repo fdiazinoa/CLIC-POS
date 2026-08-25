@@ -6,6 +6,7 @@ import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../../uti
 import { resolveLineDiscountPresentation } from '../../utils/lineDiscountPresentation';
 import { resolveTerminalDisplayName } from '../../utils/transactionHistoryPresentation';
 import { resolveGlobalDiscountLabel } from '../../utils/globalDiscountPresentation';
+import { resolveReceiptCouponCodes } from '../../utils/receiptCouponPresentation';
 
 export interface EscPosLabelRecord {
   productId: string;
@@ -405,6 +406,7 @@ export const buildEscPosTicketPayload = (
   const receiptTaxTotal = fiscalSummary.taxTotal;
   const receiptTotal = fiscalSummary.total;
   const receiptTaxBreakdown = fiscalSummary.taxBreakdown || [];
+  const redeemedCouponCodes = resolveReceiptCouponCodes(transaction);
   const ncfTypeLabels: Record<string, string> = {
     B01: 'FACTURA DE CREDITO FISCAL',
     B02: 'FACTURA DE CONSUMO',
@@ -498,21 +500,21 @@ export const buildEscPosTicketPayload = (
 
   chunks.push(divider(width));
   pushPair(chunks, 'SUBTOTAL', formatMoney(config.currencySymbol || '$', receiptSubtotal), width);
-  if (receiptTaxBreakdown.length > 0) {
-    receiptTaxBreakdown.forEach(tax => {
-      pushPair(chunks, formatTaxLineLabel(tax), formatMoney(config.currencySymbol || '$', tax.amount), width);
-    });
-  } else if (receiptTaxTotal > 0) {
-    pushPair(chunks, 'IMPUESTOS', formatMoney(config.currencySymbol || '$', receiptTaxTotal), width);
-  }
   if (totals.globalDiscountTotal > 0) {
     pushPair(chunks, resolveGlobalDiscountLabel({
       discountAmount: totals.globalDiscountTotal,
       subtotalBeforeDiscount: receiptSubtotal,
       discountType: transaction.discountType,
       discountValue: transaction.discountValue,
-      baseLabel: 'DESCUENTO GENERAL',
+      baseLabel: 'DESCUENTO TOTAL',
     }), formatMoney(config.currencySymbol || '$', totals.globalDiscountTotal), width);
+  }
+  if (receiptTaxBreakdown.length > 0) {
+    receiptTaxBreakdown.forEach(tax => {
+      pushPair(chunks, formatTaxLineLabel(tax), formatMoney(config.currencySymbol || '$', tax.amount), width);
+    });
+  } else if (receiptTaxTotal > 0) {
+    pushPair(chunks, 'IMPUESTOS', formatMoney(config.currencySymbol || '$', receiptTaxTotal), width);
   }
   chunks.push(bold(true));
   pushPair(chunks, 'TOTAL', formatMoney(config.currencySymbol || '$', receiptTotal), width);
@@ -591,6 +593,13 @@ export const buildEscPosTicketPayload = (
     if (settlementSummary.totalChangeBase > 0.0001) {
       pushPair(chunks, 'CAMBIO', formatMoney(config.currencySymbol || '$', settlementSummary.totalChangeBase), width);
     }
+  }
+
+  if (redeemedCouponCodes.length > 0) {
+    chunks.push(divider(width));
+    redeemedCouponCodes.forEach(code => {
+      pushTextLines(chunks, splitLines(`DESCUENTO POR CUPON: ${code}`, width));
+    });
   }
 
   if (transaction.affectedInvoiceNumber || transaction.affectedNCF) {
