@@ -9,6 +9,7 @@ import { buildPaymentSettlementSummary, resolveCurrencySymbol } from './paymentS
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from './terminalSnapshotSellers';
 import { normalizePrintCopies, resolveConfiguredPrintCopies, resolveTransactionPrintKind } from './printCopies';
 import { resolveGlobalDiscountLabel } from './globalDiscountPresentation';
+import { resolveReceiptCouponCodes } from './receiptCouponPresentation';
 
 const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -187,6 +188,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
     const taxTotal = fiscalSummary.taxTotal;
     const finalTotal = fiscalSummary.total;
     const savings = lineDiscountTotal + discountTotal;
+    const redeemedCouponCodes = resolveReceiptCouponCodes(transaction);
 
     // NCF Type Label Map
     const ncfTypeLabels: Record<string, string> = {
@@ -512,6 +514,11 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                         <span>${currencySymbol}${settlementSummary.totalChangeBase.toFixed(2)}</span>
                     </div>
                     ` : ''}
+                    ${redeemedCouponCodes.map(code => `
+                    <div class="meta-row" style="margin-top: 6px; font-size: 11px; font-weight: bold;">
+                        DESCUENTO POR CUPÓN: ${escapeHtml(code)}
+                    </div>
+                    `).join('')}
                 </div>
                 `;
         })()}

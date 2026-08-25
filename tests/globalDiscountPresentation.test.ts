@@ -89,3 +89,37 @@ test('las impresiones HTML y ESC/POS usan la etiqueta y una devolución fuerza n
   assert.match(decodedRefund, /NOTA DE CREDITO/);
   assert.doesNotMatch(decodedRefund, /FACTURA DE CONSUMO/);
 });
+
+test('el ticket ESC/POS imprime descuento antes de impuestos y el cupón después de pagos', () => {
+  const payload = buildEscPosTicketPayload({
+    id: 'sale-coupon-1',
+    displayId: 'TCK-COUPON-1',
+    date: new Date().toISOString(),
+    items: [{ id: 'p1', cartId: 'c1', name: 'Producto', quantity: 1, price: 1_000 } as any],
+    total: 1_062,
+    payments: [{ id: 'payment-1', method: 'CASH', methodLabel: 'EFECTIVO', amount: 1_062 }],
+    userId: 'u1',
+    userName: 'Cajero',
+    terminalId: 't1',
+    status: 'COMPLETED',
+    discountAmount: 100,
+    discountType: 'FIXED',
+    discountValue: 100,
+    taxBreakdown: [{ id: 'itbis-18', name: 'ITBIS', rate: 0.18, amount: 162 }],
+    couponCode: 'PROMO-2026',
+    coupons: [{ id: 'coupon-1', code: 'PROMO-2026' }],
+  } as any, printerConfig);
+  const decoded = Buffer.from(payload || '', 'base64').toString('latin1');
+  const subtotalIndex = decoded.indexOf('SUBTOTAL');
+  const discountIndex = decoded.indexOf('DESCUENTO TOTAL');
+  const taxIndex = decoded.indexOf('ITBIS 18%');
+  const paymentsIndex = decoded.indexOf('PAGOS');
+  const couponIndex = decoded.indexOf('DESCUENTO POR CUPON: PROMO-2026');
+
+  assert.ok(subtotalIndex >= 0);
+  assert.ok(discountIndex > subtotalIndex);
+  assert.ok(taxIndex > discountIndex);
+  assert.ok(paymentsIndex > taxIndex);
+  assert.ok(couponIndex > paymentsIndex);
+  assert.equal(decoded.match(/DESCUENTO POR CUPON: PROMO-2026/g)?.length, 1);
+});
