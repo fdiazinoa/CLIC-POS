@@ -172,6 +172,7 @@ test('resuelve identificadores de contratos ERP por alias conocidos', () => {
 
 test('pairing y full pull usan la reconciliación protegida', () => {
   assert.match(appSource, /pairing_roster_reconciled/);
+  assert.match(appSource, /pairing_remote_roster_refreshed/);
   assert.match(appSource, /const reconciledUsers = reconcilePosUsers\(\{/);
   assert.doesNotMatch(appSource, /setUsers\(setupResult\.boundUsers\)/);
   assert.match(syncSource, /safeItems = await this\.reconcileFullDownloadPosUsers\(safeItems, items\)/);
@@ -179,6 +180,7 @@ test('pairing y full pull usan la reconciliación protegida', () => {
   assert.match(syncSource, /removeDefaultSeedUsers: true/);
   assert.match(syncSource, /requestTimeoutMs: 8_000/);
   assert.match(appSource, /refreshErpPosUserRoster\(finalConfig\)/);
+  assert.match(appSource, /refreshErpPosUserRoster\(updatedConfig\)/);
   assert.match(appSource, /hasErpSnapshotPosUsers\(refreshedUsers\)/);
   assert.match(appSource, /queueUnsyncedLocalPosUsers/);
   assert.match(appSource, /removeDefaultSeedUsers: isErpDirectBinding/);
