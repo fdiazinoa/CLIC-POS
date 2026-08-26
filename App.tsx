@@ -1818,6 +1818,10 @@ const AppContent: React.FC = () => {
   }, [currentUser]);
 
   useEffect(() => {
+    terminalRouter.setCurrentUser(currentUser);
+  }, [currentUser]);
+
+  useEffect(() => {
     if (currentUser) {
       persistActiveUserSession(currentUser, currentView);
     }

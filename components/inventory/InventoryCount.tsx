@@ -5,7 +5,7 @@
  * Scan products and adjust quantities.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScanBarcode, Plus, Minus, Save, X, Camera, Cloud, Wifi, WifiOff } from 'lucide-react';
 import { Product } from '../../types';
 import BarcodeScannerModal from '../BarcodeScannerModal';
@@ -71,6 +71,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
     const [syncTab, setSyncTab] = useState<'PENDING' | 'CONFLICTS'>('PENDING');
     const [startedAt] = useState(() => new Date().toISOString());
     const [sessionId] = useState(() => `CNT-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+    const scanInputRef = useRef<HTMLInputElement | null>(null);
     const filteredProducts = useMemo(
         () => filterInventoryProducts(products, scanInput, 12),
         [products, scanInput]
@@ -79,6 +80,17 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
         () => inventoryScannerPreferenceKey(terminalId),
         [terminalId]
     );
+
+    const focusScannerInput = useCallback(() => {
+        window.requestAnimationFrame(() => scanInputRef.current?.focus());
+    }, []);
+
+    useEffect(() => {
+        focusScannerInput();
+        const restoreFocus = () => focusScannerInput();
+        window.addEventListener('focus', restoreFocus);
+        return () => window.removeEventListener('focus', restoreFocus);
+    }, [focusScannerInput]);
 
     useEffect(() => {
         try {
@@ -101,9 +113,10 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
             setScanFeedback(nextMode === 'UNIT'
                 ? 'El lector agregará 1 unidad automáticamente.'
                 : 'El lector solicitará la cantidad.');
+            focusScannerInput();
             return nextMode;
         });
-    }, [scannerPreferenceKey]);
+    }, [focusScannerInput, scannerPreferenceKey]);
 
     // Get expected qty for a product in the selected warehouse
     const getExpectedQty = useCallback((product: Product) => {
@@ -116,6 +129,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
         const expected = getExpectedQty(product);
         setScanInput('');
         setScanFeedback(`${product.name}: +${normalizedQuantity}`);
+        focusScannerInput();
         setCounts(currentCounts => {
             const existing = currentCounts.find(c => c.productId === product.id);
             if (existing) {
@@ -145,7 +159,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
             productId: product.id,
             code
         } as any);
-    }, [getExpectedQty, recordOfflineScan, sessionId, warehouseId]);
+    }, [focusScannerInput, getExpectedQty, recordOfflineScan, sessionId, warehouseId]);
 
     const handleResolvedProduct = useCallback(async (product: Product, code: string) => {
         if (scannerQuantityMode === 'PROMPT') {
@@ -171,6 +185,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                 ? 'Selecciona un producto de los resultados.'
                 : 'Producto no encontrado');
             if (filteredProducts.length === 0) setScanInput('');
+            focusScannerInput();
             return;
         }
 
@@ -192,11 +207,13 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
             }
             if (filterInventoryProducts(products, query, 1).length === 0) {
                 setScanFeedback(`Producto no encontrado: ${query}`);
+                setScanInput('');
+                focusScannerInput();
             }
         }, 250);
 
         return () => window.clearTimeout(timer);
-    }, [handleResolvedProduct, products, scanInput]);
+    }, [focusScannerInput, handleResolvedProduct, products, scanInput]);
 
     useEffect(() => {
         if (!syncToast || !clearSyncToast) return;
@@ -322,6 +339,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                     <div className="flex-1 relative">
                         <ScanBarcode className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200" size={20} />
                         <input
+                            ref={scanInputRef}
                             type="text"
                             value={scanInput}
                             onChange={(e) => {
@@ -547,7 +565,10 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
             {/* Camera Scanner Modal */}
             <BarcodeScannerModal
                 isOpen={showCameraScanner}
-                onClose={() => setShowCameraScanner(false)}
+                onClose={() => {
+                    setShowCameraScanner(false);
+                    focusScannerInput();
+                }}
                 onScan={handleCameraScan}
             />
 
@@ -561,7 +582,10 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                             </div>
                             <button
                                 type="button"
-                                onClick={() => setPendingScannerProduct(null)}
+                                onClick={() => {
+                                    setPendingScannerProduct(null);
+                                    focusScannerInput();
+                                }}
                                 className="rounded-xl bg-gray-100 p-2 text-gray-500"
                                 aria-label="Cerrar"
                             >
