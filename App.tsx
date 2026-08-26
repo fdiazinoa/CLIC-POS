@@ -12006,6 +12006,39 @@ const AppContent: React.FC = () => {
         return (
           <InventoryHome
             onNavigate={handleViewChange}
+            onSyncNow={async () => {
+              await syncTriggerCoordinator.request({ reason: 'MANUAL' });
+              await syncManager.syncTerminalManifestInBackground(undefined, { reason: 'manual_sync' });
+              await syncManager.refreshTerminalResolvedConfig(undefined, {
+                forceRemoteFetch: true,
+                forceFullCatalog: false,
+                masterScopes: ['purchase_orders', 'transfers'],
+                resolvedScopes: ['identity', 'terminal', 'device_role', 'role', 'inventory', 'documents'],
+                supplementalMode: 'skip',
+                dispatchEvent: true,
+              });
+
+              const [freshProducts, freshOrders, freshTransfers, freshWarehouses] = await Promise.all([
+                db.get('products') as Promise<Product[]>,
+                db.get('purchaseOrders') as Promise<PurchaseOrder[]>,
+                db.get('transfers') as Promise<StockTransfer[]>,
+                db.get('warehouses') as Promise<Warehouse[]>,
+              ]);
+
+              if (Array.isArray(freshProducts) && freshProducts.length > 0) setProducts(freshProducts);
+              setPurchaseOrders(Array.isArray(freshOrders) ? freshOrders : []);
+              setTransfers(Array.isArray(freshTransfers) ? freshTransfers : []);
+              if (Array.isArray(freshWarehouses) && freshWarehouses.length > 0) setWarehouses(freshWarehouses);
+
+              return {
+                purchaseOrders: Array.isArray(freshOrders)
+                  ? freshOrders.filter(order => order.status === 'ORDERED' || order.status === 'PARTIAL').length
+                  : 0,
+                transfers: Array.isArray(freshTransfers)
+                  ? freshTransfers.filter(transfer => transfer.status === 'IN_TRANSIT').length
+                  : 0,
+              };
+            }}
             userName={currentUser?.name}
             warehouses={warehouses}
           />

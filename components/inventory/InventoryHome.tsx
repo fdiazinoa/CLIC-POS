@@ -12,16 +12,20 @@ import WarehouseSelectionModal from './WarehouseSelectionModal';
 
 interface InventoryHomeProps {
     onNavigate: (view: string, data?: any) => void;
+    onSyncNow?: () => Promise<{ purchaseOrders: number; transfers: number }>;
     userName?: string;
     warehouses: Warehouse[];
 }
 
 const InventoryHome: React.FC<InventoryHomeProps> = ({
     onNavigate,
+    onSyncNow,
     userName = 'Usuario',
     warehouses = []
 }) => {
     const [isWarehouseModalOpen, setIsWarehouseModalOpen] = useState(false);
+    const [isSyncing, setIsSyncing] = useState(false);
+    const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
 
     const menuItems = [
         {
@@ -49,10 +53,10 @@ const InventoryHome: React.FC<InventoryHomeProps> = ({
             gradient: 'from-purple-500 to-purple-600'
         },
         {
-            id: 'SETTINGS_SYNC',
+            id: 'HANDHELD_SYNC_NOW',
             icon: RefreshCw,
-            label: 'Sincronización',
-            description: 'Probar conexión con Maestra',
+            label: 'Sincronizar ahora',
+            description: 'Actualizar productos, OC y traspasos',
             color: 'indigo',
             gradient: 'from-indigo-500 to-indigo-600'
         },
@@ -66,9 +70,21 @@ const InventoryHome: React.FC<InventoryHomeProps> = ({
         }
     ];
 
-    const handleItemClick = (id: string) => {
+    const handleItemClick = async (id: string) => {
         if (id === 'INVENTORY_COUNT') {
             setIsWarehouseModalOpen(true);
+        } else if (id === 'HANDHELD_SYNC_NOW') {
+            if (!onSyncNow || isSyncing) return;
+            setIsSyncing(true);
+            setSyncFeedback('Sincronizando productos, órdenes y traspasos...');
+            try {
+                const result = await onSyncNow();
+                setSyncFeedback(`Sincronización completa: ${result.purchaseOrders} OC y ${result.transfers} traspasos disponibles.`);
+            } catch (error) {
+                setSyncFeedback(`No se pudo sincronizar: ${error instanceof Error ? error.message : 'Error desconocido'}`);
+            } finally {
+                setIsSyncing(false);
+            }
         } else {
             onNavigate(id);
         }
@@ -110,17 +126,18 @@ const InventoryHome: React.FC<InventoryHomeProps> = ({
                     return (
                         <button
                             key={item.id}
-                            onClick={() => handleItemClick(item.id)}
-                            className="w-full bg-white p-6 rounded-2xl shadow-sm border-2 border-gray-100 hover:border-blue-300 hover:shadow-md transition-all active:scale-98 text-left"
+                            onClick={() => void handleItemClick(item.id)}
+                            disabled={item.id === 'HANDHELD_SYNC_NOW' && isSyncing}
+                            className="w-full bg-white p-6 rounded-2xl shadow-sm border-2 border-gray-100 hover:border-blue-300 hover:shadow-md transition-all active:scale-98 text-left disabled:opacity-60"
                         >
                             <div className="flex items-center gap-4">
                                 <div className={`w-16 h-16 bg-gradient-to-br ${item.gradient} rounded-2xl flex items-center justify-center flex-shrink-0 shadow-lg`}>
-                                    <Icon size={32} className="text-white" strokeWidth={2.5} />
+                                    <Icon size={32} className={`text-white ${item.id === 'HANDHELD_SYNC_NOW' && isSyncing ? 'animate-spin' : ''}`} strokeWidth={2.5} />
                                 </div>
 
                                 <div className="flex-1">
                                     <h3 className="text-lg font-black text-gray-800 mb-1">
-                                        {item.label}
+                                        {item.id === 'HANDHELD_SYNC_NOW' && isSyncing ? 'Sincronizando...' : item.label}
                                     </h3>
                                     <p className="text-sm text-gray-500">
                                         {item.description}
@@ -137,6 +154,18 @@ const InventoryHome: React.FC<InventoryHomeProps> = ({
                     );
                 })}
             </div>
+
+            {syncFeedback && (
+                <div
+                    role="status"
+                    className={`mb-6 rounded-2xl border px-4 py-3 text-sm font-bold ${syncFeedback.startsWith('No se pudo')
+                        ? 'border-red-200 bg-red-50 text-red-700'
+                        : 'border-indigo-200 bg-indigo-50 text-indigo-700'
+                    }`}
+                >
+                    {syncFeedback}
+                </div>
+            )}
 
             {/* Quick Stats */}
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
