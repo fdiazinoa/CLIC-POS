@@ -164,6 +164,10 @@ test('la comparación del padrón detecta cambios aunque la cantidad sea igual',
 test('resuelve identificadores de contratos ERP por alias conocidos', () => {
   assert.equal(resolvePosUserId({ user_id: 'erp-user' }), 'erp-user');
   assert.equal(resolvePosUserId({ email: 'user@example.com' }), 'user@example.com');
+  assert.equal(
+    resolvePosUserId({ id: 'erp-uuid', source_user_id: 'felix-local' }),
+    'felix-local',
+  );
 });
 
 test('pairing y full pull usan la reconciliación protegida', () => {

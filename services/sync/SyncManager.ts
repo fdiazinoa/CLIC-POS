@@ -4019,6 +4019,10 @@ class SyncManager {
         }
 
         const id = this.snapshotText(
+            row.source_pos_user_id ??
+            row.sourcePosUserId ??
+            row.source_user_id ??
+            row.sourceUserId ??
             row.id ??
             row.user_id ??
             row.userId ??

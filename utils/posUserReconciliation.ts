@@ -106,6 +106,10 @@ export const resolvePosUserId = (raw: unknown): string => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return '';
   const row = raw as PosUserRow;
   return asText(
+    row.source_pos_user_id ??
+    row.sourcePosUserId ??
+    row.source_user_id ??
+    row.sourceUserId ??
     row.id ??
     row.user_id ??
     row.userId ??
