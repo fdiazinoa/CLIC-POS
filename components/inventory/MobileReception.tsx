@@ -137,7 +137,9 @@ const MobileReception: React.FC<MobileReceptionProps> = ({
   }, [clearSyncToast, syncToast]);
 
   const buildPurchaseOrderDocument = useCallback((order: PurchaseOrder): ReceiptDocument | null => {
-    const supplierName = suppliers.find((supplier) => supplier.id === order.supplierId)?.name || 'Proveedor no asignado';
+    const supplierName = suppliers.find((supplier) => supplier.id === order.supplierId)?.name
+      || order.supplierName?.trim()
+      || 'Proveedor no asignado';
     const warehouseId = order.warehouseId || config.inventoryScope?.defaultSalesWarehouseId || warehouses[0]?.id || 'wh_central';
 
     const computedLines = (order.items || []).map((item) => {
