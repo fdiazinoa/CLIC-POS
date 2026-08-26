@@ -51,14 +51,20 @@ export const withoutDefaultSeedPosUsers = (users: unknown): SyncedPosUser[] => (
     : []
 );
 
+export const hasErpSnapshotPosUsers = (users: unknown): boolean => (
+  Array.isArray(users)
+  && (users as SyncedPosUser[]).some((user) => user?.syncSource === 'ERP_SNAPSHOT')
+);
+
 export interface SelectPosUsersForRuntimeOptions {
   erpManaged: boolean;
   fallbackUsers?: SyncedPosUser[];
 }
 
 /**
- * ERP users take precedence over demo seeds. When ERP has no POS users yet,
- * keep the local seed roster available instead of locking a new terminal out.
+ * ERP users take precedence over demo seeds. A locally-created operator is not
+ * proof that the ERP roster arrived, so keep the seeds available until at least
+ * one real ERP snapshot user exists. Local operators always remain visible.
  */
 export const selectPosUsersForRuntime = (
   users: unknown,
@@ -68,12 +74,12 @@ export const selectPosUsersForRuntime = (
   if (!erpManaged) return localUsers;
 
   const operationalUsers = withoutDefaultSeedPosUsers(localUsers);
-  if (operationalUsers.length > 0) return operationalUsers;
+  if (hasErpSnapshotPosUsers(localUsers)) return operationalUsers;
 
   const preservedSeeds = localUsers.filter(isDefaultSeedPosUser);
-  if (preservedSeeds.length > 0) return preservedSeeds;
+  if (preservedSeeds.length > 0) return [...preservedSeeds, ...operationalUsers];
 
-  return fallbackUsers.filter(isDefaultSeedPosUser);
+  return [...fallbackUsers.filter(isDefaultSeedPosUser), ...operationalUsers];
 };
 
 export const posUserRostersMatch = (left: unknown, right: unknown): boolean => {

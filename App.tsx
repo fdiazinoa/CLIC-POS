@@ -67,6 +67,10 @@ import { buildPaymentPostedPayload, buildSalePostedPayload } from './services/sy
 import { paymentIntentService } from './services/payments/PaymentIntentService';
 import { syncTriggerCoordinator, type SyncTriggerReason } from './services/sync/SyncTriggerCoordinator';
 import { queueCustomerMutation } from './services/sync/CustomerSyncQueue';
+import {
+  queuePosUserRosterChanges,
+  queueUnsyncedLocalPosUsers,
+} from './services/sync/PosUserSyncQueue';
 import { currencyScheduleExecutor } from './services/currency/CurrencyService';
 import { productImageCacheService } from './services/sync/ProductImageCacheService';
 import { posCloudStagingService } from './services/sync/PosCloudStagingService';
@@ -122,10 +126,10 @@ import {
 import { markPosInteractionActivity, setPosSaleActivity } from './utils/posSaleActivity';
 import { ORDER_TAKER_TERMINAL_TYPE, STANDARD_POS_TERMINAL_TYPE } from './utils/orderTakerPolicy';
 import {
+  hasErpSnapshotPosUsers,
   posUserRostersMatch,
   reconcilePosUsers,
   selectPosUsersForRuntime,
-  withoutDefaultSeedPosUsers,
 } from './utils/posUserReconciliation';
 
 // Layout imports
@@ -6405,19 +6409,27 @@ const AppContent: React.FC = () => {
               // Prefer ERP users, but keep the default roster when ERP has no POS users yet.
               const localUsers = await db.get('users') as User[];
               let usableUsers = visiblePosUsersForRuntime(localUsers);
-              const hasLocalErpUsers = withoutDefaultSeedPosUsers(localUsers).length > 0;
 
-              if (isErpSetupMode && !hasLocalErpUsers) {
-                console.log('🔒 Security Bootstrap: ERP roster unavailable. Refreshing authorized POS users...');
-                const refreshedUsers = await syncManager.refreshErpPosUserRoster(finalConfig);
-                usableUsers = visiblePosUsersForRuntime(refreshedUsers);
-                const hasRefreshedErpUsers = withoutDefaultSeedPosUsers(refreshedUsers).length > 0;
+              if (isErpSetupMode) {
+                console.log('🔒 Security Bootstrap: Refreshing authorized ERP POS users...');
+                try {
+                  const refreshedUsers = await syncManager.refreshErpPosUserRoster(finalConfig);
+                  usableUsers = visiblePosUsersForRuntime(refreshedUsers);
+                  const hasRefreshedErpUsers = hasErpSnapshotPosUsers(refreshedUsers);
 
-                if (!hasRefreshedErpUsers && usableUsers.length > 0) {
-                  console.warn('[SYNC_USERS] ERP returned no POS users; activating default local roster.');
-                  if (!posUserRostersMatch(refreshedUsers, usableUsers)) {
-                    await db.save('users', usableUsers);
+                  if (!hasRefreshedErpUsers && usableUsers.length > 0) {
+                    console.warn('[SYNC_USERS] ERP returned no POS users; preserving local operators and default roster.');
                   }
+                } catch (error) {
+                  console.warn('[SYNC_USERS] ERP roster refresh failed; preserving offline login roster.', error);
+                }
+
+                const persistedUsers = await db.get('users') as User[];
+                const queuedLocalUsers = await queueUnsyncedLocalPosUsers(
+                  Array.isArray(persistedUsers) ? persistedUsers : localUsers,
+                );
+                if (queuedLocalUsers > 0) {
+                  console.log(`[SYNC_USERS] Queued ${queuedLocalUsers} local POS user(s) for ERP upsert.`);
                 }
               } else if (!Array.isArray(localUsers) || localUsers.length === 0) {
                 console.log('🔒 Security Bootstrap: No users found. Starting Fast Sync...');
@@ -7907,11 +7919,20 @@ const AppContent: React.FC = () => {
   };
 
   const handleUsersUpdate = async (newUsers: User[]) => {
-    console.log(`handleUsersUpdate: Saving ${newUsers.length} users discovered during binding.`);
+    console.log(`handleUsersUpdate: Saving ${newUsers.length} POS users.`);
+    const previousUsers = await db.get('users') as User[];
     setUsers(newUsers);
-    // Persist to DB so it survives reload if they get disconnected
-    for (const user of newUsers) {
-      await db.save('users', user);
+    await db.save('users', newUsers);
+
+    if (isErpManagedPosUserRuntime()) {
+      const queued = await queuePosUserRosterChanges(
+        Array.isArray(previousUsers) ? previousUsers : [],
+        newUsers,
+      );
+      if (queued > 0) {
+        console.log(`[SYNC_USERS] Queued ${queued} POS user mutation(s) for ERP.`);
+        backgroundSyncManager.triggerSync().catch(console.error);
+      }
     }
   };
 
@@ -11083,7 +11104,7 @@ const AppContent: React.FC = () => {
             onUpdateTransfers={async (t) => { setTransfers(t); await db.save('transfers', t); }}
             onUpdateSequences={async (s) => { setInternalSequences(s); await db.save('internalSequences', s); }}
             onUpdateConfig={handleConfigUpdate}
-            onUpdateUsers={async (u) => { setUsers(u); await db.save('users', u); }}
+            onUpdateUsers={handleUsersUpdate}
             onUpdateRoles={async (r) => { setRoles(r); await db.save('roles', r); }}
             onUpdateProducts={async (p) => { setProducts(p); /* db.save('products', p) removed for efficiency */ syncManager.broadcastChange('products', null, 'UPDATE').catch(console.error); }}
             onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
@@ -11151,7 +11172,7 @@ const AppContent: React.FC = () => {
             onUpdateTransfers={async (t) => { setTransfers(t); await db.save('transfers', t); }}
             onUpdateSequences={async (s) => { setInternalSequences(s); await db.save('internalSequences', s); }}
             onUpdateConfig={handleConfigUpdate}
-            onUpdateUsers={async (u) => { setUsers(u); await db.save('users', u); }}
+            onUpdateUsers={handleUsersUpdate}
             onUpdateRoles={async (r) => { setRoles(r); await db.save('roles', r); }}
             onUpdateProducts={async (p) => { setProducts(p); await db.save('products', p); }}
             onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
