@@ -1,4 +1,5 @@
 import type { Product } from '../types';
+import { productReferenceCandidates } from './productReferences';
 
 const normalizeSearchValue = (value: unknown): string => String(value || '')
   .normalize('NFD')
@@ -6,23 +7,30 @@ const normalizeSearchValue = (value: unknown): string => String(value || '')
   .trim()
   .toLowerCase();
 
+const expandSearchValue = (value: unknown): string[] => {
+  const normalized = normalizeSearchValue(value);
+  if (!normalized) return [];
+
+  // Some Android engines emit UPC-A (12 digits) while ERP catalogs persist
+  // the equivalent EAN-13 value with a leading zero, or vice versa.
+  if (/^\d{12}$/.test(normalized)) return [normalized, `0${normalized}`];
+  if (/^0\d{12}$/.test(normalized)) return [normalized, normalized.slice(1)];
+  return [normalized];
+};
+
 const getProductSearchValues = (product: Product): string[] => {
   const record = product as Product & Record<string, unknown>;
   const variants = Array.isArray(product.variants) ? product.variants : [];
 
   return [
-    product.id,
     product.name,
-    product.barcode,
     product.category,
-    record.sku,
-    record.code,
-    record.item_code,
     record.internalCode,
     record.reference,
-    ...variants.flatMap(variant => [variant.sku, ...(Array.isArray(variant.barcode) ? variant.barcode : [])]),
+    ...productReferenceCandidates(record),
+    ...variants.flatMap(variant => productReferenceCandidates(variant as unknown as Record<string, unknown>)),
   ]
-    .map(normalizeSearchValue)
+    .flatMap(expandSearchValue)
     .filter(Boolean);
 };
 

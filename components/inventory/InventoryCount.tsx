@@ -85,6 +85,13 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
         window.requestAnimationFrame(() => scanInputRef.current?.focus());
     }, []);
 
+    const selectScannerInput = useCallback(() => {
+        window.requestAnimationFrame(() => {
+            scanInputRef.current?.focus();
+            scanInputRef.current?.select();
+        });
+    }, []);
+
     useEffect(() => {
         focusScannerInput();
         const restoreFocus = () => focusScannerInput();
@@ -181,11 +188,10 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
             || (filteredProducts.length === 1 ? filteredProducts[0] : undefined);
 
         if (!product) {
-            alert(filteredProducts.length > 1
+            setScanFeedback(filteredProducts.length > 1
                 ? 'Selecciona un producto de los resultados.'
-                : 'Producto no encontrado');
-            if (filteredProducts.length === 0) setScanInput('');
-            focusScannerInput();
+                : `Producto no encontrado: ${query}`);
+            selectScannerInput();
             return;
         }
 
@@ -207,13 +213,12 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
             }
             if (filterInventoryProducts(products, query, 1).length === 0) {
                 setScanFeedback(`Producto no encontrado: ${query}`);
-                setScanInput('');
-                focusScannerInput();
+                selectScannerInput();
             }
         }, 250);
 
         return () => window.clearTimeout(timer);
-    }, [focusScannerInput, handleResolvedProduct, products, scanInput]);
+    }, [handleResolvedProduct, products, scanInput, selectScannerInput]);
 
     useEffect(() => {
         if (!syncToast || !clearSyncToast) return;

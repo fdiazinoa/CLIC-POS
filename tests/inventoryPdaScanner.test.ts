@@ -37,6 +37,6 @@ test('InventoryCount autoagrega coincidencias exactas y expone el modo sin Setti
   assert.match(inventoryCountSource, /Lector: \+1 automático/);
   assert.match(inventoryCountSource, /Lector: pedir cantidad/);
   assert.match(inventoryCountSource, /Producto no encontrado/);
-  assert.match(inventoryCountSource, /setScanInput\(''\);\s*focusScannerInput\(\);/);
+  assert.match(inventoryCountSource, /scanInputRef\.current\?\.select\(\)/);
   assert.match(inventoryCountSource, /ref=\{scanInputRef\}/);
 });
