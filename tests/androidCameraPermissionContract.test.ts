@@ -14,6 +14,8 @@ const scannerSource = readFileSync(
 test('el APK declara el permiso requerido por getUserMedia para escanear', () => {
   assert.match(manifestSource, /<uses-permission android:name="android\.permission\.CAMERA"\s*\/>/);
   assert.match(scannerSource, /html5QrCode\.start\(/);
+  assert.match(scannerSource, /Html5Qrcode\.getCameras\(\)/);
+  assert.match(scannerSource, /selectPreferredBackCameraId\(cameras\)/);
   assert.match(scannerSource, /facingMode:\s*"environment"/);
   assert.match(
     scannerSource,

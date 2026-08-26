@@ -19,6 +19,41 @@ test('filtra inventario por SKU y código de barras', () => {
   assert.equal(findExactInventoryProduct(products, '7460002')?.id, 'p-2');
 });
 
+test('reconoce aliases ERP, códigos múltiples y variantes', () => {
+  const aliasedProducts = [{
+    id: 'local-1',
+    name: 'Producto con aliases',
+    category: 'Prueba',
+    source_item_id: 'erp-100',
+    barcodes: [{ value: '718037884653' }],
+    variants: [{ sku: 'VAR-100', barcode: ['7469999'] }],
+    images: [],
+    attributes: [],
+    tariffs: [],
+    appliedTaxIds: [],
+  }] as unknown as Product[];
+
+  assert.equal(findExactInventoryProduct(aliasedProducts, 'erp-100')?.id, 'local-1');
+  assert.equal(findExactInventoryProduct(aliasedProducts, '718037884653')?.id, 'local-1');
+  assert.equal(findExactInventoryProduct(aliasedProducts, '7469999')?.id, 'local-1');
+});
+
+test('considera equivalentes UPC-A y EAN-13 con cero inicial', () => {
+  const eanProducts = [{
+    id: 'p-ean',
+    name: 'Producto EAN',
+    barcode: '0718037884653',
+    category: 'Prueba',
+    variants: [],
+    images: [],
+    attributes: [],
+    tariffs: [],
+    appliedTaxIds: [],
+  }] as unknown as Product[];
+
+  assert.equal(findExactInventoryProduct(eanProducts, '718037884653')?.id, 'p-ean');
+});
+
 test('no selecciona silenciosamente una búsqueda ambigua', () => {
   assert.equal(findExactInventoryProduct(products, 'cafe'), undefined);
   assert.equal(filterInventoryProducts(products, 'cafe').length, 2);

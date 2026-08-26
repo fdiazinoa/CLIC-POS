@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { X, Camera, Zap, ZapOff, ScanBarcode } from 'lucide-react';
+import { selectPreferredBackCameraId } from '../utils/cameraSelection';
 
 interface BarcodeScannerModalProps {
     isOpen: boolean;
@@ -98,8 +99,20 @@ const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({ isOpen, onClo
                 aspectRatio: 1.0,
             };
 
+            let cameraConfig: string | MediaTrackConstraints = { facingMode: "environment" };
+            try {
+                const cameras = await Html5Qrcode.getCameras();
+                const preferredCameraId = selectPreferredBackCameraId(cameras);
+                if (preferredCameraId) {
+                    cameraConfig = preferredCameraId;
+                    console.info(`[ScannerCamera] Cámara seleccionada: ${preferredCameraId}`);
+                }
+            } catch (cameraDiscoveryError) {
+                console.warn('[ScannerCamera] No se pudieron enumerar las cámaras; usando facingMode.', cameraDiscoveryError);
+            }
+
             await html5QrCode.start(
-                { facingMode: "environment" },
+                cameraConfig,
                 config,
                 async (decodedText) => {
                     const now = Date.now();
