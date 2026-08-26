@@ -213,6 +213,7 @@ const SEED_DATA = {
   erp_sales_documents: [] as any[],
   wallet_transactions: [] as any[],
   loyalty_events: [] as any[],
+  posUserMutations: [] as any[],
   productionAreas: [] as any[]
 };
 

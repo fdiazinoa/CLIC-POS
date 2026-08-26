@@ -1099,6 +1099,7 @@ class SyncManager {
             dispatchEvent: false,
             forceRemoteFetch: true,
             forceFullCatalog: true,
+            requestTimeoutMs: 8_000,
             masterScopes: ['pos_users', 'users', 'pos_roles', 'roles'],
             resolvedScopes: ['identity', 'role'],
             supplementalMode: 'skip',
@@ -3124,6 +3125,7 @@ class SyncManager {
             dispatchEvent?: boolean;
             forceRemoteFetch?: boolean;
             forceFullCatalog?: boolean;
+            requestTimeoutMs?: number;
             masterScopes?: TerminalManifestMasterScope[];
             blockScopes?: TerminalManifestBlockScope[];
             resolvedScopes?: TerminalManifestResolvedScope[];
@@ -3178,6 +3180,10 @@ class SyncManager {
             endpointCandidates.length > 0
         );
         const allowPendingFallback = !options?.forceRemoteFetch;
+        const requestTimeoutMs = Number.isFinite(options?.requestTimeoutMs)
+            ? Math.max(1_000, Number(options?.requestTimeoutMs))
+            : null;
+        const remoteFetchDeadline = requestTimeoutMs ? Date.now() + requestTimeoutMs : null;
 
         posCatalogDebugLog('refreshTerminalResolvedConfig: context', {
             terminalId: context.terminalId,
@@ -3235,6 +3241,16 @@ class SyncManager {
                 }
 
                 try {
+                    const remainingRequestMs = remoteFetchDeadline
+                        ? Math.max(0, remoteFetchDeadline - Date.now())
+                        : null;
+                    if (remainingRequestMs !== null && remainingRequestMs <= 0) {
+                        throw new Error('ERP_POS_USER_REFRESH_TIMEOUT');
+                    }
+                    const requestController = remainingRequestMs !== null ? new AbortController() : null;
+                    const requestTimeout = requestController
+                        ? setTimeout(() => requestController.abort(), remainingRequestMs as number)
+                        : null;
                     const endpointPath = `/terminals/${encodeURIComponent(context.terminalId)}/config`;
                     const endpoint = `${endpointCandidate.baseUrl}${endpointPath}${params.toString() ? `?${params.toString()}` : ''}`;
                     posCatalogDebugLog('refreshTerminalResolvedConfig: fetch begin', {
@@ -3247,12 +3263,18 @@ class SyncManager {
                         requestedBlockScopes,
                         requestedResolvedScopes,
                     });
-                    const response = await fetch(endpoint, {
-                        headers: {
-                            Accept: 'application/json',
-                            ...this.buildPosDeviceHeaders(context.posDeviceId),
-                        },
-                    });
+                    let response: Response;
+                    try {
+                        response = await fetch(endpoint, {
+                            headers: {
+                                Accept: 'application/json',
+                                ...this.buildPosDeviceHeaders(context.posDeviceId),
+                            },
+                            ...(requestController ? { signal: requestController.signal } : {}),
+                        });
+                    } finally {
+                        if (requestTimeout) clearTimeout(requestTimeout);
+                    }
                     if (!response.ok) {
                         throw await this.buildTerminalEndpointError(
                             response,
@@ -3997,6 +4019,10 @@ class SyncManager {
         }
 
         const id = this.snapshotText(
+            row.source_pos_user_id ??
+            row.sourcePosUserId ??
+            row.source_user_id ??
+            row.sourceUserId ??
             row.id ??
             row.user_id ??
             row.userId ??

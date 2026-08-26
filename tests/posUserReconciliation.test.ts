@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   explicitlyRemovesPosUser,
+  hasErpSnapshotPosUsers,
   isDefaultSeedPosUser,
   posUserRostersMatch,
   reconcilePosUsers,
@@ -123,6 +124,20 @@ test('un tenant ERP sin usuarios conserva el roster por defecto', () => {
   }), defaultUsers);
 });
 
+test('un usuario local no oculta los defaults ni simula un padrón ERP', () => {
+  const defaultUser = user('u1', 'Admin Master', {
+    role: 'ADMIN',
+    roleId: 'ADMIN',
+    syncSource: 'LOCAL_SEED',
+  });
+  const localUser = user('felix', 'Felix', { syncSource: 'LOCAL' });
+
+  assert.equal(hasErpSnapshotPosUsers([defaultUser, localUser]), false);
+  assert.deepEqual(selectPosUsersForRuntime([defaultUser, localUser], {
+    erpManaged: true,
+  }), [defaultUser, localUser]);
+});
+
 test('los usuarios ERP sustituyen visualmente los defaults cuando existen', () => {
   const defaultUser = user('u1', 'Admin Master', {
     role: 'ADMIN',
@@ -130,11 +145,12 @@ test('los usuarios ERP sustituyen visualmente los defaults cuando existen', () =
     syncSource: 'LOCAL_SEED',
   });
   const erpUser = user('erp-1', 'Operador ERP', { syncSource: 'ERP_SNAPSHOT' });
+  const localUser = user('felix', 'Felix', { syncSource: 'LOCAL' });
 
-  assert.deepEqual(selectPosUsersForRuntime([defaultUser, erpUser], {
+  assert.deepEqual(selectPosUsersForRuntime([defaultUser, localUser, erpUser], {
     erpManaged: true,
     fallbackUsers: [defaultUser],
-  }), [erpUser]);
+  }), [localUser, erpUser]);
   assert.deepEqual(selectPosUsersForRuntime([defaultUser, erpUser], {
     erpManaged: false,
   }), [defaultUser, erpUser]);
@@ -148,6 +164,10 @@ test('la comparación del padrón detecta cambios aunque la cantidad sea igual',
 test('resuelve identificadores de contratos ERP por alias conocidos', () => {
   assert.equal(resolvePosUserId({ user_id: 'erp-user' }), 'erp-user');
   assert.equal(resolvePosUserId({ email: 'user@example.com' }), 'user@example.com');
+  assert.equal(
+    resolvePosUserId({ id: 'erp-uuid', source_user_id: 'felix-local' }),
+    'felix-local',
+  );
 });
 
 test('pairing y full pull usan la reconciliación protegida', () => {
@@ -157,7 +177,10 @@ test('pairing y full pull usan la reconciliación protegida', () => {
   assert.match(syncSource, /safeItems = await this\.reconcileFullDownloadPosUsers\(safeItems, items\)/);
   assert.match(syncSource, /safeItems = await this\.reconcileFullDownloadPosUsers\(safeItems, fullItems\)/);
   assert.match(syncSource, /removeDefaultSeedUsers: true/);
+  assert.match(syncSource, /requestTimeoutMs: 8_000/);
   assert.match(appSource, /refreshErpPosUserRoster\(finalConfig\)/);
+  assert.match(appSource, /hasErpSnapshotPosUsers\(refreshedUsers\)/);
+  assert.match(appSource, /queueUnsyncedLocalPosUsers/);
   assert.match(appSource, /removeDefaultSeedUsers: isErpDirectBinding/);
-  assert.match(appSource, /ERP returned no POS users; activating default local roster/);
+  assert.match(appSource, /ERP returned no POS users; preserving local operators and default roster/);
 });

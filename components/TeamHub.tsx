@@ -1,5 +1,6 @@
 
 import React, { useEffect, useState, useMemo } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import {
    Users, Calendar, ShieldCheck, Clock, Check, X,
    UserPlus, ScanFace, ChevronRight, Lock,
@@ -196,12 +197,13 @@ const TeamHub: React.FC<TeamHubProps> = ({
          onUpdateUsers(users.map(u => u.id === editingUser.id ? { ...editingUser, ...userForm } as User : u));
       } else {
          const newUser: User = {
-            id: `u-${Date.now()}`,
+            id: uuidv4(),
             name: userForm.name!,
             pin: userForm.pin!,
             role: userForm.role!,
             photo: userForm.photo,
-            biometrics: userForm.biometrics
+            biometrics: userForm.biometrics,
+            syncSource: 'LOCAL',
          };
          onUpdateUsers([...users, newUser]);
       }

@@ -5226,6 +5226,34 @@ class ApiSyncAdapter {
         }
     }
 
+    async pushPosUserMutation(mutation: any): Promise<void> {
+        try {
+            const mutationId = String(mutation?.id || '').trim();
+            const sourceUserId = String(mutation?.sourceUserId || '').trim();
+            if (!mutationId) throw new Error('POS_USER_MUTATION_ID_MISSING');
+            if (!sourceUserId) throw new Error('POS_USER_SOURCE_ID_MISSING');
+
+            const acknowledgement = await this.postOperationalPayload('/pos-users/mutations', {
+                items: [{
+                    mutationId,
+                    sourceUserId,
+                    sourceTerminalId: mutation.terminalId,
+                    operation: mutation.operation || 'UPSERT',
+                    user: mutation.user,
+                    createdAt: mutation.createdAt,
+                }],
+            });
+            if (!acknowledgement) {
+                throw new Error('POS_USER_ACK_MISSING: ERP no confirmó la mutación');
+            }
+            assertOperationalAcknowledgement(acknowledgement, mutationId, 'POS_USER');
+            console.log(`📤 ApiSyncAdapter: Pushed POS user mutation ${mutationId}`);
+        } catch (error) {
+            console.error('❌ ApiSyncAdapter: Error pushing POS user mutation:', error);
+            throw error;
+        }
+    }
+
     async saveCurrencies(currencies: any[], actor: { userId: string; userName: string; terminalId?: string }): Promise<any> {
         const mutationId = `currency-upsert-${Date.now()}`;
         const acknowledgement = await this.postOperationalPayload('/currencies/upsert', {

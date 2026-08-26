@@ -19,7 +19,7 @@ export interface SyncState {
 }
 
 class BackgroundSyncManager {
-    private readonly operationalCollections = ['customerMutations', 'inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'wallet_transactions', 'loyalty_events'];
+    private readonly operationalCollections = ['customerMutations', 'posUserMutations', 'inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'wallet_transactions', 'loyalty_events'];
     private isProcessing = false;
     private interval: any = null;
     private retryTimeout: any = null;
@@ -234,6 +234,7 @@ class BackgroundSyncManager {
 
         const terminalScopedCollections = new Set([
             'customerMutations',
+            'posUserMutations',
             'inventoryLedger',
             'cashMovements',
             'zReports',
@@ -328,6 +329,13 @@ class BackgroundSyncManager {
                 await apiSyncAdapter.pushCustomerMutation(item);
             }).catch((error: any) => {
                 collectionErrors.push(`customerMutations: ${error?.message || 'unknown error'}`);
+            });
+
+            // Local operator mutations never contain biometric templates.
+            await this.processCollection<any>('posUserMutations', async (item) => {
+                await apiSyncAdapter.pushPosUserMutation(item);
+            }).catch((error: any) => {
+                collectionErrors.push(`posUserMutations: ${error?.message || 'unknown error'}`);
             });
 
             // The SALE_COMMITTED durable event owns its inventory movements.
