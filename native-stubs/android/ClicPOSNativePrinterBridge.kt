@@ -34,6 +34,8 @@ import java.net.URLEncoder
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.lang.ref.WeakReference
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -42,11 +44,11 @@ import org.json.JSONObject
  *
  * Uso recomendado en Activity/Fragment:
  * 1) webView.settings.javaScriptEnabled = true
- * 2) val bridge = AndroidPrinterBridge(applicationContext)
+ * 2) val bridge = AndroidPrinterBridge(applicationContext, webView)
  * 3) webView.addJavascriptInterface(bridge, "AndroidPrinter")
  * 4) AndroidPrinterBridge.injectContractShim(webView)
  */
-class AndroidPrinterBridge(context: Context) {
+class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: WebView? = null) {
     companion object {
         private const val DGII_LOG_TAG = "ClicPOSDGII"
 
@@ -72,6 +74,44 @@ class AndroidPrinterBridge(context: Context) {
                     }
                     var raw = window.AndroidPrinter[method](JSON.stringify(payload || {}));
                     return Promise.resolve(parseResult(raw));
+                  };
+
+                  var fingerprintRequestSequence = 0;
+                  var verifyFingerprintAsync = function (payload) {
+                    if (!window.AndroidPrinter || typeof window.AndroidPrinter.verifyFingerprintAsync !== 'function') {
+                      return call('verifyFingerprint', payload);
+                    }
+
+                    var requestID = 'fp-' + Date.now() + '-' + (++fingerprintRequestSequence);
+                    return new Promise(function (resolve) {
+                      var eventName = 'clic:fingerprint-verification-result';
+                      var settled = false;
+                      var timeoutID;
+                      var finish = function (result) {
+                        if (settled) return;
+                        settled = true;
+                        window.removeEventListener(eventName, onResult);
+                        if (timeoutID) window.clearTimeout(timeoutID);
+                        resolve(result);
+                      };
+                      var onResult = function (event) {
+                        var detail = event && event.detail ? event.detail : {};
+                        if (detail.requestID === requestID) finish(detail);
+                      };
+
+                      window.addEventListener(eventName, onResult);
+                      timeoutID = window.setTimeout(function () {
+                        finish({ status: 'ERROR', success: false, message: 'Tiempo agotado esperando respuesta del lector.' });
+                      }, 20000);
+
+                      try {
+                        var request = Object.assign({}, payload || {}, { requestID: requestID });
+                        var acknowledgement = parseResult(window.AndroidPrinter.verifyFingerprintAsync(JSON.stringify(request)));
+                        if (!acknowledgement || acknowledgement.success !== true) finish(acknowledgement);
+                      } catch (error) {
+                        finish({ status: 'ERROR', success: false, message: String(error) });
+                      }
+                    });
                   };
 
                   window.ClicPOSNativePrinter = {
@@ -106,7 +146,8 @@ class AndroidPrinterBridge(context: Context) {
                     scanFingerprintReaders: function (payload) { return call('scanFingerprintReaders', payload); },
                     testFingerprintReader: function (payload) { return call('testFingerprintReader', payload); },
                     enrollFingerprint: function (payload) { return call('enrollFingerprint', payload); },
-                    verifyFingerprint: function (payload) { return call('verifyFingerprint', payload); }
+                    verifyFingerprint: function (payload) { return call('verifyFingerprint', payload); },
+                    verifyFingerprintAsync: function (payload) { return verifyFingerprintAsync(payload); }
                   };
                 })();
             """.trimIndent()
@@ -118,6 +159,8 @@ class AndroidPrinterBridge(context: Context) {
     }
 
     private val appContext = context.applicationContext
+    private val webViewRef = WeakReference(webView)
+    private val fingerprintVerificationInFlight = AtomicBoolean(false)
     private val clipboardManager = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
 
     private val manager = ClicPOSBluetoothPrinterManager(appContext)
@@ -364,8 +407,44 @@ class AndroidPrinterBridge(context: Context) {
 
     @JavascriptInterface
     fun verifyFingerprint(payloadJson: String?): String {
+        return verifyFingerprintPayload(JSONObject(payloadJson ?: "{}")).toString()
+    }
+
+    @JavascriptInterface
+    fun verifyFingerprintAsync(payloadJson: String?): String {
+        val payload = JSONObject(payloadJson ?: "{}")
+        val requestId = payload.optString("requestID", "").ifBlank { "fp-${UUID.randomUUID()}" }
+        if (!fingerprintVerificationInFlight.compareAndSet(false, true)) {
+            return JSONObject()
+                .put("status", "BUSY")
+                .put("success", false)
+                .put("requestID", requestId)
+                .put("message", "El lector ya está procesando una huella.")
+                .toString()
+        }
+
+        Thread({
+            try {
+                val result = verifyFingerprintPayload(payload).put("requestID", requestId)
+                dispatchFingerprintVerificationResult(result)
+            } finally {
+                fingerprintVerificationInFlight.set(false)
+            }
+        }, "clic-fingerprint-verification").apply {
+            isDaemon = true
+            start()
+        }
+
+        return JSONObject()
+            .put("status", "LISTENING")
+            .put("success", true)
+            .put("requestID", requestId)
+            .put("message", "Lector listo.")
+            .toString()
+    }
+
+    private fun verifyFingerprintPayload(payload: JSONObject): JSONObject {
         return try {
-            val payload = JSONObject(payloadJson ?: "{}")
             val templates = payload.optJSONArray("templates") ?: JSONArray()
             val candidates = buildList {
                 for (index in 0 until templates.length()) {
@@ -392,14 +471,33 @@ class AndroidPrinterBridge(context: Context) {
                 .put("score", match.score)
                 .put("threshold", match.threshold)
                 .put("message", if (match.credentialId != null) "Huella reconocida." else "Huella no reconocida. Intente nuevamente.")
-                .toString()
         } catch (e: Exception) {
-            Log.e("ClicPOSFingerprint", "verify_failed: ${e.message}", e)
+            val timedOut = e.message?.startsWith("Tiempo agotado:") == true
+            if (timedOut) {
+                Log.d("ClicPOSFingerprint", "verify_timeout: ${e.message}")
+            } else {
+                Log.e("ClicPOSFingerprint", "verify_failed: ${e.message}", e)
+            }
             JSONObject()
-                .put("status", "ERROR")
+                .put("status", if (timedOut) "TIMEOUT" else "ERROR")
                 .put("success", false)
                 .put("message", e.message ?: "FP_VERIFY_ERROR")
-                .toString()
+        }
+    }
+
+    private fun dispatchFingerprintVerificationResult(result: JSONObject) {
+        val webView = webViewRef.get()
+        if (webView == null) {
+            Log.w("ClicPOSFingerprint", "verify_result_dropped: WebView unavailable")
+            return
+        }
+
+        val encodedResult = JSONObject.quote(result.toString())
+        webView.post {
+            webView.evaluateJavascript(
+                "window.dispatchEvent(new CustomEvent('clic:fingerprint-verification-result',{detail:JSON.parse($encodedResult)}));",
+                null,
+            )
         }
     }
 

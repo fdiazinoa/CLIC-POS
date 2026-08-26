@@ -53,7 +53,7 @@ public class MainActivity extends BridgeActivity {
                 ? WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                 : WebSettings.MIXED_CONTENT_NEVER_ALLOW);
 
-        webView.addJavascriptInterface(new AndroidPrinterBridge(getApplicationContext()), "AndroidPrinter");
+        webView.addJavascriptInterface(new AndroidPrinterBridge(getApplicationContext(), webView), "AndroidPrinter");
         AndroidPrinterBridge.injectContractShim(webView);
         webView.addJavascriptInterface(
                 new AndroidCustomerDisplayBridge(this),

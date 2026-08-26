@@ -52,7 +52,7 @@ export const biometricService = {
      */
     isExternalReaderAvailable: async (): Promise<boolean> => {
         const nativeBridge = nativeFingerprintBridge();
-        if (!nativeBridge?.discoverFingerprintReaders || !nativeBridge?.verifyFingerprint) return false;
+        if (!nativeBridge?.discoverFingerprintReaders || !nativeBridge?.verifyFingerprintAsync) return false;
 
         try {
             const result = await nativeBridge.discoverFingerprintReaders({ connection: 'USB' });
@@ -157,13 +157,16 @@ export const biometricService = {
         try {
             const nativeCredentials = credentials.filter(isSourceAfisCredential);
             const nativeBridge = nativeFingerprintBridge();
-            if (nativeCredentials.length > 0 && nativeBridge?.verifyFingerprint) {
-                const result = await nativeBridge.verifyFingerprint({
+            if (nativeCredentials.length > 0 && (nativeBridge?.verifyFingerprintAsync || nativeBridge?.verifyFingerprint)) {
+                const payload = {
                     templates: nativeCredentials.map(credential => ({
                         credentialID: credential.credentialID,
                         publicKey: credential.publicKey,
                     })),
-                });
+                };
+                const result = nativeBridge.verifyFingerprintAsync
+                    ? await nativeBridge.verifyFingerprintAsync(payload)
+                    : await nativeBridge.verifyFingerprint(payload);
                 return result?.success && result?.credentialID ? String(result.credentialID) : null;
             }
 
