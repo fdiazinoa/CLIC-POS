@@ -243,8 +243,17 @@ const resolveCurrencySymbol = (config: BusinessConfig | undefined, currencyCode:
   return config?.currencies?.find(currency => currency.code === currencyCode)?.symbol || currencyCode;
 };
 
-const shouldOpenDrawerForTransaction = (transaction: Transaction, config: BusinessConfig): boolean => {
-  const terminal = (config.terminals || []).find(candidate => candidate.id === transaction.terminalId);
+export const shouldOpenDrawerForTransaction = (transaction: Transaction, config: BusinessConfig): boolean => {
+  const transactionTerminalId = String(transaction.terminalId || '').trim();
+  const terminal = (config.terminals || []).find(candidate => {
+    const terminalConfig = candidate.config as Record<string, any>;
+    return [
+      candidate.id,
+      terminalConfig?.erpTerminalId,
+      terminalConfig?.terminalId,
+      terminalConfig?.localTerminalId,
+    ].some(candidateId => String(candidateId || '').trim() === transactionTerminalId);
+  }) || (config.terminals || []).find(candidate => candidate.config?.currentDeviceId);
   if (terminal?.config?.hardware?.cashDrawerTrigger !== 'PRINTER') {
     return false;
   }
@@ -330,16 +339,16 @@ const calculateTransactionTotals = (transaction: Transaction, config: BusinessCo
   };
 };
 
-const finalizeReceipt = (chunks: Uint8Array[], options?: { openCashDrawer?: boolean }) => {
+const finalizeReceipt = (chunks: Uint8Array[]) => {
   chunks.push(text(''));
   chunks.push(text(''));
-
-  if (options?.openCashDrawer) {
-    chunks.push(openDrawer());
-  }
-
   chunks.push(fullCut());
 };
+
+export const buildEscPosCashDrawerPayload = (): string => toBase64(concat([
+  initPrinter(),
+  openDrawer(),
+]));
 
 export const buildEscPosHardwareTestPayload = (data: EscPosHardwareTestData): string => {
   const width = RECEIPT_LINE_WIDTH;
@@ -646,9 +655,7 @@ export const buildEscPosTicketPayload = (
   chunks.push(align(1));
   footerLines.forEach(line => pushTextLines(chunks, splitLines(line, width)));
   chunks.push(align(0));
-  finalizeReceipt(chunks, {
-    openCashDrawer: shouldOpenDrawerForTransaction(transaction, config)
-  });
+  finalizeReceipt(chunks);
 
   return toBase64(concat(chunks));
 };

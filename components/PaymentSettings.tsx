@@ -24,7 +24,7 @@ import {
 
 interface PaymentSettingsProps {
   config: BusinessConfig;
-  onUpdateConfig: (newConfig: BusinessConfig) => void;
+  onUpdateConfig: (newConfig: BusinessConfig) => void | Promise<void>;
   onClose: () => void;
 }
 
@@ -81,6 +81,7 @@ const normalizePaymentMethod = (method: PaymentMethodDefinition): PaymentMethodD
     integrationId: forcedType === 'CARD' && integrationMode === 'INTEGRATED' ? method.integrationId : undefined,
     integrationConfig: forcedType === 'CARD' ? method.integrationConfig || {} : {},
     foreignCurrencyRounding: method.foreignCurrencyRounding || 'NONE',
+    opensDrawer: method.opensDrawer === true,
   };
 
   if (forcedType === 'CREDIT') {
@@ -97,6 +98,7 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
   );
   const [editingMethod, setEditingMethod] = useState<PaymentMethodDefinition | null>(null);
   const [isMethodModalOpen, setIsMethodModalOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const dragItem = useRef<number | null>(null);
   const dragOverItem = useRef<number | null>(null);
@@ -203,25 +205,36 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
     setIsMethodModalOpen(false);
   };
 
-  const handleSaveChanges = () => {
-    onUpdateConfig({
-      ...config,
-      paymentMethods: methods.map(normalizePaymentMethod),
-    });
-    alert('Métodos de pago guardados correctamente.');
-    onClose();
+  const handleSaveChanges = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      await onUpdateConfig({
+        ...config,
+        paymentMethods: methods.map(normalizePaymentMethod),
+      });
+      alert('Métodos de pago guardados correctamente.');
+      onClose();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'No se pudieron guardar los métodos de pago.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const Toggle: React.FC<{ label: string; checked: boolean; onChange: (value: boolean) => void }> = ({ label, checked, onChange }) => (
-    <div
-      onClick={() => onChange(!checked)}
-      className="flex cursor-pointer items-center justify-between rounded-xl border border-transparent bg-gray-50 p-4 transition-colors hover:border-gray-200 hover:bg-gray-100"
-    >
-      <span className="font-medium text-gray-700">{label}</span>
-      <div className={`relative h-6 w-12 rounded-full transition-colors duration-300 ${checked ? 'bg-green-500' : 'bg-gray-300'}`}>
-        <div className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-300 ${checked ? 'left-7' : 'left-1'}`} />
-      </div>
-    </div>
+  const Toggle: React.FC<{ label: string; checked: boolean; onChange: (value: boolean) => void; helper?: string }> = ({ label, checked, onChange, helper }) => (
+    <label className="flex cursor-pointer items-center justify-between rounded-xl border border-transparent bg-gray-50 p-4 transition-colors hover:border-gray-200 hover:bg-gray-100">
+      <span>
+        <span className="block font-medium text-gray-700">{label}</span>
+        {helper ? <span className="mt-1 block text-xs text-gray-500">{helper}</span> : null}
+      </span>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="h-5 w-5 rounded border-gray-300 text-green-600 focus:ring-green-500"
+      />
+    </label>
   );
 
   const renderIntegrationBadge = (method: PaymentMethodDefinition) => {
@@ -258,10 +271,11 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
             Cancelar
           </button>
           <button
-            onClick={handleSaveChanges}
-            className="flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-3 font-bold text-white transition-all hover:bg-blue-700"
+            onClick={() => void handleSaveChanges()}
+            disabled={isSaving}
+            className="flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-3 font-bold text-white transition-all hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60"
           >
-            <Save size={20} /> Guardar Cambios
+            <Save size={20} /> {isSaving ? 'Guardando...' : 'Guardar Cambios'}
           </button>
         </div>
       </div>
@@ -536,7 +550,8 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
               <div className="space-y-2">
                 <Toggle
                   label="Abrir cajón portamonedas al cobrar"
-                  checked={editingMethod.opensDrawer}
+                  helper="Solo este medio de pago enviará la orden de apertura a la impresora de tickets."
+                  checked={editingMethod.opensDrawer === true}
                   onChange={(value) => setEditingMethod({ ...editingMethod, opensDrawer: value })}
                 />
                 <Toggle

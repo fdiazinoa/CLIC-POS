@@ -27,7 +27,7 @@ import {
    sumCreditPaymentsBase
 } from '../utils/creditRules';
 import { isLoyaltyRedeemMethod } from '../utils/loyaltyEngine';
-import { printIntegratedPaymentArtifacts, printTicket } from '../utils/printer';
+import { openCashDrawerForTransaction, printIntegratedPaymentArtifacts, printTicket } from '../utils/printer';
 import { networkSyncService } from '../services/sync/NetworkSyncService';
 import { AzulGatewayError, azulMcmService } from '../services/payments/AzulMcmService';
 import {
@@ -952,6 +952,18 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   : { ...txn, payments: paymentsToConfirm };
                const gatewayPayments = (finalizedTransaction.payments || []).filter((payment: any) => payment?.gatewayProvider);
                let autoPrintNotice: string | null = null;
+
+               if (!isInstallmentPayment && config) {
+                  try {
+                     const drawerResult = await openCashDrawerForTransaction(finalizedTransaction, config);
+                     if (drawerResult === 'FAILED') {
+                        autoPrintNotice = 'Venta aprobada, pero no se pudo abrir el cajón portamonedas.';
+                     }
+                  } catch (drawerError) {
+                     console.error('❌ Cash drawer command failed:', drawerError);
+                     autoPrintNotice = 'Venta aprobada, pero ocurrió un problema al abrir el cajón portamonedas.';
+                  }
+               }
 
                const preferredReceiptEmail = finalizedTransaction.customerSnapshot?.email || customer?.email;
                const shouldEmailReceiptOnly = Boolean(customer?.prefersEmail && preferredReceiptEmail);

@@ -1,6 +1,6 @@
 import { Transaction, BusinessConfig, Reservation, CartItem, Table } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
-import { buildEscPosComandaPayload, buildEscPosReservationPayload, buildEscPosSubtotalPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload } from '../services/printer/EscPosFormatter';
+import { buildEscPosCashDrawerPayload, buildEscPosComandaPayload, buildEscPosReservationPayload, buildEscPosSubtotalPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload, shouldOpenDrawerForTransaction } from '../services/printer/EscPosFormatter';
 import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRuntime';
 import { dbAdapter } from '../services/db';
 import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, formatTaxLineLabel } from './fiscalBreakdown';
@@ -12,6 +12,27 @@ import { resolveGlobalDiscountLabel } from './globalDiscountPresentation';
 import { resolveReceiptCouponCodes } from './receiptCouponPresentation';
 
 const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+export const openCashDrawerForTransaction = async (
+    transaction: Transaction,
+    config: BusinessConfig
+): Promise<'NOT_REQUIRED' | 'OPENED' | 'FAILED'> => {
+    if (!shouldOpenDrawerForTransaction(transaction, config)) {
+        return 'NOT_REQUIRED';
+    }
+
+    const opened = await PrintRouterService.routeAndPrintEscPos({
+        config,
+        escPosBase64: buildEscPosCashDrawerPayload(),
+        role: 'TICKET',
+        terminalId: transaction.terminalId,
+        jobType: 'CASH_DRAWER',
+        referenceId: transaction.id,
+        copies: 1,
+    });
+
+    return opened ? 'OPENED' : 'FAILED';
+};
 
 const escapeHtml = (value: string): string => {
     return value
