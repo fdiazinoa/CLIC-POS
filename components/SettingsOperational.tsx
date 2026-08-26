@@ -4,9 +4,8 @@ import {
     Building2, LayoutGrid, ShieldCheck,
     Monitor, Utensils, ShoppingBag,
     Lock, Users, Info, Sparkles, CalendarDays, Percent, Landmark, Hash, Package,
-    Image as ImageIcon, ScanBarcode
+    Image as ImageIcon
 } from 'lucide-react';
-import { resolveScannerQuantityMode } from '../utils/scannerQuantity';
 
 interface SettingsOperationalProps {
     config: any; // activeTerminal.config
@@ -96,7 +95,6 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
     const activeVertical = verticalValue === 'RESTAURANT' || verticalValue === 'RESTAURANTE'
         ? 'RESTAURANT'
         : 'RETAIL';
-    const scannerQuantityMode = resolveScannerQuantityMode(config);
 
     const handleToggle = (key: string, val: boolean) => {
         onUpdate('operational', key, val);
@@ -232,28 +230,6 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                         )}
                     </button>
                 </div>
-            </div>
-
-            {/* Section: Hardware barcode scanner */}
-            <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-6">
-                <div className="flex items-center gap-3 mb-2">
-                    <div className="w-10 h-10 bg-violet-100 text-violet-600 rounded-2xl flex items-center justify-center">
-                        <ScanBarcode size={20} />
-                    </div>
-                    <div>
-                        <h3 className="text-lg font-black text-gray-800">Lector de código de barras</h3>
-                        <p className="text-xs text-gray-400 font-bold uppercase tracking-widest">Cantidad al escanear</p>
-                    </div>
-                </div>
-
-                <Toggle
-                    label="Solicitar cantidad al escanear"
-                    description="Desactivado: valida el artículo y agrega 1 inmediatamente. Activado: muestra una ventana para indicar la cantidad antes de agregarlo."
-                    checked={scannerQuantityMode === 'PROMPT'}
-                    onChange={(enabled: boolean) => onUpdate('operational', 'scannerQuantityMode', enabled ? 'PROMPT' : 'UNIT')}
-                    icon={ScanBarcode}
-                    disabled={isReadOnly}
-                />
             </div>
 
             {/* Section: Table Management */}

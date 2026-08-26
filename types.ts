@@ -793,7 +793,6 @@ export interface TerminalConfig {
     fiscalThreshold?: number;
     expandTicket?: boolean;
     showGlobalSales?: boolean;
-    scannerQuantityMode?: 'UNIT' | 'PROMPT';
     orderNumbers?: {
       enabled?: boolean;
       nextNumber?: number;

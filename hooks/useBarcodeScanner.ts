@@ -57,24 +57,8 @@ export const useBarcodeScanner = ({
     useEffect(() => {
         if (!enabled) return;
 
-        const emitScan = (rawCode: string) => {
-            const code = rawCode.trim();
-            if (code.length < 3) return false;
-
-            console.log(`[Scanner] Detected code: ${code}`);
-            const ticketId = detectTicketPattern(code);
-            if (ticketId && onTicketScanRef.current) {
-                console.log(`[Scanner] 🎫 Ticket Match: ${ticketId}`);
-                onTicketScanRef.current(ticketId);
-            } else {
-                onScanRef.current(code);
-            }
-            return true;
-        };
-
         const handleGlobalKeyDown = (e: KeyboardEvent) => {
             const target = e.target as HTMLElement;
-            const isScannerTarget = target.dataset?.barcodeScannerTarget === 'true';
 
             // CRITICAL: Identify if the event originated from an input field
             const isEditableInput = (
@@ -85,7 +69,7 @@ export const useBarcodeScanner = ({
             const isManualInput = isEditableInput || target.isContentEditable;
 
             // If user is typing in a text field, we MUST ignore global capture
-            if (isManualInput && !isScannerTarget) {
+            if (isManualInput) {
                 return;
             }
 
@@ -100,18 +84,25 @@ export const useBarcodeScanner = ({
                 buffer.current = '';
             }
 
-            // PDA wedges commonly terminate with Enter or Tab. When the search
-            // input has focus, its value is a fallback for slower scanners.
-            if (e.key === 'Enter' || e.key === 'Tab') {
-                const targetValue = isScannerTarget && target instanceof HTMLInputElement
-                    ? target.value
-                    : '';
-                const code = targetValue.length >= 3 ? targetValue : buffer.current;
-                if (emitScan(code)) {
+            // Handle Enter - The signal that scanning is complete
+            if (e.key === 'Enter') {
+                if (buffer.current.length >= 3) {
+                    console.log(`[Scanner] Detected code: ${buffer.current}`);
+
+                    const ticketId = detectTicketPattern(buffer.current);
+                    if (ticketId && onTicketScanRef.current) {
+                        console.log(`[Scanner] 🎫 Ticket Match: ${ticketId}`);
+                        onTicketScanRef.current(ticketId);
+                    } else {
+                        onScanRef.current(buffer.current);
+                    }
+
+                    buffer.current = '';
                     e.preventDefault();
                     e.stopPropagation();
+                } else {
+                    buffer.current = '';
                 }
-                buffer.current = '';
                 return;
             }
 
@@ -127,43 +118,16 @@ export const useBarcodeScanner = ({
                     }
                 }
 
-                // Some PDAs are configured without a suffix. Auto-submit only
-                // from an explicitly marked scanner/search field after a burst.
-                // Slower keyboard wedges may reset the speed buffer, so use the
-                // complete field value as the reliable fallback.
-                const scannerTargetInput = isScannerTarget && target instanceof HTMLInputElement
-                    ? target
-                    : null;
                 idleTimer.current = setTimeout(() => {
-                    const bufferedCode = buffer.current;
-                    const fieldCode = scannerTargetInput?.value || '';
-                    if (isScannerTarget) emitScan(fieldCode.length >= 3 ? fieldCode : bufferedCode);
                     buffer.current = '';
                 }, idleTimeout);
             }
         };
 
-        // Some integrated Android/PDA readers write through the IME and only
-        // dispatch an `input` event. In that mode no keydown/Enter reaches the
-        // WebView, so debounce the complete value of marked scanner fields.
-        const handleGlobalInput = (event: Event) => {
-            const target = event.target;
-            if (!(target instanceof HTMLInputElement)) return;
-            if (target.dataset?.barcodeScannerTarget !== 'true') return;
-
-            if (idleTimer.current) clearTimeout(idleTimer.current);
-            idleTimer.current = setTimeout(() => {
-                emitScan(target.value);
-                buffer.current = '';
-            }, idleTimeout);
-        };
-
         window.addEventListener('keydown', handleGlobalKeyDown, true);
-        window.addEventListener('input', handleGlobalInput, true);
 
         return () => {
             window.removeEventListener('keydown', handleGlobalKeyDown, true);
-            window.removeEventListener('input', handleGlobalInput, true);
             if (idleTimer.current) clearTimeout(idleTimer.current);
         };
     }, [enabled, prefixTimeout, idleTimeout]);
