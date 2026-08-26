@@ -5,12 +5,18 @@
  * Scan products and adjust quantities.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScanBarcode, Plus, Minus, Save, X, Camera, Cloud, Wifi, WifiOff } from 'lucide-react';
 import { Product } from '../../types';
 import BarcodeScannerModal from '../BarcodeScannerModal';
 import { useOfflineSync } from '../../hooks/useOfflineSync';
 import { filterInventoryProducts, findExactInventoryProduct } from '../../utils/inventoryProductSearch';
+import {
+    inventoryScannerPreferenceKey,
+    normalizeInventoryScannerQuantity,
+    resolveInventoryScannerQuantityMode,
+    type InventoryScannerQuantityMode,
+} from '../../utils/inventoryScanner';
 
 interface CountedItem {
     productId: string;
@@ -58,6 +64,10 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
     const [scanInput, setScanInput] = useState('');
     const [selectedItem, setSelectedItem] = useState<string | null>(null);
     const [showCameraScanner, setShowCameraScanner] = useState(false);
+    const [scannerQuantityMode, setScannerQuantityMode] = useState<InventoryScannerQuantityMode>('UNIT');
+    const [pendingScannerProduct, setPendingScannerProduct] = useState<{ product: Product; code: string } | null>(null);
+    const [scannerQuantityInput, setScannerQuantityInput] = useState('1');
+    const [scanFeedback, setScanFeedback] = useState<string | null>(null);
     const [syncTab, setSyncTab] = useState<'PENDING' | 'CONFLICTS'>('PENDING');
     const [startedAt] = useState(() => new Date().toISOString());
     const [sessionId] = useState(() => `CNT-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
@@ -65,21 +75,57 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
         () => filterInventoryProducts(products, scanInput, 12),
         [products, scanInput]
     );
+    const scannerPreferenceKey = useMemo(
+        () => inventoryScannerPreferenceKey(terminalId),
+        [terminalId]
+    );
+
+    useEffect(() => {
+        try {
+            setScannerQuantityMode(resolveInventoryScannerQuantityMode(
+                window.localStorage.getItem(scannerPreferenceKey)
+            ));
+        } catch (error) {
+            console.warn('[InventoryScanner] No se pudo leer la preferencia local:', error);
+        }
+    }, [scannerPreferenceKey]);
+
+    const toggleScannerQuantityMode = useCallback(() => {
+        setScannerQuantityMode(currentMode => {
+            const nextMode: InventoryScannerQuantityMode = currentMode === 'UNIT' ? 'PROMPT' : 'UNIT';
+            try {
+                window.localStorage.setItem(scannerPreferenceKey, nextMode);
+            } catch (error) {
+                console.warn('[InventoryScanner] No se pudo guardar la preferencia local:', error);
+            }
+            setScanFeedback(nextMode === 'UNIT'
+                ? 'El lector agregará 1 unidad automáticamente.'
+                : 'El lector solicitará la cantidad.');
+            return nextMode;
+        });
+    }, [scannerPreferenceKey]);
 
     // Get expected qty for a product in the selected warehouse
-    const getExpectedQty = (product: Product) => {
+    const getExpectedQty = useCallback((product: Product) => {
         if (!warehouseId) return product.stock || 0;
         return product.stockBalances?.[warehouseId] ?? 0;
-    };
+    }, [warehouseId]);
 
-    const addProductToCount = async (product: Product, code: string) => {
+    const addProductToCount = useCallback(async (product: Product, code: string, quantity = 1) => {
+        const normalizedQuantity = normalizeInventoryScannerQuantity(quantity);
         const expected = getExpectedQty(product);
+        setScanInput('');
+        setScanFeedback(`${product.name}: +${normalizedQuantity}`);
         setCounts(currentCounts => {
             const existing = currentCounts.find(c => c.productId === product.id);
             if (existing) {
                 return currentCounts.map(c =>
                     c.productId === product.id
-                        ? { ...c, countedQty: c.countedQty + 1, difference: c.countedQty + 1 - c.expectedQty }
+                        ? {
+                            ...c,
+                            countedQty: c.countedQty + normalizedQuantity,
+                            difference: c.countedQty + normalizedQuantity - c.expectedQty
+                        }
                         : c
                 );
             }
@@ -87,8 +133,8 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                 productId: product.id,
                 productName: product.name,
                 expectedQty: expected,
-                countedQty: 1,
-                difference: 1 - expected
+                countedQty: normalizedQuantity,
+                difference: normalizedQuantity - expected
             }];
         });
 
@@ -99,8 +145,18 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
             productId: product.id,
             code
         } as any);
-        setScanInput('');
-    };
+    }, [getExpectedQty, recordOfflineScan, sessionId, warehouseId]);
+
+    const handleResolvedProduct = useCallback(async (product: Product, code: string) => {
+        if (scannerQuantityMode === 'PROMPT') {
+            setPendingScannerProduct({ product, code });
+            setScannerQuantityInput('1');
+            setScanInput('');
+            setScanFeedback(`${product.name}: indica la cantidad.`);
+            return;
+        }
+        await addProductToCount(product, code, 1);
+    }, [addProductToCount, scannerQuantityMode]);
 
     // Handle barcode, ID or an unambiguous keyboard search.
     const handleScan = async () => {
@@ -118,8 +174,29 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
             return;
         }
 
-        await addProductToCount(product, query);
+        await handleResolvedProduct(product, query);
     };
+
+    // Integrated Android readers can write through the IME without emitting
+    // Enter or keydown. An exact catalog match is therefore auto-submitted
+    // after a short idle period; partial name searches remain interactive.
+    useEffect(() => {
+        const query = scanInput.trim();
+        if (query.length < 3) return;
+
+        const timer = window.setTimeout(() => {
+            const exactProduct = findExactInventoryProduct(products, query);
+            if (exactProduct) {
+                void handleResolvedProduct(exactProduct, query);
+                return;
+            }
+            if (filterInventoryProducts(products, query, 1).length === 0) {
+                setScanFeedback(`Producto no encontrado: ${query}`);
+            }
+        }, 250);
+
+        return () => window.clearTimeout(timer);
+    }, [handleResolvedProduct, products, scanInput]);
 
     useEffect(() => {
         if (!syncToast || !clearSyncToast) return;
@@ -132,8 +209,13 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
         const product = findExactInventoryProduct(products, code);
 
         if (product) {
-            await addProductToCount(product, code.trim());
-            return { success: true, message: `${product.name} agregado` };
+            await handleResolvedProduct(product, code.trim());
+            return {
+                success: true,
+                message: scannerQuantityMode === 'PROMPT'
+                    ? `${product.name}: indica la cantidad`
+                    : `${product.name} agregado`
+            };
         } else {
             return { success: false, message: 'Producto no encontrado' };
         }
@@ -242,7 +324,10 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                         <input
                             type="text"
                             value={scanInput}
-                            onChange={(e) => setScanInput(e.target.value)}
+                            onChange={(e) => {
+                                setScanInput(e.target.value);
+                                setScanFeedback(null);
+                            }}
                             onKeyDown={(e) => e.key === 'Enter' && void handleScan()}
                             placeholder="Buscar por nombre, SKU o código..."
                             className="w-full pl-10 pr-12 py-3 bg-white/10 border-2 border-white/20 rounded-xl text-white placeholder-blue-200 font-bold outline-none focus:bg-white/20"
@@ -264,6 +349,25 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                         Agregar
                     </button>
                 </div>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                    <button
+                        type="button"
+                        onClick={toggleScannerQuantityMode}
+                        className={`rounded-lg border px-3 py-1.5 text-[11px] font-black shadow-sm ${scannerQuantityMode === 'UNIT'
+                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                            : 'border-amber-200 bg-amber-50 text-amber-700'
+                        }`}
+                    >
+                        {scannerQuantityMode === 'UNIT'
+                            ? 'Lector: +1 automático'
+                            : 'Lector: pedir cantidad'}
+                    </button>
+                    {scanFeedback && (
+                        <span className="min-w-0 truncate text-right text-[11px] font-bold text-white">
+                            {scanFeedback}
+                        </span>
+                    )}
+                </div>
                 {scanInput.trim() && filteredProducts.length > 0 && (
                     <div className="mt-2 max-h-56 overflow-y-auto rounded-xl border border-white/20 bg-white text-gray-900 shadow-xl">
                         {filteredProducts.map(product => {
@@ -273,7 +377,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                                 <button
                                     key={product.id}
                                     type="button"
-                                    onClick={() => void addProductToCount(product, scanInput.trim())}
+                                    onClick={() => void handleResolvedProduct(product, scanInput.trim())}
                                     className="flex w-full items-center justify-between gap-3 border-b border-gray-100 px-4 py-3 text-left last:border-b-0 hover:bg-blue-50"
                                 >
                                     <span className="min-w-0">
@@ -446,6 +550,64 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                 onClose={() => setShowCameraScanner(false)}
                 onScan={handleCameraScan}
             />
+
+            {pendingScannerProduct && (
+                <div className="fixed inset-0 z-[170] flex items-end justify-center bg-slate-950/55 p-4 sm:items-center">
+                    <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <p className="text-[11px] font-black uppercase tracking-widest text-blue-600">Cantidad escaneada</p>
+                                <h2 className="mt-1 text-lg font-black text-gray-900">{pendingScannerProduct.product.name}</h2>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setPendingScannerProduct(null)}
+                                className="rounded-xl bg-gray-100 p-2 text-gray-500"
+                                aria-label="Cerrar"
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+                        <input
+                            type="number"
+                            min="1"
+                            max="9999"
+                            step="1"
+                            inputMode="numeric"
+                            autoFocus
+                            value={scannerQuantityInput}
+                            onChange={(event) => setScannerQuantityInput(event.target.value)}
+                            onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                    const pending = pendingScannerProduct;
+                                    setPendingScannerProduct(null);
+                                    void addProductToCount(
+                                        pending.product,
+                                        pending.code,
+                                        normalizeInventoryScannerQuantity(scannerQuantityInput)
+                                    );
+                                }
+                            }}
+                            className="mt-5 w-full rounded-2xl border-2 border-blue-100 px-4 py-3 text-center text-3xl font-black outline-none focus:border-blue-500"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => {
+                                const pending = pendingScannerProduct;
+                                setPendingScannerProduct(null);
+                                void addProductToCount(
+                                    pending.product,
+                                    pending.code,
+                                    normalizeInventoryScannerQuantity(scannerQuantityInput)
+                                );
+                            }}
+                            className="mt-4 w-full rounded-2xl bg-blue-600 py-3.5 text-base font-black text-white"
+                        >
+                            Agregar cantidad
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {syncToast && (
                 <div className="fixed left-1/2 -translate-x-1/2 bottom-24 z-[160] px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-black shadow-xl">
