@@ -12012,20 +12012,22 @@ const AppContent: React.FC = () => {
               await syncManager.refreshTerminalResolvedConfig(undefined, {
                 forceRemoteFetch: true,
                 forceFullCatalog: false,
-                masterScopes: ['purchase_orders', 'transfers'],
+                masterScopes: ['suppliers', 'purchase_orders', 'transfers'],
                 resolvedScopes: ['identity', 'terminal', 'device_role', 'role', 'inventory', 'documents'],
                 supplementalMode: 'skip',
                 dispatchEvent: true,
               });
 
-              const [freshProducts, freshOrders, freshTransfers, freshWarehouses] = await Promise.all([
+              const [freshProducts, freshSuppliers, freshOrders, freshTransfers, freshWarehouses] = await Promise.all([
                 db.get('products') as Promise<Product[]>,
+                db.get('suppliers') as Promise<Supplier[]>,
                 db.get('purchaseOrders') as Promise<PurchaseOrder[]>,
                 db.get('transfers') as Promise<StockTransfer[]>,
                 db.get('warehouses') as Promise<Warehouse[]>,
               ]);
 
               if (Array.isArray(freshProducts) && freshProducts.length > 0) setProducts(freshProducts);
+              if (Array.isArray(freshSuppliers) && freshSuppliers.length > 0) setSuppliers(freshSuppliers);
               setPurchaseOrders(Array.isArray(freshOrders) ? freshOrders : []);
               setTransfers(Array.isArray(freshTransfers) ? freshTransfers : []);
               if (Array.isArray(freshWarehouses) && freshWarehouses.length > 0) setWarehouses(freshWarehouses);
