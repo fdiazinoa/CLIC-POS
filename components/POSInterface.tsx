@@ -7070,16 +7070,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         onInput={(e) => setSearchTerm(e.currentTarget.value)}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         onKeyDown={handleSearchKeyDown}
-                        className="w-full h-11 md:h-12 pl-10 md:pl-12 pr-20 md:pr-24 py-0 bg-gray-100 rounded-xl md:rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
+                        className="w-full h-11 md:h-12 pl-10 md:pl-12 pr-28 md:pr-32 py-0 bg-gray-100 rounded-xl md:rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
                      />
                      <button
                         type="button"
                         onClick={toggleScannerQuantityMode}
                         aria-label={scannerQuantityMode === 'UNIT' ? 'Lector agrega una unidad; cambiar a solicitar cantidad' : 'Lector solicita cantidad; cambiar a una unidad'}
                         title={scannerQuantityMode === 'UNIT' ? 'Modo lector: agregar 1 unidad' : 'Modo lector: solicitar cantidad'}
-                        className={`absolute right-10 md:right-11 top-1/2 -translate-y-1/2 h-7 min-w-8 px-1.5 rounded-lg border text-[10px] font-black transition-colors ${scannerQuantityMode === 'UNIT' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}
+                        className={`absolute right-10 md:right-11 top-1/2 -translate-y-1/2 h-7 min-w-8 px-1.5 rounded-lg border text-[10px] font-black shadow-sm transition-colors ${scannerQuantityMode === 'UNIT' ? 'border-emerald-300 bg-emerald-100 text-emerald-800' : 'border-amber-300 bg-amber-100 text-amber-800'}`}
                      >
-                        {scannerQuantityMode === 'UNIT' ? '1x' : 'Cant.'}
+                        {scannerQuantityMode === 'UNIT' ? '1 unidad' : 'Pedir cant.'}
                      </button>
                      <button onClick={() => setIsScannerOpen(true)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-lg md:rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
                   </div>
@@ -7503,16 +7503,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               }
                            }}
                            autoFocus
-                           className="w-full pl-12 pr-24 py-2.5 bg-gray-100 rounded-xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-purple-500 text-sm font-bold transition-all"
+                           className="w-full pl-12 pr-32 py-2.5 bg-gray-100 rounded-xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-purple-500 text-sm font-bold transition-all"
                         />
                         <button
                            type="button"
                            onClick={toggleScannerQuantityMode}
                            aria-label={scannerQuantityMode === 'UNIT' ? 'Lector agrega una unidad; cambiar a solicitar cantidad' : 'Lector solicita cantidad; cambiar a una unidad'}
                            title={scannerQuantityMode === 'UNIT' ? 'Modo lector: agregar 1 unidad' : 'Modo lector: solicitar cantidad'}
-                           className={`absolute right-11 top-1/2 -translate-y-1/2 h-7 min-w-8 px-1.5 rounded-lg border text-[10px] font-black transition-colors ${scannerQuantityMode === 'UNIT' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}
+                           className={`absolute right-11 top-1/2 -translate-y-1/2 h-7 min-w-8 px-1.5 rounded-lg border text-[10px] font-black shadow-sm transition-colors ${scannerQuantityMode === 'UNIT' ? 'border-emerald-300 bg-emerald-100 text-emerald-800' : 'border-amber-300 bg-amber-100 text-amber-800'}`}
                         >
-                           {scannerQuantityMode === 'UNIT' ? '1x' : 'Cant.'}
+                           {scannerQuantityMode === 'UNIT' ? '1 unidad' : 'Pedir cant.'}
                         </button>
                         <button
                            type="button"

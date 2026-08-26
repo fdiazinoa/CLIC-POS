@@ -143,10 +143,27 @@ export const useBarcodeScanner = ({
             }
         };
 
+        // Some integrated Android/PDA readers write through the IME and only
+        // dispatch an `input` event. In that mode no keydown/Enter reaches the
+        // WebView, so debounce the complete value of marked scanner fields.
+        const handleGlobalInput = (event: Event) => {
+            const target = event.target;
+            if (!(target instanceof HTMLInputElement)) return;
+            if (target.dataset?.barcodeScannerTarget !== 'true') return;
+
+            if (idleTimer.current) clearTimeout(idleTimer.current);
+            idleTimer.current = setTimeout(() => {
+                emitScan(target.value);
+                buffer.current = '';
+            }, idleTimeout);
+        };
+
         window.addEventListener('keydown', handleGlobalKeyDown, true);
+        window.addEventListener('input', handleGlobalInput, true);
 
         return () => {
             window.removeEventListener('keydown', handleGlobalKeyDown, true);
+            window.removeEventListener('input', handleGlobalInput, true);
             if (idleTimer.current) clearTimeout(idleTimer.current);
         };
     }, [enabled, prefixTimeout, idleTimeout]);
