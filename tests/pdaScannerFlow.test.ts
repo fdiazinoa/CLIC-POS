@@ -39,6 +39,8 @@ test('el capturador PDA admite Enter, Tab y lectores sin sufijo en campos marcad
   assert.match(scannerHookSource, /e\.key === 'Enter' \|\| e\.key === 'Tab'/);
   assert.match(scannerHookSource, /barcodeScannerTarget === 'true'/);
   assert.match(scannerHookSource, /fieldCode\.length >= 3 \? fieldCode : bufferedCode/);
+  assert.match(scannerHookSource, /window\.addEventListener\('input', handleGlobalInput, true\)/);
+  assert.match(scannerHookSource, /emitScan\(target\.value\)/);
   assert.match(posSource, /data-barcode-scanner-target="true"/);
 });
 
@@ -46,6 +48,7 @@ test('el POS valida el artículo y aplica el modo de cantidad configurado', () =
   assert.match(posSource, /scannerQuantityMode === 'PROMPT'/);
   assert.match(posSource, /Modo lector: agregar 1 unidad/);
   assert.match(posSource, /Modo lector: solicitar cantidad/);
+  assert.match(posSource, /Pedir cant\./);
   assert.match(posSource, /Producto agregado: \$\{match\.product\.name\} · Cantidad/);
   assert.match(posSource, /Artículo validado/);
   assert.match(posSource, /Código no encontrado:/);
