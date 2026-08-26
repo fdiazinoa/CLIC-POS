@@ -1,5 +1,4 @@
 import { RealtimeChannel } from '@supabase/supabase-js';
-import { ensureSupabaseSessionRestored, supabase } from '../../utils/supabase';
 import { getStoredErpSyncBinding } from '../../utils/erpSyncLifecycle';
 import { dispatchDeviceRevoked, resolveLocalDeviceId } from '../../utils/deviceRevocation';
 import { isSyncFeatureEnabled } from './SyncFeatureFlags';
@@ -144,6 +143,12 @@ class RealtimeNotificationService {
     }
 
     async initialize(masterUrl: string, terminalId: string) {
+        if (!isSyncFeatureEnabled('private_realtime')) {
+            await this.disconnect('DISABLED');
+            console.warn('📡 RealtimeNotificationService: Private realtime disabled; polling remains active.');
+            return;
+        }
+
         const { isConfigured } = resolveSupabaseConfig();
         const binding = getStoredErpSyncBinding();
         const storeId = binding.storeId || null;
@@ -180,30 +185,21 @@ class RealtimeNotificationService {
         this.storeId = storeId;
         this.terminalId = terminalId;
         this.setState('CONNECTING');
-        const privateRealtime = isSyncFeatureEnabled('private_realtime');
-        let channelClient = supabase;
-        let channelNames = [`store_${storeId}`];
-        if (privateRealtime) {
-            const authorization = await ensurePrivateRealtimeAuthorization({
-                tenantId,
-                storeId,
-                terminalId,
-            }, masterUrl);
-            channelClient = authorization.client;
-            const terminalTopic = buildPrivateSyncTopic(authorization.scope);
-            channelNames = [
-                `sync:${authorization.scope.tenantId}:${authorization.scope.storeId}`,
-                terminalTopic,
-            ];
-        } else {
-            await ensureSupabaseSessionRestored();
-        }
-        console.log(`📡 RealtimeNotificationService: Connecting to ${privateRealtime ? 'private sync scope' : `store_${storeId}`}...`);
+        const authorization = await ensurePrivateRealtimeAuthorization({
+            tenantId,
+            storeId,
+            terminalId,
+        }, masterUrl);
+        const channelClient = authorization.client;
+        const terminalTopic = buildPrivateSyncTopic(authorization.scope);
+        const channelNames = [
+            `sync:${authorization.scope.tenantId}:${authorization.scope.storeId}`,
+            terminalTopic,
+        ];
+        console.log('📡 RealtimeNotificationService: Connecting to private sync scope...');
 
         const channels = channelNames.map((channelName) => channelClient.channel(channelName, {
-            config: privateRealtime
-                ? { private: true, broadcast: { self: false } }
-                : { broadcast: { self: false } },
+            config: { private: true, broadcast: { self: false } },
         }));
         const subscribedChannels = new Set<string>();
 
@@ -278,7 +274,7 @@ class RealtimeNotificationService {
         channel.subscribe(async (status) => {
             if (status === 'SUBSCRIBED') {
                 subscribedChannels.add(channelNames[channelIndex]);
-                console.log(`📡 RealtimeNotificationService: Subscribed to ${privateRealtime ? 'private sync scope' : `store_${storeId}`}.`);
+                console.log('📡 RealtimeNotificationService: Subscribed to private sync scope.');
                 if (subscribedChannels.size === channels.length) {
                     const reconnected = this.hasSubscribed;
                     this.hasSubscribed = true;

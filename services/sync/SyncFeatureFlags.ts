@@ -33,19 +33,41 @@ const parseBoolean = (value: unknown): boolean | null => {
     return null;
 };
 
-export const isSyncFeatureEnabled = (name: SyncFeatureFlagName): boolean => {
-    const localValue = typeof localStorage !== 'undefined'
-        ? parseBoolean(localStorage.getItem(`${LOCAL_PREFIX}${name}`))
-        : null;
-    if (localValue !== null) return localValue;
+type SyncFeatureFlagInputs = {
+    localValue: unknown;
+    envValue: unknown;
+    legacyPrivateEnvValue?: unknown;
+};
 
+export const resolveSyncFeatureFlagValue = (
+    name: SyncFeatureFlagName,
+    { localValue, envValue, legacyPrivateEnvValue }: SyncFeatureFlagInputs,
+): boolean => {
+    const parsedLocalValue = parseBoolean(localValue);
+    const parsedEnvValue = parseBoolean(envValue);
+
+    if (name === 'private_realtime') {
+        // Production security policy is authoritative. A stale device override
+        // must never downgrade a private-only Supabase project to public channels.
+        return parsedEnvValue
+            ?? parseBoolean(legacyPrivateEnvValue)
+            ?? parsedLocalValue
+            ?? DEFAULTS[name];
+    }
+
+    return parsedLocalValue ?? parsedEnvValue ?? DEFAULTS[name];
+};
+
+export const isSyncFeatureEnabled = (name: SyncFeatureFlagName): boolean => {
     // Keep the access statically analyzable so Vite replaces production flags in the bundle.
     const env = import.meta.env;
-    const envValue = parseBoolean(env[ENV_KEYS[name]]);
-    if (name === 'private_realtime') {
-        return envValue ?? parseBoolean(env.VITE_SYNC_PRIVATE_REALTIME_ENABLED) ?? DEFAULTS[name];
-    }
-    return envValue ?? DEFAULTS[name];
+    return resolveSyncFeatureFlagValue(name, {
+        localValue: typeof localStorage !== 'undefined'
+            ? localStorage.getItem(`${LOCAL_PREFIX}${name}`)
+            : null,
+        envValue: env[ENV_KEYS[name]],
+        legacyPrivateEnvValue: env.VITE_SYNC_PRIVATE_REALTIME_ENABLED,
+    });
 };
 
 export const setLocalSyncFeatureOverride = (name: SyncFeatureFlagName, enabled: boolean | null): void => {
