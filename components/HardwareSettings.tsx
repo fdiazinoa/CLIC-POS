@@ -102,7 +102,7 @@ const resolvePrinterRoleId = (printer: Partial<PrinterDevice>): string => {
 interface HardwareSettingsProps {
    config: BusinessConfig;
    products: Product[];
-   onUpdateConfig: (cfg: BusinessConfig) => void;
+   onUpdateConfig: (cfg: BusinessConfig) => void | Promise<void>;
    onClose: () => void;
    terminalId?: string;
 }
@@ -127,6 +127,8 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    const [manualTestResult, setManualTestResult] = useState<{ success: boolean; message: string } | null>(null);
    const [testingPrinterId, setTestingPrinterId] = useState<string | null>(null);
    const [printerTestFeedback, setPrinterTestFeedback] = useState<Record<string, { success: boolean; message: string }>>({});
+   const [isSavingHardware, setIsSavingHardware] = useState(false);
+   const [hardwareSaveFeedback, setHardwareSaveFeedback] = useState<{ success: boolean; message: string } | null>(null);
 
    // -- Customer Display State --
    const currentTerminalConfig = useMemo(() => {
@@ -401,6 +403,10 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    };
 
    const handleSaveAllHardware = async () => {
+      if (isSavingHardware) return;
+
+      setIsSavingHardware(true);
+      setHardwareSaveFeedback(null);
       const normalizedDisplayConfig = normalizeCustomerDisplayConfig(displayConfig);
       const newConfig = { ...globalConfig, scales, availablePrinters: printers, scaleLabelConfig };
       if (newConfig.terminals) {
@@ -426,11 +432,16 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
             return t;
          });
       }
-      onUpdateConfig(newConfig);
-      const launchResult = normalizedDisplayConfig.isEnabled
-         ? await launchConfiguredCustomerDisplay(normalizedDisplayConfig)
-         : null;
-      alert(launchResult ? 'Configuración de hardware sincronizada y visor preparado con éxito.' : 'Configuración de hardware sincronizada con éxito.');
+
+      try {
+         await onUpdateConfig(newConfig);
+         setHardwareSaveFeedback({ success: true, message: 'Configuración de hardware guardada correctamente.' });
+      } catch (error) {
+         const message = error instanceof Error ? error.message : 'No se pudo guardar la configuración de hardware.';
+         setHardwareSaveFeedback({ success: false, message });
+      } finally {
+         setIsSavingHardware(false);
+      }
    };
 
    const renderFingerprintSettings = () => {
@@ -1590,11 +1601,21 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
          </div>
 
          <div className="fixed bottom-6 right-6 z-50">
+            {hardwareSaveFeedback && (
+               <div className={`mb-3 max-w-sm rounded-2xl border px-4 py-3 text-sm font-bold shadow-lg ${hardwareSaveFeedback.success
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : 'border-red-200 bg-red-50 text-red-700'
+                  }`}>
+                  {hardwareSaveFeedback.message}
+               </div>
+            )}
             <button
-               onClick={handleSaveAllHardware}
-               className="px-8 py-4 bg-blue-600 text-white rounded-2xl font-bold text-lg shadow-xl shadow-blue-600/30 flex items-center gap-3 transition-all hover:scale-105 active:scale-95 animate-in slide-in-from-bottom-8 duration-500"
+               onClick={() => void handleSaveAllHardware()}
+               disabled={isSavingHardware}
+               className="px-8 py-4 bg-blue-600 text-white rounded-2xl font-bold text-lg shadow-xl shadow-blue-600/30 flex items-center gap-3 transition-all hover:scale-105 active:scale-95 animate-in slide-in-from-bottom-8 duration-500 disabled:cursor-wait disabled:opacity-60 disabled:hover:scale-100"
             >
-               <Save size={20} /> Sincronizar Hardware
+               {isSavingHardware ? <Loader2 size={20} className="animate-spin" /> : <Save size={20} />}
+               {isSavingHardware ? 'Guardando...' : 'Guardar configuración'}
             </button>
          </div>
 
