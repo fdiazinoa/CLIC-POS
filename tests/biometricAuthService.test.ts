@@ -15,6 +15,7 @@ const installNativeBridge = (overrides: Record<string, unknown> = {}) => {
         publicKey: 'sourceafis:3.18.1:template',
       }),
       verifyFingerprint: async () => ({ success: true, credentialID: 'dp4500:test' }),
+      verifyFingerprintAsync: async () => ({ success: true, credentialID: 'dp4500:test' }),
       ...overrides,
     },
   };
@@ -48,7 +49,7 @@ test('registra una plantilla SourceAFIS sin conservar la imagen cruda', async ()
 test('envía plantillas SourceAFIS al cotejo nativo y devuelve la credencial reconocida', async () => {
   let received: unknown;
   installNativeBridge({
-    verifyFingerprint: async (payload: unknown) => {
+    verifyFingerprintAsync: async (payload: unknown) => {
       received = payload;
       return { success: true, credentialID: 'dp4500:test' };
     },
@@ -62,4 +63,9 @@ test('envía plantillas SourceAFIS al cotejo nativo y devuelve la credencial rec
   assert.deepEqual(received, {
     templates: [{ credentialID: 'dp4500:test', publicKey: 'sourceafis:3.18.1:template' }],
   });
+});
+
+test('no activa escucha automática cuando el bridge sólo ofrece verificación síncrona', async () => {
+  installNativeBridge({ verifyFingerprintAsync: undefined });
+  assert.equal(await biometricService.isExternalReaderAvailable(), false);
 });

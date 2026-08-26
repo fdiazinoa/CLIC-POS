@@ -264,7 +264,7 @@ export const nativePrintBridge = {
     const methodCandidates = [
       'printEscPos', 'printEscpos', 'printRaw', 'printHtml', 'print',
       'discoverPrinters', 'scanPrinters', 'listPrinters',
-      'discoverFingerprintReaders', 'scanFingerprintReaders', 'testFingerprintReader',
+      'discoverFingerprintReaders', 'scanFingerprintReaders', 'testFingerprintReader', 'verifyFingerprintAsync',
       'pairPrinter', 'connectPrinter', 'bindPrinter',
       'getDeviceProfile', 'getDeviceInfo'
     ] as const;
