@@ -22,7 +22,17 @@ const installNativeBridge = (overrides: Record<string, unknown> = {}) => {
 
 test('detecta el U.are.U 4500 mediante el bridge nativo', async () => {
   installNativeBridge();
+  assert.equal(await biometricService.isExternalReaderAvailable(), true);
   assert.equal(await biometricService.isAvailable(), true);
+});
+
+test('no activa escucha USB para otros lectores', async () => {
+  installNativeBridge({
+    discoverFingerprintReaders: async () => ({
+      devices: [{ vendorId: 0x1234, productId: 0xabcd }],
+    }),
+  });
+  assert.equal(await biometricService.isExternalReaderAvailable(), false);
 });
 
 test('registra una plantilla SourceAFIS sin conservar la imagen cruda', async () => {

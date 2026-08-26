@@ -37,10 +37,12 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
   const [biometricError, setBiometricError] = useState(false);
   const [biometricFailCount, setBiometricFailCount] = useState(0);
   const [isHardwareAvailable, setIsHardwareAvailable] = useState(false);
+  const [isExternalReaderListening, setIsExternalReaderListening] = useState(false);
   const [buildVersion, setBuildVersion] = useState<string>('');
   const [currentDateTime, setCurrentDateTime] = useState(() => new Date());
   const [failedUserPhotos, setFailedUserPhotos] = useState<Record<string, boolean>>({});
   const pinInputRef = useRef<HTMLInputElement>(null);
+  const biometricScanInFlightRef = useRef(false);
   const usersByPin = useMemo(() => {
     const map = new Map<string, UserType>();
     for (const user of availableUsers) {
@@ -197,6 +199,9 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
       return;
     }
 
+    if (biometricScanInFlightRef.current) return;
+    biometricScanInFlightRef.current = true;
+
     try {
       setBiometricError(false);
       const enrolledUsers = availableUsers.filter((user) => user.biometrics?.credentialID);
@@ -220,14 +225,72 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
       setBiometricFailCount((prev) => prev + 1);
       setBiometricError(true);
       window.setTimeout(() => setBiometricError(false), 2000);
+    } finally {
+      biometricScanInFlightRef.current = false;
     }
   };
+
+  useEffect(() => {
+    if (!config.security?.allowBiometrics || !isHardwareAvailable) {
+      setIsExternalReaderListening(false);
+      return;
+    }
+
+    const enrolledUsers = availableUsers.filter((user) => user.biometrics?.publicKey?.startsWith('sourceafis:'));
+    if (enrolledUsers.length === 0) {
+      setIsExternalReaderListening(false);
+      return;
+    }
+
+    let cancelled = false;
+    const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+    const listenForFingerprint = async () => {
+      const externalReaderAvailable = await biometricService.isExternalReaderAvailable();
+      if (cancelled || !externalReaderAvailable) return;
+
+      setIsExternalReaderListening(true);
+      const credentials = enrolledUsers.map((user) => user.biometrics!);
+
+      while (!cancelled) {
+        if (biometricScanInFlightRef.current) {
+          await wait(250);
+          continue;
+        }
+
+        biometricScanInFlightRef.current = true;
+        try {
+          const matchedId = await biometricService.verify(credentials);
+          if (cancelled) return;
+
+          const targetUser = enrolledUsers.find((user) => user.biometrics?.credentialID === matchedId);
+          if (targetUser) {
+            setIsExternalReaderListening(false);
+            onLogin(targetUser);
+            return;
+          }
+        } finally {
+          biometricScanInFlightRef.current = false;
+        }
+
+        if (!cancelled) await wait(500);
+      }
+    };
+
+    void listenForFingerprint();
+    return () => {
+      cancelled = true;
+      setIsExternalReaderListening(false);
+    };
+  }, [availableUsers, config.security?.allowBiometrics, isHardwareAvailable, onLogin]);
 
   const loginFooterText =
     config.security?.allowBiometrics && isHardwareAvailable
       ? biometricError
         ? 'Reintente huella o tarjeta'
-        : 'Escanear Tarjeta o Login con Huella'
+        : isExternalReaderListening
+          ? 'Lector listo: coloque el dedo'
+          : 'Preparando lector de huella...'
       : 'Escanear Tarjeta o Login con Huella';
 
   return (
