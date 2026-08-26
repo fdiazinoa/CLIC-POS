@@ -109,7 +109,13 @@ import {
 import { resolveDeviceRoleValue } from '../utils/deviceRoleHelpers';
 import { resolveTerminalDeviceProfile } from '../utils/deviceProfile';
 import { normalizeProductionOutputMode, resolveProductionOutputTargets } from '../utils/productionOutputMode';
-import { normalizeScannerQuantity, resolveScannerQuantityMode } from '../utils/scannerQuantity';
+import {
+   normalizeScannerQuantity,
+   resolveScannerQuantityMode,
+   resolveScannerQuantityPreference,
+   scannerQuantityPreferenceKey,
+   type ScannerQuantityMode,
+} from '../utils/scannerQuantity';
 import { isClientTerminalMode, resolveOperationalApiUrl } from '../utils/masterOperationalApi';
 import ProductionRoutingAssignmentModal, {
    type ProductionRoutingPromptArea,
@@ -1260,6 +1266,37 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const activeTerminal = (config.terminals || []).find(t => t.id === activeTerminalId) || (config.terminals || [])[0];
    const activeTerminalConfig = activeTerminal?.config;
    const terminalId = activeTerminal?.id || 'T1';
+   const configuredScannerQuantityMode = resolveScannerQuantityMode(activeTerminalConfig);
+   const scannerQuantityStorageKey = useMemo(
+      () => scannerQuantityPreferenceKey(terminalId),
+      [terminalId]
+   );
+   const [scannerQuantityMode, setScannerQuantityMode] = useState<ScannerQuantityMode>(configuredScannerQuantityMode);
+
+   useEffect(() => {
+      let storedMode: string | null = null;
+      try {
+         storedMode = window.localStorage.getItem(scannerQuantityStorageKey);
+      } catch (error) {
+         console.warn('[Scanner] No se pudo leer la preferencia local de cantidad:', error);
+      }
+      setScannerQuantityMode(resolveScannerQuantityPreference(storedMode, configuredScannerQuantityMode));
+   }, [configuredScannerQuantityMode, scannerQuantityStorageKey]);
+
+   const toggleScannerQuantityMode = useCallback(() => {
+      setScannerQuantityMode(currentMode => {
+         const nextMode: ScannerQuantityMode = currentMode === 'UNIT' ? 'PROMPT' : 'UNIT';
+         try {
+            window.localStorage.setItem(scannerQuantityStorageKey, nextMode);
+         } catch (error) {
+            console.warn('[Scanner] No se pudo guardar la preferencia local de cantidad:', error);
+         }
+         setSuccessToast(nextMode === 'UNIT'
+            ? 'Lector: agrega 1 unidad automáticamente'
+            : 'Lector: solicitará la cantidad');
+         return nextMode;
+      });
+   }, [scannerQuantityStorageKey]);
    const activeTerminalConfigRaw = useMemo<Record<string, unknown>>(
       () => activeTerminalConfig ? (activeTerminalConfig as unknown as Record<string, unknown>) : {},
       [activeTerminalConfig]
@@ -3670,7 +3707,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (!hasConfiguredVariant && ((match.product.variants || []).length > 0 || (match.product.attributes || []).length > 0)) {
             handleProductClick(match.product);
             setErrorToast(`Artículo identificado: ${match.product.name}. Complete la selección.`);
-         } else if (resolveScannerQuantityMode(activeTerminalConfig) === 'PROMPT') {
+         } else if (scannerQuantityMode === 'PROMPT') {
             const quantity = normalizeScannerQuantity(match.quantity);
             if (!canAddItemToCart(match.product, isReturnMode ? -quantity : quantity)) return;
             setPendingScannerAdd({ ...match, quantity });
@@ -3699,7 +3736,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       setErrorToast(`Código no encontrado: ${trimmed}`);
       setTimeout(() => setErrorToast(null), 2500);
-   }, [activeReservationByScanCode, activeTerminalConfig, addToCart, canAddItemToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, isReturnMode, productCodeIndex, routeScannedCoupon, transactionByScanCode]);
+   }, [activeReservationByScanCode, addToCart, canAddItemToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, isReturnMode, productCodeIndex, routeScannedCoupon, scannerQuantityMode, transactionByScanCode]);
 
    const confirmPendingScannerAdd = useCallback(async () => {
       if (!pendingScannerAdd) return;
@@ -7033,8 +7070,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         onInput={(e) => setSearchTerm(e.currentTarget.value)}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         onKeyDown={handleSearchKeyDown}
-                        className="w-full h-11 md:h-12 pl-10 md:pl-12 pr-10 md:pr-12 py-0 bg-gray-100 rounded-xl md:rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
+                        className="w-full h-11 md:h-12 pl-10 md:pl-12 pr-20 md:pr-24 py-0 bg-gray-100 rounded-xl md:rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
                      />
+                     <button
+                        type="button"
+                        onClick={toggleScannerQuantityMode}
+                        aria-label={scannerQuantityMode === 'UNIT' ? 'Lector agrega una unidad; cambiar a solicitar cantidad' : 'Lector solicita cantidad; cambiar a una unidad'}
+                        title={scannerQuantityMode === 'UNIT' ? 'Modo lector: agregar 1 unidad' : 'Modo lector: solicitar cantidad'}
+                        className={`absolute right-10 md:right-11 top-1/2 -translate-y-1/2 h-7 min-w-8 px-1.5 rounded-lg border text-[10px] font-black transition-colors ${scannerQuantityMode === 'UNIT' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}
+                     >
+                        {scannerQuantityMode === 'UNIT' ? '1x' : 'Cant.'}
+                     </button>
                      <button onClick={() => setIsScannerOpen(true)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-lg md:rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
                   </div>
 
@@ -7457,8 +7503,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               }
                            }}
                            autoFocus
-                           className="w-full pl-12 pr-12 py-2.5 bg-gray-100 rounded-xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-purple-500 text-sm font-bold transition-all"
+                           className="w-full pl-12 pr-24 py-2.5 bg-gray-100 rounded-xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-purple-500 text-sm font-bold transition-all"
                         />
+                        <button
+                           type="button"
+                           onClick={toggleScannerQuantityMode}
+                           aria-label={scannerQuantityMode === 'UNIT' ? 'Lector agrega una unidad; cambiar a solicitar cantidad' : 'Lector solicita cantidad; cambiar a una unidad'}
+                           title={scannerQuantityMode === 'UNIT' ? 'Modo lector: agregar 1 unidad' : 'Modo lector: solicitar cantidad'}
+                           className={`absolute right-11 top-1/2 -translate-y-1/2 h-7 min-w-8 px-1.5 rounded-lg border text-[10px] font-black transition-colors ${scannerQuantityMode === 'UNIT' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}
+                        >
+                           {scannerQuantityMode === 'UNIT' ? '1x' : 'Cant.'}
+                        </button>
                         <button
                            type="button"
                            onClick={() => setSearchTerm('')}

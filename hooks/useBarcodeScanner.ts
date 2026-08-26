@@ -106,7 +106,7 @@ export const useBarcodeScanner = ({
                 const targetValue = isScannerTarget && target instanceof HTMLInputElement
                     ? target.value
                     : '';
-                const code = buffer.current.length >= 3 ? buffer.current : targetValue;
+                const code = targetValue.length >= 3 ? targetValue : buffer.current;
                 if (emitScan(code)) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -129,8 +129,15 @@ export const useBarcodeScanner = ({
 
                 // Some PDAs are configured without a suffix. Auto-submit only
                 // from an explicitly marked scanner/search field after a burst.
+                // Slower keyboard wedges may reset the speed buffer, so use the
+                // complete field value as the reliable fallback.
+                const scannerTargetInput = isScannerTarget && target instanceof HTMLInputElement
+                    ? target
+                    : null;
                 idleTimer.current = setTimeout(() => {
-                    if (isScannerTarget) emitScan(buffer.current);
+                    const bufferedCode = buffer.current;
+                    const fieldCode = scannerTargetInput?.value || '';
+                    if (isScannerTarget) emitScan(fieldCode.length >= 3 ? fieldCode : bufferedCode);
                     buffer.current = '';
                 }, idleTimeout);
             }
