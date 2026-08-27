@@ -1944,24 +1944,28 @@ const AppContent: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!isDataLoaded || posApkUpdateCheckStartedRef.current) return;
+    if (!isDataLoaded || !isSecurityLoaded || posApkUpdateCheckStartedRef.current) return;
     posApkUpdateCheckStartedRef.current = true;
-
-    let disposed = false;
 
     void checkForPosApkUpdate({ config, timeoutMs: 3500 })
       .then((result) => {
-        if (disposed || !result?.hasUpdate) return;
-        setPosApkUpdate(result);
+        if (!result) {
+          console.info('[posApkUpdate] Validación automática omitida: SKIPPED');
+          return;
+        }
+        if (result.hasUpdate) {
+          setPosApkUpdate(result);
+          return;
+        }
+        console.info(
+          '[posApkUpdate] Validación automática completada sin actualización:',
+          'reason' in result ? result.reason : 'NOT_NEWER',
+        );
       })
       .catch((error) => {
         console.info('[posApkUpdate] Validación omitida sin bloquear operación:', error);
       });
-
-    return () => {
-      disposed = true;
-    };
-  }, [config, isDataLoaded]);
+  }, [config, isDataLoaded, isSecurityLoaded]);
 
   useEffect(() => {
     if (!isNativeAndroidRuntime()) {
@@ -7521,6 +7525,21 @@ const AppContent: React.FC = () => {
       });
       permissionService.initialize(updatedConfig, terminalId);
       await syncManager.initialize(updatedConfig, terminalId);
+      if (isErpDirectBinding) {
+        try {
+          setupResult.progress?.({
+            stepId: 'sync',
+            message: 'Actualizando usuarios autorizados para esta terminal...',
+          });
+          const refreshedPairingUsers = await syncManager.refreshErpPosUserRoster(updatedConfig);
+          setUsers(visiblePosUsersForRuntime(refreshedPairingUsers));
+          console.info('[SYNC_USERS] pairing_remote_roster_refreshed', {
+            total: visiblePosUsersForRuntime(refreshedPairingUsers).length,
+          });
+        } catch (rosterError) {
+          console.warn('[SYNC_USERS] ERP roster refresh failed after pairing; preserving offline login roster.', rosterError);
+        }
+      }
       if (isErpDirectBinding && navigator.onLine) {
         try {
           setupResult.progress?.({

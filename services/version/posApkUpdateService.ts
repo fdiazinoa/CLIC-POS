@@ -49,8 +49,10 @@ type CheckOptions = {
   force?: boolean;
 };
 
-const DEFAULT_POS_APK_LATEST_URL = 'https://cloud-admin-gamma.vercel.app/api/pos-apk/latest';
-const DEFAULT_POS_APK_PORTAL_URL = 'https://cloud-admin-gamma.vercel.app/apk-pos';
+const CANONICAL_CLOUD_ADMIN_BASE_URL = 'https://cloud-admin.clicsuite.com';
+const LEGACY_CLOUD_ADMIN_BASE_URL = 'https://cloud-admin-gamma.vercel.app';
+const DEFAULT_POS_APK_LATEST_URL = `${CANONICAL_CLOUD_ADMIN_BASE_URL}/api/pos-apk/latest`;
+const DEFAULT_POS_APK_PORTAL_URL = `${CANONICAL_CLOUD_ADMIN_BASE_URL}/apk-pos`;
 const POS_APK_LATEST_URL_STORAGE_KEY = 'clic_pos_apk_latest_url';
 const POS_APK_PORTAL_URL_STORAGE_KEY = 'clic_pos_apk_portal_url';
 const POS_APK_LOCAL_VERSION_CODE_OVERRIDE_KEY = 'clic_pos_apk_local_version_code_override';
@@ -90,14 +92,24 @@ const getLocalStorageValue = (key: string): string => {
   }
 };
 
+const normalizeCloudAdminUrl = (value: unknown): string => {
+  const normalized = normalizeString(value).replace(/\/$/, '');
+  if (!normalized) return '';
+  if (normalized === LEGACY_CLOUD_ADMIN_BASE_URL) return CANONICAL_CLOUD_ADMIN_BASE_URL;
+  if (normalized.startsWith(`${LEGACY_CLOUD_ADMIN_BASE_URL}/`)) {
+    return `${CANONICAL_CLOUD_ADMIN_BASE_URL}${normalized.slice(LEGACY_CLOUD_ADMIN_BASE_URL.length)}`;
+  }
+  return normalized;
+};
+
 const resolveCloudAdminBaseUrl = (config?: BusinessConfig | null): string => {
   const env = getEnv();
   const metadata = (config?.metadata || {}) as Record<string, unknown>;
-  return normalizeString(
+  return normalizeCloudAdminUrl(
     metadata.cloudAdminBaseUrl
     || metadata.cloud_admin_base_url
     || env.VITE_CLOUD_ADMIN_BASE_URL
-  ).replace(/\/$/, '');
+  );
 };
 
 export const resolvePosApkLatestUrl = (config?: BusinessConfig | null): string => {
@@ -105,7 +117,7 @@ export const resolvePosApkLatestUrl = (config?: BusinessConfig | null): string =
   const metadata = (config?.metadata || {}) as Record<string, unknown>;
   const configuredBaseUrl = resolveCloudAdminBaseUrl(config);
 
-  const explicitUrl = normalizeString(
+  const explicitUrl = normalizeCloudAdminUrl(
     metadata.posApkLatestUrl
     || metadata.pos_apk_latest_url
     || getLocalStorageValue(POS_APK_LATEST_URL_STORAGE_KEY)
@@ -123,7 +135,7 @@ export const resolvePosApkPortalUrl = (config?: BusinessConfig | null): string =
   const metadata = (config?.metadata || {}) as Record<string, unknown>;
   const configuredBaseUrl = resolveCloudAdminBaseUrl(config);
 
-  const explicitUrl = normalizeString(
+  const explicitUrl = normalizeCloudAdminUrl(
     metadata.posApkPortalUrl
     || metadata.pos_apk_portal_url
     || metadata.posApkManualUrl
