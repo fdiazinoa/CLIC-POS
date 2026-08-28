@@ -5056,6 +5056,11 @@ const AppContent: React.FC = () => {
         });
         activeTableEditLockRef.current = null;
         setActiveTableEditLock(null);
+        setTables(previousTables => previousTables.map(table => (
+          String(table.id) === String(lock.tableId)
+            ? { ...table, editingLock: undefined }
+            : table
+        )));
         return true;
       } catch (error) {
         console.warn(`[TABLE_EDIT_LOCK] No se pudo confirmar liberación (intento ${attempt}/2):`, error);
