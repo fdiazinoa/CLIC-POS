@@ -14,6 +14,7 @@ import { getDefaultDeviceProfile, resolveDeviceProfile } from '../utils/devicePr
 interface SetupWizardProps {
   initialConfig: BusinessConfig;
   onComplete: (finalConfig: BusinessConfig) => void;
+  onCancel?: () => void;
 }
 
 type WizardStep =
@@ -175,7 +176,7 @@ const DETECTED_CSV_HEADERS = [
   'PVP'
 ];
 
-const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) => {
+const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete, onCancel }) => {
   const [currentStep, setCurrentStep] = useState<WizardStep>('SEED');
   const [seedMode, setSeedMode] = useState<'DEMO' | 'BLANK'>('BLANK');
   const [productSeedPackId, setProductSeedPackId] = useState<ProductSeedPackId>('NONE');
@@ -1548,15 +1549,15 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
 
         {/* Footer Actions */}
         <div className="p-6 border-t border-gray-100 flex justify-between items-center bg-white">
-          <button 
-            onClick={handleBack}
-            disabled={currentStep === 'SEED' || currentStep === 'READY'}
+          <button
+            onClick={currentStep === 'SEED' ? onCancel : handleBack}
+            disabled={(currentStep === 'SEED' && !onCancel) || currentStep === 'READY'}
             className={`
               flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-gray-500 transition-colors
-              ${currentStep === 'SEED' || currentStep === 'READY' ? 'opacity-0 pointer-events-none' : 'hover:bg-gray-100'}
+              ${(currentStep === 'SEED' && !onCancel) || currentStep === 'READY' ? 'opacity-0 pointer-events-none' : 'hover:bg-gray-100'}
             `}
           >
-            <ArrowLeft size={20} /> Atrás
+            <ArrowLeft size={20} /> {currentStep === 'SEED' ? 'Cancelar configuración local' : 'Atrás'}
           </button>
 
           <button 
