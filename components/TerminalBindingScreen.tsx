@@ -13,6 +13,11 @@ import { isEligibleOperationalMasterConfig } from '../utils/masterServerEligibil
 import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../services/sync/SyncProfile';
 import type { RuntimeTerminalRecoveryState } from '../services/setup/erpTerminalSetup';
 import {
+  fetchMasterPairingResources,
+  MASTER_PAIRING_CONFIG_TIMEOUT_MS,
+  MasterPairingConnectionError,
+} from '../services/setup/masterPairingConnection';
+import {
   ORDER_TAKER_TERMINAL_TYPE,
   STANDARD_POS_TERMINAL_TYPE,
   type PosTerminalType,
@@ -120,33 +125,19 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
     let lastError: Error | null = null;
 
     for (const baseUrl of candidates) {
-      const controller = new AbortController();
-      const timeoutId = window.setTimeout(() => controller.abort(), 3500);
       try {
-        const [configResponse, usersResponse] = await Promise.all([
-          fetch(`${baseUrl}/api/config`, { signal: controller.signal }),
-          fetch(`${baseUrl}/api/users`, { signal: controller.signal }),
-        ]);
-
-        if (!configResponse.ok) {
-          throw new Error(`El servidor respondió con error ${configResponse.status}`);
-        }
-
-        const fetchedConfig = await configResponse.json();
+        const { config: fetchedConfig, users: fetchedUsers } = await fetchMasterPairingResources(baseUrl);
         if (!isEligibleOperationalMasterConfig(fetchedConfig)) {
           throw new Error('El equipo encontrado no es una Caja Master operativa.');
         }
-        const fetchedUsers = usersResponse.ok ? await usersResponse.json() : [];
         return {
           baseUrl,
           host: new URL(baseUrl).hostname,
           config: fetchedConfig,
-          users: Array.isArray(fetchedUsers) ? fetchedUsers : [],
+          users: fetchedUsers,
         };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
-      } finally {
-        window.clearTimeout(timeoutId);
       }
     }
 
@@ -159,11 +150,13 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   ) => {
     await onConfigUpdate?.(connection.config);
 
-    const fetchedAdmins = connection.users.filter((user: any) =>
+    const fetchedAdmins = (connection.users || []).filter((user: any) =>
       user.role?.toUpperCase() === 'ADMIN' || user.role?.toUpperCase() === 'ADMINISTRADOR'
     );
     setMasterAdmins(fetchedAdmins);
-    await onUsersUpdate?.(connection.users);
+    if (connection.users) {
+      await onUsersUpdate?.(connection.users);
+    }
 
     localStorage.setItem('pos_master_ip', connection.host);
     localStorage.setItem('CLIC_POS_MASTER_URL', connection.baseUrl || buildMasterUrlFromHost(connection.host));
@@ -212,9 +205,11 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
     } catch (err) {
       console.error('Failed to connect to master during terminal activation:', err);
       const normalizedHost = normalizeMasterHost(masterIp);
-      const detail = (err as Error).name === 'AbortError'
-        ? 'La Maestra no respondió dentro de 3.5 segundos.'
-        : 'No hay un servicio Master disponible en esa dirección.';
+      const detail = err instanceof MasterPairingConnectionError
+        ? err.message
+        : (err as Error).message === 'El equipo encontrado no es una Caja Master operativa.'
+          ? (err as Error).message
+          : `No hay un servicio Master disponible en esa dirección después de ${MASTER_PAIRING_CONFIG_TIMEOUT_MS / 1000} segundos.`;
       setError(
         `No se pudo conectar a la Maestra (${normalizedHost}).\n\n`
         + `${detail}\n`
