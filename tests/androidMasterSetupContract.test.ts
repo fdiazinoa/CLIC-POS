@@ -15,6 +15,10 @@ const terminalBindingSource = readFileSync(
   'utf8',
 );
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+const setupWizardSource = readFileSync(
+  new URL('../components/SetupWizard.tsx', import.meta.url),
+  'utf8',
+);
 const erpTerminalSetupSource = readFileSync(
   new URL('../services/setup/erpTerminalSetup.ts', import.meta.url),
   'utf8',
@@ -140,6 +144,12 @@ test('una instalación sin modo elegido muestra el selector y reserva el wizard 
     appSource,
     /localStorage\.removeItem\(SETUP_FLOW_STAGE_KEY\);[\s\S]*?setCurrentView\('TERMINAL_PAIRING'\);[\s\S]*?\}, \[\]\);/
   );
+});
+
+test('el wizard local puede cancelarse sin completar ni crear datos operativos', () => {
+  assert.match(setupWizardSource, /onCancel\?: \(\) => void/);
+  assert.match(setupWizardSource, /Cancelar configuración local/);
+  assert.match(appSource, /onCancel=\{\(\) => \{[\s\S]*?removeItem\(SETUP_FLOW_STAGE_KEY\)[\s\S]*?setCurrentView\('TERMINAL_MODE_SELECTOR'\)/);
 });
 
 test('la activacion cliente cierra el progreso cuando la terminal esta ocupada', () => {

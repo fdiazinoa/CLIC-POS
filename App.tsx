@@ -10498,6 +10498,13 @@ const AppContent: React.FC = () => {
           <SetupWizard
             initialConfig={config}
             onComplete={handleSetupWizardComplete}
+            onCancel={() => {
+              localStorage.removeItem(SETUP_FLOW_STAGE_KEY);
+              localStorage.removeItem(SETUP_FLOW_VERSION_KEY);
+              localStorage.removeItem(TERMINAL_SETUP_MODE_KEY);
+              localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
+              setCurrentView('TERMINAL_MODE_SELECTOR');
+            }}
           />
         );
 
