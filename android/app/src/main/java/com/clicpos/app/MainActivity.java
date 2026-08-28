@@ -50,7 +50,7 @@ public class MainActivity extends BridgeActivity {
         settings.setUseWideViewPort(true);
         settings.setLoadWithOverviewMode(true);
         settings.setMixedContentMode(BuildConfig.ALLOW_CLEARTEXT_WEBVIEW
-                ? WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                ? WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 : WebSettings.MIXED_CONTENT_NEVER_ALLOW);
 
         webView.addJavascriptInterface(new AndroidPrinterBridge(getApplicationContext(), webView), "AndroidPrinter");

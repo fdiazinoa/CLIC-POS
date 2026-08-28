@@ -24,9 +24,10 @@ test('release defaults to strict HTTPS with an explicit emergency LAN override',
     assert.match(strictConfig, /base-config cleartextTrafficPermitted="false"/);
 });
 
-test('release WebView blocks mixed content while local middleware remains scoped', () => {
+test('release WebView follows the explicit LAN override while strict builds block mixed content', () => {
+    assert.match(mainActivity, /ALLOW_CLEARTEXT_WEBVIEW/);
     assert.match(mainActivity, /MIXED_CONTENT_NEVER_ALLOW/);
-    assert.doesNotMatch(mainActivity, /MIXED_CONTENT_ALWAYS_ALLOW/);
+    assert.match(mainActivity, /MIXED_CONTENT_ALWAYS_ALLOW/);
     assert.match(strictConfig, />localhost</);
     assert.match(strictConfig, />127\.0\.0\.1</);
 });
