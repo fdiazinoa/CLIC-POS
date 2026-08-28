@@ -4868,7 +4868,11 @@ const AppContent: React.FC = () => {
               currentOrderTotal: remoteTable.currentOrderTotal,
               timeSeated: remoteTable.timeSeated,
               waiterId: remoteTable.waiterId,
-              waiterName: remoteTable.waiterName
+              waiterName: remoteTable.waiterName,
+              // El snapshot de la Master es autoritativo para los locks. Cuando
+              // editingLock no viene, el lock ya fue liberado y debe borrarse
+              // en vez de conservar la copia local del render anterior.
+              editingLock: remoteTable.editingLock
             };
           });
 

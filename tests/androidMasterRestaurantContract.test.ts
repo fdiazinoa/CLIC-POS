@@ -137,6 +137,7 @@ test('el puente Android publica reconciliación, locks y sincronización seriali
   assert.match(appSource, /No reconciliar contra el closure anterior/);
   assert.match(appSource, /const ticketsForReconciliation = hasAuthoritativeParkedTickets \? nextParkedTickets : parkedTickets/);
   assert.match(appSource, /reconcileTablesWithParkedTickets\(merged, ticketsForReconciliation\)/);
+  assert.match(appSource, /editingLock: remoteTable\.editingLock/);
   assert.match(appSource, /pendingMasterTableSyncRef\.current/);
   assert.match(appSource, /mergePendingClientTableTickets\(responseParkedTickets, pendingTableSync\)/);
 });
