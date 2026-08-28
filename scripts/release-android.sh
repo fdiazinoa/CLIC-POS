@@ -9,11 +9,20 @@ SOURCE_REPO_ROOT="$(dirname "${COMMON_GIT_DIR}")"
 WORKSPACE_ROOT="$(dirname "${SOURCE_REPO_ROOT}")"
 CANONICAL_BUILD_WORKTREE="${WORKSPACE_ROOT}/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite"
 SOURCE_REF="${1:-origin/develop}"
+# CLIC-POS Master/Cliente communicates over the store LAN on port 3001. Keep
+# direct Gradle release builds strict, but make the canonical release protocol
+# explicitly opt in to the cleartext LAN transport required by the product.
+LAN_HTTP_ENABLED="${CLIC_POS_RELEASE_LAN_HTTP_ENABLED:-true}"
 
 fail() {
   echo "ERROR: $*" >&2
   exit 1
 }
+
+case "${LAN_HTTP_ENABLED}" in
+  true|false) ;;
+  *) fail "CLIC_POS_RELEASE_LAN_HTTP_ENABLED debe ser true o false" ;;
+esac
 
 info() {
   echo "[release-android] $*"
@@ -203,6 +212,7 @@ trap cleanup EXIT
 info "Fuente del release: ${SOURCE_REF} (${SOURCE_COMMIT_SHORT})"
 info "VersionCode siguiente: ${NEXT_VERSION_CODE}"
 info "VersionName siguiente: ${VERSION_NAME}"
+info "HTTP LAN Master/Cliente: ${LAN_HTTP_ENABLED}"
 info "Worktree temporal: ${TEMP_WORKTREE}"
 
 git -C "${REPO_ROOT}" worktree add --detach "${TEMP_WORKTREE}" "${SOURCE_COMMIT}" >/dev/null
@@ -244,7 +254,8 @@ info "Ejecutando npx cap sync android"
 (cd "${TEMP_WORKTREE}" && npx cap sync android)
 
 info "Ejecutando ./gradlew clean assembleRelease"
-(cd "${TEMP_WORKTREE}/android" && ./gradlew clean assembleRelease)
+(cd "${TEMP_WORKTREE}/android" && ./gradlew clean assembleRelease \
+  "-PclicPosAllowReleaseCleartext=${LAN_HTTP_ENABLED}")
 
 APK_SRC="${TEMP_WORKTREE}/android/app/build/outputs/apk/release/Clic-Pos-${VERSION_NAME}-release.apk"
 METADATA_SRC="${TEMP_WORKTREE}/android/app/build/outputs/apk/release/output-metadata.json"
@@ -272,6 +283,7 @@ sourceRef=${SOURCE_REF}
 sourceBranch=${SOURCE_BRANCH}
 sourceCommit=${SOURCE_COMMIT}
 sourceCommitShort=${SOURCE_COMMIT_SHORT}
+lanHttpEnabled=${LAN_HTTP_ENABLED}
 canonicalBuildWorktree=${CANONICAL_BUILD_WORKTREE}
 artifact=${APK_DEST}
 metadata=${METADATA_DEST}
