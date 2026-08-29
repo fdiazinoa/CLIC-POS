@@ -5265,6 +5265,17 @@ class ApiSyncAdapter {
         return acknowledgement;
     }
 
+    async saveTaxes(taxes: any[], actor: { userId: string; userName: string; terminalId?: string }): Promise<any> {
+        const mutationId = `tax-upsert-${Date.now()}`;
+        const acknowledgement = await this.postOperationalPayload('/taxes/upsert', {
+            mutationId,
+            taxes,
+            actor,
+        });
+        assertOperationalAcknowledgement(acknowledgement, mutationId, 'TAX');
+        return acknowledgement;
+    }
+
     async scheduleCurrencyRate(schedule: Record<string, unknown>): Promise<any> {
         const scheduleId = String(schedule.id || `currency-schedule-${Date.now()}`);
         const acknowledgement = await this.postOperationalPayload('/currencies/schedules', {

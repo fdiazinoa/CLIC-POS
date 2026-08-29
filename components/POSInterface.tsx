@@ -1201,6 +1201,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!selectedCustomer?.id) return selectedCustomer;
       return customers.find(customer => customer.id === selectedCustomer.id) || selectedCustomer;
    }, [customers, selectedCustomer]);
+   const isSelectedCustomerTaxExempt = effectiveSelectedCustomer?.isTaxExempt === true;
    const [quickActionData, setQuickActionData] = useState<{ product: Product; x: number; y: number } | null>(null);
    const [successToast, setSuccessToast] = useState<string | null>(null);
    const [cashMovementModalType, setCashMovementModalType] = useState<'IN' | 'OUT' | null>(null);
@@ -2096,6 +2097,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const deferredSearchTerm = useDeferredValue(searchTerm);
    const [categoryFilter, setCategoryFilter] = useState('ALL');
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
+   const returnToTicketView = useCallback(() => {
+      setRightSidebarTab('CART');
+      setMobileView('TICKET');
+   }, []);
 
    const [showDiscountModal, setShowDiscountModal] = useState(false);
    const [showSplitModal, setShowSplitModal] = useState(false);
@@ -2913,6 +2918,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             alert(`¡Cupón Aplicado!\n${result.benefit.description}`);
             setShowCouponModal(false);
             setCouponCode('');
+            returnToTicketView();
          }
       } else {
          alert(`Error: ${result.error}`);
@@ -4157,12 +4163,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
 
    const taxBreakdown = useMemo(() => {
+      if (isSelectedCustomerTaxExempt) return [];
       return calculateTaxBreakdownFromItems(processedCart, config, {
          discountAmount,
          isTaxIncluded,
          terminalConfig: activeTerminalConfig,
+         taxExempt: isSelectedCustomerTaxExempt,
       });
-   }, [processedCart, config, discountAmount, isTaxIncluded, activeTerminalConfig]);
+   }, [processedCart, config, discountAmount, isTaxIncluded, activeTerminalConfig, isSelectedCustomerTaxExempt]);
 
    const displayTaxBreakdown = useMemo(() => {
       const grouped = new Map<string, { id: string; name: string; rate: number; amount: number }>();
@@ -4251,17 +4259,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const cartSubtotal = grossLineTotal; // This represents the sum of list prices
    const baseCurrency = (config.currencies || []).find(c => c.isBase) || (config.currencies || [])[0];
    const getCartItemTaxSummary = useCallback((item: CartItem) => {
+      if (isSelectedCustomerTaxExempt) return 'Cliente exento';
       const lineTaxBreakdown = calculateTaxBreakdownFromItems([item], config, {
          isTaxIncluded,
          terminalConfig: activeTerminalConfig,
          absoluteLineValues: true,
+         taxExempt: isSelectedCustomerTaxExempt,
       });
       if (lineTaxBreakdown.length === 0) {
          return 'Sin impuestos';
       }
       const lineTaxAmount = Math.abs(lineTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0));
       return `${lineTaxBreakdown.map((tax) => formatTaxLineLabel(tax)).join(' + ')} (${baseCurrency.symbol}${lineTaxAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`;
-   }, [config, isTaxIncluded, activeTerminalConfig, baseCurrency.symbol]);
+   }, [config, isTaxIncluded, activeTerminalConfig, baseCurrency.symbol, isSelectedCustomerTaxExempt]);
    const isRecoveredUberOrder = isUberRecoveredReservation(activeRecoveredReservation);
    const reservationAdvanceApplied = activeRecoveredReservation
       ? (isRecoveredUberOrder
@@ -4341,7 +4351,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             taxId: selectedCustomer.taxId,
             address: selectedCustomer.address,
             phone: selectedCustomer.phone,
-            email: selectedCustomer.email
+            email: selectedCustomer.email,
+            isTaxExempt: selectedCustomer.isTaxExempt
          } : undefined,
          timestamp: existing?.timestamp || new Date().toISOString(),
          tableId: activeTable.id,
@@ -5065,6 +5076,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const saleTaxBreakdown = calculateTaxBreakdownFromItems(rawSaleItems, config, {
                   isTaxIncluded,
                   terminalConfig: activeTerminalConfig,
+                  taxExempt: isSelectedCustomerTaxExempt,
                });
                const saleTaxAmount = Math.round((
                   saleTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0)
@@ -5266,6 +5278,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      transactionNetAmount: netAmount,
                      transactionTaxAmount: taxAmount,
                      transactionTotal: documentTotal,
+                     taxExempt: isSelectedCustomerTaxExempt,
                   })
                   : contextualDocumentItems;
                const documentConsignmentFields = getConsignmentTicketFields(documentItems);
@@ -5501,7 +5514,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          taxId: selectedCustomer.taxId,
          address: selectedCustomer.address,
          phone: selectedCustomer.phone,
-         email: selectedCustomer.email
+         email: selectedCustomer.email,
+         isTaxExempt: selectedCustomer.isTaxExempt
       } : undefined;
       const originalOrderId = activeTable?.currentOrderId;
       const existingOriginal = originalOrderId
@@ -6257,7 +6271,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             taxId: selectedCustomer.taxId,
             address: selectedCustomer.address,
             phone: selectedCustomer.phone,
-            email: selectedCustomer.email
+            email: selectedCustomer.email,
+            isTaxExempt: selectedCustomer.isTaxExempt
          } : undefined,
          timestamp: existingParked?.timestamp || new Date().toISOString(),
          tableId: activeTable?.id || existingParked?.tableId,
@@ -6291,6 +6306,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setActiveRecoveredReservation(null);
       setErrorToast(activeTable ? "Mesa Guardada" : "Ticket Guardado");
       setTimeout(() => setErrorToast(null), 2000);
+      if (!activeTable) returnToTicketView();
    };
 
    const saveActiveTableOrderForMap = async () => {
@@ -6316,7 +6332,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             taxId: selectedCustomer.taxId,
             address: selectedCustomer.address,
             phone: selectedCustomer.phone,
-            email: selectedCustomer.email
+            email: selectedCustomer.email,
+            isTaxExempt: selectedCustomer.isTaxExempt
          } : undefined,
          timestamp: existingParked?.timestamp || new Date().toISOString(),
          tableId: activeTable.id,
@@ -6402,7 +6419,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       onUpdateParkedTickets(parkedTickets.filter(p => p.id !== parked.id));
       setActiveRecoveredReservation(null);
       setShowParkedList(false);
-      setMobileView('TICKET');
+      returnToTicketView();
    };
 
    const handleOpenDrawer = async () => {
@@ -6565,7 +6582,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             break;
          case 'SETTINGS': if (onOpenSettings) onOpenSettings(); break;
          case 'ATTENDANCE': onOpenAttendance(); break;
-         case 'TRACKING': if (onOpenInventoryTracking) onOpenInventoryTracking(); break;
+         case 'TRACKING':
+            setShowParkedList(false);
+            setRightSidebarTab('CART');
+            onOpenInventoryTracking();
+            break;
          case 'DRAWER': handleOpenDrawer(); break;
          case 'CASH_IN':
             if (!canRegisterCashMovement) {
@@ -6645,9 +6666,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             orientation="vertical"
             onAction={(action) => {
                handleGridAction(action);
-               if (['PARK', 'RECOVER', 'PRINT_RESERVE', 'KITCHEN'].includes(action)) {
-                  setRightSidebarTab('CART');
-               }
             }}
             config={config}
             parkedTicketsCount={parkedTickets.length}
@@ -8447,6 +8465,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                if (isSubtotalizedMutation) onUpdateCart(current => clearCartSubtotalization(current));
                setGlobalDiscount({ value: numVal, type });
                setShowGlobalDiscount(false);
+               returnToTicketView();
             }} />
          }
 

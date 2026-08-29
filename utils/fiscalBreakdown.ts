@@ -56,6 +56,7 @@ interface TaxBreakdownOptions {
   fallbackTaxName?: string;
   absoluteLineValues?: boolean;
   multiplier?: number;
+  taxExempt?: boolean;
 }
 
 interface AuthoritativeLineOptions extends TaxBreakdownOptions {
@@ -135,6 +136,8 @@ export const calculateTaxBreakdownFromItems = (
     absoluteLineValues = false,
     multiplier = 1,
   } = options;
+
+  if (options.taxExempt) return [];
 
   const normalizedItems = Array.isArray(items) ? items : [];
   const grossLineTotal = normalizedItems.reduce((sum, item) => {
@@ -258,6 +261,7 @@ export const calculateLineFiscalValuesForTransaction = (
     terminalConfig,
     fallbackTaxRate = 0,
     fallbackTaxName = 'Impuesto',
+    taxExempt = false,
   } = options;
 
   const normalizedItems = Array.isArray(items) ? items : [];
@@ -270,7 +274,9 @@ export const calculateLineFiscalValuesForTransaction = (
     const itemRatio = grossLineTotal > 0 ? lineGross / grossLineTotal : 0;
     const lineDiscount = Math.max(0, toNumber(discountAmount)) * itemRatio;
     const lineBaseAfterDiscount = Math.max(0, lineGross - lineDiscount);
-    const itemTaxes = resolveEffectiveTaxes(item, config, terminalConfig, fallbackTaxRate, fallbackTaxName);
+    const itemTaxes = taxExempt
+      ? []
+      : resolveEffectiveTaxes(item, config, terminalConfig, fallbackTaxRate, fallbackTaxName);
     const totalTaxRate = itemTaxes.reduce((sum, tax) => sum + Math.max(0, toNumber(tax.rate)), 0);
 
     if (itemTaxes.length === 0 || totalTaxRate <= EPSILON) {

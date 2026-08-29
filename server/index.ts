@@ -8,6 +8,7 @@ import emailRoutes from './routes/emailRoutes.js';
 import syncRoutes from './routes/sync.js';
 import supplierRoutes from './routes/supplierRoutes.js';
 import currencyRoutes from './routes/currencies.js';
+import taxRoutes from './routes/taxes.js';
 import maintenanceRoutes from './routes/maintenance.js'; // Restore missing import
 import dgiiRoutes from './routes/dgiiRoutes.js'; // Import new route
 import bulkRoutes from './routes/bulkRoutes.js';
@@ -145,6 +146,11 @@ server.use('/v1', passKitRoutes);
 server.use('/api/email', emailRoutes);
 server.use('/api/suppliers', supplierRoutes);
 server.use('/api/currencies', currencyRoutes);
+// Operational clients use the canonical /api/sync namespace. Keep the legacy
+// mount above for the settings UI and expose the same idempotent handlers here.
+server.use('/api/sync/currencies', currencyRoutes);
+server.use('/api/taxes', taxRoutes);
+server.use('/api/sync/taxes', taxRoutes);
 server.use('/api/maintenance', maintenanceRoutes);
 server.use('/api/dgii', dgiiRoutes);
 server.use('/api/bulk', bulkRoutes);

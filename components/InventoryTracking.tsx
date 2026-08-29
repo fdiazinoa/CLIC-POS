@@ -333,7 +333,7 @@ const InventoryTracking = ({ onClose, initialProductId }: { onClose?: () => void
     }, [initialProductId]);
 
     return (
-        <div className="h-full flex flex-col bg-slate-50/50 p-6">
+        <div className="h-full min-h-0 flex flex-col overflow-y-auto bg-slate-50/50 p-4 md:p-6" data-view="inventory-tracking">
             {/* Header */}
             <div className="mb-6 flex justify-between items-end">
                 <div>

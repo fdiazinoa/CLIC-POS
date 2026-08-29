@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Percent, Plus, Save, ShieldAlert, Trash2 } from 'lucide-react';
 import { BusinessConfig, Product, TaxDefinition } from '../types';
+import { apiSyncAdapter } from '../services/sync/ApiSyncAdapter';
+import { syncPolicy } from '../services/sync/SyncProfile';
 
 interface TaxSettingsProps {
   config: BusinessConfig;
@@ -8,6 +10,8 @@ interface TaxSettingsProps {
   onUpdateConfig: (newConfig: BusinessConfig, restart?: boolean) => void;
   onUpdateProducts: (products: Product[]) => void;
   onClose: () => void;
+  currentUser?: { id: string; name: string } | null;
+  terminalId?: string;
 }
 
 const TAX_TYPE_OPTIONS: Array<{ value: TaxDefinition['type']; label: string }> = [
@@ -42,6 +46,8 @@ const TaxSettings: React.FC<TaxSettingsProps> = ({
   onUpdateConfig,
   onUpdateProducts,
   onClose,
+  currentUser,
+  terminalId,
 }) => {
   const [draftTaxes, setDraftTaxes] = useState<TaxDefinition[]>(config.taxes || []);
   const [defaultTaxId, setDefaultTaxId] = useState<string>(resolveInitialDefaultTaxId(config));
@@ -92,7 +98,7 @@ const TaxSettings: React.FC<TaxSettingsProps> = ({
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const normalizedTaxes = draftTaxes.map((tax, index) => ({
       ...tax,
       id: tax.id || createTaxId(),
@@ -149,17 +155,24 @@ const TaxSettings: React.FC<TaxSettingsProps> = ({
       };
     });
 
-    if (productsChanged) {
-      onUpdateProducts(nextProducts);
+    try {
+      if (syncPolicy.targetKind() === 'ERP_ACTIVE') {
+        await apiSyncAdapter.saveTaxes(normalizedTaxes, {
+          userId: currentUser?.id || 'POS',
+          userName: currentUser?.name || 'POS',
+          terminalId,
+        });
+      }
+      if (productsChanged) await Promise.resolve(onUpdateProducts(nextProducts));
+      await Promise.resolve(onUpdateConfig({
+        ...config,
+        taxRate: nextTaxRate,
+        taxes: normalizedTaxes,
+      }));
+      alert('Configuración de impuestos guardada y sincronizada.');
+    } catch (error: any) {
+      alert(`No se pudieron sincronizar los impuestos: ${error?.message || 'error desconocido'}`);
     }
-
-    onUpdateConfig({
-      ...config,
-      taxRate: nextTaxRate,
-      taxes: normalizedTaxes,
-    });
-
-    alert('Configuración de impuestos guardada.');
   };
 
   const primaryTaxPreview =
