@@ -557,6 +557,9 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    const [searchTerm, setSearchTerm] = useState('');
    const [categoryFilter, setCategoryFilter] = useState('ALL');
    const [editingProduct, setEditingProduct] = useState<Product | null | 'NEW'>(null);
+   const [quickPriceProduct, setQuickPriceProduct] = useState<Product | null>(null);
+   const [quickPriceValue, setQuickPriceValue] = useState('');
+   const [isSavingQuickPrice, setIsSavingQuickPrice] = useState(false);
    const [productStocks, setProductStocks] = useState<ProductStock[]>([]);
    const [viewportWidth, setViewportWidth] = useState(resolveViewportWidth());
    const consumedInitialProductIdRef = useRef<string | null>(null);
@@ -1087,6 +1090,53 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       }
    }
 
+   const defaultPosTariff = (() => {
+      const terminal = (config.terminals || []).find((entry) => entry.id === terminalId) || config.terminals?.[0];
+      const tariffId = terminal?.config?.pricing?.defaultTariffId || tariffs[0]?.id;
+      return tariffs.find((tariff) => tariff.id === tariffId) || tariffs[0];
+   })();
+
+   const openQuickPriceEditor = (product: Product) => {
+      const tariffPrice = (product.tariffs || []).find((entry) => entry.tariffId === defaultPosTariff?.id);
+      setQuickPriceValue(String(Number(tariffPrice?.price ?? product.price ?? 0)));
+      setQuickPriceProduct(product);
+   };
+
+   const appendQuickPriceKey = (key: string) => {
+      setQuickPriceValue((previous) => {
+         if (key === 'BACKSPACE') return previous.slice(0, -1);
+         if (key === '.' && previous.includes('.')) return previous;
+         if (key === '.' && !previous) return '0.';
+         return `${previous}${key}`.replace(/^0(?=\d)/, '');
+      });
+   };
+
+   const saveQuickPrice = async () => {
+      if (!quickPriceProduct || !defaultPosTariff || isSavingQuickPrice) return;
+      const nextPrice = Number(quickPriceValue.replace(',', '.'));
+      if (!Number.isFinite(nextPrice) || nextPrice < 0) {
+         alert('Ingrese un precio válido.');
+         return;
+      }
+      setIsSavingQuickPrice(true);
+      try {
+         const tariffRows = Array.isArray(quickPriceProduct.tariffs) ? quickPriceProduct.tariffs : [];
+         const hasDefaultRow = tariffRows.some((entry) => entry.tariffId === defaultPosTariff.id);
+         const updatedProduct: Product = {
+            ...quickPriceProduct,
+            price: nextPrice,
+            tariffs: hasDefaultRow
+               ? tariffRows.map((entry) => entry.tariffId === defaultPosTariff.id ? { ...entry, price: nextPrice, name: entry.name || defaultPosTariff.name } : entry)
+               : [...tariffRows, { tariffId: defaultPosTariff.id, name: defaultPosTariff.name, price: nextPrice }],
+            updatedAt: new Date().toISOString(),
+         };
+         await handleSaveProduct(updatedProduct);
+         setQuickPriceProduct(null);
+      } finally {
+         setIsSavingQuickPrice(false);
+      }
+   };
+
    async function handleDeleteProduct(product: Product) {
       if (!canManage || !product?.id) return;
       const label = product.name || product.id;
@@ -1525,6 +1575,13 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                           {canManage && (
                                              <div className="flex items-center gap-2">
                                                 <button
+                                                   onClick={(e) => { e.stopPropagation(); openQuickPriceEditor(product); }}
+                                                   className="h-12 w-12 rounded-2xl border border-emerald-100 bg-emerald-50 text-emerald-700 shadow-sm transition-all hover:bg-emerald-600 hover:text-white active:scale-95 flex items-center justify-center"
+                                                   aria-label={`Modificar precio de ${product.name}`}
+                                                >
+                                                   <DollarSign size={20} strokeWidth={2.8} />
+                                                </button>
+                                                <button
                                                    onClick={(e) => { e.stopPropagation(); setEditingProduct(product); }}
                                                    className="h-12 w-12 rounded-2xl border border-blue-100 bg-blue-50 text-blue-700 shadow-sm transition-all hover:bg-blue-600 hover:text-white active:scale-95 flex items-center justify-center"
                                                    aria-label={`Editar ${product.name}`}
@@ -1768,6 +1825,33 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                onClose={() => setShowBulkModal(false)}
                onSave={handleBulkUpdate}
             />
+         )}
+
+         {quickPriceProduct && (
+            <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm" onClick={() => setQuickPriceProduct(null)}>
+               <div className="w-full max-w-sm rounded-[2rem] bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+                  <div className="mb-5 flex items-start justify-between gap-4">
+                     <div>
+                        <p className="text-xs font-black uppercase tracking-widest text-emerald-600">Tarifa por defecto · {defaultPosTariff?.name}</p>
+                        <h3 className="mt-1 text-xl font-black text-slate-900">{quickPriceProduct.name}</h3>
+                     </div>
+                     <button type="button" onClick={() => setQuickPriceProduct(null)} className="rounded-xl bg-slate-100 p-2 text-slate-500"><XCircle size={20} /></button>
+                  </div>
+                  <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-right text-3xl font-black text-slate-900">
+                     {config.currencySymbol}{quickPriceValue || '0'}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                     {['1','2','3','4','5','6','7','8','9','.','0','BACKSPACE'].map((key) => (
+                        <button key={key} type="button" onClick={() => appendQuickPriceKey(key)} className="h-14 rounded-2xl bg-slate-100 text-xl font-black text-slate-800 active:scale-95">
+                           {key === 'BACKSPACE' ? '⌫' : key}
+                        </button>
+                     ))}
+                  </div>
+                  <button type="button" disabled={isSavingQuickPrice || !defaultPosTariff} onClick={() => void saveQuickPrice()} className="mt-4 w-full rounded-2xl bg-emerald-600 px-5 py-4 font-black text-white disabled:opacity-50">
+                     {isSavingQuickPrice ? 'Guardando…' : 'Guardar precio'}
+                  </button>
+               </div>
+            </div>
          )}
       </div>
    );

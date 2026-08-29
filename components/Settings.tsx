@@ -328,10 +328,11 @@ const Settings: React.FC<SettingsProps> = (props) => {
 
       case 'WALLET_KEYS':
         return (
-          <WalletIntegrations
-            config={props.config}
-            onUpdateConfig={(newConfig) => props.onUpdateConfig(newConfig)}
-          />
+            <WalletIntegrations
+              config={props.config}
+              onUpdateConfig={(newConfig) => props.onUpdateConfig(newConfig)}
+              onClose={() => setCurrentView('HOME')}
+            />
         );
 
       case 'CATALOG':
@@ -437,6 +438,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
             onUpdateConfig={props.onUpdateConfig}
             onUpdateProducts={props.onUpdateProducts}
             onClose={() => setCurrentView('HOME')}
+            currentUser={props.currentUser}
+            terminalId={props.terminalId}
           />
         );
 

@@ -1,16 +1,17 @@
 import React, { useState, useRef } from 'react';
 import {
     Wallet, Shield, Upload, CheckCircle2, AlertTriangle,
-    Eye, EyeOff, Save, RefreshCw, Lock, FileJson, FileKey
+    Eye, EyeOff, Save, RefreshCw, Lock, FileJson, FileKey, ArrowLeft
 } from 'lucide-react';
 import { WalletConfig, BusinessConfig } from '../types';
 
 interface WalletIntegrationsProps {
     config: BusinessConfig;
     onUpdateConfig: (config: BusinessConfig) => void;
+    onClose: () => void;
 }
 
-const WalletIntegrations: React.FC<WalletIntegrationsProps> = ({ config, onUpdateConfig }) => {
+const WalletIntegrations: React.FC<WalletIntegrationsProps> = ({ config, onUpdateConfig, onClose }) => {
     const [activeTab, setActiveTab] = useState<'APPLE' | 'GOOGLE'>('APPLE');
     const [showPassword, setShowPassword] = useState(false);
     const [isTesting, setIsTesting] = useState(false);
@@ -131,11 +132,16 @@ const WalletIntegrations: React.FC<WalletIntegrationsProps> = ({ config, onUpdat
         <div className="h-full flex flex-col bg-gray-50 animate-in fade-in duration-300">
             {/* Header */}
             <div className="bg-white border-b border-gray-200 p-6 flex justify-between items-center">
-                <div>
+                <div className="flex items-start gap-3">
+                    <button type="button" onClick={onClose} aria-label="Volver a ajustes" className="mt-0.5 rounded-xl border border-gray-200 p-2 text-gray-600 hover:bg-gray-100">
+                        <ArrowLeft size={20} />
+                    </button>
+                    <div>
                     <h2 className="text-2xl font-black text-gray-800 flex items-center gap-2">
                         <Wallet className="text-blue-600" /> Integraciones Wallet
                     </h2>
                     <p className="text-sm text-gray-500">Gestiona las llaves criptográficas para Apple y Google Wallet</p>
+                    </div>
                 </div>
                 <div className="flex bg-gray-100 p-1 rounded-xl">
                     <button

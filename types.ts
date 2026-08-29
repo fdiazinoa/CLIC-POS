@@ -1742,6 +1742,7 @@ export interface Transaction {
     address?: string;
     phone?: string;
     email?: string;
+    isTaxExempt?: boolean;
   };
 
   // Accounting
@@ -2194,6 +2195,7 @@ export interface ParkedTicket {
     address?: string;
     phone?: string;
     email?: string;
+    isTaxExempt?: boolean;
   };
   timestamp: string;
   tableId?: string | number;

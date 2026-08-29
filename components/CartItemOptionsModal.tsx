@@ -201,7 +201,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-[100] flex items-end md:items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
-      <div className="bg-white w-full md:w-[500px] md:rounded-[2.5rem] rounded-t-[2.5rem] shadow-2xl flex flex-col max-h-[95vh] overflow-hidden animate-in slide-in-from-bottom-10">
+      <div className="bg-white w-full md:w-[760px] md:rounded-[2.5rem] rounded-t-[2.5rem] shadow-2xl flex flex-col max-h-[95vh] overflow-hidden animate-in slide-in-from-bottom-10">
 
         {/* Header */}
         <div className="p-6 pb-4 flex justify-between items-start">
@@ -251,7 +251,8 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
             <span className="text-lg font-black text-blue-700">{item.stock || 0} u.</span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start" data-layout="restaurant-item-options">
+            <div className="space-y-4">
             {/* 3. PRICE INPUT */}
             <div className="space-y-2">
               <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5 ml-1">
@@ -310,8 +311,9 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
                 />
               )}
             </div>
-          </div>
+            </div>
 
+            <div className="space-y-5">
           {/* 5. SELLER SELECT */}
           <div className="space-y-2">
             <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5 ml-1">
@@ -345,6 +347,8 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
               rows={2}
               className="w-full bg-transparent border-b border-gray-100 py-2 text-sm font-medium focus:border-blue-500 outline-none transition-all resize-none"
             />
+          </div>
+            </div>
           </div>
 
         </div>

@@ -1590,43 +1590,12 @@ const isSeedSetupBusinessConfig = (config: BusinessConfig | null | undefined): b
   );
 };
 
-const resolveCompanyNameFromTenantIdentity = (): string | null => {
-  const tenantIdentity = getStoredTenantIdentity();
-  const identityText = [
-    tenantIdentity.tenantSlug,
-    tenantIdentity.tenantEmail,
-    tenantIdentity.tenantId,
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
-
-  if (identityText.includes('mercasend')) return 'Mercasend';
-  return null;
-};
-
 const normalizeCompanyInfoFromTenantIdentity = (
   sourceConfig: BusinessConfig | null | undefined
 ): { config: BusinessConfig | null | undefined; changed: boolean } => {
-  if (!sourceConfig?.companyInfo || !isSeedSetupBusinessConfig(sourceConfig)) {
-    return { config: sourceConfig, changed: false };
-  }
-
-  const tenantCompanyName = resolveCompanyNameFromTenantIdentity();
-  if (!tenantCompanyName) {
-    return { config: sourceConfig, changed: false };
-  }
-
-  return {
-    config: {
-      ...sourceConfig,
-      companyInfo: {
-        ...sourceConfig.companyInfo,
-        name: tenantCompanyName,
-      },
-    },
-    changed: true,
-  };
+  // Tenant identity selects the data boundary; it is not company master data.
+  // The configured companyInfo (local or ERP snapshot) is therefore preserved.
+  return { config: sourceConfig, changed: false };
 };
 
 const normalizePaymentMethod = (method: unknown): string => {
@@ -3797,6 +3766,20 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     if (!isDataLoaded || currentUser || !Array.isArray(users) || users.length === 0) return;
     if (isCustomerDisplaySurface()) return;
+    // A native cold start must never inherit the operator who was active when
+    // Android killed or force-closed the process. Foreground/resume retains the
+    // in-memory user and therefore never enters this restoration branch.
+    if (Capacitor.isNativePlatform()) {
+      const nativeSetupViews = new Set<ViewState>([
+        'ACTIVATION', 'WIZARD', 'TERMINAL_PAIRING', 'TERMINAL_BINDING',
+        'SETUP', 'DEVICE_UNAUTHORIZED', 'VISOR',
+      ] as ViewState[]);
+      if (nativeSetupViews.has(currentView)) return;
+      clearActiveUserSession();
+      clearSecurityState();
+      if (currentView !== 'LOGIN') setCurrentView('LOGIN');
+      return;
+    }
     if (consumeForceLoginAfterExit()) {
       clearActiveUserSession();
       clearSecurityState();
