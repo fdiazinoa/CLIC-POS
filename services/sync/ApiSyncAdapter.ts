@@ -54,6 +54,7 @@ import {
     VARIANT_PROMOTIONS_CAPABILITY,
 } from '../../utils/syncCapabilities';
 import { classifyMasterPullFailure } from './masterPullFailure';
+import { isTerminalAuthorizationSuperseded } from '../../utils/terminalAuthorizationGuard';
 
 /**
  * API Sync Adapter
@@ -2723,12 +2724,14 @@ class ApiSyncAdapter {
             const deviceId = this.resolveCurrentDeviceId();
             const deviceTokenResolution = resolveSyncDeviceToken();
             const tenantId = this.resolveCurrentTenantId();
+            const deviceWasSuperseded = isTerminalAuthorizationSuperseded();
             console.warn('POS_AUTH_MISMATCH_DETECTED', {
                 terminalId: target.terminalId,
                 deviceId,
                 authStatus: localAuthStatus,
+                deviceWasSuperseded,
             });
-            if (this.reconcileStaleOperationalAuthState({
+            if (!deviceWasSuperseded && this.reconcileStaleOperationalAuthState({
                 target,
                 staleStatus: localAuthStatus,
                 deviceId,
@@ -2742,7 +2745,7 @@ class ApiSyncAdapter {
                     };
                 }
             }
-            if (this.canAttemptOperationalReauth()) {
+            if (!deviceWasSuperseded && this.canAttemptOperationalReauth()) {
                 const recovered = await this.recoverErpCredentialsViaRegister({
                     target,
                     deviceId,
