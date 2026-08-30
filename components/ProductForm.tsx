@@ -3650,7 +3650,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Clasificación Comercial</label>
                       <div className="space-y-4">
                         <div>
-                          <label className="block text-xs font-bold text-gray-700 mb-2">Categoría POS</label>
+                          <label className="block text-xs font-bold text-gray-700 mb-2">Categoría de venta POS</label>
                           <div className="relative">
                             <select
                               value={formData.category}
@@ -3658,7 +3658,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                               disabled={categoryOptions.length === 0}
                               className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-medium outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60 disabled:cursor-not-allowed"
                             >
-                              <option value="">-- Seleccione Categoría POS --</option>
+                              <option value="">-- Seleccione Categoría de venta POS --</option>
                               {categoryOptions.map(c => (
                                 <option key={c.id} value={c.name}>{c.name}</option>
                               ))}
@@ -3666,8 +3666,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                           </div>
                           <p className="text-[10px] text-gray-400 mt-1 pl-1">
                             {categoryOptions.length > 0
-                              ? 'Seleccione una categoría sincronizada/configurada. No se permite escribir categorías libres.'
-                              : 'No hay categorías POS sincronizadas todavía.'}
+                              ? 'Agrupa el artículo en la pantalla de ventas. Seleccione una categoría sincronizada/configurada.'
+                              : 'No hay categorías de venta POS sincronizadas todavía.'}
                           </p>
                         </div>
                         <div>
