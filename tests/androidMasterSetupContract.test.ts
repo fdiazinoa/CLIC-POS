@@ -98,25 +98,22 @@ test('Master ERP lista terminales autoritativas del ERP y no acepta seeds del se
   assert.doesNotMatch(terminalSelectorSource, /setup proxy \/terminals failed, falling back to ERP direct/);
 });
 
-test('Master ERP directo propaga forceTransfer en Android y en el fallback web', () => {
+test('Master ERP directo neutraliza forceTransfer en Android y web', () => {
   const directBindingFlow = terminalSelectorSource.slice(
     terminalSelectorSource.indexOf('if (useErpDirectMasterAndroid) {', terminalSelectorSource.indexOf('const bindTerminal = useCallback')),
     terminalSelectorSource.indexOf('} else {', terminalSelectorSource.indexOf('if (useErpDirectMasterAndroid) {', terminalSelectorSource.indexOf('const bindTerminal = useCallback'))),
   );
 
-  assert.equal((directBindingFlow.match(/forceTransfer,/g) || []).length, 2);
-  assert.doesNotMatch(directBindingFlow, /forceTransfer:\s*false/);
+  assert.equal((directBindingFlow.match(/forceTransfer:\s*false/g) || []).length, 2);
+  assert.doesNotMatch(directBindingFlow, /forceTransfer,/);
 });
 
-test('el takeover ERP directo está limitado a MASTER y usa el UUID canónico', () => {
-  assert.match(erpTerminalSetupSource, /input\.bindingMode === 'MASTER'/);
-  assert.match(erpTerminalSetupSource, /input\.forceTransfer === true/);
-  assert.match(
-    erpTerminalSetupSource,
-    /`\/api\/sync\/terminals\/\$\{encodeURIComponent\(targetErpTerminalId\)\}\/takeover`/,
-  );
-  assert.match(erpTerminalSetupSource, /terminal_id:\s*targetErpTerminalId/);
-  assert.match(erpTerminalSetupSource, /status:\s*'TAKEOVER_ACCEPTED'/);
+test('ERP directo verifica autorización canónica y nunca ejecuta takeover desde POS', () => {
+  assert.doesNotMatch(erpTerminalSetupSource, /\/takeover/);
+  assert.match(erpTerminalSetupSource, /checkTerminalAuthorizationFromErp/);
+  assert.match(erpTerminalSetupSource, /terminal_id:\s*input\.erpTerminalId/);
+  assert.match(erpTerminalSetupSource, /erp_terminal_id:\s*input\.erpTerminalId/);
+  assert.match(erpTerminalSetupSource, /device_id:\s*input\.posDeviceId/);
   assert.match(terminalSelectorSource, /message:\s*err\.message/);
   assert.match(terminalSelectorSource, /\{authorizationIssue\.message\}/);
 });

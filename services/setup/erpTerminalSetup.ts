@@ -20,6 +20,7 @@ import {
   POS_SYNC_CAPABILITY_VERSIONS,
   VARIANT_PROMOTIONS_CAPABILITY,
 } from '../../utils/syncCapabilities';
+import { isDeviceExplicitlyAuthorizedByBootstrap } from '../../utils/terminalAuthorizationGuard';
 
 export interface RuntimeTerminalCard {
   id: string;
@@ -191,6 +192,29 @@ export class SetupErpRequestError extends Error {
     this.payload = options.payload;
   }
 }
+
+export const checkTerminalAuthorizationFromErp = async (input: {
+  erpBaseUrl: string;
+  tenantId?: string | null;
+  erpTerminalId: string;
+  posDeviceId: string;
+}) => {
+  const payload = asObject(await fetchErpJson(input.erpBaseUrl, '/api/sync/bootstrap/check', {
+    method: 'POST',
+    headers: buildDeviceHeaders(input.posDeviceId),
+    body: {
+      tenant_id: input.tenantId || null,
+      terminal_id: input.erpTerminalId,
+      erp_terminal_id: input.erpTerminalId,
+      device_id: input.posDeviceId,
+    },
+  }));
+
+  return {
+    authorized: isDeviceExplicitlyAuthorizedByBootstrap(payload, input.posDeviceId),
+    payload,
+  };
+};
 
 const REQUEST_TIMEOUT_MS = 12000;
 
@@ -400,7 +424,9 @@ const fetchErpJson = async (
           httpStatus: response.status,
           payload: asObject(payload),
           currentDeviceId:
-            asString(asObject(payload).current_device_id)
+            asString(asObject(payload).authorized_device_id)
+            || asString(asObject(payload).authorizedDeviceId)
+            || asString(asObject(payload).current_device_id)
             || asString(asObject(payload).currentDeviceId)
             || asString(asObject(payload).bound_device_id)
             || undefined,
@@ -410,6 +436,19 @@ const fetchErpJson = async (
             || undefined,
           terminalName: asString(asObject(payload).terminal_name) || undefined,
         }
+      );
+    }
+    if (backendCode === 'SETUP_AUTH_REQUIRED') {
+      console.error('[POS_ERP_PAIRING]', {
+        endpoint: path,
+        httpStatus: response.status,
+        authResponseCode: backendCode,
+        pairingStatus: 'CLIENT_IMPLEMENTATION_ERROR',
+      });
+      throw new SetupErpRequestError(
+        backendCode,
+        'La autorización debe completarse desde Cloud Admin. Este dispositivo no puede autorizarse por sí mismo.',
+        { httpStatus: response.status, payload: asObject(payload) },
       );
     }
     if (options?.preserveBackendError) {
@@ -1472,51 +1511,37 @@ export const bindTerminalFromErp = async (input: {
   const occupiedDeviceId =
     asString(targetTerminal.device_id) || resolveOccupiedDeviceId(targetTerminal, currentProfilePayload);
 
-  let takeoverPayload: any = null;
   let registerPayload: Record<string, any> | null = null;
 
-  const shouldTakeover = Boolean(
-    input.bindingMode === 'MASTER'
-    && input.forceTransfer === true
-    && occupiedDeviceId
-    && occupiedDeviceId !== input.posDeviceId
+  const authorizationCheck = await checkTerminalAuthorizationFromErp({
+    erpBaseUrl: input.erpBaseUrl,
+    tenantId: resolvedContext.tenantId,
+    erpTerminalId: targetErpTerminalId,
+    posDeviceId: input.posDeviceId,
+  });
+  const authorizationPayload = authorizationCheck.payload;
+  const occupiedByAnotherDevice = Boolean(
+    occupiedDeviceId
+    && occupiedDeviceId.toUpperCase() !== input.posDeviceId.toUpperCase()
   );
-
-  if (shouldTakeover) {
-    console.info('[POS_ERP_PAIRING]', {
+  if (occupiedByAnotherDevice && !authorizationCheck.authorized) {
+    console.warn('[POS_ERP_PAIRING]', {
       ...pairingLogBase,
       previousDeviceId: occupiedDeviceId,
-      status: 'TAKEOVER_REQUESTED',
+      authResponseCode: resolveBackendCode(authorizationPayload) || 'DEVICE_NOT_AUTHORIZED',
+      pairingStatus: 'WAITING_CLOUD_ADMIN_REAUTHORIZATION',
     });
-    takeoverPayload = asObject(await fetchErpJson(
-      input.erpBaseUrl,
-      `/api/sync/terminals/${encodeURIComponent(targetErpTerminalId)}/takeover`,
+    throw new SetupDeviceAuthorizationError(
+      resolveBackendCode(authorizationPayload) || 'DEVICE_NOT_AUTHORIZED',
+      'La autorización debe completarse desde Cloud Admin. Este dispositivo no puede autorizarse por sí mismo.',
       {
-        method: 'POST',
-        headers: buildDeviceHeaders(input.posDeviceId),
-        preserveBackendError: true,
-        body: {
-          terminal_id: targetErpTerminalId,
-          device_id: input.posDeviceId,
-          ...(input.deviceName ? { device_name: input.deviceName } : {}),
-          tenant_id: resolvedContext.tenantId,
-          cloud_admin_tenant_id: input.tenantId || null,
-          reason: 'CLIC_POS_ANDROID_DIRECT_REAUTHORIZATION',
-          requested_by: 'clic-pos-android-setup',
-          takeover: true,
-          rotate_device_token: true,
-        },
+        httpStatus: 403,
+        payload: authorizationPayload,
+        currentDeviceId: occupiedDeviceId,
+        terminalId: targetErpTerminalId,
+        terminalName: targetTerminalName,
       },
-    ));
-    console.info('[POS_ERP_PAIRING]', {
-      ...pairingLogBase,
-      previousDeviceId:
-        asString(takeoverPayload.previous_device_id)
-        || asString(takeoverPayload.previousDeviceId)
-        || occupiedDeviceId,
-      authResponseCode: resolveBackendCode(takeoverPayload) || asString(takeoverPayload.status) || 'OK',
-      status: 'TAKEOVER_ACCEPTED',
-    });
+    );
   }
 
   try {
@@ -1688,17 +1713,6 @@ export const bindTerminalFromErp = async (input: {
 
   const profilesByTerminalId = new Map<string, any>(profiles);
   let recoveryState: RuntimeTerminalRecoveryState | null = null;
-  if (takeoverPayload) {
-    try {
-      recoveryState = await fetchTerminalRecoveryStateFromErp({
-        erpBaseUrl: input.erpBaseUrl,
-        erpTerminalId: canonicalErpTerminalId,
-        posDeviceId: input.posDeviceId,
-      });
-    } catch (error) {
-      console.warn('⚠️ No se pudo consultar recovery-state después del takeover:', error);
-    }
-  }
 
   const boundConfig = buildBoundConfig({
     currentConfig: input.currentConfig,
@@ -1711,10 +1725,6 @@ export const bindTerminalFromErp = async (input: {
   });
   const runtimeAuth = extractErpRegisterAuth(
     registerPayload,
-    takeoverPayload,
-    takeoverPayload?.auth,
-    takeoverPayload?.syncHeaders,
-    takeoverPayload?.sync_headers,
     registerPayload?.auth,
     registerPayload?.syncHeaders,
     registerPayload?.sync_headers,
@@ -1727,7 +1737,7 @@ export const bindTerminalFromErp = async (input: {
     targetTerminal
   );
   if (runtimeAuth.deviceToken) {
-    persistSyncDeviceToken(runtimeAuth.deviceToken, takeoverPayload ? 'ERP_TAKEOVER' : 'ERP_REGISTER', runtimeAuth.tokenExpiresAt);
+    persistSyncDeviceToken(runtimeAuth.deviceToken, 'ERP_REGISTER', runtimeAuth.tokenExpiresAt);
   }
   if (runtimeAuth.deviceToken || runtimeAuth.syncToken) {
     saveTerminalCredentialsSync({
@@ -1742,7 +1752,7 @@ export const bindTerminalFromErp = async (input: {
       cloudAdminTenantId: input.tenantId || null,
       ...(runtimeAuth.deviceToken ? {
         deviceToken: runtimeAuth.deviceToken,
-        deviceTokenSource: takeoverPayload ? 'ERP_TAKEOVER' : 'ERP_REGISTER',
+        deviceTokenSource: 'ERP_REGISTER',
         deviceTokenUpdatedAt: new Date().toISOString(),
         deviceTokenExpiresAt: runtimeAuth.tokenExpiresAt || null,
       } : {}),
@@ -1776,12 +1786,8 @@ export const bindTerminalFromErp = async (input: {
     terminal_name: targetTerminalName,
     company_id: asString(targetTerminal.company_id) || resolvedContext.companyId || null,
     store_id: asString(targetTerminal.store_id) || resolvedContext.storeId || null,
-    transferred: Boolean(takeoverPayload),
-    previous_device_id:
-      asString(takeoverPayload?.previous_device_id)
-      || asString(takeoverPayload?.previousDeviceId)
-      || asString(registerPayload?.previous_device_id)
-      || (takeoverPayload ? occupiedDeviceId || null : null),
+    transferred: false,
+    previous_device_id: asString(registerPayload?.previous_device_id) || null,
     recovery_state: recoveryState,
     config: boundConfig,
     syncProfile,

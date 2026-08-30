@@ -2366,7 +2366,10 @@ export const getStoredErpSyncBinding = () => ({
     status: normalizeOptional(localStorage.getItem(SYNC_BINDING_STATUS_KEY)) || null,
 });
 
-export const bootstrapErpSyncLifecycle = async (deviceId: string): Promise<SyncBootstrapResponse | null> => {
+export const bootstrapErpSyncLifecycle = async (
+    deviceId: string,
+    terminalId?: string | null,
+): Promise<SyncBootstrapResponse | null> => {
     if (!isConfigured() || !deviceId) return null;
 
     const identity = getStoredTenantIdentity();
@@ -2381,6 +2384,8 @@ export const bootstrapErpSyncLifecycle = async (deviceId: string): Promise<SyncB
         company_ref: identity.tenantSlug || null,
         email: identity.tenantEmail || null,
         device_id: deviceId,
+        terminal_id: resolveCanonicalErpTerminalId(terminalId) || undefined,
+        erp_terminal_id: resolveCanonicalErpTerminalId(terminalId) || undefined,
     });
 
     if (payload?.terminal) {
