@@ -173,12 +173,6 @@ const RouteLoadingFallback: React.FC = () => (
   </div>
 );
 
-type TerminalAuthorizationBlock = {
-  terminalId?: string | null;
-  terminalLabel: string;
-  message: string;
-};
-
 type TerminalAuthorizationCheckState = 'idle' | 'checking' | 'authorized';
 
 
@@ -270,7 +264,7 @@ import {
   type SyncProfilePersistenceDiagnostic,
   type SyncProfileSource
 } from './services/sync/SyncProfile';
-import { persistSyncDeviceToken } from './services/sync/deviceToken';
+import { markSyncDeviceTokenInvalid, persistSyncDeviceToken } from './services/sync/deviceToken';
 import {
   extractErpRegisterAuth,
   resolveIncomingSyncProfileFromRegister,
@@ -278,7 +272,14 @@ import {
   resolveRegisterErpTerminalId,
   resolveRegisterTerminalCode,
 } from './services/sync/erpRegisterResponse';
-import { readTerminalCredentials, saveTerminalCredentialsSync } from './services/sync/TerminalCredentialStore';
+import { clearStoredSyncToken, readTerminalCredentials, saveTerminalCredentialsSync } from './services/sync/TerminalCredentialStore';
+import {
+  clearPersistedTerminalAuthorizationBlock,
+  isDeviceExplicitlyAuthorizedByBootstrap,
+  persistTerminalAuthorizationBlock,
+  readPersistedTerminalAuthorizationBlock,
+  type TerminalAuthorizationBlock,
+} from './utils/terminalAuthorizationGuard';
 import {
   normalizeCanonicalErpTerminalId,
   requireCanonicalErpTerminalId,
@@ -1854,7 +1855,7 @@ const AppContent: React.FC = () => {
   const [failedMasterIp, setFailedMasterIp] = useState<string>('');
   const initLoadStartedRef = useRef(false);
   const forceSyncHandledRef = useRef(false);
-  const lockdownHandledRef = useRef(false);
+  const lockdownHandledRef = useRef(Boolean(readPersistedTerminalAuthorizationBlock()));
   const [reconnectionStatus, setReconnectionStatus] = useState<'idle' | 'searching' | 'connected' | 'failed'>('idle');
   const [terminalConfigRestartNotice, setTerminalConfigRestartNotice] = useState<TerminalConfigRestartNotice | null>(() => readTerminalConfigRestartNotice());
   const [posApkUpdate, setPosApkUpdate] = useState<PosApkUpdateAvailable | null>(null);
@@ -1881,7 +1882,9 @@ const AppContent: React.FC = () => {
   const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [licenseError, setLicenseError] = useState<string | null>(null);
-  const [terminalAuthorizationBlock, setTerminalAuthorizationBlock] = useState<TerminalAuthorizationBlock | null>(null);
+  const [terminalAuthorizationBlock, setTerminalAuthorizationBlock] = useState<TerminalAuthorizationBlock | null>(
+    () => readPersistedTerminalAuthorizationBlock(),
+  );
   const [terminalAuthorizationCheckState, setTerminalAuthorizationCheckState] = useState<TerminalAuthorizationCheckState>('idle');
   const terminalAuthorizationCheckInFlightRef = useRef(false);
   const inactivityTimerRef = useRef<number | null>(null);
@@ -1894,6 +1897,14 @@ const AppContent: React.FC = () => {
   const isAppInBackgroundRef = useRef(false);
   const lifecycleSyncInFlightRef = useRef<Promise<boolean> | null>(null);
   const erpHeartbeatInFlightRef = useRef<Promise<void> | null>(null);
+
+  useEffect(() => {
+    if (!terminalAuthorizationBlock) return;
+    syncManager.stopAutoSync();
+    clearActiveUserSession();
+    setCurrentUser(null);
+    void realtimeNotificationService.disconnect('DISABLED');
+  }, [terminalAuthorizationBlock]);
 
   // Security bootstrap logic moved to loadData
 
@@ -2251,6 +2262,18 @@ const AppContent: React.FC = () => {
   }, [config.terminals]);
 
   const triggerLockdown = React.useCallback((message: string, terminalBlock?: TerminalAuthorizationBlock | null) => {
+    if (terminalBlock) {
+      persistTerminalAuthorizationBlock(terminalBlock);
+      markSyncDeviceTokenInvalid('DEVICE_SUPERSEDED');
+      clearStoredSyncToken();
+      localStorage.setItem(TERMINAL_BINDING_STATUS_KEY, 'NEEDS_REAUTH');
+      localStorage.setItem('clic_sync_auth_status', 'NEEDS_REAUTH');
+      localStorage.setItem('clic_sync_last_auth_error', 'DEVICE_SUPERSEDED');
+      saveTerminalCredentialsSync({
+        authStatus: 'NEEDS_REAUTH',
+        lastAuthError: 'DEVICE_SUPERSEDED',
+      });
+    }
     if (lockdownHandledRef.current) return;
     lockdownHandledRef.current = true;
     syncManager.stopAutoSync();
@@ -2286,95 +2309,7 @@ const AppContent: React.FC = () => {
       const bootstrap = await bootstrapErpSyncLifecycle(normalizedDeviceId);
       const payload = (bootstrap || {}) as any;
       const terminal = payload.terminal || payload.terminal_config?.terminal || payload.terminalConfig?.terminal || {};
-      const config = terminal.config || payload.terminal_config?.config || payload.terminalConfig?.config || {};
-      const profile = payload.profile || payload.terminal_profile || payload.terminalProfile || {};
-      const metadata = terminal.metadata || config.metadata || payload.metadata || {};
-      const auth = payload.authorization || payload.auth || terminal.authorization || terminal.auth || {};
-      const candidates = [
-        terminal.authorized_device_id,
-        terminal.authorizedDeviceId,
-        terminal.current_device_id,
-        terminal.currentDeviceId,
-        terminal.canonical_device_id,
-        terminal.canonicalDeviceId,
-        terminal.device_id,
-        terminal.deviceId,
-        config.authorized_device_id,
-        config.authorizedDeviceId,
-        config.current_device_id,
-        config.currentDeviceId,
-        config.canonical_device_id,
-        config.canonicalDeviceId,
-        config.device_id,
-        config.deviceId,
-        profile.authorized_device_id,
-        profile.authorizedDeviceId,
-        profile.current_device_id,
-        profile.currentDeviceId,
-        profile.canonical_device_id,
-        profile.canonicalDeviceId,
-        profile.device_id,
-        profile.deviceId,
-        metadata.authorized_device_id,
-        metadata.authorizedDeviceId,
-        metadata.bound_device_id,
-        metadata.boundDeviceId,
-        metadata.canonical_device_id,
-        metadata.canonicalDeviceId,
-        auth.authorized_device_id,
-        auth.authorizedDeviceId,
-        auth.current_device_id,
-        auth.currentDeviceId,
-        auth.canonical_device_id,
-        auth.canonicalDeviceId,
-        payload.authorized_device_id,
-        payload.authorizedDeviceId,
-        payload.current_device_id,
-        payload.currentDeviceId,
-        payload.canonical_device_id,
-        payload.canonicalDeviceId,
-        payload.device_id,
-        payload.deviceId,
-      ].map((value) => String(value || '').trim().toUpperCase()).filter(Boolean);
-      const statusText = [
-        payload.status,
-        payload.authorization_status,
-        payload.authorizationStatus,
-        payload.device_status,
-        payload.deviceStatus,
-        terminal.status,
-        terminal.authorization_status,
-        terminal.authorizationStatus,
-        config.status,
-        config.authorization_status,
-        profile.status,
-        auth.status,
-        auth.authorization_status,
-      ].map((value) => String(value || '').trim().toUpperCase()).filter(Boolean).join('|');
-      const revoked = Boolean(
-        payload.revoked
-        || payload.is_revoked
-        || payload.isRevoked
-        || payload.requires_reauth
-        || payload.requiresReauth
-        || payload.reauth_required
-        || payload.reauthRequired
-        || terminal.revoked
-        || terminal.is_revoked
-        || terminal.isRevoked
-        || terminal.requires_reauth
-        || terminal.requiresReauth
-        || config.revoked
-        || config.is_revoked
-        || config.requires_reauth
-        || metadata.revoked
-        || metadata.is_revoked
-        || metadata.requires_reauth
-        || auth.revoked
-        || auth.requires_reauth
-        || /REVOKED|SUPERSEDED|DEVICE_NOT_AUTHORIZED|TAKEOVER_REQUIRED|WAITING_CLOUD_ADMIN_REAUTHORIZATION|NEEDS_REAUTH|LOCKED_AUTH_REQUIRED/.test(statusText)
-      );
-      const isAuthorized = candidates.includes(normalizedDeviceId) && !revoked;
+      const isAuthorized = isDeviceExplicitlyAuthorizedByBootstrap(payload, normalizedDeviceId);
       if (isAuthorized) {
         console.info('stale_authorization_block_ignored', {
           deviceId: normalizedDeviceId,
@@ -2410,6 +2345,7 @@ const AppContent: React.FC = () => {
       setCatalogDiagnosticStatus('SYNCED');
       setSalesPushDiagnosticStatus('ENABLED');
       setSyncAuthDiagnosticStatus('AUTHENTICATED');
+      clearPersistedTerminalAuthorizationBlock();
       localStorage.setItem(TERMINAL_BINDING_STATUS_KEY, 'BOUND');
       localStorage.setItem('clic_sync_auth_status', 'AUTHENTICATED');
       localStorage.removeItem('clic_sync_last_auth_error');
@@ -2424,6 +2360,27 @@ const AppContent: React.FC = () => {
     });
     return false;
   }, [resolveBlockedTerminalLabel, triggerLockdown, verifyErpDeviceStillAuthorized]);
+
+  const retryTerminalAuthorization = React.useCallback(async () => {
+    if (terminalAuthorizationCheckInFlightRef.current || !terminalAuthorizationBlock) return;
+
+    terminalAuthorizationCheckInFlightRef.current = true;
+    setTerminalAuthorizationCheckState('checking');
+    try {
+      const authorized = await triggerLockdownAfterAuthorizationCheck(
+        DEVICE_SUPERSEDED_MESSAGE,
+        deviceId,
+        { terminalId: terminalAuthorizationBlock.terminalId || null },
+      );
+      if (authorized) {
+        window.location.reload();
+        return;
+      }
+      setTerminalAuthorizationCheckState('idle');
+    } finally {
+      terminalAuthorizationCheckInFlightRef.current = false;
+    }
+  }, [deviceId, terminalAuthorizationBlock, triggerLockdownAfterAuthorizationCheck]);
 
   useEffect(() => {
     const handleDeviceRevoked = (event: Event) => {
@@ -3211,7 +3168,7 @@ const AppContent: React.FC = () => {
     const currentTerminal = getCurrentTerminal();
     const tenantIdentity = getStoredTenantIdentity();
 
-    if (setupPending || !erpLifecycleReady) return;
+    if (setupPending || !erpLifecycleReady || terminalAuthorizationBlock) return;
     if (!deviceId || !currentTerminal?.id) return;
     if (!tenantIdentity.tenantId && !tenantIdentity.tenantSlug && !tenantIdentity.tenantEmail) return;
 
@@ -3641,7 +3598,7 @@ const AppContent: React.FC = () => {
       window.removeEventListener('online', handleErpOnline);
       document.removeEventListener('visibilitychange', handleErpAppResume);
     };
-  }, [erpLifecycleReady, deviceId, getCurrentTerminal]);
+  }, [erpLifecycleReady, deviceId, getCurrentTerminal, terminalAuthorizationBlock]);
 
   // --- RECONNECTION BANNER ---
   const renderReconnectionBanner = () => {
@@ -7732,6 +7689,7 @@ const AppContent: React.FC = () => {
       );
       clearSyncErrorDiagnostic();
       setSyncDiagnostic(null);
+      clearPersistedTerminalAuthorizationBlock();
       markDeviceReauthorized(deviceId);
       if (isErpDirectBinding) {
         console.log('[SYNC_ROUTER] POS_ERP binding complete: skipping POS_CLOUD_STAGING snapshot and PUSH_MASTERS.');
@@ -10074,11 +10032,12 @@ const AppContent: React.FC = () => {
 
             <button
               type="button"
-              onClick={() => window.location.reload()}
-              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-4 text-sm font-black uppercase tracking-[0.12em] text-white shadow-xl transition active:scale-[0.98]"
+              onClick={() => void retryTerminalAuthorization()}
+              disabled={terminalAuthorizationCheckState === 'checking'}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-4 text-sm font-black uppercase tracking-[0.12em] text-white shadow-xl transition active:scale-[0.98] disabled:cursor-wait disabled:opacity-70"
             >
-              <RefreshCw size={18} />
-              Reintentar autorización
+              <RefreshCw size={18} className={terminalAuthorizationCheckState === 'checking' ? 'animate-spin' : ''} />
+              {terminalAuthorizationCheckState === 'checking' ? 'Validando autorización...' : 'Reintentar autorización'}
             </button>
           </div>
         </section>
