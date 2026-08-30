@@ -1953,10 +1953,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (usesSupermarketLayout) {
          return "hidden";
       }
-      if (uxConfig.quickKeysLayout === 'B') {
-         return "bg-white border-b border-gray-200 px-3 md:px-8 py-2 md:py-3 flex flex-wrap gap-2 shrink-0 max-h-28 md:max-h-32 overflow-y-auto custom-scrollbar";
-      }
-      return "bg-white border-b border-gray-200 px-3 md:px-8 py-2 md:py-3 flex gap-2 overflow-x-auto no-scrollbar shrink-0";
+      const scrollbarClass = uxConfig.quickKeysLayout === 'B' ? 'custom-scrollbar' : 'no-scrollbar';
+      return `bg-white border-b border-gray-200 px-3 md:px-8 py-2 md:py-3 grid grid-flow-col grid-rows-2 auto-cols-[112px] md:auto-cols-[132px] gap-x-3 gap-y-2 overflow-x-auto overflow-y-hidden shrink-0 ${scrollbarClass}`;
    }, [usesSupermarketLayout, uxConfig.quickKeysLayout]);
 
    const allowedTariffs = useMemo(() => {
@@ -7067,12 +7065,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      key={categoryOption.id || `cat-${idx}`}
                      onClick={() => setCategoryFilter(categoryOption.id)}
                      style={configuredStyle}
-                     className={`h-[42px] md:h-[48px] min-w-[102px] md:min-w-[116px] px-4 md:px-6 rounded-xl text-[11px] md:text-[12px] font-black uppercase tracking-[0.1em] transition-all whitespace-nowrap border shadow-sm active:scale-95 ${isActiveCategory
+                     className={`h-[42px] md:h-[48px] w-full min-w-0 px-2 md:px-3 rounded-xl text-[11px] md:text-[12px] leading-tight font-black uppercase tracking-[0.08em] transition-all whitespace-normal text-center border shadow-sm active:scale-95 ${isActiveCategory
                         ? `${configuredColor ? '' : categoryTone.active} shadow-lg -translate-y-0.5`
                         : `${configuredColor ? '' : categoryTone.idle} hover:-translate-y-0.5 hover:shadow-md`
                         }`}
                   >
-                     {categoryOption.label}
+                     <span className="line-clamp-2">{categoryOption.label}</span>
                   </button>
                   );
                })}
