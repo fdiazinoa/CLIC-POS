@@ -870,18 +870,18 @@ const ProductGridCard = React.memo(({
             ? usesSupermarketLayout
                ? 'rounded-[1.75rem] p-3.5 shadow-[0_10px_26px_rgba(15,23,42,0.08)] min-h-[230px] grid grid-rows-[60%_40%]'
                : usesExpandedCatalog
-                  ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[214px] grid grid-rows-[56%_44%]'
+                  ? 'h-full min-h-0 rounded-[1.4rem] p-2.5 shadow-[0_1px_6px_rgba(15,23,42,0.06)] grid grid-rows-[52%_48%]'
                   : isCompactMobileCard
                      ? `rounded-[1.5rem] p-2.5 min-h-[194px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`
                      : `rounded-[2rem] p-3 min-h-[214px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`
             : usesExpandedCatalog
-               ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[168px] flex flex-col'
+               ? 'h-full min-h-0 rounded-[1.4rem] p-2.5 shadow-[0_1px_6px_rgba(15,23,42,0.06)] flex flex-col'
                : isCompactMobileCard
                   ? `rounded-[1.4rem] p-2.5 min-h-[148px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`
                   : `rounded-[1.6rem] p-3 min-h-[166px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
       >
          {showProductImages && (
-            <div className={`${usesSupermarketLayout ? 'h-full rounded-[1.35rem] mb-0 p-2.5' : usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-[6.75rem] rounded-[1.15rem] mb-1.5 p-2' : 'h-28 md:h-32 rounded-[1.5rem] mb-2.5'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
+            <div className={`${usesSupermarketLayout ? 'h-full rounded-[1.35rem] mb-0 p-2.5' : usesExpandedCatalog ? 'h-full rounded-[1.1rem] mb-0 p-1.5' : isCompactMobileCard ? 'h-[6.75rem] rounded-[1.15rem] mb-1.5 p-2' : 'h-28 md:h-32 rounded-[1.5rem] mb-2.5'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
                {imageSrc ? <img src={imageSrc} className={`w-full h-full ${usesSupermarketLayout || usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={usesSupermarketLayout ? 56 : 48} strokeWidth={1} /></div>}
 
                {isWeighted && (
@@ -959,7 +959,7 @@ const ProductGridCard = React.memo(({
          )}
          <div className={`flex flex-col ${showProductImages
             ? usesExpandedCatalog
-               ? 'min-h-0 h-full pt-2 justify-between'
+               ? 'min-h-0 h-full pt-1.5 justify-between'
                : usesSupermarketLayout
                   ? 'flex-1 gap-1 pt-1.5'
                   : isCompactMobileCard
@@ -967,9 +967,9 @@ const ProductGridCard = React.memo(({
                      : 'flex-1 justify-between gap-2 pt-1'
             : 'min-h-0 flex-1 justify-end gap-1 pt-2'}`}>
             <div className={usesSupermarketLayout ? 'space-y-1.5' : usesExpandedCatalog ? 'space-y-1' : isCompactMobileCard ? 'space-y-0.5' : 'space-y-1.5'}>
-               <span className={`block font-black text-purple-500 uppercase opacity-70 line-clamp-1 ${usesSupermarketLayout ? 'text-[11px]' : usesExpandedCatalog ? 'text-[10px]' : isCompactMobileCard ? 'text-[10px]' : 'text-[9px]'}`}>{product.category}</span>
+               <span className={`block font-black text-purple-500 uppercase opacity-70 line-clamp-1 ${usesSupermarketLayout ? 'text-[11px]' : usesExpandedCatalog ? 'text-[9px]' : isCompactMobileCard ? 'text-[10px]' : 'text-[9px]'}`}>{product.category}</span>
                {showProductImages && (
-                  <h3 className={`font-black text-gray-800 dark:text-white leading-[1.08] truncate tracking-[-0.02em] ${usesSupermarketLayout ? 'text-[1.22rem] min-h-[1.35rem]' : usesExpandedCatalog ? 'text-[1.16rem] min-h-[1.3rem]' : isCompactMobileCard ? 'text-[1.16rem] min-h-[1.3rem]' : 'text-[1rem] min-h-[1.15rem]'}`}>{product.name}</h3>
+                  <h3 className={`font-black text-gray-800 dark:text-white leading-[1.08] truncate tracking-[-0.02em] ${usesSupermarketLayout ? 'text-[1.22rem] min-h-[1.35rem]' : usesExpandedCatalog ? 'text-[1.05rem] min-h-[1.15rem]' : isCompactMobileCard ? 'text-[1.16rem] min-h-[1.3rem]' : 'text-[1rem] min-h-[1.15rem]'}`}>{product.name}</h3>
                )}
             </div>
             <div className={`${showProductImages
@@ -983,7 +983,7 @@ const ProductGridCard = React.memo(({
                   ? usesSupermarketLayout
                      ? 'text-[1.78rem]'
                      : usesExpandedCatalog
-                        ? 'text-[1.5rem]'
+                        ? 'text-[1.3rem]'
                         : isCompactMobileCard
                            ? 'text-[1.4rem]'
                            : 'text-lg'
@@ -1938,7 +1938,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         return "grid [grid-template-columns:repeat(auto-fill,minmax(210px,1fr))] gap-4 md:gap-5 content-start auto-rows-fr";
       }
       if (usesExpandedCatalog) {
-        return "grid grid-cols-4 gap-x-4 gap-y-4 content-start auto-rows-fr";
+        return "grid h-full min-h-[320px] grid-cols-4 grid-rows-2 gap-3 content-start";
       }
       if (isMobile) {
          return "grid [grid-template-columns:repeat(auto-fill,minmax(138px,1fr))] gap-2.5 content-start";
@@ -1948,6 +1948,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       return "grid [grid-template-columns:repeat(auto-fill,minmax(160px,1fr))] gap-3 md:gap-4 content-start";
    }, [isMobile, usesExpandedCatalog, usesSupermarketLayout, uxConfig.gridDensity]);
+
+   const expandedCatalogGridStyle = useMemo(
+      () => usesExpandedCatalog
+         ? {
+            gridTemplateRows: 'repeat(2, minmax(0, 1fr))',
+            gridAutoRows: 'calc((100% - 0.75rem) / 2)',
+         } as React.CSSProperties
+         : undefined,
+      [usesExpandedCatalog]
+   );
 
    const categoryContainerClass = useMemo(() => {
       if (usesSupermarketLayout) {
@@ -2267,7 +2277,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             paddingBottom: isMobile
                ? 'calc(var(--bottom-safe-offset, 12px) + env(safe-area-inset-bottom))'
                : usesExpandedCatalog
-                  ? 'calc(var(--bottom-safe-offset, 12px) + 0.75rem)'
+                  ? '0.75rem'
                   : '1.25rem',
          }) as React.CSSProperties,
       [isMobile, usesExpandedCatalog]
@@ -7077,10 +7087,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div>
 
             <div
-               className={`flex-1 min-h-0 overflow-y-auto bg-[#eef2f6] ${usesExpandedCatalog ? 'p-3 pl-4 pr-2' : isMobile ? 'p-3' : 'p-8'} custom-scrollbar scrollbar-thin dark:bg-slate-900`}
+               className={`flex-1 min-h-0 overflow-y-auto bg-[#eef2f6] ${usesExpandedCatalog ? 'px-4 py-3' : isMobile ? 'p-3' : 'p-8'} custom-scrollbar scrollbar-thin dark:bg-slate-900`}
                style={bottomAwareScrollStyle}
             >
-               <div className={gridClass}>
+               <div className={gridClass} style={expandedCatalogGridStyle}>
                   {filteredProducts.map((product, idx) => (
                      <ProductGridCard
                         key={product.id || `prod-${idx}`}
