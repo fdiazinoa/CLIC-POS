@@ -208,9 +208,11 @@ import {
   ERP_FULL_BOOTSTRAP_REQUIRED_EVENT,
   getLifecycleActivationBlockMessage,
   getLifecycleBlockingMessageFromError,
+  getStoredErpSyncBinding,
   heartbeatErpSyncTerminal,
   isLifecycleActivationBlocked,
   persistStoredErpSyncBinding,
+  registerErpSyncTerminal,
   triggerErpSyncOutbox
 } from './utils/erpSyncLifecycle';
 import { createErpHeartbeatScheduler } from './utils/erpHeartbeatScheduler';
@@ -1901,6 +1903,7 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     if (!terminalAuthorizationBlock) return;
     syncManager.stopAutoSync();
+    backgroundSyncManager.stopForAuthorizationLoss();
     clearActiveUserSession();
     setCurrentUser(null);
     void realtimeNotificationService.disconnect('DISABLED');
@@ -2277,6 +2280,7 @@ const AppContent: React.FC = () => {
     if (lockdownHandledRef.current) return;
     lockdownHandledRef.current = true;
     syncManager.stopAutoSync();
+    backgroundSyncManager.stopForAuthorizationLoss();
     setTerminalAuthorizationBlock(terminalBlock || null);
     setLicenseError(message);
     setIsDataLoaded(true);
@@ -2295,10 +2299,42 @@ const AppContent: React.FC = () => {
     });
   }, []);
 
-  const verifyErpDeviceStillAuthorized = React.useCallback(async (candidateDeviceId?: string | null): Promise<boolean> => {
-    const normalizedDeviceId = String(
-      candidateDeviceId
+  const lockSupersededTerminal = React.useCallback((
+    message: string,
+    options?: { terminalId?: string | null; requestDeviceId?: string | null; payload?: unknown },
+  ) => {
+    const payload = options?.payload && typeof options.payload === 'object'
+      ? options.payload as Record<string, any>
+      : {};
+    const terminalId = options?.terminalId || payload.terminal_id || payload.erp_terminal_id || null;
+    const requestDeviceId = String(
+      options?.requestDeviceId
+      || payload.request_device_id
+      || payload.requestDeviceId
       || deviceId
+      || ''
+    ).trim() || null;
+    const authorizedDeviceId = String(
+      payload.authorized_device_id
+      || payload.authorizedDeviceId
+      || payload.current_device_id
+      || payload.currentDeviceId
+      || ''
+    ).trim() || null;
+    const terminalLabel = resolveBlockedTerminalLabel(terminalId);
+    triggerLockdown(message, {
+      terminalId,
+      terminalLabel,
+      requestDeviceId,
+      authorizedDeviceId,
+      message: `La caja ${terminalLabel} está activa en otro equipo. La autorización debe completarse desde Cloud Admin; este dispositivo no puede autorizarse por sí mismo.`,
+    });
+  }, [deviceId, resolveBlockedTerminalLabel, triggerLockdown]);
+
+  const completeErpDeviceReauthorization = React.useCallback(async (candidateDeviceId?: string | null): Promise<boolean> => {
+    const normalizedDeviceId = String(
+      deviceId
+      || candidateDeviceId
       || localStorage.getItem('pos_device_id')
       || localStorage.getItem('CLIC_POS_DEVICE_ID')
       || ''
@@ -2306,118 +2342,146 @@ const AppContent: React.FC = () => {
     if (!normalizedDeviceId || isPosOnlyCloudStagingTarget()) return false;
 
     try {
-      const bootstrap = await bootstrapErpSyncLifecycle(normalizedDeviceId);
+      const storedBinding = getStoredErpSyncBinding();
+      const blockedTerminalId = normalizeCanonicalErpTerminalId(
+        terminalAuthorizationBlock?.terminalId
+        || storedBinding.terminalId
+        || storedBinding.terminalUuid
+      );
+      if (!blockedTerminalId) return false;
+
+      const bootstrap = await bootstrapErpSyncLifecycle(normalizedDeviceId, blockedTerminalId);
       const payload = (bootstrap || {}) as any;
       const terminal = payload.terminal || payload.terminal_config?.terminal || payload.terminalConfig?.terminal || {};
       const isAuthorized = isDeviceExplicitlyAuthorizedByBootstrap(payload, normalizedDeviceId);
-      if (isAuthorized) {
-        console.info('stale_authorization_block_ignored', {
+      if (!isAuthorized) return false;
+
+      const canonicalTerminalId = normalizeCanonicalErpTerminalId(
+        terminal.id
+        || payload.terminal_id
+        || payload.erp_terminal_id
+        || blockedTerminalId
+      );
+      if (!canonicalTerminalId) return false;
+
+      const registered = await registerErpSyncTerminal({
+        deviceId: normalizedDeviceId,
+        terminalId: canonicalTerminalId,
+        localTerminalId: storedBinding.localTerminalId,
+        terminalName: storedBinding.terminalName,
+        companyId: storedBinding.companyId,
+        storeId: storedBinding.storeId,
+      });
+      const refreshedCredentials = await readTerminalCredentials();
+      if (!registered || (!refreshedCredentials.deviceToken && !refreshedCredentials.syncToken)) {
+        console.warn('[AUTHORIZATION_GUARD] register completed without fresh runtime credentials', {
+          endpoint: '/api/sync/terminals/register',
+          terminalId: canonicalTerminalId,
           deviceId: normalizedDeviceId,
-          terminalId: terminal.id || payload.terminal_id || payload.terminalId || null,
         });
-        console.info('pos_reauth_state_ignored_because_device_authorized', {
-          deviceId: normalizedDeviceId,
-          terminalId: terminal.id || payload.terminal_id || payload.terminalId || null,
-          source: 'ERP_BOOTSTRAP_CHECK',
-        });
+        return false;
       }
-      return isAuthorized;
+
+      markDeviceReauthorized(normalizedDeviceId);
+      console.info('pos_reauthorization_completed', {
+        deviceId: normalizedDeviceId,
+        terminalId: canonicalTerminalId,
+        source: 'ERP_BOOTSTRAP_CHECK_THEN_REGISTER',
+      });
+      return true;
     } catch (error) {
-      console.warn('[AUTHORIZATION_GUARD] ERP bootstrap check skipped before lockdown:', error);
+      console.warn('[AUTHORIZATION_GUARD] reauthorization remains pending', {
+        endpoint: (error as any)?.code === 'SETUP_AUTH_REQUIRED'
+          ? '/api/setup/bind-terminal'
+          : '/api/sync/bootstrap/check',
+        status: (error as any)?.status || (error as any)?.httpStatus || null,
+        code: (error as any)?.code || null,
+      });
       return false;
     }
-  }, [deviceId]);
+  }, [deviceId, terminalAuthorizationBlock]);
 
-  const triggerLockdownAfterAuthorizationCheck = React.useCallback(async (
-    message: string,
-    candidateDeviceId?: string | null,
-    options?: { terminalId?: string | null; preserveDiagnosticWhenAuthorized?: boolean },
-  ): Promise<boolean> => {
-    if (await verifyErpDeviceStillAuthorized(candidateDeviceId)) {
-      lockdownHandledRef.current = false;
-      setLicenseError(null);
-      setTerminalAuthorizationBlock(null);
-      if (!options?.preserveDiagnosticWhenAuthorized) {
-        clearSyncErrorDiagnostic();
-        setSyncDiagnostic(null);
-      }
-      setTerminalBindingDiagnosticStatus('BOUND');
-      setCatalogDiagnosticStatus('SYNCED');
-      setSalesPushDiagnosticStatus('ENABLED');
-      setSyncAuthDiagnosticStatus('AUTHENTICATED');
-      clearPersistedTerminalAuthorizationBlock();
-      localStorage.setItem(TERMINAL_BINDING_STATUS_KEY, 'BOUND');
-      localStorage.setItem('clic_sync_auth_status', 'AUTHENTICATED');
-      localStorage.removeItem('clic_sync_last_auth_error');
-      localStorage.removeItem('clic_sync_last_reauth_attempt_at');
-      return true;
-    }
-    const terminalLabel = resolveBlockedTerminalLabel(options?.terminalId);
-    triggerLockdown(message, {
-      terminalId: options?.terminalId || null,
-      terminalLabel,
-      message: `La caja ${terminalLabel} está activa en otro equipo. Por seguridad, este dispositivo no puede ingresar ni sincronizar hasta que la caja sea reautorizada.`,
-    });
-    return false;
-  }, [resolveBlockedTerminalLabel, triggerLockdown, verifyErpDeviceStillAuthorized]);
-
-  const retryTerminalAuthorization = React.useCallback(async () => {
-    if (terminalAuthorizationCheckInFlightRef.current || !terminalAuthorizationBlock) return;
+  const retryTerminalAuthorization = React.useCallback(async (): Promise<boolean> => {
+    if (terminalAuthorizationCheckInFlightRef.current || !terminalAuthorizationBlock) return false;
 
     terminalAuthorizationCheckInFlightRef.current = true;
     setTerminalAuthorizationCheckState('checking');
     try {
-      const authorized = await triggerLockdownAfterAuthorizationCheck(
-        DEVICE_SUPERSEDED_MESSAGE,
-        deviceId,
-        { terminalId: terminalAuthorizationBlock.terminalId || null },
-      );
+      const authorized = await completeErpDeviceReauthorization(deviceId);
       if (authorized) {
+        lockdownHandledRef.current = false;
+        setLicenseError(null);
+        setTerminalAuthorizationBlock(null);
+        clearSyncErrorDiagnostic();
+        setSyncDiagnostic(null);
+        setTerminalBindingDiagnosticStatus('BOUND');
+        setCatalogDiagnosticStatus('SYNCED');
+        setSalesPushDiagnosticStatus('ENABLED');
+        setSyncAuthDiagnosticStatus('AUTHENTICATED');
+        clearPersistedTerminalAuthorizationBlock();
+        localStorage.setItem(TERMINAL_BINDING_STATUS_KEY, 'BOUND');
+        localStorage.setItem('clic_sync_auth_status', 'AUTHENTICATED');
+        localStorage.removeItem('clic_sync_last_auth_error');
+        localStorage.removeItem('clic_sync_last_reauth_attempt_at');
         window.location.reload();
-        return;
+        return true;
       }
       setTerminalAuthorizationCheckState('idle');
+      return false;
     } finally {
       terminalAuthorizationCheckInFlightRef.current = false;
     }
-  }, [deviceId, terminalAuthorizationBlock, triggerLockdownAfterAuthorizationCheck]);
+  }, [completeErpDeviceReauthorization, deviceId, terminalAuthorizationBlock]);
 
   useEffect(() => {
     const handleDeviceRevoked = (event: Event) => {
       const detail = (event as CustomEvent<DeviceRevocationDetail>).detail;
       const revokedDeviceId = detail?.previousDeviceId || (detail as any)?.deviceId || deviceId;
-      void triggerLockdownAfterAuthorizationCheck(
+      lockSupersededTerminal(
         detail?.message || DEVICE_SUPERSEDED_MESSAGE,
-        revokedDeviceId,
-        { terminalId: detail?.terminalId || null },
+        { terminalId: detail?.terminalId || null, requestDeviceId: revokedDeviceId, payload: detail?.payload },
       );
     };
 
     window.addEventListener(DEVICE_REVOKED_EVENT, handleDeviceRevoked as EventListener);
     return () => window.removeEventListener(DEVICE_REVOKED_EVENT, handleDeviceRevoked as EventListener);
-  }, [deviceId, triggerLockdownAfterAuthorizationCheck]);
+  }, [deviceId, lockSupersededTerminal]);
 
   useEffect(() => {
     if (!isTerminalAuthorizationLossDiagnostic(syncDiagnostic)) {
       setTerminalAuthorizationCheckState('idle');
       return;
     }
-    if (terminalAuthorizationCheckInFlightRef.current) return;
-    terminalAuthorizationCheckInFlightRef.current = true;
-    setTerminalAuthorizationCheckState('checking');
     const affectedTerminalId = syncDiagnostic?.resolvedTarget?.terminalId || syncDiagnostic?.terminalId || null;
-    void triggerLockdownAfterAuthorizationCheck(
+    lockSupersededTerminal(
       DEVICE_SUPERSEDED_MESSAGE,
-      deviceId,
-      { terminalId: affectedTerminalId, preserveDiagnosticWhenAuthorized: true },
-    )
-      .then((authorized) => {
-        setTerminalAuthorizationCheckState(authorized ? 'authorized' : 'idle');
-      })
-      .finally(() => {
-        terminalAuthorizationCheckInFlightRef.current = false;
-      });
-  }, [deviceId, syncDiagnostic, triggerLockdownAfterAuthorizationCheck]);
+      { terminalId: affectedTerminalId, requestDeviceId: deviceId, payload: syncDiagnostic },
+    );
+    setTerminalAuthorizationCheckState('idle');
+  }, [deviceId, lockSupersededTerminal, syncDiagnostic]);
+
+  useEffect(() => {
+    if (!terminalAuthorizationBlock) return;
+    let disposed = false;
+    let attempt = 0;
+    let timerId: number | null = null;
+
+    const schedule = () => {
+      const delayMs = Math.min(5000 * (2 ** attempt), 60000);
+      timerId = window.setTimeout(async () => {
+        const completed = await retryTerminalAuthorization();
+        if (disposed || completed) return;
+        attempt += 1;
+        schedule();
+      }, delayMs);
+    };
+
+    schedule();
+    return () => {
+      disposed = true;
+      if (timerId !== null) window.clearTimeout(timerId);
+    };
+  }, [retryTerminalAuthorization, terminalAuthorizationBlock]);
 
   // --- REALTIME KILL SWITCH (FALLBACK: SMART POLLING) ---
   useEffect(() => {
@@ -3291,7 +3355,11 @@ const AppContent: React.FC = () => {
         const blockingMessage = getLifecycleBlockingMessageFromError(error);
         if (!disposed && blockingMessage) {
           if (blockingMessage === DEVICE_SUPERSEDED_MESSAGE) {
-            await triggerLockdownAfterAuthorizationCheck(blockingMessage, deviceId);
+            lockSupersededTerminal(blockingMessage, {
+              terminalId: erpTerminalId,
+              requestDeviceId: deviceId,
+              payload: (error as any)?.payload,
+            });
           } else {
             triggerLockdown(blockingMessage);
           }
@@ -3398,7 +3466,11 @@ const AppContent: React.FC = () => {
         const blockingMessage = getLifecycleBlockingMessageFromError(error);
         if (!disposed && blockingMessage) {
           if (blockingMessage === DEVICE_SUPERSEDED_MESSAGE) {
-            await triggerLockdownAfterAuthorizationCheck(blockingMessage, deviceId);
+            lockSupersededTerminal(blockingMessage, {
+              terminalId: currentTerminal.config?.erpTerminalId || currentTerminal.id,
+              requestDeviceId: deviceId,
+              payload: (error as any)?.payload,
+            });
           } else {
             triggerLockdown(blockingMessage);
           }
@@ -3598,7 +3670,7 @@ const AppContent: React.FC = () => {
       window.removeEventListener('online', handleErpOnline);
       document.removeEventListener('visibilitychange', handleErpAppResume);
     };
-  }, [erpLifecycleReady, deviceId, getCurrentTerminal, terminalAuthorizationBlock]);
+  }, [erpLifecycleReady, deviceId, getCurrentTerminal, lockSupersededTerminal, terminalAuthorizationBlock]);
 
   // --- RECONNECTION BANNER ---
   const renderReconnectionBanner = () => {
@@ -5842,8 +5914,7 @@ const AppContent: React.FC = () => {
           terminalSetupPending &&
           !isVisorMode &&
           !setupMode &&
-          !localPairedTerminal &&
-          !setupWizardCompleted;
+          !localPairedTerminal;
         const shouldPairAsServerErp =
           terminalSetupPending &&
           !isVisorMode &&
@@ -10026,6 +10097,15 @@ const AppContent: React.FC = () => {
               {terminalAuthorizationBlock.message}
             </p>
 
+            {terminalAuthorizationBlock.requestDeviceId && (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Dispositivo solicitante</p>
+                <p className="mt-1 break-all font-mono text-sm font-black text-slate-900">
+                  {terminalAuthorizationBlock.requestDeviceId}
+                </p>
+              </div>
+            )}
+
             <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-4 text-sm font-semibold leading-relaxed text-blue-900">
               Use el equipo que ya tiene esta caja, seleccione otra terminal disponible o reautorice este dispositivo desde Cloud-Admin. Esta pantalla no permitirá entrar al POS mientras la caja continúe ocupada.
             </div>
@@ -10037,7 +10117,7 @@ const AppContent: React.FC = () => {
               className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-4 text-sm font-black uppercase tracking-[0.12em] text-white shadow-xl transition active:scale-[0.98] disabled:cursor-wait disabled:opacity-70"
             >
               <RefreshCw size={18} className={terminalAuthorizationCheckState === 'checking' ? 'animate-spin' : ''} />
-              {terminalAuthorizationCheckState === 'checking' ? 'Validando autorización...' : 'Reintentar autorización'}
+              {terminalAuthorizationCheckState === 'checking' ? 'Validando autorización...' : 'Comprobar autorización de Cloud Admin'}
             </button>
           </div>
         </section>
@@ -10461,6 +10541,9 @@ const AppContent: React.FC = () => {
 
       case 'TERMINAL_PAIRING':
       case 'DEVICE_UNAUTHORIZED':
+        if (!getStoredTerminalSetupMode()) {
+          return <TerminalModeSelector onSelect={handleTerminalModeSelection} />;
+        }
         return (
           <TerminalBindingScreen
             config={config}
@@ -10523,7 +10606,7 @@ const AppContent: React.FC = () => {
             hasInitialTerminalConfig: Boolean(storedInitialConfig),
             lastSyncDiagnostic: localStorage.getItem(SYNC_DIAGNOSTIC_STORAGE_KEY) || null,
           });
-          setCurrentView('TERMINAL_PAIRING');
+          setCurrentView(getStoredTerminalSetupMode() ? 'TERMINAL_PAIRING' : 'TERMINAL_MODE_SELECTOR');
           return null;
         }
         const loginProps = {

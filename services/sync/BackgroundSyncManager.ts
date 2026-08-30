@@ -105,6 +105,20 @@ class BackgroundSyncManager {
         window.addEventListener(POS_SALE_ACTIVITY_EVENT, this.saleActivityHandler);
     }
 
+    stopForAuthorizationLoss() {
+        if (this.interval) clearInterval(this.interval);
+        this.interval = null;
+        this.clearRetryTimeout();
+        this.isProcessing = false;
+        if (this.onlineHandler) window.removeEventListener('online', this.onlineHandler);
+        if (this.offlineHandler) window.removeEventListener('offline', this.offlineHandler);
+        if (this.focusHandler) window.removeEventListener('focus', this.focusHandler);
+        if (this.visibilityHandler) document.removeEventListener('visibilitychange', this.visibilityHandler);
+        if (this.saleActivityHandler) window.removeEventListener(POS_SALE_ACTIVITY_EVENT, this.saleActivityHandler);
+        this.initialized = false;
+        console.warn('🛑 BackgroundSyncManager stopped because terminal authorization was revoked.');
+    }
+
     private startWorker() {
         if (this.interval) clearInterval(this.interval);
         this.interval = setInterval(() => this.sync(), this.WORKER_INTERVAL_MS);

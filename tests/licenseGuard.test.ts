@@ -247,7 +247,7 @@ test('el contrato App bloquea suspensiones explícitas pero tolera fallas tempor
   assert.match(source, /\[BOOT\] License validation unavailable; continuing without permanent lockdown\./);
   assert.match(source, /\[LICENSE\] Validation unavailable during polling; preserving recoverable POS access\./);
   assert.match(source, /if \(license\.cloudReachable === false\) \{[\s\S]*?alert\(license\.reason/);
-  assert.match(source, /if \(blockingMessage === DEVICE_SUPERSEDED_MESSAGE\) \{\s*await triggerLockdownAfterAuthorizationCheck/);
+  assert.match(source, /if \(blockingMessage === DEVICE_SUPERSEDED_MESSAGE\) \{\s*lockSupersededTerminal/);
   assert.doesNotMatch(source, /triggerLockdownAfterAuthorizationCheck\(license\.reason/);
   assert.doesNotMatch(source, /triggerLockdownAfterAuthorizationCheck\(res\.reason/);
   assert.match(

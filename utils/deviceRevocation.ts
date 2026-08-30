@@ -6,7 +6,6 @@ export const DEVICE_REAUTH_GRACE_STORAGE_KEY = 'clic_device_reauthorized_at';
 export const DEVICE_PAIRING_SESSION_STORAGE_KEY = 'clic_pairing_device_id';
 const PERSISTENT_DEVICE_ID_STORAGE_KEY = 'clic_pos_persistent_device_id';
 const DEVICE_REAUTH_DEVICE_STORAGE_KEY = 'clic_device_reauthorized_device_id';
-const DEVICE_REAUTH_GRACE_MS = 3 * 60 * 1000;
 
 export type DeviceRevocationReason = 'DEVICE_SUPERSEDED' | 'DEVICE_REVOKED' | 'TERMINAL_TAKEOVER';
 
@@ -141,6 +140,10 @@ export const isDeviceSupersededError = (error: unknown): boolean => {
 };
 
 const shouldSuppressFreshAuthorizationRevocation = (detail: DeviceRevocationDetail): boolean => {
+  // A backend DEVICE_SUPERSEDED response is authoritative. Never let the
+  // recent-reauthorization grace window or an echoed device id bypass it.
+  if (detail.reason === 'DEVICE_SUPERSEDED') return false;
+
   const localDeviceId = normalizeDeviceId(resolveLocalDeviceId());
   if (!localDeviceId) return false;
 
@@ -170,32 +173,6 @@ const shouldSuppressFreshAuthorizationRevocation = (detail: DeviceRevocationDeta
 
   if (candidateAuthorizedDevices.includes(localDeviceId)) {
     console.warn('[DEVICE_REVOCATION_IGNORED]', 'Backend payload points to the current local device.', {
-      localDeviceId,
-      reason: detail.reason,
-      terminalId: detail.terminalId || payload.terminal_id || null,
-    });
-    return true;
-  }
-
-  if (detail.reason !== 'DEVICE_SUPERSEDED') return false;
-
-  const reauthorizedAt = Number(localStorage.getItem(DEVICE_REAUTH_GRACE_STORAGE_KEY) || '0');
-  const reauthorizedDeviceId = normalizeDeviceId(localStorage.getItem(DEVICE_REAUTH_DEVICE_STORAGE_KEY));
-  const previousDeviceId = normalizeDeviceId(
-    detail.previousDeviceId
-    || payload.previous_device_id
-    || payload.previousDeviceId
-    || payload.request_device_id
-    || payload.requestDeviceId
-    || payload.device_id
-    || payload.deviceId
-    || payload.pos_device_id
-    || payload.posDeviceId
-  );
-  const withinGrace = Number.isFinite(reauthorizedAt) && Date.now() - reauthorizedAt <= DEVICE_REAUTH_GRACE_MS;
-
-  if (withinGrace && reauthorizedDeviceId === localDeviceId && previousDeviceId === localDeviceId) {
-    console.warn('[DEVICE_REVOCATION_IGNORED]', 'Ignoring stale superseded response during fresh reauthorization grace window.', {
       localDeviceId,
       reason: detail.reason,
       terminalId: detail.terminalId || payload.terminal_id || null,

@@ -27,12 +27,15 @@ test('el bloqueo DEVICE_SUPERSEDED sobrevive a una recarga y solo se elimina exp
     terminalId: 'terminal-1',
     terminalLabel: 'POS-001',
     message: 'La caja está activa en otro equipo.',
+    requestDeviceId: 'DEV-NUEVO',
   }, storage);
 
   assert.deepEqual(readPersistedTerminalAuthorizationBlock(storage), {
     terminalId: 'terminal-1',
     terminalLabel: 'POS-001',
     message: 'La caja está activa en otro equipo.',
+    requestDeviceId: 'DEV-NUEVO',
+    authorizedDeviceId: null,
   });
   assert.ok(storage.values.has(TERMINAL_AUTHORIZATION_BLOCK_STORAGE_KEY));
   assert.equal(isTerminalAuthorizationSuperseded(storage), true);

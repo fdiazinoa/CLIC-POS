@@ -2,6 +2,8 @@ export type TerminalAuthorizationBlock = {
   terminalId?: string | null;
   terminalLabel: string;
   message: string;
+  requestDeviceId?: string | null;
+  authorizedDeviceId?: string | null;
 };
 
 export const TERMINAL_AUTHORIZATION_BLOCK_STORAGE_KEY = 'clic_terminal_authorization_block';
@@ -39,6 +41,8 @@ export const readPersistedTerminalAuthorizationBlock = (
       terminalId: String(parsed.terminalId || '').trim() || null,
       terminalLabel,
       message,
+      requestDeviceId: String(parsed.requestDeviceId || '').trim() || null,
+      authorizedDeviceId: String(parsed.authorizedDeviceId || '').trim() || null,
     };
   } catch {
     return null;
@@ -54,6 +58,8 @@ export const persistTerminalAuthorizationBlock = (
     terminalId: String(block.terminalId || '').trim() || null,
     terminalLabel: String(block.terminalLabel || '').trim() || 'Caja vinculada',
     message: String(block.message || '').trim(),
+    requestDeviceId: String(block.requestDeviceId || '').trim() || null,
+    authorizedDeviceId: String(block.authorizedDeviceId || '').trim() || null,
   }));
 };
 
