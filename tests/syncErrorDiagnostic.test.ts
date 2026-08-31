@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   isRecoverableNetworkConnectivityMessage,
   isRecoverableStaleSyncDiagnostic,
+  isNonBlockingBoundLocalMasterDiagnostic,
   isTerminalAuthorizationLossDiagnostic,
 } from '../services/sync/SyncErrorDiagnostic';
 
@@ -104,5 +105,50 @@ test('keeps device-not-authorized classified after a background retry loses the 
       backendCode: 'DEVICE_NOT_AUTHORIZED',
     }),
     true,
+  );
+});
+
+const boundLocalMasterDiagnostic = (overrides: Record<string, unknown> = {}) => ({
+  operation: 'PULL_MASTERS',
+  collection: 'customers',
+  resolvedTargetKind: 'POS_MASTER',
+  terminalBindingStatus: 'BOUND',
+  isCriticalMaster: false,
+  backendCode: null,
+  httpStatus: null,
+  responseBody: null,
+  errorMessage: 'Authentication failed. Please check connection to Master.',
+  ...overrides,
+}) as any;
+
+test('keeps a transient non-critical local Master pull silent on a bound terminal', () => {
+  assert.equal(
+    isNonBlockingBoundLocalMasterDiagnostic(boundLocalMasterDiagnostic()),
+    true,
+  );
+});
+
+test('does not silence products, critical masters, or unbound terminal failures', () => {
+  assert.equal(
+    isNonBlockingBoundLocalMasterDiagnostic(boundLocalMasterDiagnostic({ collection: 'products' })),
+    false,
+  );
+  assert.equal(
+    isNonBlockingBoundLocalMasterDiagnostic(boundLocalMasterDiagnostic({ isCriticalMaster: true })),
+    false,
+  );
+  assert.equal(
+    isNonBlockingBoundLocalMasterDiagnostic(boundLocalMasterDiagnostic({ terminalBindingStatus: 'UNBOUND' })),
+    false,
+  );
+});
+
+test('does not silence local Master authorization loss', () => {
+  assert.equal(
+    isNonBlockingBoundLocalMasterDiagnostic(boundLocalMasterDiagnostic({
+      backendCode: 'DEVICE_NOT_AUTHORIZED',
+      errorMessage: 'DEVICE_NOT_AUTHORIZED: este equipo no está autorizado.',
+    })),
+    false,
   );
 });

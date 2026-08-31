@@ -382,8 +382,21 @@ const resolveDiagnosticErrorMessage = (
 
 const shouldSuppressSyncErrorDiagnostic = (diagnostic: SyncErrorDiagnostic): boolean => {
     if (isRecoverableStaleSyncDiagnostic(diagnostic)) return true;
+    if (isNonBlockingBoundLocalMasterDiagnostic(diagnostic)) return true;
     if (diagnostic.userVisibleSeverity === 'info') return true;
     return false;
+};
+
+export const isNonBlockingBoundLocalMasterDiagnostic = (
+    diagnostic: SyncErrorDiagnostic | null | undefined,
+): boolean => {
+    if (!diagnostic) return false;
+    if (diagnostic.operation !== 'PULL_MASTERS') return false;
+    if (diagnostic.resolvedTargetKind !== 'POS_MASTER') return false;
+    if (diagnostic.terminalBindingStatus !== 'BOUND') return false;
+    if (diagnostic.isCriticalMaster === true || diagnostic.collection === 'products') return false;
+    if (isTerminalAuthorizationLossDiagnostic(diagnostic)) return false;
+    return true;
 };
 
 const markInputErrorReported = (error: unknown): void => {
@@ -552,6 +565,10 @@ export const reportSyncErrorDiagnostic = (input: Parameters<typeof buildSyncErro
 
     const diagnostic = buildSyncErrorDiagnostic(input);
     if (shouldSuppressSyncErrorDiagnostic(diagnostic)) {
+        // A lower-level sync attempt already classified this failure. Mark the
+        // original error before returning so outer batch wrappers do not turn
+        // the same non-blocking failure back into a user-facing modal.
+        markInputErrorReported(input.error);
         clearSyncErrorDiagnostic();
         return null;
     }
