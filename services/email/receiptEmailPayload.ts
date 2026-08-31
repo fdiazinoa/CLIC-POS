@@ -35,6 +35,60 @@ const normalizeDiscountPercentage = (value: unknown, fallback: number): number =
   return Math.abs(numeric) <= 1 ? numeric * 100 : numeric;
 };
 
+const roundMoney = (value: unknown): number => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.round((numeric + Number.EPSILON) * 100) / 100;
+};
+
+const buildReceiptEmailPayment = (
+  payment: NonNullable<Transaction['payments']>[number],
+  baseCurrencyCode: string,
+): Record<string, unknown> => {
+  const method = payment.method || payment.payment_method;
+  const normalizedMethod = String(method || '').trim().toUpperCase();
+  const amount = roundMoney(payment.amount);
+  const settledAmount = roundMoney(
+    payment.appliedAmount ?? payment.applied_amount ?? payment.amountApplied ?? payment.amount,
+  );
+  const changeAmount = roundMoney(
+    payment.changeAmount ?? payment.change_amount ?? Math.max(0, amount - settledAmount),
+  );
+  const currencyCode = String(payment.currencyCode || payment.currency_code || baseCurrencyCode)
+    .trim()
+    .toUpperCase();
+  const isBaseCurrencyCashWithChange = ['CASH', 'EFECTIVO'].includes(normalizedMethod)
+    && currencyCode === baseCurrencyCode
+    && changeAmount > 0;
+
+  return {
+    method,
+    methodLabel: isBaseCurrencyCashWithChange
+      ? 'Efectivo recibido'
+      : payment.methodLabel,
+    amount,
+    amountOriginal: payment.amountOriginal == null ? undefined : Number(payment.amountOriginal),
+    // El renderer legado usa appliedAmount como monto visible. Cuando hay cambio lo
+    // omitimos para que muestre amount (efectivo entregado) y conservamos el valor
+    // contable aplicado en settledAmount.
+    ...(isBaseCurrencyCashWithChange ? {} : { appliedAmount: settledAmount }),
+    receivedAmount: amount,
+    settledAmount,
+    displayAmount: amount,
+    displayLabel: isBaseCurrencyCashWithChange
+      ? 'Efectivo recibido'
+      : payment.methodLabel,
+    currencyCode,
+    exchangeRate: payment.exchangeRate == null && payment.exchange_rate == null
+      ? undefined
+      : Number(payment.exchangeRate ?? payment.exchange_rate),
+    changeAmount: payment.changeAmount == null && payment.change_amount == null && changeAmount <= 0
+      ? undefined
+      : changeAmount,
+    changeCurrencyCode: payment.changeCurrencyCode || payment.change_currency_code,
+  };
+};
+
 export const resolveReceiptItemOptions = (item: CartItem): string[] => {
   const variantInfo = asText(item.variantInfo);
   const variantValueKeys = resolveVariantValueKeys(variantInfo);
@@ -61,6 +115,9 @@ export const buildReceiptEmailPayload = (
   currencySymbol: string,
   users: User[] = [],
 ): ReceiptEmailPayload => {
+  const baseCurrencyCode = String(
+    config?.currencies?.find(currency => currency.isBase)?.code || 'DOP',
+  ).trim().toUpperCase();
   const fiscalCode = transaction.ncfType || getFiscalCodeFromNcf(transaction.ncf);
   const fiscalDocumentLabel = fiscalCode ? FISCAL_DOCUMENT_LABELS[fiscalCode] : undefined;
   const cart = (transaction.items || []).map(item => {
@@ -89,21 +146,7 @@ export const buildReceiptEmailPayload = (
     cart,
     total: Number(transaction.total || 0),
     paymentMethod: transaction.payments?.[0]?.method || 'CASH',
-    payments: (transaction.payments || []).map(payment => ({
-      method: payment.method || payment.payment_method,
-      methodLabel: payment.methodLabel,
-      amount: Number(payment.amount || 0),
-      amountOriginal: payment.amountOriginal == null ? undefined : Number(payment.amountOriginal),
-      appliedAmount: Number(payment.appliedAmount ?? payment.applied_amount ?? payment.amountApplied ?? payment.amount ?? 0),
-      currencyCode: payment.currencyCode || payment.currency_code,
-      exchangeRate: payment.exchangeRate == null && payment.exchange_rate == null
-        ? undefined
-        : Number(payment.exchangeRate ?? payment.exchange_rate),
-      changeAmount: payment.changeAmount == null && payment.change_amount == null
-        ? undefined
-        : Number(payment.changeAmount ?? payment.change_amount),
-      changeCurrencyCode: payment.changeCurrencyCode || payment.change_currency_code,
-    })),
+    payments: (transaction.payments || []).map(payment => buildReceiptEmailPayment(payment, baseCurrencyCode)),
     transactionId: transaction.displayId || transaction.id || 'PENDING-ID',
     ncf: transaction.ncf,
     ncfType: fiscalCode || undefined,
