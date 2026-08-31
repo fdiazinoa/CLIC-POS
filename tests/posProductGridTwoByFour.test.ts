@@ -47,6 +47,18 @@ test('las tarjetas expandidas ocupan su fila sin conservar alturas fijas que cor
   assert.doesNotMatch(cardSource, /usesExpandedCatalog\s*\?\s*'[^']*h-\[168px\]/);
 });
 
+test('nombres largos no ensanchan la tarjeta ni recortan la insignia de inventario', () => {
+  const cardStart = source.indexOf('title={\n            warehouseSaleBlocked');
+  const cardEnd = source.indexOf('warehouseSaleBlocked && (', cardStart);
+  const cardSource = source.slice(cardStart, cardEnd);
+
+  assert.ok(cardStart >= 0, 'No se encontró la tarjeta de artículo');
+  assert.match(cardSource, /w-full min-w-0 bg-white/);
+  assert.match(cardSource, /w-full min-w-0 .*bg-gray-50/);
+  assert.match(cardSource, /w-full min-w-0 flex flex-col/);
+  assert.ok((cardSource.match(/whitespace-nowrap bg-rose-600/g) || []).length >= 2);
+});
+
 test('el área de artículos conserva márgenes simétricos y calcula las filas sobre el viewport desplazable', () => {
   const gridStart = source.indexOf('const gridClass');
   const gridEnd = source.indexOf('const categoryContainerClass', gridStart);

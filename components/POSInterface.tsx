@@ -864,7 +864,7 @@ const ProductGridCard = React.memo(({
          onTouchEnd={onProductTouchEnd}
          onTouchCancel={onProductTouchEnd}
          style={{ touchAction: 'manipulation' }}
-         className={`bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 transition-all group relative overflow-hidden ${
+         className={`w-full min-w-0 bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 transition-all group relative overflow-hidden ${
             warehouseSaleBlocked
                ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
                : 'cursor-pointer hover:border-purple-300 hover:-translate-y-1 active:scale-95'
@@ -883,7 +883,7 @@ const ProductGridCard = React.memo(({
                   : `rounded-[1.6rem] p-3 min-h-[166px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
       >
          {showProductImages && (
-            <div className={`${usesSupermarketLayout ? 'h-full rounded-[1.35rem] mb-0 p-2.5' : usesExpandedCatalog ? 'h-full rounded-[1.1rem] mb-0 p-1.5' : isCompactMobileCard ? 'h-[6.75rem] rounded-[1.15rem] mb-1.5 p-2' : 'h-28 md:h-32 rounded-[1.5rem] mb-2.5'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
+            <div className={`w-full min-w-0 ${usesSupermarketLayout ? 'h-full rounded-[1.35rem] mb-0 p-2.5' : usesExpandedCatalog ? 'h-full rounded-[1.1rem] mb-0 p-1.5' : isCompactMobileCard ? 'h-[6.75rem] rounded-[1.15rem] mb-1.5 p-2' : 'h-28 md:h-32 rounded-[1.5rem] mb-2.5'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
                {imageSrc ? <img src={imageSrc} className={`w-full h-full ${usesSupermarketLayout || usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={usesSupermarketLayout ? 56 : 48} strokeWidth={1} /></div>}
 
                {isWeighted && (
@@ -902,7 +902,7 @@ const ProductGridCard = React.memo(({
                      className="absolute top-0 right-0 cursor-pointer z-20"
                      onClick={handlePromoClick}
                   >
-                     <div className="bg-red-500 text-white text-[10px] font-black px-2 py-1 rounded-bl-xl shadow-md flex items-center gap-1 animate-in slide-in-from-top-2 hover:bg-red-600 transition-colors">
+                     <div className="whitespace-nowrap bg-red-500 text-white text-[10px] font-black px-2 py-1 rounded-bl-xl shadow-md flex items-center gap-1 animate-in slide-in-from-top-2 hover:bg-red-600 transition-colors">
                         <Tag size={10} className="fill-white" />
                         <span>OFERTA</span>
                      </div>
@@ -910,7 +910,7 @@ const ProductGridCard = React.memo(({
                )}
                {outOfStock && (
                   <div className="absolute top-0 right-0 z-20 pointer-events-none">
-                     <div className="bg-rose-600 text-white text-[10px] font-black px-2 py-1 rounded-bl-xl shadow-md flex items-center gap-1">
+                     <div className="whitespace-nowrap bg-rose-600 text-white text-[10px] font-black px-2 py-1 rounded-bl-xl shadow-md flex items-center gap-1">
                         <AlertTriangle size={10} strokeWidth={3} />
                         <span>SIN STOCK</span>
                      </div>
@@ -945,7 +945,7 @@ const ProductGridCard = React.memo(({
                className="absolute top-0 right-0 cursor-pointer z-20"
                onClick={handlePromoClick}
             >
-               <div className="bg-red-500 text-white text-[10px] font-black px-3 py-1.5 rounded-bl-2xl shadow-sm flex items-center gap-1 hover:bg-red-600 transition-colors">
+               <div className="whitespace-nowrap bg-red-500 text-white text-[10px] font-black px-3 py-1.5 rounded-bl-2xl shadow-sm flex items-center gap-1 hover:bg-red-600 transition-colors">
                   <Tag size={12} className="fill-white" />
                   <span>OFERTA</span>
                </div>
@@ -953,13 +953,13 @@ const ProductGridCard = React.memo(({
          )}
          {!showProductImages && outOfStock && (
             <div className="absolute top-0 right-0 z-20 pointer-events-none">
-               <div className="bg-rose-600 text-white text-[10px] font-black px-3 py-1.5 rounded-bl-2xl shadow-sm flex items-center gap-1">
+               <div className="whitespace-nowrap bg-rose-600 text-white text-[10px] font-black px-3 py-1.5 rounded-bl-2xl shadow-sm flex items-center gap-1">
                   <AlertTriangle size={12} strokeWidth={3} />
                   <span>SIN STOCK</span>
                </div>
             </div>
          )}
-         <div className={`flex flex-col ${showProductImages
+         <div className={`w-full min-w-0 flex flex-col ${showProductImages
             ? usesExpandedCatalog
                ? 'min-h-0 h-full pt-1.5 justify-between'
                : usesSupermarketLayout
