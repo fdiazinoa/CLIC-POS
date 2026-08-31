@@ -11,8 +11,28 @@ test('el catálogo expandido distribuye cuatro columnas en dos filas completas',
 
   assert.ok(gridStart >= 0, 'No se encontró la configuración del grid de artículos');
   assert.match(gridSource, /absolute inset-0 grid min-h-0 grid-cols-4 gap-3 content-start overflow-y-auto px-4 py-3/);
-  assert.match(gridSource, /gridTemplateRows: 'repeat\(2, minmax\(0, 1fr\)\)'/);
   assert.match(gridSource, /gridAutoRows: 'calc\(\(100% - 0\.75rem\) \/ 2\)'/);
+  assert.doesNotMatch(
+    gridSource,
+    /gridTemplateRows/,
+    'Las filas fr explícitas colapsan a 0px cuando existen filas adicionales desplazables'
+  );
+});
+
+test('el modo restaurante de escritorio activa siempre el catálogo 2x4 aunque expandTicket esté deshabilitado', () => {
+  const expandedStart = source.indexOf('const usesExpandedCatalog');
+  const expandedEnd = source.indexOf('const gridClass', expandedStart);
+  const expandedSource = source.slice(expandedStart, expandedEnd);
+
+  assert.ok(expandedStart >= 0, 'No se encontró la selección del catálogo expandido');
+  assert.match(
+    expandedSource,
+    /!isMobile && \(isRetailMode \|\| isRestaurantMode \|\| activeTerminalConfig\?\.operational\?\.expandTicket\)/
+  );
+  assert.match(
+    expandedSource,
+    /\[activeTerminalConfig\?\.operational\?\.expandTicket, isMobile, isRestaurantMode, isRetailMode\]/
+  );
 });
 
 test('las tarjetas expandidas ocupan su fila sin conservar alturas fijas que corten la segunda línea', () => {
@@ -25,6 +45,18 @@ test('las tarjetas expandidas ocupan su fila sin conservar alturas fijas que cor
   assert.match(cardSource, /grid-rows-\[52%_48%\]/);
   assert.doesNotMatch(cardSource, /usesExpandedCatalog\s*\?\s*'[^']*h-\[214px\]/);
   assert.doesNotMatch(cardSource, /usesExpandedCatalog\s*\?\s*'[^']*h-\[168px\]/);
+});
+
+test('nombres largos no ensanchan la tarjeta ni recortan la insignia de inventario', () => {
+  const cardStart = source.indexOf('title={\n            warehouseSaleBlocked');
+  const cardEnd = source.indexOf('warehouseSaleBlocked && (', cardStart);
+  const cardSource = source.slice(cardStart, cardEnd);
+
+  assert.ok(cardStart >= 0, 'No se encontró la tarjeta de artículo');
+  assert.match(cardSource, /w-full min-w-0 bg-white/);
+  assert.match(cardSource, /w-full min-w-0 .*bg-gray-50/);
+  assert.match(cardSource, /w-full min-w-0 flex flex-col/);
+  assert.ok((cardSource.match(/whitespace-nowrap bg-rose-600/g) || []).length >= 2);
 });
 
 test('el área de artículos conserva márgenes simétricos y calcula las filas sobre el viewport desplazable', () => {
