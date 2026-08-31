@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Capacitor } from '@capacitor/core';
 import {
     X, Package, Tag, DollarSign, StickyNote,
     Save, AlertCircle, Check, Store
@@ -6,6 +7,7 @@ import {
 import { Product, Warehouse, ProductStock, User, BusinessConfig } from '../types';
 import { db } from '../utils/db';
 import { hasProductPromotion } from '../utils/promotionEngine';
+import NumericKeypad from './NumericKeypad';
 
 interface ProductActionModalProps {
     isOpen: boolean;
@@ -34,6 +36,8 @@ const ProductActionModal: React.FC<ProductActionModalProps> = ({
     terminalId,
     existingCartItem
 }) => {
+    const isAndroid = Capacitor.getPlatform() === 'android';
+    const productBasePrice = Number.isFinite(Number(product?.price)) ? Number(product?.price) : 0;
     const [activeTab, setActiveTab] = useState<Tab>('STOCK');
     const [stockData, setStockData] = useState<ProductStock[]>([]);
     const [loadingStock, setLoadingStock] = useState(false);
@@ -44,13 +48,13 @@ const ProductActionModal: React.FC<ProductActionModalProps> = ({
         if (isOpen && product) {
             // Reset state
             setActiveTab('STOCK');
-            setPriceOverride(existingCartItem?.price?.toString() || product.price.toString());
+            setPriceOverride(existingCartItem?.price?.toString() || String(productBasePrice));
             setNote(existingCartItem?.note || '');
 
             // Fetch stock
             fetchStock(product.id);
         }
-    }, [isOpen, product, existingCartItem]);
+    }, [existingCartItem, isOpen, product, productBasePrice]);
 
     const fetchStock = async (productId: string) => {
         setLoadingStock(true);
@@ -199,7 +203,10 @@ const ProductActionModal: React.FC<ProductActionModalProps> = ({
                                         <span className="text-gray-500 font-bold">$</span>
                                     </div>
                                     <input
-                                        type="number"
+                                        type={isAndroid ? 'text' : 'number'}
+                                        inputMode={isAndroid ? 'none' : 'decimal'}
+                                        readOnly={isAndroid}
+                                        data-disable-native-soft-keyboard={isAndroid ? 'true' : undefined}
                                         value={priceOverride}
                                         onChange={(e) => setPriceOverride(e.target.value)}
                                         disabled={!canChangePrice}
@@ -207,8 +214,13 @@ const ProductActionModal: React.FC<ProductActionModalProps> = ({
                                         placeholder="0.00"
                                     />
                                 </div>
+                                {isAndroid && (
+                                    <div className="mt-3">
+                                        <NumericKeypad value={priceOverride} onChange={setPriceOverride} disabled={!canChangePrice} />
+                                    </div>
+                                )}
                                 <p className="text-xs text-gray-500 mt-2">
-                                    Precio original: <span className="font-medium">${product.price.toFixed(2)}</span>
+                                    Precio original: <span className="font-medium">${productBasePrice.toFixed(2)}</span>
                                 </p>
                             </div>
                         </div>
