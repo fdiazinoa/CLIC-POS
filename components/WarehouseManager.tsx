@@ -9,6 +9,14 @@ import {
 import { Warehouse, Product, StockTransfer, StockTransferItem, BusinessConfig, LedgerConcept, RoleDefinition, User } from '../types';
 import { validateTerminalDocument, validateWarehouseAccess } from '../utils/validation';
 import { db } from '../utils/db';
+import { backgroundSyncManager } from '../services/sync/BackgroundSyncManager';
+import {
+   pendingTransferQuantity,
+   resolveTransferReceiptTerminalContext,
+   TRANSFER_RECEIPT_QUEUE_UPDATED_EVENT,
+   transferReceiptService,
+   type TransferReceiptQueueItem,
+} from '../services/sync/TransferReceiptService';
 
 interface WarehouseManagerProps {
    warehouses: Warehouse[];
@@ -31,7 +39,7 @@ interface WarehouseManagerProps {
 }
 
 type Tab = 'LOCATIONS' | 'TRANSFERS' | 'HISTORY' | 'OPTIMIZER' | 'FORECASTING' | 'INVENTORY' | 'AUDIT_CLOSURE';
-type HistoryFilter = 'ALL' | 'IN_TRANSIT' | 'COMPLETED';
+type HistoryFilter = 'ALL' | 'IN_TRANSIT' | 'PARTIALLY_RECEIVED' | 'COMPLETED';
 
 import InventoryOptimizer from './InventoryOptimizer';
 import SmartReplenishment from './SmartReplenishment';
@@ -106,6 +114,11 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
 
    // Reception State
    const [receptionQuantities, setReceptionQuantities] = useState<Record<string, number>>({});
+   const [receptionReasons, setReceptionReasons] = useState<Record<string, string>>({});
+   const [receptionNotes, setReceptionNotes] = useState('');
+   const [receiptQueue, setReceiptQueue] = useState<TransferReceiptQueueItem[]>([]);
+   const [receiptError, setReceiptError] = useState<string | null>(null);
+   const [submittingReceiptId, setSubmittingReceiptId] = useState<string | null>(null);
    const [discrepancyModal, setDiscrepancyModal] = useState<{
       transferId: string;
       items: { productId: string; productName: string; sent: number; received: number }[];
@@ -113,6 +126,47 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
 
    const [breakdownData, setBreakdownData] = useState<{ product: Product, warehouseId: string } | null>(null);
    const [activeTracking, setActiveTracking] = useState<any[]>([]);
+
+   useEffect(() => {
+      let mounted = true;
+      const reloadQueue = async () => {
+         const queue = await transferReceiptService.list();
+         if (mounted) setReceiptQueue(queue);
+      };
+      void reloadQueue();
+      window.addEventListener(TRANSFER_RECEIPT_QUEUE_UPDATED_EVENT, reloadQueue);
+      return () => {
+         mounted = false;
+         window.removeEventListener(TRANSFER_RECEIPT_QUEUE_UPDATED_EVENT, reloadQueue);
+      };
+   }, []);
+
+   useEffect(() => {
+      setReceiptError(null);
+      setReceptionReasons({});
+      setReceptionNotes('');
+      if (!viewingTransfer || viewingTransfer.syncSource !== 'ERP_SNAPSHOT') return;
+      setReceptionQuantities(Object.fromEntries((viewingTransfer.items || []).map(item => [
+         item.transferItemId || item.productId,
+         pendingTransferQuantity(item.quantity, item.receivedQuantity),
+      ])));
+   }, [viewingTransfer?.id, viewingTransfer?.status]);
+
+   const receiptOperationByTransfer = useMemo(() => {
+      const active = receiptQueue.filter(item => (
+         ['PENDING', 'SENDING', 'RETRY_WAIT'].includes(item.status)
+         || (item.status === 'APPLIED' && item.snapshotRefreshPending)
+      ));
+      return new Map(active.map(item => [item.transferId, item]));
+   }, [receiptQueue]);
+
+   const receiptStatusByTransfer = useMemo(() => {
+      const visible = receiptQueue.filter(item => (
+         ['PENDING', 'SENDING', 'RETRY_WAIT', 'REJECTED'].includes(item.status)
+         || (item.status === 'APPLIED' && item.snapshotRefreshPending)
+      ));
+      return new Map(visible.map(item => [item.transferId, item]));
+   }, [receiptQueue]);
 
    // Inventory State
    const [auditWarehouseId, setAuditWarehouseId] = useState<string | null>(null);
@@ -662,7 +716,7 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
    };
 
    // STEP 2: RECEIVE (Add to Destination)
-   const handleReceiveTransfer = async (transferId: string, discrepancyReason?: string) => {
+   const handleReceiveLocalTransfer = async (transferId: string, discrepancyReason?: string) => {
       const transfer = transfers.find(t => t.id === transferId);
       if (!transfer || transfer.status !== 'IN_TRANSIT') return;
 
@@ -779,6 +833,38 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
       }
    };
 
+   const handleReceiveErpTransfer = async (transfer: StockTransfer) => {
+      if (submittingReceiptId || receiptOperationByTransfer.has(transfer.id)) return;
+      setSubmittingReceiptId(transfer.id);
+      setReceiptError(null);
+      try {
+         const context = resolveTransferReceiptTerminalContext(config, terminalId);
+         await transferReceiptService.enqueue({
+            transfer,
+            ...context,
+            quantities: receptionQuantities,
+            discrepancyReasons: receptionReasons,
+            notes: receptionNotes,
+         });
+         setReceiptQueue(await transferReceiptService.list());
+         void backgroundSyncManager.triggerSync();
+      } catch (error) {
+         setReceiptError(error instanceof Error ? error.message : 'No se pudo preparar la recepción.');
+      } finally {
+         setSubmittingReceiptId(null);
+      }
+   };
+
+   const handleReceiveTransfer = async (transferId: string, discrepancyReason?: string) => {
+      const transfer = transfers.find(item => item.id === transferId);
+      if (!transfer) return;
+      if (transfer.syncSource === 'ERP_SNAPSHOT') {
+         await handleReceiveErpTransfer(transfer);
+         return;
+      }
+      await handleReceiveLocalTransfer(transferId, discrepancyReason);
+   };
+
    const filteredProducts = useMemo(() => {
       if (!itemSearch) return [];
       return products.filter(p =>
@@ -792,7 +878,7 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
       return transfers.filter(t => t.status === historyFilter);
    }, [transfers, historyFilter]);
 
-   const pendingCount = transfers.filter(t => t.status === 'IN_TRANSIT').length;
+   const pendingCount = transfers.filter(t => ['IN_TRANSIT', 'PARTIALLY_RECEIVED'].includes(t.status)).length;
 
    return (
       <>
@@ -1164,6 +1250,7 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
                            {[
                               { id: 'ALL', label: 'Todos' },
                               { id: 'IN_TRANSIT', label: 'En Tránsito' },
+                              { id: 'PARTIALLY_RECEIVED', label: 'Parciales' },
                               { id: 'COMPLETED', label: 'Completados' }
                            ].map(f => (
                               <button
@@ -1200,7 +1287,8 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
                         {filteredTransfers.map(t => {
                            const sourceName = warehouses.find(w => w.id === t.sourceWarehouseId)?.name || '???';
                            const destName = warehouses.find(w => w.id === t.destinationWarehouseId)?.name || '???';
-                           const isPending = t.status === 'IN_TRANSIT';
+                           const isPending = ['IN_TRANSIT', 'PARTIALLY_RECEIVED'].includes(t.status);
+                           const queuedReceipt = receiptStatusByTransfer.get(t.id);
 
                            return (
                               <div key={t.id} className={`bg-white p-5 rounded-2xl border-2 transition-all ${isPending ? 'border-orange-300 shadow-md' : 'border-gray-100'}`}>
@@ -1214,8 +1302,19 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
                                                 ? 'bg-amber-100 text-amber-700'
                                                 : 'bg-green-100 text-green-700'
                                              }`}>
-                                             {isPending ? 'En Tránsito (Pendiente)' : t.discrepancyReason ? 'Recibido (Con Diferencia)' : 'Completado'}
+                                             {t.status === 'PARTIALLY_RECEIVED'
+                                                ? 'Recibido parcialmente'
+                                                : isPending
+                                                   ? 'En Tránsito (Pendiente)'
+                                                   : t.discrepancyReason
+                                                      ? 'Recibido (Con Diferencia)'
+                                                      : 'Completado'}
                                           </span>
+                                          {queuedReceipt && (
+                                             <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${queuedReceipt.status === 'REJECTED' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
+                                                {queuedReceipt.status === 'REJECTED' ? 'Error de sincronización' : 'Pendiente de sincronización'}
+                                             </span>
+                                          )}
                                        </div>
                                        <div className="flex items-center gap-3 text-sm text-gray-500">
                                           <div className="flex items-center gap-1">
@@ -1252,8 +1351,9 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
 
                                           {isPending && (
                                              <button
-                                                onClick={() => handleReceiveTransfer(t.id)}
-                                                className="px-4 py-2 bg-green-600 text-white rounded-xl font-bold shadow-md hover:bg-green-700 active:scale-95 transition-all flex items-center gap-2 text-sm"
+                                                onClick={() => setViewingTransfer(t)}
+                                                disabled={receiptOperationByTransfer.has(t.id) || submittingReceiptId === t.id}
+                                                className="px-4 py-2 bg-green-600 text-white rounded-xl font-bold shadow-md hover:bg-green-700 active:scale-95 transition-all flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                                              >
                                                 <Check size={16} /> Recibir
                                              </button>
@@ -1401,8 +1501,8 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
                      <div className="p-5 border-b border-gray-100">
                         <div className="flex items-center justify-between text-sm mb-2">
                            <span className="text-gray-500">Estado</span>
-                           <span className={`font-bold px-2 py-0.5 rounded text-xs uppercase ${viewingTransfer.status === 'IN_TRANSIT' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
-                              {viewingTransfer.status === 'IN_TRANSIT' ? 'En Tránsito' : 'Completado'}
+                           <span className={`font-bold px-2 py-0.5 rounded text-xs uppercase ${viewingTransfer.status === 'IN_TRANSIT' ? 'bg-orange-100 text-orange-700' : viewingTransfer.status === 'PARTIALLY_RECEIVED' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
+                              {viewingTransfer.status === 'IN_TRANSIT' ? 'En Tránsito' : viewingTransfer.status === 'PARTIALLY_RECEIVED' ? 'Recibido parcialmente' : 'Completado'}
                            </span>
                         </div>
                         <div className="flex justify-between items-center bg-blue-50 p-3 rounded-xl border border-blue-100">
@@ -1421,33 +1521,59 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
                      <div className="flex-1 overflow-y-auto p-5 space-y-2">
                         <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Items Incluidos</h4>
                         {(viewingTransfer.items || []).map((item, idx) => {
-                           const isPending = viewingTransfer.status === 'IN_TRANSIT';
-                           const currentVal = receptionQuantities[item.productId] ?? item.quantity;
+                           const isPending = ['IN_TRANSIT', 'PARTIALLY_RECEIVED'].includes(viewingTransfer.status);
+                           const isErpReceipt = viewingTransfer.syncSource === 'ERP_SNAPSHOT';
+                           const lineId = item.transferItemId || item.productId;
+                           const accumulated = item.receivedQuantity || 0;
+                           const pending = pendingTransferQuantity(item.quantity, accumulated);
+                           const currentVal = receptionQuantities[lineId] ?? (isErpReceipt ? pending : item.quantity);
 
                            return (
-                              <div key={idx} className="flex justify-between items-center p-3 border border-gray-100 rounded-xl hover:bg-gray-50">
-                                 <span className="font-medium text-gray-700 text-sm">{item.productName}</span>
+                              <div key={item.transferItemId || `${item.productId}-${idx}`} className="p-3 border border-gray-100 rounded-xl hover:bg-gray-50 space-y-3">
+                                 <span className="font-medium text-gray-700 text-sm block">{item.productName}</span>
                                  {isPending ? (
-                                    <div className="flex items-center gap-2">
-                                       <input
-                                          type="number"
-                                          value={currentVal}
-                                          max={item.quantity}
-                                          min={0}
-                                          onChange={(e) => {
-                                             const val = parseInt(e.target.value) || 0;
-                                             if (val > item.quantity) {
-                                                alert(`No puede recibir más de lo enviado (${item.quantity}).`);
-                                                return;
-                                             }
-                                             setReceptionQuantities(prev => ({ ...prev, [item.productId]: val }));
-                                          }}
-                                          className="w-16 p-1 text-center bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none"
-                                       />
-                                       <span className="text-[10px] font-bold text-gray-400 uppercase">/ {item.quantity}</span>
-                                    </div>
+                                    <>
+                                       <div className={`grid ${isErpReceipt ? 'grid-cols-4' : 'grid-cols-2'} gap-2 items-end`}>
+                                          <div><span className="block text-[9px] font-bold text-gray-400 uppercase">Enviado</span><strong>{item.quantity}</strong></div>
+                                          {isErpReceipt && <div><span className="block text-[9px] font-bold text-gray-400 uppercase">Recibido</span><strong>{accumulated}</strong></div>}
+                                          {isErpReceipt && <div><span className="block text-[9px] font-bold text-gray-400 uppercase">Pendiente</span><strong>{pending}</strong></div>}
+                                          <label>
+                                             <span className="block text-[9px] font-bold text-gray-400 uppercase">Recibir ahora</span>
+                                             <input
+                                                type="number"
+                                                value={currentVal}
+                                                max={isErpReceipt ? pending : item.quantity}
+                                                min={0}
+                                                step="any"
+                                                disabled={Boolean(receiptOperationByTransfer.get(viewingTransfer.id))}
+                                                onChange={(e) => {
+                                                   const value = Number(e.target.value);
+                                                   const max = isErpReceipt ? pending : item.quantity;
+                                                   if (!Number.isFinite(value) || value < 0 || value > max) {
+                                                      setReceiptError(`La cantidad de ${item.productName} debe estar entre 0 y ${max}.`);
+                                                      return;
+                                                   }
+                                                   setReceiptError(null);
+                                                   setReceptionQuantities(prev => ({ ...prev, [lineId]: value }));
+                                                }}
+                                                className="w-full p-1 text-center bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-60"
+                                             />
+                                          </label>
+                                       </div>
+                                       {isErpReceipt && currentVal < pending && (
+                                          <label className="block">
+                                             <span className="block text-[9px] font-bold text-amber-600 uppercase mb-1">Motivo de recepción parcial *</span>
+                                             <input
+                                                value={receptionReasons[lineId] || ''}
+                                                onChange={(event) => setReceptionReasons(previous => ({ ...previous, [lineId]: event.target.value }))}
+                                                placeholder="Ej.: Faltaron unidades en el despacho"
+                                                className="w-full p-2 border border-amber-200 bg-amber-50 rounded-lg text-xs outline-none focus:ring-2 focus:ring-amber-400"
+                                             />
+                                          </label>
+                                       )}
+                                    </>
                                  ) : (
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex items-center justify-end gap-2">
                                        <span className="font-bold text-gray-900 bg-gray-100 px-2 py-1 rounded-lg text-sm">
                                           {item.receivedQuantity ?? item.quantity}
                                        </span>
@@ -1461,15 +1587,35 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
                               </div>
                            );
                         })}
+                        {viewingTransfer.syncSource === 'ERP_SNAPSHOT' && ['IN_TRANSIT', 'PARTIALLY_RECEIVED'].includes(viewingTransfer.status) && (
+                           <label className="block pt-2">
+                              <span className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Notas de recepción</span>
+                              <textarea
+                                 value={receptionNotes}
+                                 onChange={(event) => setReceptionNotes(event.target.value)}
+                                 placeholder="Recepción verificada por almacén"
+                                 className="w-full min-h-16 p-2 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-400"
+                              />
+                           </label>
+                        )}
+                        {receiptStatusByTransfer.get(viewingTransfer.id) && (
+                           <div className={`p-3 rounded-xl text-xs font-bold ${receiptStatusByTransfer.get(viewingTransfer.id)?.status === 'REJECTED' ? 'bg-red-50 text-red-700' : 'bg-blue-50 text-blue-700'}`}>
+                              {receiptStatusByTransfer.get(viewingTransfer.id)?.status === 'REJECTED'
+                                 ? `Recepción rechazada: ${receiptStatusByTransfer.get(viewingTransfer.id)?.lastError || 'revise la autorización y los datos.'}`
+                                 : 'Pendiente de sincronización. La recepción permanece guardada y se reintentará con la misma clave.'}
+                           </div>
+                        )}
+                        {receiptError && <div className="p-3 rounded-xl bg-red-50 text-red-700 text-xs font-bold">{receiptError}</div>}
                      </div>
 
-                     {viewingTransfer.status === 'IN_TRANSIT' && (
+                     {['IN_TRANSIT', 'PARTIALLY_RECEIVED'].includes(viewingTransfer.status) && (
                         <div className="p-5 border-t border-gray-100 bg-gray-50">
                            <button
                               onClick={() => handleReceiveTransfer(viewingTransfer.id)}
-                              className="w-full py-3 bg-green-600 text-white rounded-xl font-bold shadow-lg hover:bg-green-700 active:scale-95 transition-all flex items-center justify-center gap-2"
+                              disabled={Boolean(receiptOperationByTransfer.get(viewingTransfer.id)) || submittingReceiptId === viewingTransfer.id}
+                              className="w-full py-3 bg-green-600 text-white rounded-xl font-bold shadow-lg hover:bg-green-700 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                            >
-                              <Check size={20} /> Confirmar Recepción
+                              <Check size={20} /> {submittingReceiptId === viewingTransfer.id ? 'Guardando...' : 'Confirmar Recepción'}
                            </button>
                         </div>
                      )}

@@ -10,6 +10,10 @@ import { syncMetrics } from './SyncMetrics';
 import { isSyncFeatureEnabled } from './SyncFeatureFlags';
 import { durableOutboxBatchSender } from './DurableOutboxBatchSender';
 import { durableOutboxRepository } from './DurableOutboxRepository';
+import {
+    transferReceiptService,
+    type TransferReceiptQueueItem,
+} from './TransferReceiptService';
 
 export interface SyncState {
     pendingCount: number;
@@ -63,6 +67,7 @@ class BackgroundSyncManager {
         // Recover interrupted sync states from previous crashes/reloads.
         await this.recoverStuckSyncItems();
         await this.recoverCompletedTransactionsForReplay();
+        await transferReceiptService.recoverInterrupted();
 
         // Initial count of pending items
         await this.updatePendingCount();
@@ -311,6 +316,21 @@ class BackgroundSyncManager {
         let pausedForSaleActivity = false;
 
         try {
+            const receiptQueue = await transferReceiptService.processDue();
+            const retryingReceipts = receiptQueue.filter(item => item.status === 'RETRY_WAIT');
+            if (retryingReceipts.length > 0) {
+                const nextRetryAt = retryingReceipts
+                    .map(item => Date.parse(String(item.nextRetryAt || '')))
+                    .filter(Number.isFinite)
+                    .sort((left, right) => left - right)[0];
+                if (Number.isFinite(nextRetryAt)) {
+                    const delay = Math.max(1000, nextRetryAt - Date.now());
+                    this.nextRetryDelayMs = this.nextRetryDelayMs === null
+                        ? delay
+                        : Math.min(this.nextRetryDelayMs, delay);
+                }
+            }
+
             const durableBatchActive = isSyncFeatureEnabled('sqlite_outbox_v2');
             if (durableBatchActive) {
                 const batch = await durableOutboxBatchSender.sendNext();
@@ -585,6 +605,18 @@ class BackgroundSyncManager {
                 });
             }
         }
+
+        const transferReceipts = await transferReceiptService.list();
+        const pendingTransferReceipts = transferReceipts.filter((item: TransferReceiptQueueItem) => (
+            ['PENDING', 'SENDING', 'RETRY_WAIT'].includes(item.status)
+            || (item.status === 'APPLIED' && item.snapshotRefreshPending === true)
+        ));
+        count += pendingTransferReceipts.length;
+        pendingTransferReceipts.forEach((item) => {
+            const createdAt = Date.parse(item.createdAt);
+            if (!Number.isFinite(createdAt)) return;
+            oldestCreatedAt = oldestCreatedAt === null ? createdAt : Math.min(oldestCreatedAt, createdAt);
+        });
 
         syncMetrics.setOutboxState(count, oldestCreatedAt);
         this.updateState({ pendingCount: count });

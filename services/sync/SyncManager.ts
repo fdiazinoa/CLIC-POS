@@ -4359,6 +4359,9 @@ class SyncManager {
                 }
 
                 const line = entry as Record<string, unknown>;
+                const transferItemId = typeof line.transferItemId === 'string'
+                    ? line.transferItemId.trim()
+                    : String(line.transferItemId || line.transfer_item_id || line.id || '').trim();
                 const productId = typeof line.productId === 'string' ? line.productId.trim() : String(line.productId || line.item_id || '').trim();
                 if (!productId) {
                     return null;
@@ -4371,6 +4374,7 @@ class SyncManager {
                     : String(line.productName || line.product_name || line.name || '').trim();
 
                 return {
+                    transferItemId: transferItemId || undefined,
                     productId,
                     productName: productName || productId,
                     quantity: Number.isFinite(quantity) ? Math.max(0, quantity) : 0,
@@ -4398,7 +4402,11 @@ class SyncManager {
                 ? row.destinationWarehouseId.trim()
                 : String(row.destinationWarehouseId || row.destination_warehouse_id || '').trim(),
             items: normalizedItems,
-            status: rawStatus === 'COMPLETED' ? 'COMPLETED' : 'IN_TRANSIT',
+            status: rawStatus === 'COMPLETED'
+                ? 'COMPLETED'
+                : rawStatus === 'PARTIALLY_RECEIVED'
+                    ? 'PARTIALLY_RECEIVED'
+                    : 'IN_TRANSIT',
             createdAt: typeof row.createdAt === 'string' ? row.createdAt : String(row.createdAt || row.created_at || new Date().toISOString()).trim(),
             sentAt: typeof row.sentAt === 'string' ? row.sentAt : String(row.sentAt || row.sent_at || '').trim() || undefined,
             receivedAt: typeof row.receivedAt === 'string' ? row.receivedAt : String(row.receivedAt || row.received_at || '').trim() || undefined,
