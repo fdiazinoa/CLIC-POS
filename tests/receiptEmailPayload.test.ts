@@ -143,3 +143,76 @@ test('convierte la tasa promocional fraccionaria a porcentaje para el correo', (
 
   assert.equal(line.itemDiscountRate, 50);
 });
+
+test('muestra el efectivo recibido y conserva por separado el monto aplicado cuando hay cambio', () => {
+  const transaction = {
+    id: 'tx-cash-change',
+    date: '2026-08-31T23:40:00.000Z',
+    items: [],
+    total: 1_875,
+    payments: [{
+      id: 'cash-1',
+      method: 'CASH',
+      methodLabel: 'Efectivo',
+      amount: 2_000,
+      appliedAmount: 1_875,
+      currencyCode: 'DOP',
+      changeAmount: 125,
+      changeCurrencyCode: 'DOP',
+    }],
+    userId: 'cashier-1',
+    userName: 'Ana P.',
+    status: 'COMPLETED',
+  } as Transaction;
+  const config = {
+    currencies: [{
+      code: 'DOP',
+      name: 'Peso dominicano',
+      symbol: 'RD$',
+      rate: 1,
+      isBase: true,
+      isEnabled: true,
+    }],
+  } as BusinessConfig;
+
+  const payload = buildReceiptEmailPayload(transaction, 'cliente@example.com', config, 'RD$');
+  const payment = (payload.payments as Record<string, unknown>[])[0];
+
+  assert.equal(payment.methodLabel, 'Efectivo recibido');
+  assert.equal(payment.amount, 2_000);
+  assert.equal(payment.receivedAmount, 2_000);
+  assert.equal(payment.settledAmount, 1_875);
+  assert.equal(payment.displayAmount, 2_000);
+  assert.equal(payment.changeAmount, 125);
+  assert.equal(Object.hasOwn(payment, 'appliedAmount'), false);
+});
+
+test('mantiene appliedAmount en pagos sin cambio', () => {
+  const transaction = {
+    id: 'tx-exact-cash',
+    date: '2026-08-31T23:45:00.000Z',
+    items: [],
+    total: 375,
+    payments: [{
+      id: 'cash-1',
+      method: 'CASH',
+      methodLabel: 'Efectivo',
+      amount: 375,
+      appliedAmount: 375,
+      currencyCode: 'DOP',
+    }],
+    userId: 'cashier-1',
+    userName: 'Ana P.',
+    status: 'COMPLETED',
+  } as Transaction;
+
+  const payload = buildReceiptEmailPayload(transaction, 'cliente@example.com', undefined, 'RD$');
+  const payment = (payload.payments as Record<string, unknown>[])[0];
+
+  assert.equal(payment.methodLabel, 'Efectivo');
+  assert.equal(payment.amount, 375);
+  assert.equal(payment.appliedAmount, 375);
+  assert.equal(payment.receivedAmount, 375);
+  assert.equal(payment.settledAmount, 375);
+  assert.equal(payment.changeAmount, undefined);
+});
