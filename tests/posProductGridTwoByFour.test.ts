@@ -4,6 +4,18 @@ import test from 'node:test';
 
 const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
 
+test('el restaurante de escritorio activa siempre el catálogo compacto 2x4', () => {
+  const layoutStart = source.indexOf('const usesExpandedCatalog');
+  const layoutEnd = source.indexOf('const gridClass', layoutStart);
+  const layoutSource = source.slice(layoutStart, layoutEnd);
+
+  assert.ok(layoutStart >= 0, 'No se encontró la selección del catálogo expandido');
+  assert.match(
+    layoutSource,
+    /!isMobile && \(isRestaurantMode \|\| isRetailMode \|\| activeTerminalConfig\?\.operational\?\.expandTicket\)/,
+  );
+});
+
 test('el catálogo expandido distribuye cuatro columnas en dos filas completas', () => {
   const gridStart = source.indexOf('const gridClass');
   const gridEnd = source.indexOf('const categoryContainerClass', gridStart);

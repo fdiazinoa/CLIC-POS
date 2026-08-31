@@ -1929,8 +1929,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
 
    const usesExpandedCatalog = useMemo(
-      () => Boolean(!isMobile && (isRetailMode || activeTerminalConfig?.operational?.expandTicket)),
-      [activeTerminalConfig?.operational?.expandTicket, isMobile, isRetailMode]
+      () => Boolean(!isMobile && (isRestaurantMode || isRetailMode || activeTerminalConfig?.operational?.expandTicket)),
+      [activeTerminalConfig?.operational?.expandTicket, isMobile, isRestaurantMode, isRetailMode]
    );
 
    const gridClass = useMemo(() => {
