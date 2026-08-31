@@ -1961,7 +1961,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const expandedCatalogGridStyle = useMemo(
       () => usesExpandedCatalog
          ? {
-            gridTemplateRows: 'repeat(2, minmax(0, 1fr))',
             gridAutoRows: 'calc((100% - 0.75rem) / 2)',
          } as React.CSSProperties
          : undefined,

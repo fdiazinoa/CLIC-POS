@@ -11,8 +11,12 @@ test('el catálogo expandido distribuye cuatro columnas en dos filas completas',
 
   assert.ok(gridStart >= 0, 'No se encontró la configuración del grid de artículos');
   assert.match(gridSource, /absolute inset-0 grid min-h-0 grid-cols-4 gap-3 content-start overflow-y-auto px-4 py-3/);
-  assert.match(gridSource, /gridTemplateRows: 'repeat\(2, minmax\(0, 1fr\)\)'/);
   assert.match(gridSource, /gridAutoRows: 'calc\(\(100% - 0\.75rem\) \/ 2\)'/);
+  assert.doesNotMatch(
+    gridSource,
+    /gridTemplateRows/,
+    'Las filas fr explícitas colapsan a 0px cuando existen filas adicionales desplazables'
+  );
 });
 
 test('el modo restaurante de escritorio activa siempre el catálogo 2x4 aunque expandTicket esté deshabilitado', () => {
