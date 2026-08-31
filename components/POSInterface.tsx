@@ -127,6 +127,7 @@ import {
    resolveClassificationSortOrder,
 } from '../utils/posCatalogPresentation';
 import { resolvePosCategoryGridPosition } from '../utils/posCategoryGrid';
+import { resolvePosTableHeaderLabel } from '../utils/posTableHeader';
 
 // ... existing imports
 
@@ -1269,6 +1270,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       () => buildTableContextLabels(activeTable, rooms),
       [activeTable, rooms]
    );
+   const activeTableHeaderLabel = useMemo(
+      () => resolvePosTableHeaderLabel({
+         roomName: activeTableContext.roomLabel,
+         tableName: activeTableContext.tableLabel,
+      }) || activeTableContext.tableLabel,
+      [activeTableContext.roomLabel, activeTableContext.tableLabel]
+   );
    const activeTableAccounts = useMemo(() => {
       const tableId = String(activeTable?.id || '').trim();
       if (!tableId) return [];
@@ -1939,7 +1947,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         return "grid [grid-template-columns:repeat(auto-fill,minmax(210px,1fr))] gap-4 md:gap-5 content-start auto-rows-fr";
       }
       if (usesExpandedCatalog) {
-        return "grid h-full min-h-0 grid-cols-4 gap-3 content-start overflow-y-auto px-4 py-3";
+        return "absolute inset-0 grid min-h-0 grid-cols-4 gap-3 content-start overflow-y-auto px-4 py-3";
       }
       if (isMobile) {
          return "grid [grid-template-columns:repeat(auto-fill,minmax(138px,1fr))] gap-2.5 content-start";
@@ -1953,6 +1961,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const expandedCatalogGridStyle = useMemo(
       () => usesExpandedCatalog
          ? {
+            gridTemplateRows: 'repeat(2, minmax(0, 1fr))',
             gridAutoRows: 'calc((100% - 0.75rem) / 2)',
          } as React.CSSProperties
          : undefined,
@@ -7091,7 +7100,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div>
 
             <div
-               className={`flex-1 min-h-0 bg-[#eef2f6] ${usesExpandedCatalog ? 'overflow-hidden' : `overflow-y-auto ${isMobile ? 'p-3' : 'p-8'}`} custom-scrollbar scrollbar-thin dark:bg-slate-900`}
+               className={`flex-1 min-h-0 bg-[#eef2f6] ${usesExpandedCatalog ? 'relative overflow-hidden' : `overflow-y-auto ${isMobile ? 'p-3' : 'p-8'}`} custom-scrollbar scrollbar-thin dark:bg-slate-900`}
                style={bottomAwareScrollStyle}
             >
                <div className={gridClass} style={expandedCatalogGridStyle}>
@@ -7285,9 +7294,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <button onClick={() => setMobileView('PRODUCTS')} className="h-10 w-10 -ml-2 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors flex items-center justify-center">
                         <ArrowLeft size={24} />
                      </button>
-                     <h2 className="font-black text-gray-800 text-lg leading-tight">
+                     <h2 className="min-w-0 max-w-[180px] truncate font-black text-gray-800 text-base leading-tight">
                         {activeTable ? (
-                           <span>{activeBarTabName || activeTableContext.compactLabel || activeTable.nombre || activeTable.name}</span>
+                           <span title={activeTableContext.compactLabel || activeTableHeaderLabel}>
+                              {activeBarTabName || activeTableHeaderLabel || activeTable.nombre || activeTable.name}
+                           </span>
                         ) : 'Ticket Actual'}
                      </h2>
                   </div>
@@ -7583,8 +7594,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <div className="flex w-full items-center justify-between gap-3 animate-in fade-in slide-in-from-top-1 duration-200">
                      <div className="flex min-w-0 items-center gap-2">
                         <Layout size={18} className="shrink-0 text-blue-600" />
-                        <span className="truncate text-xl font-black tracking-tight text-slate-900">
-                           {activeBarTabName || activeTableContext.compactLabel || activeTable.nombre || activeTable.name}
+                        <span
+                           className="max-w-[220px] truncate text-base font-black tracking-tight text-slate-900"
+                           title={activeTableContext.compactLabel || activeTableHeaderLabel}
+                        >
+                           {activeBarTabName || activeTableHeaderLabel || activeTable.nombre || activeTable.name}
                         </span>
                      </div>
 
