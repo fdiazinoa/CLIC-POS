@@ -40,3 +40,16 @@ test('canonical APK releases explicitly enable the Master/Cliente LAN transport'
     );
     assert.match(releaseScript, /lanHttpEnabled=\$\{LAN_HTTP_ENABLED\}/);
 });
+
+test('canonical release aborts when the binary manifest does not match the requested LAN policy', () => {
+    assert.match(releaseScript, /verify_apk_network_policy/);
+    assert.match(releaseScript, /dump xmltree "\$\{apk\}" AndroidManifest\.xml/);
+    assert.match(releaseScript, /android:usesCleartextTraffic/);
+    assert.match(releaseScript, /0xffffffff/);
+    assert.match(releaseScript, /manifestNetworkPolicyVerified=true/);
+    assert.ok(
+        releaseScript.indexOf('verify_apk_network_policy "${AAPT}"')
+        < releaseScript.indexOf('cp "${APK_SRC}" "${APK_DEST}"'),
+        'la política debe validarse antes de publicar el APK canónico',
+    );
+});
