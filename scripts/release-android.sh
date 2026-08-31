@@ -153,6 +153,40 @@ resolve_apksigner() {
   echo "${apksigner}"
 }
 
+resolve_aapt() {
+  local sdk_dir="$1"
+  local build_tools_version
+  local aapt
+
+  build_tools_version="$(ls -1 "${sdk_dir}/build-tools" | sort -V | tail -n1)"
+  [[ -n "${build_tools_version}" ]] || fail "No encontré build-tools dentro de ${sdk_dir}"
+
+  aapt="${sdk_dir}/build-tools/${build_tools_version}/aapt"
+  [[ -x "${aapt}" ]] || fail "No encontré aapt ejecutable en ${aapt}"
+
+  echo "${aapt}"
+}
+
+verify_apk_network_policy() {
+  local aapt="$1"
+  local apk="$2"
+  local lan_http_enabled="$3"
+  local cleartext_attribute
+
+  cleartext_attribute="$("${aapt}" dump xmltree "${apk}" AndroidManifest.xml \
+    | grep 'android:usesCleartextTraffic' \
+    | head -n1)"
+  [[ -n "${cleartext_attribute}" ]] || fail "El APK no declara android:usesCleartextTraffic"
+
+  if [[ "${lan_http_enabled}" == "true" ]]; then
+    [[ "${cleartext_attribute}" == *'0xffffffff'* ]] \
+      || fail "El APK bloquea HTTP LAN aunque el release solicitó Master/Cliente LAN habilitado"
+  else
+    [[ "${cleartext_attribute}" == *'(type 0x12)0x0'* ]] \
+      || fail "El APK permite HTTP LAN aunque el release solicitó política estricta"
+  fi
+}
+
 git -C "${REPO_ROOT}" fetch origin --quiet
 
 SOURCE_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --verify "${SOURCE_REF}")" || fail "No pude resolver el ref fuente: ${SOURCE_REF}"
@@ -180,6 +214,7 @@ require_file "${LOCAL_PROPERTIES}"
 
 SDK_DIR="$(resolve_sdk_dir "${LOCAL_PROPERTIES}")"
 APKSIGNER="$(resolve_apksigner "${SDK_DIR}")"
+AAPT="$(resolve_aapt "${SDK_DIR}")"
 
 CANONICAL_GRADLE_FILE="${CANONICAL_BUILD_WORKTREE}/android/app/build.gradle"
 require_file "${CANONICAL_GRADLE_FILE}"
@@ -263,6 +298,9 @@ METADATA_SRC="${TEMP_WORKTREE}/android/app/build/outputs/apk/release/output-meta
 require_file "${APK_SRC}"
 require_file "${METADATA_SRC}"
 
+info "Verificando política HTTP LAN del manifiesto"
+verify_apk_network_policy "${AAPT}" "${APK_SRC}" "${LAN_HTTP_ENABLED}"
+
 info "Verificando firma"
 "${APKSIGNER}" verify --print-certs "${APK_SRC}"
 
@@ -284,6 +322,7 @@ sourceBranch=${SOURCE_BRANCH}
 sourceCommit=${SOURCE_COMMIT}
 sourceCommitShort=${SOURCE_COMMIT_SHORT}
 lanHttpEnabled=${LAN_HTTP_ENABLED}
+manifestNetworkPolicyVerified=true
 canonicalBuildWorktree=${CANONICAL_BUILD_WORKTREE}
 artifact=${APK_DEST}
 metadata=${METADATA_DEST}
