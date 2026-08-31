@@ -113,7 +113,7 @@ test('el ticket ESC/POS imprime descuento antes de impuestos y el cupón despué
   const subtotalIndex = decoded.indexOf('SUBTOTAL');
   const discountIndex = decoded.indexOf('DESCUENTO TOTAL');
   const taxIndex = decoded.indexOf('ITBIS 18%');
-  const paymentsIndex = decoded.indexOf('PAGOS');
+  const paymentsIndex = decoded.indexOf('PAGO');
   const couponIndex = decoded.indexOf('DESCUENTO POR CUPON: PROMO-2026');
 
   assert.ok(subtotalIndex >= 0);

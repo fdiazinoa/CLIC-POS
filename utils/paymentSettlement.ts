@@ -250,3 +250,88 @@ export const resolveCurrencySymbol = (
     if (!normalizedCode) return fallbackSymbol;
     return config?.currencies?.find(currency => currency.code === normalizedCode)?.symbol || normalizedCode;
 };
+
+export type PaymentReceiptRow = {
+    label: string;
+    value: string;
+    emphasis?: boolean;
+};
+
+export type PaymentReceiptGroup = {
+    paymentId: string;
+    rows: PaymentReceiptRow[];
+};
+
+export type PaymentReceiptPresentation = {
+    heading: 'PAGO' | 'PAGOS';
+    groups: PaymentReceiptGroup[];
+    change?: PaymentReceiptRow;
+};
+
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+    CASH: 'EFECTIVO',
+    CARD: 'TARJETA',
+    STORE_CREDIT: 'NOTA DE CRÉDITO',
+};
+
+const resolvePaymentMethodReceiptLabel = (line: PaymentSettlementLine): string => {
+    const method = String(line.method || '').trim().toUpperCase();
+    const configuredLabel = String(line.methodLabel || '').trim();
+    if (configuredLabel && configuredLabel.toUpperCase() !== method) return configuredLabel.toUpperCase();
+    return PAYMENT_METHOD_LABELS[method] || method || 'PAGO';
+};
+
+const formatReceiptMoney = (symbol: string, value: number): string => (
+    `${symbol}${roundToTwo(value).toFixed(2)}`
+);
+
+export const buildPaymentReceiptPresentation = (
+    summary: PaymentSettlementSummary,
+    config: BusinessConfig | undefined,
+    baseCurrencyCode = 'DOP',
+    fallbackSymbol = '$'
+): PaymentReceiptPresentation => {
+    const baseSymbol = resolveCurrencySymbol(config, baseCurrencyCode, fallbackSymbol);
+    const groups = summary.lines.map((line): PaymentReceiptGroup => {
+        const methodLabel = resolvePaymentMethodReceiptLabel(line);
+        const isTenderedAmountRelevant = line.isForeignCurrency || line.changeBase > 0.0001;
+        const rows: PaymentReceiptRow[] = [];
+
+        if (isTenderedAmountRelevant) {
+            const receivedSymbol = line.isForeignCurrency
+                ? resolveCurrencySymbol(config, line.currencyCode, line.currencyCode)
+                : baseSymbol;
+            const receivedAmount = line.isForeignCurrency ? line.receivedOriginal : line.receivedBase;
+            rows.push({
+                label: `${methodLabel} RECIBIDO`,
+                value: formatReceiptMoney(receivedSymbol, receivedAmount),
+            });
+        } else {
+            rows.push({
+                label: methodLabel,
+                value: formatReceiptMoney(baseSymbol, line.appliedBase),
+            });
+        }
+
+        if (line.isForeignCurrency) {
+            rows.push({
+                label: 'EQUIVALENTE',
+                value: formatReceiptMoney(baseSymbol, line.receivedBase),
+            });
+        }
+
+        return { paymentId: line.paymentId, rows };
+    });
+
+    return {
+        heading: groups.length === 1 ? 'PAGO' : 'PAGOS',
+        groups,
+        change: summary.totalChangeBase > 0.0001
+            ? {
+                label: 'CAMBIO',
+                value: formatReceiptMoney(baseSymbol, summary.totalChangeBase),
+                emphasis: true,
+            }
+            : undefined,
+    };
+};
