@@ -8,6 +8,7 @@ import {
   resolveDocumentAssignmentId,
   resolveEffectiveSeriesIdForDocumentType,
 } from '../utils/documentSeriesIdentity';
+import { normalizeDocumentSeries } from '../utils/terminalConfigSnapshot';
 
 const EPSILON = 0.01;
 
@@ -202,6 +203,23 @@ const findOperationalTerminal = (terminals: any[], terminalId?: string): any | u
     );
 };
 
+const getPersistedTerminalSnapshotSeries = (terminal: any): DocumentSeries[] => {
+    const snapshot = terminal?.config?.erpSnapshot || {};
+    const resolved = snapshot?.resolved || {};
+    const terminalFiscalConfig = resolved?.terminalFiscalConfig || resolved?.terminal_fiscal_config || {};
+    const sources = [
+        terminalFiscalConfig?.documentSeries,
+        terminalFiscalConfig?.document_series,
+        resolved?.documents?.documentSeries,
+        resolved?.documents?.document_series,
+    ].filter(Array.isArray) as unknown[][];
+
+    return sources
+        .flat()
+        .map((row, index) => normalizeDocumentSeries(row, index))
+        .filter((series): series is DocumentSeries => Boolean(series));
+};
+
 const mergeTerminalAuthoritativeSeries = (
     terminalSeries: DocumentSeries[],
     existingSeries: DocumentSeries[]
@@ -240,9 +258,13 @@ class TransactionService {
         const currentConfig = resolveCurrentConfig(configRaw);
         const terminals = Array.isArray(currentConfig?.terminals) ? currentConfig.terminals : [];
         const terminal = findOperationalTerminal(terminals, terminalId);
-        const fromTerminalConfig = (Array.isArray(terminal?.config?.documentSeries)
+        const configuredTerminalSeries = (Array.isArray(terminal?.config?.documentSeries)
             ? terminal.config.documentSeries
             : []) as DocumentSeries[];
+        const fromTerminalConfig = mergeDocumentSeriesCollection([
+            ...configuredTerminalSeries,
+            ...getPersistedTerminalSnapshotSeries(terminal),
+        ]);
         const hasAuthoritativeTerminalSeries = fromTerminalConfig.some((series: any) =>
             String(series?.source || '').toUpperCase() === 'ERP_TERMINAL_CONFIG'
         );
