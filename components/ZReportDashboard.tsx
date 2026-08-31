@@ -1,5 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
+import { Capacitor } from '@capacitor/core';
 import {
    ArrowLeft, Receipt, CheckCircle, Banknote, Calendar,
    AlertTriangle, Lock, RefreshCw, Printer, Mail, Loader2
@@ -16,6 +17,7 @@ import {
    getPaymentChangeBaseAmount,
    getPaymentReceivedAmountForDrawer,
 } from '../utils/paymentSettlement';
+import AndroidNumericKeypadDialog from './AndroidNumericKeypadDialog';
 
 interface ZReportDashboardProps {
    transactions: Transaction[];
@@ -88,7 +90,14 @@ const formatDenomination = (value: number) => (
    Number.isInteger(value) ? value.toString() : value.toFixed(2)
 );
 
+type AndroidZKeypadTarget =
+   | { kind: 'CASH'; currencyCode: string; title: string }
+   | { kind: 'DENOMINATION'; currencyCode: string; denominationKey: string; title: string }
+   | { kind: 'CARD'; title: string }
+   | { kind: 'OTHER'; title: string };
+
 const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashMovements, config, userName, currentUser, roles, onClose, onConfirmClose, terminalId, collections }) => {
+   const isAndroid = Capacitor.getPlatform() === 'android';
    const [cashCountedByCurrency, setCashCountedByCurrency] = useState<Record<string, string>>({});
    const [denominationCounts, setDenominationCounts] = useState<Record<string, Record<string, string>>>({});
    const [declaredCard, setDeclaredCard] = useState('');
@@ -96,6 +105,36 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const [notes, setNotes] = useState('');
    const [replacementReport, setReplacementReport] = useState<ZReport | null>(null);
    const [replacementTransactions, setReplacementTransactions] = useState<Transaction[]>([]);
+   const [androidKeypadTarget, setAndroidKeypadTarget] = useState<AndroidZKeypadTarget | null>(null);
+
+   const androidKeypadValue = (() => {
+      if (!androidKeypadTarget) return '';
+      if (androidKeypadTarget.kind === 'CASH') return cashCountedByCurrency[androidKeypadTarget.currencyCode] || '';
+      if (androidKeypadTarget.kind === 'DENOMINATION') {
+         return denominationCounts[androidKeypadTarget.currencyCode]?.[androidKeypadTarget.denominationKey] || '';
+      }
+      return androidKeypadTarget.kind === 'CARD' ? declaredCard : declaredOther;
+   })();
+
+   const updateAndroidKeypadValue = (value: string) => {
+      if (!androidKeypadTarget) return;
+      if (androidKeypadTarget.kind === 'CASH') {
+         setCashCountedByCurrency((previous) => ({ ...previous, [androidKeypadTarget.currencyCode]: value }));
+         return;
+      }
+      if (androidKeypadTarget.kind === 'DENOMINATION') {
+         setDenominationCounts((previous) => ({
+            ...previous,
+            [androidKeypadTarget.currencyCode]: {
+               ...(previous[androidKeypadTarget.currencyCode] || {}),
+               [androidKeypadTarget.denominationKey]: value.replace(/[^\d]/g, ''),
+            },
+         }));
+         return;
+      }
+      if (androidKeypadTarget.kind === 'CARD') setDeclaredCard(value);
+      else setDeclaredOther(value);
+   };
 
    // Closing workflow states
    const [isProcessing, setIsProcessing] = useState(false);
@@ -713,9 +752,11 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                                                       {formatDenomination(denomination)}.
                                                    </span>
                                                    <input
-                                                      autoFocus={index === 0 && denominationIndex === 0}
-                                                      type="number"
-                                                      inputMode="numeric"
+                                                      autoFocus={!isAndroid && index === 0 && denominationIndex === 0}
+                                                      type={isAndroid ? 'text' : 'number'}
+                                                      inputMode={isAndroid ? 'none' : 'numeric'}
+                                                      readOnly={isAndroid}
+                                                      data-disable-native-soft-keyboard={isAndroid ? 'true' : undefined}
                                                       min="0"
                                                       step="1"
                                                       value={quantity}
@@ -726,6 +767,12 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                                                             [denominationKey]: e.target.value.replace(/[^\d]/g, '')
                                                          }
                                                       }))}
+                                                      onClick={() => isAndroid && setAndroidKeypadTarget({
+                                                         kind: 'DENOMINATION',
+                                                         currencyCode,
+                                                         denominationKey,
+                                                         title: `${currencyCode} · ${formatDenomination(denomination)}`,
+                                                      })}
                                                       placeholder="Cant."
                                                       className="w-full rounded-xl border-2 border-gray-200 px-3 py-1.5 text-right text-lg font-black outline-none transition-colors focus:border-blue-500"
                                                    />
@@ -748,11 +795,15 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                                     <div className="relative">
                                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-lg">{symbol}</span>
                                        <input
-                                          autoFocus={index === 0}
-                                          type="number"
+                                          autoFocus={!isAndroid && index === 0}
+                                          type={isAndroid ? 'text' : 'number'}
+                                          inputMode={isAndroid ? 'none' : 'decimal'}
+                                          readOnly={isAndroid}
+                                          data-disable-native-soft-keyboard={isAndroid ? 'true' : undefined}
                                           step="0.01"
                                           value={counted}
                                           onChange={(e) => setCashCountedByCurrency(prev => ({ ...prev, [currencyCode]: e.target.value }))}
+                                          onClick={() => isAndroid && setAndroidKeypadTarget({ kind: 'CASH', currencyCode, title: `Efectivo contado · ${currencyCode}` })}
                                           placeholder="0.00"
                                           className="w-full pl-16 pr-4 py-3 text-2xl font-bold border-2 border-gray-200 rounded-2xl focus:border-blue-500 outline-none transition-colors"
                                        />
@@ -793,10 +844,14 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                         <div className="relative">
                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-lg">{baseCurrency?.symbol || baseCurrencyCode}</span>
                            <input
-                              type="number"
+                              type={isAndroid ? 'text' : 'number'}
+                              inputMode={isAndroid ? 'none' : 'decimal'}
+                              readOnly={isAndroid}
+                              data-disable-native-soft-keyboard={isAndroid ? 'true' : undefined}
                               step="0.01"
                               value={declaredCard}
                               onChange={(e) => setDeclaredCard(e.target.value)}
+                              onClick={() => isAndroid && setAndroidKeypadTarget({ kind: 'CARD', title: 'Tarjeta / vouchers declarados' })}
                               placeholder="0.00"
                               className="w-full pl-16 pr-4 py-3 text-xl font-bold border-2 border-gray-200 rounded-2xl focus:border-blue-500 outline-none transition-colors"
                            />
@@ -809,10 +864,14 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                         <div className="relative">
                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-lg">{baseCurrency?.symbol || baseCurrencyCode}</span>
                            <input
-                              type="number"
+                              type={isAndroid ? 'text' : 'number'}
+                              inputMode={isAndroid ? 'none' : 'decimal'}
+                              readOnly={isAndroid}
+                              data-disable-native-soft-keyboard={isAndroid ? 'true' : undefined}
                               step="0.01"
                               value={declaredOther}
                               onChange={(e) => setDeclaredOther(e.target.value)}
+                              onClick={() => isAndroid && setAndroidKeypadTarget({ kind: 'OTHER', title: 'Otros medios declarados' })}
                               placeholder="0.00"
                               className="w-full pl-16 pr-4 py-3 text-xl font-bold border-2 border-gray-200 rounded-2xl focus:border-blue-500 outline-none transition-colors"
                            />
@@ -874,6 +933,16 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
             />
             <p className="text-xs text-gray-400 mt-4 text-center">Responsable: <strong>{userName}</strong></p>
          </div>
+
+         {isAndroid && androidKeypadTarget && (
+            <AndroidNumericKeypadDialog
+               title={androidKeypadTarget.title}
+               value={androidKeypadValue}
+               onChange={updateAndroidKeypadValue}
+               onClose={() => setAndroidKeypadTarget(null)}
+               allowDecimal={androidKeypadTarget.kind !== 'DENOMINATION'}
+            />
+         )}
 
       </div>
    );

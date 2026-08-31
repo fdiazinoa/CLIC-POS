@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Capacitor } from '@capacitor/core';
 import {
     DollarSign, Edit3, Box, Globe, Printer,
     PauseCircle, PlayCircle, Settings, X, Check, Save
 } from 'lucide-react';
 import { Product, BusinessConfig, Warehouse, ProductStock, RoleDefinition, User } from '../types';
 import { db } from '../utils/db';
+import NumericKeypad from './NumericKeypad';
 import {
     canonicalizeWarehouseIds,
     canonicalizeWarehouseRecord,
@@ -91,8 +93,10 @@ const ProductQuickActions: React.FC<QuickActionsProps> = ({
     currentUser,
     roles
 }) => {
+    const isAndroid = Capacitor.getPlatform() === 'android';
+    const productBasePrice = Number.isFinite(Number(product.price)) ? Number(product.price) : 0;
     const [activeModal, setActiveModal] = useState<'NONE' | 'PRICE' | 'NAME' | 'WAREHOUSE' | 'STOCK'>('NONE');
-    const [tempPrice, setTempPrice] = useState(product.price.toString());
+    const [tempPrice, setTempPrice] = useState(String(productBasePrice));
     const [tempName, setTempName] = useState(product.name);
     const [productStocks, setProductStocks] = useState<ProductStock[]>([]);
     const menuRef = useRef<HTMLDivElement>(null);
@@ -326,13 +330,17 @@ const ProductQuickActions: React.FC<QuickActionsProps> = ({
                             <div className="relative">
                                 <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold">{config.currencySymbol}</span>
                                 <input
-                                    type="number"
+                                    type={isAndroid ? 'text' : 'number'}
+                                    inputMode={isAndroid ? 'none' : 'decimal'}
+                                    readOnly={isAndroid}
+                                    data-disable-native-soft-keyboard={isAndroid ? 'true' : undefined}
                                     value={tempPrice}
-                                    autoFocus
+                                    autoFocus={!isAndroid}
                                     onChange={e => setTempPrice(e.target.value)}
                                     className="w-full pl-10 pr-4 py-4 bg-gray-50 dark:bg-slate-900 border-2 border-gray-100 dark:border-slate-700 rounded-2xl text-2xl font-black focus:border-blue-500 transition-all outline-none"
                                 />
                             </div>
+                            {isAndroid && <NumericKeypad value={tempPrice} onChange={setTempPrice} />}
                             <div className="flex gap-3">
                                 <button onClick={() => setActiveModal('NONE')} className="flex-1 py-3 font-bold text-gray-500 bg-gray-100 dark:bg-slate-700 rounded-xl hover:bg-gray-200 transition-all">Cancelar</button>
                                 <button onClick={handleSavePrice} className="flex-1 py-3 font-bold text-white bg-blue-600 rounded-xl shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all flex items-center justify-center gap-2">
