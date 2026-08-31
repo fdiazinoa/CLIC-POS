@@ -15,6 +15,22 @@ test('el catálogo expandido distribuye cuatro columnas en dos filas completas',
   assert.match(gridSource, /gridAutoRows: 'calc\(\(100% - 0\.75rem\) \/ 2\)'/);
 });
 
+test('el modo restaurante de escritorio activa siempre el catálogo 2x4 aunque expandTicket esté deshabilitado', () => {
+  const expandedStart = source.indexOf('const usesExpandedCatalog');
+  const expandedEnd = source.indexOf('const gridClass', expandedStart);
+  const expandedSource = source.slice(expandedStart, expandedEnd);
+
+  assert.ok(expandedStart >= 0, 'No se encontró la selección del catálogo expandido');
+  assert.match(
+    expandedSource,
+    /!isMobile && \(isRetailMode \|\| isRestaurantMode \|\| activeTerminalConfig\?\.operational\?\.expandTicket\)/
+  );
+  assert.match(
+    expandedSource,
+    /\[activeTerminalConfig\?\.operational\?\.expandTicket, isMobile, isRestaurantMode, isRetailMode\]/
+  );
+});
+
 test('las tarjetas expandidas ocupan su fila sin conservar alturas fijas que corten la segunda línea', () => {
   const cardStart = source.indexOf("showProductImages\n            ? usesSupermarketLayout");
   const cardEnd = source.indexOf('warehouseSaleBlocked && (', cardStart);
