@@ -10,7 +10,8 @@ export type MasterPairingFailureCode =
   | 'CONFIG_HTTP_ERROR'
   | 'CONFIG_INVALID_JSON'
   | 'CONFIG_NETWORK_ERROR'
-  | 'CONFIG_TIMEOUT';
+  | 'CONFIG_TIMEOUT'
+  | 'CONFIG_NOT_READY';
 
 export class MasterPairingConnectionError extends Error {
   constructor(
@@ -32,6 +33,7 @@ interface MasterPairingStartupRetryOptions {
   now?: () => number;
   sleep?: (delayMs: number) => Promise<void>;
   onRetry?: (state: { attempt: number; elapsedMs: number; nextDelayMs: number; error: unknown }) => void;
+  isConfigReady?: (config: BusinessConfig) => boolean;
 }
 
 const fetchWithTimeout = async (
@@ -118,7 +120,11 @@ export const fetchMasterPairingResources = async (
 
 const isRetryableStartupError = (error: unknown): boolean => {
   if (!(error instanceof MasterPairingConnectionError)) return false;
-  if (error.code === 'CONFIG_NETWORK_ERROR' || error.code === 'CONFIG_TIMEOUT') return true;
+  if (
+    error.code === 'CONFIG_NETWORK_ERROR'
+    || error.code === 'CONFIG_TIMEOUT'
+    || error.code === 'CONFIG_NOT_READY'
+  ) return true;
   if (error.code !== 'CONFIG_HTTP_ERROR') return false;
   const status = Number(error.message.match(/\b(\d{3})\b/)?.[1]);
   return Number.isFinite(status) && status >= 500;
@@ -145,7 +151,14 @@ export const waitForMasterPairingResources = async (
   while (true) {
     attempt += 1;
     try {
-      return await fetchMasterPairingResources(baseUrl, fetchImpl);
+      const resources = await fetchMasterPairingResources(baseUrl, fetchImpl);
+      if (options.isConfigReady && !options.isConfigReady(resources.config)) {
+        throw new MasterPairingConnectionError(
+          'CONFIG_NOT_READY',
+          'La Master respondió, pero todavía está preparando su configuración operativa.',
+        );
+      }
+      return resources;
     } catch (error) {
       const elapsedMs = Math.max(0, now() - startedAt);
       const remainingMs = maxWaitMs - elapsedMs;

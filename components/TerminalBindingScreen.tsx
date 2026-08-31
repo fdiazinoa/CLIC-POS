@@ -132,7 +132,10 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
     for (const baseUrl of candidates) {
       try {
         const { config: fetchedConfig, users: fetchedUsers } = options.waitForStartup
-          ? await waitForMasterPairingResources(baseUrl, fetch, { onRetry: options.onRetry })
+          ? await waitForMasterPairingResources(baseUrl, fetch, {
+              onRetry: options.onRetry,
+              isConfigReady: isEligibleOperationalMasterConfig,
+            })
           : await fetchMasterPairingResources(baseUrl);
         if (!isEligibleOperationalMasterConfig(fetchedConfig)) {
           throw new Error('El equipo encontrado no es una Caja Master operativa.');

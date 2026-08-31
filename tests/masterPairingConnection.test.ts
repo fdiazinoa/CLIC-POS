@@ -84,6 +84,33 @@ test('la vinculación espera el arranque de la Master y conecta con backoff', as
   assert.deepEqual(delays, [750, 1275]);
 });
 
+test('la vinculación reintenta cuando el puerto abre antes de que la configuración Master esté lista', async () => {
+  let configAttempts = 0;
+  let nowMs = 0;
+  const retryCodes: string[] = [];
+  const fetchImpl = (async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith('/api/users')) return jsonResponse([]);
+    configAttempts += 1;
+    return jsonResponse({ ready: configAttempts >= 3, terminals: [] });
+  }) as typeof fetch;
+
+  const result = await waitForMasterPairingResources(
+    'http://10.0.0.142:3001',
+    fetchImpl,
+    {
+      isConfigReady: config => (config as BusinessConfig & { ready?: boolean }).ready === true,
+      now: () => nowMs,
+      sleep: async delayMs => { nowMs += delayMs; },
+      onRetry: state => retryCodes.push((state.error as MasterPairingConnectionError).code),
+    },
+  );
+
+  assert.equal((result.config as BusinessConfig & { ready?: boolean }).ready, true);
+  assert.equal(configAttempts, 3);
+  assert.deepEqual(retryCodes, ['CONFIG_NOT_READY', 'CONFIG_NOT_READY']);
+});
+
 test('la espera de arranque no reintenta errores funcionales 4xx', async () => {
   let configAttempts = 0;
   const fetchImpl = (async (input: string | URL | Request) => {
