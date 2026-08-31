@@ -1938,7 +1938,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         return "grid [grid-template-columns:repeat(auto-fill,minmax(210px,1fr))] gap-4 md:gap-5 content-start auto-rows-fr";
       }
       if (usesExpandedCatalog) {
-        return "grid h-full min-h-[320px] grid-cols-4 grid-rows-2 gap-3 content-start";
+        return "grid h-full min-h-0 grid-cols-4 gap-3 content-start overflow-y-auto px-4 py-3";
       }
       if (isMobile) {
          return "grid [grid-template-columns:repeat(auto-fill,minmax(138px,1fr))] gap-2.5 content-start";
@@ -1952,7 +1952,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const expandedCatalogGridStyle = useMemo(
       () => usesExpandedCatalog
          ? {
-            gridTemplateRows: 'repeat(2, minmax(0, 1fr))',
             gridAutoRows: 'calc((100% - 0.75rem) / 2)',
          } as React.CSSProperties
          : undefined,
@@ -2277,7 +2276,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             paddingBottom: isMobile
                ? 'calc(var(--bottom-safe-offset, 12px) + env(safe-area-inset-bottom))'
                : usesExpandedCatalog
-                  ? '0.75rem'
+                  ? '0px'
                   : '1.25rem',
          }) as React.CSSProperties,
       [isMobile, usesExpandedCatalog]
@@ -7087,7 +7086,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div>
 
             <div
-               className={`flex-1 min-h-0 overflow-y-auto bg-[#eef2f6] ${usesExpandedCatalog ? 'px-4 py-3' : isMobile ? 'p-3' : 'p-8'} custom-scrollbar scrollbar-thin dark:bg-slate-900`}
+               className={`flex-1 min-h-0 bg-[#eef2f6] ${usesExpandedCatalog ? 'overflow-hidden' : `overflow-y-auto ${isMobile ? 'p-3' : 'p-8'}`} custom-scrollbar scrollbar-thin dark:bg-slate-900`}
                style={bottomAwareScrollStyle}
             >
                <div className={gridClass} style={expandedCatalogGridStyle}>

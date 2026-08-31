@@ -10,8 +10,7 @@ test('el catálogo expandido distribuye cuatro columnas en dos filas completas',
   const gridSource = source.slice(gridStart, gridEnd);
 
   assert.ok(gridStart >= 0, 'No se encontró la configuración del grid de artículos');
-  assert.match(gridSource, /grid-cols-4 grid-rows-2 gap-3/);
-  assert.match(gridSource, /gridTemplateRows: 'repeat\(2, minmax\(0, 1fr\)\)'/);
+  assert.match(gridSource, /grid-cols-4 gap-3 content-start overflow-y-auto px-4 py-3/);
   assert.match(gridSource, /gridAutoRows: 'calc\(\(100% - 0\.75rem\) \/ 2\)'/);
 });
 
@@ -27,14 +26,18 @@ test('las tarjetas expandidas ocupan su fila sin conservar alturas fijas que cor
   assert.doesNotMatch(cardSource, /usesExpandedCatalog\s*\?\s*'[^']*h-\[168px\]/);
 });
 
-test('el área de artículos conserva márgenes simétricos y no vuelve a reservar la altura del footer', () => {
+test('el área de artículos conserva márgenes simétricos y calcula las filas sobre el viewport desplazable', () => {
+  const gridStart = source.indexOf('const gridClass');
+  const gridEnd = source.indexOf('const categoryContainerClass', gridStart);
+  const gridSource = source.slice(gridStart, gridEnd);
   const productsStart = source.indexOf('filteredProducts.map');
   const productsSource = source.slice(productsStart - 800, productsStart + 200);
   const paddingStart = source.indexOf('const bottomAwareScrollStyle');
   const paddingEnd = source.indexOf('const mobileFooterStyle', paddingStart);
   const paddingSource = source.slice(paddingStart, paddingEnd);
 
-  assert.match(productsSource, /usesExpandedCatalog \? 'px-4 py-3'/);
-  assert.match(paddingSource, /usesExpandedCatalog\s*\? '0\.75rem'/);
+  assert.match(gridSource, /overflow-y-auto px-4 py-3/);
+  assert.match(productsSource, /usesExpandedCatalog \? 'overflow-hidden'/);
+  assert.match(paddingSource, /usesExpandedCatalog\s*\? '0px'/);
   assert.doesNotMatch(paddingSource, /usesExpandedCatalog[\s\S]*var\(--bottom-safe-offset/);
 });
