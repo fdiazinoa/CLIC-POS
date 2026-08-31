@@ -126,6 +126,7 @@ import {
    resolveClassificationColor,
    resolveClassificationSortOrder,
 } from '../utils/posCatalogPresentation';
+import { resolvePosCategoryGridPosition } from '../utils/posCategoryGrid';
 
 // ... existing imports
 
@@ -7072,11 +7073,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      borderColor: configuredColor,
                      color: isActiveCategory ? readableTextColor(configuredColor) : configuredColor,
                   } : undefined;
+                  const categoryGridPosition = resolvePosCategoryGridPosition(idx);
                   return (
                   <button
                      key={categoryOption.id || `cat-${idx}`}
                      onClick={() => setCategoryFilter(categoryOption.id)}
-                     style={configuredStyle}
+                     style={{ ...configuredStyle, ...categoryGridPosition }}
                      className={`h-[42px] md:h-[48px] w-full min-w-0 px-2 md:px-3 rounded-xl text-[11px] md:text-[12px] leading-tight font-black uppercase tracking-[0.08em] transition-all whitespace-normal text-center border shadow-sm active:scale-95 ${isActiveCategory
                         ? `${configuredColor ? '' : categoryTone.active} shadow-lg -translate-y-0.5`
                         : `${configuredColor ? '' : categoryTone.idle} hover:-translate-y-0.5 hover:shadow-md`
