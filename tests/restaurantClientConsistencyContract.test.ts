@@ -56,7 +56,7 @@ test('la salida conserva las credenciales del lock, evita esperas y no duplica c
     releaseSource.indexOf("await invokeTableEditLock('release'")
       < releaseSource.indexOf('activeTableEditLockRef.current = null'),
   );
-  assert.match(releaseSource, /attempt <= 2/);
+  assert.match(releaseSource, /attempt <= 3/);
 
   const saveStart = appSource.indexOf('const handleUpdateParkedTickets');
   const saveEnd = appSource.indexOf('const handleParkedOrderSplitFromMap', saveStart);
