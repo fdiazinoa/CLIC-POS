@@ -14,8 +14,9 @@ import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../service
 import type { RuntimeTerminalRecoveryState } from '../services/setup/erpTerminalSetup';
 import {
   fetchMasterPairingResources,
-  MASTER_PAIRING_CONFIG_TIMEOUT_MS,
+  MASTER_PAIRING_STARTUP_WINDOW_MS,
   MasterPairingConnectionError,
+  waitForMasterPairingResources,
 } from '../services/setup/masterPairingConnection';
 import {
   ORDER_TAKER_TERMINAL_TYPE,
@@ -104,6 +105,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   const [error, setError] = useState<string | null>(initialError || null);
   const [masterIp, setMasterIp] = useState(initialMasterIp || '');
   const [isConnecting, setIsConnecting] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('');
   const [masterAdmins, setMasterAdmins] = useState<UserType[]>([]);
   const [localIps, setLocalIps] = useState<string[]>([]);
   const [bindingMode, setBindingMode] = useState<'MASTER' | 'SLAVE'>(initialBindingMode || 'MASTER');
@@ -119,14 +121,19 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
     }
   }, [initialBindingMode, initialExpectedTerminalType]);
 
-  const resolveReachableMaster = async (host: string) => {
+  const resolveReachableMaster = async (
+    host: string,
+    options: { waitForStartup?: boolean; onRetry?: () => void } = {},
+  ) => {
     const normalizedHost = normalizeMasterHost(host);
     const candidates = buildMasterUrlCandidates(normalizedHost);
     let lastError: Error | null = null;
 
     for (const baseUrl of candidates) {
       try {
-        const { config: fetchedConfig, users: fetchedUsers } = await fetchMasterPairingResources(baseUrl);
+        const { config: fetchedConfig, users: fetchedUsers } = options.waitForStartup
+          ? await waitForMasterPairingResources(baseUrl, fetch, { onRetry: options.onRetry })
+          : await fetchMasterPairingResources(baseUrl);
         if (!isEligibleOperationalMasterConfig(fetchedConfig)) {
           throw new Error('El equipo encontrado no es una Caja Master operativa.');
         }
@@ -198,9 +205,13 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
 
     setIsConnecting(true);
     setError(null);
+    setConnectionStatus('Conectando con la Master...');
 
     try {
-      const connection = await resolveReachableMaster(masterIp);
+      const connection = await resolveReachableMaster(masterIp, {
+        waitForStartup: true,
+        onRetry: () => setConnectionStatus('La Master está iniciándose. Reintentando automáticamente...'),
+      });
       await applyMasterConnection(connection, 'MANUAL');
     } catch (err) {
       console.error('Failed to connect to master during terminal activation:', err);
@@ -209,7 +220,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
         ? err.message
         : (err as Error).message === 'El equipo encontrado no es una Caja Master operativa.'
           ? (err as Error).message
-          : `No hay un servicio Master disponible en esa dirección después de ${MASTER_PAIRING_CONFIG_TIMEOUT_MS / 1000} segundos.`;
+          : `No hay un servicio Master disponible en esa dirección después de ${MASTER_PAIRING_STARTUP_WINDOW_MS / 1000} segundos.`;
       setError(
         `No se pudo conectar a la Maestra (${normalizedHost}).\n\n`
         + `${detail}\n`
@@ -218,6 +229,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
       );
     } finally {
       setIsConnecting(false);
+      setConnectionStatus('');
     }
   };
 
@@ -232,6 +244,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
     const discoverAndConnect = async () => {
       setIsConnecting(true);
       setError(null);
+      setConnectionStatus('Buscando la Master en la red...');
 
       const candidates: Array<{ host: string; source: 'CLOUD' | 'LAN' }> = [];
       const appendCandidate = (value: string | null | undefined, source: 'CLOUD' | 'LAN') => {
@@ -247,9 +260,14 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
         const cloudEndpoint = await resolveMasterEndpointFromCloud();
         appendCandidate(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl, 'CLOUD');
 
-        for (const candidate of candidates) {
+        for (const [candidateIndex, candidate] of candidates.entries()) {
           try {
-            const connection = await resolveReachableMaster(candidate.host);
+            const connection = await resolveReachableMaster(candidate.host, {
+              waitForStartup: candidateIndex === 0,
+              onRetry: () => {
+                if (!cancelled) setConnectionStatus('Master encontrada, esperando que termine de iniciar...');
+              },
+            });
             if (cancelled) return;
             await applyMasterConnection(connection, candidate.source);
             return;
@@ -279,7 +297,10 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
           setError('No se pudo completar la búsqueda automática. Puede ingresar la IP manualmente.');
         }
       } finally {
-        if (!cancelled) setIsConnecting(false);
+        if (!cancelled) {
+          setIsConnecting(false);
+          setConnectionStatus('');
+        }
       }
     };
 
@@ -444,6 +465,11 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                     <p className="whitespace-pre-line text-center text-xs font-black text-red-500">{error}</p>
                   </div>
                 )}
+                {isConnecting && connectionStatus && (
+                  <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-3">
+                    <p className="text-center text-xs font-black text-blue-600">{connectionStatus}</p>
+                  </div>
+                )}
               </div>
 
               <button
@@ -451,7 +477,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                 disabled={isConnecting}
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-purple-600 py-4 text-base font-black text-white shadow-xl shadow-purple-200 transition-all hover:bg-purple-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 sm:text-lg"
               >
-                {isConnecting ? 'Conectando...' : 'Conectar y Sincronizar'} <ChevronRight size={20} />
+                {isConnecting ? 'Esperando a la Master...' : 'Conectar y Sincronizar'} <ChevronRight size={20} />
               </button>
 
               <button
