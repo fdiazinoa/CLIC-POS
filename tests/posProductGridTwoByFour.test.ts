@@ -10,7 +10,8 @@ test('el catálogo expandido distribuye cuatro columnas en dos filas completas',
   const gridSource = source.slice(gridStart, gridEnd);
 
   assert.ok(gridStart >= 0, 'No se encontró la configuración del grid de artículos');
-  assert.match(gridSource, /grid-cols-4 gap-3 content-start overflow-y-auto px-4 py-3/);
+  assert.match(gridSource, /absolute inset-0 grid min-h-0 grid-cols-4 gap-3 content-start overflow-y-auto px-4 py-3/);
+  assert.match(gridSource, /gridTemplateRows: 'repeat\(2, minmax\(0, 1fr\)\)'/);
   assert.match(gridSource, /gridAutoRows: 'calc\(\(100% - 0\.75rem\) \/ 2\)'/);
 });
 
@@ -37,7 +38,7 @@ test('el área de artículos conserva márgenes simétricos y calcula las filas 
   const paddingSource = source.slice(paddingStart, paddingEnd);
 
   assert.match(gridSource, /overflow-y-auto px-4 py-3/);
-  assert.match(productsSource, /usesExpandedCatalog \? 'overflow-hidden'/);
+  assert.match(productsSource, /usesExpandedCatalog \? 'relative overflow-hidden'/);
   assert.match(paddingSource, /usesExpandedCatalog\s*\? '0px'/);
   assert.doesNotMatch(paddingSource, /usesExpandedCatalog[\s\S]*var\(--bottom-safe-offset/);
 });
