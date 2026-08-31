@@ -2,12 +2,16 @@ import type { BusinessConfig, User } from '../../types';
 
 export const MASTER_PAIRING_CONFIG_TIMEOUT_MS = 12_000;
 export const MASTER_PAIRING_USERS_TIMEOUT_MS = 6_000;
+export const MASTER_PAIRING_STARTUP_WINDOW_MS = 30_000;
+export const MASTER_PAIRING_INITIAL_RETRY_MS = 750;
+export const MASTER_PAIRING_MAX_RETRY_MS = 3_000;
 
 export type MasterPairingFailureCode =
   | 'CONFIG_HTTP_ERROR'
   | 'CONFIG_INVALID_JSON'
   | 'CONFIG_NETWORK_ERROR'
-  | 'CONFIG_TIMEOUT';
+  | 'CONFIG_TIMEOUT'
+  | 'CONFIG_NOT_READY';
 
 export class MasterPairingConnectionError extends Error {
   constructor(
@@ -21,6 +25,16 @@ export class MasterPairingConnectionError extends Error {
 }
 
 type FetchLike = typeof fetch;
+
+interface MasterPairingStartupRetryOptions {
+  maxWaitMs?: number;
+  initialDelayMs?: number;
+  maxDelayMs?: number;
+  now?: () => number;
+  sleep?: (delayMs: number) => Promise<void>;
+  onRetry?: (state: { attempt: number; elapsedMs: number; nextDelayMs: number; error: unknown }) => void;
+  isConfigReady?: (config: BusinessConfig) => boolean;
+}
 
 const fetchWithTimeout = async (
   url: string,
@@ -102,4 +116,58 @@ export const fetchMasterPairingResources = async (
   const config = await readConfig(baseUrl, fetchImpl);
   const users = await usersPromise;
   return { config, users };
+};
+
+const isRetryableStartupError = (error: unknown): boolean => {
+  if (!(error instanceof MasterPairingConnectionError)) return false;
+  if (
+    error.code === 'CONFIG_NETWORK_ERROR'
+    || error.code === 'CONFIG_TIMEOUT'
+    || error.code === 'CONFIG_NOT_READY'
+  ) return true;
+  if (error.code !== 'CONFIG_HTTP_ERROR') return false;
+  const status = Number(error.message.match(/\b(\d{3})\b/)?.[1]);
+  return Number.isFinite(status) && status >= 500;
+};
+
+export const waitForMasterPairingResources = async (
+  baseUrl: string,
+  fetchImpl: FetchLike = fetch,
+  options: MasterPairingStartupRetryOptions = {},
+): Promise<{ config: BusinessConfig; users: User[] | null }> => {
+  const maxWaitMs = Math.max(0, options.maxWaitMs ?? MASTER_PAIRING_STARTUP_WINDOW_MS);
+  const maxDelayMs = Math.max(1, options.maxDelayMs ?? MASTER_PAIRING_MAX_RETRY_MS);
+  let nextDelayMs = Math.min(
+    maxDelayMs,
+    Math.max(1, options.initialDelayMs ?? MASTER_PAIRING_INITIAL_RETRY_MS),
+  );
+  const now = options.now ?? Date.now;
+  const sleep = options.sleep ?? ((delayMs: number) => new Promise<void>(resolve => {
+    globalThis.setTimeout(resolve, delayMs);
+  }));
+  const startedAt = now();
+  let attempt = 0;
+
+  while (true) {
+    attempt += 1;
+    try {
+      const resources = await fetchMasterPairingResources(baseUrl, fetchImpl);
+      if (options.isConfigReady && !options.isConfigReady(resources.config)) {
+        throw new MasterPairingConnectionError(
+          'CONFIG_NOT_READY',
+          'La Master respondió, pero todavía está preparando su configuración operativa.',
+        );
+      }
+      return resources;
+    } catch (error) {
+      const elapsedMs = Math.max(0, now() - startedAt);
+      const remainingMs = maxWaitMs - elapsedMs;
+      if (!isRetryableStartupError(error) || remainingMs <= 0) throw error;
+
+      const delayMs = Math.min(nextDelayMs, remainingMs);
+      options.onRetry?.({ attempt, elapsedMs, nextDelayMs: delayMs, error });
+      await sleep(delayMs);
+      nextDelayMs = Math.min(maxDelayMs, Math.ceil(nextDelayMs * 1.7));
+    }
+  }
 };

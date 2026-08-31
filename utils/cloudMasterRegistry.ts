@@ -235,7 +235,7 @@ export const buildMasterUrlCandidates = (
 
     const candidates = [buildMasterUrlFromHost(normalizedHost, port)];
 
-    if (isAndroidWebRuntime()) {
+    if (isAndroidWebRuntime() && isLoopbackHost(normalizedHost)) {
         candidates.push(
             buildMasterUrlFromHost('10.0.3.2', port, 'http'),
             buildMasterUrlFromHost('10.0.2.2', port, 'http'),
