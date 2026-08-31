@@ -3067,7 +3067,12 @@ class ApiSyncAdapter {
     private async postOperationalPayload(
         path: string,
         body: Record<string, unknown>,
-        options: { maxRequestBytes?: number; acceptCompressedResponse?: boolean } = {},
+        options: {
+            maxRequestBytes?: number;
+            acceptCompressedResponse?: boolean;
+            includeHttpStatus?: boolean;
+            reauthenticateOn401?: boolean;
+        } = {},
     ): Promise<any> {
         const target = await this.authenticateOperationalTarget(false, 'sales', 'PUSH_OPERATIONS');
         const requestBody = this.buildOperationalPostBody(target, body);
@@ -3087,7 +3092,7 @@ class ApiSyncAdapter {
             body: serializedBody
         }, 2, 500, 'sales', 'PUSH_OPERATIONS');
 
-        if (response.status === 401) {
+        if (response.status === 401 && options.reauthenticateOn401 !== false) {
             if (target.useLocalTarget) {
                 this.authToken = null;
             } else {
@@ -3124,7 +3129,8 @@ class ApiSyncAdapter {
                 throw new Error(`Operational sync failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}${retryText ? ` — ${retryText.slice(0, 400)}` : ''}`);
             }
 
-            return this.parseOperationalResponse(retryResponse);
+            const data = await this.parseOperationalResponse(retryResponse);
+            return options.includeHttpStatus ? { httpStatus: retryResponse.status, data } : data;
         }
 
         if (!response.ok) {
@@ -3138,7 +3144,32 @@ class ApiSyncAdapter {
             if (authRejection) throw authRejection;
             throw new Error(`Operational sync failed: ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 400)}` : ''}`);
         }
-        return this.parseOperationalResponse(response);
+        const data = await this.parseOperationalResponse(response);
+        return options.includeHttpStatus ? { httpStatus: response.status, data } : data;
+    }
+
+    async postTransferReceipt(
+        transferId: string,
+        payload: Record<string, any>,
+    ): Promise<{ httpStatus: number; data: Record<string, any> }> {
+        const normalizedTransferId = String(transferId || '').trim();
+        if (!normalizedTransferId) throw new Error('TRANSFER_RECEIPT_TRANSFER_ID_MISSING');
+        if (payload?.closeWithDiscrepancy !== false) {
+            throw new Error('TRANSFER_RECEIPT_CLOSE_WITH_DISCREPANCY_FORBIDDEN');
+        }
+
+        try {
+            return await this.postOperationalPayload(
+                `/transfers/${encodeURIComponent(normalizedTransferId)}/receipts`,
+                payload,
+                { includeHttpStatus: true, reauthenticateOn401: false },
+            );
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error || 'Transfer receipt failed');
+            const statusMatch = message.match(/(?:failed(?: after re-auth)?):\s*(\d{3})/i);
+            if (statusMatch) (error as any).httpStatus = Number(statusMatch[1]);
+            throw error;
+        }
     }
 
     private async getOperationalPayload<T = any>(

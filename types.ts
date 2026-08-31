@@ -1967,6 +1967,7 @@ export interface Warehouse {
 }
 
 export interface StockTransferItem {
+  transferItemId?: string;
   productId: string;
   productName: string;
   quantity: number;
@@ -1981,7 +1982,7 @@ export interface StockTransfer {
   sourceWarehouseId: string;
   destinationWarehouseId: string;
   items: StockTransferItem[];
-  status: 'IN_TRANSIT' | 'COMPLETED';
+  status: 'IN_TRANSIT' | 'PARTIALLY_RECEIVED' | 'COMPLETED';
   createdAt: string;
   sentAt?: string;
   receivedAt?: string;
