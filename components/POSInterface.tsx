@@ -173,7 +173,7 @@ export interface POSInterfaceProps {
    onOpenZReport?: () => void;
    onOpenInventoryTracking: (productId?: string) => void;
    onOpenAudit?: () => void;
-   onOpenTableMap?: () => void;
+   onOpenTableMap?: () => void | Promise<void>;
    onOpenAgenda?: () => void;
    onTransactionComplete: (txn: Transaction) => void | Promise<void>;
    onAddCustomer: (customer: Customer) => void;
@@ -6305,8 +6305,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (activeTable) {
          await Promise.resolve(onTableOrderSaved?.(activeTable, newParked));
 
-         if (onClearActiveTable) onClearActiveTable();
-         if (onOpenTableMap) onOpenTableMap();
+         if (onOpenTableMap) {
+            await Promise.resolve(onOpenTableMap());
+         } else if (onClearActiveTable) {
+            onClearActiveTable();
+         }
       }
 
       onUpdateCart([]); onSelectCustomer(null);
@@ -6389,7 +6392,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
          await handleParkCurrentTicket();
       } else if (onOpenTableMap) {
-         onOpenTableMap();
+         await Promise.resolve(onOpenTableMap());
       }
    };
 
@@ -6414,7 +6417,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
       }
 
-      if (onOpenTableMap) onOpenTableMap();
+      if (onOpenTableMap) await Promise.resolve(onOpenTableMap());
    };
 
    const handleRestoreTicket = (parked: ParkedTicket) => {

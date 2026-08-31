@@ -1768,6 +1768,9 @@ const AppContent: React.FC = () => {
   const [activeTable, setActiveTable] = useState<Table | null>(null); // New state for selected table context
   const [activeTableEditLock, setActiveTableEditLock] = useState<ActiveTableEditLock | null>(null);
   const activeTableEditLockRef = useRef<ActiveTableEditLock | null>(null);
+  const tableLockReleaseInFlightRef = useRef(false);
+  const tableLockLifecycleVersionRef = useRef(0);
+  const tableLockReleasePromiseRef = useRef<Promise<boolean> | null>(null);
   const closedRestaurantOrderIdsRef = useRef<Set<string>>(new Set());
   /* original code */
   const [currentView, setCurrentView] = useState<ViewState>(() => {
@@ -5054,31 +5057,52 @@ const AppContent: React.FC = () => {
   }, [getCurrentTerminal]);
 
   const releaseActiveTableEditLock = useCallback(async (): Promise<boolean> => {
+    if (tableLockReleasePromiseRef.current) {
+      return tableLockReleasePromiseRef.current;
+    }
     const lock = activeTableEditLockRef.current;
     if (!lock) return true;
-    await parkedTicketSyncQueueRef.current.catch((error) => {
-      console.warn('[TABLE_SYNC] La última actualización falló antes de liberar la mesa:', error);
-    });
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      try {
-        await invokeTableEditLock('release', {
-          tableId: lock.tableId,
-          ownerId: lock.ownerId,
-          token: lock.token,
-        });
-        activeTableEditLockRef.current = null;
-        setActiveTableEditLock(null);
-        setTables(previousTables => previousTables.map(table => (
-          String(table.id) === String(lock.tableId)
-            ? { ...table, editingLock: undefined }
-            : table
-        )));
-        return true;
-      } catch (error) {
-        console.warn(`[TABLE_EDIT_LOCK] No se pudo confirmar liberación (intento ${attempt}/2):`, error);
+    tableLockReleaseInFlightRef.current = true;
+    tableLockLifecycleVersionRef.current += 1;
+
+    const releaseOperation = (async (): Promise<boolean> => {
+      await parkedTicketSyncQueueRef.current.catch((error) => {
+        console.warn('[TABLE_SYNC] La última actualización falló antes de liberar la mesa:', error);
+      });
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          await invokeTableEditLock('release', {
+            tableId: lock.tableId,
+            ownerId: lock.ownerId,
+            token: lock.token,
+          });
+          activeTableEditLockRef.current = null;
+          setActiveTableEditLock(null);
+          setTables(previousTables => previousTables.map(table => (
+            String(table.id) === String(lock.tableId)
+              ? { ...table, editingLock: undefined }
+              : table
+          )));
+          return true;
+        } catch (error) {
+          console.warn(`[TABLE_EDIT_LOCK] No se pudo confirmar liberación (intento ${attempt}/3):`, error);
+          if (attempt < 3) {
+            await new Promise<void>(resolve => window.setTimeout(resolve, attempt * 250));
+          }
+        }
+      }
+      return false;
+    })();
+
+    tableLockReleasePromiseRef.current = releaseOperation;
+    try {
+      return await releaseOperation;
+    } finally {
+      if (tableLockReleasePromiseRef.current === releaseOperation) {
+        tableLockReleasePromiseRef.current = null;
+        tableLockReleaseInFlightRef.current = false;
       }
     }
-    return false;
   }, [invokeTableEditLock]);
 
   const acquireTableEditLock = useCallback(async (table: Table): Promise<boolean> => {
@@ -5135,6 +5159,9 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     if (!activeTableEditLock || (currentView !== 'POS' && currentView !== 'CUSTOMERS')) return;
     const heartbeat = window.setInterval(() => {
+      if (tableLockReleaseInFlightRef.current) return;
+      const lifecycleVersion = tableLockLifecycleVersionRef.current;
+      const heartbeatToken = activeTableEditLock.token;
       void invokeTableEditLock('acquire', {
         tableId: activeTableEditLock.tableId,
         ownerId: activeTableEditLock.ownerId,
@@ -5143,6 +5170,15 @@ const AppContent: React.FC = () => {
         userName: activeTableEditLock.userName || currentUser?.name,
         token: activeTableEditLock.token,
       }).then(result => {
+        const currentLock = activeTableEditLockRef.current;
+        if (
+          tableLockReleaseInFlightRef.current ||
+          lifecycleVersion !== tableLockLifecycleVersionRef.current ||
+          currentLock?.tableId !== activeTableEditLock.tableId ||
+          currentLock?.token !== heartbeatToken
+        ) {
+          return;
+        }
         if (result?.success && result?.lock?.token) {
           activeTableEditLockRef.current = result.lock as ActiveTableEditLock;
           setActiveTableEditLock(result.lock as ActiveTableEditLock);
@@ -10953,18 +10989,16 @@ const AppContent: React.FC = () => {
             }}
             onOpenInventoryTracking={(productId) => handleViewChange('TRACKING', { productId })}
             onOpenAudit={() => handleViewChange('INVENTORY_AUDIT')}
-            onOpenTableMap={() => {
-              void (async () => {
-                const released = await releaseActiveTableEditLock();
-                if (!released) {
-                  alert('No se pudo liberar la mesa en la Caja Master. Reintente para evitar que quede bloqueada.');
-                  return;
-                }
-                setActiveTable(null);
-                setViewData(null);
-                setCurrentView('TABLE_MAP');
-                await fetchTables().catch((error) => console.error('Failed to refresh tables on TABLE_MAP view:', error));
-              })();
+            onOpenTableMap={async () => {
+              const released = await releaseActiveTableEditLock();
+              if (!released) {
+                alert('No se pudo liberar la mesa en la Caja Master. Reintente para evitar que quede bloqueada.');
+                return;
+              }
+              setActiveTable(null);
+              setViewData(null);
+              setCurrentView('TABLE_MAP');
+              await fetchTables().catch((error) => console.error('Failed to refresh tables on TABLE_MAP view:', error));
             }}
             onTableOrderSaved={async (table, ticket) => {
               const total = typeof ticket.total === 'number'

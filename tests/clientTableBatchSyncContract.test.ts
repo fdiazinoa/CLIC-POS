@@ -43,13 +43,32 @@ test('volver al mapa fuerza el último envío antes de liberar el bloqueo', () =
   );
   assert.match(saveForMap, /La mesa permanece abierta y pendiente\./);
 
-  const openMapStart = appSource.indexOf('onOpenTableMap={() =>');
+  const openMapStart = appSource.indexOf('onOpenTableMap={async () =>');
   const openMapHandler = appSource.slice(
     openMapStart,
     appSource.indexOf('onTableOrderSaved=', openMapStart),
   );
   assert.match(openMapHandler, /await releaseActiveTableEditLock\(\)/);
   assert.match(appSource, /await parkedTicketSyncQueueRef\.current/);
+  assert.match(posSource, /await Promise\.resolve\(onOpenTableMap\(\)\)/);
+});
+
+test('un heartbeat tardío no puede volver a bloquear una mesa liberada', () => {
+  const releaseSource = appSource.slice(
+    appSource.indexOf('const releaseActiveTableEditLock'),
+    appSource.indexOf('const acquireTableEditLock'),
+  );
+  const heartbeatSource = appSource.slice(
+    appSource.indexOf("if (!activeTableEditLock || (currentView !== 'POS'"),
+    appSource.indexOf('const retryClientMasterConnection'),
+  );
+
+  assert.match(releaseSource, /tableLockReleasePromiseRef\.current/);
+  assert.match(releaseSource, /tableLockReleaseInFlightRef\.current = true/);
+  assert.match(releaseSource, /tableLockLifecycleVersionRef\.current \+= 1/);
+  assert.match(heartbeatSource, /if \(tableLockReleaseInFlightRef\.current\) return/);
+  assert.match(heartbeatSource, /lifecycleVersion !== tableLockLifecycleVersionRef\.current/);
+  assert.match(heartbeatSource, /currentLock\?\.token !== heartbeatToken/);
 });
 
 test('la cola pendiente solo se limpia después de una confirmación exitosa de la Master', () => {
