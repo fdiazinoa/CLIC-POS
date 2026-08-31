@@ -599,7 +599,7 @@ const normalizeTax = (raw: unknown, index: number): TaxDefinition | null => {
   };
 };
 
-const normalizeDocumentSeries = (raw: unknown, index: number): DocumentSeries | null => {
+export const normalizeDocumentSeries = (raw: unknown, index: number): DocumentSeries | null => {
   if (typeof raw === 'string' && raw.trim()) {
     const prefix = raw.trim().toUpperCase();
     return canonicalizeDocumentSeries({
@@ -1693,6 +1693,9 @@ export const applyTerminalConfigSnapshot = (
   const resolvedPricing = asObject(effectiveResolved.pricing);
   const resolvedInventory = asObject(effectiveResolved.inventory);
   const resolvedDocuments = asObject(effectiveResolved.documents);
+  const resolvedTerminalFiscalConfig = asObject(
+    effectiveResolved.terminalFiscalConfig || effectiveResolved.terminal_fiscal_config
+  );
   const resolvedCatalog = asObject(effectiveResolved.catalog);
   const resolvedTaxes = asArray(effectiveResolved.taxes);
   const resolvedLoyalty = asObject(effectiveResolved.loyalty);
@@ -1903,6 +1906,7 @@ export const applyTerminalConfigSnapshot = (
   const documentSeriesSources = [
     incomingTerminalConfigResolvedDocuments,
     resolvedDocuments,
+    resolvedTerminalFiscalConfig,
     asObject(resolvedTerminal.documents),
     asObject(resolvedTerminalConfig.documents),
     resolvedTerminalConfig,

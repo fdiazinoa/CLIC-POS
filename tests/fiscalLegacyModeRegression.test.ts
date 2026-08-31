@@ -8,7 +8,7 @@ import {
   isTerminalFiscalReceiptRequired,
   resolveTerminalFiscalMode,
 } from '../utils/fiscal/fiscalHelpers';
-import { applyTerminalConfigSnapshot } from '../utils/terminalConfigSnapshot';
+import { applyTerminalConfigSnapshot, extractTerminalOperationalDocumentState, normalizeDocumentSeries } from '../utils/terminalConfigSnapshot';
 
 const terminalId = '0f77877f-66b2-4820-b956-997cd5b4b575';
 const posSource = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
@@ -128,6 +128,61 @@ test('normaliza el snapshot contradictorio de Caja 2 como fiscal LEGACY_B activo
   assert.equal(terminalConfig.fiscal.fiscalRanges?.length, 1);
   assert.equal(terminalConfig.fiscal.fiscalAllocations?.length, 1);
   assert.equal(effective.mode, 'LEGACY_B');
+});
+
+test('hidrata la serie TICKET publicada en resolved.terminalFiscalConfig', () => {
+  const ticketSeriesId = 'e982957a-6f02-4872-aaa2-9cadedc1027b';
+  const snapshot = {
+    terminal_id: terminalId,
+    terminal_name: 'CAJA-2',
+    station_number: 'POS-002',
+    resolved: {
+      terminalFiscalConfig: {
+        documentSeries: [{
+          id: ticketSeriesId,
+          code: 'TCKS0012',
+          serie: 'TCKS0012',
+          prefix: 'TCKS0012',
+          document_type: 'TICKET',
+          active: true,
+          next_number: 1,
+          current_number: 0,
+        }],
+      },
+      documents: {
+        assignments: { TICKET: ticketSeriesId },
+        internalSequences: [],
+      },
+    },
+  } as any;
+
+  const applied = applyTerminalConfigSnapshot(buildBusinessConfig(), {
+    terminalId,
+    incomingSnapshot: snapshot,
+  });
+  const terminalConfig = applied.config.terminals.find((terminal) => terminal.id === terminalId)!.config;
+  const operationalState = extractTerminalOperationalDocumentState(applied.config, terminalId);
+
+  assert.equal(terminalConfig.documentAssignments?.TICKET, ticketSeriesId);
+  assert.equal(terminalConfig.documentSeries?.[0]?.id, ticketSeriesId);
+  assert.equal(terminalConfig.documentSeries?.[0]?.documentType, 'TICKET');
+  assert.equal(operationalState.documentSeries[0]?.id, ticketSeriesId);
+});
+
+test('normaliza la serie persistida para recuperación offline antes del siguiente sync', () => {
+  const series = normalizeDocumentSeries({
+    id: 'e982957a-6f02-4872-aaa2-9cadedc1027b',
+    code: 'TCKS0012',
+    document_type: 'TICKET',
+    active: true,
+    next_number: 1,
+  }, 0);
+
+  assert.equal(series?.id, 'e982957a-6f02-4872-aaa2-9cadedc1027b');
+  assert.equal(series?.documentType, 'TICKET');
+  assert.equal(series?.prefix, 'TCKS0012');
+  assert.equal(series?.nextNumber, 1);
+  assert.equal(series?.source, 'ERP_TERMINAL_CONFIG');
 });
 
 test('el modo NONE explícito continúa deshabilitando comprobantes fiscales', () => {
