@@ -1,6 +1,7 @@
 import {
   BusinessConfig,
   Campaign,
+  CompanyInfo,
   Coupon,
   CurrencyConfig,
   DeviceRole,
@@ -408,6 +409,71 @@ const readCurrencyCodesFromList = (value: unknown): string[] => (
 const hasOwn = (record: Record<string, any>, key: string): boolean => (
   Object.prototype.hasOwnProperty.call(record, key)
 );
+
+type RemoteCompanyProfile = {
+  companyInfoPatch: Partial<CompanyInfo>;
+  hasCompanyBlock: boolean;
+  hasLogoField: boolean;
+  logo?: string;
+};
+
+const readPreferredCompanyString = (
+  source: Record<string, any>,
+  keys: string[]
+): { present: boolean; value: string } => {
+  const presentKeys = keys.filter((key) => hasOwn(source, key));
+  if (presentKeys.length === 0) return { present: false, value: '' };
+
+  const preferredValue = presentKeys
+    .map((key) => asString(source[key]))
+    .find(Boolean);
+  return { present: true, value: preferredValue || '' };
+};
+
+const resolveRemoteCompanyProfile = (
+  candidates: unknown[]
+): RemoteCompanyProfile => {
+  const company = candidates
+    .map(asObject)
+    .find((candidate) => Object.keys(candidate).length > 0);
+
+  if (!company) {
+    return {
+      companyInfoPatch: {},
+      hasCompanyBlock: false,
+      hasLogoField: false,
+    };
+  }
+
+  const companyInfoPatch: Partial<CompanyInfo> = {};
+  const fields: Array<[keyof CompanyInfo, string[]]> = [
+    ['name', ['trade_name', 'tradeName', 'name', 'legal_name', 'legalName']],
+    ['rnc', ['tax_id', 'taxId', 'rnc']],
+    ['phone', ['phone']],
+    ['address', ['address', 'address_line', 'addressLine']],
+    ['email', ['email']],
+    ['website', ['website']],
+  ];
+
+  fields.forEach(([target, keys]) => {
+    const resolved = readPreferredCompanyString(company, keys);
+    if (resolved.present) companyInfoPatch[target] = resolved.value;
+  });
+
+  const resolvedLogo = readPreferredCompanyString(company, [
+    'receipt_logo_url',
+    'receiptLogoUrl',
+    'logo_url',
+    'logoUrl',
+  ]);
+
+  return {
+    companyInfoPatch,
+    hasCompanyBlock: true,
+    hasLogoField: resolvedLogo.present,
+    ...(resolvedLogo.present ? { logo: resolvedLogo.value } : {}),
+  };
+};
 
 const resolveCurrencyCodeFromRecord = (record: unknown): string => {
   const data = asObject(record);
@@ -1530,6 +1596,8 @@ export const extractTerminalConfigSnapshot = (payload: unknown): TerminalConfigS
       Object.keys(asObject(snapshot.resolved)).length > 0 ||
       Object.keys(asObject(snapshot.config)).length > 0 ||
       Object.keys(asObject(snapshot.business_config || snapshot.businessConfig)).length > 0 ||
+      Object.keys(asObject(snapshot.company)).length > 0 ||
+      Object.keys(asObject(snapshot.company_info || snapshot.companyInfo)).length > 0 ||
       Object.keys(asObject(snapshot.operational)).length > 0 ||
       snapshot.vertical_negocio != null ||
       snapshot.verticalNegocio != null ||
@@ -1726,6 +1794,36 @@ export const applyTerminalConfigSnapshot = (
   const resolvedProfileConfig = asObject(resolvedProfile.config);
   const fallbackTerminalConfig = asObject(fallbackTerminal.config);
   const fallbackProfileConfig = asObject(fallbackProfile.config);
+
+  const effectiveSnapshotRaw = asObject(effectiveSnapshot);
+  const effectiveTerminalConfigSnake = asObject(effectiveSnapshotRaw.terminal_config);
+  const effectiveTerminalConfigCamel = asObject(effectiveSnapshotRaw.terminalConfig);
+  const effectiveTerminalConfig = Object.keys(effectiveTerminalConfigSnake).length > 0
+    ? effectiveTerminalConfigSnake
+    : effectiveTerminalConfigCamel;
+  const effectiveTerminalConfigResolved = asObject(effectiveTerminalConfig.resolved);
+  const effectiveBusinessConfig = asObject(
+    effectiveSnapshotRaw.business_config || effectiveSnapshotRaw.businessConfig
+  );
+  const effectiveTerminalBusinessConfig = asObject(
+    effectiveTerminalConfig.business_config || effectiveTerminalConfig.businessConfig
+  );
+  const remoteCompanyProfile = resolveRemoteCompanyProfile([
+    effectiveResolved.company,
+    effectiveTerminalConfigResolved.company,
+    effectiveTerminalConfig.company,
+    effectiveSnapshotRaw.company,
+    effectiveResolved.company_info,
+    effectiveResolved.companyInfo,
+    effectiveSnapshotRaw.company_info,
+    effectiveSnapshotRaw.companyInfo,
+    effectiveFallbackConfig.company_info,
+    effectiveFallbackConfig.companyInfo,
+    effectiveBusinessConfig.company_info,
+    effectiveBusinessConfig.companyInfo,
+    effectiveTerminalBusinessConfig.company_info,
+    effectiveTerminalBusinessConfig.companyInfo,
+  ]);
 
   const incomingBusinessConfig = asObject(incomingRaw.business_config || incomingRaw.businessConfig);
   const incomingOperational = asObject(incomingRaw.operational);
@@ -2535,6 +2633,18 @@ export const applyTerminalConfigSnapshot = (
 
   nextConfig.tariffs = effectiveTariffs;
   nextConfig.taxes = effectiveTaxes;
+  if (remoteCompanyProfile.hasCompanyBlock) {
+    nextConfig.companyInfo = {
+      ...nextConfig.companyInfo,
+      ...remoteCompanyProfile.companyInfoPatch,
+    };
+    if (remoteCompanyProfile.hasLogoField) {
+      nextConfig.receiptConfig = {
+        ...(nextConfig.receiptConfig || {}),
+        logo: remoteCompanyProfile.logo || '',
+      };
+    }
+  }
   if (erpBusinessVertical) {
     nextConfig.vertical = erpBusinessVertical;
     (nextConfig as any).vertical_negocio = erpBusinessVertical;

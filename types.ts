@@ -570,6 +570,9 @@ export interface TerminalConfigResolvedLoyaltySnapshot {
 }
 
 export interface TerminalConfigResolvedSnapshot {
+  company?: Record<string, any>;
+  company_info?: Record<string, any>;
+  companyInfo?: Record<string, any>;
   identity?: Record<string, any>;
   terminal?: Record<string, any>;
   deviceRole?: Record<string, any> | string;
@@ -596,6 +599,9 @@ export interface TerminalConfigSnapshot {
   terminal_name?: string;
   station_number?: string | number;
   role?: string;
+  company?: Record<string, any>;
+  company_info?: Record<string, any>;
+  companyInfo?: Record<string, any>;
   masters?: {
     items?: Record<string, any>[];
     customers?: Customer[];
