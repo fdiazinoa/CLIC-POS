@@ -28,7 +28,7 @@ import SupervisorModal from './SupervisorModal';
 import { User, DeviceRole } from '../types';
 import { RefundModal } from './RefundModal';
 import FiscalSyncBadge from './FiscalSyncBadge';
-import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../utils/fiscalBreakdown';
+import { calculateTransactionFiscalSummary, consolidateTaxBreakdownForDisplay, formatTaxLineLabel } from '../utils/fiscalBreakdown';
 import {
    canRetryFiscalTransaction,
    FISCAL_DOCUMENT_LABELS,
@@ -711,6 +711,7 @@ const TicketDetailDrawer: React.FC<{
    const affectedNCF = (tx.affectedNCF || '').toString().trim();
    const terminalConfig = config.terminals?.find(t => t.id === tx.terminalId)?.config;
    const fiscalSummary = calculateTransactionFiscalSummary(tx, config, { terminalConfig });
+   const displayTaxBreakdown = consolidateTaxBreakdownForDisplay(fiscalSummary.taxBreakdown, config.taxes);
    const historyDiscountTotal = resolveHistoryDiscountTotal(tx);
    const historyTerminalName = resolveHistoryTerminalName(tx, config.terminals || []);
    const canRetryFiscal = canRetryFiscalTransaction(tx) && Boolean(onRetryFiscalDocument);
@@ -958,8 +959,8 @@ const TicketDetailDrawer: React.FC<{
                         <span>-{config.currencySymbol}{historyDiscountTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                      </div>
                   )}
-                  {fiscalSummary.taxBreakdown.length > 0 ? (
-                     fiscalSummary.taxBreakdown.map((tax) => (
+                  {displayTaxBreakdown.length > 0 ? (
+                     displayTaxBreakdown.map((tax) => (
                         <div key={`${tx.id}-${tax.id}`} className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
                            <span>{formatTaxLineLabel(tax)}</span>
                            <span>{config.currencySymbol}{Number(tax.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>

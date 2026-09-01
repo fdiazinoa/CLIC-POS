@@ -2,7 +2,7 @@ import { BusinessConfig, CartItem, Reservation, Table, Transaction, ZReport } fr
 import { findTaxByIdentifier } from '../../utils/taxIdentity';
 import { buildPaymentReceiptPresentation, buildPaymentSettlementSummary } from '../../utils/paymentSettlement';
 import { resolveTerminalSellerName } from '../../utils/terminalSnapshotSellers';
-import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../../utils/fiscalBreakdown';
+import { calculateTransactionFiscalSummary, consolidateTaxBreakdownForDisplay, formatTaxLineLabel } from '../../utils/fiscalBreakdown';
 import { resolveLineDiscountPresentation } from '../../utils/lineDiscountPresentation';
 import { resolveTerminalDisplayName } from '../../utils/transactionHistoryPresentation';
 import { resolveGlobalDiscountLabel } from '../../utils/globalDiscountPresentation';
@@ -414,7 +414,7 @@ export const buildEscPosTicketPayload = (
   const receiptSubtotal = fiscalSummary.subtotal;
   const receiptTaxTotal = fiscalSummary.taxTotal;
   const receiptTotal = fiscalSummary.total;
-  const receiptTaxBreakdown = fiscalSummary.taxBreakdown || [];
+  const receiptTaxBreakdown = consolidateTaxBreakdownForDisplay(fiscalSummary.taxBreakdown, config.taxes);
   const redeemedCouponCodes = resolveReceiptCouponCodes(transaction);
   const ncfTypeLabels: Record<string, string> = {
     B01: 'FACTURA DE CREDITO FISCAL',

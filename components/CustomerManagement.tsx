@@ -17,7 +17,7 @@ import { agendaService } from '../services/AgendaService';
 import ActivityModal from './ActivityModal';
 import LoyaltyDashboard from './LoyaltyDashboard';
 import FiscalSyncBadge from './FiscalSyncBadge';
-import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../utils/fiscalBreakdown';
+import { calculateTransactionFiscalSummary, consolidateTaxBreakdownForDisplay, formatTaxLineLabel } from '../utils/fiscalBreakdown';
 import {
    canRetryFiscalTransaction,
    getFiscalComplianceConfig,
@@ -1988,6 +1988,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
             const settlementCurrencySymbol = resolveCurrencySymbol(config, settlementCurrencyCode, config.currencySymbol);
             const terminalConfig = config.terminals?.find(t => t.id === tx.terminalId)?.config;
             const fiscalSummary = calculateTransactionFiscalSummary(tx, config, { terminalConfig });
+            const displayTaxBreakdown = consolidateTaxBreakdownForDisplay(fiscalSummary.taxBreakdown, config.taxes);
             const canRetryFiscal = canRetryFiscalTransaction(tx) && Boolean(onRetryFiscalDocument);
             const retryActionLabel = getFiscalRetryActionLabel(tx) || 'Reintentar envío';
             const transactionCustomerName = String(
@@ -2084,8 +2085,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                               <span>Subtotal</span>
                               <span>{config.currencySymbol}{fiscalSummary.subtotal.toFixed(2)}</span>
                            </div>
-                           {fiscalSummary.taxBreakdown.length > 0 ? (
-                              fiscalSummary.taxBreakdown.map((tax) => (
+                           {displayTaxBreakdown.length > 0 ? (
+                              displayTaxBreakdown.map((tax) => (
                                  <div key={`${tx.id}-${tax.id}`} className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
                                     <span>{formatTaxLineLabel(tax)}</span>
                                     <span>{config.currencySymbol}{Number(tax.amount || 0).toFixed(2)}</span>
