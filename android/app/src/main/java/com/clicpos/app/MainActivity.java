@@ -30,9 +30,11 @@ import java.util.List;
 public class MainActivity extends BridgeActivity {
     private static final int BLUETOOTH_PERMISSION_REQUEST = 2001;
     private static final String TAG = "CLICPOS_MAIN";
+    private boolean activityRecreated;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        activityRecreated = savedInstanceState != null;
         super.onCreate(savedInstanceState);
         enforcePosWindowPolicy();
 
@@ -126,6 +128,11 @@ public class MainActivity extends BridgeActivity {
     }
 
     private class AndroidAppBridge {
+        @JavascriptInterface
+        public String getLaunchContext() {
+            return activityRecreated ? "activity_recreated" : "fresh_start";
+        }
+
         @JavascriptInterface
         public void showSoftKeyboard() {
             runOnUiThread(() -> {
