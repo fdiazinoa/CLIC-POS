@@ -36,11 +36,14 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   const EPSILON = 0.01;
   const [quantity, setQuantity] = useState(item.quantity);
   const [price, setPrice] = useState(item.price);
+  const [priceInputValue, setPriceInputValue] = useState(String(item.price ?? 0));
   const [note, setNote] = useState(item.note || '');
   const [salespersonId, setSalespersonId] = useState(item.salespersonId || '');
 
   const [discountType, setDiscountType] = useState<'PERCENT' | 'FIXED'>('PERCENT');
   const [discountValue, setDiscountValue] = useState<string>('');
+  const [activeNumericField, setActiveNumericField] = useState<'PRICE' | 'DISCOUNT'>('DISCOUNT');
+  const [replacePriceOnNextKey, setReplacePriceOnNextKey] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const isAndroid = Capacitor.getPlatform() === 'android';
 
@@ -72,6 +75,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
     const val = parseFloat(rawValue);
     if (isNaN(val) || val <= 0) {
       setPrice(adjustmentBasePrice);
+      setPriceInputValue(String(adjustmentBasePrice));
       return;
     }
 
@@ -81,7 +85,9 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
     } else {
       newPrice = Math.max(0, adjustmentBasePrice - val);
     }
-    setPrice(parseFloat(newPrice.toFixed(2)));
+    const normalizedPrice = parseFloat(newPrice.toFixed(2));
+    setPrice(normalizedPrice);
+    setPriceInputValue(String(normalizedPrice));
   };
 
   const handleDiscountValueChange = (nextValue: string) => {
@@ -94,12 +100,17 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
     applyDiscount(discountValue, nextType);
   };
 
-  const handlePriceManualChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value);
-    if (!isNaN(val) && val >= 0) {
-      setPrice(val);
-      setDiscountValue('');
-    }
+  const handlePriceValueChange = (rawValue: string) => {
+    setPriceInputValue(rawValue);
+    setReplacePriceOnNextKey(false);
+    const val = parseFloat(rawValue);
+    setPrice(!isNaN(val) && val >= 0 ? val : 0);
+    setDiscountValue('');
+  };
+
+  const activatePriceKeypad = () => {
+    setActiveNumericField('PRICE');
+    setReplacePriceOnNextKey(true);
   };
 
   const handleSave = () => {
@@ -261,11 +272,16 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
               <div className="relative group">
                 <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-black text-sm">$</span>
                 <input
-                  type="number"
-                  value={price}
-                  onChange={handlePriceManualChange}
+                  type={isAndroid ? 'text' : 'number'}
+                  inputMode={isAndroid ? 'none' : 'decimal'}
+                  readOnly={isAndroid}
+                  data-disable-native-soft-keyboard={isAndroid ? 'true' : undefined}
+                  value={priceInputValue}
+                  onFocus={activatePriceKeypad}
+                  onClick={activatePriceKeypad}
+                  onChange={(event) => handlePriceValueChange(event.target.value)}
                   disabled={!canApplyDiscount}
-                  className={`w-full pl-8 pr-4 py-4 rounded-2xl bg-gray-50 border-none font-black text-gray-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all ${!canApplyDiscount ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  className={`w-full pl-8 pr-4 py-4 rounded-2xl border-none font-black text-gray-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all ${activeNumericField === 'PRICE' && isAndroid ? 'bg-blue-50 ring-2 ring-blue-200' : 'bg-gray-50'} ${!canApplyDiscount ? 'opacity-50 cursor-not-allowed' : ''}`}
                 />
               </div>
             </div>
@@ -284,31 +300,48 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
                     data-disable-native-soft-keyboard={isAndroid ? 'true' : undefined}
                     placeholder="0"
                     value={discountValue}
+                    onFocus={() => setActiveNumericField('DISCOUNT')}
+                    onClick={() => setActiveNumericField('DISCOUNT')}
                     onChange={(e) => handleDiscountValueChange(e.target.value)}
                     disabled={!canApplyDiscount}
                     className="w-full bg-gray-50 border-none rounded-l-2xl pl-4 pr-2 py-4 font-black text-gray-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all disabled:opacity-50"
                   />
                 </div>
                 <button
-                  onClick={() => handleDiscountTypeChange('PERCENT')}
+                  onClick={() => {
+                    setActiveNumericField('DISCOUNT');
+                    handleDiscountTypeChange('PERCENT');
+                  }}
                   className={`px-4 py-4 border-none font-black text-sm transition-all ${discountType === 'PERCENT' ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-400'}`}
                 >
                   %
                 </button>
                 <button
-                  onClick={() => handleDiscountTypeChange('FIXED')}
+                  onClick={() => {
+                    setActiveNumericField('DISCOUNT');
+                    handleDiscountTypeChange('FIXED');
+                  }}
                   className={`px-4 py-4 rounded-r-2xl border-none font-black text-sm transition-all ${discountType === 'FIXED' ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-400'}`}
                 >
                   $
                 </button>
               </div>
               {isAndroid && (
-                <NumericKeypad
-                  value={discountValue}
-                  onChange={handleDiscountValueChange}
-                  maxValue={discountType === 'PERCENT' ? 100 : adjustmentBasePrice}
-                  disabled={!canApplyDiscount}
-                />
+                <div className="space-y-2">
+                  <p className="text-[9px] font-black uppercase tracking-[0.16em] text-blue-500">
+                    Digitando: {activeNumericField === 'PRICE' ? 'Precio unitario' : 'Descuento'}
+                  </p>
+                  <NumericKeypad
+                    value={activeNumericField === 'PRICE'
+                      ? (replacePriceOnNextKey ? '' : priceInputValue)
+                      : discountValue}
+                    onChange={activeNumericField === 'PRICE' ? handlePriceValueChange : handleDiscountValueChange}
+                    maxValue={activeNumericField === 'DISCOUNT'
+                      ? (discountType === 'PERCENT' ? 100 : adjustmentBasePrice)
+                      : undefined}
+                    disabled={!canApplyDiscount}
+                  />
+                </div>
               )}
             </div>
             </div>
