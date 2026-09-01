@@ -34,3 +34,15 @@ test('el teclado de precio no se interpreta como clic fuera del menú de accione
   assert.match(source, /if \(activeModal !== 'NONE'\) return;/);
   assert.match(source, /\[activeModal, onClose\]/);
 });
+
+test('precio y descuento del artículo comparten el teclado interno sin abrir LatinIME', () => {
+  const source = readComponent('CartItemOptionsModal.tsx');
+
+  assert.match(source, /activeNumericField/);
+  assert.match(source, /'PRICE' \| 'DISCOUNT'/);
+  assert.match(source, /inputMode=\{isAndroid \? 'none' : 'decimal'\}/);
+  assert.ok((source.match(/data-disable-native-soft-keyboard/g) || []).length >= 2);
+  assert.ok((source.match(/readOnly=\{isAndroid\}/g) || []).length >= 2);
+  assert.match(source, /replacePriceOnNextKey \? '' : priceInputValue/);
+  assert.match(source, /Digitando: \{activeNumericField === 'PRICE' \? 'Precio unitario' : 'Descuento'\}/);
+});
