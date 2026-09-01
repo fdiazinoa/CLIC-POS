@@ -80,6 +80,7 @@ import { printReservation } from '../utils/printer';
 import MobileCartButton from './MobileCartButton';
 import {
    calculateTaxBreakdownFromItems,
+   consolidateTaxBreakdownForDisplay,
    formatTaxLineLabel,
    freezeAuthoritativeLineFiscalAmounts,
    resolveEffectiveTaxIds,
@@ -4196,25 +4197,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       });
    }, [processedCart, config, discountAmount, isTaxIncluded, activeTerminalConfig, isSelectedCustomerTaxExempt]);
 
-   const displayTaxBreakdown = useMemo(() => {
-      const grouped = new Map<string, { id: string; name: string; rate: number; amount: number }>();
-      taxBreakdown.forEach((tax) => {
-         const rateKey = String(Math.round((Number(tax.rate || 0) <= 1 ? Number(tax.rate || 0) * 100 : Number(tax.rate || 0)) * 1000) / 1000);
-         const existing = grouped.get(rateKey);
-         const normalizedName = (tax.name || '').toLowerCase();
-         const displayName = normalizedName.includes('itbis') ? tax.name : existing?.name || tax.name;
-         grouped.set(rateKey, {
-            id: existing?.id || `tax-rate-${rateKey}`,
-            name: displayName,
-            rate: tax.rate,
-            amount: (existing?.amount || 0) + tax.amount,
-         });
-      });
-      return Array.from(grouped.values()).map((tax) => ({
-         ...tax,
-         amount: Math.round((tax.amount + Number.EPSILON) * 100) / 100,
-      }));
-   }, [taxBreakdown]);
+   const displayTaxBreakdown = useMemo(
+      () => consolidateTaxBreakdownForDisplay(taxBreakdown, config.taxes),
+      [taxBreakdown, config.taxes]
+   );
 
    const cartTax = displayTaxBreakdown.reduce((sum, t) => sum + t.amount, 0);
    const primaryTaxLabel = useMemo(() => {

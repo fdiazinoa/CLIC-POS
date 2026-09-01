@@ -48,6 +48,74 @@ export interface FiscalTaxBreakdownLine {
   lineCount: number;
 }
 
+const normalizeDisplayTaxRate = (rate: unknown): number => {
+  const numericRate = Math.max(0, toNumber(rate));
+  return numericRate > 1 ? numericRate / 100 : numericRate;
+};
+
+const inferDisplayTaxFamily = (
+  line: FiscalTaxBreakdownLine,
+  tax?: TaxDefinition | null,
+): string => {
+  if (tax?.type) return `type:${tax.type}`;
+
+  const normalizedName = String(line.name || '').trim().toLowerCase();
+  if (/^(itbis|iva|vat)(\s|$)/.test(normalizedName) || normalizedName === 'impuesto') {
+    return 'type:VAT';
+  }
+
+  return `name:${normalizedName || line.id}`;
+};
+
+const preferDisplayTaxName = (currentName: string, candidateName: string, family: string): string => {
+  if (family !== 'type:VAT') return currentName || candidateName;
+
+  const currentIsItbis = /\bitbis\b/i.test(currentName);
+  const candidateIsItbis = /\bitbis\b/i.test(candidateName);
+  return candidateIsItbis && !currentIsItbis ? candidateName : currentName || candidateName;
+};
+
+/**
+ * Consolidates equivalent tax definitions only for presentation. Fiscal IDs and
+ * the persisted breakdown remain untouched for synchronization and auditing.
+ */
+export const consolidateTaxBreakdownForDisplay = (
+  lines: FiscalTaxBreakdownLine[] | null | undefined,
+  taxes: TaxDefinition[] | null | undefined = [],
+): FiscalTaxBreakdownLine[] => {
+  const grouped = new Map<string, FiscalTaxBreakdownLine>();
+
+  (Array.isArray(lines) ? lines : []).forEach((line) => {
+    const taxDefinition = findTaxByIdentifier(taxes || [], line.id);
+    const normalizedRate = normalizeDisplayTaxRate(line.rate);
+    const rateKey = Math.round(normalizedRate * 1_000_000);
+    const family = inferDisplayTaxFamily(line, taxDefinition);
+    const key = `${family}:${rateKey}`;
+    const current = grouped.get(key);
+
+    if (!current) {
+      grouped.set(key, {
+        ...line,
+        id: `display:${key}`,
+        rate: normalizedRate,
+        amount: round2(toNumber(line.amount)),
+        taxableBase: round2(toNumber(line.taxableBase)),
+        total: round2(toNumber(line.total)),
+        lineCount: Math.round(toNumber(line.lineCount)),
+      });
+      return;
+    }
+
+    current.name = preferDisplayTaxName(current.name, line.name, family);
+    current.amount = round2(current.amount + toNumber(line.amount));
+    current.taxableBase = round2(current.taxableBase + toNumber(line.taxableBase));
+    current.total = round2(current.total + toNumber(line.total));
+    current.lineCount += Math.round(toNumber(line.lineCount));
+  });
+
+  return Array.from(grouped.values()).sort((left, right) => right.rate - left.rate);
+};
+
 interface TaxBreakdownOptions {
   discountAmount?: number;
   isTaxIncluded?: boolean;

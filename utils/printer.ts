@@ -3,7 +3,7 @@ import { PrintRouterService } from '../services/printer/PrintRouterService';
 import { buildEscPosCashDrawerPayload, buildEscPosComandaPayload, buildEscPosReservationPayload, buildEscPosSubtotalPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload, shouldOpenDrawerForTransaction } from '../services/printer/EscPosFormatter';
 import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRuntime';
 import { dbAdapter } from '../services/db';
-import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, formatTaxLineLabel } from './fiscalBreakdown';
+import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, consolidateTaxBreakdownForDisplay, formatTaxLineLabel } from './fiscalBreakdown';
 import { resolveLineDiscountPresentation } from './lineDiscountPresentation';
 import { buildPaymentReceiptPresentation, buildPaymentSettlementSummary } from './paymentSettlement';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from './terminalSnapshotSellers';
@@ -383,11 +383,11 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 <tbody>
                     ${transaction.items.map(item => {
             const lineVal = item.price * item.quantity;
-            const itemTaxBreakdown = calculateTaxBreakdownFromItems([item], config, {
+            const itemTaxBreakdown = consolidateTaxBreakdownForDisplay(calculateTaxBreakdownFromItems([item], config, {
                 isTaxIncluded,
                 terminalConfig,
                 absoluteLineValues: true,
-            });
+            }), config.taxes);
             const iTax = Math.abs(itemTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0));
             const taxLineHtml = itemTaxBreakdown.length > 0
                 ? `<br/>${itemTaxBreakdown.map(tax => `${formatTaxLineLabel(tax)}: ${currencySymbol}${Number(tax.amount || 0).toFixed(2)}`).join('<br/>')}`
