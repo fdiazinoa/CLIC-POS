@@ -2,6 +2,7 @@ package com.clicpos.app;
 
 import android.Manifest;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -34,7 +35,12 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        activityRecreated = savedInstanceState != null;
+        boolean launchedFromHistory = getIntent() != null
+                && (getIntent().getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0;
+        activityRecreated = savedInstanceState != null || launchedFromHistory;
+        Log.i(TAG, "Launch context activityRecreated=" + activityRecreated
+                + " savedState=" + (savedInstanceState != null)
+                + " launchedFromHistory=" + launchedFromHistory);
         super.onCreate(savedInstanceState);
         enforcePosWindowPolicy();
 
