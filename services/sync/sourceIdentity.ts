@@ -299,6 +299,7 @@ export const normalizeTransactionForSync = (transaction: Transaction): Transacti
         source_credit_note_id: sourceCreditNoteId,
         original_transaction_id: originalTransactionId,
         original_display_id: originalDisplayId,
+        service_type: transaction.serviceType || transaction.service_type,
         settlementCurrencyCode,
         settlementExchangeRate,
         settlementReceivedOriginal,

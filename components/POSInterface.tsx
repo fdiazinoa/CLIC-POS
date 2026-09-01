@@ -20,7 +20,8 @@ import {
    BusinessConfig, User as UserType, RoleDefinition,
    DeviceRole, DeviceFormFactor, DeviceOrientation,
    Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType, FiscalDocumentCode,
-   PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, RedeemedCouponRef, ProductVariant
+   PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, RedeemedCouponRef, ProductVariant,
+   OrderServiceType
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, isTerminalFiscalReceiptRequired, mapElectronicFiscalCodeToLegacy, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
@@ -108,6 +109,7 @@ import {
 } from '../services/sync/ConsignmentSyncService';
 import { resolveDeviceRoleValue } from '../utils/deviceRoleHelpers';
 import { resolveTerminalDeviceProfile } from '../utils/deviceProfile';
+import { shouldApplyRestaurantServiceCharge } from '../utils/orderServiceType';
 import { normalizeProductionOutputMode, resolveProductionOutputTargets } from '../utils/productionOutputMode';
 import { isClientTerminalMode, resolveOperationalApiUrl } from '../utils/masterOperationalApi';
 import ProductionRoutingAssignmentModal, {
@@ -1220,6 +1222,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    // --- TICKET TABS STRATEGY STATE ---
    const [rightSidebarTab, setRightSidebarTab] = useState<'CART' | 'ACTIONS'>('CART');
+   const [orderServiceType, setOrderServiceType] = useState<OrderServiceType>('DINE_IN');
 
    const cancelTicketAutoSync = () => {
       if (ticketAutoSyncTimeoutRef.current) {
@@ -1866,6 +1869,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!orderId) {
          if (isNewTableContext) {
             onUpdateCart([]);
+            setOrderServiceType('DINE_IN');
             if (!selectedCustomer) onSelectCustomer(null);
          }
          activeTableHydrationRef.current = { key: tableKey, missingTicket: false };
@@ -1898,6 +1902,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          } else if (!selectedCustomer) {
             onSelectCustomer(null);
          }
+         setOrderServiceType(ticket.serviceType || 'DINE_IN');
       }
 
       activeTableHydrationRef.current = { key: tableKey, missingTicket: false };
@@ -2225,6 +2230,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          type: restoredType,
          value: Number.isFinite(restoredValue) ? Math.max(0, restoredValue) : 0,
       });
+      setOrderServiceType(parked.serviceType || 'DINE_IN');
       restoredParkedPricingRef.current = restoreKey;
    }, [
       activeTable?.currentOrderId,
@@ -2636,6 +2642,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const customer = customers.find(c => c.id === reservation.customerId) || null;
       onSelectCustomer(customer);
       setActiveRecoveredReservation(reservation);
+      setOrderServiceType('DINE_IN');
       closeRecoverReservationModal();
       setSuccessToast(`Reserva ${reservation.code} cargada`);
    }, [customers, onSelectCustomer, onUpdateCart, closeRecoverReservationModal]);
@@ -2725,6 +2732,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          onUpdateCart(hydratedItems);
          onSelectCustomer(null);
          setActiveRecoveredReservation(recoveredOrder);
+         setOrderServiceType('DELIVERY');
          setRightSidebarTab('CART');
          closeRecoverReservationModal();
          setSuccessToast(`Pedido Uber Eats ${displayCode} cargado`);
@@ -4226,20 +4234,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const tipsConfig = config.tipsConfig;
    const serviceCharge = tipsConfig?.serviceCharge;
+   const isRecoveredUberOrder = isUberRecoveredReservation(activeRecoveredReservation);
+   const effectiveOrderServiceType: OrderServiceType = isRecoveredUberOrder ? 'DELIVERY' : orderServiceType;
 
    const shouldApplyServiceCharge = useMemo(() => {
-      if (!isRestaurantMode || !serviceCharge?.enabled) return false;
-
-      const currentGross = grossLineTotal - discountAmount;
-      const totalOver = serviceCharge.applyIfTotalOver || 0;
-      const guestsOver = serviceCharge.applyIfGuestsOver || 0;
-
-      const guestMatch = guestsOver > 0 && (activeTable?.guests || 0) >= guestsOver;
-      const totalMatch = totalOver > 0 && currentGross >= totalOver;
-
-      if (totalOver === 0 && guestsOver === 0) return true;
-      return totalMatch || guestMatch;
-   }, [isRestaurantMode, serviceCharge, grossLineTotal, discountAmount, activeTable]);
+      return shouldApplyRestaurantServiceCharge({
+         isRestaurantMode,
+         serviceType: effectiveOrderServiceType,
+         serviceCharge,
+         grossAfterDiscount: grossLineTotal - discountAmount,
+         guests: activeTable?.guests || 0,
+      });
+   }, [isRestaurantMode, serviceCharge, grossLineTotal, discountAmount, activeTable, effectiveOrderServiceType]);
 
    const {
       legalTipRate,
@@ -4288,7 +4294,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const lineTaxAmount = Math.abs(lineTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0));
       return `${lineTaxBreakdown.map((tax) => formatTaxLineLabel(tax)).join(' + ')} (${baseCurrency.symbol}${lineTaxAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`;
    }, [config, isTaxIncluded, activeTerminalConfig, baseCurrency.symbol, isSelectedCustomerTaxExempt]);
-   const isRecoveredUberOrder = isUberRecoveredReservation(activeRecoveredReservation);
    const reservationAdvanceApplied = activeRecoveredReservation
       ? (isRecoveredUberOrder
          ? Math.min(activeRecoveredReservation.prepaidPayment?.amount || activeRecoveredReservation.balancePaid || 0, cartTotal)
@@ -4345,8 +4350,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          (existing?.discountType || 'PERCENT') === globalDiscount.type &&
          Math.abs(Number(existing?.discountValue || 0) - globalDiscount.value) < 0.01;
       const sameGuests = Number(existing?.guests || 0) === Number(activeTable?.guests || 0);
+      const sameServiceType = (existing?.serviceType || 'DINE_IN') === effectiveOrderServiceType;
 
-      if (existingDigest === nextDigest && sameCustomer && sameCustomerName && sameFinalTotal && sameDiscount && sameGuests) {
+      if (existingDigest === nextDigest && sameCustomer && sameCustomerName && sameFinalTotal && sameDiscount && sameGuests && sameServiceType) {
          return;
       }
 
@@ -4377,6 +4383,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          tableRoomLabel: activeTableContext.roomLabel || existing?.tableRoomLabel,
          barTabId: existing?.barTabId || activeBarTabId || undefined,
          barTabName: existing?.barTabName || activeBarTabName || undefined,
+         serviceType: effectiveOrderServiceType,
       };
 
       const nextTickets = [
@@ -5139,6 +5146,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         ...getConsignmentTicketFields(saleItems),
                         consignmentSyncStatus: saleItems.some(item => item.consignmentId) ? 'PENDING' : undefined,
                         serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
+                        serviceType: effectiveOrderServiceType,
                         voluntaryTipAmount: voluntaryTip,
                         ...saleSettlement,
                         ...couponSyncFields,
@@ -5181,6 +5189,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
                         walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined,
                         serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
+                        serviceType: effectiveOrderServiceType,
                         voluntaryTipAmount: voluntaryTip,
                         authorizedById: refundAuthorizedBy?.id,
                         authorizedByName: refundAuthorizedBy?.name
@@ -5357,6 +5366,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
                   walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined,
                   serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
+                  serviceType: effectiveOrderServiceType,
                   voluntaryTipAmount: voluntaryTip,
                   marketplaceSourceChannel: uberRecoveredOrder ? 'UBER_EATS' : undefined,
                   marketplaceSourceOrderId: uberRecoveredOrder?.sourceOrderId,
@@ -5497,6 +5507,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                setIsReturnMode(false);
                setRefundAuthorizedBy(null);
                setActiveRecoveredReservation(null);
+               setOrderServiceType('DINE_IN');
                // Keep the payment modal mounted so it can show the completed-sale
                // actions. Returning to TABLE_MAP here unmounted it before
                // PaymentModal could render Ticket / Email / Nueva Venta.
@@ -5555,6 +5566,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          tableRoomLabel: activeTableContext.roomLabel || existingOriginal?.tableRoomLabel,
          barTabId: existingOriginal?.barTabId || activeBarTabId || undefined,
          barTabName: existingOriginal?.barTabName || activeBarTabName || undefined,
+         serviceType: existingOriginal?.serviceType || effectiveOrderServiceType,
       } : null;
       const newTickets: ParkedTicket[] = splitGroups.map((items, index) => ({
          id: `split-${now}-${index + 2}`,
@@ -5570,6 +5582,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          tableRoomLabel: activeTableContext.roomLabel || undefined,
          barTabId: activeBarTabId || undefined,
          barTabName: activeBarTabName || undefined,
+         serviceType: effectiveOrderServiceType,
          timestamp: new Date().toISOString()
       }));
 
@@ -6297,6 +6310,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          tableRoomLabel: activeTableContext.roomLabel || existingParked?.tableRoomLabel,
          barTabId: existingParked?.barTabId || activeBarTabId || undefined,
          barTabName: existingParked?.barTabName || activeBarTabName || undefined,
+         serviceType: effectiveOrderServiceType,
       };
 
       // Remove existing if updating same ID
@@ -6361,6 +6375,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          tableRoomLabel: activeTableContext.roomLabel || existingParked?.tableRoomLabel,
          barTabId: existingParked?.barTabId || activeBarTabId || undefined,
          barTabName: existingParked?.barTabName || activeBarTabName || undefined,
+         serviceType: effectiveOrderServiceType,
       };
 
       const updatedTickets = [
@@ -6431,6 +6446,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const handleRestoreTicket = (parked: ParkedTicket) => {
       onUpdateCart([...parked.items]);
+      setOrderServiceType(parked.serviceType || 'DINE_IN');
       if (parked.customerId) {
          const found = (customers || []).find(c => c.id === parked.customerId);
          if (found) onSelectCustomer(found);
@@ -6626,6 +6642,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             setCashMovementReason('');
             break;
          case 'SAVE': openParkAliasModal(); break;
+         case 'TAKEOUT':
+            if (isRecoveredUberOrder) {
+               setSuccessToast('Este pedido ya está identificado como Delivery');
+               break;
+            }
+            setOrderServiceType(current => current === 'TAKEOUT' ? 'DINE_IN' : 'TAKEOUT');
+            setSuccessToast(orderServiceType === 'TAKEOUT'
+               ? 'Ticket cambiado a consumo en mesa'
+               : 'Ticket marcado Para llevar · propina legal RD$0.00');
+            setRightSidebarTab('CART');
+            break;
          case 'TABLES':
             if (!showTableMapButton) break;
             if ((config.vertical === 'RESTAURANT' || config.vertical === 'RETAIL') && cart.length > 0) {
@@ -6693,6 +6720,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             globalDiscountValue={globalDiscount.value}
             showLogout={false}
             allowWaitList={!activeTable}
+            showTakeout={isRestaurantMode}
+            isTakeout={effectiveOrderServiceType === 'TAKEOUT'}
          />
       </div>
    );
@@ -7635,6 +7664,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                )}
 
+               {isRestaurantMode && effectiveOrderServiceType !== 'DINE_IN' && (
+                  <div className="flex items-center gap-1 rounded-lg border border-violet-200 bg-violet-50 px-2 py-1 text-[9px] font-black uppercase tracking-tighter text-violet-700 animate-in fade-in slide-in-from-top-1">
+                     <ShoppingBag size={10} />
+                     <span>{effectiveOrderServiceType === 'DELIVERY' ? 'Delivery' : 'Para llevar'} · Propina legal {baseCurrency.symbol}0.00</span>
+                  </div>
+               )}
+
                {
                   selectedCustomer ? (
                      <div className="flex items-center gap-3 mb-4 p-3 bg-blue-50/50 rounded-xl border border-blue-100 animate-in slide-in-from-top-2">
@@ -8183,6 +8219,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               globalDiscountValue={globalDiscount.value}
                               showLogout={false}
                               allowWaitList={!activeTable}
+                              showTakeout={isRestaurantMode}
+                              isTakeout={effectiveOrderServiceType === 'TAKEOUT'}
                            />
                         </div>
 

@@ -1115,6 +1115,8 @@ export interface TipConfiguration {
   };
 }
 
+export type OrderServiceType = 'DINE_IN' | 'TAKEOUT' | 'DELIVERY';
+
 export interface N8nConfig {
   webhookUrl: string;
   events: {
@@ -1826,6 +1828,8 @@ export interface Transaction {
   walletPaymentAmount?: number;     // Amount paid using customer wallet balance
 
   // Restaurant fields
+  serviceType?: OrderServiceType;
+  service_type?: OrderServiceType;
   serviceChargeAmount?: number;     // Propina Legal (10%)
   voluntaryTipAmount?: number;      // Propina Voluntaria
   orderNumber?: string;
@@ -2215,6 +2219,7 @@ export interface ParkedTicket {
   barTabId?: string;
   barTabName?: string;
   paymentFraction?: PaymentFractionPlan;
+  serviceType?: OrderServiceType;
 }
 
 export interface PaymentFractionPart {
@@ -2751,6 +2756,21 @@ export interface ZReportStats {
   collectionsTotal: number; // New: Total CXC Collections (Abonos)
 }
 
+export interface ServiceTypeSummaryLine {
+  serviceType: OrderServiceType;
+  transactionCount: number;
+  total: number;
+  serviceChargeAmount: number;
+}
+
+export interface ServiceTypeTransactionLine {
+  transactionId: string;
+  displayId: string;
+  date: string;
+  serviceType: Extract<OrderServiceType, 'TAKEOUT' | 'DELIVERY'>;
+  total: number;
+}
+
 export type ZReportModule = 'FINANCIAL' | 'PAYMENTS' | 'CASH_DETAILS' | 'KPIS' | 'AUDIT';
 
 export type CloseReportSection =
@@ -2881,6 +2901,8 @@ export interface ZReport {
 
   // Analytics
   stats?: ZReportStats;
+  serviceTypeSummary?: ServiceTypeSummaryLine[];
+  serviceTypeTransactions?: ServiceTypeTransactionLine[];
   enabledSections?: CloseReportSection[];
   reportDetails?: CloseReportDetails;
   syncStatus?: SyncStatus;

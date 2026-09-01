@@ -174,6 +174,12 @@ export const buildReceiptEmailPayload = (
     showForeignCurrencyTotals: config?.receiptConfig?.showForeignCurrencyTotals || false,
     showOrderNumber: config?.receiptConfig?.showOrderNumber || false,
     orderNumber: transaction.orderNumber,
+    serviceType: transaction.serviceType,
+    serviceTypeLabel: transaction.serviceType === 'TAKEOUT'
+      ? 'Para llevar'
+      : transaction.serviceType === 'DELIVERY'
+        ? 'Delivery'
+        : transaction.serviceType === 'DINE_IN' ? 'Consumo en mesa' : undefined,
     currencies: (config?.currencies || [])
       .filter(currency => currency.isBase || currency.isEnabled)
       .map(currency => ({

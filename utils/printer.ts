@@ -353,6 +353,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 </div>
                 ${receiptConfig?.showOrderNumber && transaction.orderNumber && !receiptConfig?.showQr ? `<div class="meta-row" style="font-weight: bold; margin-top: 3px;">No. Orden: ${transaction.orderNumber}</div>` : ''}
                 ${transaction.tableDisplayLabel ? `<div class="meta-row" style="font-weight: bold;">Mesa/Sala: ${transaction.tableDisplayLabel}</div>` : ''}
+                ${transaction.serviceType ? `<div class="meta-row" style="font-weight: bold;">Tipo de servicio: ${transaction.serviceType === 'TAKEOUT' ? 'Para llevar' : transaction.serviceType === 'DELIVERY' ? 'Delivery' : 'Consumo en mesa'}</div>` : ''}
             </div>
 
             <div class="divider"></div>

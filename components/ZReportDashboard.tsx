@@ -10,6 +10,7 @@ import { sendZReportEmail } from '../utils/email';
 import { db } from '../utils/db';
 import ZReportHistory from './ZReportHistory';
 import { calculateZReportStats } from '../utils/analytics';
+import { buildServiceTypeReport } from '../utils/orderServiceType';
 import { buildCloseReportDetails, resolveCloseReportSections } from '../utils/closeReportOptions';
 import { ThermalPrinterService } from '../services/printer/ThermalPrinterService';
 import {
@@ -294,6 +295,9 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                   transactionCount: filteredTransactions.length,
                   stats: calculateZReportStats(filteredTransactions, filteredCollections)
                };
+               const tempServiceTypeReport = buildServiceTypeReport(filteredTransactions);
+               tempReport.serviceTypeSummary = tempServiceTypeReport.summary;
+               tempReport.serviceTypeTransactions = tempServiceTypeReport.transactions;
 
                tempReport.enabledSections = resolveCloseReportSections(config, currentTerminalId, currentUser?.id, 'Z');
                tempReport.reportDetails = buildCloseReportDetails(

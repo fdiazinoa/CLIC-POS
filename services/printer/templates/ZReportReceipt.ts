@@ -22,6 +22,11 @@ export const generateZReportReceipt = (
   const enabledSections = new Set(report.enabledSections || []);
   const reportDetails = report.reportDetails || {};
   const denominationBreakdown = report.denominationBreakdown || report.denomination_breakdown || {};
+  const serviceTypeSummary = report.serviceTypeSummary || [];
+  const serviceTypeTransactions = report.serviceTypeTransactions || [];
+  const serviceTypeLabel = (value: string) => value === 'TAKEOUT'
+    ? 'Para llevar'
+    : value === 'DELIVERY' ? 'Delivery' : 'Consumo en mesa';
 
   const formatCurrency = (amount: number) => {
     const value = Number(amount || 0);
@@ -130,6 +135,26 @@ export const generateZReportReceipt = (
         <span>Transacciones:</span>
         <span>${report.transactionCount}</span>
       </div>
+      ` : ''}
+
+      ${serviceTypeSummary.length > 0 ? `
+      <div class="section-title">VENTAS POR TIPO DE SERVICIO</div>
+      ${serviceTypeSummary.map(line => `
+        <div class="row">
+          <span>${serviceTypeLabel(line.serviceType)} (${line.transactionCount})</span>
+          <span>${formatCurrency(line.total)}</span>
+        </div>
+      `).join('')}
+      ` : ''}
+
+      ${serviceTypeTransactions.length > 0 ? `
+      <div class="section-title">PARA LLEVAR / DELIVERY</div>
+      ${serviceTypeTransactions.map(line => `
+        <div style="margin-bottom: 4px;">
+          <div class="row"><span>${line.displayId}</span><span>${formatCurrency(line.total)}</span></div>
+          <div style="font-size: 10px;">${serviceTypeLabel(line.serviceType)} · ${formatDate(line.date)}</div>
+        </div>
+      `).join('')}
       ` : ''}
       
       <!-- PAYMENT METHODS -->
