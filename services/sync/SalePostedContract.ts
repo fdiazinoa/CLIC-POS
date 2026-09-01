@@ -171,6 +171,10 @@ export const buildSalePostedSummary = (transaction: Transaction | UnknownRecord)
         tax_amount: numberOrZero(record.taxAmount ?? record.tax_amount),
         net_amount: numberOrZero(record.netAmount ?? record.net_amount),
         discount_amount: numberOrZero(record.discountAmount ?? record.discount_amount),
+        service_type: firstString(record.serviceType, record.service_type).toUpperCase() || undefined,
+        service_charge_amount: hasValue(record.serviceChargeAmount ?? record.service_charge_amount)
+            ? numberOrZero(record.serviceChargeAmount ?? record.service_charge_amount)
+            : undefined,
         item_count: items.length,
         payment_count: payments.length,
         customer_id: firstString(record.customerId, record.customer_id, customer.id) || undefined,

@@ -461,6 +461,14 @@ export const buildEscPosTicketPayload = (
   if (transaction.tableDisplayLabel) {
     pushTextLines(chunks, splitLines(`Mesa/Sala: ${transaction.tableDisplayLabel}`, width));
   }
+  if (transaction.serviceType) {
+    const serviceLabel = transaction.serviceType === 'TAKEOUT'
+      ? 'Para llevar'
+      : transaction.serviceType === 'DELIVERY'
+        ? 'Delivery'
+        : 'Consumo en mesa';
+    pushTextLines(chunks, splitLines(`Tipo servicio: ${serviceLabel}`, width));
+  }
 
   const snapshot = transaction.customerSnapshot;
   const customerName = (snapshot?.name || transaction.customerName || 'Cliente Mostrador').trim() || 'Cliente Mostrador';
@@ -934,6 +942,29 @@ export const buildEscPosZReportPayload = (
     pushTextLines(chunks, splitLines('METODOS DE PAGO', width));
     Object.entries(report.totalsByMethod).forEach(([method, amount]) => {
       pushPair(chunks, method, formatMoney(currencySymbol, amount), width);
+    });
+  }
+
+  const serviceTypeSummary = report.serviceTypeSummary || [];
+  const serviceTypeTransactions = report.serviceTypeTransactions || [];
+  const serviceTypeLabel = (value: string) => value === 'TAKEOUT'
+    ? 'Para llevar'
+    : value === 'DELIVERY' ? 'Delivery' : 'Consumo en mesa';
+  if (serviceTypeSummary.length > 0) {
+    chunks.push(divider(width));
+    pushTextLines(chunks, splitLines('VENTAS POR TIPO DE SERVICIO', width));
+    serviceTypeSummary.forEach(line => {
+      pushTextLines(chunks, splitLines(`${serviceTypeLabel(line.serviceType)} (${line.transactionCount})`, width));
+      pushPair(chunks, 'Total', formatMoney(currencySymbol, line.total), width);
+    });
+  }
+  if (serviceTypeTransactions.length > 0) {
+    chunks.push(divider(width));
+    pushTextLines(chunks, splitLines('PARA LLEVAR / DELIVERY', width));
+    serviceTypeTransactions.forEach(line => {
+      const time = new Date(line.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      pushTextLines(chunks, splitLines(`${line.displayId} · ${serviceTypeLabel(line.serviceType)} · ${time}`, width));
+      pushPair(chunks, 'Total', formatMoney(currencySymbol, line.total), width);
     });
   }
 

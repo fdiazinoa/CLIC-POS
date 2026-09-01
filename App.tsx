@@ -75,6 +75,7 @@ import { currencyScheduleExecutor } from './services/currency/CurrencyService';
 import { productImageCacheService } from './services/sync/ProductImageCacheService';
 import { posCloudStagingService } from './services/sync/PosCloudStagingService';
 import { calculateZReportStats } from './utils/analytics';
+import { buildServiceTypeReport } from './utils/orderServiceType';
 import { buildCloseReportDetails, resolveCloseReportSections } from './utils/closeReportOptions';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
 import { calculateTransactionTaxSummary } from './utils/taxSummary';
@@ -9568,6 +9569,7 @@ const AppContent: React.FC = () => {
       const expectedCash = cashSales + cashIn - cashOut;
       const discrepancy = Number(cashCounted || 0) - expectedCash;
       const stats = calculateZReportStats(terminalTransactions, terminalCollections);
+      const serviceTypeReport = buildServiceTypeReport(terminalTransactions);
 
       const orderedTicketRefs = terminalTransactions
         .map((transaction) => transaction.displayId || transaction.id)
@@ -9695,6 +9697,8 @@ const AppContent: React.FC = () => {
           last_ticket_id: orderedTicketRefs[orderedTicketRefs.length - 1] || null,
         },
         stats,
+        serviceTypeSummary: serviceTypeReport.summary,
+        serviceTypeTransactions: serviceTypeReport.transactions,
         enabledSections,
         reportDetails,
         syncStatus: 'PENDING' as const
@@ -9816,6 +9820,7 @@ const AppContent: React.FC = () => {
       }, {});
 
       const stats = calculateZReportStats(terminalTransactions, terminalCollections);
+      const serviceTypeReport = buildServiceTypeReport(terminalTransactions);
       const transactionCount = terminalTransactions.length;
       const declaredCashByCurrency = (reportData?.cashCountedByCurrency || {}) as Record<string, unknown>;
       const expectedCashByCurrencySnapshot = (reportData?.expectedCashByCurrency || {}) as Record<string, unknown>;
@@ -9995,6 +10000,8 @@ const AppContent: React.FC = () => {
           last_ticket_id: lastTicketId,
         },
         stats,
+        serviceTypeSummary: serviceTypeReport.summary,
+        serviceTypeTransactions: serviceTypeReport.transactions,
         enabledSections,
         reportDetails,
         syncStatus: 'PENDING' as const,

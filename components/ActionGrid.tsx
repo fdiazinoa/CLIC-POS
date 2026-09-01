@@ -2,7 +2,7 @@ import React from 'react';
 import {
     Percent, QrCode, Inbox, StickyNote, Box, Save, Settings,
     Lock, LogOut, Package, RotateCcw, CreditCard, Calendar, Power,
-    ArrowDownLeft, ArrowUpRight, Clock
+    ArrowDownLeft, ArrowUpRight, Clock, ShoppingBag
 } from 'lucide-react';
 import { BusinessConfig } from '../types';
 
@@ -16,6 +16,8 @@ interface ActionGridProps {
     orientation?: 'horizontal' | 'vertical';
     showLogout?: boolean;
     allowWaitList?: boolean;
+    showTakeout?: boolean;
+    isTakeout?: boolean;
 }
 
 const ActionGrid: React.FC<ActionGridProps> = ({
@@ -28,6 +30,8 @@ const ActionGrid: React.FC<ActionGridProps> = ({
     orientation = 'horizontal',
     showLogout = true,
     allowWaitList = true,
+    showTakeout = false,
+    isTakeout = false,
 }) => {
     const isHorizontal = orientation === 'horizontal';
     const shouldRenderLogout = showLogout && isHorizontal;
@@ -38,7 +42,8 @@ const ActionGrid: React.FC<ActionGridProps> = ({
         icon: React.ReactElement,
         group: 'sales' | 'wait' | 'utility' | 'closing',
         disabled: boolean = false,
-        badge?: number | boolean
+        badge?: number | boolean,
+        active: boolean = false,
     ) => {
         let colors = "";
 
@@ -58,7 +63,11 @@ const ActionGrid: React.FC<ActionGridProps> = ({
         }
 
         const isActiveDiscount = id === 'DISCOUNT' && globalDiscountValue > 0;
-        const finalColors = isActiveDiscount ? "bg-rose-600 text-white shadow-sm shadow-rose-600/25 hover:bg-rose-700" : colors;
+        const finalColors = isActiveDiscount
+            ? "bg-rose-600 text-white shadow-sm shadow-rose-600/25 hover:bg-rose-700"
+            : active
+                ? "bg-violet-700 text-white shadow-sm shadow-violet-700/25 hover:bg-violet-800 ring-2 ring-violet-200"
+                : colors;
 
         return (
             <div key={id} className={`relative ${isHorizontal ? 'w-[112px] shrink-0' : 'w-full'}`}>
@@ -105,6 +114,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
                 {allowWaitList && renderButton('PARK_LIST', 'Espera', <Inbox />, 'wait', false, parkedTicketsCount > 0 ? parkedTicketsCount : false)}
                 {renderButton('RESERVATION', 'Reserva', <StickyNote />, 'wait')}
                 {renderButton('SAVE', 'Guardar', <Save />, 'wait')}
+                {showTakeout && renderButton('TAKEOUT', isTakeout ? 'Para llevar ✓' : 'Para llevar', <ShoppingBag />, 'wait', false, false, isTakeout)}
 
                 {/* UTILITY GROUP (Gray) */}
                 {renderButton('SETTINGS', 'Ajustes', <Settings />, 'utility')}
