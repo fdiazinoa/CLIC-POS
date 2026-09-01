@@ -103,6 +103,7 @@ import {
   hasDesignedFloorPlan,
   selectAuthoritativeFloorPlan,
 } from './utils/tableLayout';
+import { NativeLaunchContext, shouldRestoreNativeSession } from './utils/nativeSessionResume';
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
@@ -531,13 +532,23 @@ const persistActiveUserSession = (user: User | null, currentView: ViewState) => 
       userId: user.id,
       savedAt: new Date().toISOString(),
       currentView,
+      terminalId: String(
+        window.localStorage.getItem('active_terminal_id')
+        || window.localStorage.getItem('CLIC_POS_TERMINAL_ID')
+        || ''
+      ).trim() || undefined,
     }));
   } catch {
     // Session restore is best-effort only. Login remains the source of truth.
   }
 };
 
-const readActiveUserSession = (): { userId: string; currentView?: ViewState } | null => {
+const readActiveUserSession = (): {
+  userId: string;
+  currentView?: ViewState;
+  savedAt?: string;
+  terminalId?: string;
+} | null => {
   try {
     const raw = window.localStorage.getItem(ACTIVE_USER_SESSION_STORAGE_KEY);
     if (!raw) return null;
@@ -547,10 +558,22 @@ const readActiveUserSession = (): { userId: string; currentView?: ViewState } | 
     return {
       userId,
       currentView: parsed?.currentView,
+      savedAt: typeof parsed?.savedAt === 'string' ? parsed.savedAt : undefined,
+      terminalId: typeof parsed?.terminalId === 'string' ? parsed.terminalId : undefined,
     };
   } catch {
     return null;
   }
+};
+
+const readNativeLaunchContext = (): NativeLaunchContext => {
+  try {
+    const value = String((window as any).ClicPOSAppBridge?.getLaunchContext?.() || '').trim();
+    if (value === 'activity_recreated' || value === 'fresh_start') return value;
+  } catch {
+    // A missing bridge is intentionally treated as a fresh/unknown launch.
+  }
+  return 'unknown';
 };
 
 const clearActiveUserSession = () => {
@@ -3797,23 +3820,10 @@ const AppContent: React.FC = () => {
   // --- DATA STORES ---
 
   useEffect(() => {
-    if (!isDataLoaded || currentUser || !Array.isArray(users) || users.length === 0) return;
+    if (!isDataLoaded || !isSecurityLoaded || currentUser || !Array.isArray(users) || users.length === 0) return;
     if (isCustomerDisplaySurface()) return;
-    // A native cold start must never inherit the operator who was active when
-    // Android killed or force-closed the process. Foreground/resume retains the
-    // in-memory user and therefore never enters this restoration branch.
-    if (Capacitor.isNativePlatform()) {
-      const nativeSetupViews = new Set<ViewState>([
-        'ACTIVATION', 'WIZARD', 'TERMINAL_PAIRING', 'TERMINAL_BINDING',
-        'SETUP', 'DEVICE_UNAUTHORIZED', 'VISOR',
-      ] as ViewState[]);
-      if (nativeSetupViews.has(currentView)) return;
-      clearActiveUserSession();
-      clearSecurityState();
-      if (currentView !== 'LOGIN') setCurrentView('LOGIN');
-      return;
-    }
-    if (consumeForceLoginAfterExit()) {
+    const forceLoginAfterExit = consumeForceLoginAfterExit();
+    if (forceLoginAfterExit || terminalAuthorizationBlock) {
       clearActiveUserSession();
       clearSecurityState();
       if (currentView !== 'LOGIN') setCurrentView('LOGIN');
@@ -3821,6 +3831,29 @@ const AppContent: React.FC = () => {
     }
     const session = readActiveUserSession();
     if (!session) return;
+    if (Capacitor.isNativePlatform()) {
+      const nativeSetupViews = new Set<ViewState>([
+        'ACTIVATION', 'WIZARD', 'TERMINAL_PAIRING', 'TERMINAL_BINDING',
+        'SETUP', 'DEVICE_UNAUTHORIZED', 'VISOR',
+      ] as ViewState[]);
+      if (nativeSetupViews.has(currentView)) return;
+
+      const currentTerminal = getCurrentTerminal();
+      const canResumeRecreatedActivity = shouldRestoreNativeSession({
+        launchContext: readNativeLaunchContext(),
+        forceLogin: forceLoginAfterExit,
+        savedAt: session.savedAt,
+        autoLogoutMinutes: resolveTerminalAutoLogoutMinutes(currentTerminal),
+        currentTerminalId: currentTerminal?.id,
+        sessionTerminalId: session.terminalId,
+      });
+      if (!canResumeRecreatedActivity) {
+        clearActiveUserSession();
+        clearSecurityState();
+        if (currentView !== 'LOGIN') setCurrentView('LOGIN');
+        return;
+      }
+    }
     const restoredUser = users.find(user => String(user.id) === session.userId);
     if (!restoredUser) {
       clearActiveUserSession();
@@ -3843,7 +3876,7 @@ const AppContent: React.FC = () => {
     if (currentView === 'LOGIN') {
       setCurrentView(restoreView);
     }
-  }, [currentUser, currentView, isDataLoaded, users]);
+  }, [currentUser, currentView, getCurrentTerminal, isDataLoaded, isSecurityLoaded, terminalAuthorizationBlock, users]);
 
   const [roles, setRoles] = useState<RoleDefinition[]>(DEFAULT_ROLES);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -4317,6 +4350,7 @@ const AppContent: React.FC = () => {
     const markBackground = (reason: string) => {
       isAppInBackgroundRef.current = true;
       appBackgroundSinceRef.current = Date.now();
+      persistActiveUserSession(currentUserRef.current, currentViewRef.current);
       if (inactivityTimerRef.current) {
         window.clearTimeout(inactivityTimerRef.current);
         inactivityTimerRef.current = null;
