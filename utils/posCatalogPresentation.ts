@@ -89,6 +89,42 @@ export const comparePosProducts = (left: Product, right: Product): number => {
 export const categoryAliases = (item: Partial<ClassificationItem>): string[] =>
   Array.from(new Set([item.id, item.code, item.name].map(normalizeCatalogKey).filter(Boolean)));
 
+/**
+ * ERP catalog refreshes own the category identity and descriptive fields, while
+ * the POS owns its local presentation. Keep the latter when both records refer
+ * to the same logical category, even if ERP uses a UUID and POS uses the name.
+ */
+export const mergePosCategoryPresentation = (
+  existingItems: Array<Partial<ClassificationItem>> | null | undefined,
+  incomingItems: ClassificationItem[],
+): ClassificationItem[] => {
+  const existingByAlias = new Map<string, Partial<ClassificationItem>>();
+  for (const existing of existingItems || []) {
+    categoryAliases(existing).forEach((alias) => {
+      if (!existingByAlias.has(alias)) existingByAlias.set(alias, existing);
+    });
+  }
+
+  return incomingItems.map((incoming) => {
+    const existing = categoryAliases(incoming)
+      .map((alias) => existingByAlias.get(alias))
+      .find(Boolean);
+    if (!existing) return incoming;
+
+    const merged: ClassificationItem = { ...existing, ...incoming } as ClassificationItem;
+    if (Object.prototype.hasOwnProperty.call(existing, 'isActive')) {
+      merged.isActive = existing.isActive;
+    }
+    if (Object.prototype.hasOwnProperty.call(existing, 'color')) {
+      merged.color = existing.color;
+    }
+    if (Object.prototype.hasOwnProperty.call(existing, 'sortOrder')) {
+      merged.sortOrder = existing.sortOrder;
+    }
+    return merged;
+  });
+};
+
 export const readableTextColor = (hexColor: string): '#FFFFFF' | '#0F172A' => {
   const normalized = normalizeCategoryColor(hexColor);
   if (!normalized) return '#0F172A';

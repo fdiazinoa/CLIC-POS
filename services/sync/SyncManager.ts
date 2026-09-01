@@ -73,6 +73,7 @@ import {
     resolveAutomaticMasterSyncStrategy,
     shouldRunLegacyAutomaticMasterSweep,
 } from './ErpMasterSyncStrategy';
+import { mergePosCategoryPresentation } from '../../utils/posCatalogPresentation';
 
 export type SyncableCollection =
     | 'products' | 'items' | 'taxes' | 'customers' | 'suppliers' | 'warehouses'
@@ -3328,7 +3329,13 @@ class SyncManager {
                     });
 
                     if (!snapshot && payload?.config && !Array.isArray(payload.config)) {
-                        const incomingConfig = payload.config as BusinessConfig;
+                        const rawIncomingConfig = payload.config as BusinessConfig;
+                        const incomingConfig = {
+                            ...rawIncomingConfig,
+                            posCategories: Array.isArray(rawIncomingConfig.posCategories)
+                                ? mergePosCategoryPresentation(baseConfig.posCategories, rawIncomingConfig.posCategories)
+                                : baseConfig.posCategories,
+                        } as BusinessConfig;
                         const changed =
                             JSON.stringify(this.sanitizeConfig(baseConfig)) !==
                             JSON.stringify(this.sanitizeConfig(incomingConfig));
@@ -4849,6 +4856,9 @@ class SyncManager {
             posCategories.length > 0
         ) {
             const currentConfig = ((await db.get('config')) || {}) as Record<string, any>;
+            const mergedPosCategories = posCategories.length > 0
+                ? mergePosCategoryPresentation(currentConfig.posCategories, posCategories)
+                : currentConfig.posCategories;
             const nextConfig = {
                 ...currentConfig,
                 departments: departments.length > 0 ? departments : currentConfig.departments,
@@ -4856,7 +4866,7 @@ class SyncManager {
                 families: families.length > 0 ? families : currentConfig.families,
                 subfamilies: subfamilies.length > 0 ? subfamilies : currentConfig.subfamilies,
                 brands: brands.length > 0 ? brands : currentConfig.brands,
-                posCategories: posCategories.length > 0 ? posCategories : currentConfig.posCategories,
+                posCategories: mergedPosCategories,
             };
             await db.save('config', nextConfig);
             nextConfigWithClassifications = nextConfig;
@@ -6586,6 +6596,13 @@ class SyncManager {
             } catch (snapshotError) {
                 console.warn('⚠️ SyncManager: Terminal snapshot refresh failed during pullConfig. Using global config fallback.', snapshotError);
             }
+
+            finalConfig = {
+                ...finalConfig,
+                posCategories: Array.isArray(finalConfig.posCategories)
+                    ? mergePosCategoryPresentation(localConfig?.posCategories, finalConfig.posCategories)
+                    : localConfig?.posCategories,
+            };
 
             const currentTerminalId = permissionService.getTerminalId();
             const localTerminal = (localConfig?.terminals || []).find((terminal: any) => terminal.id === currentTerminalId);
