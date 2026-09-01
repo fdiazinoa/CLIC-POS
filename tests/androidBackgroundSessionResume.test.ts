@@ -63,17 +63,17 @@ test('a terminal with auto logout disabled can resume a recreated activity', () 
   }), true);
 });
 
-test('Android bridge exposes whether this is an activity recreation', () => {
+test('Android bridge treats saved state and Recents/history as resumable reconstruction', () => {
   const mainActivity = readFileSync(
     new URL('../android/app/src/main/java/com/clicpos/app/MainActivity.java', import.meta.url),
     'utf8',
   );
   const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 
-  assert.match(mainActivity, /activityRecreated\s*=\s*savedInstanceState\s*!=\s*null/);
+  assert.match(mainActivity, /Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY/);
+  assert.match(mainActivity, /activityRecreated\s*=\s*savedInstanceState\s*!=\s*null\s*\|\|\s*launchedFromHistory/);
   assert.match(mainActivity, /public String getLaunchContext\(\)/);
   assert.match(mainActivity, /activity_recreated/);
   assert.match(appSource, /persistActiveUserSession\(currentUserRef\.current, currentViewRef\.current\)/);
   assert.match(appSource, /shouldRestoreNativeSession\(\{/);
 });
-
