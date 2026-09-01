@@ -247,6 +247,50 @@ test('applies and persists USD from CONFIG_PUSH_V2 while keeping DOP enabled', a
     assert.ok(diagnostics.appliedAt);
 });
 
+test('CONFIG_PUSH_V2 persiste el perfil canónico de empresa y emite configUpdated', async () => {
+    resetHarness();
+    const { result, acks } = await runEvent({
+        id: 'company-profile',
+        scopes: ['terminal_config'],
+        versions: { terminal_config: 9 },
+        domains: {
+            terminal_config: {
+                terminal: { terminal_id: terminalId, config: {} },
+                resolved: {
+                    company: {
+                        trade_name: 'Comercial ERP',
+                        legal_name: 'Empresa ERP, SRL',
+                        tax_id: '1-01-99999-9',
+                        phone: '809-555-0199',
+                        address_line: 'Calle ERP #10',
+                        email: 'empresa@erp.test',
+                        website: 'https://erp.test',
+                        receipt_logo_url: 'https://cdn.erp.test/receipt.png',
+                        logo_url: 'https://cdn.erp.test/general.png',
+                    },
+                },
+            },
+        },
+    });
+
+    assert.equal(result?.applied, 1);
+    assert.equal(acks[0].status, 'APPLIED');
+
+    const persisted = clone(collections.get('config')) as any;
+    assert.deepEqual(persisted.companyInfo, {
+        name: 'Comercial ERP',
+        rnc: '1-01-99999-9',
+        phone: '809-555-0199',
+        address: 'Calle ERP #10',
+        email: 'empresa@erp.test',
+        website: 'https://erp.test',
+    });
+    assert.equal(persisted.receiptConfig.logo, 'https://cdn.erp.test/receipt.png');
+
+    const configEvent = dispatchedEvents.find((event) => event.type === 'configUpdated');
+    assert.deepEqual(configEvent?.detail, persisted);
+});
+
 test('applies DOP, EUR and USD from terminal.config when resolved data is present', async () => {
     const { localTerminalId } = resetHarness();
     const { result, acks } = await runEvent({
