@@ -10,7 +10,7 @@ import { sendZReportEmail } from '../utils/email';
 import { db } from '../utils/db';
 import ZReportHistory from './ZReportHistory';
 import { calculateZReportStats } from '../utils/analytics';
-import { buildServiceTypeReport } from '../utils/orderServiceType';
+import { buildServiceTypeReport, getOrderServiceTypeLabel } from '../utils/orderServiceType';
 import { buildCloseReportDetails, resolveCloseReportSections } from '../utils/closeReportOptions';
 import { ThermalPrinterService } from '../services/printer/ThermalPrinterService';
 import {
@@ -493,6 +493,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
 
    // Calculate Stats for Preview
    const stats = calculateZReportStats(filteredTransactions, filteredCollections);
+   const serviceTypeReport = buildServiceTypeReport(filteredTransactions);
 
    useEffect(() => {
       setDeclaredCard(prev => (prev === '' ? expectedCardTotal.toFixed(2) : prev));
@@ -639,6 +640,27 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                         <p className="text-[10px] text-indigo-400 uppercase font-bold mb-1 tracking-wider">Cobros CxC (Recibos)</p>
                         <p className="text-lg font-black text-indigo-700">{baseCurrency?.symbol}{stats.collectionsTotal.toFixed(2)}</p>
                      </div>
+                  </div>
+               </div>
+
+               <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 md:col-span-2">
+                  <h3 className="font-bold text-gray-500 uppercase text-xs tracking-wider mb-4 flex items-center gap-2">
+                     <Receipt size={14} /> Ventas por tipo de servicio
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                     {serviceTypeReport.summary.map((line) => (
+                        <div key={line.serviceType} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                           <div className="flex items-center justify-between gap-3">
+                              <p className="font-black text-slate-800">{getOrderServiceTypeLabel(line.serviceType)}</p>
+                              <span className="rounded-full bg-white px-2 py-1 text-[10px] font-black text-slate-500">{line.transactionCount}</span>
+                           </div>
+                           <p className="mt-3 text-xl font-black text-slate-900">{baseCurrency?.symbol}{line.total.toFixed(2)}</p>
+                           <div className="mt-3 space-y-1 border-t border-slate-200 pt-2 text-xs font-bold text-slate-500">
+                              <div className="flex justify-between"><span>Impuestos</span><span>{baseCurrency?.symbol}{line.taxAmount.toFixed(2)}</span></div>
+                              <div className="flex justify-between"><span>Propina legal</span><span>{baseCurrency?.symbol}{line.serviceChargeAmount.toFixed(2)}</span></div>
+                           </div>
+                        </div>
+                     ))}
                   </div>
                </div>
 

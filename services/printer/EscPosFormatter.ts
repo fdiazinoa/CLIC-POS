@@ -956,6 +956,8 @@ export const buildEscPosZReportPayload = (
     serviceTypeSummary.forEach(line => {
       pushTextLines(chunks, splitLines(`${serviceTypeLabel(line.serviceType)} (${line.transactionCount})`, width));
       pushPair(chunks, 'Total', formatMoney(currencySymbol, line.total), width);
+      pushPair(chunks, 'Impuestos', formatMoney(currencySymbol, line.taxAmount || 0), width);
+      pushPair(chunks, 'Propina legal', formatMoney(currencySymbol, line.serviceChargeAmount || 0), width);
     });
   }
   if (serviceTypeTransactions.length > 0) {

@@ -40,6 +40,7 @@ import { getDefaultRoleConfig, resolveDeviceRoleValue } from './deviceRoleHelper
 import { resolveTariffId, resolveWarehouseId } from './masterIdentity';
 import { resolveOrderTakerContract } from './orderTakerPolicy';
 import { resolveDeviceProfile, toDeviceProfileContract } from './deviceProfile';
+import { normalizeServiceTaxPolicies } from './serviceTaxPolicy';
 
 const asObject = (value: unknown): Record<string, any> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -1808,6 +1809,33 @@ export const applyTerminalConfigSnapshot = (
   const effectiveTerminalBusinessConfig = asObject(
     effectiveTerminalConfig.business_config || effectiveTerminalConfig.businessConfig
   );
+  const resolvedFinancial = asObject(
+    effectiveTerminalConfigResolved.financial
+    || effectiveResolved.financial
+    || resolvedTerminalConfig.financial
+    || resolvedProfileConfig.financial
+  );
+  const fallbackFinancial = asObject(
+    effectiveFallbackConfig.financial
+    || fallbackTerminalConfig.financial
+    || fallbackProfileConfig.financial
+  );
+  const terminalServicePoliciesSource =
+    resolvedFinancial.serviceTaxPolicies
+    ?? resolvedFinancial.service_tax_policies
+    ?? effectiveTerminalConfigResolved.serviceTaxPolicies
+    ?? effectiveTerminalConfigResolved.service_tax_policies
+    ?? effectiveResolved.serviceTaxPolicies
+    ?? effectiveResolved.service_tax_policies
+    ?? fallbackFinancial.serviceTaxPolicies
+    ?? fallbackFinancial.service_tax_policies;
+  const terminalServiceTaxPolicies = normalizeServiceTaxPolicies(terminalServicePoliciesSource);
+  const businessServicePoliciesSource =
+    effectiveTerminalBusinessConfig.serviceTaxPolicies
+    ?? effectiveTerminalBusinessConfig.service_tax_policies
+    ?? effectiveBusinessConfig.serviceTaxPolicies
+    ?? effectiveBusinessConfig.service_tax_policies;
+  const businessServiceTaxPolicies = normalizeServiceTaxPolicies(businessServicePoliciesSource);
   const remoteCompanyProfile = resolveRemoteCompanyProfile([
     effectiveResolved.company,
     effectiveTerminalConfigResolved.company,
@@ -2493,6 +2521,9 @@ export const applyTerminalConfigSnapshot = (
     financial: {
       ...terminalTemplate.financial,
       ...(effectiveCurrencies.length > 0 ? { acceptedCurrencies: enabledCurrencyCodes } : {}),
+      ...(terminalServicePoliciesSource !== undefined
+        ? { serviceTaxPolicies: terminalServiceTaxPolicies || {} }
+        : {}),
     },
     documentSeries: effectiveDocumentSeries,
     documentAssignments:
@@ -2633,6 +2664,9 @@ export const applyTerminalConfigSnapshot = (
 
   nextConfig.tariffs = effectiveTariffs;
   nextConfig.taxes = effectiveTaxes;
+  if (businessServicePoliciesSource !== undefined) {
+    nextConfig.serviceTaxPolicies = businessServiceTaxPolicies || {};
+  }
   if (remoteCompanyProfile.hasCompanyBlock) {
     nextConfig.companyInfo = {
       ...nextConfig.companyInfo,

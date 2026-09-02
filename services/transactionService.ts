@@ -450,6 +450,8 @@ class TransactionService {
             walletPaymentAmount: data.walletPaymentAmount,
             serviceChargeAmount: data.serviceChargeAmount,
             serviceType: data.serviceType,
+            serviceTaxPolicySnapshot: data.serviceTaxPolicySnapshot,
+            service_tax_policy_snapshot: data.serviceTaxPolicySnapshot || data.service_tax_policy_snapshot,
             voluntaryTipAmount: data.voluntaryTipAmount,
             orderNumber: data.orderNumber,
             tableDisplayLabel: data.tableDisplayLabel,

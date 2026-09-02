@@ -144,6 +144,8 @@ export const generateZReportReceipt = (
           <span>${serviceTypeLabel(line.serviceType)} (${line.transactionCount})</span>
           <span>${formatCurrency(line.total)}</span>
         </div>
+        <div class="row" style="font-size: 10px;"><span>Impuestos</span><span>${formatCurrency(line.taxAmount || 0)}</span></div>
+        <div class="row" style="font-size: 10px;"><span>Propina legal</span><span>${formatCurrency(line.serviceChargeAmount || 0)}</span></div>
       `).join('')}
       ` : ''}
 

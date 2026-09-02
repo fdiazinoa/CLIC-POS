@@ -125,6 +125,8 @@ interface TaxBreakdownOptions {
   absoluteLineValues?: boolean;
   multiplier?: number;
   taxExempt?: boolean;
+  /** Undefined preserves product taxes; [] explicitly applies no taxes. */
+  allowedTaxIds?: string[];
 }
 
 interface AuthoritativeLineOptions extends TaxBreakdownOptions {
@@ -135,6 +137,8 @@ interface AuthoritativeLineOptions extends TaxBreakdownOptions {
 
 type TaxableTransaction = Pick<Transaction, 'items' | 'discountAmount' | 'isTaxIncluded' | 'taxAmount' | 'total'> & {
   taxBreakdown?: FiscalTaxBreakdownLine[];
+  serviceTaxPolicySnapshot?: Transaction['serviceTaxPolicySnapshot'];
+  service_tax_policy_snapshot?: Transaction['service_tax_policy_snapshot'];
 };
 
 export const getTerminalDefaultTaxIds = (terminalConfig?: TerminalTaxConfig): string[] =>
@@ -153,7 +157,8 @@ export const resolveEffectiveTaxes = (
   config: Pick<BusinessConfig, 'taxes' | 'taxRate'>,
   terminalConfig?: TerminalTaxConfig,
   fallbackTaxRate = 0,
-  fallbackTaxName = 'Impuesto'
+  fallbackTaxName = 'Impuesto',
+  allowedTaxIds?: string[],
 ): TaxDefinition[] => {
   const itemTaxIds = normalizeTaxIds(
     Array.isArray((item as TaxableLineItem).appliedTaxIds)
@@ -163,13 +168,25 @@ export const resolveEffectiveTaxes = (
   const resolvedTaxes = resolveEffectiveTaxIds(itemTaxIds, terminalConfig)
     .map((taxId) => findTaxByIdentifier(config.taxes || [], taxId))
     .filter(Boolean) as TaxDefinition[];
+  const normalizedAllowedTaxIds = allowedTaxIds === undefined
+    ? undefined
+    : normalizeTaxIds(allowedTaxIds);
+  const allowedTaxes = normalizedAllowedTaxIds === undefined
+    ? resolvedTaxes
+    : resolvedTaxes.filter((tax) => normalizedAllowedTaxIds.some((identifier) => (
+      findTaxByIdentifier(config.taxes || [], identifier)?.id === tax.id
+    )));
 
-  if (resolvedTaxes.length > 0) {
-    const resolvedTaxRate = resolvedTaxes.reduce((sum, tax) => sum + Math.max(0, toNumber(tax.rate)), 0);
+  if (allowedTaxes.length > 0) {
+    const resolvedTaxRate = allowedTaxes.reduce((sum, tax) => sum + Math.max(0, toNumber(tax.rate)), 0);
     if (resolvedTaxRate > EPSILON || (item as TaxableLineItem).taxable !== true) {
-      return resolvedTaxes;
+      return allowedTaxes;
     }
   }
+
+  // An explicit service policy is authoritative and must never reintroduce a
+  // filtered tax through the legacy global-rate fallback.
+  if (normalizedAllowedTaxIds !== undefined) return allowedTaxes;
 
   const shouldFallbackForTaxableItem = (item as TaxableLineItem).taxable === true;
   const effectiveFallbackRate = fallbackTaxRate > EPSILON
@@ -203,6 +220,7 @@ export const calculateTaxBreakdownFromItems = (
     fallbackTaxName = 'Impuesto',
     absoluteLineValues = false,
     multiplier = 1,
+    allowedTaxIds,
   } = options;
 
   if (options.taxExempt) return [];
@@ -225,7 +243,7 @@ export const calculateTaxBreakdownFromItems = (
     const itemRatio = grossLineTotal > 0 ? lineGross / grossLineTotal : 0;
     const lineDiscount = Math.max(0, toNumber(discountAmount)) * itemRatio;
     const lineBaseAfterDiscount = Math.max(0, lineGross - lineDiscount);
-    const itemTaxes = resolveEffectiveTaxes(item, config, terminalConfig, fallbackTaxRate, fallbackTaxName);
+    const itemTaxes = resolveEffectiveTaxes(item, config, terminalConfig, fallbackTaxRate, fallbackTaxName, allowedTaxIds);
     const totalTaxRate = itemTaxes.reduce((sum, tax) => sum + Math.max(0, toNumber(tax.rate)), 0);
 
     if (itemTaxes.length === 0 || totalTaxRate <= EPSILON) return;
@@ -271,7 +289,7 @@ export const calculateTaxBreakdownFromItems = (
 export const calculateTransactionFiscalSummary = (
   transaction: TaxableTransaction,
   config: BusinessConfig,
-  options: { terminalConfig?: TerminalTaxConfig } = {}
+  options: { terminalConfig?: TerminalTaxConfig; allowedTaxIds?: string[] } = {}
 ): {
   grossLineTotal: number;
   discountAmount: number;
@@ -288,11 +306,15 @@ export const calculateTransactionFiscalSummary = (
     ? Math.max(0, toNumber(config.taxRate))
     : 0;
 
+  const policySnapshot = transaction.serviceTaxPolicySnapshot || transaction.service_tax_policy_snapshot;
+  const hasSnapshotTaxIds = !!policySnapshot
+    && Object.prototype.hasOwnProperty.call(policySnapshot, 'taxIds');
   const computedBreakdown = calculateTaxBreakdownFromItems(transaction.items || [], config, {
     discountAmount,
     isTaxIncluded: !!transaction.isTaxIncluded,
     terminalConfig: options.terminalConfig,
     fallbackTaxRate,
+    allowedTaxIds: hasSnapshotTaxIds ? policySnapshot?.taxIds : options.allowedTaxIds,
   });
 
   const taxBreakdown = Array.isArray(transaction.taxBreakdown) && transaction.taxBreakdown.length > 0
@@ -330,6 +352,7 @@ export const calculateLineFiscalValuesForTransaction = (
     fallbackTaxRate = 0,
     fallbackTaxName = 'Impuesto',
     taxExempt = false,
+    allowedTaxIds,
   } = options;
 
   const normalizedItems = Array.isArray(items) ? items : [];
@@ -344,7 +367,7 @@ export const calculateLineFiscalValuesForTransaction = (
     const lineBaseAfterDiscount = Math.max(0, lineGross - lineDiscount);
     const itemTaxes = taxExempt
       ? []
-      : resolveEffectiveTaxes(item, config, terminalConfig, fallbackTaxRate, fallbackTaxName);
+      : resolveEffectiveTaxes(item, config, terminalConfig, fallbackTaxRate, fallbackTaxName, allowedTaxIds);
     const totalTaxRate = itemTaxes.reduce((sum, tax) => sum + Math.max(0, toNumber(tax.rate)), 0);
 
     if (itemTaxes.length === 0 || totalTaxRate <= EPSILON) {

@@ -26,6 +26,7 @@ import { mergeDocumentSeriesCollection } from '../utils/documentSeriesIdentity';
 import { isPartialXReportAllowed } from '../utils/seriesValidation';
 import { CLOSE_REPORT_SECTION_OPTIONS, type CloseReportType } from '../utils/closeReportOptions';
 import { resolveDeviceProfile } from '../utils/deviceProfile';
+import ServiceTaxPolicyEditor from './ServiceTaxPolicyEditor';
 
 interface TerminalSettingsProps {
    config: BusinessConfig;
@@ -989,6 +990,22 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                         {activeTab === 'FISCAL' && (
                            <div className="space-y-6">
                               <h3 className="text-2xl font-black text-slate-800 flex items-center gap-3"><Landmark className="text-indigo-600" /> Fiscal</h3>
+                              <div className="rounded-[2rem] border border-emerald-100 bg-emerald-50/40 p-6 space-y-4">
+                                 <div>
+                                    <h4 className="text-sm font-black uppercase tracking-[0.16em] text-slate-800">Política por tipo de servicio</h4>
+                                    <p className="mt-1 text-xs font-medium text-slate-500">
+                                       La terminal hereda la política general del POS. Activa una política propia solo cuando esta caja necesite una excepción.
+                                    </p>
+                                 </div>
+                                 <ServiceTaxPolicyEditor
+                                    taxes={config.taxes || []}
+                                    value={activeTerminal.config.financial?.serviceTaxPolicies || activeTerminal.config.financial?.service_tax_policies || {}}
+                                    fallback={config.serviceTaxPolicies || config.service_tax_policies || {}}
+                                    onChange={(value) => handleUpdateActiveConfig('financial', 'serviceTaxPolicies', value)}
+                                    disabled={isReadOnly}
+                                    allowInherit
+                                 />
+                              </div>
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                  {['B01', 'B02', 'B04', 'B14', 'B15'].map(type => (
                                     <div key={type} className="p-5 bg-slate-50 rounded-3xl space-y-3">

@@ -79,7 +79,16 @@ test('una integración de marketplace se clasifica como delivery sin reclasifica
 });
 
 test('el tipo de servicio viaja en la normalización y resumen de sincronización', () => {
-  const takeout = transaction({ serviceType: 'TAKEOUT', serviceChargeAmount: 0 });
+  const takeout = transaction({
+    serviceType: 'TAKEOUT',
+    serviceChargeAmount: 0,
+    serviceTaxPolicySnapshot: {
+      serviceType: 'TAKEOUT',
+      source: 'TERMINAL',
+      taxIds: ['tax-18'],
+      legalTip: { enabled: false, percentage: 0 },
+    },
+  });
   const normalized = normalizeTransactionForSync(takeout);
   const summary = buildSalePostedSummary(takeout);
 
@@ -87,12 +96,14 @@ test('el tipo de servicio viaja en la normalización y resumen de sincronizació
   assert.equal(normalized.service_type, 'TAKEOUT');
   assert.equal(summary.service_type, 'TAKEOUT');
   assert.equal(summary.service_charge_amount, 0);
+  assert.deepEqual(normalized.service_tax_policy_snapshot, takeout.serviceTaxPolicySnapshot);
+  assert.deepEqual(summary.service_tax_policy_snapshot, takeout.serviceTaxPolicySnapshot);
 });
 
 test('la impresión histórica del cierre conserva cada factura para llevar o delivery', () => {
   const serviceReport = buildServiceTypeReport([
-    transaction({ id: 'takeout', displayId: 'TCK-20', serviceType: 'TAKEOUT', total: 200 }),
-    transaction({ id: 'delivery', displayId: 'TCK-21', serviceType: 'DELIVERY', total: 300 }),
+    transaction({ id: 'takeout', displayId: 'TCK-20', serviceType: 'TAKEOUT', total: 200, taxAmount: 18 }),
+    transaction({ id: 'delivery', displayId: 'TCK-21', serviceType: 'DELIVERY', total: 300, taxAmount: 36, serviceChargeAmount: 15 }),
   ]);
   const report = {
     id: 'z-service',
@@ -121,10 +132,14 @@ test('la impresión histórica del cierre conserva cada factura para llevar o de
   assert.match(html, /VENTAS POR TIPO DE SERVICIO/);
   assert.match(html, /TCK-20/);
   assert.match(html, /TCK-21/);
+  assert.match(html, /Impuestos/);
+  assert.match(html, /Propina legal/);
 
   const escPos = buildEscPosZReportPayload(report, [], config);
   const decoded = Buffer.from(escPos!, 'base64').toString('latin1');
   assert.match(decoded, /PARA LLEVAR \/ DELIVERY/);
   assert.match(decoded, /TCK-20/);
   assert.match(decoded, /TCK-21/);
+  assert.match(decoded, /Impuestos/);
+  assert.match(decoded, /Propina legal/);
 });

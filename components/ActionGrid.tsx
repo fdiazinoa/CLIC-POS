@@ -70,7 +70,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
                 : colors;
 
         return (
-            <div key={id} className={`relative ${isHorizontal ? 'w-[112px] shrink-0' : 'w-full'}`}>
+            <div key={id} className="relative w-full min-w-0">
                 <button
                     disabled={disabled}
                     onClick={() => onAction(id)}
@@ -102,8 +102,8 @@ const ActionGrid: React.FC<ActionGridProps> = ({
     };
 
     return (
-        <div className={`w-full ${isHorizontal ? 'bg-white border-t border-gray-100 p-2 shadow-inner overflow-x-auto overflow-y-hidden no-scrollbar' : ''}`}>
-            <div className={`mx-auto ${isHorizontal ? 'flex w-max min-w-full gap-2' : 'grid grid-cols-3 gap-2'}`}>
+        <div className={`w-full ${isHorizontal ? 'max-h-[200px] bg-white border-t border-gray-100 p-2 shadow-inner overflow-x-hidden overflow-y-auto custom-scrollbar' : ''}`}>
+            <div className={`mx-auto grid gap-2 ${isHorizontal ? 'grid-cols-4' : 'grid-cols-3'}`}>
                 {/* SALES GROUP (Blue) */}
                 {renderButton('DISCOUNT', 'Descuento', <Percent />, 'sales')}
                 {renderButton('COUPON', 'Cupón', <QrCode />, 'sales')}
