@@ -2,9 +2,9 @@ import React from 'react';
 import {
     Percent, QrCode, Inbox, StickyNote, Box, Save, Settings,
     Lock, LogOut, Package, RotateCcw, CreditCard, Calendar, Power,
-    ArrowDownLeft, ArrowUpRight, Clock, ShoppingBag
+    ArrowDownLeft, ArrowUpRight, Clock, ShoppingBag, Truck, Building2
 } from 'lucide-react';
-import { BusinessConfig } from '../types';
+import { BusinessConfig, OrderServiceType } from '../types';
 
 interface ActionGridProps {
     onAction: (action: string) => void;
@@ -18,6 +18,7 @@ interface ActionGridProps {
     allowWaitList?: boolean;
     showTakeout?: boolean;
     isTakeout?: boolean;
+    serviceType?: OrderServiceType;
     actionRegion?: 'all' | 'ticket' | 'other';
 }
 
@@ -33,6 +34,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
     allowWaitList = true,
     showTakeout = false,
     isTakeout = false,
+    serviceType = isTakeout ? 'TAKEOUT' : 'DINE_IN',
     actionRegion = 'all',
 }) => {
     const isHorizontal = orientation === 'horizontal';
@@ -121,7 +123,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
                 {allowWaitList && renderButton('PARK_LIST', 'Espera', <Inbox />, 'wait', false, parkedTicketsCount > 0 ? parkedTicketsCount : false)}
                 {renderButton('RESERVATION', 'Reserva', <StickyNote />, 'wait')}
                 {renderButton('SAVE', 'Guardar', <Save />, 'wait')}
-                {showTakeout && renderButton('TAKEOUT', isTakeout ? 'Para llevar ✓' : 'Para llevar', <ShoppingBag />, 'wait', false, false, isTakeout)}
+                {showTakeout && renderButton('TAKEOUT', serviceType === 'DELIVERY' ? 'Delivery ✓' : serviceType === 'TAKEOUT' ? 'Para llevar ✓' : 'Tipo de servicio', serviceType === 'DELIVERY' ? <Truck /> : serviceType === 'TAKEOUT' ? <ShoppingBag /> : <Building2 />, 'wait', false, false, serviceType !== 'DINE_IN')}
 
                 {/* UTILITY GROUP (Gray) */}
                 {renderButton('SETTINGS', 'Ajustes', <Settings />, 'utility')}

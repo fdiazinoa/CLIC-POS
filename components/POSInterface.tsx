@@ -112,6 +112,7 @@ import {
 import { resolveDeviceRoleValue } from '../utils/deviceRoleHelpers';
 import { resolveTerminalDeviceProfile } from '../utils/deviceProfile';
 import { shouldApplyRestaurantServiceCharge } from '../utils/orderServiceType';
+import OrderServiceTypeDialog from './OrderServiceTypeDialog';
 import { resolveAppliedServiceTaxPolicy } from '../utils/serviceTaxPolicy';
 import { normalizeProductionOutputMode, resolveProductionOutputTargets } from '../utils/productionOutputMode';
 import { isClientTerminalMode, resolveOperationalApiUrl } from '../utils/masterOperationalApi';
@@ -1226,6 +1227,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // --- TICKET TABS STRATEGY STATE ---
    const [rightSidebarTab, setRightSidebarTab] = useState<'CART' | 'ACTIONS'>('CART');
    const [orderServiceType, setOrderServiceType] = useState<OrderServiceType>('DINE_IN');
+   const [showServiceTypeDialog, setShowServiceTypeDialog] = useState(false);
 
    const cancelTicketAutoSync = () => {
       if (ticketAutoSyncTimeoutRef.current) {
@@ -3711,6 +3713,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, transactionByScanCode]);
 
    const isAnyModalOpen = !!(
+      showServiceTypeDialog ||
       showPaymentModal ||
       showSplitModal ||
       showTicketOptions ||
@@ -6646,15 +6649,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             break;
          case 'SAVE': openParkAliasModal(); break;
          case 'TAKEOUT':
-            if (isRecoveredUberOrder) {
-               setSuccessToast('Este pedido ya está identificado como Delivery');
-               break;
-            }
-            setOrderServiceType(current => current === 'TAKEOUT' ? 'DINE_IN' : 'TAKEOUT');
-            setSuccessToast(orderServiceType === 'TAKEOUT'
-               ? 'Ticket cambiado a consumo en local'
-               : 'Ticket marcado Para llevar · política fiscal aplicada');
-            setRightSidebarTab('CART');
+            setShowServiceTypeDialog(true);
             break;
          case 'TABLES':
             if (!showTableMapButton) break;
@@ -6725,6 +6720,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             allowWaitList={!activeTable}
             showTakeout={!isKioskMode}
             isTakeout={effectiveOrderServiceType === 'TAKEOUT'}
+            serviceType={effectiveOrderServiceType}
          />
       </div>
    );
@@ -6842,6 +6838,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div>
          )}
 
+         {showServiceTypeDialog && <OrderServiceTypeDialog
+            value={effectiveOrderServiceType}
+            locked={isRecoveredUberOrder}
+            onClose={() => setShowServiceTypeDialog(false)}
+            onSelect={serviceType => {
+               if (isRecoveredUberOrder) return;
+               setOrderServiceType(serviceType);
+               setShowServiceTypeDialog(false);
+               setRightSidebarTab('CART');
+               setSuccessToast(`Ticket: ${serviceType === 'DINE_IN' ? 'En local' : serviceType === 'TAKEOUT' ? 'Para llevar' : 'Delivery'} · Política fiscal aplicada`);
+            }}
+         />}
          <MobileConfigModal
             isOpen={showMobileConfigModal}
             onClose={() => {
@@ -7667,11 +7675,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                )}
 
-               {effectiveOrderServiceType !== 'DINE_IN' && (
-                  <div className="flex items-center gap-1 rounded-lg border border-violet-200 bg-violet-50 px-2 py-1 text-[9px] font-black uppercase tracking-tighter text-violet-700 animate-in fade-in slide-in-from-top-1">
+               {!isKioskMode && (
+                  <button type="button" aria-label="Cambiar tipo de servicio" onClick={() => handleGridAction('TAKEOUT')} className="flex min-h-9 items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">
                      <ShoppingBag size={10} />
-                     <span>{effectiveOrderServiceType === 'DELIVERY' ? 'Delivery' : 'Para llevar'} · Política fiscal aplicada</span>
-                  </div>
+                     <span>Tipo de servicio: {effectiveOrderServiceType === 'DINE_IN' ? 'En local' : effectiveOrderServiceType === 'DELIVERY' ? 'Delivery' : 'Para llevar'}</span>
+                     <ChevronDown size={14} />
+                  </button>
                )}
 
                {
@@ -8139,6 +8148,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               allowWaitList={!activeTable}
                               showTakeout={!isKioskMode}
                               isTakeout={effectiveOrderServiceType === 'TAKEOUT'}
+                              serviceType={effectiveOrderServiceType}
                            />
                         </div>
                         <SupermarketTicketSummary
