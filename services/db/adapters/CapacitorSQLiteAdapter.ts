@@ -1,6 +1,13 @@
 import { Capacitor } from '@capacitor/core';
-import type { DatabaseAdapter, FinancialCommitInput } from '../DatabaseAdapter';
+import type {
+    DatabaseAdapter,
+    FinancialCommitInput,
+    MasterNumberRangeRecord,
+    NumberedMasterCommitInput,
+    NumberedMasterCommitResult,
+} from '../DatabaseAdapter';
 import { DURABLE_OUTBOX_SCHEMA_SQL } from '../../sync/DurableOutboxSchema';
+import { applyMasterNumberToDocument, buildNumberedCustomerMutation } from '../../sync/masterNumberRangeContract';
 
 const DB_NAME = 'clic_pos_native';
 const DB_VERSION = 1;
@@ -32,6 +39,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     private sqliteConnection: SQLiteConnectionInstance | null = null;
     private db: SQLiteDBConnectionInstance | null = null;
     private isReady = false;
+    private writeQueue: Promise<unknown> = Promise.resolve();
     public readonly adapterType = 'local';
 
     async connect(): Promise<void> {
@@ -186,7 +194,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     async deleteDocument(collectionName: string, id: string): Promise<void> {
         const db = this.ensureDb();
-        await db.run('DELETE FROM documents WHERE collection_name = ? AND doc_id = ?', [collectionName, id]);
+        await this.withWriteLock(() => db.run('DELETE FROM documents WHERE collection_name = ? AND doc_id = ?', [collectionName, id]));
     }
 
     async executeSQL(query: string, params: any[] = []): Promise<any> {
@@ -212,7 +220,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ];
         }
 
-        return db.run(normalized, params);
+        return this.withWriteLock(() => db.run(normalized, params));
     }
 
     async commitFinancialTransaction(input: FinancialCommitInput): Promise<void> {
@@ -272,6 +280,170 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.executeSetOrRun(statements);
     }
 
+    async getMasterNumberRanges(): Promise<MasterNumberRangeRecord[]> {
+        const result = await this.ensureDb().query(`SELECT
+            range_id, entity_type, prefix, start_number, end_number, next_number,
+            last_issued_number, padding, status, updated_at, last_reported_number,
+            progress_pending, blocked_reason, terminal_id
+            FROM master_number_ranges ORDER BY entity_type, start_number, range_id`);
+        return (Array.isArray(result?.values) ? result.values : []).map((row: any) => ({
+            id: String(row.range_id),
+            entityType: row.entity_type,
+            prefix: String(row.prefix),
+            startNumber: Number(row.start_number),
+            endNumber: Number(row.end_number),
+            nextNumber: Number(row.next_number),
+            lastIssuedNumber: row.last_issued_number == null ? null : Number(row.last_issued_number),
+            padding: Number(row.padding),
+            status: String(row.status),
+            updatedAt: String(row.updated_at),
+            lastReportedNumber: row.last_reported_number == null ? null : Number(row.last_reported_number),
+            progressPending: Number(row.progress_pending) === 1,
+            blockedReason: row.blocked_reason == null ? null : String(row.blocked_reason),
+            terminalId: row.terminal_id == null ? null : String(row.terminal_id),
+        }));
+    }
+
+    async upsertMasterNumberRanges(ranges: MasterNumberRangeRecord[]): Promise<void> {
+        if (!ranges.length) return;
+        await this.executeSetOrRun(ranges.map(range => ({
+            statement: `INSERT INTO master_number_ranges (
+                range_id, entity_type, prefix, start_number, end_number, next_number,
+                last_issued_number, padding, status, updated_at, last_reported_number,
+                progress_pending, blocked_reason, terminal_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(range_id) DO UPDATE SET
+                entity_type = excluded.entity_type,
+                prefix = excluded.prefix,
+                start_number = excluded.start_number,
+                end_number = excluded.end_number,
+                next_number = MAX(master_number_ranges.next_number, excluded.next_number),
+                last_issued_number = MAX(
+                    COALESCE(master_number_ranges.last_issued_number, excluded.start_number - 1),
+                    COALESCE(excluded.last_issued_number, excluded.start_number - 1)
+                ),
+                padding = excluded.padding,
+                terminal_id = excluded.terminal_id,
+                status = CASE
+                    WHEN master_number_ranges.status = 'REVOKED' THEN 'REVOKED'
+                    WHEN master_number_ranges.status = 'BLOCKED'
+                         AND datetime(excluded.updated_at) <= datetime(master_number_ranges.updated_at)
+                    THEN 'BLOCKED'
+                    WHEN MAX(master_number_ranges.next_number, excluded.next_number) > excluded.end_number
+                         AND excluded.status = 'ACTIVE'
+                    THEN 'EXHAUSTED'
+                    ELSE excluded.status
+                END,
+                updated_at = CASE WHEN datetime(excluded.updated_at) > datetime(master_number_ranges.updated_at)
+                    THEN excluded.updated_at ELSE master_number_ranges.updated_at END,
+                last_reported_number = MAX(
+                    COALESCE(master_number_ranges.last_reported_number, excluded.start_number - 1),
+                    COALESCE(excluded.last_reported_number, excluded.start_number - 1)
+                ),
+                progress_pending = CASE
+                    WHEN master_number_ranges.progress_pending = 1 THEN 1
+                    ELSE excluded.progress_pending
+                END,
+                blocked_reason = CASE
+                    WHEN master_number_ranges.status = 'BLOCKED'
+                         AND datetime(excluded.updated_at) <= datetime(master_number_ranges.updated_at)
+                    THEN master_number_ranges.blocked_reason
+                    ELSE excluded.blocked_reason
+                END`,
+            values: [
+                range.id, range.entityType, range.prefix, range.startNumber, range.endNumber,
+                range.nextNumber, range.lastIssuedNumber, range.padding, range.status, range.updatedAt,
+                range.lastReportedNumber, range.progressPending ? 1 : 0, range.blockedReason ?? null,
+                range.terminalId ?? null,
+            ],
+        })));
+    }
+
+    async commitNumberedMasterCreation(input: NumberedMasterCommitInput): Promise<NumberedMasterCommitResult> {
+        return this.withWriteLock(async () => {
+        const db = this.ensureDb();
+        await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
+        try {
+            const existing = await this.getDocument<any>(input.collectionName, input.document.id);
+            if (existing) {
+                await db.execute('COMMIT;', false);
+                return {
+                    document: existing,
+                    range: null,
+                    issuedNumber: Number.isSafeInteger(existing.master_number_value) ? existing.master_number_value : null,
+                    code: String(existing.external_code || existing.customer_code || existing.supplier_code || existing.sku || ''),
+                };
+            }
+            await db.run(`UPDATE master_number_ranges
+                SET status = 'EXHAUSTED'
+                WHERE entity_type = ? AND status = 'ACTIVE' AND next_number > end_number`, [input.entityType], false);
+            const selection = await db.query(`SELECT * FROM master_number_ranges
+                WHERE entity_type = ? AND terminal_id = ? AND status = 'ACTIVE' AND next_number <= end_number
+                ORDER BY start_number, range_id LIMIT 1`, [input.entityType, input.sourceTerminalId]);
+            const row = Array.isArray(selection?.values) ? selection.values[0] : null;
+            if (!row) throw new Error('La terminal agotó el rango asignado. Conéctala y solicita un nuevo rango.');
+            const range: MasterNumberRangeRecord = {
+                id: String(row.range_id), entityType: row.entity_type, prefix: String(row.prefix),
+                startNumber: Number(row.start_number), endNumber: Number(row.end_number),
+                nextNumber: Number(row.next_number),
+                lastIssuedNumber: row.last_issued_number == null ? null : Number(row.last_issued_number),
+                padding: Number(row.padding), status: String(row.status), updatedAt: String(row.updated_at),
+                lastReportedNumber: row.last_reported_number == null ? null : Number(row.last_reported_number),
+                progressPending: Number(row.progress_pending) === 1,
+                blockedReason: row.blocked_reason == null ? null : String(row.blocked_reason),
+                terminalId: row.terminal_id == null ? null : String(row.terminal_id),
+            };
+            const issuedNumber = range.nextNumber;
+            const document = applyMasterNumberToDocument(
+                input.entityType, input.document, range, issuedNumber, input.sourceTerminalId,
+            );
+            const nextNumber = issuedNumber + 1;
+            await db.run(`UPDATE master_number_ranges SET
+                next_number = ?, last_issued_number = ?, progress_pending = 1,
+                status = CASE WHEN ? > end_number THEN 'EXHAUSTED' ELSE status END
+                WHERE range_id = ?`, [nextNumber, issuedNumber, nextNumber, range.id], false);
+            const now = new Date().toISOString();
+            await db.run(DOCUMENT_UPSERT_SQL.trim(), [
+                input.collectionName, input.document.id, JSON.stringify(document),
+                input.collectionName, input.document.id, input.collectionName, now,
+            ], false);
+            if (input.entityType === 'CUSTOMER') {
+                const mutation = buildNumberedCustomerMutation(document, input.localTerminalId || input.sourceTerminalId, now);
+                await db.run(DOCUMENT_UPSERT_SQL.trim(), [
+                    'customerMutations', mutation.id, JSON.stringify(mutation),
+                    'customerMutations', mutation.id, 'customerMutations', now,
+                ], false);
+            }
+            await db.execute('COMMIT;', false);
+            return {
+                document,
+                range: { ...range, nextNumber, lastIssuedNumber: issuedNumber,
+                    status: nextNumber > range.endNumber ? 'EXHAUSTED' : range.status, progressPending: true },
+                issuedNumber,
+                code: String(document.external_code),
+            };
+        } catch (error) {
+            await db.execute('ROLLBACK;', false).catch(() => undefined);
+            throw error;
+        }
+        });
+    }
+
+    async markMasterNumberRangeProgressReported(rangeId: string, lastIssuedNumber: number): Promise<void> {
+        await this.withWriteLock(() => this.ensureDb().run(`UPDATE master_number_ranges SET
+            last_reported_number = MAX(COALESCE(last_reported_number, start_number - 1), ?),
+            progress_pending = CASE WHEN COALESCE(last_issued_number, start_number - 1)
+                > MAX(COALESCE(last_reported_number, start_number - 1), ?) THEN 1 ELSE 0 END
+            WHERE range_id = ?`, [lastIssuedNumber, lastIssuedNumber, rangeId]));
+    }
+
+    async blockMasterNumberRange(rangeId: string, reason: string): Promise<void> {
+        await this.withWriteLock(() => this.ensureDb().run(
+            `UPDATE master_number_ranges SET status = 'BLOCKED', blocked_reason = ? WHERE range_id = ?`,
+            [reason, rangeId],
+        ));
+    }
+
     async getStats(): Promise<{ type: string; size: number; tables: number }> {
         const db = this.ensureDb();
         const tablesResult = await db.query(
@@ -328,6 +500,24 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             );
             CREATE INDEX IF NOT EXISTS idx_sync_queue_status_created_at
             ON sync_queue(status, createdAt);
+            CREATE TABLE IF NOT EXISTS master_number_ranges (
+                range_id TEXT PRIMARY KEY NOT NULL,
+                entity_type TEXT NOT NULL,
+                prefix TEXT NOT NULL,
+                start_number INTEGER NOT NULL,
+                end_number INTEGER NOT NULL,
+                next_number INTEGER NOT NULL,
+                last_issued_number INTEGER,
+                padding INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_reported_number INTEGER,
+                progress_pending INTEGER NOT NULL DEFAULT 0,
+                blocked_reason TEXT,
+                terminal_id TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_master_number_ranges_allocation
+            ON master_number_ranges(entity_type, status, start_number, range_id);
             ${DURABLE_OUTBOX_SCHEMA_SQL}
         `);
         await this.migrateLegacyCollectionsBlobTable();
@@ -436,6 +626,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     private async executeSetOrRun(statements: Array<{ statement: string; values: any[] }>): Promise<void> {
         if (!statements.length) return;
+        await this.withWriteLock(async () => {
         const db = this.ensureDb();
         const executable = statements.map((entry) => ({
             statement: entry.statement.trim(),
@@ -447,16 +638,23 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             return;
         }
 
-        await db.execute('BEGIN TRANSACTION;');
+        await db.execute('BEGIN TRANSACTION;', false);
         try {
             for (const entry of executable) {
-                await db.run(entry.statement, entry.values);
+                await db.run(entry.statement, entry.values, false);
             }
-            await db.execute('COMMIT;');
+            await db.execute('COMMIT;', false);
         } catch (error) {
-            await db.execute('ROLLBACK;').catch(() => undefined);
+            await db.execute('ROLLBACK;', false).catch(() => undefined);
             throw error;
         }
+        });
+    }
+
+    private withWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+        const result = this.writeQueue.then(operation, operation);
+        this.writeQueue = result.then(() => undefined, () => undefined);
+        return result;
     }
 
     private resolveDocumentId(collectionName: string, doc: any, index: number): string {
@@ -596,9 +794,9 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     private async setMetaValue(key: string, value: string): Promise<void> {
         const db = this.ensureDb();
-        await db.run(
+        await this.withWriteLock(() => db.run(
             'INSERT OR REPLACE INTO storage_meta (key, value, updatedAt) VALUES (?, ?, ?)',
             [key, value, new Date().toISOString()]
-        );
+        ));
     }
 }

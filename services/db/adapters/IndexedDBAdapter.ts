@@ -1,7 +1,17 @@
-import { DatabaseAdapter } from '../DatabaseAdapter';
+import type {
+    DatabaseAdapter,
+    MasterNumberRangeRecord,
+    NumberedMasterCommitInput,
+    NumberedMasterCommitResult,
+} from '../DatabaseAdapter';
+import {
+    applyMasterNumberToDocument,
+    buildNumberedCustomerMutation,
+    mergeMasterNumberRange,
+} from '../../sync/masterNumberRangeContract';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 20; // Keep aligned with deployed local schemas and avoid web downgrades
+const DB_VERSION = 21; // v21 adds the independent offline master-number range store
 const OLD_DB_KEY = 'clic_pos_db_v1';
 const OPEN_TIMEOUT_MS = 15000;
 const CURSOR_IDLE_TIMEOUT_MS = 3000;
@@ -22,7 +32,8 @@ const STORES = [
     'offline_print_queue', 'reservations', 'inventoryCommitments', 'serviceTypes', 'activities', 'collections',
     'crmOpportunities', 'erp_sales_documents', 'customerMutations',
     'currencyAuditLogs', 'currencyRateSchedules',
-    'invoiceReviewFlags', 'invoiceAuditEvents', 'invoiceAdjustments'
+    'invoiceReviewFlags', 'invoiceAuditEvents', 'invoiceAdjustments',
+    'masterNumberRanges', 'masterNumberSyncReceipts'
 ];
 
 export class IndexedDBAdapter implements DatabaseAdapter {
@@ -709,6 +720,135 @@ export class IndexedDBAdapter implements DatabaseAdapter {
 
             transaction.oncomplete = () => resolve();
             transaction.onerror = () => reject(transaction.error);
+        });
+    }
+
+    async getMasterNumberRanges(): Promise<MasterNumberRangeRecord[]> {
+        return this.getCollection<MasterNumberRangeRecord>('masterNumberRanges');
+    }
+
+    async upsertMasterNumberRanges(ranges: MasterNumberRangeRecord[]): Promise<void> {
+        if (!ranges.length) return;
+        if (!this.db || this.storageOnlyMode || !this.hasStore('masterNumberRanges')) {
+            throw new Error('El almacenamiento local no soporta rangos numéricos de maestros.');
+        }
+        await new Promise<void>((resolve, reject) => {
+            const transaction = this.db!.transaction('masterNumberRanges', 'readwrite');
+            const store = transaction.objectStore('masterNumberRanges');
+            for (const remote of ranges) {
+                const request = store.get(remote.id);
+                request.onsuccess = () => {
+                    store.put(mergeMasterNumberRange(request.result as MasterNumberRangeRecord | undefined, remote));
+                };
+                request.onerror = () => transaction.abort();
+            }
+            transaction.oncomplete = () => resolve();
+            transaction.onerror = () => reject(transaction.error || new Error('No se pudieron actualizar los rangos.'));
+            transaction.onabort = () => reject(transaction.error || new Error('No se pudieron actualizar los rangos.'));
+        });
+    }
+
+    async commitNumberedMasterCreation(input: NumberedMasterCommitInput): Promise<NumberedMasterCommitResult> {
+        if (!this.db || this.storageOnlyMode || !this.hasStore('masterNumberRanges') || !this.hasStore(input.collectionName)) {
+            throw new Error('La terminal agotó el rango asignado. Conéctala y solicita un nuevo rango.');
+        }
+
+        return new Promise((resolve, reject) => {
+            const stores = ['masterNumberRanges', input.collectionName];
+            if (input.entityType === 'CUSTOMER') stores.push('customerMutations');
+            const transaction = this.db!.transaction(stores, 'readwrite');
+            const rangesStore = transaction.objectStore('masterNumberRanges');
+            const documentsStore = transaction.objectStore(input.collectionName);
+            let result: NumberedMasterCommitResult | null = null;
+            const existingRequest = documentsStore.get(input.document.id);
+            existingRequest.onsuccess = () => {
+                if (existingRequest.result) {
+                    const existing = existingRequest.result;
+                    result = {
+                        document: existing,
+                        range: null,
+                        issuedNumber: Number.isSafeInteger(existing.master_number_value) ? existing.master_number_value : null,
+                        code: String(existing.external_code || existing.customer_code || existing.supplier_code || existing.sku || ''),
+                    };
+                    return;
+                }
+                const request = rangesStore.getAll();
+                request.onsuccess = () => {
+                const ranges = (request.result as MasterNumberRangeRecord[])
+                    .filter(row => row.entityType === input.entityType && row.terminalId === input.sourceTerminalId
+                        && row.status === 'ACTIVE' && row.nextNumber <= row.endNumber)
+                    .sort((a, b) => a.startNumber - b.startNumber || a.id.localeCompare(b.id));
+                const range = ranges[0];
+                if (!range) {
+                    transaction.abort();
+                    return;
+                }
+                const issuedNumber = range.nextNumber;
+                const document = applyMasterNumberToDocument(
+                    input.entityType,
+                    input.document,
+                    range,
+                    issuedNumber,
+                    input.sourceTerminalId,
+                );
+                const updatedRange: MasterNumberRangeRecord = {
+                    ...range,
+                    nextNumber: issuedNumber + 1,
+                    lastIssuedNumber: issuedNumber,
+                    status: issuedNumber + 1 > range.endNumber ? 'EXHAUSTED' : range.status,
+                    progressPending: true,
+                };
+                rangesStore.put(updatedRange);
+                documentsStore.put(document);
+                if (input.entityType === 'CUSTOMER') {
+                    transaction.objectStore('customerMutations').put(buildNumberedCustomerMutation(
+                        document, input.localTerminalId || input.sourceTerminalId, new Date().toISOString(),
+                    ));
+                }
+                result = { document, range: updatedRange, issuedNumber, code: String(document.external_code) };
+                };
+                request.onerror = () => transaction.abort();
+            };
+            existingRequest.onerror = () => transaction.abort();
+            transaction.oncomplete = () => result
+                ? resolve(result)
+                : reject(new Error('La terminal agotó el rango asignado. Conéctala y solicita un nuevo rango.'));
+            transaction.onabort = () => reject(new Error('La terminal agotó el rango asignado. Conéctala y solicita un nuevo rango.'));
+            transaction.onerror = () => reject(transaction.error || new Error('No se pudo reservar el código de maestro.'));
+        });
+    }
+
+    async markMasterNumberRangeProgressReported(rangeId: string, lastIssuedNumber: number): Promise<void> {
+        await this.mutateMasterNumberRange(rangeId, range => ({
+            ...range,
+            lastReportedNumber: Math.max(range.lastReportedNumber ?? (range.startNumber - 1), lastIssuedNumber),
+            progressPending: (range.lastIssuedNumber ?? (range.startNumber - 1))
+                > Math.max(range.lastReportedNumber ?? (range.startNumber - 1), lastIssuedNumber),
+        }));
+    }
+
+    async blockMasterNumberRange(rangeId: string, reason: string): Promise<void> {
+        await this.mutateMasterNumberRange(rangeId, range => ({ ...range, status: 'BLOCKED', blockedReason: reason }));
+    }
+
+    private async mutateMasterNumberRange(
+        rangeId: string,
+        transform: (range: MasterNumberRangeRecord) => MasterNumberRangeRecord,
+    ): Promise<void> {
+        if (!this.db || this.storageOnlyMode || !this.hasStore('masterNumberRanges')) {
+            throw new Error('El almacenamiento local no soporta rangos numéricos de maestros.');
+        }
+        await new Promise<void>((resolve, reject) => {
+            const transaction = this.db!.transaction('masterNumberRanges', 'readwrite');
+            const store = transaction.objectStore('masterNumberRanges');
+            const request = store.get(rangeId);
+            request.onsuccess = () => {
+                if (request.result) store.put(transform(request.result as MasterNumberRangeRecord));
+            };
+            request.onerror = () => transaction.abort();
+            transaction.oncomplete = () => resolve();
+            transaction.onerror = () => reject(transaction.error);
+            transaction.onabort = () => reject(transaction.error || new Error('No se pudo actualizar el rango.'));
         });
     }
 

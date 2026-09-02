@@ -1354,6 +1354,16 @@ export interface CustomerAddress {
 
 export interface Customer {
   id: string;
+  customer_code?: string;
+  customerCode?: string;
+  external_code?: string;
+  externalCode?: string;
+  source_customer_id?: string;
+  sourceCustomerId?: string;
+  created_source?: 'POS' | string;
+  source_terminal_id?: string;
+  master_number_range_id?: string;
+  master_number_value?: number;
   name: string;
   phone?: string;
   email?: string;
@@ -1462,6 +1472,13 @@ export interface RecipeDetail {
 
 export interface Product {
   id: string;
+  sku?: string;
+  external_code?: string;
+  externalCode?: string;
+  created_source?: 'POS' | string;
+  source_terminal_id?: string;
+  master_number_range_id?: string;
+  master_number_value?: number;
   name: string;
   price: number;
   category: string;
@@ -2147,6 +2164,14 @@ export interface CashMovement {
 
 export interface Supplier {
   id: string;
+  supplier_code?: string;
+  supplierCode?: string;
+  external_code?: string;
+  externalCode?: string;
+  created_source?: 'POS' | string;
+  source_terminal_id?: string;
+  master_number_range_id?: string;
+  master_number_value?: number;
   name: string;
   taxId: string; // RNC o Cédula
   email: string;
