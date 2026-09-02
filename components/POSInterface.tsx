@@ -113,6 +113,7 @@ import { resolveDeviceRoleValue } from '../utils/deviceRoleHelpers';
 import { resolveTerminalDeviceProfile } from '../utils/deviceProfile';
 import { shouldApplyRestaurantServiceCharge } from '../utils/orderServiceType';
 import OrderServiceTypeDialog from './OrderServiceTypeDialog';
+import OrderServiceTypeButton from './OrderServiceTypeButton';
 import { resolveAppliedServiceTaxPolicy } from '../utils/serviceTaxPolicy';
 import { normalizeProductionOutputMode, resolveProductionOutputTargets } from '../utils/productionOutputMode';
 import { isClientTerminalMode, resolveOperationalApiUrl } from '../utils/masterOperationalApi';
@@ -6718,9 +6719,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             globalDiscountValue={globalDiscount.value}
             showLogout={false}
             allowWaitList={!activeTable}
-            showTakeout={!isKioskMode}
-            isTakeout={effectiveOrderServiceType === 'TAKEOUT'}
-            serviceType={effectiveOrderServiceType}
          />
       </div>
    );
@@ -7418,6 +7416,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <Layers size={18} strokeWidth={2.3} />
                      </span>
                   </button>
+                  {!isKioskMode && <OrderServiceTypeButton value={effectiveOrderServiceType} onClick={() => handleGridAction('TAKEOUT')} />}
                </div>
 
                {/* CUSTOMER PILL (MOBILE) */}
@@ -7457,9 +7456,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* DESKTOP: marca + mesa/comensales bajo el logo; retail: busqueda al centro; botones carrito/acciones alineados a la derecha (como APK 1.0.300) */}
             <div className={`hidden md:flex px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
-               <div className="flex w-full items-center justify-between gap-4">
+               <div data-testid="desktop-ticket-toolbar" className="flex w-full items-center justify-between gap-1">
                   <div className="flex min-w-0 shrink-0 items-center justify-start">
-                     {renderTicketBrand(false)}
+                     {renderTicketBrand(!isRetailMode)}
                   </div>
 
                   {/* RETAIL MODE SEARCH BAR */}
@@ -7559,7 +7558,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
-                  <div className="ml-auto flex max-w-[240px] shrink-0 items-center justify-end gap-2">
+                  <div className="ml-auto flex shrink-0 items-center justify-end gap-1">
                      {cart.length > 0 && (
                         <button
                            onClick={handleClearFreshCartItems}
@@ -7626,6 +7625,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <Layers size={18} strokeWidth={2.3} />
                         </span>
                      </button>
+                     {!isKioskMode && <OrderServiceTypeButton value={effectiveOrderServiceType} onClick={() => handleGridAction('TAKEOUT')} />}
                   </div>
                </div>
 
@@ -7673,14 +7673,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <Percent size={10} className="text-blue-500" />
                      <span>Propina legal {appliedServiceTaxPolicy.legalTip?.percentage ?? serviceCharge?.percentage ?? 0}% activa</span>
                   </div>
-               )}
-
-               {!isKioskMode && (
-                  <button type="button" aria-label="Cambiar tipo de servicio" onClick={() => handleGridAction('TAKEOUT')} className="flex min-h-9 items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">
-                     <ShoppingBag size={10} />
-                     <span>Tipo de servicio: {effectiveOrderServiceType === 'DINE_IN' ? 'En local' : effectiveOrderServiceType === 'DELIVERY' ? 'Delivery' : 'Para llevar'}</span>
-                     <ChevronDown size={14} />
-                  </button>
                )}
 
                {
@@ -8146,9 +8138,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               globalDiscountValue={globalDiscount.value}
                               showLogout={false}
                               allowWaitList={!activeTable}
-                              showTakeout={!isKioskMode}
-                              isTakeout={effectiveOrderServiceType === 'TAKEOUT'}
-                              serviceType={effectiveOrderServiceType}
                            />
                         </div>
                         <SupermarketTicketSummary
