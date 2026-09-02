@@ -1,0 +1,21 @@
+.supermarket-ticket-table { min-width: 760px; }
+.supermarket-ticket-table .supermarket-money { width: 10.5rem; }
+.supermarket-ticket-table td.supermarket-money { font-size: 1rem; overflow-wrap: anywhere; }
+.supermarket-ticket-table td.supermarket-line-total { font-size: 1.125rem; }
+.supermarket-ticket-table td.supermarket-money-long { font-size: .875rem; }
+.supermarket-variant { max-width: 100%; overflow-wrap: anywhere; }
+.supermarket-footer {
+  display: grid;
+  grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr) minmax(0, 1fr);
+  align-items: end;
+  gap: 1rem;
+}
+.supermarket-footer-summary { min-width: 0; border: 1px solid #e2e8f0; border-radius: 1.25rem; background: #f8fafc; padding: 1rem; }
+.supermarket-footer-summary .supermarket-payable { font-size: clamp(1.5rem, 2.8vw, 2.75rem); line-height: 1.1; overflow-wrap: anywhere; }
+.supermarket-checkout { min-width: 0; display: flex; flex-direction: column; gap: .75rem; }
+.supermarket-checkout-buttons { display: grid; grid-template-columns: minmax(0, .75fr) minmax(0, 1.25fr); gap: .75rem; }
+@media (max-width: 1099px) {
+  .supermarket-footer { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .75rem; }
+  .supermarket-footer-secondary { grid-column: 1 / -1; grid-row: 2; }
+  .supermarket-footer-secondary > div { max-height: 76px; }
+}

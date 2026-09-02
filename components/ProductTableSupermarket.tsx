@@ -1,6 +1,7 @@
 import React, { CSSProperties, useEffect, useRef, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { CartItem, BusinessConfig } from '../types';
+import './supermarketTicket.css';
 
 interface ProductTableSupermarketProps {
     cart: CartItem[];
@@ -9,6 +10,7 @@ interface ProductTableSupermarketProps {
     lastAddedCartId: string | null;
     onRemoveItem: (cartId: string) => void;
     containerStyle?: CSSProperties;
+    taxIncluded?: boolean;
 }
 
 const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
@@ -17,7 +19,8 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
     currencySymbol,
     lastAddedCartId,
     onRemoveItem,
-    containerStyle
+    containerStyle,
+    taxIncluded = false
 }) => {
     const [highlightedId, setHighlightedId] = useState<string | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -42,14 +45,14 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
             className="flex-1 min-h-0 overflow-y-auto custom-scrollbar bg-white scroll-smooth relative"
             style={containerStyle}
         >
-            <table className="w-full text-left border-collapse table-fixed">
+            <table className="supermarket-ticket-table w-full text-left border-collapse table-fixed">
                 <thead className="bg-gray-50 sticky top-0 z-10 text-[11px] uppercase text-gray-400 font-black tracking-[0.18em] shadow-sm">
                     <tr>
                         <th className="px-2 py-2 text-center w-16 text-gray-600">Cant</th>
                         <th className="px-3 py-2 w-auto">Descripción</th>
-                        <th className="px-3 py-2 text-right w-24 hidden sm:table-cell">ITBIS</th>
-                        <th className="px-3 py-2 text-right w-28">Precio</th>
-                        <th className="px-3 py-2 text-right pr-4 w-32 text-gray-800">Total</th>
+                        <th className="supermarket-money px-4 py-3 text-right">Precio<span className="block text-[9px] tracking-normal font-medium normal-case">Unitario</span></th>
+                        <th className="supermarket-money px-4 py-3 text-right">ITBIS<span className="block text-[9px] tracking-normal font-medium normal-case">{taxIncluded ? 'Incluido · línea' : 'Por línea'}</span></th>
+                        <th className="supermarket-money px-4 py-3 text-right text-gray-800">Total</th>
                         <th className="w-8"></th>
                     </tr>
                 </thead>
@@ -59,7 +62,7 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                         const taxAmount = item.price * item.quantity * (config.taxRate || 0.18);
                         const total = item.price * item.quantity;
                         const hasDiscount = item.originalPrice && item.price < item.originalPrice;
-                        const displayCode = item.barcode || item.variantSku || item.id;
+                        const displayCode = item.barcode || item.variantSku || item.sku || item.id;
                         const isReturn = item.quantity < 0;
 
                         return (
@@ -76,19 +79,20 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                                     {item.quantity}
                                 </td>
 
-                                {/* DESCRIPCION (Combined Name + SKU) */}
+                                {/* Name and variant on top; code on its own secondary line. */}
                                 <td className="px-3 py-3">
                                     <div className="flex flex-col justify-center h-full">
-                                        <div className="flex items-baseline gap-2 overflow-hidden">
-                                            <span className={`font-black text-[1.02rem] truncate ${isReturn ? 'text-red-700' : 'text-gray-800'}`}>
+                                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
+                                            <span className={`font-black text-[1.02rem] break-words min-w-0 ${isReturn ? 'text-red-700' : 'text-gray-800'}`}>
                                                 {item.name}
                                             </span>
-                                            {displayCode && (
-                                                <span className="text-xs text-gray-400 font-mono hidden md:inline shrink-0">
-                                                    {displayCode}
+                                            {item.variantInfo && (
+                                                <span className="supermarket-variant inline-flex rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-sm font-bold text-blue-800">
+                                                    {item.variantInfo}
                                                 </span>
                                             )}
                                         </div>
+                                        {displayCode && <span className="supermarket-code mt-1 block break-all text-xs text-slate-500 font-mono">{displayCode}</span>}
                                         {hasDiscount && (
                                             <span className="text-[11px] text-red-500 font-bold leading-none mt-1">
                                                 Desc. Aplicado
@@ -97,18 +101,18 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                                     </div>
                                 </td>
 
-                                {/* ITBIS */}
-                                <td className="px-3 py-3 text-right font-mono text-gray-500 text-sm tabular-nums hidden sm:table-cell">
-                                    {currencySymbol}{taxAmount.toFixed(2)}
-                                </td>
-
                                 {/* PRECIO */}
-                                <td className="px-3 py-3 text-right font-mono text-gray-700 tabular-nums font-bold text-lg">
+                                <td className={`supermarket-money px-4 py-3 text-right text-gray-700 tabular-nums font-bold ${currencySymbol.length + item.price.toFixed(2).length > 13 ? 'supermarket-money-long' : ''}`}>
                                     {currencySymbol}{item.price.toFixed(2)}
                                 </td>
 
+                                {/* ITBIS */}
+                                <td className={`supermarket-money px-4 py-3 text-right text-gray-500 tabular-nums ${currencySymbol.length + taxAmount.toFixed(2).length > 13 ? 'supermarket-money-long' : ''}`}>
+                                    {currencySymbol}{taxAmount.toFixed(2)}
+                                </td>
+
                                 {/* TOTAL */}
-                                <td className={`px-3 py-3 text-right pr-4 font-black font-mono tabular-nums text-2xl ${isReturn ? 'text-red-600' : 'text-gray-900'}`}>
+                                <td className={`supermarket-money supermarket-line-total px-4 py-3 text-right font-black tabular-nums ${currencySymbol.length + total.toFixed(2).length > 13 ? 'supermarket-money-long' : ''} ${isReturn ? 'text-red-600' : 'text-gray-900'}`}>
                                     {currencySymbol}{total.toFixed(2)}
                                 </td>
 
