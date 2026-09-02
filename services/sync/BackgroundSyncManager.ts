@@ -14,6 +14,11 @@ import {
     transferReceiptService,
     type TransferReceiptQueueItem,
 } from './TransferReceiptService';
+import {
+    getPendingMasterNumberRanges,
+    markNumberedMasterSynced,
+    reportPendingMasterNumberRangeProgress,
+} from './MasterNumberRangeService';
 
 export interface SyncState {
     pendingCount: number;
@@ -361,6 +366,7 @@ class BackgroundSyncManager {
             // 2) Customer mutations
             await this.processCollection<any>('customerMutations', async (item) => {
                 await apiSyncAdapter.pushCustomerMutation(item);
+                if (syncPolicy.resolve().kind === 'ERP_ACTIVE') await markNumberedMasterSynced(item.customer);
             }).catch((error: any) => {
                 collectionErrors.push(`customerMutations: ${error?.message || 'unknown error'}`);
             });
@@ -408,6 +414,12 @@ class BackgroundSyncManager {
                 await (apiSyncAdapter as any).pushOperationalEvents?.([item]);
             }).catch((error: any) => {
                 collectionErrors.push(`loyalty_events: ${error?.message || 'unknown error'}`);
+            });
+
+            // Report range cursors only after the normal master/document queues.
+            // The local row remains pending until the ERP acknowledges it.
+            await reportPendingMasterNumberRangeProgress().catch((error: any) => {
+                collectionErrors.push(`masterNumberRanges: ${error?.message || 'unknown error'}`);
             });
 
             this.updateState({
@@ -617,6 +629,9 @@ class BackgroundSyncManager {
             if (!Number.isFinite(createdAt)) return;
             oldestCreatedAt = oldestCreatedAt === null ? createdAt : Math.min(oldestCreatedAt, createdAt);
         });
+
+        const pendingRanges = await getPendingMasterNumberRanges();
+        count += pendingRanges.length;
 
         syncMetrics.setOutboxState(count, oldestCreatedAt);
         this.updateState({ pendingCount: count });

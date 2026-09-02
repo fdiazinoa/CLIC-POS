@@ -23,6 +23,7 @@ import {
   type RuntimeTerminalRecoveryState,
 } from '../services/setup/erpTerminalSetup';
 import { markSyncDeviceTokenInvalid, persistSyncDeviceToken } from '../services/sync/deviceToken';
+import { persistMasterNumberRangesFromSnapshot } from '../services/sync/MasterNumberRangeService';
 import {
   extractErpRegisterAuth,
   resolveNormalizedRegisterDeviceToken,
@@ -1567,6 +1568,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           initialConfigEtag: initialConfigData.etag || null,
           progress: showProgress ? updateBindingProgress : undefined,
         });
+        await persistMasterNumberRangesFromSnapshot(initialConfigData, resolvedErpTerminalId);
         completed = true;
         if (showProgress) {
           updateBindingProgress({
