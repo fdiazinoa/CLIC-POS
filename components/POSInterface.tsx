@@ -64,6 +64,7 @@ import { syncManager } from '../services/sync/SyncManager';
 import { isSyncFeatureEnabled } from '../services/sync/SyncFeatureFlags';
 import { requestJson } from '../services/network/httpClient';
 import ProductTableSupermarket from './ProductTableSupermarket';
+import SupermarketTicketSummary from './SupermarketTicketSummary';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { printComanda, printPrecuenta } from '../utils/printer';
 import { canStepCartQuantity, isValidCartQuantity, isValidCartQuantityTransition } from '../utils/cartQuantity';
@@ -7767,6 +7768,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                <ProductTableSupermarket
                   cart={processedCart}
                   config={config}
+                  taxIncluded={isTaxIncluded}
                   currencySymbol={baseCurrency.symbol}
                   lastAddedCartId={lastAddedCartId}
                   onRemoveItem={(cartId) => updateCartItem(null, cartId)}
@@ -8117,72 +8119,54 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             )}
 
             {/* Sidebar Footer */}
-            <div className={`flex-none bg-white border-t border-gray-200 p-4 shadow-inner ${isRetailMode ? 'flex flex-row-reverse items-end justify-between gap-8' : 'space-y-3'} ${isMobile ? 'hidden' : ''}`}>
+            <div className={`flex-none bg-white border-t border-gray-200 p-4 shadow-inner ${isRetailMode ? 'supermarket-footer' : 'space-y-3'} ${isMobile ? 'hidden' : ''}`}>
                {/* DESKTOP FOOTER CONTENT (UNCHANGED) */}
                {
                   isRetailMode ? (
                      // --- RETAIL MODE FOOTER (HORIZONTAL) ---
                      <>
-                        {/* RIGHT: PAY & TOTAL */}
-                        <div className="flex items-end gap-5">
-                           <div className="hidden xl:flex flex-col gap-3 rounded-[1.75rem] border border-slate-100 bg-slate-50 px-5 py-4 shadow-sm">
-                              <div className="flex items-end gap-6">
-                                 <div className="text-right">
-                                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Subtotal</p>
-                                    <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartSubtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                                 </div>
-                                 {discountAmount > 0 && (
-                                    <div className="text-right">
-                                       <p className="text-[10px] text-red-400 font-bold uppercase tracking-wider">Descuento</p>
-                                       <p className="text-lg font-bold text-red-500">-{baseCurrency.symbol}{discountAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                                    </div>
-                                 )}
-                                 <div className="text-right">
-                                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Impuestos</p>
-                                    <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartTax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                                 </div>
-                              </div>
-                              <div className="flex items-end justify-between gap-6 border-t border-slate-200 pt-3">
-                                 <div className="text-left">
-                                    <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Total a Pagar</p>
-                                    <p className="text-[10px] font-bold text-gray-400 mt-1">
-                                       {cart.reduce((acc, i) => acc + i.quantity, 0)} Artículos
-                                       {pointsEarned > 0 && <span className="text-purple-500 ml-2">• Ganarás +{pointsEarned} pts</span>}
-                                    </p>
-                                 </div>
-                                 <div className="text-right text-[3rem] font-black text-slate-900 leading-none tracking-tighter">
-                                    {baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                 </div>
-                              </div>
-                           </div>
-
-                           <div className="text-right hidden sm:block xl:hidden mr-1">
-                              <div className="flex items-end justify-end gap-5">
-                                 <div>
-                                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Subtotal</p>
-                                    <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartSubtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                                 </div>
-                                 <div>
-                                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Impuestos</p>
-                                    <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartTax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                                 </div>
-                              </div>
-                              <div className="mt-3 border-t border-slate-200 pt-3">
-                                 <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Total a Pagar</p>
-                                 <div className="text-4xl font-black text-slate-900 leading-none tracking-tighter">
-                                    {baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                 </div>
-                                 <p className="text-[10px] font-bold text-gray-400 mt-1">
-                                    {cart.reduce((acc, i) => acc + i.quantity, 0)} Artículos
-                                    {pointsEarned > 0 && <span className="text-purple-500 ml-2">• Ganarás +{pointsEarned} pts</span>}
-                                 </p>
-                              </div>
-                           </div>
-
-                           <div className="flex items-center gap-4 pl-2">
+                        <div className="supermarket-footer-secondary min-w-0">
+                           <ActionGrid
+                              actionRegion="other"
+                              orientation="horizontal"
+                              onAction={handleGridAction}
+                              config={config}
+                              parkedTicketsCount={parkedTickets.length}
+                              isReturnMode={isReturnMode}
+                              hasCartItems={cart.length > 0}
+                              globalDiscountValue={globalDiscount.value}
+                              showLogout={false}
+                              allowWaitList={!activeTable}
+                              showTakeout={!isKioskMode}
+                              isTakeout={effectiveOrderServiceType === 'TAKEOUT'}
+                           />
+                        </div>
+                        <SupermarketTicketSummary
+                           symbol={baseCurrency.symbol}
+                           subtotal={cartSubtotal}
+                           discount={discountAmount}
+                           tax={cartTax}
+                           total={cartTotal}
+                           units={cart.reduce((acc, item) => acc + item.quantity, 0)}
+                           points={pointsEarned}
+                        />
+                        <div className="supermarket-checkout">
+                           <ActionGrid
+                              actionRegion="ticket"
+                              orientation="horizontal"
+                              onAction={handleGridAction}
+                              config={config}
+                              parkedTicketsCount={parkedTickets.length}
+                              isReturnMode={isReturnMode}
+                              hasCartItems={cart.length > 0}
+                              globalDiscountValue={globalDiscount.value}
+                              showLogout={false}
+                              allowWaitList={!activeTable}
+                           />
+                           <div className="supermarket-checkout-buttons">
                               <button
                                  onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
-                                 className="h-14 min-w-[136px] px-5 rounded-2xl font-black text-base border-2 border-red-100 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2.5 shrink-0"
+                                 className="h-14 min-w-0 px-3 rounded-2xl font-black text-base border-2 border-red-100 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2.5"
                               >
                                  <LogOut size={22} />
                                  <span>Salir</span>
@@ -8202,28 +8186,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     }
                                  }}
                                  disabled={cart.length === 0 || !canCheckoutWithFiscalPolicy}
-                                 className={`h-14 min-w-[228px] px-6 rounded-2xl font-black text-lg shadow-xl hover:scale-[1.05] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 shrink-0 ${!canCheckoutWithFiscalPolicy ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
+                                 className={`h-14 min-w-0 px-3 rounded-2xl font-black text-lg shadow-xl active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 ${!canCheckoutWithFiscalPolicy ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
                               >
                                  <span>{checkoutActionLabel}</span>
                                  <ArrowRight size={24} />
                               </button>
                            </div>
-                        </div>
-
-                        <div className="flex-1 w-full min-w-0 pr-4">
-                           <ActionGrid
-                              orientation="horizontal"
-                              onAction={handleGridAction}
-                              config={config}
-                              parkedTicketsCount={parkedTickets.length}
-                              isReturnMode={isReturnMode}
-                              hasCartItems={cart.length > 0}
-                              globalDiscountValue={globalDiscount.value}
-                              showLogout={false}
-                              allowWaitList={!activeTable}
-                              showTakeout={!isKioskMode}
-                              isTakeout={effectiveOrderServiceType === 'TAKEOUT'}
-                           />
                         </div>
 
                      </>

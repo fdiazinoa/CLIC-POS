@@ -18,6 +18,7 @@ interface ActionGridProps {
     allowWaitList?: boolean;
     showTakeout?: boolean;
     isTakeout?: boolean;
+    actionRegion?: 'all' | 'ticket' | 'other';
 }
 
 const ActionGrid: React.FC<ActionGridProps> = ({
@@ -32,6 +33,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
     allowWaitList = true,
     showTakeout = false,
     isTakeout = false,
+    actionRegion = 'all',
 }) => {
     const isHorizontal = orientation === 'horizontal';
     const shouldRenderLogout = showLogout && isHorizontal;
@@ -45,6 +47,9 @@ const ActionGrid: React.FC<ActionGridProps> = ({
         badge?: number | boolean,
         active: boolean = false,
     ) => {
+        const isTicketAction = ['DISCOUNT', 'COUPON', 'PARK_LIST', 'SAVE'].includes(id);
+        if (actionRegion === 'ticket' && !isTicketAction) return null;
+        if (actionRegion === 'other' && isTicketAction) return null;
         let colors = "";
 
         switch (group) {
@@ -72,6 +77,8 @@ const ActionGrid: React.FC<ActionGridProps> = ({
         return (
             <div key={id} className="relative w-full min-w-0">
                 <button
+                    type="button"
+                    data-action-id={id}
                     disabled={disabled}
                     onClick={() => onAction(id)}
                     className={`
@@ -103,7 +110,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
 
     return (
         <div className={`w-full ${isHorizontal ? 'max-h-[200px] bg-white border-t border-gray-100 p-2 shadow-inner overflow-x-hidden overflow-y-auto custom-scrollbar' : ''}`}>
-            <div className={`mx-auto grid gap-2 ${isHorizontal ? 'grid-cols-4' : 'grid-cols-3'}`}>
+            <div className={`mx-auto grid gap-2 ${actionRegion === 'ticket' ? 'grid-cols-2' : isHorizontal ? 'grid-cols-4' : 'grid-cols-3'}`}>
                 {/* SALES GROUP (Blue) */}
                 {renderButton('DISCOUNT', 'Descuento', <Percent />, 'sales')}
                 {renderButton('COUPON', 'Cupón', <QrCode />, 'sales')}
