@@ -115,7 +115,8 @@ export const DEFAULT_TERMINAL_CONFIG = {
     taxInclusivePrices: true,
     printTaxBreakdown: true,
     returnChangeInBaseCurrency: true,
-    acceptedCurrencies: ['USD', 'EUR']
+    acceptedCurrencies: ['USD', 'EUR'],
+    serviceTaxPolicies: {}
   },
   documentSeries: DEFAULT_DOCUMENT_SERIES,
   documentAssignments: { ...DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS },
@@ -587,6 +588,11 @@ export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
     currencySymbol: '$',
     taxRate: 0.18,
     taxes: INITIAL_TAXES,
+    serviceTaxPolicies: {
+      DINE_IN: { legalTip: { enabled: isFood, percentage: isFood ? 10 : 0 } },
+      TAKEOUT: { legalTip: { enabled: false, percentage: 0 } },
+      DELIVERY: { legalTip: { enabled: false, percentage: 0 } },
+    },
     themeColor: 'blue',
     features: { stockTracking: true },
     ux: DEFAULT_TERMINAL_CONFIG.ux,

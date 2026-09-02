@@ -300,6 +300,7 @@ export const normalizeTransactionForSync = (transaction: Transaction): Transacti
         original_transaction_id: originalTransactionId,
         original_display_id: originalDisplayId,
         service_type: transaction.serviceType || transaction.service_type,
+        service_tax_policy_snapshot: transaction.serviceTaxPolicySnapshot || transaction.service_tax_policy_snapshot,
         settlementCurrencyCode,
         settlementExchangeRate,
         settlementReceivedOriginal,

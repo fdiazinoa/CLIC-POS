@@ -4,6 +4,7 @@ import {
   ServiceTypeTransactionLine,
   Transaction,
   TipConfiguration,
+  ServiceTaxPolicy,
 } from '../types';
 
 const SERVICE_TYPES: OrderServiceType[] = ['DINE_IN', 'TAKEOUT', 'DELIVERY'];
@@ -40,7 +41,7 @@ export const buildServiceTypeReport = (transactions: Transaction[]): {
   const sales = (transactions || []).filter(isSale);
   const buckets = new Map<OrderServiceType, ServiceTypeSummaryLine>(SERVICE_TYPES.map(serviceType => [
     serviceType,
-    { serviceType, transactionCount: 0, total: 0, serviceChargeAmount: 0 },
+    { serviceType, transactionCount: 0, total: 0, taxAmount: 0, serviceChargeAmount: 0 },
   ]));
   const details: ServiceTypeTransactionLine[] = [];
 
@@ -51,6 +52,7 @@ export const buildServiceTypeReport = (transactions: Transaction[]): {
     const bucket = buckets.get(serviceType)!;
     bucket.transactionCount += 1;
     bucket.total += Number(transaction.total || 0);
+    bucket.taxAmount += Number(transaction.taxAmount || 0);
     bucket.serviceChargeAmount += Number(transaction.serviceChargeAmount || 0);
 
     if (serviceType === 'TAKEOUT' || serviceType === 'DELIVERY') {
@@ -70,6 +72,7 @@ export const buildServiceTypeReport = (transactions: Transaction[]): {
       return {
         ...bucket,
         total: Math.round((bucket.total + Number.EPSILON) * 100) / 100,
+        taxAmount: Math.round((bucket.taxAmount + Number.EPSILON) * 100) / 100,
         serviceChargeAmount: Math.round((bucket.serviceChargeAmount + Number.EPSILON) * 100) / 100,
       };
     }),
@@ -91,12 +94,16 @@ export const shouldApplyRestaurantServiceCharge = (input: {
   serviceCharge?: TipConfiguration['serviceCharge'];
   grossAfterDiscount: number;
   guests: number;
+  legalTipPolicy?: ServiceTaxPolicy['legalTip'];
 }): boolean => {
-  const { isRestaurantMode, serviceType, serviceCharge, grossAfterDiscount, guests } = input;
-  if (!isRestaurantMode || !serviceCharge?.enabled || serviceType !== 'DINE_IN') return false;
+  const { isRestaurantMode, serviceType, serviceCharge, legalTipPolicy, grossAfterDiscount, guests } = input;
+  const hasExplicitPolicy = legalTipPolicy !== undefined;
+  const enabled = hasExplicitPolicy ? legalTipPolicy.enabled : serviceCharge?.enabled;
+  if (!enabled) return false;
+  if (!hasExplicitPolicy && (!isRestaurantMode || serviceType !== 'DINE_IN')) return false;
 
-  const totalOver = Number(serviceCharge.applyIfTotalOver || 0);
-  const guestsOver = Number(serviceCharge.applyIfGuestsOver || 0);
+  const totalOver = Number(serviceCharge?.applyIfTotalOver || 0);
+  const guestsOver = Number(serviceCharge?.applyIfGuestsOver || 0);
   if (totalOver === 0 && guestsOver === 0) return true;
 
   return (totalOver > 0 && grossAfterDiscount >= totalOver)

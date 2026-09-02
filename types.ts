@@ -585,6 +585,9 @@ export interface TerminalConfigResolvedSnapshot {
   documents?: TerminalConfigResolvedDocumentsSnapshot;
   catalog?: TerminalConfigResolvedCatalogSnapshot;
   taxes?: TaxDefinition[];
+  financial?: Record<string, any>;
+  serviceTaxPolicies?: ServiceTaxPolicyMap;
+  service_tax_policies?: ServiceTaxPolicyMap;
   /** Promociones ERP → POS (forma camelCase, ver `posPromotionsSnapshot.js`). */
   promotions?: any[];
   loyalty?: TerminalConfigResolvedLoyaltySnapshot;
@@ -762,6 +765,9 @@ export interface TerminalConfig {
     printTaxBreakdown: boolean;
     returnChangeInBaseCurrency: boolean;
     acceptedCurrencies: string[];
+    /** Terminal-specific overrides over the POS-wide service policies. */
+    serviceTaxPolicies?: ServiceTaxPolicyMap;
+    service_tax_policies?: ServiceTaxPolicyMap;
   };
   documentSeries: DocumentSeries[];
   documentAssignments?: Record<string, string>; // Mapeo de Rol -> ID de DocumentSeries maestra
@@ -1117,6 +1123,27 @@ export interface TipConfiguration {
 
 export type OrderServiceType = 'DINE_IN' | 'TAKEOUT' | 'DELIVERY';
 
+/** Fiscal behavior selected when a ticket changes its service type. */
+export interface ServiceTaxPolicy {
+  /**
+   * Allow-list over taxes already assigned to each product. Undefined keeps
+   * the product configuration; an empty array explicitly applies no taxes.
+   */
+  taxIds?: string[];
+  legalTip?: {
+    enabled: boolean;
+    percentage?: number;
+  };
+  updatedAt?: string;
+}
+
+export type ServiceTaxPolicyMap = Partial<Record<OrderServiceType, ServiceTaxPolicy>>;
+
+export interface AppliedServiceTaxPolicySnapshot extends ServiceTaxPolicy {
+  serviceType: OrderServiceType;
+  source: 'TERMINAL' | 'POS' | 'LEGACY';
+}
+
 export interface N8nConfig {
   webhookUrl: string;
   events: {
@@ -1209,6 +1236,8 @@ export interface BusinessConfig {
   currencySymbol: string;
   taxRate: number;
   taxes: TaxDefinition[];
+  serviceTaxPolicies?: ServiceTaxPolicyMap;
+  service_tax_policies?: ServiceTaxPolicyMap;
   themeColor: 'blue' | 'orange' | 'gray';
   features: {
     stockTracking: boolean;
@@ -1830,6 +1859,8 @@ export interface Transaction {
   // Restaurant fields
   serviceType?: OrderServiceType;
   service_type?: OrderServiceType;
+  serviceTaxPolicySnapshot?: AppliedServiceTaxPolicySnapshot;
+  service_tax_policy_snapshot?: AppliedServiceTaxPolicySnapshot;
   serviceChargeAmount?: number;     // Propina Legal (10%)
   voluntaryTipAmount?: number;      // Propina Voluntaria
   orderNumber?: string;
@@ -2760,6 +2791,7 @@ export interface ServiceTypeSummaryLine {
   serviceType: OrderServiceType;
   transactionCount: number;
   total: number;
+  taxAmount: number;
   serviceChargeAmount: number;
 }
 

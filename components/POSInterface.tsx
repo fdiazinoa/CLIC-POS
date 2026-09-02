@@ -111,6 +111,7 @@ import {
 import { resolveDeviceRoleValue } from '../utils/deviceRoleHelpers';
 import { resolveTerminalDeviceProfile } from '../utils/deviceProfile';
 import { shouldApplyRestaurantServiceCharge } from '../utils/orderServiceType';
+import { resolveAppliedServiceTaxPolicy } from '../utils/serviceTaxPolicy';
 import { normalizeProductionOutputMode, resolveProductionOutputTargets } from '../utils/productionOutputMode';
 import { isClientTerminalMode, resolveOperationalApiUrl } from '../utils/masterOperationalApi';
 import ProductionRoutingAssignmentModal, {
@@ -4187,6 +4188,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       [globalDiscount.type, globalDiscount.value, grossLineTotal]
    );
 
+   const tipsConfig = config.tipsConfig;
+   const serviceCharge = tipsConfig?.serviceCharge;
+   const isRecoveredUberOrder = isUberRecoveredReservation(activeRecoveredReservation);
+   const effectiveOrderServiceType: OrderServiceType = isRecoveredUberOrder ? 'DELIVERY' : orderServiceType;
+   const appliedServiceTaxPolicy = useMemo(
+      () => resolveAppliedServiceTaxPolicy(config, activeTerminalConfig, effectiveOrderServiceType),
+      [config.serviceTaxPolicies, config.service_tax_policies, config.tipsConfig, activeTerminalConfig, effectiveOrderServiceType],
+   );
+
    const taxBreakdown = useMemo(() => {
       if (isSelectedCustomerTaxExempt) return [];
       return calculateTaxBreakdownFromItems(processedCart, config, {
@@ -4194,8 +4204,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          isTaxIncluded,
          terminalConfig: activeTerminalConfig,
          taxExempt: isSelectedCustomerTaxExempt,
+         allowedTaxIds: appliedServiceTaxPolicy.taxIds,
       });
-   }, [processedCart, config, discountAmount, isTaxIncluded, activeTerminalConfig, isSelectedCustomerTaxExempt]);
+   }, [processedCart, config, discountAmount, isTaxIncluded, activeTerminalConfig, isSelectedCustomerTaxExempt, appliedServiceTaxPolicy.taxIds]);
 
    const displayTaxBreakdown = useMemo(
       () => consolidateTaxBreakdownForDisplay(taxBreakdown, config.taxes),
@@ -4218,11 +4229,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }));
    }, [displayTaxBreakdown]);
 
-   const tipsConfig = config.tipsConfig;
-   const serviceCharge = tipsConfig?.serviceCharge;
-   const isRecoveredUberOrder = isUberRecoveredReservation(activeRecoveredReservation);
-   const effectiveOrderServiceType: OrderServiceType = isRecoveredUberOrder ? 'DELIVERY' : orderServiceType;
-
    const shouldApplyServiceCharge = useMemo(() => {
       return shouldApplyRestaurantServiceCharge({
          isRestaurantMode,
@@ -4230,8 +4236,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          serviceCharge,
          grossAfterDiscount: grossLineTotal - discountAmount,
          guests: activeTable?.guests || 0,
+         legalTipPolicy: appliedServiceTaxPolicy.legalTip,
       });
-   }, [isRestaurantMode, serviceCharge, grossLineTotal, discountAmount, activeTable, effectiveOrderServiceType]);
+   }, [isRestaurantMode, serviceCharge, grossLineTotal, discountAmount, activeTable, effectiveOrderServiceType, appliedServiceTaxPolicy.legalTip]);
 
    const {
       legalTipRate,
@@ -4240,7 +4247,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       netSubtotal,
       cartTotal,
    } = useMemo(() => {
-      const nextLegalTipRate = shouldApplyServiceCharge ? (serviceCharge?.percentage || 0) / 100 : 0;
+      const nextLegalTipRate = shouldApplyServiceCharge
+         ? Number(appliedServiceTaxPolicy.legalTip?.percentage ?? serviceCharge?.percentage ?? 0) / 100
+         : 0;
       const nextCartTip = (grossLineTotal - discountAmount) * nextLegalTipRate;
 
       let nextCartTotalWithoutTip = 0;
@@ -4261,7 +4270,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          netSubtotal: nextNetSubtotal,
          cartTotal: nextCartTotalWithoutTip + nextCartTip,
       };
-   }, [cartTax, discountAmount, grossLineTotal, isTaxIncluded, serviceCharge?.percentage, shouldApplyServiceCharge]);
+   }, [cartTax, discountAmount, grossLineTotal, isTaxIncluded, serviceCharge?.percentage, shouldApplyServiceCharge, appliedServiceTaxPolicy.legalTip?.percentage]);
 
    // Alias for compatibility if needed, though netSubtotal is what we usually display as "Subtotal"
    const cartSubtotal = grossLineTotal; // This represents the sum of list prices
@@ -4273,13 +4282,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          terminalConfig: activeTerminalConfig,
          absoluteLineValues: true,
          taxExempt: isSelectedCustomerTaxExempt,
+         allowedTaxIds: appliedServiceTaxPolicy.taxIds,
       });
       if (lineTaxBreakdown.length === 0) {
          return 'Sin impuestos';
       }
       const lineTaxAmount = Math.abs(lineTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0));
       return `${lineTaxBreakdown.map((tax) => formatTaxLineLabel(tax)).join(' + ')} (${baseCurrency.symbol}${lineTaxAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`;
-   }, [config, isTaxIncluded, activeTerminalConfig, baseCurrency.symbol, isSelectedCustomerTaxExempt]);
+   }, [config, isTaxIncluded, activeTerminalConfig, baseCurrency.symbol, isSelectedCustomerTaxExempt, appliedServiceTaxPolicy.taxIds]);
    const reservationAdvanceApplied = activeRecoveredReservation
       ? (isRecoveredUberOrder
          ? Math.min(activeRecoveredReservation.prepaidPayment?.amount || activeRecoveredReservation.balancePaid || 0, cartTotal)
@@ -5086,6 +5096,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   isTaxIncluded,
                   terminalConfig: activeTerminalConfig,
                   taxExempt: isSelectedCustomerTaxExempt,
+                  allowedTaxIds: appliedServiceTaxPolicy.taxIds,
                });
                const saleTaxAmount = Math.round((
                   saleTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0)
@@ -5100,6 +5111,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   transactionNetAmount: saleNetAmount,
                   transactionTaxAmount: saleTaxAmount,
                   transactionTotal: saleTotal,
+                  allowedTaxIds: appliedServiceTaxPolicy.taxIds,
                });
                const salePayments = payments.filter(p => !['WALLET', 'ADVANCE'].includes(p.method));
                const salePayableTotal = saleTotal + (voluntaryTip || 0);
@@ -5131,8 +5143,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         payments: salePayments,
                         ...getConsignmentTicketFields(saleItems),
                         consignmentSyncStatus: saleItems.some(item => item.consignmentId) ? 'PENDING' : undefined,
-                        serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
+                        serviceChargeAmount: cartTip,
                         serviceType: effectiveOrderServiceType,
+                        serviceTaxPolicySnapshot: appliedServiceTaxPolicy,
                         voluntaryTipAmount: voluntaryTip,
                         ...saleSettlement,
                         ...couponSyncFields,
@@ -5174,8 +5187,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         ncfType: refundNcf ? 'B04' : undefined,
                         walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
                         walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined,
-                        serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
+                        serviceChargeAmount: cartTip,
                         serviceType: effectiveOrderServiceType,
+                        serviceTaxPolicySnapshot: appliedServiceTaxPolicy,
                         voluntaryTipAmount: voluntaryTip,
                         authorizedById: refundAuthorizedBy?.id,
                         authorizedByName: refundAuthorizedBy?.name
@@ -5290,6 +5304,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      transactionTaxAmount: taxAmount,
                      transactionTotal: documentTotal,
                      taxExempt: isSelectedCustomerTaxExempt,
+                     allowedTaxIds: appliedServiceTaxPolicy.taxIds,
                   })
                   : contextualDocumentItems;
                const documentConsignmentFields = getConsignmentTicketFields(documentItems);
@@ -5351,8 +5366,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      : activeRecoveredReservation ? reservationBalanceDue : undefined,
                   walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
                   walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined,
-                  serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
+                  serviceChargeAmount: cartTip,
                   serviceType: effectiveOrderServiceType,
+                  serviceTaxPolicySnapshot: appliedServiceTaxPolicy,
                   voluntaryTipAmount: voluntaryTip,
                   marketplaceSourceChannel: uberRecoveredOrder ? 'UBER_EATS' : undefined,
                   marketplaceSourceOrderId: uberRecoveredOrder?.sourceOrderId,
@@ -6635,8 +6651,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
             setOrderServiceType(current => current === 'TAKEOUT' ? 'DINE_IN' : 'TAKEOUT');
             setSuccessToast(orderServiceType === 'TAKEOUT'
-               ? 'Ticket cambiado a consumo en mesa'
-               : 'Ticket marcado Para llevar · propina legal RD$0.00');
+               ? 'Ticket cambiado a consumo en local'
+               : 'Ticket marcado Para llevar · política fiscal aplicada');
             setRightSidebarTab('CART');
             break;
          case 'TABLES':
@@ -6706,7 +6722,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             globalDiscountValue={globalDiscount.value}
             showLogout={false}
             allowWaitList={!activeTable}
-            showTakeout={isRestaurantMode}
+            showTakeout={!isKioskMode}
             isTakeout={effectiveOrderServiceType === 'TAKEOUT'}
          />
       </div>
@@ -7643,17 +7659,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                )}
 
-               {activeTable && shouldApplyServiceCharge && (
+               {shouldApplyServiceCharge && (
                   <div className="flex items-center gap-1 rounded-lg border border-blue-100/50 bg-blue-50 px-2 py-1 text-[9px] font-black uppercase tracking-tighter text-blue-600 animate-in fade-in slide-in-from-top-1">
                      <Percent size={10} className="text-blue-500" />
-                     <span>Propina Sugerida {serviceCharge?.percentage}% Activa</span>
+                     <span>Propina legal {appliedServiceTaxPolicy.legalTip?.percentage ?? serviceCharge?.percentage ?? 0}% activa</span>
                   </div>
                )}
 
-               {isRestaurantMode && effectiveOrderServiceType !== 'DINE_IN' && (
+               {effectiveOrderServiceType !== 'DINE_IN' && (
                   <div className="flex items-center gap-1 rounded-lg border border-violet-200 bg-violet-50 px-2 py-1 text-[9px] font-black uppercase tracking-tighter text-violet-700 animate-in fade-in slide-in-from-top-1">
                      <ShoppingBag size={10} />
-                     <span>{effectiveOrderServiceType === 'DELIVERY' ? 'Delivery' : 'Para llevar'} · Propina legal {baseCurrency.symbol}0.00</span>
+                     <span>{effectiveOrderServiceType === 'DELIVERY' ? 'Delivery' : 'Para llevar'} · Política fiscal aplicada</span>
                   </div>
                )}
 
@@ -8205,7 +8221,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               globalDiscountValue={globalDiscount.value}
                               showLogout={false}
                               allowWaitList={!activeTable}
-                              showTakeout={isRestaurantMode}
+                              showTakeout={!isKioskMode}
                               isTakeout={effectiveOrderServiceType === 'TAKEOUT'}
                            />
                         </div>

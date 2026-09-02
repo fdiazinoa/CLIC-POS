@@ -175,6 +175,8 @@ export const buildSalePostedSummary = (transaction: Transaction | UnknownRecord)
         service_charge_amount: hasValue(record.serviceChargeAmount ?? record.service_charge_amount)
             ? numberOrZero(record.serviceChargeAmount ?? record.service_charge_amount)
             : undefined,
+        service_tax_policy_snapshot:
+            record.serviceTaxPolicySnapshot ?? record.service_tax_policy_snapshot ?? undefined,
         item_count: items.length,
         payment_count: payments.length,
         customer_id: firstString(record.customerId, record.customer_id, customer.id) || undefined,
