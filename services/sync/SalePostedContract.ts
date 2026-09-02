@@ -1,4 +1,5 @@
 import type { Transaction } from '../../types';
+import { customerNumberIdentity } from './customerIdentityContract';
 
 export const SALE_POSTED_MONEY_TOLERANCE = 0.05;
 
@@ -180,6 +181,13 @@ export const buildSalePostedSummary = (transaction: Transaction | UnknownRecord)
         item_count: items.length,
         payment_count: payments.length,
         customer_id: firstString(record.customerId, record.customer_id, customer.id) || undefined,
+        customer_code: firstString(record.customer_code, record.customerCode,
+            customerNumberIdentity(customer).customer_code,
+            customerNumberIdentity(customerSnapshot).customer_code) || undefined,
+        customer: customerNumberIdentity(customer).customer_code
+            ? customerNumberIdentity(customer)
+            : customerNumberIdentity(customerSnapshot).customer_code
+                ? customerNumberIdentity(customerSnapshot) : undefined,
         customer_name: firstString(
             record.customerName,
             record.customer_name,

@@ -1792,6 +1792,11 @@ export interface Transaction {
   customerName?: string;
   customerSnapshot?: {
     name: string;
+    customer_code?: string;
+    master_number_range_id?: string;
+    master_number_value?: number;
+    source_terminal_id?: string;
+    created_source?: string;
     taxId?: string;
     address?: string;
     phone?: string;
