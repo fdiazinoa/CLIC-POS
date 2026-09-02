@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import {
    ArrowLeft, Users, UserPlus, Search, Phone, Mail, MapPin,
    Edit2, Trash2, Save, X, FileText, Award, Wallet as WalletIcon,
@@ -35,7 +35,7 @@ import {
 interface CustomerManagementProps {
    customers: Customer[];
    config: BusinessConfig;
-   onAddCustomer: (customer: Customer) => void;
+   onAddCustomer: (customer: Customer) => Promise<void> | void;
    onUpdateCustomer: (customer: Customer) => void;
    onDeleteCustomer: (id: string) => void;
    onSelect?: (customer: Customer) => void; // Prop para modo selección
@@ -68,6 +68,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    const [searchTerm, setSearchTerm] = useState('');
    const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
    const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+   const customerSaveInFlight = useRef(false);
    const [activeProfileTab, setActiveProfileTab] = useState<'HISTORY' | 'WALLET' | 'LOYALTY' | 'CREDIT' | 'AGENDA'>('HISTORY');
    const [editModalTab, setEditModalTab] = useState<'GENERAL' | 'ADDRESSES'>('GENERAL');
    const [isAbonoModalOpen, setIsAbonoModalOpen] = useState(false);
@@ -411,30 +412,38 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       setIsEditModalOpen(true);
    };
 
-   const handleSubmit = (e: React.FormEvent) => {
+   const handleSubmit = async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!formData.name) return;
+      if (!formData.name || customerSaveInFlight.current) return;
+      customerSaveInFlight.current = true;
 
-      const customerPayload = {
-         ...formData,
-         isTemporary: false,
-         defaultNcfType: normalizeCustomerNcfType(formData.defaultNcfType, formData.requiresFiscalInvoice)
-      };
-
-      if (formData.id) {
-         onUpdateCustomer({ ...customerPayload } as Customer);
-      } else {
-         const newCustomer: Customer = {
-            ...customerPayload as Customer,
-            id: Math.random().toString(36).substr(2, 9),
-            createdAt: new Date().toISOString(),
-            totalSpent: 0,
-            lastVisit: new Date().toISOString()
+      try {
+         const customerPayload = {
+            ...formData,
+            isTemporary: false,
+            defaultNcfType: normalizeCustomerNcfType(formData.defaultNcfType, formData.requiresFiscalInvoice)
          };
-         onAddCustomer(newCustomer);
-         setSelectedCustomerId(newCustomer.id);
+
+         if (formData.id && customers.some(customer => customer.id === formData.id)) {
+            await onUpdateCustomer({ ...customerPayload } as Customer);
+         } else {
+            const newCustomer: Customer = {
+               ...customerPayload as Customer,
+               id: formData.id || crypto.randomUUID(),
+               createdAt: new Date().toISOString(),
+               totalSpent: 0,
+               lastVisit: new Date().toISOString()
+            };
+            setFormData(previous => ({ ...previous, id: newCustomer.id }));
+            await onAddCustomer(newCustomer);
+            setSelectedCustomerId(newCustomer.id);
+         }
+         setIsEditModalOpen(false);
+      } catch (error) {
+         alert(error instanceof Error ? error.message : 'No se pudo guardar el cliente.');
+      } finally {
+         customerSaveInFlight.current = false;
       }
-      setIsEditModalOpen(false);
    };
 
    const handleDelete = async (id: string) => {

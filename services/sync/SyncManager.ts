@@ -74,6 +74,7 @@ import {
     shouldRunLegacyAutomaticMasterSweep,
 } from './ErpMasterSyncStrategy';
 import { mergePosCategoryPresentation } from '../../utils/posCatalogPresentation';
+import { persistMasterNumberRangesFromSnapshot } from './MasterNumberRangeService';
 
 export type SyncableCollection =
     | 'products' | 'items' | 'taxes' | 'customers' | 'suppliers' | 'warehouses'
@@ -3388,6 +3389,10 @@ class SyncManager {
         if (!snapshot) {
             return null;
         }
+
+        // Numeric master ranges are independent from the generic document collections.
+        // Their upsert is monotonic, so a stale snapshot can never move a local cursor back.
+        await persistMasterNumberRangesFromSnapshot(snapshot, context.terminalId);
 
         try {
             const applyStartedAt = posCatalogDebugNow();

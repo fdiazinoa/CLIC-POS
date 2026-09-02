@@ -5,8 +5,9 @@ import {
   Monitor, Users, Truck, ShieldCheck, FileText,
   Globe, Database, Activity, Mail, Coins, Grid,
   Cpu, HardDrive, Smartphone, Cloud, Lock, Package, Building2,
-  Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award, Wallet, RefreshCw, Layers, ChefHat, UserCircle, BarChart3, Calendar, MessageCircle, Map as MapIcon, MapPin, PlugZap, ShoppingBag
+  Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award, Wallet, RefreshCw, Layers, ChefHat, UserCircle, BarChart3, Calendar, MessageCircle, Map as MapIcon, MapPin, PlugZap, ShoppingBag, Hash
 } from 'lucide-react';
+import { createNumberedMaster } from '../services/sync/MasterNumberRangeService';
 import {
   BusinessConfig,
   User,
@@ -69,6 +70,7 @@ const ReportDashboard = React.lazy(() => import('./ReportDashboard'));
 const ReportViewer = React.lazy(() => import('./ReportViewer'));
 const SourcingIntelligence = React.lazy(() => import('./SourcingIntelligence'));
 const CompanySettings = React.lazy(() => import('./CompanySettings'));
+const MasterNumberRangeDiagnostics = React.lazy(() => import('./MasterNumberRangeDiagnostics'));
 
 const SettingsModuleFallback: React.FC = () => (
   <div className="flex h-full min-h-[280px] items-center justify-center bg-slate-50">
@@ -105,6 +107,7 @@ interface SettingsProps {
   onUpdateProducts: (products: Product[]) => void;
   onUpdateWarehouses: (warehouses: Warehouse[]) => void;
   onUpdateCustomers?: (customers: Customer[]) => void;
+  onAddCustomer?: (customer: Customer) => Promise<void> | void;
   onRepairLegacyReceivables?: () => Promise<{
     scannedTransactions: number;
     scannedWalletMovements: number;
@@ -133,7 +136,7 @@ interface SettingsProps {
   onUpdateRooms?: (rooms: Room[]) => void;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
+type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'MASTER_NUMBER_RANGES' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -588,6 +591,9 @@ const Settings: React.FC<SettingsProps> = (props) => {
           />
         );
 
+      case 'MASTER_NUMBER_RANGES':
+        return <MasterNumberRangeDiagnostics onClose={() => setCurrentView('HOME')} />;
+
       case 'CUSTOMERS':
         return (
           <CustomerManagement
@@ -599,8 +605,13 @@ const Settings: React.FC<SettingsProps> = (props) => {
             terminalId={props.terminalId || 'T1'}
             collections={props.collections || []}
             onUpdateCollections={(cols) => props.onUpdateCollections?.(cols)}
-            onAddCustomer={(customer) => {
-              const updated = [...(props.customers || []), customer];
+            onAddCustomer={async (customer) => {
+              if (props.onAddCustomer) {
+                await props.onAddCustomer(customer);
+                return;
+              }
+              const numberedCustomer = await createNumberedMaster('CUSTOMER', 'customers', customer, props.terminalId);
+              const updated = [...(props.customers || []), numberedCustomer];
               props.onUpdateCustomers?.(updated);
             }}
             onUpdateCustomer={(customer) => {
@@ -984,6 +995,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     locked={!hasPermission('SETTINGS_ACCESS') || isRepairingReceivables}
                   />
                   <SettingsCard icon={RefreshCw} label="Sincronización" description="Estado de Red y Réplicas" color="bg-indigo-600" onClick={() => setCurrentView('SYNC')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={Hash} label="Rangos de maestros" description="Códigos offline y disponibilidad" color="bg-cyan-700" onClick={() => setCurrentView('MASTER_NUMBER_RANGES')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Cloud} label={isCheckingApkUpdate ? "Buscando APK..." : "Actualizar APK"} description="Buscar y descargar release POS" color="bg-sky-700" onClick={handleManualApkUpdateCheck} locked={!hasPermission('SETTINGS_ACCESS') || isCheckingApkUpdate} />
                   <SettingsCard icon={ShieldAlert} label="Seguridad y Datos" description="Backups y Modo Kiosco" color="bg-red-600" onClick={() => setCurrentView('SECURITY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={History} label="Traza de Auditoría" description="Logs de Operaciones" color="bg-orange-500" onClick={() => setCurrentView('LOGS')} locked={!hasPermission('AUDIT_LOG_VIEW')} />

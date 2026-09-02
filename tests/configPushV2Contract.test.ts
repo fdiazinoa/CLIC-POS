@@ -670,3 +670,45 @@ test('maps promotions, purchase orders and transfers contracts', async () => {
     assert.equal(orders[0].collection, 'purchaseOrders');
     assert.equal(transfers[0].collection, 'transfers');
 });
+
+test('CONFIG_PUSH_V2 incorpora nuevos rangos maestros sin retroceder un cursor consumido', async () => {
+    resetHarness();
+    const { dbAdapter } = await import('../services/db');
+    const { mergeMasterNumberRange } = await import('../services/sync/masterNumberRangeContract');
+    const originalGet = dbAdapter.getCollection;
+    const originalUpsert = dbAdapter.upsertMasterNumberRanges;
+    const ranges = new Map<string, any>();
+    const row = {
+        id: 'range-1', entity_type: 'CUSTOMER', prefix: 'CLI',
+        start_number: 1000, end_number: 1099, next_number: 1000,
+        last_issued_number: 999, padding: 6, status: 'ACTIVE',
+        updated_at: '2026-09-02T15:00:00.000Z',
+    };
+    try {
+        (dbAdapter as any).getCollection = async (collection: string) => clone(collections.get(collection) ?? []);
+        dbAdapter.upsertMasterNumberRanges = async (incoming) => {
+            incoming.forEach(range => ranges.set(range.id, mergeMasterNumberRange(ranges.get(range.id), range)));
+        };
+        const first = await runEvent({
+            id: 'master-ranges-first', scopes: ['terminal_config'], versions: { terminal_config: 20 },
+            domains: { terminal_config: { terminal: { terminal_id: terminalId, config: {} }, resolved: { master_number_ranges: [row] } } },
+        });
+        assert.equal(first.acks[0].status, 'APPLIED');
+        assert.equal(ranges.get('range-1').terminalId, terminalId);
+        ranges.set('range-1', { ...ranges.get('range-1'), nextNumber: 1005, lastIssuedNumber: 1004, progressPending: true });
+        const second = await runEvent({
+            id: 'master-ranges-next', scopes: ['terminal_config'], versions: { terminal_config: 21 },
+            domains: { terminal_config: { terminal: { terminal_id: terminalId, config: {} }, resolved: { master_number_ranges: [
+                row,
+                { ...row, id: 'range-2', start_number: 1100, end_number: 1199, next_number: 1100, last_issued_number: 1099 },
+            ] } } },
+        });
+        assert.equal(second.acks[0].status, 'APPLIED');
+        assert.equal(ranges.get('range-1').nextNumber, 1005);
+        assert.equal(ranges.get('range-2').nextNumber, 1100);
+        assert.ok(dispatchedEvents.some(event => event.type === 'masterNumberRangesUpdated'));
+    } finally {
+        dbAdapter.getCollection = originalGet;
+        dbAdapter.upsertMasterNumberRanges = originalUpsert;
+    }
+});

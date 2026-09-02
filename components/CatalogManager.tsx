@@ -29,6 +29,7 @@ import {
    resolveInventoryProductStockRow,
 } from '../utils/productReferences';
 import { resolveProductImageSrc } from '../utils/entityImage';
+import { createNumberedMaster } from '../services/sync/MasterNumberRangeService';
 
 interface CatalogManagerProps {
    products: Product[];
@@ -1011,8 +1012,12 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          const oldProduct = products.find(p => p.id === savedProduct.id);
          const exists = !!oldProduct;
 
+         if (!exists) {
+            savedProduct = await createNumberedMaster('ITEM', 'products', savedProduct, terminalId);
+         }
+
          // 1. Persist ONLY the modified product
-         await db.saveDocument('products', savedProduct);
+         if (exists) await db.saveDocument('products', savedProduct);
          const productPriceRows = buildProductPriceRowsForProduct(savedProduct, tariffs);
          const existingProductPrices = await db.get('productPrices' as any).catch(() => []) as ProductPrice[];
          const nextProductPrices = [
@@ -1086,7 +1091,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          window.dispatchEvent(new CustomEvent('productPricesUpdated'));
       } catch (error) {
          console.error('❌ CatalogManager: Error saving product', error);
-         alert('No se pudo guardar el producto. Revise la consola para más detalle.');
+         alert(error instanceof Error ? error.message : 'No se pudo guardar el producto. Revise la consola para más detalle.');
       }
    }
 

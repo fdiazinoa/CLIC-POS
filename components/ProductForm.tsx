@@ -1071,7 +1071,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
   const [formData, setFormData] = useState<Product>(() => {
     const base = initialData || {
-      id: `PRD_${Date.now()}`,
+      id: crypto.randomUUID(),
       name: '',
       type: 'PRODUCT',
       category: 'General',

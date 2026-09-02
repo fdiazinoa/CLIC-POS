@@ -52,6 +52,8 @@ import {
 } from '../types';
 import { authenticatedActivityTracker } from '../services/sync/AuthenticatedActivityTracker';
 import { syncMetrics } from '../services/sync/SyncMetrics';
+import { persistMasterNumberRangesFromSnapshot } from '../services/sync/MasterNumberRangeService';
+import { extractMasterNumberRanges } from '../services/sync/masterNumberRangeContract';
 
 type TenantIdentity = {
     tenantId?: string | null;
@@ -765,7 +767,8 @@ const applyConfigPushV2Domain = async (
     rollbackJournal: ConfigPushV2RollbackJournal
 ): Promise<string[]> => {
     const writes = await buildConfigPushV2DomainWrites(scope, domainPayload);
-    if (writes.length === 0) {
+    const containsMasterNumberRanges = extractMasterNumberRanges(domainPayload).length > 0;
+    if (writes.length === 0 && !containsMasterNumberRanges) {
         throw new Error(`Dominio ${scope} no contiene colecciones aplicables`);
     }
 
@@ -779,6 +782,9 @@ const applyConfigPushV2Domain = async (
             await assertConfigPushV2ConfigPersisted(write.value);
         }
         touchedCollections.push(write.collection);
+    }
+    if (containsMasterNumberRanges) {
+        touchedCollections.push('masterNumberRanges');
     }
     return touchedCollections;
 };
@@ -1062,6 +1068,15 @@ const processConfigPushV2Event = async (
                         scopes: [scope],
                         count: touchedForScope.length,
                     });
+                }
+                // Do not activate a range from an event whose later domain fails.
+                // The independent monotonic range transaction runs only after all
+                // ordinary domain writes have been validated successfully.
+                const masterNumberRanges = staleScopes.flatMap(scope => extractMasterNumberRanges(domains[scope]));
+                if (masterNumberRanges.length > 0) {
+                    await persistMasterNumberRangesFromSnapshot(
+                        { resolved: { master_number_ranges: masterNumberRanges } }, terminalId,
+                    );
                 }
             } catch (error) {
                 await rollbackConfigPushV2Collections(rollbackJournal);

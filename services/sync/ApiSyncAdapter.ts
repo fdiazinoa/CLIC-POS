@@ -3172,6 +3172,26 @@ class ApiSyncAdapter {
         }
     }
 
+    async pushMasterNumberRangeProgress(
+        terminalId: string,
+        payload: Record<string, unknown>,
+    ): Promise<{ httpStatus: number; data: Record<string, any> }> {
+        const normalizedTerminalId = String(terminalId || '').trim();
+        if (!normalizedTerminalId) throw new Error('MASTER_NUMBER_RANGE_TERMINAL_ID_MISSING');
+        try {
+            return await this.postOperationalPayload(
+                `/terminals/${encodeURIComponent(normalizedTerminalId)}/master-number-ranges/progress`,
+                payload,
+                { includeHttpStatus: true, reauthenticateOn401: false },
+            );
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error || 'Master range progress failed');
+            const statusMatch = message.match(/(?:failed(?: after re-auth)?):\s*(\d{3})/i);
+            if (statusMatch) (error as any).httpStatus = Number(statusMatch[1]);
+            throw error;
+        }
+    }
+
     private async getOperationalPayload<T = any>(
         path: string,
         operation: OperationalSyncOperation = 'PULL_CONFIG'

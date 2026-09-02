@@ -33,7 +33,7 @@ interface SupplyChainManagerProps {
    onUpdateOrder: (order: PurchaseOrder) => void;
    onReceiveStock: (items: PurchaseOrderItem[], orderId?: string) => void;
    onAdjustStock: (adjustments: { productId: string; quantity: number }[]) => void;
-   onAddSupplier: (supplier: Supplier) => void;
+   onAddSupplier: (supplier: Supplier) => Promise<void> | void;
    onUpdateSupplier: (supplier: Supplier) => void;
    onDeleteSupplier: (id: string) => Promise<void>;
    onDeleteOrder: (id: string) => Promise<void>;
@@ -1364,14 +1364,18 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                         Cancelar
                      </button>
                      <button
-                        onClick={() => {
+                        onClick={async () => {
                            const isNew = !safeSuppliers.find(s => s.id === editingSupplier.id);
-                           if (isNew) {
-                              onAddSupplier(editingSupplier);
-                           } else {
-                              onUpdateSupplier(editingSupplier);
+                           try {
+                              if (isNew) {
+                                 await onAddSupplier(editingSupplier);
+                              } else {
+                                 onUpdateSupplier(editingSupplier);
+                              }
+                              setEditingSupplier(null);
+                           } catch (error) {
+                              alert(error instanceof Error ? error.message : 'No se pudo crear el proveedor.');
                            }
-                           setEditingSupplier(null);
                         }}
                         className="px-10 py-4 bg-indigo-600 text-white font-black uppercase tracking-widest text-xs rounded-2xl shadow-xl shadow-indigo-100 hover:bg-indigo-500 transition-all flex items-center gap-2"
                      >
@@ -1391,7 +1395,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
             <button
                onClick={() => {
                   const newSup: Supplier = {
-                     id: `SUP-${Date.now()}`,
+                     id: crypto.randomUUID(),
                      name: '',
                      taxId: '',
                      email: '',

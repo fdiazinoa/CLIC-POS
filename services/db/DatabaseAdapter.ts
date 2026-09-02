@@ -29,6 +29,41 @@ export interface FinancialCommitInput {
     paymentIntentIds?: string[];
 }
 
+export type MasterNumberRangeEntityType = 'CUSTOMER' | 'SUPPLIER' | 'ITEM';
+
+export interface MasterNumberRangeRecord {
+    id: string;
+    entityType: MasterNumberRangeEntityType;
+    prefix: string;
+    startNumber: number;
+    endNumber: number;
+    nextNumber: number;
+    lastIssuedNumber: number | null;
+    padding: number;
+    status: string;
+    updatedAt: string;
+    lastReportedNumber: number | null;
+    progressPending: boolean;
+    blockedReason?: string | null;
+    /** Local ownership scope, taken from the validated terminal snapshot context. */
+    terminalId?: string | null;
+}
+
+export interface NumberedMasterCommitInput {
+    entityType: MasterNumberRangeEntityType;
+    collectionName: 'customers' | 'suppliers' | 'products';
+    document: { id: string; [key: string]: any };
+    sourceTerminalId: string;
+    localTerminalId?: string;
+}
+
+export interface NumberedMasterCommitResult {
+    document: { id: string; [key: string]: any };
+    range: MasterNumberRangeRecord | null;
+    issuedNumber: number | null;
+    code: string;
+}
+
 export interface DatabaseAdapter {
     connect(): Promise<void>;
     disconnect(): Promise<void>;
@@ -51,6 +86,12 @@ export interface DatabaseAdapter {
     // Android SQLite only. POS-2A uses this boundary to commit the financial
     // documents and their durable outbox events in one database transaction.
     commitFinancialTransaction?(input: FinancialCommitInput): Promise<void>;
+
+    getMasterNumberRanges?(): Promise<MasterNumberRangeRecord[]>;
+    upsertMasterNumberRanges?(ranges: MasterNumberRangeRecord[]): Promise<void>;
+    commitNumberedMasterCreation?(input: NumberedMasterCommitInput): Promise<NumberedMasterCommitResult>;
+    markMasterNumberRangeProgressReported?(rangeId: string, lastIssuedNumber: number): Promise<void>;
+    blockMasterNumberRange?(rangeId: string, reason: string): Promise<void>;
 
     // Stats
     getStats?(): Promise<{ type: string; size: number; tables: number }>;
