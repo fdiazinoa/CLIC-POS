@@ -5,7 +5,7 @@ import { Supplier } from '../types';
 interface SupplierSelectorProps {
     selectedSupplierId: string;
     onSelect: (supplier: Supplier) => void;
-    onAddSupplier: (supplier: Supplier) => void;
+    onAddSupplier: (supplier: Supplier) => Promise<void> | void;
 }
 
 const SupplierSelector: React.FC<SupplierSelectorProps> = ({
@@ -67,29 +67,27 @@ const SupplierSelector: React.FC<SupplierSelectorProps> = ({
     const handleQuickAdd = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
-            const response = await fetch('/api/suppliers', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    ...quickAddForm,
-                    isActive: true,
-                    paymentTermDays: 0
-                })
-            });
-            const data = await response.json();
-            if (response.ok) {
-                onAddSupplier(data);
-                onSelect(data);
-                setIsQuickAddOpen(false);
-                setIsOpen(false);
-                setQuickAddForm({ name: '', taxId: '', phone: '' });
-                // Trigger success toast if available in parent
-            } else {
-                alert(data.message || 'Error al crear proveedor');
-            }
+            const supplier: Supplier = {
+                ...quickAddForm,
+                id: crypto.randomUUID(),
+                email: '',
+                contactPerson: '',
+                paymentMethod: 'CASH',
+                paymentTermDays: 0,
+                creditLimit: 0,
+                balance: 0,
+                leadTimeDays: 7,
+                isActive: true,
+            };
+            await onAddSupplier(supplier);
+            setSuppliers(previous => [...previous.filter(entry => entry.id !== supplier.id), supplier]);
+            onSelect(supplier);
+            setIsQuickAddOpen(false);
+            setIsOpen(false);
+            setQuickAddForm({ name: '', taxId: '', phone: '' });
         } catch (error) {
             console.error('Error creating supplier:', error);
-            alert('Error de conexión');
+            alert(error instanceof Error ? error.message : 'No se pudo crear el proveedor.');
         }
     };
 

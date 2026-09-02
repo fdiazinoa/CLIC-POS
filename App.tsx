@@ -67,6 +67,7 @@ import { buildPaymentPostedPayload, buildSalePostedPayload } from './services/sy
 import { paymentIntentService } from './services/payments/PaymentIntentService';
 import { syncTriggerCoordinator, type SyncTriggerReason } from './services/sync/SyncTriggerCoordinator';
 import { queueCustomerMutation } from './services/sync/CustomerSyncQueue';
+import { createNumberedMaster } from './services/sync/MasterNumberRangeService';
 import {
   queuePosUserRosterChanges,
   queueUnsyncedLocalPosUsers,
@@ -8284,6 +8285,8 @@ const AppContent: React.FC = () => {
   };
 
   const handleAddCustomer = async (customer: Customer) => {
+    const numberedCustomer = await createNumberedMaster('CUSTOMER', 'customers', customer);
+    customer = numberedCustomer;
     const mergeCustomer = (source: Customer[]) => [
       ...source.filter(existing => String(existing.id) !== String(customer.id)),
       customer,
@@ -8319,7 +8322,7 @@ const AppContent: React.FC = () => {
       }
     }
 
-    await queueCustomerMutation('UPSERT', customer);
+    if (!customer.master_number_range_id) await queueCustomerMutation('UPSERT', customer);
     backgroundSyncManager.triggerSync().catch(console.error);
   };
 
@@ -11244,6 +11247,7 @@ const AppContent: React.FC = () => {
             onUpdateProducts={async (p) => { setProducts(p); /* db.save('products', p) removed for efficiency */ syncManager.broadcastChange('products', null, 'UPDATE').catch(console.error); }}
             onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
             onUpdateCustomers={async (c) => { setCustomers(c); await db.save('customers', c); }}
+            onAddCustomer={handleAddCustomer}
             onRepairLegacyReceivables={handleRepairLegacyReceivables}
             onAdjustStock={async (adjustments) => {
               const pairedTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
@@ -11312,6 +11316,7 @@ const AppContent: React.FC = () => {
             onUpdateProducts={async (p) => { setProducts(p); await db.save('products', p); }}
             onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
             onUpdateCustomers={async (c) => { setCustomers(c); await db.save('customers', c); }}
+            onAddCustomer={handleAddCustomer}
             collections={collections}
             onUpdateCollections={setCollections}
             onRepairLegacyReceivables={handleRepairLegacyReceivables}
@@ -11742,9 +11747,9 @@ const AppContent: React.FC = () => {
               // backgroundSyncManager.triggerSync already called above
             }}
             onAddSupplier={async (s) => {
-              setSuppliers(prev => [...prev, s]);
-              await db.saveDocument('suppliers', s);
-              syncManager.broadcastChange('suppliers', s, 'CREATE').catch(console.error);
+              const numberedSupplier = await createNumberedMaster('SUPPLIER', 'suppliers', s);
+              setSuppliers(prev => [...prev, numberedSupplier]);
+              syncManager.broadcastChange('suppliers', numberedSupplier, 'CREATE').catch(console.error);
             }}
             onUpdateSupplier={async (s) => {
               setSuppliers(prev => prev.map(sup => sup.id === s.id ? s : sup));
