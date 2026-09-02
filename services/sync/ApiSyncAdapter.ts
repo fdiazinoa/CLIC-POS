@@ -49,6 +49,7 @@ import {
     ERP_SUPPORTED_MASTER_COLLECTIONS,
 } from './ErpMasterSyncContract';
 import { assertOperationalAcknowledgement } from './operationalAcknowledgement';
+import { assertCustomerNumberAcknowledgement, buildCustomerMutationEnvelope } from './customerIdentityContract';
 import {
     POS_SYNC_CAPABILITY_VERSIONS,
     VARIANT_PROMOTIONS_CAPABILITY,
@@ -5262,16 +5263,10 @@ class ApiSyncAdapter {
             const customerId = String(mutation?.customerId || mutation?.customer?.id || '').trim();
             if (!customerId) throw new Error('CUSTOMER_ID_MISSING');
             const acknowledgement = await this.postOperationalPayload('/customers/upsert', {
-                items: [{
-                    source_customer_mutation_id: mutation.id,
-                    source_customer_id: customerId,
-                    source_terminal_id: mutation.terminalId,
-                    operation: mutation.operation || 'UPSERT',
-                    customer: mutation.customer,
-                    created_at: mutation.createdAt,
-                }],
+                items: [buildCustomerMutationEnvelope({ ...mutation, customerId, operation: mutation.operation || 'UPSERT' })],
             });
             assertOperationalAcknowledgement(acknowledgement, String(mutation.id), 'CUSTOMER');
+            assertCustomerNumberAcknowledgement(acknowledgement, mutation.customer);
             console.log(`📤 ApiSyncAdapter: Pushed customer mutation ${mutation.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing customer mutation:', error);

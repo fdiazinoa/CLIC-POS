@@ -9,6 +9,7 @@ import {
   resolveEffectiveSeriesIdForDocumentType,
 } from '../utils/documentSeriesIdentity';
 import { normalizeDocumentSeries } from '../utils/terminalConfigSnapshot';
+import { withCustomerNumberSnapshot } from './sync/customerIdentityContract';
 
 const EPSILON = 0.01;
 
@@ -363,6 +364,11 @@ class TransactionService {
         }
         if (!data.seriesId) {
             throw new Error('seriesId is required');
+        }
+
+        if (data.customerId) {
+            const customer = await db.getDocument('customers', data.customerId) as Customer | null;
+            data = withCustomerNumberSnapshot(data, customer);
         }
 
         const resolvedSeriesId = await this.resolveSeriesIdForEmission(

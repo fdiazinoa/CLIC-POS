@@ -67,6 +67,7 @@ import { buildPaymentPostedPayload, buildSalePostedPayload } from './services/sy
 import { paymentIntentService } from './services/payments/PaymentIntentService';
 import { syncTriggerCoordinator, type SyncTriggerReason } from './services/sync/SyncTriggerCoordinator';
 import { queueCustomerMutation } from './services/sync/CustomerSyncQueue';
+import { withCustomerNumberSnapshot } from './services/sync/customerIdentityContract';
 import { createNumberedMaster } from './services/sync/MasterNumberRangeService';
 import {
   queuePosUserRosterChanges,
@@ -9045,6 +9046,11 @@ const AppContent: React.FC = () => {
   }, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction]);
 
   const handleTransactionComplete = async (txn: Transaction) => {
+    // Cover checkout paths that construct a transaction without transactionService.
+    if (txn.customerId) {
+      const customer = await db.getDocument('customers', txn.customerId) as Customer | null;
+      txn.customerSnapshot = withCustomerNumberSnapshot(txn, customer).customerSnapshot;
+    }
     // Get current terminal ID before persisting.
     const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
     const terminalId = currentTerminal?.id || 'T1';

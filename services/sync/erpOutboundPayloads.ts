@@ -3,6 +3,7 @@
  * Technical IDs are always taken from persistent POS fields (id, source_*); display_id is never used as identity.
  */
 import type { CashMovement, InventoryLedgerEntry, Transaction, ZReport } from '../../types';
+import { customerNumberIdentity } from './customerIdentityContract';
 import {
     normalizeCashMovementForSync,
     normalizeInventoryLedgerForSync,
@@ -165,6 +166,8 @@ export function buildErpSalePayload(transaction: Transaction): Transaction & {
     currency_code: string;
     exchange_rate?: number;
     customer_ref?: string;
+    customer_code?: string;
+    customer?: ReturnType<typeof customerNumberIdentity>;
     original_source_transaction_id?: string;
     original_source_display_id?: string;
 } {
@@ -180,6 +183,7 @@ export function buildErpSalePayload(transaction: Transaction): Transaction & {
           }
         : {};
     const isCreditNote = !isFiscalDisabled && (base.documentType === 'REFUND' || base.ncfType === 'B04' || base.ncfType === 'E34');
+    const customerIdentity = customerNumberIdentity(base.customerSnapshot);
     return {
         ...base,
         ...fiscalFields,
@@ -187,6 +191,10 @@ export function buildErpSalePayload(transaction: Transaction): Transaction & {
         currency_code: pickTransactionCurrency(base),
         exchange_rate: pickTransactionExchangeRate(base),
         customer_ref: base.customerId || undefined,
+        ...(customerIdentity.customer_code ? {
+            customer_code: customerIdentity.customer_code,
+            customer: { ...(base as Transaction & { customer?: Record<string, unknown> }).customer, ...customerIdentity },
+        } : {}),
         ...(isCreditNote
             ? {
                   original_source_transaction_id: base.original_transaction_id,
