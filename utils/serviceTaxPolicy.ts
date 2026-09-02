@@ -5,6 +5,7 @@ import {
   ServiceTaxPolicy,
   ServiceTaxPolicyMap,
   TerminalConfig,
+  TaxDefinition,
 } from '../types';
 
 const SERVICE_TYPES: OrderServiceType[] = ['DINE_IN', 'TAKEOUT', 'DELIVERY'];
@@ -133,3 +134,43 @@ export const serviceTaxPolicyEquals = (
   right: ServiceTaxPolicyMap | undefined,
 ): boolean => JSON.stringify(normalizeServiceTaxPolicies(left) || {})
   === JSON.stringify(normalizeServiceTaxPolicies(right) || {});
+
+export const resolveEditableServiceTaxPolicies = (
+  config: Pick<BusinessConfig, 'serviceTaxPolicies' | 'service_tax_policies' | 'tipsConfig'>,
+): ServiceTaxPolicyMap => (
+  normalizeServiceTaxPolicies(config.serviceTaxPolicies ?? config.service_tax_policies) || {
+    DINE_IN: {
+      legalTip: {
+        enabled: Boolean(config.tipsConfig?.serviceCharge?.enabled),
+        percentage: Number(config.tipsConfig?.serviceCharge?.percentage || 0),
+      },
+    },
+    TAKEOUT: { legalTip: { enabled: false, percentage: 0 } },
+    DELIVERY: { legalTip: { enabled: false, percentage: 0 } },
+  }
+);
+
+export const buildServiceTaxPolicyConfigUpdate = (
+  config: BusinessConfig,
+  policies: ServiceTaxPolicyMap,
+  taxes: TaxDefinition[] = config.taxes || [],
+): BusinessConfig => {
+  const validTaxIds = new Set((taxes || []).map((tax) => String(tax.id || '').trim()).filter(Boolean));
+  const normalizedPolicies = normalizeServiceTaxPolicies(policies) || {};
+  const sanitizedPolicies = Object.fromEntries(
+    Object.entries(normalizedPolicies).map(([serviceType, policy]) => [
+      serviceType,
+      {
+        ...policy,
+        ...(Object.prototype.hasOwnProperty.call(policy || {}, 'taxIds')
+          ? { taxIds: (policy?.taxIds || []).filter((taxId) => validTaxIds.has(taxId)) }
+          : {}),
+      },
+    ]),
+  ) as ServiceTaxPolicyMap;
+
+  return {
+    ...config,
+    serviceTaxPolicies: sanitizedPolicies,
+  };
+};

@@ -184,7 +184,7 @@ const DEVICE_FORM_FACTOR_OPTIONS = [
    { value: DeviceFormFactor.KIOSK, label: 'Kiosco', description: 'Pantalla fija de autoservicio.', icon: Tv },
 ];
 
-type TerminalTab = 'IDENTITY' | 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'DOCUMENTS' | 'OFFLINE' | 'INVENTORY' | 'LAN_BINDING' | 'CATALOG' | 'DEVICE_ROLE';
+type TerminalTab = 'IDENTITY' | 'OPERATIONAL' | 'SERVICE_TYPES' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'DOCUMENTS' | 'OFFLINE' | 'INVENTORY' | 'LAN_BINDING' | 'CATALOG' | 'DEVICE_ROLE';
 
 const NCF_LABELS: Record<NCFType, string> = {
    'B01': 'Crédito Fiscal',
@@ -542,6 +542,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                {[
                   { id: 'IDENTITY', label: 'Identidad', icon: UserCircle },
                   { id: 'OPERATIONAL', label: 'Operación', icon: Zap },
+                  { id: 'SERVICE_TYPES', label: 'Tipo de servicio', icon: ShoppingBag },
                   { id: 'FISCAL', label: 'Fiscal', icon: Landmark },
                   { id: 'DOCUMENTS', label: 'Documentos', icon: FileText },
                   { id: 'SESSION', label: 'Sesión', icon: Clock },
@@ -987,9 +988,9 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                            </div>
                         )}
 
-                        {activeTab === 'FISCAL' && (
+                        {activeTab === 'SERVICE_TYPES' && (
                            <div className="space-y-6">
-                              <h3 className="text-2xl font-black text-slate-800 flex items-center gap-3"><Landmark className="text-indigo-600" /> Fiscal</h3>
+                              <h3 className="text-2xl font-black text-slate-800 flex items-center gap-3"><ShoppingBag className="text-violet-600" /> Tipo de servicio</h3>
                               <div className="rounded-[2rem] border border-emerald-100 bg-emerald-50/40 p-6 space-y-4">
                                  <div>
                                     <h4 className="text-sm font-black uppercase tracking-[0.16em] text-slate-800">Política por tipo de servicio</h4>
@@ -1006,6 +1007,12 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     allowInherit
                                  />
                               </div>
+                           </div>
+                        )}
+
+                        {activeTab === 'FISCAL' && (
+                           <div className="space-y-6">
+                              <h3 className="text-2xl font-black text-slate-800 flex items-center gap-3"><Landmark className="text-indigo-600" /> Fiscal</h3>
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                  {['B01', 'B02', 'B04', 'B14', 'B15'].map(type => (
                                     <div key={type} className="p-5 bg-slate-50 rounded-3xl space-y-3">
