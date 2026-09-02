@@ -1,10 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Percent, Plus, Save, ShieldAlert, Trash2 } from 'lucide-react';
-import { BusinessConfig, Product, ServiceTaxPolicyMap, TaxDefinition } from '../types';
+import { BusinessConfig, Product, TaxDefinition } from '../types';
 import { apiSyncAdapter } from '../services/sync/ApiSyncAdapter';
 import { syncPolicy } from '../services/sync/SyncProfile';
-import ServiceTaxPolicyEditor from './ServiceTaxPolicyEditor';
-import { normalizeServiceTaxPolicies } from '../utils/serviceTaxPolicy';
 
 interface TaxSettingsProps {
   config: BusinessConfig;
@@ -42,19 +40,6 @@ const normalizePercentInput = (value: string): number => {
   return parsed / 100;
 };
 
-const resolvePolicyDraft = (config: BusinessConfig): ServiceTaxPolicyMap => (
-  normalizeServiceTaxPolicies(config.serviceTaxPolicies ?? config.service_tax_policies) || {
-    DINE_IN: {
-      legalTip: {
-        enabled: Boolean(config.tipsConfig?.serviceCharge?.enabled),
-        percentage: Number(config.tipsConfig?.serviceCharge?.percentage || 0),
-      },
-    },
-    TAKEOUT: { legalTip: { enabled: false, percentage: 0 } },
-    DELIVERY: { legalTip: { enabled: false, percentage: 0 } },
-  }
-);
-
 const TaxSettings: React.FC<TaxSettingsProps> = ({
   config,
   products,
@@ -66,12 +51,10 @@ const TaxSettings: React.FC<TaxSettingsProps> = ({
 }) => {
   const [draftTaxes, setDraftTaxes] = useState<TaxDefinition[]>(config.taxes || []);
   const [defaultTaxId, setDefaultTaxId] = useState<string>(resolveInitialDefaultTaxId(config));
-  const [draftServicePolicies, setDraftServicePolicies] = useState<ServiceTaxPolicyMap>(() => resolvePolicyDraft(config));
 
   useEffect(() => {
     setDraftTaxes(config.taxes || []);
     setDefaultTaxId(resolveInitialDefaultTaxId(config));
-    setDraftServicePolicies(resolvePolicyDraft(config));
   }, [config]);
 
   const productUsageByTaxId = useMemo(() => {
@@ -148,17 +131,6 @@ const TaxSettings: React.FC<TaxSettingsProps> = ({
       : normalizedTaxes.find((tax) => tax.type === 'VAT')?.rate || 0;
 
     const remainingTaxIds = new Set(normalizedTaxes.map((tax) => tax.id));
-    const normalizedServicePolicies = Object.fromEntries(
-      Object.entries(draftServicePolicies).map(([serviceType, policy]) => [
-        serviceType,
-        {
-          ...policy,
-          ...(Object.prototype.hasOwnProperty.call(policy || {}, 'taxIds')
-            ? { taxIds: (policy?.taxIds || []).filter((taxId) => remainingTaxIds.has(taxId)) }
-            : {}),
-        },
-      ]),
-    ) as ServiceTaxPolicyMap;
     const fallbackTaxId =
       normalizedTaxes.find((tax) => tax.type === 'EXEMPT')?.id ||
       primaryTax?.id ||
@@ -196,9 +168,8 @@ const TaxSettings: React.FC<TaxSettingsProps> = ({
         ...config,
         taxRate: nextTaxRate,
         taxes: normalizedTaxes,
-        serviceTaxPolicies: normalizedServicePolicies,
       }));
-      alert('Configuración fiscal guardada correctamente.');
+      alert('Configuración de impuestos guardada correctamente.');
     } catch (error: any) {
       alert(`No se pudieron sincronizar los impuestos: ${error?.message || 'error desconocido'}`);
     }
@@ -249,20 +220,6 @@ const TaxSettings: React.FC<TaxSettingsProps> = ({
             <Save size={18} />
             Guardar Cambios
           </button>
-        </div>
-
-        <div className="mb-6 rounded-[2rem] border border-emerald-100 bg-emerald-50/40 p-6 md:p-8 shadow-sm">
-          <div className="mb-5">
-            <h2 className="text-xl font-black text-slate-800">Política fiscal por tipo de servicio</h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Define el máximo de impuestos y la propina legal para En local, Para llevar y Delivery. Los artículos exentos continúan exentos.
-            </p>
-          </div>
-          <ServiceTaxPolicyEditor
-            taxes={draftTaxes}
-            value={draftServicePolicies}
-            onChange={setDraftServicePolicies}
-          />
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-[1.4fr_0.8fr] gap-6">
