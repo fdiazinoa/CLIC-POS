@@ -5,6 +5,8 @@ import {
    ToggleLeft, ToggleRight, Trash2, Save, MapPin, Phone, Hash
 } from 'lucide-react';
 import { BusinessConfig, ReceiptConfig, CompanyInfo } from '../types';
+import PrintCopiesStepper from './PrintCopiesStepper';
+import { normalizePrintCopies } from '../utils/printCopies';
 
 interface ReceiptDesignerProps {
    config: BusinessConfig;
@@ -117,10 +119,9 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
 
    const handleCopiesChange = (
       key: keyof NonNullable<ReceiptConfig['documentCopies']>,
-      rawValue: string,
+      value: number,
    ) => {
-      const parsed = Number(rawValue);
-      const copies = Number.isFinite(parsed) ? Math.min(10, Math.max(1, Math.trunc(parsed))) : 1;
+      const copies = normalizePrintCopies(value);
       setLocalReceipt(prev => ({
          ...prev,
          documentCopies: {
@@ -258,26 +259,20 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
 
                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {COPY_FIELDS.map(field => (
-                     <label
+                     <div
                         key={field.key}
-                        className="flex items-center justify-between gap-4 p-3 bg-gray-50 rounded-xl border border-gray-200"
+                        className="flex flex-wrap items-center justify-between gap-3 p-3 bg-gray-50 rounded-xl border border-gray-200"
                      >
                         <span className="min-w-0">
                            <span className="block text-sm font-bold text-gray-700">{field.label}</span>
                            <span className="block text-[10px] text-gray-500">{field.description}</span>
                         </span>
-                        <input
-                           type="number"
-                           inputMode="numeric"
-                           min={1}
-                           max={10}
-                           step={1}
-                           aria-label={`Copias de ${field.label}`}
+                        <PrintCopiesStepper
+                           label={field.label}
                            value={localReceipt.documentCopies?.[field.key] ?? 1}
-                           onChange={event => handleCopiesChange(field.key, event.target.value)}
-                           className="w-16 shrink-0 rounded-lg border border-gray-300 bg-white px-2 py-2 text-center text-base font-black text-slate-800 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 outline-none"
+                           onChange={copies => handleCopiesChange(field.key, copies)}
                         />
-                     </label>
+                     </div>
                   ))}
                </div>
             </div>
