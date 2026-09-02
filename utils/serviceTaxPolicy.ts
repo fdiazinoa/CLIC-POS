@@ -133,4 +133,3 @@ export const serviceTaxPolicyEquals = (
   right: ServiceTaxPolicyMap | undefined,
 ): boolean => JSON.stringify(normalizeServiceTaxPolicies(left) || {})
   === JSON.stringify(normalizeServiceTaxPolicies(right) || {});
-
