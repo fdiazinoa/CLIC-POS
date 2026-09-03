@@ -1,3 +1,4 @@
+import { allowsDefaultPaymentMethods } from './utils/erpPaymentMethods';
 import { createStartupTrace } from './utils/startupTrace';
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
@@ -1654,7 +1655,7 @@ const resolveKioskPaymentMethods = (config: BusinessConfig, customer?: Customer 
       { key: 'CASH', id: 'CASH', type: 'CASH', label: 'Efectivo', iconName: 'Banknote' },
   ];
 
-  const methods: KioskResolvedPaymentMethod[] = enabledMethods.length === 0
+  const methods: KioskResolvedPaymentMethod[] = enabledMethods.length === 0 && allowsDefaultPaymentMethods(config)
     ? fallbackMethods
     : enabledMethods.map((method) => ({
       key: method.id || `${method.type}-${method.name}`,
@@ -1668,7 +1669,7 @@ const resolveKioskPaymentMethods = (config: BusinessConfig, customer?: Customer 
 
   const walletBalance = Number(customer?.wallet?.balance || 0);
   const hasWalletMethod = methods.some((method) => method.type === 'WALLET');
-  if (customer?.wallet?.status === 'ACTIVE' && walletBalance > 0 && !hasWalletMethod) {
+  if (customer?.wallet?.status === 'ACTIVE' && walletBalance > 0 && !hasWalletMethod && allowsDefaultPaymentMethods(config)) {
     methods.push({
       key: 'WALLET',
       id: 'WALLET',

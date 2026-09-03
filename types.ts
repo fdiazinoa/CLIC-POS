@@ -1247,6 +1247,7 @@ export interface BusinessConfig {
   companyInfo: CompanyInfo;
   currencies: CurrencyConfig[];
   paymentMethods: PaymentMethodDefinition[];
+  paymentMethodsSource?: 'ERP';
   integrations?: PaymentIntegrationDefinition[];
   terminals: { id: string; config: TerminalConfig }[];
   tariffs: Tariff[];

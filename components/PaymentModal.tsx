@@ -1,3 +1,4 @@
+import { allowsDefaultPaymentMethods } from '../utils/erpPaymentMethods';
 
 import React, { useState, useEffect, useMemo } from 'react';
 import {
@@ -330,14 +331,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          };
       });
 
-      const methods: ResolvedPaymentMethod[] = fromConfig.length > 0 ? fromConfig : [
+      const methods: ResolvedPaymentMethod[] = fromConfig.length > 0 || !allowsDefaultPaymentMethods(config) ? fromConfig : [
          { key: 'CASH', id: 'CASH', type: 'CASH' as PaymentMethod, label: 'Efectivo', iconName: 'Banknote', Icon: Banknote },
          { key: 'CARD', id: 'CARD', type: 'CARD' as PaymentMethod, label: 'Tarjeta', iconName: 'CreditCard', Icon: CreditCard },
          { key: 'QR', id: 'QR', type: 'QR' as PaymentMethod, label: 'Digital', iconName: 'QrCode', Icon: QrCode }
       ];
 
       const hasWalletMethod = methods.some(m => m.type === 'WALLET');
-      if (customer?.wallet && !hasWalletMethod) {
+      if (customer?.wallet && !hasWalletMethod && allowsDefaultPaymentMethods(config)) {
          methods.push({
             key: 'WALLET',
             id: 'WALLET',
@@ -349,7 +350,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
       }
 
       return methods;
-   }, [config?.paymentMethods, config?.integrations, customer?.wallet]);
+   }, [config?.paymentMethods, config?.paymentMethodsSource, config?.integrations, customer?.wallet]);
 
    const selectPaymentMethod = (method: ResolvedPaymentMethod) => {
       setActiveMethodKey(method.key);
@@ -382,7 +383,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    const typedAmountInBase = typedAmountInSelectedCurrency > 0
       ? parseFloat((typedAmountInSelectedCurrency * selectedCurrency.rate).toFixed(2))
       : 0;
-   const canFinalizeWithTypedAmount = remaining > 0.01 && typedAmountInBase >= (remaining - 0.01);
+   const canFinalizeWithTypedAmount = Boolean(activePaymentMethod) && remaining > 0.01 && typedAmountInBase >= (remaining - 0.01);
    const canFinalize = remaining <= 0.01 || canFinalizeWithTypedAmount;
    const activeIsCxCCredit = activeRuntimeMethod === 'CREDIT';
    const activeIsIntegratedCard = activePaymentMethod?.definition?.type === 'CARD'
@@ -1437,6 +1438,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
             <div className="flex-1 flex flex-col bg-white overflow-hidden min-h-0">
                {/* Payment Methods */}
                <div className="flex flex-wrap p-3 md:p-4 gap-2 md:gap-3 shrink-0 max-h-[150px] overflow-y-auto no-scrollbar">
+                  {configuredMethods.length === 0 && <p role="status" className="w-full p-3 text-sm text-gray-600">No hay formas de pago habilitadas.</p>}
                   {configuredMethods.map(method => {
                      const methodRuntimeType = resolvePaymentMethodTypeForRuntime(method.type, method.label, method.id);
                      const methodIsCredit = methodRuntimeType === 'CREDIT';
@@ -1541,8 +1543,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
 
                   <button
                      onClick={() => handleAddPayment()}
-                     disabled={(!isOnline && !isMaster && activeRequiresOnline) || isProcessingGateway || isFinalizing}
-                     className={`row-span-2 min-h-[104px] rounded-2xl md:rounded-[2rem] font-black shadow-xl flex flex-col items-center justify-center gap-1 md:gap-2 ${(!isOnline && !isMaster && activeRequiresOnline) || isProcessingGateway || isFinalizing ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${themeBgClass} text-white active:scale-95 hover:brightness-110`}`}
+                     disabled={!activePaymentMethod || (!isOnline && !isMaster && activeRequiresOnline) || isProcessingGateway || isFinalizing}
+                     className={`row-span-2 min-h-[104px] rounded-2xl md:rounded-[2rem] font-black shadow-xl flex flex-col items-center justify-center gap-1 md:gap-2 ${!activePaymentMethod || (!isOnline && !isMaster && activeRequiresOnline) || isProcessingGateway || isFinalizing ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${themeBgClass} text-white active:scale-95 hover:brightness-110`}`}
                   >
                      <Plus size={28} className="md:w-8 md:h-8" />
                      <span className="text-[10px] tracking-widest uppercase">

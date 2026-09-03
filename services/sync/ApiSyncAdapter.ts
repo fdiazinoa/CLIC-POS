@@ -1,3 +1,4 @@
+import { readErpPaymentMethodsSnapshot } from '../../utils/erpPaymentMethods';
 import { Product } from '../../types';
 import {
     buildErpCashMovementPayload,
@@ -3191,6 +3192,11 @@ class ApiSyncAdapter {
             if (statusMatch) (error as any).httpStatus = Number(statusMatch[1]);
             throw error;
         }
+    }
+
+    async pullPaymentMethodsSnapshot(): Promise<unknown[]> {
+        const payload = await this.getOperationalPayload('/collections/paymentMethods/data', 'PULL_MASTERS');
+        return readErpPaymentMethodsSnapshot(payload);
     }
 
     private async getOperationalPayload<T = any>(

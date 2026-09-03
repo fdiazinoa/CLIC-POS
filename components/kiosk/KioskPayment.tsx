@@ -180,15 +180,8 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
     const total = totals?.total ?? (cartGrossTotal + tax);
     const taxLabel = totals?.taxLabel || (totals?.taxIncluded ? 'ITBIS incluido' : 'ITBIS');
     const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
-    const availablePaymentMethods = useMemo(
-        () => paymentMethods.length > 0
-            ? paymentMethods
-            : [
-                { key: 'CARD', id: 'CARD', type: 'CARD' as PaymentMethod, label: 'Tarjeta' },
-                { key: 'CASH', id: 'CASH', type: 'CASH' as PaymentMethod, label: 'Efectivo' },
-            ],
-        [paymentMethods]
-    );
+    // The parent resolves legacy defaults; an authoritative empty list stays empty.
+    const availablePaymentMethods = paymentMethods;
     const walletBalance = Number(selectedCustomer?.wallet?.balance || 0);
     const hasWallet = selectedCustomer?.wallet?.status === 'ACTIVE' && walletBalance > 0;
 
