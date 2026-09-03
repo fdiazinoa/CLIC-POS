@@ -45,6 +45,7 @@ import { validateTerminalDocument } from '../utils/validation';
 import { isSessionExpired } from '../utils/session';
 import { FiscalRangeDGII } from '../types';
 import { parseScaleBarcode } from '../utils/barcodeParser';
+import { focusSalesScannerInput } from '../utils/globalBarcodeCapture';
 import { transactionService } from '../services/transactionService';
 import { resolveTerminalDocumentSeriesId, validateTerminalSeries } from '../utils/seriesValidation';
 import { applyPromotions } from '../utils/promotionEngine';
@@ -3691,11 +3692,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       // the whole catalog on every hardware scan.
       const match = findProductByAnyCode(trimmed);
       if (match) {
+         setSearchTerm('');
          const hasConfiguredVariant = Boolean(match.selectedVariant || match.modifiers?.length);
          if (!hasConfiguredVariant && ((match.product.variants || []).length > 0 || (match.product.attributes || []).length > 0)) {
             handleProductClick(match.product);
          } else {
-            addToCart(match.product, match.quantity, match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo);
+            addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo);
          }
          setErrorToast(`Producto agregado: ${match.product.name}`);
          setTimeout(() => setErrorToast(null), 1500);
@@ -3711,9 +3713,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             setShowReturnModal(true);
          }
       }
-   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, transactionByScanCode]);
+   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, transactionByScanCode, isReturnMode]);
 
    const isAnyModalOpen = !!(
+      showSafetyGate ||
+      showDiscountModal ||
+      showParkAliasModal ||
+      showConsignmentModal ||
+      showSupervisorAuth ||
+      productionRoutingPrompt ||
       showServiceTypeDialog ||
       showPaymentModal ||
       showSplitModal ||
@@ -3734,6 +3742,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       showRecoverReservationModal ||
       supervisorModalProps.isOpen
    );
+
+   useEffect(() => {
+      if (isAnyModalOpen) return;
+      let timer: ReturnType<typeof setTimeout>;
+      const restoreScannerFocus = () => {
+         clearTimeout(timer);
+         // Wait for the click handler to open any modal before checking guards.
+         timer = setTimeout(() => focusSalesScannerInput(document), 0);
+      };
+      restoreScannerFocus();
+      window.addEventListener('pointerup', restoreScannerFocus);
+      return () => {
+         clearTimeout(timer);
+         window.removeEventListener('pointerup', restoreScannerFocus);
+      };
+   }, [isAnyModalOpen, isRetailMode]);
 
    useEffect(() => {
       if (isAnyModalOpen) return;
@@ -6733,6 +6757,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    return (
       <div
          ref={posRootRef}
+         data-pos-scanner-enabled={!isAnyModalOpen ? 'true' : 'false'}
          className={`clic-pos-device-shell fixed inset-0 w-full overflow-hidden bg-gray-50 flex font-sans select-none text-gray-900 ${isTabletProfile ? 'clic-pos-tablet-shell' : ''}`}
          data-device-form-factor={activeDeviceProfile.formFactor}
          data-device-orientation={activeDeviceProfile.orientation}
@@ -7059,6 +7084,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <Search className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                      <input
                         ref={searchInputRef}
+                        data-barcode-scanner-target="true"
                         type="text"
                         inputMode="search"
                         enterKeyHint="search"
@@ -7481,6 +7507,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </button>
                         <input
                            ref={retailSearchInputRef}
+                           data-barcode-scanner-target="true"
                            type="text"
                            inputMode="search"
                            enterKeyHint="search"
