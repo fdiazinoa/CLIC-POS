@@ -186,3 +186,9 @@ test('pairing y full pull usan la reconciliación protegida', () => {
   assert.match(appSource, /removeDefaultSeedUsers: isErpDirectBinding/);
   assert.match(appSource, /ERP returned no POS users; preserving local operators and default roster/);
 });
+
+test('el arranque solicita explícitamente el padrón POS autoritativo de la terminal', () => {
+  assert.match(appSource, /forceRemoteFetch: true,[\s\S]*forceFullCatalog: true,[\s\S]*masterScopes: \['pos_users', 'pos_roles'\]/);
+  assert.match(appSource, /const refreshedPosUsers = await db\.get\('users'\)/);
+  assert.match(appSource, /setUsers\(refreshedPosUsers\)/);
+});
