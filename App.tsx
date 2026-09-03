@@ -7051,6 +7051,9 @@ const AppContent: React.FC = () => {
         && !activeTableEditLockRef.current
         && resolvePosSalesStartView(incomingConfig, currentTerminal.config) === 'TABLE_MAP'
       ) {
+        await fetchTables().catch((error) => {
+          console.warn('Failed to preload tables before applying the restaurant start view:', error);
+        });
         setCurrentView('TABLE_MAP');
       }
 
@@ -10810,7 +10813,7 @@ const AppContent: React.FC = () => {
           config: getCurrentTerminal()!.config as any,
           availableUsers: users,
           subVertical: config.subVertical,
-          onLogin: (u: User) => {
+          onLogin: async (u: User) => {
             setCurrentUser(u);
             const role = getCurrentDeviceRole();
             const terminal = getCurrentTerminal();
@@ -10821,7 +10824,13 @@ const AppContent: React.FC = () => {
             else if (role === DeviceRole.PRICE_CHECKER) setCurrentView('CHECKER_SCAN');
             else {
               // Multi-Vertical Startup Flow
-              setCurrentView(resolvePosSalesStartView(config, terminal?.config));
+              const salesStartView = resolvePosSalesStartView(config, terminal?.config);
+              if (salesStartView === 'TABLE_MAP') {
+                await fetchTables().catch((error) => {
+                  console.warn('Failed to preload tables after restaurant login:', error);
+                });
+              }
+              setCurrentView(salesStartView);
             }
           }
         };

@@ -50,3 +50,12 @@ test('ERP startup work waits until the local UI is ready and leaves an operator 
   assert.match(appSource, /markPosInteractionActivity\(5000\)/);
   assert.match(appSource, /refreshErpStartupSecurity\(finalConfig, \{ deferDuringSale: true \}\)/);
 });
+
+test('restaurant login preloads tables before presenting the floor map', () => {
+  const loginStart = appSource.indexOf('onLogin: async (u: User) =>');
+  const tableCase = appSource.indexOf("case 'TABLE_MAP':", loginStart);
+  const loginBlock = appSource.slice(loginStart, tableCase);
+  assert.ok(loginStart >= 0 && tableCase > loginStart);
+  assert.match(loginBlock, /if \(salesStartView === 'TABLE_MAP'\) \{\s*await fetchTables\(\)/);
+  assert.ok(loginBlock.indexOf('await fetchTables()') < loginBlock.indexOf('setCurrentView(salesStartView)'));
+});
