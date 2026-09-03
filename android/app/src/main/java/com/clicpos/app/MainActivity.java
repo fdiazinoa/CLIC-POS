@@ -135,6 +135,16 @@ public class MainActivity extends BridgeActivity {
 
     private class AndroidAppBridge {
         @JavascriptInterface
+        public void recordStartupStage(String stage, int elapsedMs) {
+            if (stage == null || !stage.matches("[A-Z_]{1,40}")
+                    || elapsedMs < 0 || elapsedMs > 300000) {
+                return;
+            }
+            // This release trace deliberately excludes URLs, payloads and identity data.
+            Log.i("CLICPOS_BOOT", "stage=" + stage + " elapsedMs=" + elapsedMs);
+        }
+
+        @JavascriptInterface
         public String getLaunchContext() {
             return activityRecreated ? "activity_recreated" : "fresh_start";
         }
