@@ -3633,6 +3633,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // --- BARCODE SCANNER LOGIC ---
    const processBarcode = useCallback((code: string) => {
       const trimmed = code.trim();
+      if (!trimmed) return;
+      // A hardware scan is consumed even when routing/lookup finds no match.
+      setSearchTerm('');
 
       if (routeScannedCoupon(trimmed)) return;
 
@@ -3711,8 +3714,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (txnFound) {
             setReturnInvoiceId(txnFound.id);
             setShowReturnModal(true);
+            return;
          }
       }
+      setErrorToast('Código no encontrado');
+      setTimeout(() => setErrorToast(null), 2000);
    }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, transactionByScanCode, isReturnMode]);
 
    const isAnyModalOpen = !!(

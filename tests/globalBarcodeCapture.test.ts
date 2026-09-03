@@ -18,10 +18,12 @@ function harness(t: TestContext) {
     };
     const scans: string[] = [];
     const body = { tagName: 'BODY', dataset: {}, value: '' };
-    const search = { tagName: 'INPUT', dataset: { barcodeScannerTarget: 'true' }, value: '' };
+    const search = { tagName: 'INPUT', dataset: { barcodeScannerTarget: 'true' }, value: '',
+        ownerDocument: { createEvent: () => ({ initEvent() {} }) },
+        dispatchEvent: () => true,
+    };
     const cleanup = attachGlobalBarcodeCapture(win as unknown as Window, { onScan: code => {
         scans.push(code);
-        search.value = ''; // React POS clears search after a matched scan.
     } });
     t.after(cleanup);
     const send = (name: string, props: any = {}) => {
@@ -98,6 +100,44 @@ test('repeated HID scans of same SKU are not deduplicated', t => {
     h.burst('987654321'); h.key('Enter');
     t.mock.timers.tick(300);
     assert.equal(h.scans.length, 2);
+});
+
+test('unknown IME code is consumed before another scan without catalog cleanup', t => {
+    const h = harness(t);
+    let controlledUpdates = 0;
+    h.search.dispatchEvent = () => {
+        controlledUpdates++;
+        h.input(null); // Clearing dispatch must not become another scan.
+        return true;
+    };
+    for (const code of ['999999999991', '999999999992', '999999999992']) {
+        h.search.value += code;
+        h.input(code);
+        t.mock.timers.tick(300);
+        assert.equal(h.search.value, '');
+        assert.equal(h.key('Enter', h.search).prevented, true);
+    }
+    assert.deepEqual(h.scans, ['999999999991', '999999999992', '999999999992']);
+    assert.equal(controlledUpdates, 3);
+});
+
+test('focused HID sequential scans clear consumed text for Enter, Tab and idle', t => {
+    const h = harness(t);
+    for (const suffix of ['Enter', 'Tab', 'idle']) {
+        h.burst('987654321', h.search);
+        if (suffix !== 'idle') h.key(suffix, h.search);
+        t.mock.timers.tick(300);
+        assert.equal(h.search.value, '');
+    }
+    assert.deepEqual(h.scans, ['987654321', '987654321', '987654321']);
+});
+
+test('slow manual search is neither consumed nor cleared', t => {
+    const h = harness(t);
+    h.burst('chocolate', h.search, 150);
+    t.mock.timers.tick(300);
+    assert.equal(h.search.value, 'chocolate');
+    assert.deepEqual(h.scans, []);
 });
 
 test('late suffix after global idle does not dispatch twice', t => {
@@ -179,6 +219,8 @@ test('POS marks both search inputs, blocks modal capture and preserves return qu
     assert.match(pos, /focusSalesScannerInput\(document\)/);
     const process = pos.slice(pos.indexOf('const processBarcode ='), pos.indexOf('const isAnyModalOpen'));
     assert.match(process, /setSearchTerm\(''\)/);
+    assert.ok(process.indexOf("setSearchTerm('')") < process.indexOf('routeScannedCoupon(trimmed)'));
+    assert.match(process, /setErrorToast\('Código no encontrado'\)/);
     assert.match(process, /isReturnMode \? -1 : 1/);
 });
 

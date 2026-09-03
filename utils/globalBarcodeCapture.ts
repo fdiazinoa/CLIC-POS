@@ -32,6 +32,7 @@ export function attachGlobalBarcodeCapture(win: Window, options: BarcodeCaptureO
     let lastAt = 0;
     let burst = 0;
     let atomic = false;
+    let clearingInput = false;
     let completed: { target: HTMLElement | null; code: string; at: number } | undefined;
     const reset = () => {
         clearTimeout(timer);
@@ -48,8 +49,26 @@ export function attachGlobalBarcodeCapture(win: Window, options: BarcodeCaptureO
     const emit = () => {
         if (!eligible(target) || code.trim().length < 3) { cancel(); return false; }
         const value = code.trim();
-        completed = { target, code: value, at: Date.now() };
+        const scannedTarget = target;
         reset();
+        // Consuming a scan must not depend on a catalog match. Clear the native
+        // input AND notify controlled React inputs before routing the barcode.
+        // Otherwise an unknown SKU remains and the next scan is concatenated.
+        if (scannedTarget?.tagName === 'INPUT' && scannedTarget.dataset.barcodeScannerTarget === 'true') {
+            const input = scannedTarget as HTMLInputElement;
+            if (input.value.trim() === value) {
+                const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value')?.set;
+                if (setter) setter.call(input, '');
+                else input.value = '';
+                clearingInput = true;
+                try {
+                    const event = input.ownerDocument.createEvent('Event');
+                    event.initEvent('input', true, false);
+                    input.dispatchEvent(event);
+                } finally { clearingInput = false; }
+            }
+        }
+        completed = { target: scannedTarget, code: value, at: Date.now() };
         options.onScan(value);
         return true;
     };
@@ -91,6 +110,7 @@ export function attachGlobalBarcodeCapture(win: Window, options: BarcodeCaptureO
         schedule();
     };
     const onInput = (event: Event) => {
+        if (clearingInput) return;
         const el = event.target as HTMLInputElement | null;
         if (el?.tagName !== 'INPUT' || el.dataset.barcodeScannerTarget !== 'true') { cancel(); return; }
         const input = event as InputEvent;
