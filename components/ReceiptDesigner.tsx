@@ -7,6 +7,7 @@ import {
 import { BusinessConfig, ReceiptConfig, CompanyInfo } from '../types';
 import PrintCopiesStepper from './PrintCopiesStepper';
 import { normalizePrintCopies } from '../utils/printCopies';
+import { formatReceiptVariant } from '../utils/receiptVariant';
 
 interface ReceiptDesignerProps {
    config: BusinessConfig;
@@ -23,7 +24,7 @@ const PREVIEW_ITEMS = [
       isWeight: true,
       discount: 0.50,
       tax: 1.54,
-      variant: 'Marinado Especial',
+      variant: 'Preparación: Marinado Especial',
       seller: 'Ana P.',
       note: 'Entregar troceado',
       img: 'https://images.unsplash.com/photo-1587593810167-a84920ea0781?q=80&w=50&auto=format&fit=crop'
@@ -72,6 +73,7 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
       showSerialNumbers: config.receiptConfig?.showSerialNumbers ?? false,
       showLotNumbers: config.receiptConfig?.showLotNumbers ?? false,
       showOrderNumber: config.receiptConfig?.showOrderNumber ?? false,
+      showVariantLabels: config.receiptConfig?.showVariantLabels ?? false,
       documentCopies: {
          invoice: config.receiptConfig?.documentCopies?.invoice ?? 1,
          creditNote: config.receiptConfig?.documentCopies?.creditNote ?? 1,
@@ -233,8 +235,11 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                   <ToggleSwitch label="Código QR Factura" checked={localReceipt.showQr || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showQr: v }))} />
                   <ToggleSwitch label="Imprimir No. Orden" checked={localReceipt.showOrderNumber || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showOrderNumber: v }))} />
                   <ToggleSwitch label="Imprimir No. Serie" checked={localReceipt.showSerialNumbers || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showSerialNumbers: v }))} />
+                  <ToggleSwitch label="Mostrar nombres de variantes" checked={localReceipt.showVariantLabels || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showVariantLabels: v }))} />
                   <ToggleSwitch label="Imprimir Lote" checked={localReceipt.showLotNumbers || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showLotNumbers: v }))} />
                </div>
+
+               <p className="text-xs text-gray-500 mb-4">Variantes: Azul / L. Con nombres: Color: Azul / Talla: L.</p>
 
                <div>
                   <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 ml-1">Mensaje en Pie de Ticket</label>
@@ -333,7 +338,7 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
 
                            {item.variant && (
                               <div className="text-[10px] italic">
-                                 Opciones: {item.variant}
+                                 {formatReceiptVariant(item.variant, localReceipt.showVariantLabels)}
                               </div>
                            )}
 

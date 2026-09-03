@@ -479,6 +479,7 @@ export interface ReceiptConfig {
   showSerialNumbers?: boolean; // NEW: Toggle printing serial numbers
   showLotNumbers?: boolean; // NEW: Toggle printing lot numbers
   showOrderNumber?: boolean;
+  showVariantLabels?: boolean; // Default: print only variant values
   documentCopies?: {
     invoice?: number;
     creditNote?: number;

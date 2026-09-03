@@ -10,6 +10,7 @@ import { getTerminalSnapshotSellers, resolveTerminalSellerName } from './termina
 import { normalizePrintCopies, resolveConfiguredPrintCopies, resolveTransactionPrintKind } from './printCopies';
 import { resolveGlobalDiscountLabel } from './globalDiscountPresentation';
 import { resolveReceiptCouponCodes } from './receiptCouponPresentation';
+import { formatReceiptVariant, receiptModifiersWithoutVariant } from './receiptVariant';
 
 const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -393,6 +394,8 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 ? `<br/>${itemTaxBreakdown.map(tax => `${formatTaxLineLabel(tax)}: ${currencySymbol}${Number(tax.amount || 0).toFixed(2)}`).join('<br/>')}`
                 : '';
             const lineDiscount = resolveLineDiscountPresentation(item);
+            const variantText = formatReceiptVariant(item.variantInfo, receiptConfig?.showVariantLabels);
+            const modifiers = receiptModifiersWithoutVariant(item.modifiers, item.variantInfo);
 
             const trackingHtml = [];
             if (item.trackingData && item.trackingData.length > 0) {
@@ -424,7 +427,8 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                                     ${item.quantity} x ${currencySymbol}${(lineDiscount.hasDiscount ? lineDiscount.originalUnitPrice : lineDiscount.finalUnitPrice).toFixed(2)}
                                     ${lineDiscount.hasDiscount ? `<br/><strong>Descuento artículo (${lineDiscount.discountPercentageLabel}): -${currencySymbol}${lineDiscount.discountAmount.toFixed(2)}</strong>` : ''}
                                     ${lineDiscount.hasDiscount ? `<br/><strong>Precio final: ${currencySymbol}${lineDiscount.finalLineTotal.toFixed(2)}</strong>` : ''}
-                                    ${item.modifiers ? `<br/>Op: ${item.modifiers.join(', ')}` : ''}
+                                    ${variantText ? `<br/>${escapeHtml(variantText)}` : ''}
+                                    ${modifiers.length ? `<br/>Op: ${escapeHtml(modifiers.join(', '))}` : ''}
                                     ${taxLineHtml || `<br/>Impuestos: ${currencySymbol}${iTax.toFixed(2)}`}
                                     ${sellerNameHtml}
                                     ${hasTrackingHtml ? `<br/>${trackingHtml.join('<br/>')}` : ''}

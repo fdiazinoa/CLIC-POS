@@ -7,6 +7,7 @@ import { resolveLineDiscountPresentation } from '../../utils/lineDiscountPresent
 import { resolveTerminalDisplayName } from '../../utils/transactionHistoryPresentation';
 import { resolveGlobalDiscountLabel } from '../../utils/globalDiscountPresentation';
 import { resolveReceiptCouponCodes } from '../../utils/receiptCouponPresentation';
+import { formatReceiptVariant } from '../../utils/receiptVariant';
 import { getCloseReceiptSummary, closeTaxLabel } from '../../utils/closeReceiptSummary';
 
 export interface EscPosLabelRecord {
@@ -502,8 +503,9 @@ export const buildEscPosTicketPayload = (
       );
     }
 
-    if (item.variantInfo) {
-      pushTextLines(chunks, splitLines(`Variante: ${item.variantInfo}`, width));
+    const variantText = formatReceiptVariant(item.variantInfo, config.receiptConfig?.showVariantLabels);
+    if (variantText) {
+      pushTextLines(chunks, splitLines(variantText, width));
     }
     if (item.note) {
       pushTextLines(chunks, splitLines(`Nota: ${item.note}`, width));
