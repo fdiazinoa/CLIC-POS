@@ -26,6 +26,8 @@ test('startup manifest is owned by the ERP lifecycle without a duplicate boot ca
 test('background config and print retries defer while POS input is active', () => {
   assert.match(syncSource, /deferDuringSale\?: boolean/);
   assert.match(syncSource, /if \(options\?\.deferDuringSale\) \{\s*await waitForPosSaleIdle\(\);/);
+  assert.match(syncSource, /syncTerminalManifestInBackground[\s\S]*deferDuringSale: true/);
+  assert.match(syncSource, /lastBackgroundTerminalManifestSyncAt < 60_000/);
   assert.match(appSource, /buildTerminalConfigRefreshRequest\(detail\)[\s\S]*deferDuringSale: true/);
   assert.match(appSource, /if \(!isDataLoaded \|\| isPosSaleActive\(\)\) return;/);
   assert.match(appSource, /addEventListener\(POS_SALE_ACTIVITY_EVENT, wakeQueue as EventListener\)/);

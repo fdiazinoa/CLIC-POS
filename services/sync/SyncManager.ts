@@ -362,6 +362,7 @@ class SyncManager {
     private readonly IMAGE_SYNC_INTERVAL_MS = 180000;
     private readonly IMAGE_SYNC_BATCH_SIZE = 40;
     private terminalManifestSyncInFlight = false;
+    private lastBackgroundTerminalManifestSyncAt = 0;
     private readyToSellStartedAt = 0;
     private readyToSellState: {
         readyToSell: boolean;
@@ -2924,16 +2925,23 @@ class SyncManager {
         }
     ): Promise<BusinessConfig | null> {
         const startedAt = Date.now();
+        const reason = options?.reason || 'periodic_manifest';
+        const isExplicitRefresh = reason === 'manual_sync' || reason === 'force_sync';
+        if (!isExplicitRefresh && startedAt - this.lastBackgroundTerminalManifestSyncAt < 60_000) {
+            return null;
+        }
         try {
             const result = await this.reconcileTerminalManifest(baseConfig ?? null, {
                 skipIfStartupCompleted: false,
                 markStartupCompleted: false,
                 bootstrapBlocks: Boolean(options?.bootstrapBlocks),
+                deferDuringSale: true,
             });
+            this.lastBackgroundTerminalManifestSyncAt = Date.now();
             try { await this.refreshErpPaymentMethods(); }
             catch (error) { console.warn('Payment methods refresh failed; keeping saved methods:', error); }
             console.info('[SYNC_FALLBACK]', {
-                reason: options?.reason || 'periodic_manifest',
+                reason,
                 mechanism: 'terminal_manifest',
                 legacy_collection_sweep: false,
                 avoided_metadata_requests: ERP_SUPPORTED_MASTER_COLLECTIONS.size,
@@ -2943,7 +2951,7 @@ class SyncManager {
             return result ? (await db.get('config') as unknown as BusinessConfig) || result : result;
         } catch (error) {
             console.warn('[SYNC_FALLBACK]', {
-                reason: options?.reason || 'periodic_manifest',
+                reason,
                 mechanism: 'terminal_manifest',
                 legacy_collection_sweep: false,
                 result: 'FAILED',
