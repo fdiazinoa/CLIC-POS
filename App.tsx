@@ -6401,13 +6401,22 @@ const AppContent: React.FC = () => {
             await syncManager.initialize(finalConfig, effectivePairedTerminal.id);
             markBootStage('SYNC_INITIALIZED');
 
+            // null means the attempt failed; [] is a completed authoritative empty roster.
+            let startupErpUsers: User[] | null = null;
             try {
-              const refreshedTerminalConfig = await syncManager.refreshTerminalResolvedConfig(undefined, {
-                baseConfig: finalConfig,
-                dispatchEvent: false,
-                requestTimeoutMs: 8_000,
-                supplementalMode: 'background',
-              });
+              let refreshedTerminalConfig: BusinessConfig | null;
+              if (isErpSetupMode) {
+                const security = await syncManager.refreshErpStartupSecurity(finalConfig);
+                startupErpUsers = security.users;
+                refreshedTerminalConfig = security.config;
+              } else {
+                refreshedTerminalConfig = await syncManager.refreshTerminalResolvedConfig(undefined, {
+                  baseConfig: finalConfig,
+                  dispatchEvent: false,
+                  requestTimeoutMs: 8_000,
+                  supplementalMode: 'background',
+                });
+              }
 
               if (refreshedTerminalConfig) {
                 finalConfig = refreshedTerminalConfig;
@@ -6528,7 +6537,7 @@ const AppContent: React.FC = () => {
               if (isErpSetupMode) {
                 console.log('🔒 Security Bootstrap: Refreshing authorized ERP POS users...');
                 try {
-                  const refreshedUsers = await syncManager.refreshErpPosUserRoster(finalConfig);
+                  const refreshedUsers = startupErpUsers ?? await syncManager.refreshErpPosUserRoster(finalConfig);
                   usableUsers = visiblePosUsersForRuntime(refreshedUsers);
                   const hasRefreshedErpUsers = hasErpSnapshotPosUsers(refreshedUsers);
 
@@ -6629,6 +6638,17 @@ const AppContent: React.FC = () => {
             markBootStage('READY');
             console.log('🎉 Setting isDataLoaded = true');
             setIsDataLoaded(true);
+
+            if (isErpSetupMode) {
+              // The security snapshot was awaited above. General catalogs and
+              // supplemental masters must not keep the login under the splash.
+              window.setTimeout(() => {
+                void syncManager.refreshTerminalResolvedConfig(undefined, {
+                  requestTimeoutMs: 8_000,
+                  supplementalMode: 'background',
+                }).catch(error => console.warn('Deferred startup catalog refresh failed:', error));
+              }, 1000);
+            }
           } else {
             console.warn('⚠️ No paired terminal found. Waiting for pairing...');
             // Still load to allow access to pairing/unauthorized screens.
