@@ -19,6 +19,9 @@ export const CLOSE_REPORT_SECTION_OPTIONS: Array<{
   { id: 'HOURLY_SALES', label: 'Ventas x Hora', description: 'Tickets y venta neta agrupados por hora.' },
 ];
 
+export const ALL_CLOSE_REPORT_SECTIONS: CloseReportSection[] =
+  CLOSE_REPORT_SECTION_OPTIONS.map((option) => option.id);
+
 export type CloseReportType = 'X' | 'Z';
 
 export const resolveCloseReportSections = (

@@ -80,7 +80,7 @@ import { productImageCacheService } from './services/sync/ProductImageCacheServi
 import { posCloudStagingService } from './services/sync/PosCloudStagingService';
 import { calculateZReportStats } from './utils/analytics';
 import { buildServiceTypeReport } from './utils/orderServiceType';
-import { buildCloseReportDetails, resolveCloseReportSections } from './utils/closeReportOptions';
+import { ALL_CLOSE_REPORT_SECTIONS, buildCloseReportDetails, resolveCloseReportSections } from './utils/closeReportOptions';
 import { buildCloseTaxSummary } from './utils/closeReceiptSummary';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
 import { calculateTransactionTaxSummary } from './utils/taxSummary';
@@ -9678,7 +9678,7 @@ const AppContent: React.FC = () => {
     return true;
   };
 
-  const handleXReport = async (cashCounted: number, notes = 'Arqueo parcial') => {
+  const handleXReport = async (cashCounted: number, notes = 'Arqueo parcial', reportData?: any) => {
     const currentTerminal = getCurrentTerminal() || (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
     const terminalId = currentTerminal?.id || 'T1';
 
@@ -9809,7 +9809,9 @@ const AppContent: React.FC = () => {
       }
 
       const enabledSections = resolveCloseReportSections(config, terminalId, currentUser?.id, 'X');
-      const reportDetails = buildCloseReportDetails(terminalTransactions, config, currentTerminal?.config, enabledSections);
+      // Persist every calculable annex so options enabled after the close are
+      // also available on a later reprint. enabledSections still controls output.
+      const reportDetails = buildCloseReportDetails(terminalTransactions, config, currentTerminal?.config, ALL_CLOSE_REPORT_SECTIONS);
       const newXReport: XReport = {
         id: `XR-${Date.now()}`,
         reportType: 'X',
@@ -9827,6 +9829,8 @@ const AppContent: React.FC = () => {
         cashExpected: { [baseCurrencyCode]: expectedCash },
         cashCounted: { [baseCurrencyCode]: Number(cashCounted || 0) },
         cashDiscrepancy: { [baseCurrencyCode]: discrepancy },
+        denominationBreakdown: reportData?.denominationBreakdown,
+        denomination_breakdown: reportData?.denominationBreakdown,
         cashSales,
         cashIn,
         cashOut,
@@ -9877,7 +9881,21 @@ const AppContent: React.FC = () => {
     try {
       const userRole = roles.find(r => r.id === (currentUser?.roleId || currentUser?.role));
       const hiddenModules = userRole?.zReportConfig?.hiddenModules || [];
-      const printed = await ThermalPrinterService.printZReport(report, hiddenModules, config);
+      const printTerminal = getCurrentTerminal() || (config.terminals || []).find(t => t.id === report.terminalId);
+      const enabledSections = resolveCloseReportSections(config, printTerminal?.id || report.terminalId, currentUser?.id, 'X');
+      const terminalAliases = getTerminalReferenceKeys(report.terminalId);
+      const reportTransactions = getPendingTransactionsForTerminal(report.terminalId)
+        .filter(tx => terminalReferenceMatches(terminalAliases, terminalAliases.has('t1'), tx.terminalId, tx.source_terminal_id))
+        .filter(belongsToCurrentCashier);
+      const printReport: XReport = {
+        ...report,
+        enabledSections,
+        reportDetails: {
+          ...buildCloseReportDetails(reportTransactions, config, printTerminal?.config, ALL_CLOSE_REPORT_SECTIONS),
+          ...(report.reportDetails || {}),
+        },
+      };
+      const printed = await ThermalPrinterService.printZReport(printReport, hiddenModules, config);
       alert(printed
         ? `Cierre X ${report.sequenceNumber} enviado a impresión.`
         : `No se pudo imprimir el Cierre X ${report.sequenceNumber}. Verifica la impresora configurada.`
@@ -10105,7 +10123,9 @@ const AppContent: React.FC = () => {
       }
 
       const enabledSections = resolveCloseReportSections(config, terminalId, currentUser?.id, 'Z');
-      const reportDetails = buildCloseReportDetails(terminalTransactions, config, currentTerminal?.config, enabledSections);
+      // Store every annex once. Printing still honors enabledSections, while a
+      // later reprint can safely apply options enabled after this closure.
+      const reportDetails = buildCloseReportDetails(terminalTransactions, config, currentTerminal?.config, ALL_CLOSE_REPORT_SECTIONS);
       const newZReport: ZReport & Record<string, any> = {
         id: zReportId,
         terminalId,
@@ -10177,6 +10197,26 @@ const AppContent: React.FC = () => {
       });
 
       const sessionConfig = currentTerminal?.config?.workflow?.session;
+      if (sessionConfig?.autoPrintZReport) {
+        const userRole = roles.find(r => r.id === (currentUser?.roleId || currentUser?.role));
+        const hiddenModules = userRole?.zReportConfig?.hiddenModules || [];
+        const preferredPrinterId =
+          currentTerminal?.config?.hardware?.printerAssignments?.TICKET ||
+          currentTerminal?.config?.hardware?.receiptPrinterId;
+        try {
+          const printed = await ThermalPrinterService.printZReport(newZReport, hiddenModules, config, {
+            terminalId,
+            preferredPrinterId,
+            jobType: 'Z_REPORT',
+          });
+          if (!printed) {
+            console.warn(`⚠️ El cierre Z ${newZReport.sequenceNumber} se guardó, pero la impresión automática no fue confirmada.`);
+          }
+        } catch (printError) {
+          console.error(`❌ No se pudo imprimir automáticamente el Cierre Z ${newZReport.sequenceNumber}:`, printError);
+        }
+      }
+
       const shouldEmailZReport = Boolean(sessionConfig?.emailZReport);
       const zReportRecipients = (sessionConfig?.zReportEmails || config.emailConfig?.defaultRecipient || '').trim();
       if (shouldEmailZReport && zReportRecipients) {
@@ -11607,6 +11647,7 @@ const AppContent: React.FC = () => {
               currentUser={currentUser}
               roles={roles}
               allowPartialXReport={allowPartialXReport}
+              terminalId={currentTerminalId}
               initialCashMovementType={viewData?.initialCashMovementType}
               onRegisterMovement={handleRegisterMovement}
               onCloseXReport={handleXReport}

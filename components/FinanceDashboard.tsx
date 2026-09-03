@@ -15,10 +15,11 @@ interface FinanceDashboardProps {
    roles: RoleDefinition[];
    /** false desactiva el bloque Reporte X (gobernado desde ERP `session.allowPartialXReport`). */
    allowPartialXReport?: boolean;
+   terminalId?: string;
    initialCashMovementType?: 'IN' | 'OUT' | 'X_REPORT';
    onClose: () => void;
    onRegisterMovement: (type: 'IN' | 'OUT', amount: number, reason: string) => void;
-   onCloseXReport?: (cashCounted: number, notes?: string) => Promise<void> | void;
+   onCloseXReport?: (cashCounted: number, notes?: string, reportData?: { denominationBreakdown?: Record<string, Array<{ denomination: number; quantity: number; total: number }>> }) => Promise<void> | void;
    onPrintXReport?: (report: XReport) => Promise<void> | void;
    onOpenZReport: () => void;
 }
@@ -106,12 +107,32 @@ const PettyCashModal: React.FC<{
 
 const XCloseModal: React.FC<{
    currency: string;
+   currencyCode: string;
    expectedCash: number;
+   forceDenominationCount: boolean;
    onClose: () => void;
-   onConfirm: (cashCounted: number, notes?: string) => void | Promise<void>;
-}> = ({ currency, expectedCash, onClose, onConfirm }) => {
+   onConfirm: (cashCounted: number, notes?: string, reportData?: { denominationBreakdown?: Record<string, Array<{ denomination: number; quantity: number; total: number }>> }) => void | Promise<void>;
+}> = ({ currency, currencyCode, expectedCash, forceDenominationCount, onClose, onConfirm }) => {
    const [amount, setAmount] = useState('');
+   const [denominationCounts, setDenominationCounts] = useState<Record<string, string>>({});
    const [isProcessing, setIsProcessing] = useState(false);
+
+   const denominations = currencyCode === 'USD'
+      ? [100, 50, 20, 10, 5, 2, 1, 0.25, 0.10, 0.05, 0.01]
+      : currencyCode === 'EUR'
+         ? [500, 200, 100, 50, 20, 10, 5, 2, 1, 0.50, 0.20, 0.10, 0.05, 0.02, 0.01]
+         : [2000, 1000, 500, 200, 100, 50, 25, 10, 5, 1];
+   const denominationLines = denominations
+      .map(denomination => {
+         const quantity = Number(denominationCounts[String(denomination)] || 0);
+         return {
+            denomination,
+            quantity: Number.isFinite(quantity) ? quantity : 0,
+            total: Number.isFinite(quantity) ? denomination * quantity : 0,
+         };
+      })
+      .filter(line => line.quantity > 0);
+   const denominationTotal = denominationLines.reduce((sum, line) => sum + line.total, 0);
 
    const handleNumPad = (key: string) => {
       if (key === 'BACK') setAmount(prev => prev.slice(0, -1));
@@ -119,14 +140,18 @@ const XCloseModal: React.FC<{
       else setAmount(prev => prev + key);
    };
 
-   const parsedAmount = parseFloat(amount);
-   const isValid = Number.isFinite(parsedAmount) && parsedAmount >= 0;
+   const parsedAmount = forceDenominationCount ? denominationTotal : parseFloat(amount);
+   const isValid = forceDenominationCount
+      ? denominationLines.length > 0
+      : Number.isFinite(parsedAmount) && parsedAmount >= 0;
 
    const handleConfirm = async () => {
       if (!isValid) return;
       setIsProcessing(true);
       try {
-         await onConfirm(parsedAmount, 'Cierre X / arqueo parcial');
+         await onConfirm(parsedAmount, 'Cierre X / arqueo parcial', forceDenominationCount ? {
+            denominationBreakdown: { [currencyCode]: denominationLines },
+         } : undefined);
          onClose();
       } finally {
          setIsProcessing(false);
@@ -150,7 +175,35 @@ const XCloseModal: React.FC<{
                <p className="mt-1 text-3xl font-black text-blue-900">{currency}{expectedCash.toFixed(2)}</p>
             </div>
 
-            <div className="mb-6 text-center">
+            {forceDenominationCount ? (
+               <div className="mb-6">
+                  <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-gray-400">Conteo por denominación</p>
+                  <div className="max-h-[42vh] overflow-y-auto rounded-2xl border border-gray-100 bg-gray-50">
+                     {denominations.map(denomination => (
+                        <label key={denomination} className="grid grid-cols-[1fr_100px] items-center gap-3 border-b border-gray-100 bg-white px-4 py-2 last:border-0">
+                           <span className="text-lg font-black text-gray-800">{currency}{denomination.toFixed(denomination % 1 === 0 ? 0 : 2)}</span>
+                           <input
+                              type="number"
+                              inputMode="numeric"
+                              min="0"
+                              step="1"
+                              value={denominationCounts[String(denomination)] || ''}
+                              onChange={(event) => setDenominationCounts(previous => ({
+                                 ...previous,
+                                 [String(denomination)]: event.target.value.replace(/[^\d]/g, ''),
+                              }))}
+                              placeholder="Cant."
+                              className="w-full rounded-xl border-2 border-gray-200 px-3 py-2 text-right text-lg font-black outline-none focus:border-blue-500"
+                           />
+                        </label>
+                     ))}
+                  </div>
+                  <div className="mt-3 flex items-center justify-between rounded-2xl bg-blue-600 px-4 py-3 text-white">
+                     <span className="text-xs font-black uppercase tracking-wide">Total contado</span>
+                     <span className="text-xl font-black">{currency}{denominationTotal.toFixed(2)}</span>
+                  </div>
+               </div>
+            ) : <div className="mb-6 text-center">
                <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-gray-400">Efectivo contado</p>
                <div className="flex items-center justify-center text-5xl font-black text-gray-800">
                   <span className="mr-1 mt-2 text-2xl text-gray-400">{currency}</span>
@@ -163,9 +216,9 @@ const XCloseModal: React.FC<{
                >
                   Usar teórico
                </button>
-            </div>
+            </div>}
 
-            <div className="grid grid-cols-3 gap-3 mb-6">
+            {!forceDenominationCount && <div className="grid grid-cols-3 gap-3 mb-6">
                {[1, 2, 3, 4, 5, 6, 7, 8, 9, '.', 0].map(n => (
                   <button key={n} onClick={() => handleNumPad(n.toString())} className="py-4 bg-gray-50 rounded-xl text-xl font-bold text-gray-700 active:bg-gray-200 transition-colors">
                      {n}
@@ -174,7 +227,7 @@ const XCloseModal: React.FC<{
                <button onClick={() => handleNumPad('BACK')} className="py-4 bg-gray-50 rounded-xl text-gray-500 flex items-center justify-center active:bg-gray-200">
                   <ArrowLeft size={24} />
                </button>
-            </div>
+            </div>}
 
             <button
                onClick={handleConfirm}
@@ -197,6 +250,7 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
    currentUser,
    roles,
    allowPartialXReport = true,
+   terminalId,
    initialCashMovementType,
    onClose,
    onRegisterMovement,
@@ -212,7 +266,7 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
       if (initialCashMovementType) {
          if (initialCashMovementType === 'X_REPORT') {
             setActiveModal(null);
-            setShowXCloseModal(false);
+            setShowXCloseModal(true);
          } else {
             setShowXCloseModal(false);
             setActiveModal(initialCashMovementType);
@@ -254,15 +308,15 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
    const canViewXReport = hasPermission('POS_VIEW_X_REPORT') || hasPermission('POS_CLOSE_X');
    const canCloseXReport = hasPermission('POS_CLOSE_X') && allowPartialXReport && hasCashierActivity && Boolean(onCloseXReport);
    const canCloseZReport = hasPermission('POS_CLOSE_Z');
+   const activeTerminal = (config.terminals || []).find(terminal =>
+      terminal.id === terminalId || terminal.config?.erpTerminalId === terminalId
+   ) || config.terminals?.[0];
+   const baseCurrency = (config.currencies || []).find(currency => currency.isBase) || config.currencies?.[0];
+   const forceDenominationCount = Boolean(activeTerminal?.config?.workflow?.session?.forceDenominationCount);
 
    const handleGenerateXReport = async () => {
       if (!canCloseXReport || !onCloseXReport) return;
-      setIsGeneratingXReport(true);
-      try {
-         await onCloseXReport(expectedCashInDrawer, 'Cierre X / resumen automatico');
-      } finally {
-         setIsGeneratingXReport(false);
-      }
+      setShowXCloseModal(true);
    };
 
    return (
@@ -544,10 +598,17 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
          {showXCloseModal && (
             <XCloseModal
                currency={config.currencySymbol}
+               currencyCode={baseCurrency?.code || 'DOP'}
                expectedCash={expectedCashInDrawer}
+               forceDenominationCount={forceDenominationCount}
                onClose={() => setShowXCloseModal(false)}
-               onConfirm={async (cashCounted, notes) => {
-                  await onCloseXReport?.(cashCounted, notes);
+               onConfirm={async (cashCounted, notes, reportData) => {
+                  setIsGeneratingXReport(true);
+                  try {
+                     await onCloseXReport?.(cashCounted, notes, reportData);
+                  } finally {
+                     setIsGeneratingXReport(false);
+                  }
                }}
             />
          )}

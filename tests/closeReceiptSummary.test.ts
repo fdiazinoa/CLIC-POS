@@ -111,11 +111,11 @@ test('snapshot survives roundtrip/reprint and takes priority over live config an
   assert.doesNotMatch(Buffer.from(buildEscPosZReportPayload(data, [], config)!, 'base64').toString('latin1'),/CHANGED|99999/);
 });
 
-test('X, Z and pre-close persist the same print snapshot', () => {
+test('X y Z persisten el mismo snapshot y no imprimen un borrador previo', () => {
   const app = readFileSync(new URL('../App.tsx',import.meta.url),'utf8');
   assert.equal(app.match(/closeTaxSummary: buildCloseTaxSummary\(terminalTransactions\)/g)?.length,2);
   const dashboard = readFileSync(new URL('../components/ZReportDashboard.tsx',import.meta.url),'utf8');
-  assert.match(dashboard,/tempReport.closeTaxSummary = buildCloseTaxSummary\(filteredTransactions\)/);
+  assert.doesNotMatch(dashboard,/tempReport|\.printZReport\(/);
 });
 
 test('checkout persists the calculated tax breakdown for regular and split sales', () => {

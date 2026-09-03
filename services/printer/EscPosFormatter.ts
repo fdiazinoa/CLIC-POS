@@ -908,6 +908,8 @@ export const buildEscPosZReportPayload = (
   const enabledSections = new Set(report.enabledSections || []);
   const reportDetails = report.reportDetails || {};
   const denominationBreakdown = report.denominationBreakdown || report.denomination_breakdown || {};
+  const hasDenominationBreakdown = Object.values(denominationBreakdown)
+    .some(lines => Array.isArray(lines) && lines.length > 0);
 
   chunks.push(initPrinter());
   chunks.push(align(1));
@@ -1031,7 +1033,7 @@ export const buildEscPosZReportPayload = (
     if (!reportDetails.taxSummary?.length) pushTextLines(chunks, splitLines('Sin impuestos registrados.', width));
   }
 
-  if (enabledSections.has('CURRENCY_BREAKDOWN')) {
+  if (enabledSections.has('CURRENCY_BREAKDOWN') || hasDenominationBreakdown) {
     chunks.push(divider(width));
     pushTextLines(chunks, splitLines('DESGLOSE DE MONEDA', width));
     Object.entries(denominationBreakdown).forEach(([currency, lines]) => {
