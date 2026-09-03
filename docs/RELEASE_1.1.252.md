@@ -19,3 +19,7 @@
 Actualizado exclusivamente `127.0.0.1:6555` (Pixel_C) con `adb install -r`: Success, desde 1.1.250/1250 hasta 1.1.252/1252. Launcher resuelto, proceso estable más de 15 segundos, POS-001 y usuarios Admin/Cajero/Supervisor conservados, fecha de primera instalación intacta y SQLite abierto. Sin crashes, `Failed to fetch`, errores WebView ni bloqueo cleartext en logs acotados.
 
 No se borraron datos ni se crearon ventas, pagos o cierres. Pendiente: con credenciales, reimprimir una venta existente sin impresora y verificar aviso, pantalla retenida, reintento y doble clic. También quedan pruebas con impresora física conectada, apagada, sin papel y salida parcial.
+
+## POS físico 10.0.0.123
+
+Actualizado `10.0.0.123:5555` (Aptio_CRB) con `adb install -r`: Success, desde 1.1.251/1251 hasta 1.1.252/1252. El proceso permaneció estable más de 15 segundos; conservó POS-001, Felix/Jonas/MercaSend y la fecha de primera instalación. SQLite abrió y se confirmó `MASTER_CONFIG_READY`. Sin crashes, fallos de transporte ni bloqueo HTTP LAN en los logs acotados. No se borraron datos ni se crearon ventas, pagos o cierres.
