@@ -1,3 +1,4 @@
+import { createStartupTrace } from './utils/startupTrace';
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -5741,10 +5742,8 @@ const AppContent: React.FC = () => {
 
     const loadData = async () => {
       console.log('🚀 loadData started');
-      const bootStartedAt = performance.now();
-      const markBootStage = (stage: string) => console.info('[POS_BOOT]', {
-        stage, elapsedMs: Math.round(performance.now() - bootStartedAt),
-      });
+      const markBootStage = createStartupTrace();
+      markBootStage('STARTED');
       try {
         console.log('⏳ Calling db.init()...');
         const data = await Promise.race([
@@ -5838,6 +5837,7 @@ const AppContent: React.FC = () => {
           return;
         }
 
+        markBootStage('IDENTITY_READY');
         // --- LICENSE / KILL-SWITCH VALIDATION ---
         const license = await checkLicenseStatus(persistedTenantId, storedDeviceId);
         markBootStage('LICENSE_CHECKED');
@@ -6006,6 +6006,7 @@ const AppContent: React.FC = () => {
           (setupMode === 'CLIENT' || setupMode === 'ORDER_TAKER') &&
           !localPairedTerminal;
 
+        markBootStage('PAIRING_READY');
         const shouldResolveMasterFromCloud = !masterIp && (
           shouldPairAsClient || localPairedTerminal?.config?.isPrimaryNode === false
         );
@@ -6144,6 +6145,7 @@ const AppContent: React.FC = () => {
           });
         }
 
+        markBootStage('MASTER_CONFIG_READY');
         // CLEAN SYNC CACHE if recovering from error
         const lastStatus = localStorage.getItem('pos_sync_status');
         if (lastStatus === 'ERROR') {
@@ -6395,16 +6397,26 @@ const AppContent: React.FC = () => {
               // We already have finalConfig from Master if IP was set, but we re-enforce the terminals part
             }
 
+            markBootStage('LOCAL_STATE_READY');
             await syncManager.initialize(finalConfig, effectivePairedTerminal.id);
             markBootStage('SYNC_INITIALIZED');
 
+            // null means the attempt failed; [] is a completed authoritative empty roster.
+            let startupErpUsers: User[] | null = null;
             try {
-              const refreshedTerminalConfig = await syncManager.refreshTerminalResolvedConfig(undefined, {
-                baseConfig: finalConfig,
-                dispatchEvent: false,
-                requestTimeoutMs: 8_000,
-                supplementalMode: 'background',
-              });
+              let refreshedTerminalConfig: BusinessConfig | null;
+              if (isErpSetupMode) {
+                const security = await syncManager.refreshErpStartupSecurity(finalConfig);
+                startupErpUsers = security.users;
+                refreshedTerminalConfig = security.config;
+              } else {
+                refreshedTerminalConfig = await syncManager.refreshTerminalResolvedConfig(undefined, {
+                  baseConfig: finalConfig,
+                  dispatchEvent: false,
+                  requestTimeoutMs: 8_000,
+                  supplementalMode: 'background',
+                });
+              }
 
               if (refreshedTerminalConfig) {
                 finalConfig = refreshedTerminalConfig;
@@ -6466,6 +6478,7 @@ const AppContent: React.FC = () => {
               console.error('❌ Catalog auto-heal check failed:', driftCheckError);
             }
 
+            markBootStage('CATALOG_READY');
             // Master Re-hydration Step: This ensures state is always up to date with DB 
             // after any async drift fixes or sync initializations.
             try {
@@ -6513,6 +6526,8 @@ const AppContent: React.FC = () => {
             authLevelService.init(finalConfig, effectivePairedTerminal.id);
             terminalRouter.init(finalConfig, effectivePairedTerminal.id, effectivePairedTerminal.config.deviceRole || null);
 
+            markBootStage('REHYDRATION_READY');
+            markBootStage('SECURITY_STARTED');
             // --- CRITICAL SECURITY BOOTSTRAP ---
             try {
               // Prefer ERP users, but keep the default roster when ERP has no POS users yet.
@@ -6522,7 +6537,11 @@ const AppContent: React.FC = () => {
               if (isErpSetupMode) {
                 console.log('🔒 Security Bootstrap: Refreshing authorized ERP POS users...');
                 try {
-                  const refreshedUsers = await syncManager.refreshErpPosUserRoster(finalConfig);
+                  // A background sync may have updated/revoked users since the early snapshot.
+                  // Reuse the completed refresh, but read the current persisted roster.
+                  const refreshedUsers = startupErpUsers !== null
+                    ? (Array.isArray(localUsers) ? localUsers : [])
+                    : await syncManager.refreshErpPosUserRoster(finalConfig);
                   usableUsers = visiblePosUsersForRuntime(refreshedUsers);
                   const hasRefreshedErpUsers = hasErpSnapshotPosUsers(refreshedUsers);
 
@@ -6560,6 +6579,7 @@ const AppContent: React.FC = () => {
               console.error('❌ Security Bootstrap Failed:', bootstrapErr);
               setBootstrapError(bootstrapErr.message || 'Error loading security data.');
             }
+            markBootStage('SECURITY_READY');
             // -----------------------------------
 
             if (!authLevelService.shouldRequireUserLogin()) {
@@ -6622,6 +6642,17 @@ const AppContent: React.FC = () => {
             markBootStage('READY');
             console.log('🎉 Setting isDataLoaded = true');
             setIsDataLoaded(true);
+
+            if (isErpSetupMode) {
+              // The security snapshot was awaited above. General catalogs and
+              // supplemental masters must not keep the login under the splash.
+              window.setTimeout(() => {
+                void syncManager.refreshTerminalResolvedConfig(undefined, {
+                  requestTimeoutMs: 8_000,
+                  supplementalMode: 'background',
+                }).catch(error => console.warn('Deferred startup catalog refresh failed:', error));
+              }, 1000);
+            }
           } else {
             console.warn('⚠️ No paired terminal found. Waiting for pairing...');
             // Still load to allow access to pairing/unauthorized screens.

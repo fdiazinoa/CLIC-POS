@@ -1092,12 +1092,21 @@ class SyncManager {
     }
 
     public async refreshErpPosUserRoster(baseConfig: BusinessConfig | null): Promise<User[]> {
+        return (await this.refreshErpStartupSecurity(baseConfig)).users;
+    }
+
+    // The startup needs identity, roles and the authorized roster before login.
+    // Return them together so App does not fetch/apply a second config snapshot.
+    public async refreshErpStartupSecurity(baseConfig: BusinessConfig | null): Promise<{
+        config: BusinessConfig | null;
+        users: User[];
+    }> {
         if (syncPolicy.resolve().kind !== 'ERP_ACTIVE') {
             const localUsers = await db.get('users');
-            return Array.isArray(localUsers) ? localUsers as User[] : [];
+            return { config: baseConfig, users: Array.isArray(localUsers) ? localUsers as User[] : [] };
         }
 
-        await this.refreshTerminalResolvedConfig(undefined, {
+        const config = await this.refreshTerminalResolvedConfig(undefined, {
             baseConfig,
             dispatchEvent: false,
             forceRemoteFetch: true,
@@ -1109,7 +1118,7 @@ class SyncManager {
         });
 
         const refreshedUsers = await db.get('users');
-        return Array.isArray(refreshedUsers) ? refreshedUsers as User[] : [];
+        return { config, users: Array.isArray(refreshedUsers) ? refreshedUsers as User[] : [] };
     }
 
     private ensureDeviceToken() {
