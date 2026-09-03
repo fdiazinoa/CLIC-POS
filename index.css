@@ -130,3 +130,83 @@ input[type='number'] {
     font-size: 16px;
   }
 }
+
+/* Short landscape tablets: reserve vertical space for readable products.
+   Desktop and portrait keep the existing two-row category/action layouts. */
+@media (orientation: landscape) and (min-width: 900px) and (max-height: 760px) {
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-catalog-header {
+    display: none;
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-catalog-header[data-search-open="true"] {
+    display: flex;
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-landscape-search-close {
+    display: flex;
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-landscape-settings {
+    display: block;
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-catalog-identity,
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-catalog-sync,
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-catalog-tariff,
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-full-action-grid {
+    display: none;
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-category-strip {
+    grid-template-rows: minmax(44px, auto);
+    grid-auto-columns: 128px;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+  /* Override the inline 6x2 placement only within this compact strip. */
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-category-strip > button {
+    grid-row: 1 !important;
+    grid-column: auto !important;
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-product-card.grid {
+    grid-template-rows: 42% 58%;
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-product-name {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+    min-height: 2.3rem;
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-restaurant-actions {
+    padding: 8px 12px;
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-landscape-extra-actions {
+    display: grid;
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-landscape-actions {
+    display: grid;
+    grid-template-columns: 44px repeat(4, minmax(0, 1fr));
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-ticket-sidebar {
+    width: clamp(280px, 30vw, 340px);
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-ticket-heading {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-ticket-footer {
+    padding: 10px 12px;
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-ticket-total {
+    font-size: 2rem;
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-ticket-checkout {
+    padding-top: 8px;
+    gap: 8px;
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-ticket-checkout > button {
+    height: 48px;
+  }
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-empty-cart {
+    min-height: 0;
+  }
+}

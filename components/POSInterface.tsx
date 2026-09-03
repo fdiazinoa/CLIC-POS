@@ -873,7 +873,7 @@ const ProductGridCard = React.memo(({
          onTouchEnd={onProductTouchEnd}
          onTouchCancel={onProductTouchEnd}
          style={{ touchAction: 'manipulation' }}
-         className={`w-full min-w-0 bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 transition-all group relative overflow-hidden ${
+         className={`pos-product-card w-full min-w-0 bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 transition-all group relative overflow-hidden ${
             warehouseSaleBlocked
                ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
                : 'cursor-pointer hover:border-purple-300 hover:-translate-y-1 active:scale-95'
@@ -980,7 +980,7 @@ const ProductGridCard = React.memo(({
             <div className={usesSupermarketLayout ? 'space-y-1.5' : usesExpandedCatalog ? 'space-y-1' : isCompactMobileCard ? 'space-y-0.5' : 'space-y-1.5'}>
                <span className={`block font-black text-purple-500 uppercase opacity-70 line-clamp-1 ${usesSupermarketLayout ? 'text-[11px]' : usesExpandedCatalog ? 'text-[9px]' : isCompactMobileCard ? 'text-[10px]' : 'text-[9px]'}`}>{product.category}</span>
                {showProductImages && (
-                  <h3 className={`font-black text-gray-800 dark:text-white leading-[1.08] truncate tracking-[-0.02em] ${usesSupermarketLayout ? 'text-[1.22rem] min-h-[1.35rem]' : usesExpandedCatalog ? 'text-[1.05rem] min-h-[1.15rem]' : isCompactMobileCard ? 'text-[1.16rem] min-h-[1.3rem]' : 'text-[1rem] min-h-[1.15rem]'}`}>{product.name}</h3>
+                  <h3 className={`pos-product-name font-black text-gray-800 dark:text-white leading-[1.08] truncate tracking-[-0.02em] ${usesSupermarketLayout ? 'text-[1.22rem] min-h-[1.35rem]' : usesExpandedCatalog ? 'text-[1.05rem] min-h-[1.15rem]' : isCompactMobileCard ? 'text-[1.16rem] min-h-[1.3rem]' : 'text-[1rem] min-h-[1.15rem]'}`}>{product.name}</h3>
                )}
             </div>
             <div className={`${showProductImages
@@ -1229,6 +1229,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    // --- TICKET TABS STRATEGY STATE ---
    const [rightSidebarTab, setRightSidebarTab] = useState<'CART' | 'ACTIONS'>('CART');
+   const [compactSearchOpen, setCompactSearchOpen] = useState(false);
    const [orderServiceType, setOrderServiceType] = useState<OrderServiceType>('DINE_IN');
    const [showServiceTypeDialog, setShowServiceTypeDialog] = useState(false);
 
@@ -1974,7 +1975,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const expandedCatalogGridStyle = useMemo(
       () => usesExpandedCatalog
          ? {
-            gridAutoRows: 'calc((100% - 0.75rem) / 2)',
+            gridAutoRows: 'max(176px, calc((100% - 0.75rem) / 2))',
          } as React.CSSProperties
          : undefined,
       [usesExpandedCatalog]
@@ -1985,7 +1986,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return "hidden";
       }
       const scrollbarClass = uxConfig.quickKeysLayout === 'B' ? 'custom-scrollbar' : 'no-scrollbar';
-      return `bg-white border-b border-gray-200 px-3 md:px-8 py-2 md:py-3 grid grid-flow-col grid-rows-2 auto-cols-[112px] md:auto-cols-[132px] gap-x-3 gap-y-2 overflow-x-auto overflow-y-hidden shrink-0 ${scrollbarClass}`;
+      return `pos-category-strip bg-white border-b border-gray-200 px-3 md:px-8 py-2 md:py-3 grid grid-flow-col grid-rows-2 auto-cols-[112px] md:auto-cols-[132px] gap-x-3 gap-y-2 overflow-x-auto overflow-y-hidden shrink-0 ${scrollbarClass}`;
    }, [usesSupermarketLayout, uxConfig.quickKeysLayout]);
 
    const allowedTariffs = useMemo(() => {
@@ -6745,6 +6746,27 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div>
             <ChevronRight size={18} />
          </button>
+         <div className="pos-landscape-settings mb-3 hidden space-y-2">
+            <p className="text-xs text-gray-500">{currentUser.name} · {terminalDisplayLabel}</p>
+            <label className="block text-xs font-bold text-purple-700">
+               Tarifa
+               <select aria-label="Tarifa activa" value={activeTariffId} disabled={!canChangeTariff} onChange={(event) => setActiveTariffId(event.target.value)} className="mt-1 w-full rounded-xl border border-purple-100 bg-purple-50 px-3 text-sm text-purple-900 disabled:opacity-75">
+                  {allowedTariffs.map(tariff => <option key={tariff.id} value={tariff.id}>{tariff.name}</option>)}
+               </select>
+            </label>
+         </div>
+         {isRestaurantMode && (
+            <div className="pos-landscape-extra-actions mb-3 hidden grid-cols-2 gap-2">
+               <button type="button" onClick={handlePrintPrecuenta} disabled={cart.length === 0} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-orange-500 px-2 text-xs font-black text-white disabled:opacity-40">
+                  <Printer size={16} /><span>Sub-total</span>
+               </button>
+               {canCloseXReport && (
+                  <button type="button" onClick={() => onOpenFinance('X_REPORT')} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-2 text-xs font-black text-white">
+                     <ClipboardCheck size={16} /><span>Cierre X</span>
+                  </button>
+               )}
+            </div>
+         )}
          <ActionGrid
             orientation="vertical"
             onAction={(action) => {
@@ -6766,6 +6788,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          ref={posRootRef}
          data-pos-scanner-enabled={!isAnyModalOpen ? 'true' : 'false'}
          className={`clic-pos-device-shell fixed inset-0 w-full overflow-hidden bg-gray-50 flex font-sans select-none text-gray-900 ${isTabletProfile ? 'clic-pos-tablet-shell' : ''}`}
+         data-pos-layout={isRetailMode ? 'retail' : isRestaurantMode ? 'restaurant' : 'catalog'}
          data-device-form-factor={activeDeviceProfile.formFactor}
          data-device-orientation={activeDeviceProfile.orientation}
          data-touch-optimized={activeDeviceProfile.touchOptimized ? 'true' : 'false'}
@@ -6777,6 +6800,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             )}px`,
          } as React.CSSProperties}
       >
+         <SupervisorAuthModal
+            isOpen={showSupervisorAuth}
+            onClose={() => setShowSupervisorAuth(false)}
+            users={users}
+            requiredPermission="CAN_REFUND"
+            onSuccess={(supervisor) => {
+               console.log("Authorized by:", supervisor.name);
+               setRefundAuthorizedBy({ id: supervisor.id, name: supervisor.name });
+               setIsReturnMode(true);
+            }}
+         />
          {productionRoutingPrompt && (
             <ProductionRoutingAssignmentModal
                items={productionRoutingPrompt.items}
@@ -6983,8 +7017,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          {/* LEFT AREA: PRODUCTS */}
          <div className={`flex-1 min-h-0 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${isMobile && mobileView === 'TICKET' ? 'hidden' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
-            <header className="bg-white px-3 md:px-8 py-2 md:py-4 border-b border-gray-200 flex flex-wrap items-center gap-1.5 md:gap-6 shadow-sm z-10 shrink-0">
-               <div className="flex items-center gap-3 pr-0 md:pr-4 border-r-0 md:border-r border-gray-100 shrink-0">
+            <header data-search-open={compactSearchOpen || Boolean(searchTerm) ? 'true' : 'false'} className="pos-catalog-header bg-white px-3 md:px-8 py-2 md:py-4 border-b border-gray-200 flex flex-wrap items-center gap-1.5 md:gap-6 shadow-sm z-10 shrink-0">
+               <div className="pos-catalog-identity flex items-center gap-3 pr-0 md:pr-4 border-r-0 md:border-r border-gray-100 shrink-0">
                   <div className="w-9 h-9 md:w-10 md:h-10 rounded-full bg-gray-50 overflow-hidden border border-gray-200 shadow-inner shrink-0">
                      {currentUser.photo ? <img src={currentUser.photo} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center bg-blue-50 text-blue-600 font-bold">{currentUser.name.charAt(0)}</div>}
                   </div>
@@ -7000,7 +7034,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                </div>
 
-               <div className="flex h-9 md:h-auto items-center gap-2 px-2.5 md:px-4 py-1.5 md:py-2 rounded-xl md:rounded-2xl bg-gray-50 border border-gray-100 shadow-inner shrink-0">
+               <div className="pos-catalog-sync flex h-9 md:h-auto items-center gap-2 px-2.5 md:px-4 py-1.5 md:py-2 rounded-xl md:rounded-2xl bg-gray-50 border border-gray-100 shadow-inner shrink-0">
                   {syncState.isSyncing ? (
                      <RefreshCw size={18} className="text-amber-500 animate-spin" />
                   ) : !navigator.onLine ? (
@@ -7032,7 +7066,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
                <div className="w-full md:flex-1 flex flex-nowrap items-center gap-2 md:gap-3 md:min-w-0">
-                  <div className="relative shrink-0 ml-auto order-2 md:order-3" ref={tariffSelectorRef}>
+                  <div className="pos-catalog-tariff relative shrink-0 ml-auto order-2 md:order-3" ref={tariffSelectorRef}>
                      <button
                         type="button"
                         onClick={() => {
@@ -7121,17 +7155,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   )}
 
 
-                  <SupervisorAuthModal
-                     isOpen={showSupervisorAuth}
-                     onClose={() => setShowSupervisorAuth(false)}
-                     users={users}
-                     requiredPermission="CAN_REFUND"
-                     onSuccess={(supervisor) => {
-                        console.log("Authorized by:", supervisor.name);
-                        setRefundAuthorizedBy({ id: supervisor.id, name: supervisor.name });
-                        setIsReturnMode(true);
-                     }}
-                  />
+
+
+                  <button type="button" aria-label="Cerrar búsqueda" onClick={() => { setSearchTerm(''); setCompactSearchOpen(false); }} className="pos-landscape-search-close hidden h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-600 order-last">
+                     <X size={20} />
+                  </button>
 
                   {/* MOBILE SETTINGS BUTTON */}
                   <button onClick={() => onOpenSettings()} className="md:hidden order-4 h-11 w-11 bg-gray-100 rounded-xl text-gray-600 hover:bg-gray-200 shrink-0 flex items-center justify-center">
@@ -7233,9 +7261,27 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             {!isMobile && isRestaurantMode && (
                <div
                   ref={desktopActionGridRef}
-                  className="flex-none border-t border-slate-200 bg-white px-3 py-3 shadow-[0_-8px_24px_rgba(15,23,42,0.06)]"
+                  className="pos-restaurant-actions flex-none border-t border-slate-200 bg-white px-3 py-3 shadow-[0_-8px_24px_rgba(15,23,42,0.06)]"
                >
-                  <div className="mx-auto grid max-w-[1180px] grid-cols-3 gap-3">
+                  <nav aria-label="Acciones de tablet horizontal" className="pos-landscape-actions hidden gap-2">
+                     <button type="button" aria-label="Buscar artículos" aria-expanded={compactSearchOpen || Boolean(searchTerm)} onClick={() => { setCompactSearchOpen(true); requestAnimationFrame(() => searchInputRef.current?.focus()); }} className="flex min-h-11 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
+                        <Search size={20} />
+                     </button>
+                     <button type="button" onClick={() => { void handleBackToMap(); }} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-orange-500 px-2 text-xs font-black text-white">
+                        <Layout size={18} /><span>Mesas</span>
+                     </button>
+                     <button type="button" onClick={() => handleGridAction('SAVE')} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-blue-600 px-2 text-xs font-black text-white">
+                        <Save size={18} /><span>Guardar</span>
+                     </button>
+                     <button type="button" onClick={() => { void handleDispatchCommand(); }} disabled={cart.length === 0} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-orange-500 px-2 text-xs font-black text-white disabled:opacity-40">
+                        <ChefHat size={18} /><span>Cocina</span>
+                     </button>
+                     <button type="button" aria-pressed={rightSidebarTab === 'ACTIONS'} onClick={() => setRightSidebarTab(tab => tab === 'ACTIONS' ? 'CART' : 'ACTIONS')} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-800 px-2 text-xs font-black text-white">
+                        <span role="status" aria-label={!navigator.onLine ? 'Sin conexión' : syncState.isSyncing ? 'Sincronizando' : syncState.hasError || syncState.pendingCount > 0 ? 'Sincronización pendiente' : 'Online'} className={`h-2 w-2 shrink-0 rounded-full ${!navigator.onLine ? 'bg-red-400' : syncState.isSyncing || syncState.hasError || syncState.pendingCount > 0 ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                        <span>{rightSidebarTab === 'ACTIONS' ? 'Ver pedido' : 'Opciones'}</span>
+                     </button>
+                  </nav>
+                  <div className="pos-full-action-grid mx-auto grid max-w-[1180px] grid-cols-3 gap-3">
                      <div className="rounded-2xl border border-blue-200 bg-blue-50/50 p-2 shadow-sm">
                         <div className="mb-2 rounded-xl bg-blue-600 py-2 text-center text-[10px] font-black uppercase tracking-[0.22em] text-white shadow-sm shadow-blue-600/25">
                            Venta
@@ -7371,7 +7417,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          </div >
 
          {/* RIGHT SIDEBAR: CURRENT TICKET */}
-         <div className={`${!isMobile && !isRetailMode ? 'w-96 shrink-0' : 'w-full'} h-full min-h-0 bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${isMobile && mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden' : 'flex'}`}>
+         <div className={`pos-ticket-sidebar ${!isMobile && !isRetailMode ? 'w-96 shrink-0' : 'w-full'} h-full min-h-0 bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${isMobile && mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden' : 'flex'}`}>
 
             {/* MOBILE HEADER */}
             < div className={`${isMobile ? 'flex' : 'hidden'} px-4 py-3 border-b border-gray-100 bg-white flex-col gap-3 shrink-0`} >
@@ -7511,7 +7557,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div >
 
             {/* DESKTOP: marca + mesa/comensales bajo el logo; retail: busqueda al centro; botones carrito/acciones alineados a la derecha (como APK 1.0.300) */}
-            <div className={`${isMobile ? 'hidden' : 'flex'} px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
+            <div className={`pos-ticket-heading ${isMobile ? 'hidden' : 'flex'} px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
                <div data-testid="desktop-ticket-toolbar" className="flex w-full items-center justify-between gap-1">
                   <div className="flex min-w-0 shrink-0 items-center justify-start">
                      {renderTicketBrand(!isRetailMode)}
@@ -7842,7 +7888,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      {rightSidebarTab === 'ACTIONS' ? (
                         renderQuickActionsPanel()
                      ) : processedCart.length === 0 ? (
-                        <div className="flex h-full min-h-[320px] items-center justify-center">
+                        <div className="pos-empty-cart flex h-full min-h-[320px] items-center justify-center">
                            <div className="flex flex-col items-center text-center select-none">
                               <div className="mb-4 flex h-28 w-28 items-center justify-center rounded-full bg-slate-50 text-slate-300 shadow-inner">
                                  <ShoppingBag size={46} strokeWidth={1.4} />
@@ -8177,7 +8223,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             )}
 
             {/* Sidebar Footer */}
-            <div className={`flex-none bg-white border-t border-gray-200 p-4 shadow-inner ${isRetailMode ? 'supermarket-footer' : 'space-y-3'} ${isMobile ? 'hidden' : ''}`}>
+            <div className={`pos-ticket-footer flex-none bg-white border-t border-gray-200 p-4 shadow-inner ${isRetailMode ? 'supermarket-footer' : 'space-y-3'} ${isMobile ? 'hidden' : ''}`}>
                {/* DESKTOP FOOTER CONTENT (UNCHANGED) */}
                {
                   isRetailMode ? (
@@ -8334,13 +8380,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        <p className="text-[10px] text-slate-400 font-black uppercase tracking-[0.28em]">Total</p>
                                        {pointsEarned > 0 && <p className="text-[10px] font-bold text-purple-500">+{pointsEarned} Puntos</p>}
                                     </div>
-                                    <div className="text-right text-[2.65rem] font-black text-slate-900 leading-none tracking-tighter">
+                                    <div className="pos-ticket-total text-right text-[2.65rem] font-black text-slate-900 leading-none tracking-tighter">
                                        {formatCurrency(cartTotal, baseCurrency.symbol)}
                                     </div>
                                  </div>
                               </div>
 
-                               <div className={`grid ${isRestaurantMode ? 'grid-cols-2' : 'grid-cols-2'} items-center gap-3 pt-5 px-1`}>
+                               <div className={`pos-ticket-checkout grid ${isRestaurantMode ? 'grid-cols-2' : 'grid-cols-2'} items-center gap-3 pt-5 px-1`}>
                                  {!isRestaurantMode ? (
                                     <>
                                        <button

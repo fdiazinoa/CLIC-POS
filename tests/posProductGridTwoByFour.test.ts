@@ -4,14 +4,14 @@ import test from 'node:test';
 
 const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
 
-test('el catálogo expandido distribuye cuatro columnas en dos filas completas', () => {
+test('el catálogo expandido distribuye cuatro columnas y evita filas menores de 176 px', () => {
   const gridStart = source.indexOf('const gridClass');
   const gridEnd = source.indexOf('const categoryContainerClass', gridStart);
   const gridSource = source.slice(gridStart, gridEnd);
 
   assert.ok(gridStart >= 0, 'No se encontró la configuración del grid de artículos');
   assert.match(gridSource, /absolute inset-0 grid min-h-0 grid-cols-4 gap-3 content-start overflow-y-auto px-4 py-3/);
-  assert.match(gridSource, /gridAutoRows: 'calc\(\(100% - 0\.75rem\) \/ 2\)'/);
+  assert.match(gridSource, /gridAutoRows: 'max\(176px, calc\(\(100% - 0\.75rem\) \/ 2\)\)'/);
   assert.doesNotMatch(
     gridSource,
     /gridTemplateRows/,
