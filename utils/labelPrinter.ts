@@ -1,3 +1,4 @@
+import { notifyPrintQueued, runPrintTask } from '../services/printer/PrintFeedback';
 import { BusinessConfig, LabelElement, LabelTemplate } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
 import { buildEscPosLabelPayload } from '../services/printer/EscPosFormatter';
@@ -173,7 +174,7 @@ const renderPrintableDocument = (
   `;
 };
 
-export const printLabelsFromTemplate = async ({
+const printLabelsFromTemplateInternal = async ({
   config,
   template,
   records,
@@ -195,26 +196,31 @@ export const printLabelsFromTemplate = async ({
 
   let printedSilently = false;
 
-  if (escPosBase64) {
-    printedSilently = await PrintRouterService.routeAndPrintEscPos({
-      config,
-      escPosBase64,
-      role: 'LABEL',
-      terminalId,
-      jobType: 'LABEL',
-      referenceId: printRef
-    });
-  }
+  try {
+    if (escPosBase64) {
+      printedSilently = await PrintRouterService.routeAndPrintEscPos({
+        config,
+        escPosBase64,
+        role: 'LABEL',
+        terminalId,
+        jobType: 'LABEL',
+        referenceId: printRef
+      });
+    }
 
-  if (!printedSilently) {
-    printedSilently = await PrintRouterService.routeAndPrintHtml({
-      config,
-      html: printableHtml,
-      role: 'LABEL',
-      terminalId,
-      jobType: 'LABEL',
-      referenceId: printRef
-    });
+    if (!printedSilently) {
+      printedSilently = await PrintRouterService.routeAndPrintHtml({
+        config,
+        html: printableHtml,
+        role: 'LABEL',
+        terminalId,
+        jobType: 'LABEL',
+        referenceId: printRef
+      });
+    }
+  } catch {
+    // Keep the existing offline queue path for unavailable native printers.
+    printedSilently = false;
   }
 
   if (printedSilently) {
@@ -238,7 +244,7 @@ export const printLabelsFromTemplate = async ({
     });
 
     return {
-      printed: true,
+      printed: false,
       method: 'queued',
       message: 'Impresion en cola. Se enviara automaticamente cuando la impresora este disponible.'
     };
@@ -269,4 +275,17 @@ export const printLabelsFromTemplate = async ({
     method: 'browser',
     message: 'Se abrio la ventana del navegador para imprimir etiquetas.'
   };
+};
+
+export const printLabelsFromTemplate = async (options: PrintLabelsOptions): Promise<PrintLabelsResult> => {
+  let result: PrintLabelsResult = { printed: false, method: 'none', message: 'No se pudo confirmar la impresión de etiquetas.' };
+  await runPrintTask(`labels:${JSON.stringify([options.terminalId, options.referenceId, options.template, options.records])}`, 'Etiquetas', async () => {
+    result = await printLabelsFromTemplateInternal(options);
+    if (result.method === 'queued') {
+      notifyPrintQueued();
+      return true; // Accepted by the queue; result.printed remains false.
+    }
+    return result.printed;
+  });
+  return result;
 };

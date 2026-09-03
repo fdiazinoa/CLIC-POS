@@ -1,3 +1,5 @@
+import { runPrintTask } from './PrintFeedback';
+import { notifyBrowserPrint } from './BrowserPrint';
 import { ZReport, BusinessConfig } from '../../types';
 import { buildEscPosZReportPayload } from './EscPosFormatter';
 import { generateZReportReceipt } from './templates/ZReportReceipt';
@@ -5,7 +7,7 @@ import { PrintRouterService } from './PrintRouterService';
 import { shouldSuppressBrowserPrintFallback } from './PrintRuntime';
 import { resolveConfiguredPrintCopies } from '../../utils/printCopies';
 
-export const ThermalPrinterService = {
+const ThermalPrinterServiceInternal = {
     /**
      * Prints a Z-Report using the browser's print capability (or native plugin in future).
      * @param report The Z-Report data to print
@@ -78,40 +80,50 @@ export const ThermalPrinterService = {
             const doc = iframe.contentWindow?.document;
             if (!doc) throw new Error("Could not create print frame");
 
-            doc.open();
-            doc.write(receiptHtml);
-            doc.close();
-
-            // 3. Wait for content to load (images, fonts) then print with a timeout safety
-            await new Promise<void>((resolve) => {
-                const timeout = setTimeout(() => {
-                    console.warn("⚠️ Print timeout reached, resolving anyway");
-                    resolve();
-                }, 3000);
-
-                iframe.onload = () => {
-                    setTimeout(() => {
-                        try {
-                            iframe.contentWindow?.focus();
-                            iframe.contentWindow?.print();
-                        } catch (e) {
-                            console.error("Print error:", e);
-                        }
+            // Register onload before writing; a timeout or print exception is failure.
+            try {
+                await new Promise<void>((resolve, reject) => {
+                    let settled = false;
+                    let printTimer: ReturnType<typeof setTimeout>;
+                    const finish = (error?: Error) => {
+                        if (settled) return;
+                        settled = true;
                         clearTimeout(timeout);
-                        resolve();
-                    }, 500);
-                };
-            });
-
-            // 4. Cleanup (remove iframe after a delay to allow print dialog to work)
-            setTimeout(() => {
-                document.body.removeChild(iframe);
-            }, 5000);
-
-            return true;
+                        clearTimeout(printTimer);
+                        iframe.onload = null;
+                        error ? reject(error) : resolve();
+                    };
+                    const timeout = setTimeout(() => finish(new Error('PRINT_FRAME_TIMEOUT')), 3000);
+                    iframe.onload = () => {
+                        printTimer = setTimeout(() => {
+                            if (settled) return;
+                            try {
+                                if (!iframe.contentWindow) throw new Error('PRINT_FRAME_UNAVAILABLE');
+                                iframe.contentWindow.focus();
+                                iframe.contentWindow.print();
+                                finish();
+                            } catch (error) {
+                                finish(error instanceof Error ? error : new Error('PRINT_FRAME_FAILED'));
+                            }
+                        }, 500);
+                    };
+                    doc.open();
+                    doc.write(receiptHtml);
+                    doc.close();
+                });
+                notifyBrowserPrint();
+                return true;
+            } finally {
+                setTimeout(() => iframe.remove(), 5000);
+            }
         } catch (error) {
             console.error("❌ Thermal Print Failed:", error);
-            return false;
+            throw error;
         }
     }
+};
+
+export const ThermalPrinterService = {
+    printZReport: (...args: Parameters<typeof ThermalPrinterServiceInternal.printZReport>): Promise<boolean> =>
+        runPrintTask(`report:${args[0].id}`, (args[0] as any).reportType === 'X' ? 'Cierre X' : 'Cierre Z', () => ThermalPrinterServiceInternal.printZReport(...args)),
 };

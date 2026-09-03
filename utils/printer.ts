@@ -1,3 +1,5 @@
+import { notifyBrowserPrint } from '../services/printer/BrowserPrint';
+import { PrintOutputError, runPrintTask } from '../services/printer/PrintFeedback';
 import { Transaction, BusinessConfig, Reservation, CartItem, Table } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
 import { buildEscPosCashDrawerPayload, buildEscPosComandaPayload, buildEscPosReservationPayload, buildEscPosSubtotalPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload, shouldOpenDrawerForTransaction } from '../services/printer/EscPosFormatter';
@@ -112,7 +114,7 @@ const buildGatewayVoucherHtml = (providerLabel: string, copyLabel: string, vouch
     </html>
 `;
 
-const printGatewayVoucher = async (
+const printGatewayVoucherInternal = async (
     config: BusinessConfig,
     params: {
         providerLabel: string;
@@ -168,11 +170,11 @@ const printGatewayVoucher = async (
     if (printWindow) {
         printWindow.document.write(buildGatewayVoucherHtml(params.providerLabel, params.copyLabel, normalizedText));
         printWindow.document.close();
+        notifyBrowserPrint();
         return true;
     }
 
-    alert('Por favor, permita las ventanas emergentes para imprimir el voucher.');
-    return false;
+    throw new PrintOutputError('POPUP_BLOCKED');
 };
 
 export const printGatewayReceipt = async (
@@ -186,7 +188,7 @@ export const printGatewayReceipt = async (
     }
 ): Promise<boolean> => printGatewayVoucher(config, params);
 
-export const printTicket = async (transaction: Transaction, config: BusinessConfig): Promise<boolean> => {
+const printTicketInternal = async (transaction: Transaction, config: BusinessConfig): Promise<boolean> => {
     const { companyInfo, currencySymbol, receiptConfig, currencies } = config;
     const users = ((await dbAdapter.getCollection('users')) || []) as any[];
     const salesUsers = getTerminalSnapshotSellers(config, transaction.terminalId);
@@ -631,9 +633,10 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
     if (printWindow) {
         printWindow.document.write(receiptHtml);
         printWindow.document.close();
+        notifyBrowserPrint();
         return true;
     } else {
-        alert('Por favor, permita las ventanas emergentes para imprimir el ticket.');
+        throw new PrintOutputError('POPUP_BLOCKED');
     }
     return false;
 };
@@ -699,7 +702,7 @@ export const printIntegratedPaymentArtifacts = async (
     };
 };
 
-export const printReservation = async (
+const printReservationInternal = async (
     reservation: Reservation,
     config: BusinessConfig,
     requestedCopies?: number
@@ -874,13 +877,14 @@ export const printReservation = async (
     if (printWindow) {
         printWindow.document.write(receiptHtml);
         printWindow.document.close();
+        notifyBrowserPrint();
         return true;
     }
 
-    return false;
+    throw new PrintOutputError('POPUP_BLOCKED');
 };
 
-export const printPrecuenta = async (
+const printPrecuentaInternal = async (
     config: BusinessConfig,
     params: {
         items: CartItem[];
@@ -1068,13 +1072,14 @@ export const printPrecuenta = async (
     if (printWindow) {
         printWindow.document.write(receiptHtml);
         printWindow.document.close();
+        notifyBrowserPrint();
         return true;
     }
 
-    return false;
+    throw new PrintOutputError('POPUP_BLOCKED');
 };
 
-export const printComanda = async (
+const printComandaInternal = async (
     config: BusinessConfig,
     data: {
         items: CartItem[];
@@ -1227,8 +1232,21 @@ export const printComanda = async (
     if (printWindow) {
         printWindow.document.write(receiptHtml);
         printWindow.document.close();
+        notifyBrowserPrint();
         return true;
     }
 
-    return false;
+    throw new PrintOutputError('POPUP_BLOCKED');
 };
+
+// Shared feedback also covers callers that do not inspect the boolean result.
+const printGatewayVoucher = (...args: Parameters<typeof printGatewayVoucherInternal>) =>
+    runPrintTask(`voucher:${args[1].referenceId}:${args[1].copyLabel}`, `Voucher ${args[1].copyLabel}`, () => printGatewayVoucherInternal(...args));
+export const printTicket = (...args: Parameters<typeof printTicketInternal>) =>
+    runPrintTask(`ticket:${args[0].id}`, 'Ticket', () => printTicketInternal(...args));
+export const printReservation = (...args: Parameters<typeof printReservationInternal>) =>
+    runPrintTask(`reservation:${args[0].id}`, 'Reserva', () => printReservationInternal(...args));
+export const printPrecuenta = (...args: Parameters<typeof printPrecuentaInternal>) =>
+    runPrintTask(`precuenta:${JSON.stringify(args[1])}`, 'Precuenta', () => printPrecuentaInternal(...args));
+export const printComanda = (...args: Parameters<typeof printComandaInternal>) =>
+    runPrintTask(`comanda:${JSON.stringify(args[1])}`, 'Comanda', () => printComandaInternal(...args));
