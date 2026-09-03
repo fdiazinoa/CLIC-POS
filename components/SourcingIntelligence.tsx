@@ -1,3 +1,4 @@
+import { printCurrentPage } from '../services/printer/BrowserPrint';
 
 import React, { useState, useMemo } from 'react';
 import {
@@ -111,7 +112,7 @@ const SourcingIntelligence: React.FC<SourcingIntelligenceProps> = ({
                     <button onClick={handleExport} className="px-6 py-3 bg-emerald-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-emerald-700 shadow-lg shadow-emerald-100 flex items-center gap-2 transition-all">
                         <Download size={16} /> Excel
                     </button>
-                    <button onClick={() => window.print()} className="px-6 py-3 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-black shadow-lg shadow-slate-200 flex items-center gap-2 transition-all">
+                    <button onClick={printCurrentPage} className="px-6 py-3 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-black shadow-lg shadow-slate-200 flex items-center gap-2 transition-all">
                         <Printer size={16} /> Imprimir
                     </button>
                 </div>

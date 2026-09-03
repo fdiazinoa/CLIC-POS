@@ -9803,7 +9803,7 @@ const AppContent: React.FC = () => {
       const userRole = roles.find(r => r.id === (currentUser?.roleId || currentUser?.role));
       const hiddenModules = userRole?.zReportConfig?.hiddenModules || [];
       const printed = await ThermalPrinterService.printZReport(newXReport, hiddenModules, config);
-      alert(`Cierre X ${sequenceNumber} generado${printed ? ' e impreso' : ', pero no se pudo imprimir automáticamente'}.`);
+      alert(`Cierre X ${sequenceNumber} generado${printed ? ' y enviado a impresión' : ', pero no se pudo imprimir automáticamente'}.`);
     } catch (error: any) {
       console.error('❌ X-Report failed:', error);
       alert(`No se pudo generar el Cierre X: ${error?.message || 'Error desconocido'}`);
@@ -9816,7 +9816,7 @@ const AppContent: React.FC = () => {
       const hiddenModules = userRole?.zReportConfig?.hiddenModules || [];
       const printed = await ThermalPrinterService.printZReport(report, hiddenModules, config);
       alert(printed
-        ? `Cierre X ${report.sequenceNumber} impreso.`
+        ? `Cierre X ${report.sequenceNumber} enviado a impresión.`
         : `No se pudo imprimir el Cierre X ${report.sequenceNumber}. Verifica la impresora configurada.`
       );
     } catch (error: any) {
