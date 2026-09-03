@@ -9,6 +9,7 @@ const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 const dashboardSource = readFileSync(new URL('../components/ZReportDashboard.tsx', import.meta.url), 'utf8');
 const historySource = readFileSync(new URL('../components/ZReportHistory.tsx', import.meta.url), 'utf8');
 const financeSource = readFileSync(new URL('../components/FinanceDashboard.tsx', import.meta.url), 'utf8');
+const thermalPrinterSource = readFileSync(new URL('../services/printer/ThermalPrinterService.ts', import.meta.url), 'utf8');
 
 const config = {
   companyInfo: { name: 'CLIC QA' },
@@ -61,6 +62,16 @@ test('el Z automático imprime el reporte definitivo después de guardarlo', () 
   assert.ok(saveIndex >= 0);
   assert.ok(printIndex > saveIndex);
   assert.doesNotMatch(dashboardSource, /PRE-CLOSE|ThermalPrinterService\.printZReport/);
+  assert.match(dashboardSource, /autoPrintZReport: Boolean\(activeTerminalConfig\?\.workflow\?\.session\?\.autoPrintZReport\)/);
+  assert.match(dashboardSource, /preferredPrinterId:[\s\S]*?printerAssignments\?\.TICKET[\s\S]*?receiptPrinterId/);
+  assert.match(block, /reportData\?\.autoPrintZReport === true[\s\S]*?sessionConfig\?\.autoPrintZReport === true/);
+  assert.match(block, /reportData\?\.preferredPrinterId \|\|[\s\S]*?jobType: 'TICKET'/);
+  assert.doesNotMatch(block, /jobType: 'Z_REPORT'/);
+});
+
+test('cierres automáticos y reimpresiones usan el transporte de tickets', () => {
+  assert.equal((thermalPrinterSource.match(/options\?\.jobType \|\| 'TICKET'/g) || []).length, 2);
+  assert.match(historySource, /jobType: 'TICKET'/);
 });
 
 test('los anexos completos quedan persistidos y la reimpresión aplica opciones actuales', () => {

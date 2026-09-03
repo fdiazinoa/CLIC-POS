@@ -10197,17 +10197,21 @@ const AppContent: React.FC = () => {
       });
 
       const sessionConfig = currentTerminal?.config?.workflow?.session;
-      if (sessionConfig?.autoPrintZReport) {
+      const shouldAutoPrintZReport = reportData?.autoPrintZReport === true
+        || sessionConfig?.autoPrintZReport === true;
+      if (shouldAutoPrintZReport) {
         const userRole = roles.find(r => r.id === (currentUser?.roleId || currentUser?.role));
         const hiddenModules = userRole?.zReportConfig?.hiddenModules || [];
         const preferredPrinterId =
+          reportData?.preferredPrinterId ||
           currentTerminal?.config?.hardware?.printerAssignments?.TICKET ||
           currentTerminal?.config?.hardware?.receiptPrinterId;
+        console.log(`🖨️ Cierre Z ${newZReport.sequenceNumber}: enviando impresión automática a la impresora de tickets.`);
         try {
           const printed = await ThermalPrinterService.printZReport(newZReport, hiddenModules, config, {
             terminalId,
             preferredPrinterId,
-            jobType: 'Z_REPORT',
+            jobType: 'TICKET',
           });
           if (!printed) {
             console.warn(`⚠️ El cierre Z ${newZReport.sequenceNumber} se guardó, pero la impresión automática no fue confirmada.`);

@@ -306,6 +306,12 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
             // Pass base currency cash counted for backwards compatibility, plus full report data
             const reportData = {
                terminalId: currentTerminalId,
+               // Preserve the exact terminal settings shown in this modal. App.tsx
+               // must not rediscover a different/stale terminal after the modal closes.
+               autoPrintZReport: Boolean(activeTerminalConfig?.workflow?.session?.autoPrintZReport),
+               preferredPrinterId:
+                  activeTerminalConfig?.hardware?.printerAssignments?.TICKET ||
+                  activeTerminalConfig?.hardware?.receiptPrinterId,
                replaceReportId: replacementReport?.id,
                replaceSequenceNumber: replacementReport?.sequenceNumber,
                transactionIds: filteredTransactions.map(t => t.id),
