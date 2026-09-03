@@ -2155,7 +2155,10 @@ const AppContent: React.FC = () => {
         const detail = (event as CustomEvent<TerminalConfigSyncRequestDetail>)?.detail || null;
         const refreshedConfig = await syncManager.refreshTerminalResolvedConfig(
           undefined,
-          buildTerminalConfigRefreshRequest(detail),
+          {
+            ...buildTerminalConfigRefreshRequest(detail),
+            deferDuringSale: true,
+          },
         );
         if (refreshedConfig && !Array.isArray(refreshedConfig) && refreshedConfig.terminals) {
           setConfig(refreshedConfig);
@@ -5444,7 +5447,7 @@ const AppContent: React.FC = () => {
   }, []);
 
   const flushOfflinePrintQueue = useCallback(async () => {
-    if (!isDataLoaded) return;
+    if (!isDataLoaded || isPosSaleActive()) return;
 
     try {
       const result = await offlinePrintQueueService.processPendingQueue(config);
@@ -5475,6 +5478,7 @@ const AppContent: React.FC = () => {
     const intervalId = window.setInterval(wakeQueue, 15000);
     window.addEventListener('online', wakeQueue);
     window.addEventListener('offlinePrintQueueWake', wakeQueue as EventListener);
+    window.addEventListener(POS_SALE_ACTIVITY_EVENT, wakeQueue as EventListener);
     document.addEventListener('visibilitychange', handleVisibility);
 
     wakeQueue();
@@ -5483,6 +5487,7 @@ const AppContent: React.FC = () => {
       window.clearInterval(intervalId);
       window.removeEventListener('online', wakeQueue);
       window.removeEventListener('offlinePrintQueueWake', wakeQueue as EventListener);
+      window.removeEventListener(POS_SALE_ACTIVITY_EVENT, wakeQueue as EventListener);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [flushOfflinePrintQueue, isDataLoaded]);
@@ -6645,13 +6650,11 @@ const AppContent: React.FC = () => {
             setIsDataLoaded(true);
 
             if (isErpSetupMode) {
-              // The security snapshot was awaited above. General catalogs and
-              // supplemental masters must not keep the login under the splash.
+              // The security snapshot was awaited above. Run one manifest-driven
+              // reconciliation after boot and keep it away from active POS input.
               window.setTimeout(() => {
-                void syncManager.refreshTerminalResolvedConfig(undefined, {
-                  requestTimeoutMs: 8_000,
-                  supplementalMode: 'background',
-                }).catch(error => console.warn('Deferred startup catalog refresh failed:', error));
+                void syncManager.syncTerminalMastersOnStartup(finalConfig)
+                  .catch(error => console.warn('Deferred startup manifest refresh failed:', error));
               }, 1000);
             }
           } else {

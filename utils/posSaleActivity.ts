@@ -57,6 +57,24 @@ export const getPosSaleActivity = (): PosSaleActivityState => currentState;
 
 export const isPosSaleActive = (): boolean => computeActive();
 
+export const waitForPosSaleIdle = (): Promise<void> => {
+  if (!isPosSaleActive() || typeof window === 'undefined') {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    const handleActivityChange = () => {
+      if (isPosSaleActive()) return;
+      window.removeEventListener(POS_SALE_ACTIVITY_EVENT, handleActivityChange);
+      resolve();
+    };
+
+    window.addEventListener(POS_SALE_ACTIVITY_EVENT, handleActivityChange);
+    // Close the race where the hold expires between the initial check and listener registration.
+    handleActivityChange();
+  });
+};
+
 export const setPosSaleActivity = (next: { active: boolean; cartCount?: number }): void => {
   const cartCount = next.active ? Math.max(0, Number(next.cartCount || 0)) : 0;
   publishState(cartCount);

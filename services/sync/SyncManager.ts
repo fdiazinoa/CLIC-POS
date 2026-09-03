@@ -61,7 +61,7 @@ import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked } from '../../utils/de
 import { isConfigPushV2Enabled } from '../../utils/erpSyncLifecycle';
 import { syncTriggerCoordinator } from './SyncTriggerCoordinator';
 import { normalizeCanonicalErpTerminalId, resolveCanonicalErpTerminalId } from './terminalIdentity';
-import { isPosSaleActive } from '../../utils/posSaleActivity';
+import { isPosSaleActive, waitForPosSaleIdle } from '../../utils/posSaleActivity';
 import { POS_MASTER_OPERATIONAL_CATALOGS } from '../../utils/posMasterCatalogContract';
 import {
     isClientTerminalMode,
@@ -1039,14 +1039,6 @@ class SyncManager {
         // Performance: Purge old synced data on startup (Slave only)
         if (!this.isMaster) {
             this.purgeSyncedHistoricalData().catch(e => console.error('❌ SyncManager: Initial purge failed:', e));
-        }
-
-        if (apiSyncAdapter.isErpActiveOperationalTarget()) {
-            void this.syncTerminalMastersOnStartup(config).catch((error) => {
-                console.warn('⚠️ SyncManager: startup terminal manifest sync failed:', error);
-                this.readyToSellState.failedOperations += 1;
-                this.publishSyncHealthUpdate();
-            });
         }
 
         console.log('🔄 SyncManager initialized');
@@ -2150,8 +2142,16 @@ class SyncManager {
             skipIfStartupCompleted?: boolean;
             markStartupCompleted?: boolean;
             bootstrapBlocks?: boolean;
+            deferDuringSale?: boolean;
         }
     ): Promise<BusinessConfig | null> {
+        if (this.isDisabled || this.terminalManifestSyncInFlight || !navigator.onLine) {
+            return null;
+        }
+
+        if (options?.deferDuringSale) {
+            await waitForPosSaleIdle();
+        }
         if (this.isDisabled || this.terminalManifestSyncInFlight || !navigator.onLine) {
             return null;
         }
@@ -2203,6 +2203,9 @@ class SyncManager {
             const manifest = await this.fetchTerminalManifest(context, storedCursorMap);
             if (!manifest?.cursor_map || !manifest.changed) {
                 return null;
+            }
+            if (options?.deferDuringSale) {
+                await waitForPosSaleIdle();
             }
             this.recordSnapshotDiagnostics('manifest', manifest.snapshot_meta);
 
@@ -2495,12 +2498,13 @@ class SyncManager {
         }
     }
 
-    private async syncTerminalMastersOnStartup(baseConfig: BusinessConfig | null): Promise<void> {
+    public async syncTerminalMastersOnStartup(baseConfig: BusinessConfig | null): Promise<void> {
         try {
             this.setSyncPhase('P0_P1_STARTUP_MANIFEST');
             await this.reconcileTerminalManifest(baseConfig, {
                 skipIfStartupCompleted: true,
                 markStartupCompleted: true,
+                deferDuringSale: true,
             });
             this.markReadyToSell('P0_P1_READY');
         } catch (error) {
@@ -3145,9 +3149,13 @@ class SyncManager {
             blockScopes?: TerminalManifestBlockScope[];
             resolvedScopes?: TerminalManifestResolvedScope[];
             supplementalMode?: 'inline' | 'background' | 'skip';
+            deferDuringSale?: boolean;
         }
     ): Promise<BusinessConfig | null> {
         if (this.isDisabled) return null;
+        if (options?.deferDuringSale) {
+            await waitForPosSaleIdle();
+        }
         const refreshStartedAt = posCatalogDebugNow();
 
         const loadedConfig = options?.baseConfig ?? (await db.get('config') as unknown);
@@ -3397,6 +3405,10 @@ class SyncManager {
             return null;
         }
 
+        if (options?.deferDuringSale) {
+            await waitForPosSaleIdle();
+        }
+
         // Numeric master ranges are independent from the generic document collections.
         // Their upsert is monotonic, so a stale snapshot can never move a local cursor back.
         await persistMasterNumberRangesFromSnapshot(snapshot, context.terminalId);
@@ -3569,6 +3581,9 @@ class SyncManager {
 
         const runSupplementalMasterData = async () => {
             try {
+                if (options?.deferDuringSale) {
+                    await waitForPosSaleIdle();
+                }
                 if (options?.persist !== false) {
                     try { await this.refreshErpPaymentMethods(); }
                     catch (error) { console.warn('Payment methods refresh failed; keeping saved methods:', error); }
