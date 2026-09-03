@@ -5,6 +5,7 @@
  * Manages catalog distribution (Master → Slaves) and operational data collection (Slaves → Master).
  */
 
+import { fetchAndReadWithTimeout } from '../network/fetchAndReadWithTimeout';
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
 import { apiSyncAdapter, ProductImageManifestItem, ProductImagePayloadItem } from './ApiSyncAdapter';
@@ -3249,10 +3250,6 @@ class SyncManager {
                     if (remainingRequestMs !== null && remainingRequestMs <= 0) {
                         throw new Error('ERP_POS_USER_REFRESH_TIMEOUT');
                     }
-                    const requestController = remainingRequestMs !== null ? new AbortController() : null;
-                    const requestTimeout = requestController
-                        ? setTimeout(() => requestController.abort(), remainingRequestMs as number)
-                        : null;
                     const endpointPath = `/terminals/${encodeURIComponent(context.terminalId)}/config`;
                     const endpoint = `${endpointCandidate.baseUrl}${endpointPath}${params.toString() ? `?${params.toString()}` : ''}`;
                     posCatalogDebugLog('refreshTerminalResolvedConfig: fetch begin', {
@@ -3265,28 +3262,26 @@ class SyncManager {
                         requestedBlockScopes,
                         requestedResolvedScopes,
                     });
-                    let response: Response;
-                    try {
-                        response = await fetch(endpoint, {
-                            headers: {
-                                Accept: 'application/json',
-                                ...this.buildPosDeviceHeaders(context.posDeviceId),
-                            },
-                            ...(requestController ? { signal: requestController.signal } : {}),
-                        });
-                    } finally {
-                        if (requestTimeout) clearTimeout(requestTimeout);
-                    }
-                    if (!response.ok) {
-                        throw await this.buildTerminalEndpointError(
-                            response,
-                            `No se pudo refrescar la configuración de terminal (${response.status}).`,
-                            { terminalId: context.terminalId, posDeviceId: context.posDeviceId },
-                        );
-                    }
-
-                    const responseContentType = response.headers.get('content-type') || null;
-                    payload = await response.json();
+                    const result = await fetchAndReadWithTimeout(endpoint, {
+                        headers: {
+                            Accept: 'application/json',
+                            ...this.buildPosDeviceHeaders(context.posDeviceId),
+                        },
+                    }, async (response) => {
+                        if (!response.ok) {
+                            throw await this.buildTerminalEndpointError(
+                                response,
+                                `No se pudo refrescar la configuración de terminal (${response.status}).`,
+                                { terminalId: context.terminalId, posDeviceId: context.posDeviceId },
+                            );
+                        }
+                        return {
+                            contentType: response.headers.get('content-type') || null,
+                            payload: await response.json(),
+                        };
+                    }, remainingRequestMs ?? 15_000);
+                    const responseContentType = result.contentType;
+                    payload = result.payload;
                     const configSnapshotMeta = payload?.snapshot_meta && typeof payload.snapshot_meta === 'object' && !Array.isArray(payload.snapshot_meta)
                         ? payload.snapshot_meta as Record<string, any>
                         : payload?.cache && typeof payload.cache === 'object' && !Array.isArray(payload.cache)
