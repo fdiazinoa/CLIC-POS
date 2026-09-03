@@ -3268,7 +3268,7 @@ const AppContent: React.FC = () => {
     const currentTerminal = getCurrentTerminal();
     const tenantIdentity = getStoredTenantIdentity();
 
-    if (setupPending || !erpLifecycleReady || terminalAuthorizationBlock) return;
+    if (!isDataLoaded || setupPending || !erpLifecycleReady || terminalAuthorizationBlock) return;
     if (!deviceId || !currentTerminal?.id) return;
     if (!tenantIdentity.tenantId && !tenantIdentity.tenantSlug && !tenantIdentity.tenantEmail) return;
 
@@ -3621,8 +3621,11 @@ const AppContent: React.FC = () => {
 
     // Boot: publica endpoint; lifecycle ERP/manifest solo en contratos ERP o legacy con pull.
     void publishEndpoint();
+    let startupSyncTimeoutId: number | null = null;
     if (!isPosOnlyCloudStagingTarget()) {
-      void syncTriggerCoordinator.request({ reason: 'STARTUP' });
+      startupSyncTimeoutId = window.setTimeout(() => {
+        if (!disposed) void syncTriggerCoordinator.request({ reason: 'STARTUP' });
+      }, 8000);
     } else {
       console.log('[CLOUD STAGING] ERP lifecycle and manifest refresh disabled for POS_CLOUD_STAGING.');
     }
@@ -3687,6 +3690,7 @@ const AppContent: React.FC = () => {
 
     return () => {
       disposed = true;
+      if (startupSyncTimeoutId !== null) window.clearTimeout(startupSyncTimeoutId);
       heartbeatScheduler.stop();
       adaptivePollingScheduler.stop();
       unsubscribeRealtimeState();
@@ -3706,7 +3710,7 @@ const AppContent: React.FC = () => {
       window.removeEventListener('online', handleErpOnline);
       document.removeEventListener('visibilitychange', handleErpAppResume);
     };
-  }, [erpLifecycleReady, deviceId, getCurrentTerminal, lockSupersededTerminal, terminalAuthorizationBlock]);
+  }, [erpLifecycleReady, deviceId, getCurrentTerminal, isDataLoaded, lockSupersededTerminal, terminalAuthorizationBlock]);
 
   // --- RECONNECTION BANNER ---
   const renderReconnectionBanner = () => {
@@ -4469,7 +4473,7 @@ const AppContent: React.FC = () => {
     ]);
     if (!inputSensitiveViews.has(currentView)) return;
 
-    const markInteraction = () => markPosInteractionActivity(1500);
+    const markInteraction = () => markPosInteractionActivity(5000);
     const pointerOptions: AddEventListenerOptions = { capture: true, passive: true };
     const keyOptions: AddEventListenerOptions = { capture: true };
 
@@ -6705,7 +6709,7 @@ const AppContent: React.FC = () => {
 
             if (isErpSetupMode) {
               window.setTimeout(() => {
-                void syncManager.refreshErpStartupSecurity(finalConfig)
+                void syncManager.refreshErpStartupSecurity(finalConfig, { deferDuringSale: true })
                   .then(async (security) => {
                     if (security.config) setConfig(security.config);
                     const refreshedUsers = visiblePosUsersForRuntime(await db.get('users') as User[]);
@@ -6714,7 +6718,7 @@ const AppContent: React.FC = () => {
                   .catch((error) => {
                     console.warn('[SYNC_USERS] Background ERP security refresh failed; keeping offline roster.', error);
                   });
-              }, 1500);
+              }, 8000);
             }
 
           } else {

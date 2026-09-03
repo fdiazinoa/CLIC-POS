@@ -85,14 +85,15 @@ test('ERP refresh is deferred until after the login loading gate opens', async (
   }
   assert.match(app, /if \(usableUsers.length === 0\) \{\s*throw new Error/);
   assert.ok(app.indexOf('const license = await checkLicenseStatus') < app.indexOf('let startupErpUsers:'));
-  assert.ok(app.indexOf("markBootStage('READY')") < app.indexOf('syncManager.refreshErpStartupSecurity(finalConfig)', app.indexOf("markBootStage('READY')")));
+  assert.ok(app.indexOf("markBootStage('READY')") < app.indexOf('syncManager.refreshErpStartupSecurity(finalConfig,', app.indexOf("markBootStage('READY')")));
 });
 
 test('ERP security refresh is scheduled only after the login loading gate opens', () => {
   const ready = app.indexOf("            markBootStage('READY');");
   const gate = app.indexOf('            setIsDataLoaded(true);', ready);
-  const scheduledRefresh = app.indexOf('syncManager.refreshErpStartupSecurity(finalConfig)', gate);
+  const scheduledRefresh = app.indexOf('syncManager.refreshErpStartupSecurity(finalConfig,', gate);
   assert.ok(ready >= 0 && gate > ready && scheduledRefresh > gate);
   assert.match(app.slice(gate, scheduledRefresh), /window\.setTimeout\(\(\) => \{/);
+  assert.match(app.slice(scheduledRefresh, scheduledRefresh + 200), /deferDuringSale: true/);
   assert.match(app.slice(scheduledRefresh, scheduledRefresh + 900), /setUsers\(refreshedUsers\)/);
 });

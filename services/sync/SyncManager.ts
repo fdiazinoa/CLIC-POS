@@ -1092,7 +1092,10 @@ class SyncManager {
 
     // The startup needs identity, roles and the authorized roster before login.
     // Return them together so App does not fetch/apply a second config snapshot.
-    public async refreshErpStartupSecurity(baseConfig: BusinessConfig | null): Promise<{
+    public async refreshErpStartupSecurity(
+        baseConfig: BusinessConfig | null,
+        options?: { deferDuringSale?: boolean },
+    ): Promise<{
         config: BusinessConfig | null;
         users: User[];
     }> {
@@ -1110,6 +1113,7 @@ class SyncManager {
             masterScopes: ['pos_users', 'users', 'pos_roles', 'roles'],
             resolvedScopes: ['identity', 'role'],
             supplementalMode: 'skip',
+            deferDuringSale: options?.deferDuringSale,
         });
 
         const refreshedUsers = await db.get('users');
