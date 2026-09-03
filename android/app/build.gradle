@@ -23,8 +23,8 @@ android {
         applicationId "com.clicpos.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1253
-        versionName "1.1.253"
+        versionCode 1254
+        versionName "1.1.254"
         manifestPlaceholders = [
                 usesCleartextTraffic: "true",
                 networkSecurityConfig: "@xml/network_security_config"
