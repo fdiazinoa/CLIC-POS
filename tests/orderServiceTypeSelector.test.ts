@@ -60,7 +60,8 @@ test('POS routes existing action to selector and suspends barcode handling while
   const action = source.slice(source.indexOf("case 'TAKEOUT':"), source.indexOf("case 'TABLES':"));
   assert.match(action, /setShowServiceTypeDialog\(true\)/);
   assert.doesNotMatch(action, /setOrderServiceType/);
-  assert.match(source, /const isAnyModalOpen = !!\(\s*showServiceTypeDialog/);
+  const modalGuard = source.slice(source.indexOf('const isAnyModalOpen = !!('), source.indexOf('const isAnyModalOpen = !!(') + 1200);
+  assert.match(modalGuard.split('\n   );')[0], /\bshowServiceTypeDialog\b/);
   assert.match(source, /locked=\{isRecoveredUberOrder\}/);
   assert.match(source, /if \(isRecoveredUberOrder\) return;\s*setOrderServiceType\(serviceType\)/);
   assert.match(source, /serviceType: effectiveOrderServiceType/);
