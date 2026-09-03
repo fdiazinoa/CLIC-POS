@@ -362,6 +362,7 @@ class SyncManager {
     private readonly IMAGE_SYNC_INTERVAL_MS = 180000;
     private readonly IMAGE_SYNC_BATCH_SIZE = 40;
     private terminalManifestSyncInFlight = false;
+    private terminalConfigRefreshQueue: Promise<void> = Promise.resolve();
     private lastBackgroundTerminalManifestSyncAt = 0;
     private readyToSellStartedAt = 0;
     private readyToSellState: {
@@ -1104,7 +1105,7 @@ class SyncManager {
             baseConfig,
             dispatchEvent: false,
             forceRemoteFetch: true,
-            forceFullCatalog: true,
+            forceFullCatalog: false,
             requestTimeoutMs: 8_000,
             masterScopes: ['pos_users', 'users', 'pos_roles', 'roles'],
             resolvedScopes: ['identity', 'role'],
@@ -3160,6 +3161,14 @@ class SyncManager {
             deferDuringSale?: boolean;
         }
     ): Promise<BusinessConfig | null> {
+        const previousRefresh = this.terminalConfigRefreshQueue;
+        let releaseRefresh!: () => void;
+        this.terminalConfigRefreshQueue = new Promise<void>((resolve) => {
+            releaseRefresh = resolve;
+        });
+        await previousRefresh.catch(() => undefined);
+
+        try {
         if (this.isDisabled) return null;
         if (options?.deferDuringSale) {
             await waitForPosSaleIdle();
@@ -3623,6 +3632,9 @@ class SyncManager {
         return options?.persist !== false && options?.supplementalMode !== 'background' && options?.supplementalMode !== 'skip'
             ? (await db.get('config') as unknown as BusinessConfig) || nextConfig
             : nextConfig;
+        } finally {
+            releaseRefresh();
+        }
     }
 
     private async applySnapshotProducts(snapshot: unknown): Promise<number> {

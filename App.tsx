@@ -4213,33 +4213,51 @@ const AppContent: React.FC = () => {
       }
     };
 
+    const ensureMasterServerHealth = async () => {
+      if (disposed) return;
+      const nativeBridge = (window as any).ClicPOSNativePrinter;
+      if (!isNativeStandaloneTerminalRuntime(getCurrentTerminal())) return;
+      if (typeof nativeBridge?.getMasterServerStatus !== 'function') {
+        await ensureMasterServer(false);
+        return;
+      }
+
+      try {
+        const rawStatus = await Promise.resolve(nativeBridge.getMasterServerStatus({ port: 3001 }));
+        const status = parseNativeBridgeJson(rawStatus);
+        if (!status?.running) {
+          await ensureMasterServer(false);
+        }
+      } catch (error) {
+        console.warn('[MASTER_LAN] Could not verify native server health:', error);
+      }
+      await pollNativeRestaurantRevision();
+    };
+
     // Iniciar/actualizar configuración sin publicar rooms/tables/tickets. El
     // servidor nativo es la fuente operativa después de su bootstrap inicial.
     void ensureMasterServer(false).then(() => reconcileNativeRestaurantState());
-    const ensureMasterServerWithoutSnapshot = () => {
-      ensureMasterServer(false);
-      void pollNativeRestaurantRevision();
-    };
-    const watchdog = window.setInterval(ensureMasterServerWithoutSnapshot, 30000);
+    const publishMasterCatalog = () => void ensureMasterServer(false);
+    const watchdog = window.setInterval(() => void ensureMasterServerHealth(), 30000);
     const restaurantPoll = window.setInterval(() => void pollNativeRestaurantRevision(), 1000);
-    window.addEventListener('online', ensureMasterServerWithoutSnapshot);
-    window.addEventListener('productionAreasUpdated', ensureMasterServerWithoutSnapshot);
+    window.addEventListener('online', ensureMasterServerHealth);
+    window.addEventListener('productionAreasUpdated', publishMasterCatalog);
     const handleVisibilityChange = () => {
-      if (!document.hidden) ensureMasterServerWithoutSnapshot();
+      if (!document.hidden) void ensureMasterServerHealth();
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     const appPlugin = (window as any).Capacitor?.Plugins?.App;
-    const resumeListener = appPlugin?.addListener?.('resume', ensureMasterServerWithoutSnapshot);
+    const resumeListener = appPlugin?.addListener?.('resume', ensureMasterServerHealth);
     const stateListener = appPlugin?.addListener?.('appStateChange', (state: { isActive?: boolean }) => {
-      if (state?.isActive) ensureMasterServerWithoutSnapshot();
+      if (state?.isActive) void ensureMasterServerHealth();
     });
 
     return () => {
       disposed = true;
       window.clearInterval(watchdog);
       window.clearInterval(restaurantPoll);
-      window.removeEventListener('online', ensureMasterServerWithoutSnapshot);
-      window.removeEventListener('productionAreasUpdated', ensureMasterServerWithoutSnapshot);
+      window.removeEventListener('online', ensureMasterServerHealth);
+      window.removeEventListener('productionAreasUpdated', publishMasterCatalog);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       resumeListener?.remove?.();
       stateListener?.remove?.();
@@ -6262,7 +6280,8 @@ const AppContent: React.FC = () => {
           const persistedCustomers = await db.get('customers') as Customer[];
           setCustomers(Array.isArray(persistedCustomers) ? persistedCustomers : (data.customers || []));
           setTransactions(data.transactions || []);
-          setProducts(data.products || []);
+          const startupProducts = Array.isArray(data.products) ? data.products : [];
+          setProducts(startupProducts);
           setWarehouses(data.warehouses || []);
           const mirroredCashMovements = readArrayMirrorFromLocalStorage<CashMovement>(CASH_MOVEMENTS_STORAGE_KEY);
           const restoredCashMovements = mergeById(Array.isArray(data.cashMovements) ? data.cashMovements : [], mirroredCashMovements);
@@ -6437,14 +6456,15 @@ const AppContent: React.FC = () => {
             await syncManager.initialize(finalConfig, effectivePairedTerminal.id);
             markBootStage('SYNC_INITIALIZED');
 
-            // null means the attempt failed; [] is a completed authoritative empty roster.
+            // El login arranca desde SQLite; la verificación ERP ocurre después
+            // de abrir la pantalla para no bloquear PIN/mesas con la red.
             let startupErpUsers: User[] | null = null;
             try {
               let refreshedTerminalConfig: BusinessConfig | null;
               if (isErpSetupMode) {
-                const security = await syncManager.refreshErpStartupSecurity(finalConfig);
-                startupErpUsers = security.users;
-                refreshedTerminalConfig = security.config;
+                const localStartupUsers = await db.get('users') as User[];
+                startupErpUsers = Array.isArray(localStartupUsers) ? localStartupUsers : [];
+                refreshedTerminalConfig = finalConfig;
               } else {
                 refreshedTerminalConfig = await syncManager.refreshTerminalResolvedConfig(undefined, {
                   baseConfig: finalConfig,
@@ -6540,7 +6560,11 @@ const AppContent: React.FC = () => {
                 setConfig(syncedConfig);
               }
 
-              if (Array.isArray(dbProducts) && dbProducts.length > 0) {
+              if (
+                Array.isArray(dbProducts)
+                && dbProducts.length > 0
+                && JSON.stringify(dbProducts) !== JSON.stringify(startupProducts)
+              ) {
                 setProducts(dbProducts);
               }
               if (Array.isArray(dbUsers)) setUsers(visiblePosUsersForRuntime(dbUsers));
@@ -6678,6 +6702,20 @@ const AppContent: React.FC = () => {
             markBootStage('READY');
             console.log('🎉 Setting isDataLoaded = true');
             setIsDataLoaded(true);
+
+            if (isErpSetupMode) {
+              window.setTimeout(() => {
+                void syncManager.refreshErpStartupSecurity(finalConfig)
+                  .then(async (security) => {
+                    if (security.config) setConfig(security.config);
+                    const refreshedUsers = visiblePosUsersForRuntime(await db.get('users') as User[]);
+                    setUsers(refreshedUsers);
+                  })
+                  .catch((error) => {
+                    console.warn('[SYNC_USERS] Background ERP security refresh failed; keeping offline roster.', error);
+                  });
+              }, 1500);
+            }
 
           } else {
             console.warn('⚠️ No paired terminal found. Waiting for pairing...');

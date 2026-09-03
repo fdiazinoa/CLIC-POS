@@ -21,6 +21,9 @@ test('el watchdog consulta solo la revisión antes de serializar el snapshot res
   assert.match(appSource, /await reconcileNativeRestaurantState\(\)/);
   assert.match(appSource, /setInterval\(\(\) => void pollNativeRestaurantRevision\(\), 1000\)/);
   assert.match(appSource, /ensureMasterServer\(false\)\.then\(\(\) => reconcileNativeRestaurantState\(\)\)/);
+  assert.match(appSource, /getMasterServerStatus\(\{ port: 3001 \}\)/);
+  assert.match(appSource, /if \(!status\?\.running\) \{\s*await ensureMasterServer\(false\);/);
+  assert.match(appSource, /setInterval\(\(\) => void ensureMasterServerHealth\(\), 30000\)/);
 });
 
 test('cambios de mesa o caja no reinician la publicación pesada del catálogo Master', () => {

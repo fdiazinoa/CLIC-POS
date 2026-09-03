@@ -113,7 +113,7 @@ test('la WebView entrega el snapshot operativo al servidor nativo sin sobreescri
   assert.match(bridgeSource, /payload\.optJSONArray\("tables"\)/);
   assert.match(bridgeSource, /payload\.optJSONArray\("parkedTickets"\)/);
   assert.match(appSource, /restaurantRevision: masterRestaurantRevisionRef\.current/);
-  assert.match(appSource, /const ensureMasterServerWithoutSnapshot = \(\) =>/);
+  assert.match(appSource, /const ensureMasterServerHealth = async \(\) =>/);
   assert.match(serverSource, /acknowledgedRevision < restaurantRevision\.get\(\)/);
   assert.match(serverSource, /PREFS_RESTAURANT_KEY/);
   assert.match(appSource, /getMasterRestaurantState/);
@@ -170,7 +170,7 @@ test('la Cliente usa transporte nativo para bloquear y abrir mesas en Android', 
 });
 
 test('la Master Android se reactiva al volver al primer plano y el cliente reintenta con espera', () => {
-  assert.match(appSource, /addListener\?\.\('resume', ensureMasterServerWithoutSnapshot\)/);
+  assert.match(appSource, /addListener\?\.\('resume', ensureMasterServerHealth\)/);
   assert.match(appSource, /discoverLanMasterCandidates\(\{ timeoutMs: 2500 \}\)/);
   assert.match(appSource, /localStorage\.setItem\('CLIC_POS_MASTER_URL', baseUrl\)/);
   assert.match(appSource, /`\$\{baseUrl\}\/api\/sync\/ping`/);

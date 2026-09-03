@@ -32,3 +32,14 @@ test('background config and print retries defer while POS input is active', () =
   assert.match(appSource, /if \(!isDataLoaded \|\| isPosSaleActive\(\)\) return;/);
   assert.match(appSource, /addEventListener\(POS_SALE_ACTIVITY_EVENT, wakeQueue as EventListener\)/);
 });
+
+test('terminal config snapshots are serialized to avoid overlapping heavy applies', () => {
+  assert.match(syncSource, /terminalConfigRefreshQueue: Promise<void> = Promise\.resolve\(\)/);
+  assert.match(syncSource, /await previousRefresh\.catch\(\(\) => undefined\)/);
+  assert.match(syncSource, /finally \{\s*releaseRefresh\(\);\s*\}/);
+});
+
+test('startup does not render an unchanged product catalog twice', () => {
+  assert.match(appSource, /const startupProducts = Array\.isArray\(data\.products\)/);
+  assert.match(appSource, /JSON\.stringify\(dbProducts\) !== JSON\.stringify\(startupProducts\)/);
+});
