@@ -4378,7 +4378,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             isTaxExempt: selectedCustomer.isTaxExempt
          } : undefined,
          timestamp: existing?.timestamp || new Date().toISOString(),
-         tableId: activeTable.id,
+         // Editing from any member must retain the shared account's owner and membership.
+         tableId: existing?.primaryTableId || activeTable.id,
+         primaryTableId: existing?.primaryTableId,
+         joinedTableIds: existing?.joinedTableIds,
          orderNumber: readCartOrderNumber(cart) || existing?.orderNumber,
          tableDisplayLabel: activeTableContext.compactLabel || existing?.tableDisplayLabel,
          tableRoomLabel: activeTableContext.roomLabel || existing?.tableRoomLabel,
@@ -6311,7 +6314,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             isTaxExempt: selectedCustomer.isTaxExempt
          } : undefined,
          timestamp: existingParked?.timestamp || new Date().toISOString(),
-         tableId: activeTable?.id || existingParked?.tableId,
+         tableId: existingParked?.primaryTableId || activeTable?.id || existingParked?.tableId,
+         primaryTableId: existingParked?.primaryTableId,
+         joinedTableIds: existingParked?.joinedTableIds,
          orderNumber: readCartOrderNumber(ticketItems) || existingParked?.orderNumber,
          tableDisplayLabel: activeTableContext.compactLabel || existingParked?.tableDisplayLabel,
          tableRoomLabel: activeTableContext.roomLabel || existingParked?.tableRoomLabel,
@@ -6376,7 +6381,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             isTaxExempt: selectedCustomer.isTaxExempt
          } : undefined,
          timestamp: existingParked?.timestamp || new Date().toISOString(),
-         tableId: activeTable.id,
+         tableId: existingParked?.primaryTableId || activeTable.id,
+         primaryTableId: existingParked?.primaryTableId,
+         joinedTableIds: existingParked?.joinedTableIds,
          orderNumber: readCartOrderNumber(cart) || existingParked?.orderNumber,
          tableDisplayLabel: activeTableContext.compactLabel || existingParked?.tableDisplayLabel,
          tableRoomLabel: activeTableContext.roomLabel || existingParked?.tableRoomLabel,
