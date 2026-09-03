@@ -32,6 +32,7 @@ public class MainActivity extends BridgeActivity {
     private static final int BLUETOOTH_PERMISSION_REQUEST = 2001;
     private static final String TAG = "CLICPOS_MAIN";
     private boolean activityRecreated;
+    private volatile boolean keyboardOverlayMode;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -86,7 +87,9 @@ public class MainActivity extends BridgeActivity {
     private void enforcePosWindowPolicy() {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         int softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_UNSPECIFIED
-                | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
+                | (keyboardOverlayMode
+                        ? WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+                        : WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         getWindow().setSoftInputMode(softInputMode);
     }
 
@@ -134,6 +137,12 @@ public class MainActivity extends BridgeActivity {
     }
 
     private class AndroidAppBridge {
+        @JavascriptInterface
+        public void setKeyboardOverlayMode(boolean enabled) {
+            keyboardOverlayMode = enabled;
+            runOnUiThread(() -> enforcePosWindowPolicy());
+        }
+
         @JavascriptInterface
         public void recordStartupStage(String stage, int elapsedMs) {
             if (stage == null || !stage.matches("[A-Z_]{1,40}")
