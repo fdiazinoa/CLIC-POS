@@ -950,69 +950,81 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
             const txn = await onConfirm(paymentsToConfirm, voluntaryTip);
 
             if (txn) {
+               if (slowProcessTimer) {
+                  window.clearTimeout(slowProcessTimer);
+                  slowProcessTimer = undefined;
+               }
                const finalizedTransaction = txn.payments?.length
                   ? txn
                   : { ...txn, payments: paymentsToConfirm };
                const gatewayPayments = (finalizedTransaction.payments || []).filter((payment: any) => payment?.gatewayProvider);
-               let autoPrintNotice: string | null = null;
-
-               if (!isInstallmentPayment && config) {
-                  try {
-                     const drawerResult = await openCashDrawerForTransaction(finalizedTransaction, config);
-                     if (drawerResult === 'FAILED') {
-                        autoPrintNotice = 'Venta aprobada, pero no se pudo abrir el cajón portamonedas.';
-                     }
-                  } catch (drawerError) {
-                     console.error('❌ Cash drawer command failed:', drawerError);
-                     autoPrintNotice = 'Venta aprobada, pero ocurrió un problema al abrir el cajón portamonedas.';
-                  }
-               }
-
                const preferredReceiptEmail = finalizedTransaction.customerSnapshot?.email || customer?.email;
                const shouldEmailReceiptOnly = Boolean(customer?.prefersEmail && preferredReceiptEmail);
 
-               if (!isInstallmentPayment && shouldEmailReceiptOnly && preferredReceiptEmail) {
-                  try {
-                     const emailResult = await sendReceiptEmailRequest(finalizedTransaction, preferredReceiptEmail, config, currencySymbol, users);
-                     autoPrintNotice = emailResult.success
-                        ? `Ticket enviado automáticamente a ${preferredReceiptEmail}.`
-                        : `Venta aprobada. No se pudo enviar automáticamente el ticket a ${preferredReceiptEmail}: ${emailResult.message || 'error desconocido'}.`;
-                  } catch (emailError) {
-                     console.error('❌ Auto receipt email failed:', emailError);
-                     const reason = emailError instanceof Error ? emailError.message : 'error de conexión';
-                     autoPrintNotice = `Venta aprobada. No se pudo enviar automáticamente el ticket a ${preferredReceiptEmail}: ${reason}.`;
-                  }
-               } else if (!isInstallmentPayment && config && gatewayPayments.length > 0) {
-                  const matchedIntegration = config.integrations?.find(
-                     (integration) => integration.id === gatewayPayments[0]?.gatewayIntegrationId
-                  );
-                  const providerLabel = resolveGatewayDisplayName(
-                     matchedIntegration,
-                     String(gatewayPayments[0]?.gatewayProvider || 'Procesador de pago')
-                  );
-
-                  setGatewayProgress({
-                     title: 'Imprimiendo comprobantes',
-                     providerLabel,
-                     detail: 'Imprimiendo voucher y ticket automáticamente.',
-                  });
-
-                  try {
-                     const printResult = await printIntegratedPaymentArtifacts(finalizedTransaction, config);
-                     if (printResult.voucherCopiesFailed.length > 0) {
-                        autoPrintNotice = `Venta aprobada. No se pudo imprimir automáticamente: ${printResult.voucherCopiesFailed.join(', ')}.`;
-                     }
-                  } catch (printError) {
-                     console.error('❌ Auto print after integrated approval failed:', printError);
-                     autoPrintNotice = 'Venta aprobada, pero ocurrió un problema al imprimir automáticamente.';
-                  } finally {
-                     setGatewayProgress(null);
-                  }
-               }
-
-               setSuccessNotice(autoPrintNotice);
+               // The sale is already durable. Render success before touching any
+               // printer, cash drawer, email service or payment-gateway receipt.
+               setSuccessNotice(null);
                setCompletedTransaction(finalizedTransaction);
                setIsSuccessScreen(true);
+
+               window.setTimeout(() => {
+                  void (async () => {
+                     let deliveryNotice: string | null = null;
+
+                     if (!isInstallmentPayment && config) {
+                        try {
+                           const drawerResult = await openCashDrawerForTransaction(finalizedTransaction, config);
+                           if (drawerResult === 'FAILED') {
+                              deliveryNotice = 'Venta aprobada, pero no se pudo abrir el cajón portamonedas.';
+                           }
+                        } catch (drawerError) {
+                           console.error('❌ Cash drawer command failed:', drawerError);
+                           deliveryNotice = 'Venta aprobada, pero ocurrió un problema al abrir el cajón portamonedas.';
+                        }
+                     }
+
+                     if (!isInstallmentPayment && shouldEmailReceiptOnly && preferredReceiptEmail) {
+                        try {
+                           const emailResult = await sendReceiptEmailRequest(finalizedTransaction, preferredReceiptEmail, config, currencySymbol, users);
+                           deliveryNotice = emailResult.success
+                              ? `Ticket enviado automáticamente a ${preferredReceiptEmail}.`
+                              : `Venta aprobada. No se pudo enviar automáticamente el ticket a ${preferredReceiptEmail}: ${emailResult.message || 'error desconocido'}.`;
+                        } catch (emailError) {
+                           console.error('❌ Auto receipt email failed:', emailError);
+                           const reason = emailError instanceof Error ? emailError.message : 'error de conexión';
+                           deliveryNotice = `Venta aprobada. No se pudo enviar automáticamente el ticket a ${preferredReceiptEmail}: ${reason}.`;
+                        }
+                     } else if (!isInstallmentPayment && config && gatewayPayments.length > 0) {
+                        const matchedIntegration = config.integrations?.find(
+                           (integration) => integration.id === gatewayPayments[0]?.gatewayIntegrationId
+                        );
+                        const providerLabel = resolveGatewayDisplayName(
+                           matchedIntegration,
+                           String(gatewayPayments[0]?.gatewayProvider || 'Procesador de pago')
+                        );
+
+                        setGatewayProgress({
+                           title: 'Imprimiendo comprobantes',
+                           providerLabel,
+                           detail: 'Imprimiendo voucher y ticket automáticamente.',
+                        });
+
+                        try {
+                           const printResult = await printIntegratedPaymentArtifacts(finalizedTransaction, config);
+                           if (printResult.voucherCopiesFailed.length > 0) {
+                              deliveryNotice = `Venta aprobada. No se pudo imprimir automáticamente: ${printResult.voucherCopiesFailed.join(', ')}.`;
+                           }
+                        } catch (printError) {
+                           console.error('❌ Auto print after integrated approval failed:', printError);
+                           deliveryNotice = 'Venta aprobada, pero ocurrió un problema al imprimir automáticamente.';
+                        } finally {
+                           setGatewayProgress(null);
+                        }
+                     }
+
+                     setSuccessNotice(deliveryNotice);
+                  })();
+               }, 50);
             } else {
                setFinalizeError('No se pudo completar la venta. Verifique secuencia fiscal y configuración de terminal.');
             }
