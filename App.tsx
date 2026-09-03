@@ -2064,6 +2064,7 @@ const AppContent: React.FC = () => {
         stopMasterServer: (payload: unknown) => call('stopMasterServer', payload),
         getMasterServerStatus: (payload: unknown) => call('getMasterServerStatus', payload),
         getMasterRestaurantState: (payload: unknown) => call('getMasterRestaurantState', payload),
+        getMasterRestaurantRevision: (payload: unknown) => call('getMasterRestaurantRevision', payload),
         acquireMasterTableLock: (payload: unknown) => call('acquireMasterTableLock', payload),
         releaseMasterTableLock: (payload: unknown) => call('releaseMasterTableLock', payload),
         getDeviceProfile: () => Promise.resolve(parseResult(runtimeWindow.AndroidPrinter.getDeviceProfile?.())),
@@ -3939,6 +3940,11 @@ const AppContent: React.FC = () => {
   const pendingMasterTableSyncRef = useRef<PendingClientTableSync | null>(null);
   const masterRestaurantBootstrapRequestedRef = useRef(false);
   const masterFloorPlanRestoreInFlightRef = useRef(false);
+  const masterOperationalSnapshotRef = useRef({ rooms, tables, parkedTickets, cashMovements });
+
+  useEffect(() => {
+    masterOperationalSnapshotRef.current = { rooms, tables, parkedTickets, cashMovements };
+  }, [cashMovements, parkedTickets, rooms, tables]);
 
   useEffect(() => {
     if (!isNativeAndroidRuntime()) return;
@@ -3998,12 +4004,16 @@ const AppContent: React.FC = () => {
         users,
         catalogs,
         restaurantRevision: masterRestaurantRevisionRef.current,
-        ...(includeOperationalSnapshot ? { rooms, tables, parkedTickets } : {}),
+        ...(includeOperationalSnapshot ? {
+          rooms: masterOperationalSnapshotRef.current.rooms,
+          tables: masterOperationalSnapshotRef.current.tables,
+          parkedTickets: masterOperationalSnapshotRef.current.parkedTickets,
+        } : {}),
       };
       if (includeOperationalSnapshot) {
         masterRestaurantBootstrapRequestedRef.current = true;
       }
-      Promise.resolve(nativeBridge.startMasterServer(payload))
+      return Promise.resolve(nativeBridge.startMasterServer(payload))
         .then((status: any) => {
           if (disposed) return;
           console.info('[MASTER_LAN] Native server ensured', {
@@ -4149,7 +4159,10 @@ const AppContent: React.FC = () => {
           setProducts(routedCatalog.products);
           window.dispatchEvent(new CustomEvent('productsUpdated'));
         }
-        writeCriticalCollectionsMirror(nextParkedTickets, cashMovements);
+        writeCriticalCollectionsMirror(
+          nextParkedTickets,
+          masterOperationalSnapshotRef.current.cashMovements,
+        );
         await Promise.all([
           db.save('rooms', selectedRooms),
           db.save('tables', reconciledTables),
@@ -4179,15 +4192,36 @@ const AppContent: React.FC = () => {
       }
     };
 
+    const pollNativeRestaurantRevision = async () => {
+      if (disposed || masterRestaurantPollInFlightRef.current) return;
+      if (currentViewRef.current === 'TABLE_DESIGNER' || activeTableEditLockRef.current) return;
+      const nativeBridge = (window as any).ClicPOSNativePrinter;
+      if (typeof nativeBridge?.getMasterRestaurantRevision !== 'function') {
+        await reconcileNativeRestaurantState();
+        return;
+      }
+      if (!isNativeStandaloneTerminalRuntime(getCurrentTerminal())) return;
+
+      try {
+        const rawRevision = await Promise.resolve(nativeBridge.getMasterRestaurantRevision({}));
+        const revisionPayload = parseNativeBridgeJson(rawRevision);
+        const revision = Number(revisionPayload?.revision || 0);
+        if (!Number.isFinite(revision) || revision <= masterRestaurantRevisionRef.current) return;
+        await reconcileNativeRestaurantState();
+      } catch (error) {
+        console.warn('[MASTER_LAN] Could not poll native restaurant revision:', error);
+      }
+    };
+
     // Iniciar/actualizar configuración sin publicar rooms/tables/tickets. El
     // servidor nativo es la fuente operativa después de su bootstrap inicial.
-    ensureMasterServer(false);
+    void ensureMasterServer(false).then(() => reconcileNativeRestaurantState());
     const ensureMasterServerWithoutSnapshot = () => {
       ensureMasterServer(false);
-      void reconcileNativeRestaurantState();
+      void pollNativeRestaurantRevision();
     };
     const watchdog = window.setInterval(ensureMasterServerWithoutSnapshot, 30000);
-    const restaurantPoll = window.setInterval(() => void reconcileNativeRestaurantState(), 1000);
+    const restaurantPoll = window.setInterval(() => void pollNativeRestaurantRevision(), 1000);
     window.addEventListener('online', ensureMasterServerWithoutSnapshot);
     window.addEventListener('productionAreasUpdated', ensureMasterServerWithoutSnapshot);
     const handleVisibilityChange = () => {
@@ -4211,21 +4245,17 @@ const AppContent: React.FC = () => {
       stateListener?.remove?.();
     };
   }, [
-    cashMovements,
     collections,
     config,
     customers,
     getCurrentTerminal,
     internalSequences,
     isDataLoaded,
-    parkedTickets,
     productStocks,
     products,
     receptions,
     roles,
-    rooms,
     suppliers,
-    tables,
     transfers,
     users,
     warehouses,
@@ -6743,6 +6773,12 @@ const AppContent: React.FC = () => {
 
     // IMPORTANT: avoid overriding local edits while designing layout
     if ((config.vertical === 'RESTAURANT' || usesTables) && currentView !== 'TABLE_DESIGNER') {
+      // La Master Android ya reconcilia el estado mediante el bridge nativo y
+      // una revisión liviana. Evitar un segundo GET /api/mesas que reconstruye
+      // arrays React y vuelve a publicar el catálogo completo sin cambios.
+      if (isNativeAndroidRuntime() && isNativeStandaloneTerminalRuntime(getCurrentTerminal())) {
+        return;
+      }
       fetchTables();
       const interval = setInterval(fetchTables, isClientTerminalMode() ? 3000 : 10000);
       return () => clearInterval(interval);
