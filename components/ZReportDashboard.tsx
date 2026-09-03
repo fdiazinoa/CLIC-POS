@@ -11,9 +11,6 @@ import { db } from '../utils/db';
 import ZReportHistory from './ZReportHistory';
 import { calculateZReportStats } from '../utils/analytics';
 import { buildServiceTypeReport, getOrderServiceTypeLabel } from '../utils/orderServiceType';
-import { buildCloseReportDetails, resolveCloseReportSections } from '../utils/closeReportOptions';
-import { buildCloseTaxSummary } from '../utils/closeReceiptSummary';
-import { ThermalPrinterService } from '../services/printer/ThermalPrinterService';
 import {
    getPaymentAppliedBaseAmount,
    getPaymentChangeBaseAmount,
@@ -278,62 +275,9 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
 
             // Step 1: Impresión
             setCurrentStep(1);
-            if (activeTerminalConfig?.workflow?.session?.autoPrintZReport) {
-               const previewCashCountedData = buildCashCountedData();
-               // Construct temporary report object for printing
-               const tempReport: any = {
-                  sequenceNumber: 'PRE-CLOSE', // Will be updated on save, but good for preview
-                  closedAt: new Date().toISOString(),
-                  closedByUserName: userName,
-                  terminalId: activeTerminal?.id || 'POS-01',
-                  baseCurrency: baseCurrencyCode,
-                  totalsByMethod: {}, // Calculated below
-                  cashExpected: expectedCashByCurrency,
-                  cashCounted: previewCashCountedData,
-                  cashDiscrepancy: cashDiscrepancyByCurrency,
-                  cashMovementDetails,
-                  denominationBreakdown: buildDenominationBreakdown(),
-                  transactionCount: filteredTransactions.length,
-                  stats: calculateZReportStats(filteredTransactions, filteredCollections)
-               };
-               const tempServiceTypeReport = buildServiceTypeReport(filteredTransactions);
-               tempReport.serviceTypeSummary = tempServiceTypeReport.summary;
-               tempReport.closeTaxSummary = buildCloseTaxSummary(filteredTransactions);
-               tempReport.serviceTypeTransactions = tempServiceTypeReport.transactions;
-
-               tempReport.enabledSections = resolveCloseReportSections(config, currentTerminalId, currentUser?.id, 'Z');
-               tempReport.reportDetails = buildCloseReportDetails(
-                  filteredTransactions,
-                  config,
-                  activeTerminalConfig,
-                  tempReport.enabledSections,
-               );
-
-               // Calculate totals by method
-               const totalsByMethod: Record<string, number> = {};
-               filteredTransactions.forEach(t => {
-                  (t?.payments || []).forEach(p => {
-                     if (p && p.method) {
-                        totalsByMethod[p.method] = (totalsByMethod[p.method] || 0) + getPaymentAppliedBaseAmount(p);
-                     }
-                  });
-               });
-               tempReport.totalsByMethod = totalsByMethod;
-
-               // Get hidden modules from current user role
-               const userRole = roles.find(r => r.id === (currentUser?.roleId || currentUser?.role));
-               const hiddenModules = userRole?.zReportConfig?.hiddenModules || [];
-
-               try {
-                  await Promise.race([
-                     ThermalPrinterService.printZReport(tempReport, hiddenModules, config),
-                     new Promise((_, reject) => setTimeout(() => reject(new Error('PRINT_TIMEOUT')), 12000))
-                  ]);
-               } catch (printError) {
-                  console.warn('⚠️ Z-Report print step failed or timed out, continuing closure:', printError);
-               }
-            }
-            await new Promise(r => setTimeout(r, 1000));
+            // App.tsx imprime el reporte definitivo solo después de persistirlo con
+            // su secuencia, opciones y denominaciones. Nunca imprimir un borrador.
+            await new Promise(r => setTimeout(r, 250));
 
             // Convert declared cash to numbers. In denomination mode, totals are derived from bills/coins.
             const cashCountedData = buildCashCountedData();

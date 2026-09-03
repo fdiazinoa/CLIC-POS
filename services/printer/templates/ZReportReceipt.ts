@@ -23,6 +23,8 @@ export const generateZReportReceipt = (
   const enabledSections = new Set(report.enabledSections || []);
   const reportDetails = report.reportDetails || {};
   const denominationBreakdown = report.denominationBreakdown || report.denomination_breakdown || {};
+  const hasDenominationBreakdown = Object.values(denominationBreakdown)
+    .some(lines => Array.isArray(lines) && lines.length > 0);
   const serviceTypeSummary = report.serviceTypeSummary || [];
   const closeSummary = getCloseReceiptSummary(report);
   const escapeLabel = (value: string) => value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
@@ -257,7 +259,7 @@ export const generateZReportReceipt = (
         }).join('') || '<div>Sin impuestos registrados.</div>'}
       ` : ''}
 
-      ${enabledSections.has('CURRENCY_BREAKDOWN') ? `
+      ${(enabledSections.has('CURRENCY_BREAKDOWN') || hasDenominationBreakdown) ? `
         <div class="section-title">DESGLOSE DE MONEDA</div>
         ${Object.entries(denominationBreakdown).map(([currency, lines]) => `
           <div class="bold">${currency}</div>

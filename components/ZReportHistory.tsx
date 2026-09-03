@@ -4,11 +4,12 @@ import {
     Printer, Mail, ChevronRight, Search, AlertTriangle,
     Banknote, CheckCircle, RefreshCw
 } from 'lucide-react';
-import { ZReport, BusinessConfig, User, RoleDefinition } from '../types';
+import { ZReport, BusinessConfig, User, RoleDefinition, Transaction } from '../types';
 import { db } from '../utils/db';
 import { ThermalPrinterService } from '../services/printer/ThermalPrinterService';
 import { ZReportRecoveryService } from '../services/recovery/ZReportRecoveryService';
 import { sendZReportEmailViaErp } from '../services/email/zReportEmailService';
+import { ALL_CLOSE_REPORT_SECTIONS, buildCloseReportDetails, resolveCloseReportSections } from '../utils/closeReportOptions';
 
 interface ZReportHistoryProps {
     config: BusinessConfig;
@@ -217,9 +218,30 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
             const preferredPrinterId =
                 printTerminal?.config?.hardware?.printerAssignments?.TICKET ||
                 printTerminal?.config?.hardware?.receiptPrinterId;
+            const archived = await (db.get('transactionHistory') as Promise<Transaction[]>);
+            const reportTransactions = (Array.isArray(archived) ? archived : []).filter(tx =>
+                tx.zReportId === report.id ||
+                (tx as any).zReportSequence === report.sequenceNumber
+            );
+            const enabledSections = resolveCloseReportSections(
+                config,
+                printTerminal?.id || activeTerminalId || report.terminalId,
+                currentUser?.id,
+                'Z'
+            );
             const printReport = {
                 ...report,
-                terminalId: printTerminal?.id || activeTerminalId || report.terminalId
+                terminalId: printTerminal?.id || activeTerminalId || report.terminalId,
+                enabledSections,
+                reportDetails: {
+                    ...buildCloseReportDetails(
+                        reportTransactions,
+                        config,
+                        printTerminal?.config,
+                        ALL_CLOSE_REPORT_SECTIONS
+                    ),
+                    ...(report.reportDetails || {}),
+                },
             };
             const printed = await ThermalPrinterService.printZReport(printReport, hiddenModules, config, {
                 preferredPrinterId,
