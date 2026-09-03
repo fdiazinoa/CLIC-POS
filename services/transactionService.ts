@@ -243,6 +243,22 @@ const mergeTerminalAuthoritativeSeries = (
  * Transaction Service
  * Handles transaction ID generation with global sequence numbers
  */
+let sequenceBroadcastQueue: Promise<void> = Promise.resolve();
+
+const enqueueSequenceBroadcast = (seriesId: string, seriesConfig: any): void => {
+    const sequenceSnapshot = { ...seriesConfig };
+    sequenceBroadcastQueue = sequenceBroadcastQueue
+        .catch(() => undefined)
+        .then(async () => {
+            const { syncManager } = await import('./sync/SyncManager');
+            await syncManager.broadcastChange('internalSequences', sequenceSnapshot, 'UPDATE');
+            console.log(`📡 Broadcasted sequence update for ${seriesId} (next: ${sequenceSnapshot.nextNumber})`);
+        })
+        .catch((e) => {
+            console.warn(`⚠️ Failed to broadcast sequence update for ${seriesId}:`, e);
+        });
+};
+
 class TransactionService {
     /**
      * Prefer terminal.config.documentAssignments[documentType] when present (merged with
@@ -334,15 +350,9 @@ class TransactionService {
         seriesConfig.nextNumber = seriesNumber + 1;
         await db.save('internalSequences', series);
 
-        // Broadcast change to Master (and other terminals)
-        try {
-            const { syncManager } = await import('./sync/SyncManager');
-            await syncManager.broadcastChange('internalSequences', seriesConfig, 'UPDATE');
-            console.log(`📡 Broadcasted sequence update for ${seriesId} (next: ${seriesConfig.nextNumber})`);
-        } catch (e) {
-            // Silently fail if syncManager is not yet initialized or fails
-            console.warn(`⚠️ Failed to broadcast sequence update for ${seriesId}:`, e);
-        }
+        // The local sequence is already durable. Network propagation must never
+        // keep the cashier waiting after the ticket number has been reserved.
+        enqueueSequenceBroadcast(seriesId, seriesConfig);
 
         return {
             globalSequence,

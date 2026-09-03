@@ -9222,51 +9222,38 @@ const AppContent: React.FC = () => {
 
     const affectedPairs = new Set<string>();
     ledgerEntriesForCommit.forEach(entry => affectedPairs.add(`${entry.productId}|${entry.warehouseId}`));
-    for (const pair of affectedPairs) {
-      const [pId, wId] = pair.split('|');
-      await db.recalculateProductStock(pId, wId);
-    }
 
-    // Refresh products to reflect changes made by recordInventoryMovement
-    const refreshedDb = await db.init();
-    if (Array.isArray(refreshedDb.products) && refreshedDb.products.length > 0) {
-      setProducts(refreshedDb.products);
-    } else {
-      console.warn("Transaction completion refresh skipped empty products; preserving current POS catalog.");
-    }
-
-    // --- CRITICAL: Increment Document Series Sequence in Internal Sequences ---
-    // This is the global source of truth for sequences, synced with Settings.
-    const seriesId = txn.seriesId;
-    if (seriesId && internalSequences) {
-      const seriesIndex = internalSequences.findIndex(s => s.id === seriesId);
-
-      if (seriesIndex !== undefined && seriesIndex >= 0) {
-        // Create a deep copy
-        const updatedSequences = [...internalSequences];
-
-        // Increment
-        updatedSequences[seriesIndex].nextNumber++;
-
-        // Update State
-        setInternalSequences(updatedSequences);
-
-        // Persist local first
-        await db.save('internalSequences', updatedSequences);
-
-        // SYNC: Push to Server immediately if Master to prevent overwrite
-        if (permissionService.isMasterTerminal()) {
-          console.log(`📤 [App.tsx] Pushing updated sequences to Server...`);
-          try {
-            await syncManager.pushCatalog('internalSequences');
-            console.log(`✅ [App.tsx] Sequences pushed to Server.`);
-          } catch (e) {
-            console.error(`❌ [App.tsx] Failed to push sequences to Server:`, e);
-          }
+    // Recalculation reads the complete ledger and can grow with the history.
+    // The financial documents and ledger entries are already durable at this
+    // point, so refresh stock after releasing the checkout UI.
+    window.setTimeout(() => {
+      void (async () => {
+        for (const pair of affectedPairs) {
+          const [pId, wId] = pair.split('|');
+          await db.recalculateProductStock(pId, wId);
         }
 
-        console.log(`✅ Sequence ${seriesId} incremented to ${updatedSequences[seriesIndex].nextNumber}`);
-      }
+        const refreshedProducts = await db.get('products') as Product[];
+        if (Array.isArray(refreshedProducts) && refreshedProducts.length > 0) {
+          setProducts(refreshedProducts);
+        } else {
+          console.warn("Transaction completion refresh skipped empty products; preserving current POS catalog.");
+        }
+      })().catch(error => {
+        console.error('Post-sale inventory refresh failed:', error);
+      });
+    }, 50);
+
+    // transactionService.generateTransactionId owns the durable sequence
+    // increment. Reconcile React state without incrementing or saving it again.
+    const seriesId = txn.seriesId;
+    const reservedNextNumber = Number(txn.seriesNumber || 0) + 1;
+    if (seriesId && reservedNextNumber > 1) {
+      setInternalSequences(current => current.map(sequence =>
+        sequence.id === seriesId
+          ? { ...sequence, nextNumber: Math.max(Number(sequence.nextNumber || 1), reservedNextNumber) }
+          : sequence
+      ));
     }
 
     // --- CRITICAL: Update Customer Debt for Credit Transactions (CxC) ---
