@@ -1,3 +1,4 @@
+import { MobilePosNavigation } from './MobilePosNavigation';
 import React, { useState, useMemo, useEffect, useRef, useCallback, useDeferredValue } from 'react';
 import { Capacitor } from '@capacitor/core';
 import {
@@ -6968,7 +6969,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             config={config}
          />
 
-         {mobileView === 'PRODUCTS' && (
+         {isMobile && mobileView === 'PRODUCTS' && (
             <MobileCartButton
                buttonRef={mobileCartButtonRef}
                itemCount={cart.length}
@@ -6981,7 +6982,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          )}
 
          {/* LEFT AREA: PRODUCTS */}
-         <div className={`flex-1 min-h-0 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${mobileView === 'TICKET' ? 'hidden md:flex' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
+         <div className={`flex-1 min-h-0 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${isMobile && mobileView === 'TICKET' ? 'hidden' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
             <header className="bg-white px-3 md:px-8 py-2 md:py-4 border-b border-gray-200 flex flex-wrap items-center gap-1.5 md:gap-6 shadow-sm z-10 shrink-0">
                <div className="flex items-center gap-3 pr-0 md:pr-4 border-r-0 md:border-r border-gray-100 shrink-0">
                   <div className="w-9 h-9 md:w-10 md:h-10 rounded-full bg-gray-50 overflow-hidden border border-gray-200 shadow-inner shrink-0">
@@ -7138,6 +7139,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </button>
                </div>
             </header>
+
+            {isMobile && !isKioskMode && (
+               <MobilePosNavigation
+                  onOpenTables={showTableMapButton && onOpenTableMap ? () => { void handleBackToMap(); } : undefined}
+                  onOpenActions={() => {
+                     setRightSidebarTab('ACTIONS');
+                     setMobileView('TICKET');
+                  }}
+               />
+            )}
 
             {/* --- CATEGORY SELECTOR BAR --- */}
             <div className={categoryContainerClass}>
@@ -7360,10 +7371,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          </div >
 
          {/* RIGHT SIDEBAR: CURRENT TICKET */}
-         <div className={`w-full ${isRetailMode ? '' : 'md:w-96'} h-full min-h-0 bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden md:flex' : 'flex'}`}>
+         <div className={`${!isMobile && !isRetailMode ? 'w-96 shrink-0' : 'w-full'} h-full min-h-0 bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${isMobile && mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden' : 'flex'}`}>
 
             {/* MOBILE HEADER */}
-            < div className="md:hidden px-4 py-3 border-b border-gray-100 bg-white flex flex-col gap-3 shrink-0" >
+            < div className={`${isMobile ? 'flex' : 'hidden'} px-4 py-3 border-b border-gray-100 bg-white flex-col gap-3 shrink-0`} >
                <div className="flex justify-between items-start">
                   <div className="flex items-center gap-3">
                      {renderTicketBrand(true)}
@@ -7418,6 +7429,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   className="flex items-center justify-end gap-2"
                   aria-label="Vista del ticket"
                >
+                  {showTableMapButton && onOpenTableMap && (
+                     <button type="button" onClick={() => { void handleBackToMap(); }}
+                        className="mr-auto flex h-12 items-center gap-2 rounded-xl bg-orange-500 px-3 text-sm font-bold text-white">
+                        <Layout size={18} /> Mesas
+                     </button>
+                  )}
                   <button
                      type="button"
                      data-testid="mobile-cart-tab-button"
@@ -7494,7 +7511,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div >
 
             {/* DESKTOP: marca + mesa/comensales bajo el logo; retail: busqueda al centro; botones carrito/acciones alineados a la derecha (como APK 1.0.300) */}
-            <div className={`hidden md:flex px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
+            <div className={`${isMobile ? 'hidden' : 'flex'} px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
                <div data-testid="desktop-ticket-toolbar" className="flex w-full items-center justify-between gap-1">
                   <div className="flex min-w-0 shrink-0 items-center justify-start">
                      {renderTicketBrand(!isRetailMode)}
@@ -8392,7 +8409,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             isMobile && mobileView === 'TICKET' && rightSidebarTab === 'CART' && (
                <div
                   ref={mobileFooterRef}
-                  className="md:hidden fixed left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5"
+                  className="fixed left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5"
                   style={mobileFooterStyle}
                >
                   {activeTable && activeTableAccounts.length > 1 && (
