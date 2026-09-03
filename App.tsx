@@ -5741,6 +5741,10 @@ const AppContent: React.FC = () => {
 
     const loadData = async () => {
       console.log('🚀 loadData started');
+      const bootStartedAt = performance.now();
+      const markBootStage = (stage: string) => console.info('[POS_BOOT]', {
+        stage, elapsedMs: Math.round(performance.now() - bootStartedAt),
+      });
       try {
         console.log('⏳ Calling db.init()...');
         const data = await Promise.race([
@@ -5752,6 +5756,7 @@ const AppContent: React.FC = () => {
           })
         ]);
         console.log('✅ db.init() returned:', data ? Object.keys(data) : 'null');
+        markBootStage('LOCAL_DATABASE_READY');
 
         if (isSyncFeatureEnabled('sqlite_outbox_v2')) {
           if (!durableOutboxRepository.isSupported()) {
@@ -5835,6 +5840,7 @@ const AppContent: React.FC = () => {
 
         // --- LICENSE / KILL-SWITCH VALIDATION ---
         const license = await checkLicenseStatus(persistedTenantId, storedDeviceId);
+        markBootStage('LICENSE_CHECKED');
         if (!license.isValid && license.cloudReachable !== false) {
           triggerLockdown(license.reason || 'Servicio Suspendido.');
           return;
@@ -6390,11 +6396,14 @@ const AppContent: React.FC = () => {
             }
 
             await syncManager.initialize(finalConfig, effectivePairedTerminal.id);
+            markBootStage('SYNC_INITIALIZED');
 
             try {
               const refreshedTerminalConfig = await syncManager.refreshTerminalResolvedConfig(undefined, {
                 baseConfig: finalConfig,
                 dispatchEvent: false,
+                requestTimeoutMs: 8_000,
+                supplementalMode: 'background',
               });
 
               if (refreshedTerminalConfig) {
@@ -6409,6 +6418,8 @@ const AppContent: React.FC = () => {
             } catch (refreshError) {
               console.warn('⚠️ Startup terminal snapshot refresh failed. Using last known local config.', refreshError);
             }
+
+            markBootStage('TERMINAL_CONFIG_READY');
 
             // Auto-heal catalog/config drift on startup.
             // This catches the "2 categories / old products" mixed-state on both master and slaves.
@@ -6608,6 +6619,7 @@ const AppContent: React.FC = () => {
             backgroundSyncManager.initialize().catch(console.error);
             currencyScheduleExecutor.initialize();
 
+            markBootStage('READY');
             console.log('🎉 Setting isDataLoaded = true');
             setIsDataLoaded(true);
           } else {
@@ -6912,6 +6924,10 @@ const AppContent: React.FC = () => {
       console.log('🔔 App: configUpdated received. Applying synchronized config...');
       setConfig(incomingConfig);
 
+      // Startup owns initialization and the security bootstrap. Manifest/catalog
+      // events may update React state, but must not restart sync recursively.
+      if (!isDataLoaded) return;
+
       const activeTerminalId =
         localStorage.getItem('active_terminal_id')
         || localStorage.getItem('CLIC_POS_TERMINAL_ID')
@@ -6988,7 +7004,7 @@ const AppContent: React.FC = () => {
     return () => {
       window.removeEventListener('configUpdated', handleConfigUpdated as EventListener);
     };
-  }, [config, currentUser, currentView, deviceId, syncConfigToLocalServer]);
+  }, [config, currentUser, currentView, deviceId, isDataLoaded, syncConfigToLocalServer]);
 
   // --- GLOBAL KEYBOARD SHORTCUT FOR ADMIN ACCESS ---
   useEffect(() => {
