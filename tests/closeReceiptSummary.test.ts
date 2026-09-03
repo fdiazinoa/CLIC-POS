@@ -53,6 +53,31 @@ test('missing historical detail never fabricates 18% or 10% rates', () => {
   assert.equal(taxes[0].amount,1772.54);
 });
 
+test('recovers a missing header breakdown from reconciled persisted line fiscal amounts', () => {
+  const summary = buildCloseTaxSummary([{
+    taxAmount: 1159.32,
+    items: [
+      { taxAmount: 610.17, taxRate: .18 },
+      { taxAmount: 549.15, taxRate: .18 },
+    ],
+    serviceChargeAmount: 644.07,
+    serviceTaxPolicySnapshot: { legalTip: { percentage: 10 } },
+  } as any]);
+
+  assert.deepEqual(summary, [
+    { name: 'Impuesto', rate: 18, amount: 1159.32 },
+    { name: 'Propina legal', rate: 10, amount: 644.07 },
+  ]);
+});
+
+test('does not recover line rates when their persisted amounts do not reconcile', () => {
+  const summary = buildCloseTaxSummary([{
+    taxAmount: 100,
+    items: [{ taxAmount: 18, taxRate: .18 }],
+  } as any]);
+  assert.deepEqual(summary.map(closeTaxLabel), ['Impuestos sin desglose']);
+});
+
 test('refunds and voids do not add taxes to the service sales summary; no voluntary tips', () => {
   assert.deepEqual(buildCloseTaxSummary([
     {documentType:'REFUND',taxAmount:18}, {documentType:'VOID',taxAmount:18}, {ncfType:'B04',taxAmount:18},
@@ -91,4 +116,12 @@ test('X, Z and pre-close persist the same print snapshot', () => {
   assert.equal(app.match(/closeTaxSummary: buildCloseTaxSummary\(terminalTransactions\)/g)?.length,2);
   const dashboard = readFileSync(new URL('../components/ZReportDashboard.tsx',import.meta.url),'utf8');
   assert.match(dashboard,/tempReport.closeTaxSummary = buildCloseTaxSummary\(filteredTransactions\)/);
+});
+
+test('checkout persists the calculated tax breakdown for regular and split sales', () => {
+  const pos = readFileSync(new URL('../components/POSInterface.tsx',import.meta.url),'utf8');
+  const transactionService = readFileSync(new URL('../services/transactionService.ts',import.meta.url),'utf8');
+  assert.match(pos, /taxBreakdown: isRefundOnly \? undefined : taxBreakdown/);
+  assert.match(pos, /taxBreakdown: saleTaxBreakdown/);
+  assert.match(transactionService, /taxBreakdown: data\.taxBreakdown/);
 });

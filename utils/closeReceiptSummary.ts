@@ -28,8 +28,27 @@ export const consolidateCloseTaxLines = (lines: TaxLine[]): TaxLine[] => {
     .sort((a, b) => Number(a.name === 'Propina legal') - Number(b.name === 'Propina legal') || (b.rate ?? -1) - (a.rate ?? -1));
 };
 
+const taxBreakdownFromPersistedItems = (transaction: Transaction): TaxLine[] => {
+  const items = Array.isArray(transaction.items) ? transaction.items : [];
+  if (!items.length || !items.every(item => Number.isFinite(Number(item.taxAmount)))) return [];
+
+  const taxableItems = items.filter(item => money(item.taxAmount) !== 0);
+  if (!taxableItems.length || taxableItems.some(item => percent(item.taxRate) === undefined)) return [];
+
+  const lineTaxTotal = round(items.reduce((sum, item) => sum + money(item.taxAmount), 0));
+  if (Math.abs(lineTaxTotal - round(money(transaction.taxAmount))) > 0.01) return [];
+
+  return taxableItems.map(item => ({
+    name: 'Impuesto',
+    rate: percent(item.taxRate),
+    amount: money(item.taxAmount),
+  }));
+};
+
 /** Snapshot recorded money only. Never infer a rate from today's ERP config or
- * multiply the closing total by a tax percentage. Refunds are reported elsewhere. */
+ * multiply the closing total by a tax percentage. Persisted line fiscal amounts
+ * may recover a missing header breakdown when they reconcile exactly. Refunds
+ * are reported elsewhere. */
 export const buildCloseTaxSummary = (transactions: Transaction[]): TaxLine[] => {
   const lines: TaxLine[] = [];
   for (const transaction of transactions) {
@@ -40,7 +59,9 @@ export const buildCloseTaxSummary = (transactions: Transaction[]): TaxLine[] => 
         lines.push({ name: String(tax.name || 'Impuesto'), rate: percent(tax.rate), amount: money(tax.amount) });
       }
     } else if (money(transaction.taxAmount)) {
-      lines.push({ name: 'Impuestos sin desglose', amount: money(transaction.taxAmount) });
+      const persistedItemBreakdown = taxBreakdownFromPersistedItems(transaction);
+      if (persistedItemBreakdown.length) lines.push(...persistedItemBreakdown);
+      else lines.push({ name: 'Impuestos sin desglose', amount: money(transaction.taxAmount) });
     }
     if (money(transaction.serviceChargeAmount)) {
       const policy = transaction.serviceTaxPolicySnapshot || transaction.service_tax_policy_snapshot;
