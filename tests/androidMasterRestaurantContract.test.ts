@@ -238,7 +238,9 @@ test('los renders de la Master no reemplazan el estado operativo nativo', () => 
     appSource.indexOf('const ensureMasterServer ='),
     appSource.indexOf('useEffect(() => {\n    if (currentView !== \'TABLE_DESIGNER\')'),
   );
-  assert.match(masterServerEffect, /includeOperationalSnapshot \? \{ rooms, tables, parkedTickets \} : \{\}/);
+  assert.match(masterServerEffect, /includeOperationalSnapshot \? \{[\s\S]*masterOperationalSnapshotRef\.current\.rooms/);
+  assert.match(masterServerEffect, /masterOperationalSnapshotRef\.current\.tables/);
+  assert.match(masterServerEffect, /masterOperationalSnapshotRef\.current\.parkedTickets/);
   assert.match(masterServerEffect, /revision === 0/);
   assert.match(masterServerEffect, /masterRestaurantBootstrapRequestedRef\.current/);
   assert.match(masterServerEffect, /activeTableEditLockRef\.current/);

@@ -780,6 +780,11 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
     }
 
     @JavascriptInterface
+    fun getMasterRestaurantRevision(payloadJson: String?): String {
+        return ClicPOSMasterHttpServer.getRestaurantRevision().toString()
+    }
+
+    @JavascriptInterface
     fun acquireMasterTableLock(payloadJson: String?): String {
         val payload = runCatching {
             if (payloadJson.isNullOrBlank()) JSONObject() else JSONObject(payloadJson)
