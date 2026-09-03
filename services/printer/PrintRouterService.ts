@@ -1,3 +1,4 @@
+import { PrintOutputError } from './PrintFeedback';
 import { BusinessConfig, PrinterDevice } from '../../types';
 import { LocalPrintAgentService } from './LocalPrintAgentService';
 import { nativePrintBridge } from './NativePrintBridge';
@@ -90,8 +91,9 @@ export const PrintRouterService = {
                     jobType,
                     referenceId,
                     copies,
-                });
+            }, isAndroidNativePrintRuntime());
             }
+            if (isAndroidNativePrintRuntime()) throw new PrintOutputError('PRINTER_NOT_FOUND');
             return false;
         }
 
@@ -106,12 +108,12 @@ export const PrintRouterService = {
                 jobType,
                 referenceId,
                 copies,
-            });
+            }, isAndroidNativePrintRuntime());
             if (nativePrinted) return true;
         }
 
         if (isAndroidNativePrintRuntime()) {
-            return false;
+            throw new PrintOutputError('PRINTER_NOT_FOUND');
         }
 
         return LocalPrintAgentService.sendHtmlJob({
@@ -146,8 +148,9 @@ export const PrintRouterService = {
                     jobType,
                     referenceId,
                     copies,
-                });
+            }, isAndroidNativePrintRuntime());
             }
+            if (isAndroidNativePrintRuntime()) throw new PrintOutputError('PRINTER_NOT_FOUND');
             return false;
         }
 
@@ -162,13 +165,13 @@ export const PrintRouterService = {
                 jobType,
                 referenceId,
                 copies,
-            });
+            }, isAndroidNativePrintRuntime());
 
             if (nativePrinted) return true;
         }
 
         if (isAndroidNativePrintRuntime()) {
-            return false;
+            throw new PrintOutputError('PRINTER_NOT_FOUND');
         }
 
         return LocalPrintAgentService.sendEscPosJob({
