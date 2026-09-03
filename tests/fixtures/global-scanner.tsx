@@ -9,7 +9,9 @@ function ScannerQA() {
     const [scans, setScans] = useState<string[]>([]);
     const [manual, setManual] = useState(0);
     const [modal, setModal] = useState(false);
-    useBarcodeScanner({ onScan: code => { setScans(prev => [...prev, code]); setValue(''); } });
+    // Deliberately do not clear from onScan: unknown codes and other routes
+    // must leave the controlled input ready without help from catalog lookup.
+    useBarcodeScanner({ onScan: code => { setScans(prev => [...prev, code]); } });
     useEffect(() => { focusSalesScannerInput(document); }, [modal]);
     return <main data-pos-scanner-enabled={modal ? 'false' : 'true'}>
         <input aria-label="Search" data-barcode-scanner-target="true" value={value}
@@ -20,6 +22,7 @@ function ScannerQA() {
         {modal && <div role="dialog">Payment is open</div>}
         <output id="scans">{JSON.stringify(scans)}</output>
         <output id="manual">{manual}</output>
+        <output id="search-state">{value}</output>
     </main>;
 }
 createRoot(document.getElementById('root')!).render(<ScannerQA />);
