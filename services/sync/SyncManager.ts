@@ -5,6 +5,7 @@
  * Manages catalog distribution (Master → Slaves) and operational data collection (Slaves → Master).
  */
 
+import { syncErpPaymentMethods } from './PaymentMethodsSync';
 import { fetchAndReadWithTimeout } from '../network/fetchAndReadWithTimeout';
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
@@ -2925,6 +2926,8 @@ class SyncManager {
                 markStartupCompleted: false,
                 bootstrapBlocks: Boolean(options?.bootstrapBlocks),
             });
+            try { await this.refreshErpPaymentMethods(); }
+            catch (error) { console.warn('Payment methods refresh failed; keeping saved methods:', error); }
             console.info('[SYNC_FALLBACK]', {
                 reason: options?.reason || 'periodic_manifest',
                 mechanism: 'terminal_manifest',
@@ -2933,7 +2936,7 @@ class SyncManager {
                 result: result ? 'APPLIED' : 'NO_CHANGES',
                 duration_ms: Date.now() - startedAt,
             });
-            return result;
+            return result ? (await db.get('config') as unknown as BusinessConfig) || result : result;
         } catch (error) {
             console.warn('[SYNC_FALLBACK]', {
                 reason: options?.reason || 'periodic_manifest',
@@ -3560,8 +3563,16 @@ class SyncManager {
             this.persistTerminalCursorMap(snapshotTerminalId, nextTerminalCursorMap);
         }
 
+        if (options?.dispatchEvent !== false && changed) {
+            window.dispatchEvent(new CustomEvent('configUpdated', { detail: nextConfig }));
+        }
+
         const runSupplementalMasterData = async () => {
             try {
+                if (options?.persist !== false) {
+                    try { await this.refreshErpPaymentMethods(); }
+                    catch (error) { console.warn('Payment methods refresh failed; keeping saved methods:', error); }
+                }
                 await this.refreshTerminalSupplementalMasterData(snapshot, catalogDelta);
             } catch (error) {
                 this.readyToSellState.failedOperations += 1;
@@ -3578,10 +3589,6 @@ class SyncManager {
             await runSupplementalMasterData();
         }
 
-        if (options?.dispatchEvent !== false && changed) {
-            window.dispatchEvent(new CustomEvent('configUpdated', { detail: nextConfig }));
-        }
-
         posCatalogDebugLog('refreshTerminalResolvedConfig: completed', {
             changed,
             usedCatalogDelta: Boolean(catalogDelta),
@@ -3590,7 +3597,9 @@ class SyncManager {
             elapsedMs: posCatalogDebugElapsedMs(refreshStartedAt),
         });
 
-        return nextConfig;
+        return options?.persist !== false && options?.supplementalMode !== 'background' && options?.supplementalMode !== 'skip'
+            ? (await db.get('config') as unknown as BusinessConfig) || nextConfig
+            : nextConfig;
     }
 
     private async applySnapshotProducts(snapshot: unknown): Promise<number> {
@@ -4904,6 +4913,35 @@ class SyncManager {
         return { categories, productGroups };
     }
 
+    private paymentMethodsRefresh: Promise<number> | null = null;
+
+    private async refreshErpPaymentMethods(): Promise<number> {
+        const target = syncPolicy.resolve();
+        if (this.isDisabled || target.kind !== 'ERP_ACTIVE' || !target.canPullMasters) return 0;
+        if (this.paymentMethodsRefresh) return this.paymentMethodsRefresh;
+        this.paymentMethodsRefresh = syncErpPaymentMethods({
+            fetchSnapshot: async () => {
+                const rows = await apiSyncAdapter.pullPaymentMethodsSnapshot();
+                const current = syncPolicy.resolve();
+                if (current.kind !== target.kind || current.terminalId !== target.terminalId || current.baseUrl !== target.baseUrl || !current.canPullMasters) {
+                    throw new Error('PAYMENT_METHODS_TARGET_CHANGED');
+                }
+                return rows;
+            },
+            readConfig: async () => await db.get('config') as unknown as BusinessConfig,
+            save: (collection, value) => db.save(collection, value),
+            notify: config => {
+                window.dispatchEvent(new CustomEvent('paymentMethodsUpdated'));
+                window.dispatchEvent(new CustomEvent('configUpdated', { detail: config }));
+            },
+        });
+        try {
+            return await this.paymentMethodsRefresh;
+        } finally {
+            this.paymentMethodsRefresh = null;
+        }
+    }
+
     private async refreshTerminalSupplementalMasterData(
         snapshot: unknown,
         catalogDelta?: Record<string, unknown> | null
@@ -5643,6 +5681,10 @@ class SyncManager {
                 `[SYNC_ROUTER] pullCatalog skipped collection=${collection} channel=${target.kind} dataMaster=${target.dataMaster}. POS local remains source of truth.`
             );
             return 0;
+        }
+
+        if (collection === 'paymentMethods' && target.kind === 'ERP_ACTIVE') {
+            return this.refreshErpPaymentMethods();
         }
 
         // A local database reset can leave the legacy sync version behind. In
