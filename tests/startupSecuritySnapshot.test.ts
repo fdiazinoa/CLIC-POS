@@ -13,11 +13,12 @@ function subject(kind: string, users: unknown[], refresh: (...args: any[]) => Pr
   const instance = new Constructor(); instance.refreshTerminalResolvedConfig = refresh; return instance;
 }
 
-test('one forced security snapshot returns updated config and roster with no general catalog scope', async () => {
+test('one forced security snapshot returns updated config and roster without forcing the catalog', async () => {
   let calls = 0; const config = { terminals: [] }; const users = [{ id: 'authorized' }];
   const instance = subject('ERP_ACTIVE', users, async (_: unknown, options: any) => {
     calls++;
     assert.equal(options.forceRemoteFetch, true);
+    assert.equal(options.forceFullCatalog, false);
     assert.equal(options.requestTimeoutMs, 8000);
     assert.equal(options.supplementalMode, 'skip');
     assert.deepEqual(Array.from(options.masterScopes), ['pos_users', 'users', 'pos_roles', 'roles']);
@@ -54,20 +55,21 @@ async function runBoot(isErpSetupMode: boolean, fail = false) {
       refreshErpStartupSecurity: async () => { calls.push('security'); if (fail) throw new Error('offline'); return { config, users }; },
       refreshTerminalResolvedConfig: async () => { calls.push('general'); return config; },
     },
+    db: { get: async () => users },
   });
   return { calls, result: await execute(), users, initial, config };
 }
 
-test('ERP startup awaits security once and reuses even an empty roster; local startup keeps general config', async () => {
+test('ERP startup uses the local roster; local startup keeps general config', async () => {
   const erp = await runBoot(true);
-  assert.deepEqual(erp.calls, ['security']); assert.equal(erp.result.users, erp.users); assert.equal(erp.result.config, erp.config);
+  assert.deepEqual(erp.calls, []); assert.deepEqual(erp.result.users, []); assert.equal(erp.result.config, erp.initial);
   const local = await runBoot(false);
   assert.deepEqual(local.calls, ['general']); assert.equal(local.result.users, null);
 });
 
-test('failed early refresh preserves the existing retry path before login', async () => {
+test('ERP refresh is deferred until after the login loading gate opens', async () => {
   const failed = await runBoot(true, true);
-  assert.equal(failed.result.users, null); assert.equal(failed.result.config, failed.initial);
+  assert.deepEqual(failed.result.users, []); assert.equal(failed.result.config, failed.initial);
   const expression = app.match(/const refreshedUsers = (startupErpUsers !== null[\s\S]*?refreshErpPosUserRoster\(finalConfig\));/)?.[1];
   assert.ok(expression);
   for (const users of [null, [], [{ id: 'revoked-since-early-refresh' }]]) {
@@ -83,18 +85,15 @@ test('failed early refresh preserves the existing retry path before login', asyn
   }
   assert.match(app, /if \(usableUsers.length === 0\) \{\s*throw new Error/);
   assert.ok(app.indexOf('const license = await checkLicenseStatus') < app.indexOf('let startupErpUsers:'));
+  assert.ok(app.indexOf("markBootStage('READY')") < app.indexOf('syncManager.refreshErpStartupSecurity(finalConfig,', app.indexOf("markBootStage('READY')")));
 });
 
-test('general ERP catalogs are scheduled only after the login loading gate opens', async () => {
-  const start = app.indexOf("            markBootStage('READY');");
-  const end = app.indexOf('              }, 1000);', start) + '              }, 1000);\n            }'.length;
-  const scheduled: Array<() => Promise<unknown>> = []; const events: string[] = [];
-  const execute = runInNewContext(ts.transpile(`(() => { ${app.slice(start, end)} })`, { target: ts.ScriptTarget.ES2022 }), {
-    isErpSetupMode: true, markBootStage() {}, console: { log() {}, warn() {} },
-    setIsDataLoaded(value: boolean) { assert.equal(value, true); events.push('access'); },
-    window: { setTimeout(fn: () => Promise<unknown>, ms: number) { assert.equal(ms, 1000); scheduled.push(fn); events.push('scheduled'); } },
-    syncManager: { refreshTerminalResolvedConfig: async () => { events.push('general'); } },
-  });
-  execute(); assert.deepEqual(events, ['access', 'scheduled']);
-  await scheduled[0](); assert.deepEqual(events, ['access', 'scheduled', 'general']);
+test('ERP security refresh is scheduled only after the login loading gate opens', () => {
+  const ready = app.indexOf("            markBootStage('READY');");
+  const gate = app.indexOf('            setIsDataLoaded(true);', ready);
+  const scheduledRefresh = app.indexOf('syncManager.refreshErpStartupSecurity(finalConfig,', gate);
+  assert.ok(ready >= 0 && gate > ready && scheduledRefresh > gate);
+  assert.match(app.slice(gate, scheduledRefresh), /window\.setTimeout\(\(\) => \{/);
+  assert.match(app.slice(scheduledRefresh, scheduledRefresh + 200), /deferDuringSale: true/);
+  assert.match(app.slice(scheduledRefresh, scheduledRefresh + 900), /setUsers\(refreshedUsers\)/);
 });

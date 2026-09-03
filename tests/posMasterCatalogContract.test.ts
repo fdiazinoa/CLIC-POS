@@ -118,8 +118,8 @@ test('production assignments are published immediately by the Master LAN catalog
     2,
   );
   assert.match(managerSource, /dispatchEvent\(new CustomEvent\('productionAreasUpdated'\)\)/);
-  assert.match(appSource, /addEventListener\('productionAreasUpdated', ensureMasterServerWithoutSnapshot\)/);
-  assert.match(appSource, /removeEventListener\('productionAreasUpdated', ensureMasterServerWithoutSnapshot\)/);
+  assert.match(appSource, /addEventListener\('productionAreasUpdated', publishMasterCatalog\)/);
+  assert.match(appSource, /removeEventListener\('productionAreasUpdated', publishMasterCatalog\)/);
 });
 
 test('client KDS dispatch self-heals missing routing from the Master', () => {
