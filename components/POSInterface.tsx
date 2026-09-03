@@ -4028,7 +4028,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const normalizedCategoryFilter = categoryFilter === 'ALL'
          ? 'ALL'
          : canonicalizeCategory(categoryFilter);
-      const normalizedSearch = normalizeSearchToken(searchTerm);
+      const normalizedSearch = normalizeSearchToken(deferredSearchTerm);
 
       const filtered = salesCatalogProductEntries.filter((entry) => {
          const matchSearch = !normalizedSearch
@@ -4057,7 +4057,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             seenIds.add(p.id);
             return true;
          });
-   }, [salesCatalogProductEntries, categoryFilter, searchTerm, canonicalizeCategory, effectiveAllowedCategorySet, categoryLookup.presentationByCanonical]);
+   }, [salesCatalogProductEntries, categoryFilter, deferredSearchTerm, canonicalizeCategory, effectiveAllowedCategorySet, categoryLookup.presentationByCanonical]);
 
    const submitProductTextSearch = useCallback((rawValue: string, focusTarget?: React.RefObject<HTMLInputElement>): boolean => {
       const normalizedTextSearch = normalizeSearchToken(rawValue);
