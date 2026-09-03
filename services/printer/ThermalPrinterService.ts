@@ -39,7 +39,10 @@ const ThermalPrinterServiceInternal = {
                     escPosBase64,
                     role: 'TICKET',
                     terminalId: options?.terminalId || report.terminalId,
-                    jobType: options?.jobType || 'Z_REPORT',
+                    // Close reports use the receipt-printer transport. Keeping the
+                    // job type aligned with ordinary/reprinted tickets avoids a
+                    // separate queue classification in external print agents.
+                    jobType: options?.jobType || 'TICKET',
                     referenceId: report.id,
                     preferredPrinterId: options?.preferredPrinterId,
                     copies,
@@ -52,7 +55,7 @@ const ThermalPrinterServiceInternal = {
                     html: buildReceiptHtml(),
                     role: 'TICKET',
                     terminalId: options?.terminalId || report.terminalId,
-                    jobType: options?.jobType || 'Z_REPORT',
+                    jobType: options?.jobType || 'TICKET',
                     referenceId: report.id,
                     preferredPrinterId: options?.preferredPrinterId,
                     copies,
