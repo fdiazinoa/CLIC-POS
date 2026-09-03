@@ -1791,6 +1791,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       operationalVertical === 'RESTAURANT' ||
       operationalVertical === 'RESTAURANTE' ||
       config.vertical === 'RESTAURANT';
+
+   useEffect(() => {
+      if (!isRestaurantMode || !(Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android')) return;
+      const androidBridge = (window as Window & {
+         ClicPOSAppBridge?: { setKeyboardOverlayMode?: (enabled: boolean) => void };
+      }).ClicPOSAppBridge;
+      if (typeof androidBridge?.setKeyboardOverlayMode !== 'function') return;
+
+      androidBridge.setKeyboardOverlayMode(true);
+      return () => androidBridge.setKeyboardOverlayMode?.(false);
+   }, [isRestaurantMode]);
+
    const canReceiveConsignments = resolveConsignmentDownloadEnabled(activeTerminalConfig?.operational);
    const showTableMapButton = Boolean(activeTerminalConfig?.operational?.usa_mesas);
    const hideTableExtras = isRestaurantMode && !!activeTable;
