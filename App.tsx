@@ -6537,7 +6537,11 @@ const AppContent: React.FC = () => {
               if (isErpSetupMode) {
                 console.log('🔒 Security Bootstrap: Refreshing authorized ERP POS users...');
                 try {
-                  const refreshedUsers = startupErpUsers ?? await syncManager.refreshErpPosUserRoster(finalConfig);
+                  // A background sync may have updated/revoked users since the early snapshot.
+                  // Reuse the completed refresh, but read the current persisted roster.
+                  const refreshedUsers = startupErpUsers !== null
+                    ? (Array.isArray(localUsers) ? localUsers : [])
+                    : await syncManager.refreshErpPosUserRoster(finalConfig);
                   usableUsers = visiblePosUsersForRuntime(refreshedUsers);
                   const hasRefreshedErpUsers = hasErpSnapshotPosUsers(refreshedUsers);
 

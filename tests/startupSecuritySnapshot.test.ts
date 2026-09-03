@@ -68,14 +68,18 @@ test('ERP startup awaits security once and reuses even an empty roster; local st
 test('failed early refresh preserves the existing retry path before login', async () => {
   const failed = await runBoot(true, true);
   assert.equal(failed.result.users, null); assert.equal(failed.result.config, failed.initial);
-  const expression = app.match(/const refreshedUsers = (startupErpUsers \?\? await syncManager\.refreshErpPosUserRoster\(finalConfig\));/)?.[1];
+  const expression = app.match(/const refreshedUsers = (startupErpUsers !== null[\s\S]*?refreshErpPosUserRoster\(finalConfig\));/)?.[1];
   assert.ok(expression);
-  for (const users of [null, []]) {
+  for (const users of [null, [], [{ id: 'revoked-since-early-refresh' }]]) {
     let retries = 0;
+    const latestPersistedUsers: unknown[] = [];
     const evaluate = runInNewContext(`(async () => ${expression})`, {
-      startupErpUsers: users, finalConfig: {}, syncManager: { refreshErpPosUserRoster: async () => { retries++; return []; } },
+      startupErpUsers: users, localUsers: latestPersistedUsers, finalConfig: {}, syncManager: { refreshErpPosUserRoster: async () => { retries++; return []; } },
     });
-    await evaluate(); assert.equal(retries, users === null ? 1 : 0);
+    const result = await evaluate();
+    assert.equal(retries, users === null ? 1 : 0);
+    assert.equal(result.length, 0, 'a newer empty roster must not resurrect a revoked user');
+    if (users !== null) assert.equal(result, latestPersistedUsers);
   }
   assert.match(app, /if \(usableUsers.length === 0\) \{\s*throw new Error/);
   assert.ok(app.indexOf('const license = await checkLicenseStatus') < app.indexOf('let startupErpUsers:'));
