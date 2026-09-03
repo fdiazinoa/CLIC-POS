@@ -1,5 +1,6 @@
 import { BusinessConfig, ZReport } from '../../../types';
 import { resolveTerminalDisplayName } from '../../../utils/transactionHistoryPresentation';
+import { getCloseReceiptSummary, closeTaxLabel } from '../../../utils/closeReceiptSummary';
 
 export const generateZReportReceipt = (
   report: ZReport,
@@ -23,10 +24,8 @@ export const generateZReportReceipt = (
   const reportDetails = report.reportDetails || {};
   const denominationBreakdown = report.denominationBreakdown || report.denomination_breakdown || {};
   const serviceTypeSummary = report.serviceTypeSummary || [];
-  const serviceTypeTransactions = report.serviceTypeTransactions || [];
-  const serviceTypeLabel = (value: string) => value === 'TAKEOUT'
-    ? 'Para llevar'
-    : value === 'DELIVERY' ? 'Delivery' : 'Consumo en mesa';
+  const closeSummary = getCloseReceiptSummary(report);
+  const escapeLabel = (value: string) => value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 
   const formatCurrency = (amount: number) => {
     const value = Number(amount || 0);
@@ -139,24 +138,21 @@ export const generateZReportReceipt = (
 
       ${serviceTypeSummary.length > 0 ? `
       <div class="section-title">VENTAS POR TIPO DE SERVICIO</div>
-      ${serviceTypeSummary.map(line => `
+      ${closeSummary.services.map(line => `
         <div class="row">
-          <span>${serviceTypeLabel(line.serviceType)} (${line.transactionCount})</span>
-          <span>${formatCurrency(line.total)}</span>
+          <span>${line.label}</span>
+          <span>${formatCurrency(line.amount)}</span>
         </div>
-        <div class="row" style="font-size: 10px;"><span>Impuestos</span><span>${formatCurrency(line.taxAmount || 0)}</span></div>
-        <div class="row" style="font-size: 10px;"><span>Propina legal</span><span>${formatCurrency(line.serviceChargeAmount || 0)}</span></div>
       `).join('')}
+      <div class="row bold"><span>Total por servicio</span><span>${formatCurrency(closeSummary.total)}</span></div>
       ` : ''}
 
-      ${serviceTypeTransactions.length > 0 ? `
-      <div class="section-title">PARA LLEVAR / DELIVERY</div>
-      ${serviceTypeTransactions.map(line => `
-        <div style="margin-bottom: 4px;">
-          <div class="row"><span>${line.displayId}</span><span>${formatCurrency(line.total)}</span></div>
-          <div style="font-size: 10px;">${serviceTypeLabel(line.serviceType)} · ${formatDate(line.date)}</div>
-        </div>
+      ${closeSummary.taxes.length > 0 ? `
+      <div class="section-title">IMPUESTOS Y PROPINA</div>
+      ${closeSummary.taxes.map(line => `
+        <div class="row"><span>${escapeLabel(closeTaxLabel(line))}</span><span>${formatCurrency(line.amount)}</span></div>
       `).join('')}
+      <div style="font-size: 10px;">Desglose informativo: no sumar al total.</div>
       ` : ''}
       
       <!-- PAYMENT METHODS -->
@@ -253,7 +249,7 @@ export const generateZReportReceipt = (
         `).join('') || '<div>Sin artículos registrados.</div>'}
       ` : ''}
 
-      ${enabledSections.has('TAX_SUMMARY') ? `
+      ${enabledSections.has('TAX_SUMMARY') && closeSummary.taxes.length === 0 && !Array.isArray(report.closeTaxSummary) ? `
         <div class="section-title">IMPUESTOS</div>
         ${(reportDetails.taxSummary || []).map(tax => {
           const rate = Number(tax.rate || 0) <= 1 ? Number(tax.rate || 0) * 100 : Number(tax.rate || 0);

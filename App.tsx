@@ -79,6 +79,7 @@ import { posCloudStagingService } from './services/sync/PosCloudStagingService';
 import { calculateZReportStats } from './utils/analytics';
 import { buildServiceTypeReport } from './utils/orderServiceType';
 import { buildCloseReportDetails, resolveCloseReportSections } from './utils/closeReportOptions';
+import { buildCloseTaxSummary } from './utils/closeReceiptSummary';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
 import { calculateTransactionTaxSummary } from './utils/taxSummary';
 import { calculateTransactionFiscalSummary } from './utils/fiscalBreakdown';
@@ -9741,6 +9742,7 @@ const AppContent: React.FC = () => {
         },
         stats,
         serviceTypeSummary: serviceTypeReport.summary,
+        closeTaxSummary: buildCloseTaxSummary(terminalTransactions),
         serviceTypeTransactions: serviceTypeReport.transactions,
         enabledSections,
         reportDetails,
@@ -10044,6 +10046,7 @@ const AppContent: React.FC = () => {
         },
         stats,
         serviceTypeSummary: serviceTypeReport.summary,
+        closeTaxSummary: buildCloseTaxSummary(terminalTransactions),
         serviceTypeTransactions: serviceTypeReport.transactions,
         enabledSections,
         reportDetails,

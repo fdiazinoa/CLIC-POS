@@ -100,7 +100,7 @@ test('el tipo de servicio viaja en la normalización y resumen de sincronizació
   assert.deepEqual(summary.service_tax_policy_snapshot, takeout.serviceTaxPolicySnapshot);
 });
 
-test('la impresión histórica del cierre conserva cada factura para llevar o delivery', () => {
+test('la impresión resume servicios y conserva las facturas solo en el detalle consultable', () => {
   const serviceReport = buildServiceTypeReport([
     transaction({ id: 'takeout', displayId: 'TCK-20', serviceType: 'TAKEOUT', total: 200, taxAmount: 18 }),
     transaction({ id: 'delivery', displayId: 'TCK-21', serviceType: 'DELIVERY', total: 300, taxAmount: 36, serviceChargeAmount: 15 }),
@@ -130,16 +130,15 @@ test('la impresión histórica del cierre conserva cada factura para llevar o de
 
   const html = generateZReportReceipt(report, [], config);
   assert.match(html, /VENTAS POR TIPO DE SERVICIO/);
-  assert.match(html, /TCK-20/);
-  assert.match(html, /TCK-21/);
+  assert.doesNotMatch(html, /TCK-20|TCK-21/);
   assert.match(html, /Impuestos/);
   assert.match(html, /Propina legal/);
 
   const escPos = buildEscPosZReportPayload(report, [], config);
   const decoded = Buffer.from(escPos!, 'base64').toString('latin1');
-  assert.match(decoded, /PARA LLEVAR \/ DELIVERY/);
-  assert.match(decoded, /TCK-20/);
-  assert.match(decoded, /TCK-21/);
+  assert.doesNotMatch(decoded, /PARA LLEVAR \/ DELIVERY|TCK-20|TCK-21/);
+  assert.match(decoded, /En local/);
+  assert.equal(report.serviceTypeTransactions.length, 2);
   assert.match(decoded, /Impuestos/);
   assert.match(decoded, /Propina legal/);
 });

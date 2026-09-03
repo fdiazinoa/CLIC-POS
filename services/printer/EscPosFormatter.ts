@@ -7,6 +7,7 @@ import { resolveLineDiscountPresentation } from '../../utils/lineDiscountPresent
 import { resolveTerminalDisplayName } from '../../utils/transactionHistoryPresentation';
 import { resolveGlobalDiscountLabel } from '../../utils/globalDiscountPresentation';
 import { resolveReceiptCouponCodes } from '../../utils/receiptCouponPresentation';
+import { getCloseReceiptSummary, closeTaxLabel } from '../../utils/closeReceiptSummary';
 
 export interface EscPosLabelRecord {
   productId: string;
@@ -946,28 +947,18 @@ export const buildEscPosZReportPayload = (
   }
 
   const serviceTypeSummary = report.serviceTypeSummary || [];
-  const serviceTypeTransactions = report.serviceTypeTransactions || [];
-  const serviceTypeLabel = (value: string) => value === 'TAKEOUT'
-    ? 'Para llevar'
-    : value === 'DELIVERY' ? 'Delivery' : 'Consumo en mesa';
+  const closeSummary = getCloseReceiptSummary(report);
   if (serviceTypeSummary.length > 0) {
     chunks.push(divider(width));
     pushTextLines(chunks, splitLines('VENTAS POR TIPO DE SERVICIO', width));
-    serviceTypeSummary.forEach(line => {
-      pushTextLines(chunks, splitLines(`${serviceTypeLabel(line.serviceType)} (${line.transactionCount})`, width));
-      pushPair(chunks, 'Total', formatMoney(currencySymbol, line.total), width);
-      pushPair(chunks, 'Impuestos', formatMoney(currencySymbol, line.taxAmount || 0), width);
-      pushPair(chunks, 'Propina legal', formatMoney(currencySymbol, line.serviceChargeAmount || 0), width);
-    });
+    closeSummary.services.forEach(line => pushPair(chunks, line.label, formatMoney(currencySymbol, line.amount), width));
+    pushPair(chunks, 'Total por servicio', formatMoney(currencySymbol, closeSummary.total), width);
   }
-  if (serviceTypeTransactions.length > 0) {
+  if (closeSummary.taxes.length > 0) {
     chunks.push(divider(width));
-    pushTextLines(chunks, splitLines('PARA LLEVAR / DELIVERY', width));
-    serviceTypeTransactions.forEach(line => {
-      const time = new Date(line.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      pushTextLines(chunks, splitLines(`${line.displayId} · ${serviceTypeLabel(line.serviceType)} · ${time}`, width));
-      pushPair(chunks, 'Total', formatMoney(currencySymbol, line.total), width);
-    });
+    pushTextLines(chunks, splitLines('IMPUESTOS Y PROPINA', width));
+    closeSummary.taxes.forEach(line => pushPair(chunks, closeTaxLabel(line), formatMoney(currencySymbol, line.amount), width));
+    pushTextLines(chunks, splitLines('Desglose informativo: no sumar al total.', width));
   }
 
   if (!hiddenModules.includes('CASH_DETAILS') && Object.keys(report.cashExpected || {}).length > 0) {
@@ -1026,7 +1017,7 @@ export const buildEscPosZReportPayload = (
     if (!reportDetails.itemSummary?.length) pushTextLines(chunks, splitLines('Sin articulos registrados.', width));
   }
 
-  if (enabledSections.has('TAX_SUMMARY')) {
+  if (enabledSections.has('TAX_SUMMARY') && closeSummary.taxes.length === 0 && !Array.isArray(report.closeTaxSummary)) {
     chunks.push(divider(width));
     pushTextLines(chunks, splitLines('IMPUESTOS', width));
     (reportDetails.taxSummary || []).forEach(tax => {

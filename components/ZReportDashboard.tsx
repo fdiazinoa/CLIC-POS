@@ -12,6 +12,7 @@ import ZReportHistory from './ZReportHistory';
 import { calculateZReportStats } from '../utils/analytics';
 import { buildServiceTypeReport, getOrderServiceTypeLabel } from '../utils/orderServiceType';
 import { buildCloseReportDetails, resolveCloseReportSections } from '../utils/closeReportOptions';
+import { buildCloseTaxSummary } from '../utils/closeReceiptSummary';
 import { ThermalPrinterService } from '../services/printer/ThermalPrinterService';
 import {
    getPaymentAppliedBaseAmount,
@@ -297,6 +298,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                };
                const tempServiceTypeReport = buildServiceTypeReport(filteredTransactions);
                tempReport.serviceTypeSummary = tempServiceTypeReport.summary;
+               tempReport.closeTaxSummary = buildCloseTaxSummary(filteredTransactions);
                tempReport.serviceTypeTransactions = tempServiceTypeReport.transactions;
 
                tempReport.enabledSections = resolveCloseReportSections(config, currentTerminalId, currentUser?.id, 'Z');

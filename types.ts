@@ -2965,6 +2965,8 @@ export interface ZReport {
   stats?: ZReportStats;
   serviceTypeSummary?: ServiceTypeSummaryLine[];
   serviceTypeTransactions?: ServiceTypeTransactionLine[];
+  // Immutable print summary of recorded amounts, independent of current tax settings.
+  closeTaxSummary?: Array<{ name: string; rate?: number; amount: number }>;
   enabledSections?: CloseReportSection[];
   reportDetails?: CloseReportDetails;
   syncStatus?: SyncStatus;
