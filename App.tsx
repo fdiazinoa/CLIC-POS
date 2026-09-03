@@ -6649,14 +6649,6 @@ const AppContent: React.FC = () => {
             console.log('🎉 Setting isDataLoaded = true');
             setIsDataLoaded(true);
 
-            if (isErpSetupMode) {
-              // The security snapshot was awaited above. Run one manifest-driven
-              // reconciliation after boot and keep it away from active POS input.
-              window.setTimeout(() => {
-                void syncManager.syncTerminalMastersOnStartup(finalConfig)
-                  .catch(error => console.warn('Deferred startup manifest refresh failed:', error));
-              }, 1000);
-            }
           } else {
             console.warn('⚠️ No paired terminal found. Waiting for pairing...');
             // Still load to allow access to pairing/unauthorized screens.

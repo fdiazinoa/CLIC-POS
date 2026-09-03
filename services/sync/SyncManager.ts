@@ -2498,7 +2498,7 @@ class SyncManager {
         }
     }
 
-    public async syncTerminalMastersOnStartup(baseConfig: BusinessConfig | null): Promise<void> {
+    private async syncTerminalMastersOnStartup(baseConfig: BusinessConfig | null): Promise<void> {
         try {
             this.setSyncPhase('P0_P1_STARTUP_MANIFEST');
             await this.reconcileTerminalManifest(baseConfig, {

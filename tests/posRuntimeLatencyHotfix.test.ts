@@ -12,14 +12,15 @@ test('product filtering consumes the deferred search value', () => {
   assert.match(posSource, /\[salesCatalogProductEntries, categoryFilter, deferredSearchTerm,/);
 });
 
-test('startup performs one deferred manifest reconciliation after security bootstrap', () => {
+test('startup manifest is owned by the ERP lifecycle without a duplicate boot call', () => {
   const initializeStart = syncSource.indexOf('async initialize(');
   const initializeEnd = syncSource.indexOf('public async fastSyncCoreData', initializeStart);
   const initializeBody = syncSource.slice(initializeStart, initializeEnd);
 
   assert.ok(initializeStart >= 0 && initializeEnd > initializeStart);
   assert.doesNotMatch(initializeBody, /syncTerminalMastersOnStartup/);
-  assert.match(appSource, /syncManager\.syncTerminalMastersOnStartup\(finalConfig\)/);
+  assert.doesNotMatch(appSource, /syncManager\.syncTerminalMastersOnStartup/);
+  assert.match(appSource, /syncLifecycle\(\{ forceManifestRefresh: isStartup, reason \}\)/);
 });
 
 test('background config and print retries defer while POS input is active', () => {
