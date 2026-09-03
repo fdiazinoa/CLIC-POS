@@ -407,6 +407,7 @@ class TransactionService {
             customerSnapshot: data.customerSnapshot,
             taxAmount: normalizedFiscalAmounts.taxAmount,
             netAmount: normalizedFiscalAmounts.netAmount,
+            taxBreakdown: data.taxBreakdown,
             discountAmount: data.discountAmount,
             discountType: data.discountType,
             discountValue: data.discountValue,
