@@ -1,3 +1,4 @@
+import { isNativeAndroidRuntime } from './erpBaseUrl';
 import { ensureSupabaseSessionRestored, supabase } from './supabase';
 import { resolveStoredTenantIdentity, type TenantIdentity } from './tenantIdentityStorage';
 
@@ -447,23 +448,16 @@ const callDirectRpc = async (
     return null;
 };
 
-const getLocalNetworkCandidates = () => {
-    const candidates = [
-        '/api/network',
-        'http://127.0.0.1:3001/api/network',
-        'http://localhost:3001/api/network',
-    ];
-
-    if (window.location.protocol.startsWith('http') && window.location.hostname) {
-        candidates.unshift(`${window.location.protocol}//${window.location.hostname}:3001/api/network`);
-    }
-
-    return dedupeStrings(candidates);
-};
+const getLocalNetworkCandidates = () => getLocalCloudRegistryCandidates('/api/network');
 
 const getLocalCloudRegistryCandidates = (path: string, query = '') => {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const suffix = query ? `${normalizedPath}?${query}` : normalizedPath;
+    if (isNativeAndroidRuntime()) {
+        // Capacitor's https://localhost is the asset origin, not the HTTP
+        // server on port 3001. Do not probe it using TLS or relative /api URLs.
+        return [`http://127.0.0.1:3001${suffix}`, `http://localhost:3001${suffix}`];
+    }
     const candidates = [
         suffix,
         `http://127.0.0.1:3001${suffix}`,
