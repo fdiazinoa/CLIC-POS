@@ -1,5 +1,5 @@
 import { MobilePosNavigation } from './MobilePosNavigation';
-import React, { useState, useMemo, useEffect, useRef, useCallback, useDeferredValue } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
 import {
    Search, Trash2, MoreVertical,
@@ -2136,7 +2136,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const activeTariff = useMemo(() => (config.tariffs || []).find(t => t.id === activeTariffId), [config.tariffs, activeTariffId]);
 
    const [searchTerm, setSearchTerm] = useState('');
-   const deferredSearchTerm = useDeferredValue(searchTerm);
    const [categoryFilter, setCategoryFilter] = useState('ALL');
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
    const returnToTicketView = useCallback(() => {
@@ -4040,7 +4039,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const normalizedCategoryFilter = categoryFilter === 'ALL'
          ? 'ALL'
          : canonicalizeCategory(categoryFilter);
-      const normalizedSearch = normalizeSearchToken(deferredSearchTerm);
+      const normalizedSearch = normalizeSearchToken(searchTerm);
 
       const filtered = salesCatalogProductEntries.filter((entry) => {
          const matchSearch = !normalizedSearch
@@ -4069,7 +4068,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             seenIds.add(p.id);
             return true;
          });
-   }, [salesCatalogProductEntries, categoryFilter, deferredSearchTerm, canonicalizeCategory, effectiveAllowedCategorySet, categoryLookup.presentationByCanonical]);
+   }, [salesCatalogProductEntries, categoryFilter, searchTerm, canonicalizeCategory, effectiveAllowedCategorySet, categoryLookup.presentationByCanonical]);
 
    const submitProductTextSearch = useCallback((rawValue: string, focusTarget?: React.RefObject<HTMLInputElement>): boolean => {
       const normalizedTextSearch = normalizeSearchToken(rawValue);

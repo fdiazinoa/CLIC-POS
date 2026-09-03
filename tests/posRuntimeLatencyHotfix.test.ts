@@ -6,10 +6,10 @@ const posSource = readFileSync(new URL('../components/POSInterface.tsx', import.
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 const syncSource = readFileSync(new URL('../services/sync/SyncManager.ts', import.meta.url), 'utf8');
 
-test('product filtering consumes the deferred search value', () => {
-  assert.match(posSource, /const deferredSearchTerm = useDeferredValue\(searchTerm\)/);
-  assert.match(posSource, /normalizeSearchToken\(deferredSearchTerm\)/);
-  assert.match(posSource, /\[salesCatalogProductEntries, categoryFilter, deferredSearchTerm,/);
+test('product filtering consumes the current search value without stale deferred results', () => {
+  assert.doesNotMatch(posSource, /useDeferredValue\(searchTerm\)/);
+  assert.match(posSource, /normalizeSearchToken\(searchTerm\)/);
+  assert.match(posSource, /\[salesCatalogProductEntries, categoryFilter, searchTerm,/);
 });
 
 test('startup manifest is owned by the ERP lifecycle without a duplicate boot call', () => {
