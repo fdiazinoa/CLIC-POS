@@ -1,3 +1,4 @@
+import { printCurrentPage } from '../services/printer/BrowserPrint';
 import React, { useMemo, useState } from 'react';
 import { Transaction, Collection, BusinessConfig, Customer, CollectionAllocation } from '../types';
 import {
@@ -220,7 +221,7 @@ const CustomerStatementView: React.FC<CustomerStatementViewProps> = ({
                 <div className="p-6 border-t border-gray-100 bg-gray-50/50 flex justify-between items-center">
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">CLIC POS • Sistema de Gestión de Créditos</p>
                     <button
-                        onClick={() => window.print()}
+                        onClick={printCurrentPage}
                         className="px-6 py-2.5 bg-slate-800 text-white rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-2 hover:bg-slate-700 transition-colors shadow-lg"
                     >
                         <Printer size={16} /> Imprimir Reporte

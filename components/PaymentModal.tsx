@@ -248,6 +248,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    const [isOverrideActive, setIsOverrideActive] = useState(false);
    const [isProcessingGateway, setIsProcessingGateway] = useState(false);
    const [gatewayProgress, setGatewayProgress] = useState<GatewayProgressOverlayState | null>(null);
+   const printTicketPending = React.useRef(false);
+   const [isPrintingTicket, setIsPrintingTicket] = useState(false);
    const [successNotice, setSuccessNotice] = useState<string | null>(null);
 
    const userPermissions = useMemo(() => {
@@ -1198,13 +1200,23 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   {!isInstallmentPayment && <div className="flex gap-3">
                      <button
                         onClick={async () => {
-                           if (!config || !completedTransaction) return;
-                           await printTicket(completedTransaction, config);
-                           onClose();
+                           if (!config || !completedTransaction || printTicketPending.current) return;
+                           printTicketPending.current = true;
+                           setIsPrintingTicket(true);
+                           try {
+                              const accepted = await printTicket(completedTransaction, config);
+                              setSuccessNotice(accepted
+                                 ? 'Ticket enviado a impresión. Comprueba la salida antes de imprimir otra copia.'
+                                 : 'La venta está registrada. Revisa la impresora y vuelve a pulsar Ticket para reintentar sin repetir el cobro.');
+                           } finally {
+                              printTicketPending.current = false;
+                              setIsPrintingTicket(false);
+                           }
                         }}
-                        className="flex-1 py-3 rounded-xl bg-gray-100 font-bold text-gray-700 flex items-center justify-center gap-2 hover:bg-gray-200 transition-colors"
+                        disabled={isPrintingTicket}
+                        className="flex-1 py-3 rounded-xl bg-gray-100 font-bold text-gray-700 flex items-center justify-center gap-2 hover:bg-gray-200 transition-colors disabled:opacity-50"
                      >
-                        <Printer size={18} /> Ticket
+                        <Printer size={18} /> {isPrintingTicket ? 'Enviando...' : 'Ticket'}
                      </button>
 
                      <button

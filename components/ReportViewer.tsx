@@ -1,3 +1,4 @@
+import { printCurrentPage } from '../services/printer/BrowserPrint';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
     ArrowLeft, Download, Printer, Filter, Calendar,
@@ -2153,7 +2154,7 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                         <Download size={18} /> EXCEL
                     </button>
                     <button
-                        onClick={() => window.print()}
+                        onClick={printCurrentPage}
                         className="flex items-center gap-2 px-6 py-3 bg-slate-900 text-white rounded-2xl font-black text-sm hover:bg-black transition-all shadow-xl shadow-slate-200 active:scale-95"
                     >
                         <Printer size={18} /> IMPRIMIR

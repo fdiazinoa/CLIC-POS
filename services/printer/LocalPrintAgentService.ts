@@ -1,3 +1,4 @@
+import { notifyPrintQueued } from './PrintFeedback';
 export interface LocalPrintJobPayload {
     html: string;
     contentType?: 'HTML' | 'ESC_POS';
@@ -39,6 +40,7 @@ export const LocalPrintAgentService = {
             if (!response.ok) return false;
 
             const data = (await response.json()) as LocalPrintJobResponse;
+            if (data.status === 'queued') notifyPrintQueued();
             return data.status === 'success' || data.status === 'queued';
         } catch (error) {
             console.warn('Silent print agent unavailable:', error);
@@ -68,6 +70,7 @@ export const LocalPrintAgentService = {
             if (!response.ok) return false;
 
             const data = (await response.json()) as LocalPrintJobResponse;
+            if (data.status === 'queued') notifyPrintQueued();
             return data.status === 'success' || data.status === 'queued';
         } catch (error) {
             console.warn('Silent ESC/POS print agent unavailable:', error);

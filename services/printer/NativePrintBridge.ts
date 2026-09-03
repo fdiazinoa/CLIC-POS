@@ -1,4 +1,5 @@
 import { ConnectionType, FingerprintDiscoveredDevice, PrinterDevice } from '../../types';
+import { PrintOutputError, notifyPrintQueued } from './PrintFeedback';
 import { NativeBridgeContractStatus, NativePrinterBridge } from './NativePrintContract';
 
 export type NativePrintRuntime = 'WEB' | 'ANDROID' | 'WINDOWS' | 'ELECTRON';
@@ -96,6 +97,7 @@ const normalizePrintedResult = (result: any): boolean => {
   if (!result) return false;
 
   const status = String(result?.status || '').toLowerCase();
+  if (status === 'error' || result?.success === false) return false;
   if (status === 'success' || status === 'printed' || status === 'queued' || status === 'ok') return true;
 
   if (typeof result?.success === 'boolean') return result.success;
@@ -364,27 +366,35 @@ export const nativePrintBridge = {
     }
   },
 
-  async printHtml(payload: NativeHtmlPayload): Promise<boolean> {
+  async printHtml(payload: NativeHtmlPayload, reportErrors = false): Promise<boolean> {
     const resolved = resolveBridge();
     if (!resolved) return false;
 
     try {
       const result = await runBridgeMethod(resolved.bridge, ['printHtml', 'print'], payload);
-      return normalizePrintedResult(result);
+      const accepted = normalizePrintedResult(result);
+      if (!accepted && reportErrors) throw new PrintOutputError(result?.errorCode);
+      if (accepted && reportErrors && String(result?.status).toLowerCase() === 'queued') notifyPrintQueued();
+      return accepted;
     } catch (error) {
+      if (reportErrors) throw error instanceof PrintOutputError ? error : new PrintOutputError();
       console.warn('Native HTML print failed:', error);
       return false;
     }
   },
 
-  async printEscPos(payload: NativeEscPosPayload): Promise<boolean> {
+  async printEscPos(payload: NativeEscPosPayload, reportErrors = false): Promise<boolean> {
     const resolved = resolveBridge();
     if (!resolved) return false;
 
     try {
       const result = await runBridgeMethod(resolved.bridge, ['printEscPos', 'printEscpos', 'printRaw'], payload);
-      return normalizePrintedResult(result);
+      const accepted = normalizePrintedResult(result);
+      if (!accepted && reportErrors) throw new PrintOutputError(result?.errorCode);
+      if (accepted && reportErrors && String(result?.status).toLowerCase() === 'queued') notifyPrintQueued();
+      return accepted;
     } catch (error) {
+      if (reportErrors) throw error instanceof PrintOutputError ? error : new PrintOutputError();
       console.warn('Native ESC/POS print failed:', error);
       return false;
     }
