@@ -16,6 +16,7 @@ import {
    getPaymentChangeBaseAmount,
    getPaymentReceivedAmountForDrawer,
 } from '../utils/paymentSettlement';
+import { buildZReportPaymentMethodSummary } from '../utils/zReportPaymentSummary';
 import AndroidNumericKeypadDialog from './AndroidNumericKeypadDialog';
 
 interface ZReportDashboardProps {
@@ -92,15 +93,13 @@ const formatDenomination = (value: number) => (
 type AndroidZKeypadTarget =
    | { kind: 'CASH'; currencyCode: string; title: string }
    | { kind: 'DENOMINATION'; currencyCode: string; denominationKey: string; title: string }
-   | { kind: 'CARD'; title: string }
-   | { kind: 'OTHER'; title: string };
+   | { kind: 'PAYMENT_METHOD'; methodKey: string; title: string };
 
 const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashMovements, config, userName, currentUser, roles, onClose, onConfirmClose, terminalId, collections }) => {
    const isAndroid = Capacitor.getPlatform() === 'android';
    const [cashCountedByCurrency, setCashCountedByCurrency] = useState<Record<string, string>>({});
    const [denominationCounts, setDenominationCounts] = useState<Record<string, Record<string, string>>>({});
-   const [declaredCard, setDeclaredCard] = useState('');
-   const [declaredOther, setDeclaredOther] = useState('');
+   const [declaredPaymentMethods, setDeclaredPaymentMethods] = useState<Record<string, string>>({});
    const [notes, setNotes] = useState('');
    const [replacementReport, setReplacementReport] = useState<ZReport | null>(null);
    const [replacementTransactions, setReplacementTransactions] = useState<Transaction[]>([]);
@@ -112,7 +111,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
       if (androidKeypadTarget.kind === 'DENOMINATION') {
          return denominationCounts[androidKeypadTarget.currencyCode]?.[androidKeypadTarget.denominationKey] || '';
       }
-      return androidKeypadTarget.kind === 'CARD' ? declaredCard : declaredOther;
+      return declaredPaymentMethods[androidKeypadTarget.methodKey] || '';
    })();
 
    const updateAndroidKeypadValue = (value: string) => {
@@ -131,8 +130,10 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
          }));
          return;
       }
-      if (androidKeypadTarget.kind === 'CARD') setDeclaredCard(value);
-      else setDeclaredOther(value);
+      setDeclaredPaymentMethods(previous => ({
+         ...previous,
+         [androidKeypadTarget.methodKey]: value,
+      }));
    };
 
    // Closing workflow states
@@ -256,6 +257,15 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
          return;
       }
 
+      const hasAllConfiguredMethodsDeclared = paymentMethodsToDeclare.every(line => {
+         const value = declaredPaymentMethods[getPaymentDeclarationKey(line)];
+         return value !== undefined && value.trim() !== '' && Number.isFinite(Number(value));
+      });
+      if (!hasAllConfiguredMethodsDeclared) {
+         alert('Declara el monto contado de cada forma de pago configurada antes de cerrar.');
+         return;
+      }
+
       if (requireCashFundOnZ && fixedCashFundAmount > 0) {
          const declaredBaseCash = getDeclaredCashForCurrency(baseCurrencyCode);
          if (declaredBaseCash < fixedCashFundAmount) {
@@ -328,10 +338,21 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                fixedCashFundAmount,
                cashToLeaveInDrawer,
                cashToWithdraw,
-               declaredCardTotal: parseFloat(declaredCard) || 0,
-               declaredOtherTotal: parseFloat(declaredOther) || 0,
+               declaredCardTotal: declaredTotalByType('CARD'),
+               declaredOtherTotal: paymentMethodSummary
+                  .filter(line => !['CASH', 'CARD'].includes(String(line.methodType)))
+                  .reduce((sum, line) => sum + declaredAmountOrExpected(line), 0),
                expectedCardTotal,
                expectedOtherTotal,
+               paymentMethodDeclarations: paymentMethodsToDeclare.map(line => {
+                  const declared = Number(declaredPaymentMethods[getPaymentDeclarationKey(line)] || 0);
+                  return {
+                     ...line,
+                     expected: line.amount,
+                     declared,
+                     difference: Math.round((declared - line.amount + Number.EPSILON) * 100) / 100,
+                  };
+               }),
                totalsByMethod: finalTotalsByMethod,
                denominationBreakdown: buildDenominationBreakdown(),
                stats: finalStats,
@@ -427,34 +448,46 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    });
 
    // Legacy single-currency values (for base currency)
-   const cashSalesTotal = cashSalesByCurrency[baseCurrencyCode] || 0;
+   const paymentMethodSummary = buildZReportPaymentMethodSummary(filteredTransactions, config);
+   const cashSalesTotal = paymentMethodSummary
+      .filter(line => line.methodType === 'CASH')
+      .reduce((sum, line) => sum + line.amount, 0);
    const cashIn = cashInByCurrency[baseCurrencyCode] || 0;
-   const cashOut = cashOutByCurrency[baseCurrencyCode] || 0;
+   const cashOut = filteredCashMovements
+      .filter(movement => movement.type === 'OUT' && (!movement.currencyCode || movement.currencyCode === baseCurrencyCode))
+      .reduce((sum, movement) => sum + Number(movement.amount || 0), 0);
    const expectedCashInDrawer = expectedCashByCurrency[baseCurrencyCode] || 0;
    const cashDiscrepancy = cashDiscrepancyByCurrency[baseCurrencyCode] || 0;
    const cashToLeaveInDrawer = requireCashFundOnZ ? fixedCashFundAmount : 0;
    const cashToWithdraw = requireCashFundOnZ
       ? Math.max(0, getDeclaredCashForCurrency(baseCurrencyCode) - fixedCashFundAmount)
       : Math.max(0, getDeclaredCashForCurrency(baseCurrencyCode));
-   const expectedCardTotal = payments
-      .filter(p => p.method === 'CARD')
-      .reduce((sum, p) => sum + getPaymentAppliedBaseAmount(p), 0);
-   const expectedOtherTotal = payments
-      .filter(p => p.method !== 'CARD' && p.method !== 'CASH')
-      .reduce((sum, p) => sum + getPaymentAppliedBaseAmount(p), 0);
+   const expectedCardTotal = paymentMethodSummary
+      .filter(line => line.methodType === 'CARD')
+      .reduce((sum, line) => sum + line.amount, 0);
+   const expectedOtherTotal = paymentMethodSummary
+      .filter(line => line.methodType !== 'CARD' && line.methodType !== 'CASH')
+      .reduce((sum, line) => sum + line.amount, 0);
+   const configuredDeclarationIds = activeTerminalConfig?.workflow?.session?.zReportDeclaredPaymentMethodIds || [];
+   const paymentMethodsToDeclare = paymentMethodSummary.filter(line => (
+      line.methodType !== 'CASH'
+      && configuredDeclarationIds.some(id => id.toLowerCase() === String(line.methodId || '').toLowerCase())
+   ));
+   const getPaymentDeclarationKey = (line: typeof paymentMethodSummary[number]) => (
+      line.methodId || `${line.methodType}:${line.name}`
+   );
+   const declaredAmountOrExpected = (line: typeof paymentMethodSummary[number]) => {
+      const selected = paymentMethodsToDeclare.some(candidate => getPaymentDeclarationKey(candidate) === getPaymentDeclarationKey(line));
+      if (!selected) return line.amount;
+      return Number(declaredPaymentMethods[getPaymentDeclarationKey(line)] || 0);
+   };
+   const declaredTotalByType = (methodType: string) => paymentMethodSummary
+      .filter(line => line.methodType === methodType)
+      .reduce((sum, line) => sum + declaredAmountOrExpected(line), 0);
 
    // Calculate Stats for Preview
    const stats = calculateZReportStats(filteredTransactions, filteredCollections);
    const serviceTypeReport = buildServiceTypeReport(filteredTransactions);
-
-   useEffect(() => {
-      setDeclaredCard(prev => (prev === '' ? expectedCardTotal.toFixed(2) : prev));
-   }, [expectedCardTotal]);
-
-   useEffect(() => {
-      setDeclaredOther(prev => (prev === '' ? expectedOtherTotal.toFixed(2) : prev));
-   }, [expectedOtherTotal]);
-
 
    const handleRepeatReportFromHistory = async (report: ZReport) => {
       try {
@@ -466,8 +499,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
          ));
          setCashCountedByCurrency({});
          setDenominationCounts({});
-         setDeclaredCard('');
-         setDeclaredOther('');
+         setDeclaredPaymentMethods({});
          setNotes(`Repetición/Reemplazo de ${report.sequenceNumber}`);
          setShowHistory(false);
       } catch (error) {
@@ -814,49 +846,50 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
 
                <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
                   <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                     <Receipt size={18} className="text-gray-400" /> Declaración de medios no efectivos
+                     <Receipt size={18} className="text-gray-400" /> Formas de pago a declarar
                   </h3>
-                  <div className="space-y-5">
-                     <label className="block space-y-2">
-                        <span className="text-sm font-semibold text-gray-600">Tarjeta / vouchers declarados</span>
-                        <div className="relative">
-                           <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-lg">{baseCurrency?.symbol || baseCurrencyCode}</span>
-                           <input
-                              type={isAndroid ? 'text' : 'number'}
-                              inputMode={isAndroid ? 'none' : 'decimal'}
-                              readOnly={isAndroid}
-                              data-disable-native-soft-keyboard={isAndroid ? 'true' : undefined}
-                              step="0.01"
-                              value={declaredCard}
-                              onChange={(e) => setDeclaredCard(e.target.value)}
-                              onClick={() => isAndroid && setAndroidKeypadTarget({ kind: 'CARD', title: 'Tarjeta / vouchers declarados' })}
-                              placeholder="0.00"
-                              className="w-full pl-16 pr-4 py-3 text-xl font-bold border-2 border-gray-200 rounded-2xl focus:border-blue-500 outline-none transition-colors"
-                           />
-                        </div>
-                        <p className="text-xs text-gray-400">Referencia del sistema: {(baseCurrency?.symbol || baseCurrencyCode)}{expectedCardTotal.toFixed(2)}</p>
-                     </label>
-
-                     <label className="block space-y-2">
-                        <span className="text-sm font-semibold text-gray-600">Otros medios declarados</span>
-                        <div className="relative">
-                           <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-lg">{baseCurrency?.symbol || baseCurrencyCode}</span>
-                           <input
-                              type={isAndroid ? 'text' : 'number'}
-                              inputMode={isAndroid ? 'none' : 'decimal'}
-                              readOnly={isAndroid}
-                              data-disable-native-soft-keyboard={isAndroid ? 'true' : undefined}
-                              step="0.01"
-                              value={declaredOther}
-                              onChange={(e) => setDeclaredOther(e.target.value)}
-                              onClick={() => isAndroid && setAndroidKeypadTarget({ kind: 'OTHER', title: 'Otros medios declarados' })}
-                              placeholder="0.00"
-                              className="w-full pl-16 pr-4 py-3 text-xl font-bold border-2 border-gray-200 rounded-2xl focus:border-blue-500 outline-none transition-colors"
-                           />
-                        </div>
-                        <p className="text-xs text-gray-400">Incluye transferencias, cheques u otros medios. Referencia del sistema: {(baseCurrency?.symbol || baseCurrencyCode)}{expectedOtherTotal.toFixed(2)}</p>
-                     </label>
-                  </div>
+                  {paymentMethodsToDeclare.length > 0 ? (
+                     <div className="space-y-5">
+                        {paymentMethodsToDeclare.map(line => {
+                           const methodKey = getPaymentDeclarationKey(line);
+                           const declaredValue = declaredPaymentMethods[methodKey] || '';
+                           const declared = Number(declaredValue || 0);
+                           const difference = Math.round((declared - line.amount + Number.EPSILON) * 100) / 100;
+                           return (
+                              <label key={methodKey} className="block space-y-2">
+                                 <span className="text-sm font-semibold text-gray-600">{line.name}</span>
+                                 <div className="relative">
+                                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-lg">{baseCurrency?.symbol || baseCurrencyCode}</span>
+                                    <input
+                                       type={isAndroid ? 'text' : 'number'}
+                                       inputMode={isAndroid ? 'none' : 'decimal'}
+                                       readOnly={isAndroid}
+                                       data-disable-native-soft-keyboard={isAndroid ? 'true' : undefined}
+                                       step="0.01"
+                                       value={declaredValue}
+                                       onChange={(event) => setDeclaredPaymentMethods(previous => ({ ...previous, [methodKey]: event.target.value }))}
+                                       onClick={() => isAndroid && setAndroidKeypadTarget({ kind: 'PAYMENT_METHOD', methodKey, title: `${line.name} declarado` })}
+                                       placeholder="0.00"
+                                       className="w-full pl-16 pr-4 py-3 text-xl font-bold border-2 border-gray-200 rounded-2xl focus:border-blue-500 outline-none transition-colors"
+                                    />
+                                 </div>
+                                 <div className="flex items-center justify-between text-xs">
+                                    <span className="text-gray-400">Esperado: {(baseCurrency?.symbol || baseCurrencyCode)}{line.amount.toFixed(2)}</span>
+                                    {declaredValue !== '' && (
+                                       <span className={Math.abs(difference) <= 0.01 ? 'font-bold text-emerald-600' : 'font-bold text-red-600'}>
+                                          Diferencia: {difference > 0 ? '+' : ''}{baseCurrency?.symbol || baseCurrencyCode}{difference.toFixed(2)}
+                                       </span>
+                                    )}
+                                 </div>
+                              </label>
+                           );
+                        })}
+                     </div>
+                  ) : (
+                     <p className="text-sm text-gray-400 text-center py-4">
+                        No hay formas configuradas para declaración manual, o no fueron utilizadas en este cierre.
+                     </p>
+                  )}
                </div>
             </div>
 
@@ -905,7 +938,10 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
          <div className="shrink-0 p-6 bg-white border-t border-gray-200 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] flex flex-col items-center">
             <SlideButton
                label="Desliza para Cerrar Caja"
-               disabled={currenciesRequiringCashCount.length > 0 && !currenciesRequiringCashCount.every(currencyCode => hasDeclaredCashForCurrency(currencyCode))}
+               disabled={
+                  (currenciesRequiringCashCount.length > 0 && !currenciesRequiringCashCount.every(currencyCode => hasDeclaredCashForCurrency(currencyCode)))
+                  || paymentMethodsToDeclare.some(line => !String(declaredPaymentMethods[getPaymentDeclarationKey(line)] || '').trim())
+               }
                colorClass={config.themeColor === 'orange' ? 'bg-orange-500' : 'bg-blue-500'}
                onComplete={handleStartClosing}
             />

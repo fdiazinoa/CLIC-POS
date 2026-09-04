@@ -191,7 +191,8 @@ const cloneDeep = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 /**
  * ERP (Settings → Terminal) guarda jornada/Z en `terminal.config.session`:
  * `requireZClose`, `requireOpenSession`, `allowPartialXReport`, `autoLockMinutes`,
- * `businessStartHour`, `autoPrintZReport`, `emailZReport`, `zReportEmails`.
+ * `businessStartHour`, `autoPrintZReport`, `emailZReport`, `zReportEmails`,
+ * `zReportDeclaredPaymentMethodIds`.
  * El POS usa `workflow.session` con otros nombres (`forceZChange`, `allowSalesWithOpenZ`, …).
  * Sin este mapeo, el snapshot trae los booleans del ERP pero el POS no los aplica.
  */
@@ -252,6 +253,14 @@ const mergeWorkflowSessionFromErpConfig = (
   const zEmails = erpSession.zReportEmails ?? erpSession.z_report_emails;
   if (typeof zEmails === 'string') {
     merged.zReportEmails = zEmails;
+  }
+
+  const declaredPaymentMethodIds = erpSession.zReportDeclaredPaymentMethodIds
+    ?? erpSession.z_report_declared_payment_method_ids;
+  if (Array.isArray(declaredPaymentMethodIds)) {
+    merged.zReportDeclaredPaymentMethodIds = declaredPaymentMethodIds
+      .map(value => String(value || '').trim())
+      .filter(Boolean);
   }
 
   return merged;

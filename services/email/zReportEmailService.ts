@@ -90,6 +90,7 @@ export const sendZReportEmailViaErp = async ({
   const body = {
     emails,
     deliveryId: createDeliveryId(report.id),
+    reportSchemaVersion: 2,
     companyInfo: config.companyInfo,
     currencySymbol: config.currencySymbol,
     report,
