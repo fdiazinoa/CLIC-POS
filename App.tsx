@@ -373,6 +373,12 @@ type ActiveTableEditLock = {
   expiresAt: number;
 };
 
+type PendingTableLockRelease = {
+  lock: ActiveTableEditLock;
+  phase: 'PERSIST_PENDING' | 'RELEASING';
+  promise: Promise<boolean>;
+};
+
 type ParkedTicketSyncOptions = {
   deferRemote?: boolean;
   reason?: 'cart_changed' | 'debounced' | 'explicit' | 'customer_assigned';
@@ -1808,9 +1814,8 @@ const AppContent: React.FC = () => {
   const [activeTable, setActiveTable] = useState<Table | null>(null); // New state for selected table context
   const [activeTableEditLock, setActiveTableEditLock] = useState<ActiveTableEditLock | null>(null);
   const activeTableEditLockRef = useRef<ActiveTableEditLock | null>(null);
-  const tableLockReleaseInFlightRef = useRef(false);
   const tableLockLifecycleVersionRef = useRef(0);
-  const tableLockReleasePromiseRef = useRef<Promise<boolean> | null>(null);
+  const pendingTableLockReleasesRef = useRef<Map<string, PendingTableLockRelease>>(new Map());
   const closedRestaurantOrderIdsRef = useRef<Set<string>>(new Set());
   /* original code */
   const [currentView, setCurrentView] = useState<ViewState>(() => {
@@ -5167,33 +5172,56 @@ const AppContent: React.FC = () => {
     return result;
   }, [getCurrentTerminal]);
 
-  const releaseActiveTableEditLock = useCallback(async (): Promise<boolean> => {
-    if (tableLockReleasePromiseRef.current) {
-      return tableLockReleasePromiseRef.current;
-    }
+  const releaseActiveTableEditLock = useCallback(async (
+    options: { deferRemote?: boolean; trace?: ReturnType<typeof getLatestPosInteraction> } = {},
+  ): Promise<boolean> => {
     const lock = activeTableEditLockRef.current;
-    if (!lock) return true;
-    tableLockReleaseInFlightRef.current = true;
+    if (!lock) {
+      markInteractionStage(options.trace, 'LOCAL_UNLOCK');
+      return true;
+    }
+
+    const tableId = String(lock.tableId);
+    const existingRelease = pendingTableLockReleasesRef.current.get(tableId);
+    if (existingRelease?.lock.token === lock.token) {
+      markInteractionStage(options.trace, 'LOCAL_UNLOCK');
+      return options.deferRemote ? true : existingRelease.promise;
+    }
     tableLockLifecycleVersionRef.current += 1;
 
+    // LOCAL_COMMITTED: retirar el lock de la memoria interactiva antes de
+    // esperar SQLite, Outbox o la Master. El lock remoto continúa vigente hasta
+    // que la cola durable previa haya terminado y protege a otras terminales.
+    activeTableEditLockRef.current = null;
+    setActiveTableEditLock(null);
+    setTables(previousTables => previousTables.map(table => (
+      String(table.id) === tableId
+        ? { ...table, editingLock: undefined }
+        : table
+    )));
+    markInteractionStage(options.trace, 'LOCAL_UNLOCK');
+
+    const persistenceBarrier = parkedTicketSyncQueueRef.current.catch((error) => {
+      console.warn('[TABLE_SYNC] La última actualización falló antes de liberar la mesa:', error);
+    });
+    const pendingRelease = {
+      lock,
+      phase: 'PERSIST_PENDING' as const,
+      promise: Promise.resolve(true),
+    } as PendingTableLockRelease;
+
     const releaseOperation = (async (): Promise<boolean> => {
-      await parkedTicketSyncQueueRef.current.catch((error) => {
-        console.warn('[TABLE_SYNC] La última actualización falló antes de liberar la mesa:', error);
-      });
+      await persistenceBarrier;
+      if (pendingTableLockReleasesRef.current.get(tableId) !== pendingRelease) return true;
+      pendingRelease.phase = 'RELEASING';
       for (let attempt = 1; attempt <= 3; attempt += 1) {
+        if (pendingTableLockReleasesRef.current.get(tableId) !== pendingRelease) return true;
         try {
           await invokeTableEditLock('release', {
             tableId: lock.tableId,
             ownerId: lock.ownerId,
             token: lock.token,
           });
-          activeTableEditLockRef.current = null;
-          setActiveTableEditLock(null);
-          setTables(previousTables => previousTables.map(table => (
-            String(table.id) === String(lock.tableId)
-              ? { ...table, editingLock: undefined }
-              : table
-          )));
           return true;
         } catch (error) {
           console.warn(`[TABLE_EDIT_LOCK] No se pudo confirmar liberación (intento ${attempt}/3):`, error);
@@ -5202,18 +5230,21 @@ const AppContent: React.FC = () => {
           }
         }
       }
+      console.error('[TABLE_EDIT_LOCK_RELEASE_FAILED]', {
+        tableId,
+        ownerId: lock.ownerId,
+        recovery: 'REMOTE_LOCK_RETAINS_TTL_AND_LOCAL_OWNER_CAN_REACQUIRE',
+      });
       return false;
     })();
 
-    tableLockReleasePromiseRef.current = releaseOperation;
-    try {
-      return await releaseOperation;
-    } finally {
-      if (tableLockReleasePromiseRef.current === releaseOperation) {
-        tableLockReleasePromiseRef.current = null;
-        tableLockReleaseInFlightRef.current = false;
+    pendingRelease.promise = releaseOperation.finally(() => {
+      if (pendingTableLockReleasesRef.current.get(tableId) === pendingRelease) {
+        pendingTableLockReleasesRef.current.delete(tableId);
       }
-    }
+    });
+    pendingTableLockReleasesRef.current.set(tableId, pendingRelease);
+    return options.deferRemote ? true : pendingRelease.promise;
   }, [invokeTableEditLock]);
 
   const acquireTableEditLock = useCallback(async (table: Table): Promise<boolean> => {
@@ -5227,11 +5258,24 @@ const AppContent: React.FC = () => {
 
     const currentLock = activeTableEditLockRef.current;
     if (currentLock && currentLock.tableId !== tableId) {
-      const released = await releaseActiveTableEditLock();
+      const released = await releaseActiveTableEditLock({ deferRemote: true });
       if (!released) {
         alert('No se pudo liberar la mesa anterior. Reintente antes de abrir otra mesa.');
         return false;
       }
+    }
+
+    const pendingRelease = pendingTableLockReleasesRef.current.get(tableId);
+    let reusableLock = currentLock?.tableId === tableId ? currentLock : undefined;
+    if (pendingRelease?.phase === 'PERSIST_PENDING') {
+      // La reapertura inmediata cancela el release antes de enviarlo y conserva
+      // el token que ya protege esta mesa frente a otras terminales.
+      pendingTableLockReleasesRef.current.delete(tableId);
+      reusableLock = pendingRelease.lock;
+    } else if (pendingRelease?.phase === 'RELEASING') {
+      // Si el release remoto ya salió, terminarlo antes de solicitar un lock
+      // nuevo evita una carrera que podría dejar la mesa sin protección real.
+      await pendingRelease.promise;
     }
 
     try {
@@ -5241,7 +5285,7 @@ const AppContent: React.FC = () => {
         terminalId: getCurrentTerminal()?.id,
         userId: currentUser?.id,
         userName: currentUser?.name,
-        token: currentLock?.tableId === tableId ? currentLock.token : undefined,
+        token: reusableLock?.token,
       });
       const lock = result?.lock;
       if (!result?.success || !lock?.token) {
@@ -5270,7 +5314,6 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     if (!activeTableEditLock || (currentView !== 'POS' && currentView !== 'CUSTOMERS')) return;
     const heartbeat = window.setInterval(() => {
-      if (tableLockReleaseInFlightRef.current) return;
       const lifecycleVersion = tableLockLifecycleVersionRef.current;
       const heartbeatToken = activeTableEditLock.token;
       void invokeTableEditLock('acquire', {
@@ -5283,7 +5326,6 @@ const AppContent: React.FC = () => {
       }).then(result => {
         const currentLock = activeTableEditLockRef.current;
         if (
-          tableLockReleaseInFlightRef.current ||
           lifecycleVersion !== tableLockLifecycleVersionRef.current ||
           currentLock?.tableId !== activeTableEditLock.tableId ||
           currentLock?.token !== heartbeatToken
@@ -8293,23 +8335,9 @@ const AppContent: React.FC = () => {
     writeCriticalCollectionsMirror(validTickets, cashMovements);
     setParkedTickets(validTickets);
     const persistMasterTickets = async () => {
-      const nextTicketIds = new Set(
-        validTickets
-          .map(ticket => String(ticket?.id || '').trim())
-          .filter(Boolean)
-      );
-      const persistedTickets = await db.get('parkedTickets').catch(() => []) as ParkedTicket[] | null;
-      const staleTickets = [
-        ...(Array.isArray(parkedTickets) ? parkedTickets : []),
-        ...(Array.isArray(persistedTickets) ? persistedTickets : []),
-      ].filter(ticket => {
-        const ticketId = String(ticket?.id || '').trim();
-        return ticketId && !nextTicketIds.has(ticketId);
-      });
-      await Promise.allSettled([
-        ...staleTickets.map(ticket => db.deleteDocument('parkedTickets' as any, String(ticket.id))),
-        ...validTickets.map(ticket => db.saveDocument('parkedTickets' as any, ticket as any)),
-      ]);
+      // En Android, saveCollection produce un solo executeSet transaccional:
+      // DELETE de la colección seguido por todos los UPSERT. La operación queda
+      // atómica y evita la cadena de transacciones por cada ticket.
       await db.save('parkedTickets', validTickets);
     };
 
@@ -11058,6 +11086,7 @@ const AppContent: React.FC = () => {
                 onUpdateParkedTickets={handleUpdateParkedTickets}
                 currencySymbol={config.currencySymbol}
                 currentUser={currentUser!}
+                localTableLockOwnerId={String(deviceId || getCurrentTerminal()?.config?.currentDeviceId || '')}
                 isAdmin={currentUser?.role === 'ADMIN'}
                 roles={roles}
                 bloqueoMeseros={getCurrentTerminal()?.config?.operational?.bloqueo_meseros}
@@ -11225,6 +11254,10 @@ const AppContent: React.FC = () => {
             onOpenTableMap={async () => {
               const changeTrace = getLatestPosInteraction('CHANGE_TABLE');
               markInteractionStateUpdate(changeTrace, 3);
+              const releasingTableId = String(activeTableEditLockRef.current?.tableId || '');
+              // El lock local se retira en esta misma tarea. La liberación remota
+              // permanece detrás de la barrera durable y no bloquea el mapa.
+              void releaseActiveTableEditLock({ deferRemote: true, trace: changeTrace });
               setActiveTable(null);
               setViewData(null);
               setCurrentView('TABLE_MAP');
@@ -11232,7 +11265,8 @@ const AppContent: React.FC = () => {
               // no bloquear la navegación por red, SQLite ni heartbeat.
               window.setTimeout(() => {
                 void measureInteractionStage(changeTrace, 'SYNC_START', 'SYNC_END', async () => {
-                  const released = await releaseActiveTableEditLock();
+                  const pendingRelease = pendingTableLockReleasesRef.current.get(releasingTableId);
+                  const released = pendingRelease ? await pendingRelease.promise : true;
                   if (!released) {
                     console.warn('No se pudo confirmar la liberación de la mesa; se reconciliará el snapshot autoritativo.');
                   }

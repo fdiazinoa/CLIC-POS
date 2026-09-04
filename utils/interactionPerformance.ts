@@ -21,14 +21,15 @@ export type PosInteractionStage =
   | 'FILTER_START'
   | 'FILTER_END'
   | 'SYNC_START'
-  | 'SYNC_END';
+  | 'SYNC_END'
+  | 'LOCAL_UNLOCK';
 
 export interface PosInteractionTrace {
   id: string;
   operation: PosInteractionOperation;
   startedAt: number;
   stages: Partial<Record<PosInteractionStage, number>>;
-  durations: Partial<Record<'handler' | 'render' | 'sql' | 'filter' | 'sync' | 'inputToVisible', number>>;
+  durations: Partial<Record<'handler' | 'render' | 'sql' | 'filter' | 'sync' | 'inputToVisible' | 'inputToLocalUnlock', number>>;
   renderCount: number;
   allocationsApprox: number;
   metadata?: Record<string, unknown>;
@@ -95,6 +96,9 @@ const updateDuration = (trace: PosInteractionTrace, stage: PosInteractionStage) 
   }
   if (stage === 'RENDER_END') {
     trace.durations.inputToVisible = round(value - trace.startedAt);
+  }
+  if (stage === 'LOCAL_UNLOCK') {
+    trace.durations.inputToLocalUnlock = round(value - trace.startedAt);
   }
 };
 
@@ -193,11 +197,15 @@ export const getPosInteractionReport = () => {
     const samples = traces.filter(trace => trace.operation === operation);
     const visible = samples.flatMap(trace => trace.durations.inputToVisible ?? []);
     const filters = samples.flatMap(trace => trace.durations.filter ?? []);
+    const localUnlocks = samples.flatMap(trace => trace.durations.inputToLocalUnlock ?? []);
     return [operation, {
       samples: samples.length,
       inputLatencyP50Ms: percentile(visible, 0.5),
       inputLatencyP95Ms: percentile(visible, 0.95),
       inputLatencyP99Ms: percentile(visible, 0.99),
+      localUnlockP50Ms: percentile(localUnlocks, 0.5),
+      localUnlockP95Ms: percentile(localUnlocks, 0.95),
+      localUnlockP99Ms: percentile(localUnlocks, 0.99),
       filterP50Ms: percentile(filters, 0.5),
       rendersPerInput: round(samples.reduce((sum, trace) => sum + trace.renderCount, 0) / Math.max(1, samples.length)),
       allocationsApprox: samples.reduce((sum, trace) => sum + trace.allocationsApprox, 0),
