@@ -31,7 +31,7 @@ test('el polling no cancela el envío diferido de la primera digitación', () =>
   assert.doesNotMatch(autoSyncSource, /\n\s+onUpdateParkedTickets,\n/);
 });
 
-test('volver al mapa fuerza el último envío antes de liberar el bloqueo', () => {
+test('volver al mapa libera el estado local y conserva el envío durable antes del release remoto', () => {
   const saveForMap = posSource.slice(
     posSource.indexOf('const saveActiveTableOrderForMap'),
     posSource.indexOf('const handleSendAndExit'),
@@ -48,8 +48,10 @@ test('volver al mapa fuerza el último envío antes de liberar el bloqueo', () =
     openMapStart,
     appSource.indexOf('onTableOrderSaved=', openMapStart),
   );
-  assert.match(openMapHandler, /await releaseActiveTableEditLock\(\)/);
-  assert.match(appSource, /await parkedTicketSyncQueueRef\.current/);
+  assert.match(openMapHandler, /releaseActiveTableEditLock\(\{ deferRemote: true, trace: changeTrace \}\)/);
+  assert.ok(openMapHandler.indexOf('releaseActiveTableEditLock') < openMapHandler.indexOf("setCurrentView('TABLE_MAP')"));
+  assert.match(appSource, /const persistenceBarrier = parkedTicketSyncQueueRef\.current/);
+  assert.match(appSource, /await persistenceBarrier/);
   assert.match(posSource, /await Promise\.resolve\(onOpenTableMap\(\)\)/);
 });
 
@@ -63,10 +65,9 @@ test('un heartbeat tardío no puede volver a bloquear una mesa liberada', () => 
     appSource.indexOf('const retryClientMasterConnection'),
   );
 
-  assert.match(releaseSource, /tableLockReleasePromiseRef\.current/);
-  assert.match(releaseSource, /tableLockReleaseInFlightRef\.current = true/);
+  assert.match(releaseSource, /pendingTableLockReleasesRef\.current/);
+  assert.match(releaseSource, /phase: 'PERSIST_PENDING'/);
   assert.match(releaseSource, /tableLockLifecycleVersionRef\.current \+= 1/);
-  assert.match(heartbeatSource, /if \(tableLockReleaseInFlightRef\.current\) return/);
   assert.match(heartbeatSource, /lifecycleVersion !== tableLockLifecycleVersionRef\.current/);
   assert.match(heartbeatSource, /currentLock\?\.token !== heartbeatToken/);
 });

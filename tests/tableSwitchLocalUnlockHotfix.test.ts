@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 const tableMapSource = readFileSync(new URL('../components/TableMap.tsx', import.meta.url), 'utf8');
+const posSource = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
 const performanceSource = readFileSync(new URL('../utils/interactionPerformance.ts', import.meta.url), 'utf8');
 
 const releaseStart = appSource.indexOf('const releaseActiveTableEditLock');
@@ -82,4 +83,23 @@ test('un ACK atrasado no rerenderiza la operación interactiva siguiente', () =>
   assert.match(updateSource, /currentViewRef\.current === 'TABLE_MAP'/);
   assert.match(updateSource, /!activeTableEditLockRef\.current/);
   assert.match(updateSource, /if \(canApplyAcknowledgedSnapshot\) \{/);
+});
+
+test('cerrar una mesa vacía actualiza y desbloquea localmente antes de persistir', () => {
+  const closeStart = appSource.indexOf('onTableOrderClosed={(table');
+  const closeEnd = appSource.indexOf('onOpenAgenda=', closeStart);
+  const closeSource = appSource.slice(closeStart, closeEnd);
+  assert.ok(closeStart >= 0 && closeEnd > closeStart);
+  assert.match(closeSource, /setTables\(reconciled\)/);
+  assert.match(closeSource, /releaseActiveTableEditLock\(\{ deferRemote: true \}\)/);
+  assert.ok(closeSource.indexOf('setTables(reconciled)') < closeSource.indexOf("db.save('tables', reconciled)"));
+  assert.ok(closeSource.indexOf('releaseActiveTableEditLock') < closeSource.indexOf('await clearActiveCartDraftStorage'));
+  assert.match(closeSource, /window\.setTimeout\(\(\) => \{/);
+
+  const emptyReleaseStart = posSource.indexOf('const releaseActiveEmptyTable');
+  const emptyReleaseEnd = posSource.indexOf('const handleParkCurrentTicket', emptyReleaseStart);
+  const emptyReleaseSource = posSource.slice(emptyReleaseStart, emptyReleaseEnd);
+  assert.match(emptyReleaseSource, /void Promise\.resolve\(onUpdateParkedTickets\(remaining\)\)/);
+  assert.match(emptyReleaseSource, /void Promise\.resolve\(onTableOrderClosed\?\.\(/);
+  assert.doesNotMatch(emptyReleaseSource, /await Promise\.resolve\(onUpdateParkedTickets\(remaining\)\)/);
 });

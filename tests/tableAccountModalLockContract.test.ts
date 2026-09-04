@@ -26,6 +26,6 @@ test('la liberación confirmada elimina inmediatamente el lock del estado local'
   );
   assert.match(releaseSource, /await invokeTableEditLock\('release'/);
   assert.match(releaseSource, /setTables\(previousTables => previousTables\.map\(table =>/);
-  assert.match(releaseSource, /String\(table\.id\) === String\(lock\.tableId\)/);
+  assert.match(releaseSource, /String\(table\.id\) === tableId/);
   assert.match(releaseSource, /editingLock: undefined/);
 });

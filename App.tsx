@@ -11384,8 +11384,7 @@ const AppContent: React.FC = () => {
                 status: 'OCCUPIED'
               });
             }}
-            onTableOrderClosed={async (table, _closedOrderId, remainingTickets = []) => {
-              await clearActiveCartDraftStorage().catch((error) => console.warn('No se pudo limpiar borrador activo tras cerrar mesa:', error));
+            onTableOrderClosed={(table, _closedOrderId, remainingTickets = []) => {
               const closedOrderId = _closedOrderId ? String(_closedOrderId) : '';
               if (closedOrderId) {
                 closedRestaurantOrderIdsRef.current.add(closedOrderId);
@@ -11426,29 +11425,32 @@ const AppContent: React.FC = () => {
                     barTabName: undefined,
                   } as Table);
 
-              setTables(prev => {
-                const base = prev.some(t => t.id === nextTable.id)
-                  ? prev.map(t => t.id === nextTable.id ? nextTable : t)
-                  : [...prev, nextTable];
-                const reconciled = reconcileTablesWithParkedTickets(base, effectiveRemainingTickets);
-                db.save('tables', reconciled).catch(error => console.error('Failed to persist table release:', error));
-                return reconciled;
-              });
+              const base = tables.some(t => t.id === nextTable.id)
+                ? tables.map(t => t.id === nextTable.id ? nextTable : t)
+                : [...tables, nextTable];
+              const reconciled = reconcileTablesWithParkedTickets(base, effectiveRemainingTickets);
 
-              try {
-                await fetch(resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`), {
-                  method: 'PUT',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(nextTable)
-                });
-              } catch (error) {
-                console.warn('No se pudo persistir estado libre de mesa en API:', error);
-              }
-
-              const editLockReleased = await releaseActiveTableEditLock();
-              if (!editLockReleased) {
-                console.warn('La mesa se cerró, pero no se pudo confirmar la liberación inmediata del bloqueo de edición.');
-              }
+              // La mesa vacía también sigue el contrato LOCAL_COMMITTED: la UI y
+              // el lock local cambian en esta misma tarea. SQLite, HTTP y la
+              // liberación remota conservan su orden, pero nunca bloquean volver
+              // al mapa ni la siguiente interacción del operador.
+              setTables(reconciled);
+              void releaseActiveTableEditLock({ deferRemote: true });
+              window.setTimeout(() => {
+                void (async () => {
+                  await clearActiveCartDraftStorage().catch((error) => console.warn('No se pudo limpiar borrador activo tras cerrar mesa:', error));
+                  await db.save('tables', reconciled).catch(error => console.error('Failed to persist table release:', error));
+                  try {
+                    await fetch(resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`), {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(nextTable)
+                    });
+                  } catch (error) {
+                    console.warn('No se pudo persistir estado libre de mesa en API:', error);
+                  }
+                })();
+              }, 0);
             }}
             onOpenAgenda={() => setCurrentView('AGENDA')}
             onTransactionComplete={handleTransactionComplete}
