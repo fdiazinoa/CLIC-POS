@@ -22,7 +22,7 @@ import {
    DeviceRole, DeviceFormFactor, DeviceOrientation,
    Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType, FiscalDocumentCode,
    PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, RedeemedCouponRef, ProductVariant,
-   OrderServiceType
+   OrderServiceType, CashMovement
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, isTerminalFiscalReceiptRequired, mapElectronicFiscalCodeToLegacy, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
@@ -68,7 +68,7 @@ import { requestJson } from '../services/network/httpClient';
 import ProductTableSupermarket from './ProductTableSupermarket';
 import SupermarketTicketSummary from './SupermarketTicketSummary';
 import BarcodeScannerModal from './BarcodeScannerModal';
-import { printComanda, printPrecuenta } from '../utils/printer';
+import { printCashMovementReceipt, printComanda, printPrecuenta } from '../utils/printer';
 import { canStepCartQuantity, isValidCartQuantity, isValidCartQuantityTransition } from '../utils/cartQuantity';
 import ModifierModal from './ModifierModal';
 import { productHasRestaurantConfiguration, resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
@@ -78,6 +78,7 @@ import ProductQuickActions from './ProductQuickActions';
 import ActionGrid from './ActionGrid';
 import SupervisorAuthModal from './SupervisorAuthModal';
 import VirtualKeyboard from './VirtualKeyboard';
+import NumericKeypad from './NumericKeypad';
 import SafetyGateModal from './SafetyGateModal';
 import { printReservation } from '../utils/printer';
 import MobileCartButton from './MobileCartButton';
@@ -191,7 +192,7 @@ export interface POSInterfaceProps {
    onOpenCustomers: () => void;
    onOpenHistory: () => void;
    onOpenFinance: (initialCashMovementType?: 'IN' | 'OUT' | 'X_REPORT') => void;
-   onRegisterCashMovement?: (type: 'IN' | 'OUT', amount: number, reason: string) => void | Promise<void>;
+   onRegisterCashMovement?: (type: 'IN' | 'OUT', amount: number, reason: string) => CashMovement | void | Promise<CashMovement | void>;
    onOpenZReport?: () => void;
    onOpenInventoryTracking: (productId?: string) => void;
    onOpenAudit?: () => void;
@@ -6859,9 +6860,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       setIsSavingCashMovement(true);
       try {
-         await onRegisterCashMovement(cashMovementModalType, amount, cashMovementReason.trim() || 'Movimiento General');
-         setSuccessToast(`${cashMovementModalType === 'IN' ? 'Entrada' : 'Salida'} de efectivo registrada`);
+         const movement = await onRegisterCashMovement(cashMovementModalType, amount, cashMovementReason.trim() || 'Movimiento General');
+         const movementLabel = cashMovementModalType === 'IN' ? 'Entrada' : 'Salida';
+         setSuccessToast(`${movementLabel} de efectivo registrada`);
          closeCashMovementModal();
+         if (movement && activeTerminalConfig?.workflow?.session?.autoPrintCashMovementReceipt) {
+            void printCashMovementReceipt(movement, config);
+         }
       } catch (error: any) {
          alert(`No se pudo registrar el movimiento: ${error?.message || 'Error desconocido'}`);
          setIsSavingCashMovement(false);
@@ -6971,7 +6976,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          {cashMovementModalType && (
             <div className="fixed inset-0 z-[130] flex items-start justify-center overflow-y-auto bg-black/50 px-4 pb-8 pt-[7vh] backdrop-blur-sm sm:items-center sm:pt-4">
-               <div className="w-full max-w-md rounded-[2rem] bg-white p-6 shadow-2xl animate-in zoom-in-95 slide-in-from-bottom-6 duration-300">
+               <div className="w-full max-w-lg rounded-[2rem] bg-white p-6 shadow-2xl animate-in zoom-in-95 slide-in-from-bottom-6 duration-300">
                   <div className="mb-5 flex items-center justify-between">
                      <div>
                         <p className={`text-[10px] font-black uppercase tracking-[0.22em] ${cashMovementModalType === 'IN' ? 'text-emerald-500' : 'text-red-500'}`}>
@@ -6991,17 +6996,36 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <div className="flex items-center rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                         <span className="mr-2 text-xl font-black text-slate-400">{config.currencySymbol}</span>
                         <input
-                           autoFocus
-                           type="number"
-                           min="0"
-                           step="0.01"
+                           type="text"
+                           readOnly
+                           inputMode="none"
+                           data-disable-native-soft-keyboard="true"
+                           tabIndex={-1}
                            value={cashMovementAmount}
-                           onChange={(event) => setCashMovementAmount(event.target.value)}
                            className="w-full bg-transparent text-4xl font-black text-slate-900 outline-none"
                            placeholder="0.00"
+                           aria-label="Monto del movimiento"
                         />
                      </div>
                   </label>
+
+                  <div className="mb-4 rounded-2xl bg-slate-50 p-3">
+                     <NumericKeypad
+                        value={cashMovementAmount}
+                        onChange={setCashMovementAmount}
+                        allowDecimal
+                        maxDecimalPlaces={2}
+                        disabled={isSavingCashMovement}
+                     />
+                     <button
+                        type="button"
+                        onClick={() => setCashMovementAmount('')}
+                        disabled={isSavingCashMovement || cashMovementAmount.length === 0}
+                        className="mt-2 h-10 w-full rounded-xl border border-slate-200 bg-white text-xs font-black uppercase tracking-wider text-slate-500 active:bg-red-50 disabled:opacity-30"
+                     >
+                        Limpiar monto
+                     </button>
+                  </div>
 
                   <div className="mb-5 flex flex-wrap gap-2">
                      {(cashMovementModalType === 'IN'

@@ -95,6 +95,7 @@ export const DEFAULT_TERMINAL_CONFIG = {
       maxCashInDrawer: 20000,
       askGuestsOnTicketOpen: false,
       autoPrintZReport: true,
+      autoPrintCashMovementReceipt: false,
       zReportEmails: '',
       checkOpenOrders: true,
       forceDenominationCount: false,

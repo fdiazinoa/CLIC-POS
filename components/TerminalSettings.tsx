@@ -806,6 +806,14 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     disabled={isReadOnly}
                                  />
                                  <Toggle
+                                    label="Imprimir comprobante de entrada/salida"
+                                    description="Imprime un recibo después de registrar un movimiento de efectivo."
+                                    checked={Boolean(activeTerminal.config.workflow.session.autoPrintCashMovementReceipt)}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'autoPrintCashMovementReceipt', v)}
+                                    icon={Receipt}
+                                    disabled={isReadOnly}
+                                 />
+                                 <Toggle
                                     label="Enviar Z por correo"
                                     description="Habilita el envío por email según los destinatarios configurados."
                                     checked={Boolean(activeTerminal.config.workflow.session.emailZReport)}

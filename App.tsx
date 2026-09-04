@@ -9513,6 +9513,7 @@ const AppContent: React.FC = () => {
 
     // Trigger background sync
     backgroundSyncManager.triggerSync().catch(console.error);
+    return move;
   };
 
   const resolveRoomLabel = (room: Pick<Room, 'name' | 'nombre'>): string => {
