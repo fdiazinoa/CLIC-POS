@@ -89,6 +89,15 @@ test('critical POS interactions expose structured timing markers', () => {
   assert.match(perfSource, /__CLIC_POS_PERFORMANCE__/);
 });
 
+test('interaction telemetry stays outside the critical UI path and preserves first response', () => {
+  const perfSource = readFileSync(new URL('../utils/interactionPerformance.ts', import.meta.url), 'utf8');
+  assert.match(perfSource, /requestIdleCallback\(flushEmissions, \{ timeout: 2000 \}\)/);
+  assert.match(perfSource, /setTimeout\(flushEmissions, 500\)/);
+  assert.match(perfSource, /if \(trace\.stages\[stage\] !== undefined\) return;/);
+  assert.match(perfSource, /if \(trace\.renderTarget\) return;/);
+  assert.doesNotMatch(perfSource, /const emit = \(trace:[\s\S]{0,160}console\.info/);
+});
+
 test('catalog cards use browser rendering virtualization and lazy image decode', () => {
   assert.match(posSource, /contentVisibility: 'auto'/);
   assert.match(posSource, /loading="lazy" decoding="async"/);
