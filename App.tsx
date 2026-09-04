@@ -1162,7 +1162,7 @@ const resolveTerminalErpIdentity = (terminal: any): string => (
   ).trim()
 );
 
-const terminalReferenceMatches = (terminal: any, reference?: string | null): boolean => {
+const configuredTerminalReferenceMatches = (terminal: any, reference?: string | null): boolean => {
   const normalizedReference = String(reference || '').trim().toLowerCase();
   if (!normalizedReference) return false;
   return [
@@ -1183,7 +1183,7 @@ const resolveErpTerminalAliasMatch = (terminals: any[], reference?: string | nul
   if (!reference || looksLikeUuid(reference)) return null;
   return terminals.find((terminal) =>
     looksLikeUuid(resolveTerminalErpIdentity(terminal)) &&
-    terminalReferenceMatches(terminal, reference)
+    configuredTerminalReferenceMatches(terminal, reference)
   ) || null;
 };
 
@@ -7453,12 +7453,20 @@ const AppContent: React.FC = () => {
           ...(setupRegisterAuth.tokenExpiresAt ? { tokenExpiresAt: setupRegisterAuth.tokenExpiresAt } : {}),
         },
       };
+      const storedSetupMode = getStoredTerminalSetupMode();
       const updatedConfig = clearDuplicateDeviceAssignments(configWithAuthMetadata, deviceId, {
         activeTerminalId: terminalId,
         bindingTerminalId: setupResult?.erpTerminalId || terminalId,
         bindingLocalTerminalId: resolvedOperationalTerminalId,
       }).config;
-      const selectedTerminal = (updatedConfig.terminals || []).find(t => t.id === terminalId);
+      const selectedTerminal = (updatedConfig.terminals || []).find(t =>
+        configuredTerminalReferenceMatches(t, terminalId)
+        || configuredTerminalReferenceMatches(t, canonicalSetupErpTerminalId)
+      ) || resolvePreferredTerminalForDevice(updatedConfig.terminals || [], deviceId, {
+        activeTerminalId: terminalId,
+        bindingTerminalId: canonicalSetupErpTerminalId,
+        bindingLocalTerminalId: resolvedOperationalTerminalId,
+      });
       const resolvedTerminalName =
         setupResult?.terminalName
         || selectedTerminal?.config?.terminalName
@@ -7472,7 +7480,8 @@ const AppContent: React.FC = () => {
       if (requiresCanonicalErpIdentity && !resolvedErpTerminalId) {
         requireCanonicalErpTerminalId(setupResult);
       }
-      const isSlave = selectedTerminal?.config?.isPrimaryNode === false;
+      const isClientSetupMode = storedSetupMode === 'CLIENT' || storedSetupMode === 'ORDER_TAKER';
+      const isSlave = isClientSetupMode || selectedTerminal?.config?.isPrimaryNode === false;
       const wasOccupiedByAnotherDevice =
         !!previouslyAssignedTerminal?.config?.currentDeviceId &&
         previouslyAssignedTerminal.config.currentDeviceId !== deviceId;
@@ -7560,9 +7569,8 @@ const AppContent: React.FC = () => {
         operationalDocumentState.fiscalAllocations,
         operationalDocumentState.terminalId,
       );
-      const storedSetupMode = getStoredTerminalSetupMode();
       const nextSetupMode: TerminalSetupMode = isSlave
-        ? 'CLIENT'
+        ? storedSetupMode === 'ORDER_TAKER' ? 'ORDER_TAKER' : 'CLIENT'
         : storedSetupMode === 'SERVER_ERP'
           ? 'SERVER_ERP'
           : 'SERVER_LOCAL';
