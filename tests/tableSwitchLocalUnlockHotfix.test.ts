@@ -67,8 +67,16 @@ test('el cambio visual dispara release local antes de reconciliar con la Master'
   const openMapSource = appSource.slice(openMapStart, orderSavedStart);
   assert.match(openMapSource, /releaseActiveTableEditLock\(\{ deferRemote: true, trace: changeTrace \}\)/);
   assert.match(openMapSource, /pendingRelease \? await pendingRelease\.promise : true/);
+  assert.match(openMapSource, /currentViewRef\.current !== 'TABLE_MAP' \|\| activeTableEditLockRef\.current/);
   assert.ok(
     openMapSource.indexOf('releaseActiveTableEditLock')
       < openMapSource.indexOf("measureInteractionStage(changeTrace, 'SYNC_START', 'SYNC_END'"),
   );
+});
+
+test('un ACK atrasado no rerenderiza la operación interactiva siguiente', () => {
+  assert.match(updateSource, /const canApplyAcknowledgedSnapshot =/);
+  assert.match(updateSource, /currentViewRef\.current === 'TABLE_MAP'/);
+  assert.match(updateSource, /!activeTableEditLockRef\.current/);
+  assert.match(updateSource, /if \(canApplyAcknowledgedSnapshot\) \{/);
 });

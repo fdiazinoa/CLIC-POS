@@ -8295,9 +8295,13 @@ const AppContent: React.FC = () => {
         const effectiveSharedTickets = newerPendingSync && newerPendingSync !== pendingSync
           ? mergePendingClientTableTickets(sharedTickets, newerPendingSync)
           : sharedTickets;
-        setParkedTickets(effectiveSharedTickets);
-        if (Array.isArray(result?.tables)) {
-          setTables(result.tables);
+        const canApplyAcknowledgedSnapshot =
+          pendingClientTableSyncRef.current === pendingSync
+          && currentViewRef.current === 'TABLE_MAP'
+          && !activeTableEditLockRef.current;
+        if (canApplyAcknowledgedSnapshot) {
+          setParkedTickets(effectiveSharedTickets);
+          if (Array.isArray(result?.tables)) setTables(result.tables);
         }
         if (pendingClientTableSyncRef.current === pendingSync) {
           pendingClientTableSyncRef.current = null;
@@ -8375,9 +8379,15 @@ const AppContent: React.FC = () => {
         const effectiveSharedTickets = newerPendingSync && newerPendingSync !== masterPendingSync
           ? mergePendingClientTableTickets(sharedTickets, newerPendingSync)
           : sharedTickets;
-        setParkedTickets(effectiveSharedTickets);
-        if (Array.isArray(result?.tables)) {
-          setTables(reconcileTablesWithParkedTickets(result.tables, effectiveSharedTickets));
+        const canApplyAcknowledgedSnapshot =
+          pendingMasterTableSyncRef.current === masterPendingSync
+          && currentViewRef.current === 'TABLE_MAP'
+          && !activeTableEditLockRef.current;
+        if (canApplyAcknowledgedSnapshot) {
+          setParkedTickets(effectiveSharedTickets);
+          if (Array.isArray(result?.tables)) {
+            setTables(reconcileTablesWithParkedTickets(result.tables, effectiveSharedTickets));
+          }
         }
         const responseRevision = Number(result?.revision || 0);
         if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
@@ -11270,6 +11280,7 @@ const AppContent: React.FC = () => {
                   if (!released) {
                     console.warn('No se pudo confirmar la liberación de la mesa; se reconciliará el snapshot autoritativo.');
                   }
+                  if (currentViewRef.current !== 'TABLE_MAP' || activeTableEditLockRef.current) return;
                   await fetchTables();
                 }).catch((error) => console.error('Failed to refresh tables on TABLE_MAP view:', error));
               }, 0);
