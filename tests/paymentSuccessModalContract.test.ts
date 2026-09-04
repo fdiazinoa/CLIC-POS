@@ -36,13 +36,18 @@ test('closing the completed-sale modal performs the deferred table navigation', 
 
 test('closing a restaurant order releases its edit lock without waiting for another table', () => {
   const orderClosedHandler = appSource.slice(
-    appSource.indexOf('onTableOrderClosed={async'),
-    appSource.indexOf('onOpenAgenda=', appSource.indexOf('onTableOrderClosed={async')),
+    appSource.indexOf('onTableOrderClosed={(table'),
+    appSource.indexOf('onOpenAgenda=', appSource.indexOf('onTableOrderClosed={(table')),
   );
 
   assert.match(
     orderClosedHandler,
-    /await releaseActiveTableEditLock\(\)/,
+    /releaseActiveTableEditLock\(\{ deferRemote: true \}\)/,
     'la facturación debe liberar el bloqueo de edición dentro del cierre de la mesa',
+  );
+  assert.ok(
+    orderClosedHandler.indexOf('releaseActiveTableEditLock')
+      < orderClosedHandler.indexOf("db.save('tables', reconciled)"),
+    'la liberación local debe ocurrir antes de persistir el cierre',
   );
 });
