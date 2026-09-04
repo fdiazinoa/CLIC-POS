@@ -39,21 +39,42 @@ const MAX_TRACES = 300;
 const traces: PosInteractionTrace[] = [];
 const pendingByRenderTarget = new Map<string, PosInteractionTrace[]>();
 let sequence = 0;
+let emissionScheduled = false;
+const pendingEmissions: Array<{
+  trace: PosInteractionTrace;
+  stage: PosInteractionStage;
+  stageAt: number;
+}> = [];
 
 const now = () => typeof performance !== 'undefined' ? performance.now() : Date.now();
 const round = (value: number) => Math.round(value * 100) / 100;
 
+const flushEmissions = () => {
+  emissionScheduled = false;
+  const emissions = pendingEmissions.splice(0, pendingEmissions.length);
+  for (const { trace, stage, stageAt } of emissions) {
+    console.info('[POS_INTERACTION]', JSON.stringify({
+      id: trace.id,
+      operation: trace.operation,
+      stage,
+      elapsedMs: round(stageAt - trace.startedAt),
+      durationsMs: trace.durations,
+      renderCount: trace.renderCount,
+      allocationsApprox: trace.allocationsApprox,
+      metadata: trace.metadata,
+    }));
+  }
+};
+
 const emit = (trace: PosInteractionTrace, stage: PosInteractionStage) => {
-  console.info('[POS_INTERACTION]', JSON.stringify({
-    id: trace.id,
-    operation: trace.operation,
-    stage,
-    elapsedMs: round((trace.stages[stage] ?? now()) - trace.startedAt),
-    durationsMs: trace.durations,
-    renderCount: trace.renderCount,
-    allocationsApprox: trace.allocationsApprox,
-    metadata: trace.metadata,
-  }));
+  pendingEmissions.push({ trace, stage, stageAt: trace.stages[stage] ?? now() });
+  if (emissionScheduled) return;
+  emissionScheduled = true;
+  if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+    window.requestIdleCallback(flushEmissions, { timeout: 2000 });
+    return;
+  }
+  setTimeout(flushEmissions, 500);
 };
 
 const updateDuration = (trace: PosInteractionTrace, stage: PosInteractionStage) => {
@@ -79,6 +100,9 @@ const updateDuration = (trace: PosInteractionTrace, stage: PosInteractionStage) 
 
 export const markInteractionStage = (trace: PosInteractionTrace | null | undefined, stage: PosInteractionStage) => {
   if (!trace) return;
+  // The acceptance metric is time to the first visible response. A later state
+  // update or render must never replace the first marker and inflate the result.
+  if (trace.stages[stage] !== undefined) return;
   trace.stages[stage] = now();
   updateDuration(trace, stage);
   emit(trace, stage);
@@ -107,6 +131,9 @@ export const beginPosInteraction = (
 };
 
 export const expectInteractionRender = (trace: PosInteractionTrace, renderTarget: string) => {
+  // Keep the first requested visual target. Some flows continue toward a second
+  // screen, but the interaction has already responded visibly by then.
+  if (trace.renderTarget) return;
   trace.renderTarget = renderTarget;
   const pending = pendingByRenderTarget.get(renderTarget) || [];
   pending.push(trace);
@@ -198,6 +225,7 @@ if (typeof window !== 'undefined') {
     clear: () => {
       traces.splice(0, traces.length);
       pendingByRenderTarget.clear();
+      pendingEmissions.splice(0, pendingEmissions.length);
     },
   };
 }
