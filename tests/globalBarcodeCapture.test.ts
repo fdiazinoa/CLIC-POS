@@ -71,6 +71,18 @@ test('70ms reader works and manual 150ms input stays manual', t => {
     assert.deepEqual(h.scans, ['987654321']);
 });
 
+test('Android HID keydown-only reader works while POS search has focus', t => {
+    const h = harness(t);
+    for (const char of '74000171') {
+        h.key(char, h.search);
+        t.mock.timers.tick(20);
+    }
+    const suffix = h.key('Enter', h.search);
+    assert.equal(suffix.prevented, true);
+    assert.equal(suffix.stopped, true);
+    assert.deepEqual(h.scans, ['74000171']);
+});
+
 for (const data of ['987654321', null]) {
     test(`Android IME complete code (${data ? 'data' : 'null data'}), no keys needed`, t => {
         const h = harness(t);
