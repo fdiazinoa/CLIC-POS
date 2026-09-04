@@ -40,12 +40,25 @@ test('un trabajo pendiente bloquea envíos duplicados', async () => {
   assert.equal(await first, true);
 });
 
-test('la pantalla de venta conserva el comprobante y ofrece reintento', () => {
+test('el comprobante solo se cierra para el cajero cuando la impresión fue aceptada', () => {
   const source = readFileSync(new URL('../components/PaymentModal.tsx', import.meta.url), 'utf8');
   const handler = source.slice(source.indexOf('if (!config || !completedTransaction || printTicketPending.current)'), source.indexOf('<Printer size={18}', source.indexOf('if (!config || !completedTransaction || printTicketPending.current)')));
-  assert.doesNotMatch(handler, /onClose\(\)/);
+  assert.match(handler, /if \(accepted && !canStartNewSale\) onClose\(\);/);
   assert.match(handler, /vuelve a pulsar Ticket para reintentar sin repetir el cobro/);
   assert.match(handler, /printTicketPending\.current/);
+});
+
+test('el correo exitoso devuelve al cajero a ventas y el error conserva el comprobante', () => {
+  const source = readFileSync(new URL('../components/PaymentModal.tsx', import.meta.url), 'utf8');
+  const handler = source.slice(
+    source.indexOf('const sendReceiptEmail = async'),
+    source.indexOf('if (isSuccessScreen)'),
+  );
+  const successBranch = handler.slice(handler.indexOf('if (data.success)'), handler.indexOf('} else {'));
+  const errorBranch = handler.slice(handler.indexOf('} else {'), handler.indexOf('} catch'));
+
+  assert.match(successBranch, /if \(!canStartNewSale\) onClose\(\);/);
+  assert.doesNotMatch(errorBranch, /onClose\(\)/);
 });
 
 test('todas las salidas transaccionales usan el control compartido', () => {

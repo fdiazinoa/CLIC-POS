@@ -271,6 +271,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    }, [currentUser, config?.roles, roles]);
 
    const hasPermission = (perm: Permission) => userPermissions.includes('ALL') || userPermissions.includes(perm);
+   const canStartNewSale = hasPermission('POS_NEW_SALE');
 
    useEffect(() => {
       const unsubscribe = networkSyncService.subscribe(status => {
@@ -1126,6 +1127,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          if (data.success) {
             alert(`Ticket enviado a ${email}`);
             setShowEmailInput(false);
+            if (!canStartNewSale) onClose();
          } else {
             alert('Error al enviar: ' + data.message);
          }
@@ -1241,6 +1243,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                               setSuccessNotice(accepted
                                  ? 'Ticket enviado a impresión. Comprueba la salida antes de imprimir otra copia.'
                                  : 'La venta está registrada. Revisa la impresora y vuelve a pulsar Ticket para reintentar sin repetir el cobro.');
+                              if (accepted && !canStartNewSale) onClose();
                            } finally {
                               printTicketPending.current = false;
                               setIsPrintingTicket(false);
@@ -1261,7 +1264,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                         <Mail size={18} />
                      </button>
                   </div>}
-                  {hasPermission('POS_NEW_SALE') && (
+                  {canStartNewSale && (
                      <button onClick={onClose} className={`w-full py-4 rounded-xl font-bold text-white shadow-xl flex items-center justify-center gap-2 ${themeBgClass}`}><Repeat size={20} /> {isInstallmentPayment ? 'Continuar con la cuenta' : 'Nueva Venta'}</button>
                   )}
                </div>
