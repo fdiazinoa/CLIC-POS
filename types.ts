@@ -756,6 +756,8 @@ export interface TerminalConfig {
         X?: CloseReportSection[];
         Z?: CloseReportSection[];
       }>;
+      /** Formas no efectivas que deben ser declaradas manualmente durante el cierre Z. */
+      zReportDeclaredPaymentMethodIds?: string[];
     };
     offline: {
       mode: 'OPTIMISTIC' | 'STRICT' | 'READ_ONLY';
@@ -2911,6 +2913,20 @@ export interface ZReportDenominationLine {
   total: number;
 }
 
+export interface ZReportPaymentMethodLine {
+  methodId?: string;
+  methodType: PaymentMethod | string;
+  name: string;
+  amount: number;
+  isPending?: boolean;
+}
+
+export interface ZReportPaymentMethodDeclaration extends ZReportPaymentMethodLine {
+  expected: number;
+  declared: number;
+  difference: number;
+}
+
 export type ZReportDenominationBreakdown = Record<string, ZReportDenominationLine[]>;
 
 export interface ZReportCashMovementLine {
@@ -2941,6 +2957,10 @@ export interface ZReport {
   // Financials
   baseCurrency: string;
   totalsByMethod: Record<string, number>; // CASH, CARD, etc.
+  /** Desglose con el nombre configurado y el monto aplicado a los tickets. */
+  paymentMethodSummary?: ZReportPaymentMethodLine[];
+  /** Medios que el usuario declaró manualmente en este cierre. */
+  paymentMethodDeclarations?: ZReportPaymentMethodDeclaration[];
 
   // Cash Details (Multi-currency)
   cashExpected: Record<string, number>;

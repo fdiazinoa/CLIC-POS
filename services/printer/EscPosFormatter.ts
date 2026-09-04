@@ -9,6 +9,7 @@ import { resolveGlobalDiscountLabel } from '../../utils/globalDiscountPresentati
 import { resolveReceiptCouponCodes } from '../../utils/receiptCouponPresentation';
 import { formatReceiptVariant } from '../../utils/receiptVariant';
 import { getCloseReceiptSummary, closeTaxLabel } from '../../utils/closeReceiptSummary';
+import { getZReportPaymentMethodSummary, paymentMethodSummaryTotal } from '../../utils/zReportPaymentSummary';
 
 export interface EscPosLabelRecord {
   productId: string;
@@ -937,7 +938,8 @@ export const buildEscPosZReportPayload = (
   const isXReport = (report as any).reportType === 'X';
   const reportTitle = isXReport ? 'CIERRE X (ARQUEO)' : 'REPORTE DE CIERRE (Z)';
   const currencySymbol = resolveCurrencySymbol(config, report.baseCurrency);
-  const totalCollected = Object.values(report.totalsByMethod || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+  const paymentMethodSummary = getZReportPaymentMethodSummary(report, config);
+  const paymentMethodsTotal = paymentMethodSummaryTotal(paymentMethodSummary);
   const enabledSections = new Set(report.enabledSections || []);
   const reportDetails = report.reportDetails || {};
   const denominationBreakdown = report.denominationBreakdown || report.denomination_breakdown || {};
@@ -971,16 +973,16 @@ export const buildEscPosZReportPayload = (
     pushPair(chunks, 'Ventas Brutas', formatMoney(currencySymbol, report.stats?.grossSales || 0), width);
     pushPair(chunks, 'Devoluciones', formatMoney(currencySymbol, report.stats?.returnsTotal || 0), width);
     pushPair(chunks, 'Ventas Netas', formatMoney(currencySymbol, report.stats?.netSales || 0), width);
-    pushPair(chunks, 'Recaudado', formatMoney(currencySymbol, totalCollected), width);
     pushPair(chunks, 'Transacciones', String(report.transactionCount || 0), width);
   }
 
-  if (!hiddenModules.includes('PAYMENTS') && Object.keys(report.totalsByMethod || {}).length > 0) {
+  if (!hiddenModules.includes('PAYMENTS') && paymentMethodSummary.length > 0) {
     chunks.push(divider(width));
-    pushTextLines(chunks, splitLines('METODOS DE PAGO', width));
-    Object.entries(report.totalsByMethod).forEach(([method, amount]) => {
-      pushPair(chunks, method, formatMoney(currencySymbol, amount), width);
+    pushTextLines(chunks, splitLines('FORMAS DE PAGO', width));
+    paymentMethodSummary.forEach(line => {
+      pushPair(chunks, line.name, formatMoney(currencySymbol, line.amount), width);
     });
+    pushPair(chunks, 'Total formas de pago', formatMoney(currencySymbol, paymentMethodsTotal), width);
   }
 
   const serviceTypeSummary = report.serviceTypeSummary || [];
@@ -1003,9 +1005,25 @@ export const buildEscPosZReportPayload = (
     pushTextLines(chunks, splitLines('ARQUEO DE CAJA', width));
     Object.keys(report.cashExpected).forEach(currency => {
       pushTextLines(chunks, splitLines(currency, width));
-      pushPair(chunks, 'Esperado', Number(report.cashExpected[currency] || 0).toFixed(2), width);
-      pushPair(chunks, 'Contado', Number(report.cashCounted[currency] || 0).toFixed(2), width);
-      pushPair(chunks, 'Diferencia', Number(report.cashDiscrepancy[currency] || 0).toFixed(2), width);
+      if (currency === report.baseCurrency) {
+        pushPair(chunks, 'Efectivo en ventas', formatMoney(currencySymbol, report.cashSales || 0), width);
+        pushPair(chunks, '(+) Entradas', formatMoney(currencySymbol, report.cashIn || 0), width);
+        pushPair(chunks, '(-) Salidas', formatMoney(currencySymbol, report.cashOut || 0), width);
+      }
+      pushPair(chunks, 'Efectivo esperado', formatMoney(currencySymbol, report.cashExpected[currency] || 0), width);
+      pushPair(chunks, 'Efectivo contado', formatMoney(currencySymbol, report.cashCounted[currency] || 0), width);
+      pushPair(chunks, 'Diferencia', formatMoney(currencySymbol, report.cashDiscrepancy[currency] || 0), width);
+    });
+  }
+
+  if (!hiddenModules.includes('CASH_DETAILS') && (report.paymentMethodDeclarations || []).length > 0) {
+    chunks.push(divider(width));
+    pushTextLines(chunks, splitLines('DECLARACION FORMAS DE PAGO', width));
+    report.paymentMethodDeclarations!.forEach(line => {
+      pushTextLines(chunks, splitLines(line.name, width));
+      pushPair(chunks, 'Esperado', formatMoney(currencySymbol, line.expected), width);
+      pushPair(chunks, 'Declarado', formatMoney(currencySymbol, line.declared), width);
+      pushPair(chunks, 'Diferencia', formatMoney(currencySymbol, line.difference), width);
     });
   }
 
