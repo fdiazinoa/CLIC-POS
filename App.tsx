@@ -119,6 +119,7 @@ import {
   selectAuthoritativeFloorPlan,
 } from './utils/tableLayout';
 import { NativeLaunchContext, shouldRestoreNativeSession } from './utils/nativeSessionResume';
+import { markRestaurantLinesCommitted } from './utils/restaurantHotReversal';
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
@@ -7870,9 +7871,11 @@ const AppContent: React.FC = () => {
         }
       }
       const shouldFullPullOnPairing = setupResult?.snapshotMeta?.fullPullOnPairing ?? true;
-      // A slave's authoritative catalog is the LAN Master. The ERP setup snapshot can
-      // omit POS-only routing fields such as production_area_id and must not overwrite it.
-      const shouldPersistSetupSnapshotItems = !shouldRestoreRemoteData;
+      // The pairing snapshot is the first complete catalog the operator can use.
+      // Persist it before the background pull so a newly linked client never opens
+      // an empty ticket while the LAN catalog refresh is still in flight.
+      const shouldPersistSetupSnapshotItems = Array.isArray(setupResult?.snapshotItems)
+        && setupResult.snapshotItems.length > 0;
       if (shouldFullPullOnPairing) {
         setupResult.progress?.({
           stepId: 'sync',
@@ -11095,10 +11098,10 @@ const AppContent: React.FC = () => {
                           ? parked.total
                           : parked.items.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0)
                       };
-                      nextCart = parked.items;
+                      nextCart = markRestaurantLinesCommitted(parked.items, parked.timestamp);
                       nextSelectedCustomer = resolveParkedCustomer(parked);
                     } else if (fromTx?.items?.length) {
-                      nextCart = fromTx.items;
+                      nextCart = markRestaurantLinesCommitted(fromTx.items);
                       if (fromTx.customerId) {
                         nextSelectedCustomer = customers.find(customer => String(customer.id) === String(fromTx.customerId)) || null;
                       }
@@ -11119,7 +11122,7 @@ const AppContent: React.FC = () => {
                           ? parked.total
                           : parked.items.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0)
                       };
-                      nextCart = parked.items;
+                      nextCart = markRestaurantLinesCommitted(parked.items, parked.timestamp);
                       nextSelectedCustomer = resolveParkedCustomer(parked);
                     }
                   }
@@ -11387,7 +11390,7 @@ const AppContent: React.FC = () => {
                   } as Customer
                 : null;
 
-              setCart(ticket.items || []);
+              setCart(markRestaurantLinesCommitted(ticket.items || [], ticket.timestamp));
               setSelectedCustomer(accountCustomer || snapshotCustomer);
               setActiveTable({
                 ...activeTable,

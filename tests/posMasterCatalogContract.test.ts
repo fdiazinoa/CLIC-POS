@@ -76,14 +76,14 @@ test('production and promotion screens refresh when their client catalogs arrive
   assert.match(productionAreaSource, /removeEventListener\('productionAreasUpdated'/);
 });
 
-test('client pairing keeps the LAN Master product routing authoritative', () => {
+test('client pairing persists the Master snapshot before background catalog refresh', () => {
   const appSource = fs.readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
   const syncManagerSource = fs.readFileSync(
     new URL('../services/sync/SyncManager.ts', import.meta.url),
     'utf8',
   );
 
-  assert.match(appSource, /const shouldPersistSetupSnapshotItems = !shouldRestoreRemoteData/);
+  assert.match(appSource, /const shouldPersistSetupSnapshotItems = Array\.isArray\(setupResult\?\.snapshotItems\)/);
   assert.equal(
     (appSource.match(/shouldPersistSetupSnapshotItems && Array\.isArray\(setupResult\?\.snapshotItems\)/g) || []).length,
     2,

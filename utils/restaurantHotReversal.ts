@@ -1,6 +1,8 @@
 export type RestaurantDraftLine = {
+  quantity?: number;
   dispatched?: boolean;
   subtotalizedAt?: string;
+  restaurantCommittedAt?: string;
   kdsStatus?: string;
   kdsOrderId?: string;
   kdsAreaId?: string;
@@ -43,5 +45,25 @@ export const canReverseRestaurantDraftWithoutApproval = (
   isRestaurantMode
   && item
   && !item.subtotalizedAt
+  && !item.restaurantCommittedAt
   && !hasKitchenDispatchEvidence(item)
+);
+
+export const markRestaurantLinesCommitted = <T extends RestaurantDraftLine>(
+  items: T[],
+  committedAt = new Date().toISOString(),
+): Array<T & { restaurantCommittedAt: string }> => items.map(item => item.restaurantCommittedAt
+  ? item
+  : { ...item, restaurantCommittedAt: committedAt }
+) as Array<T & { restaurantCommittedAt: string }>;
+
+export const requiresRestaurantReductionApproval = (
+  isRestaurantOrderContext: boolean,
+  item: RestaurantDraftLine | null | undefined,
+  nextQuantity: number,
+): boolean => Boolean(
+  isRestaurantOrderContext
+  && item?.restaurantCommittedAt
+  && Number.isFinite(nextQuantity)
+  && nextQuantity < Number(item.quantity || 0)
 );
