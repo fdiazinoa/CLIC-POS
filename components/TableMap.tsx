@@ -52,6 +52,7 @@ interface TableMapProps {
     onTableOpenCancelled?: (table: Table) => void | Promise<void>;
     currencySymbol: string;
     currentUser: UserType;
+    localTableLockOwnerId?: string;
     isAdmin?: boolean;
     bloqueoMeseros?: boolean;
     isRestaurantMode?: boolean;
@@ -458,6 +459,7 @@ const TableMap: React.FC<TableMapProps> = ({
     onTableOpenCancelled,
     currencySymbol,
     currentUser,
+    localTableLockOwnerId,
     isAdmin,
     bloqueoMeseros,
     isRestaurantMode,
@@ -854,7 +856,12 @@ const TableMap: React.FC<TableMapProps> = ({
             const smartStatus = getSmartStatus(table, elapsedMinutes, hasDigitizedItems, isSubtotalized);
             const displayTable = hasDigitizedItems && parkedSummary ? enrichTableWithParkedTicket(table) : table;
             const isOccupiedLike = smartStatus !== 'FREE';
-            const isBeingEdited = Boolean(displayTable.editingLock);
+            // El lock remoto sigue protegiendo a otras terminales mientras la
+            // persistencia termina, pero nunca debe bloquear a su propio dueño.
+            const isBeingEdited = Boolean(
+                displayTable.editingLock
+                && String(displayTable.editingLock.ownerId || '') !== String(localTableLockOwnerId || '')
+            );
             const isLocked = isBeingEdited || (
                 isOccupiedLike &&
                 Boolean(bloqueoMeseros) &&
@@ -902,7 +909,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 lastOrderHint: computeLastOrderHint(baseModel)
             };
         });
-    }, [serviceTables, bloqueoMeseros, currentUser.id, isAdmin, expectedStayMinutes, highRevenueThreshold, getParkedSummaryForTable, enrichTableWithParkedTicket, getTableTickets, getVisualTableState]);
+    }, [serviceTables, bloqueoMeseros, currentUser.id, isAdmin, localTableLockOwnerId, expectedStayMinutes, highRevenueThreshold, getParkedSummaryForTable, enrichTableWithParkedTicket, getTableTickets, getVisualTableState]);
 
     const createTableAccount = useCallback(async (table: Table, requestedName?: string) => {
         const existingTickets = getTableTickets(table);

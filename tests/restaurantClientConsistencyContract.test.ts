@@ -53,9 +53,10 @@ test('la salida conserva las credenciales del lock, evita esperas y no duplica c
   const releaseEnd = appSource.indexOf('const acquireTableEditLock', releaseStart);
   const releaseSource = appSource.slice(releaseStart, releaseEnd);
   assert.ok(
-    releaseSource.indexOf("await invokeTableEditLock('release'")
-      < releaseSource.indexOf('activeTableEditLockRef.current = null'),
+    releaseSource.indexOf('activeTableEditLockRef.current = null')
+      < releaseSource.indexOf("await invokeTableEditLock('release'"),
   );
+  assert.match(releaseSource, /const persistenceBarrier = parkedTicketSyncQueueRef\.current/);
   assert.match(releaseSource, /attempt <= 3/);
 
   const saveStart = appSource.indexOf('const handleUpdateParkedTickets');
@@ -72,8 +73,8 @@ test('la salida conserva las credenciales del lock, evita esperas y no duplica c
   const backEnd = posSource.indexOf('const handleRestoreTicket', backStart);
   const backSource = posSource.slice(backStart, backEnd);
   assert.match(backSource, /cart\.some\(item => !item\.dispatched\)/);
-  assert.match(backSource, /await handleDispatchCommand\('table_exit'\)/);
-  assert.match(backSource, /dispatchOutcome === 'DISPATCHED' \|\| dispatchOutcome === 'CANCELLED'/);
+  assert.match(backSource, /handleDispatchCommand\('table_exit', \{ backgroundTableExit: true \}\)/);
+  assert.match(backSource, /requiresBackgroundDispatch/);
 });
 
 test('el diseñador vuelve al mapa cuando se abrió desde Salas', () => {

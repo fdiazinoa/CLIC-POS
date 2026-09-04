@@ -373,6 +373,12 @@ type ActiveTableEditLock = {
   expiresAt: number;
 };
 
+type PendingTableLockRelease = {
+  lock: ActiveTableEditLock;
+  phase: 'PERSIST_PENDING' | 'RELEASING';
+  promise: Promise<boolean>;
+};
+
 type ParkedTicketSyncOptions = {
   deferRemote?: boolean;
   reason?: 'cart_changed' | 'debounced' | 'explicit' | 'customer_assigned';
@@ -406,6 +412,10 @@ const FLOOR_PLAN_STORAGE_KEY = 'clic_pos_floor_plan_mirror_v1';
 const ACTIVE_USER_SESSION_STORAGE_KEY = 'clic_pos_active_user_session_v1';
 const FORCE_LOGIN_AFTER_EXIT_STORAGE_KEY = 'clic_pos_force_login_after_exit_v1';
 const PENDING_CLIENT_TABLE_SYNC_STORAGE_KEY = 'clic_pos_pending_client_table_sync_v1';
+// Un operador puede encadenar mesa → artículo → mesa en menos de un segundo.
+// El journal local ya está escrito; SQLite/Outbox esperan esta ventana para no
+// competir con la siguiente pintura, pero conservan orden FIFO después de ella.
+const TABLE_PERSISTENCE_IDLE_MS = 1_000;
 
 type FloorPlanMirror = {
   rooms: Room[];
@@ -671,12 +681,16 @@ const writeCriticalCollectionsMirror = (parkedTickets: ParkedTicket[], cashMovem
 };
 
 const persistPendingClientTableSync = async (pending: PendingClientTableSync): Promise<void> => {
+  writePendingTableSyncMirror(pending);
+  await db.save('pendingClientTableSync' as any, pending);
+};
+
+const writePendingTableSyncMirror = (pending: PendingClientTableSync): void => {
   try {
     window.localStorage.setItem(PENDING_CLIENT_TABLE_SYNC_STORAGE_KEY, JSON.stringify(pending));
   } catch {
     // SQLite remains the durable fallback when localStorage is unavailable.
   }
-  await db.save('pendingClientTableSync' as any, pending);
 };
 
 const readPendingClientTableSync = async (): Promise<PendingClientTableSync | null> => {
@@ -1808,9 +1822,9 @@ const AppContent: React.FC = () => {
   const [activeTable, setActiveTable] = useState<Table | null>(null); // New state for selected table context
   const [activeTableEditLock, setActiveTableEditLock] = useState<ActiveTableEditLock | null>(null);
   const activeTableEditLockRef = useRef<ActiveTableEditLock | null>(null);
-  const tableLockReleaseInFlightRef = useRef(false);
   const tableLockLifecycleVersionRef = useRef(0);
-  const tableLockReleasePromiseRef = useRef<Promise<boolean> | null>(null);
+  const pendingTableLockReleasesRef = useRef<Map<string, PendingTableLockRelease>>(new Map());
+  const lastTableInteractionAtRef = useRef(0);
   const closedRestaurantOrderIdsRef = useRef<Set<string>>(new Set());
   /* original code */
   const [currentView, setCurrentView] = useState<ViewState>(() => {
@@ -5167,33 +5181,57 @@ const AppContent: React.FC = () => {
     return result;
   }, [getCurrentTerminal]);
 
-  const releaseActiveTableEditLock = useCallback(async (): Promise<boolean> => {
-    if (tableLockReleasePromiseRef.current) {
-      return tableLockReleasePromiseRef.current;
-    }
+  const releaseActiveTableEditLock = useCallback(async (
+    options: { deferRemote?: boolean; trace?: ReturnType<typeof getLatestPosInteraction> } = {},
+  ): Promise<boolean> => {
     const lock = activeTableEditLockRef.current;
-    if (!lock) return true;
-    tableLockReleaseInFlightRef.current = true;
+    if (!lock) {
+      markInteractionStage(options.trace, 'LOCAL_UNLOCK');
+      return true;
+    }
+
+    const tableId = String(lock.tableId);
+    lastTableInteractionAtRef.current = performance.now();
+    const existingRelease = pendingTableLockReleasesRef.current.get(tableId);
+    if (existingRelease?.lock.token === lock.token) {
+      markInteractionStage(options.trace, 'LOCAL_UNLOCK');
+      return options.deferRemote ? true : existingRelease.promise;
+    }
     tableLockLifecycleVersionRef.current += 1;
 
+    // LOCAL_COMMITTED: retirar el lock de la memoria interactiva antes de
+    // esperar SQLite, Outbox o la Master. El lock remoto continúa vigente hasta
+    // que la cola durable previa haya terminado y protege a otras terminales.
+    activeTableEditLockRef.current = null;
+    setActiveTableEditLock(null);
+    setTables(previousTables => previousTables.map(table => (
+      String(table.id) === tableId
+        ? { ...table, editingLock: undefined }
+        : table
+    )));
+    markInteractionStage(options.trace, 'LOCAL_UNLOCK');
+
+    const persistenceBarrier = parkedTicketSyncQueueRef.current.catch((error) => {
+      console.warn('[TABLE_SYNC] La última actualización falló antes de liberar la mesa:', error);
+    });
+    const pendingRelease = {
+      lock,
+      phase: 'PERSIST_PENDING' as const,
+      promise: Promise.resolve(true),
+    } as PendingTableLockRelease;
+
     const releaseOperation = (async (): Promise<boolean> => {
-      await parkedTicketSyncQueueRef.current.catch((error) => {
-        console.warn('[TABLE_SYNC] La última actualización falló antes de liberar la mesa:', error);
-      });
+      await persistenceBarrier;
+      if (pendingTableLockReleasesRef.current.get(tableId) !== pendingRelease) return true;
+      pendingRelease.phase = 'RELEASING';
       for (let attempt = 1; attempt <= 3; attempt += 1) {
+        if (pendingTableLockReleasesRef.current.get(tableId) !== pendingRelease) return true;
         try {
           await invokeTableEditLock('release', {
             tableId: lock.tableId,
             ownerId: lock.ownerId,
             token: lock.token,
           });
-          activeTableEditLockRef.current = null;
-          setActiveTableEditLock(null);
-          setTables(previousTables => previousTables.map(table => (
-            String(table.id) === String(lock.tableId)
-              ? { ...table, editingLock: undefined }
-              : table
-          )));
           return true;
         } catch (error) {
           console.warn(`[TABLE_EDIT_LOCK] No se pudo confirmar liberación (intento ${attempt}/3):`, error);
@@ -5202,23 +5240,27 @@ const AppContent: React.FC = () => {
           }
         }
       }
+      console.error('[TABLE_EDIT_LOCK_RELEASE_FAILED]', {
+        tableId,
+        ownerId: lock.ownerId,
+        recovery: 'REMOTE_LOCK_RETAINS_TTL_AND_LOCAL_OWNER_CAN_REACQUIRE',
+      });
       return false;
     })();
 
-    tableLockReleasePromiseRef.current = releaseOperation;
-    try {
-      return await releaseOperation;
-    } finally {
-      if (tableLockReleasePromiseRef.current === releaseOperation) {
-        tableLockReleasePromiseRef.current = null;
-        tableLockReleaseInFlightRef.current = false;
+    pendingRelease.promise = releaseOperation.finally(() => {
+      if (pendingTableLockReleasesRef.current.get(tableId) === pendingRelease) {
+        pendingTableLockReleasesRef.current.delete(tableId);
       }
-    }
+    });
+    pendingTableLockReleasesRef.current.set(tableId, pendingRelease);
+    return options.deferRemote ? true : pendingRelease.promise;
   }, [invokeTableEditLock]);
 
   const acquireTableEditLock = useCallback(async (table: Table): Promise<boolean> => {
     const tableId = String(table.id || '').trim();
     if (!tableId) return false;
+    lastTableInteractionAtRef.current = performance.now();
     const ownerId = String(deviceId || getCurrentTerminal()?.config?.currentDeviceId || '').trim();
     if (!ownerId) {
       alert('No se pudo identificar este dispositivo para bloquear la mesa.');
@@ -5227,11 +5269,24 @@ const AppContent: React.FC = () => {
 
     const currentLock = activeTableEditLockRef.current;
     if (currentLock && currentLock.tableId !== tableId) {
-      const released = await releaseActiveTableEditLock();
+      const released = await releaseActiveTableEditLock({ deferRemote: true });
       if (!released) {
         alert('No se pudo liberar la mesa anterior. Reintente antes de abrir otra mesa.');
         return false;
       }
+    }
+
+    const pendingRelease = pendingTableLockReleasesRef.current.get(tableId);
+    let reusableLock = currentLock?.tableId === tableId ? currentLock : undefined;
+    if (pendingRelease?.phase === 'PERSIST_PENDING') {
+      // La reapertura inmediata cancela el release antes de enviarlo y conserva
+      // el token que ya protege esta mesa frente a otras terminales.
+      pendingTableLockReleasesRef.current.delete(tableId);
+      reusableLock = pendingRelease.lock;
+    } else if (pendingRelease?.phase === 'RELEASING') {
+      // Si el release remoto ya salió, terminarlo antes de solicitar un lock
+      // nuevo evita una carrera que podría dejar la mesa sin protección real.
+      await pendingRelease.promise;
     }
 
     try {
@@ -5241,7 +5296,7 @@ const AppContent: React.FC = () => {
         terminalId: getCurrentTerminal()?.id,
         userId: currentUser?.id,
         userName: currentUser?.name,
-        token: currentLock?.tableId === tableId ? currentLock.token : undefined,
+        token: reusableLock?.token,
       });
       const lock = result?.lock;
       if (!result?.success || !lock?.token) {
@@ -5270,7 +5325,6 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     if (!activeTableEditLock || (currentView !== 'POS' && currentView !== 'CUSTOMERS')) return;
     const heartbeat = window.setInterval(() => {
-      if (tableLockReleaseInFlightRef.current) return;
       const lifecycleVersion = tableLockLifecycleVersionRef.current;
       const heartbeatToken = activeTableEditLock.token;
       void invokeTableEditLock('acquire', {
@@ -5283,7 +5337,6 @@ const AppContent: React.FC = () => {
       }).then(result => {
         const currentLock = activeTableEditLockRef.current;
         if (
-          tableLockReleaseInFlightRef.current ||
           lifecycleVersion !== tableLockLifecycleVersionRef.current ||
           currentLock?.tableId !== activeTableEditLock.tableId ||
           currentLock?.token !== heartbeatToken
@@ -8196,6 +8249,14 @@ const AppContent: React.FC = () => {
   };
 
   // --- PERSISTENCE HANDLER FOR PARKED TICKETS ---
+  const waitForTableInteractionIdle = async (): Promise<void> => {
+    while (true) {
+      const remaining = TABLE_PERSISTENCE_IDLE_MS - (performance.now() - lastTableInteractionAtRef.current);
+      if (remaining <= 0) return;
+      await new Promise<void>(resolve => window.setTimeout(resolve, Math.ceil(remaining)));
+    }
+  };
+
   const handleUpdateParkedTickets = async (
     tickets: ParkedTicket[],
     options: ParkedTicketSyncOptions = { reason: 'explicit' },
@@ -8215,6 +8276,7 @@ const AppContent: React.FC = () => {
         parkedTickets: validTickets,
       };
       pendingClientTableSyncRef.current = pendingSync;
+      writePendingTableSyncMirror(pendingSync);
       writeCriticalCollectionsMirror(validTickets, cashMovements);
       setParkedTickets(validTickets);
       const persistLocal = () => Promise.allSettled([
@@ -8253,9 +8315,13 @@ const AppContent: React.FC = () => {
         const effectiveSharedTickets = newerPendingSync && newerPendingSync !== pendingSync
           ? mergePendingClientTableTickets(sharedTickets, newerPendingSync)
           : sharedTickets;
-        setParkedTickets(effectiveSharedTickets);
-        if (Array.isArray(result?.tables)) {
-          setTables(result.tables);
+        const canApplyAcknowledgedSnapshot =
+          pendingClientTableSyncRef.current === pendingSync
+          && currentViewRef.current === 'TABLE_MAP'
+          && !activeTableEditLockRef.current;
+        if (canApplyAcknowledgedSnapshot) {
+          setParkedTickets(effectiveSharedTickets);
+          if (Array.isArray(result?.tables)) setTables(result.tables);
         }
         if (pendingClientTableSyncRef.current === pendingSync) {
           pendingClientTableSyncRef.current = null;
@@ -8268,6 +8334,7 @@ const AppContent: React.FC = () => {
       const queuedSync = parkedTicketSyncQueueRef.current
         .catch(() => undefined)
         .then(() => new Promise<void>(resolve => window.requestAnimationFrame(() => window.setTimeout(resolve, 0))))
+        .then(waitForTableInteractionIdle)
         .then(syncOperation);
       parkedTicketSyncQueueRef.current = queuedSync.catch(() => undefined);
       void queuedSync.catch(error => console.warn('[TABLE_SYNC] Reconciliación cliente diferida:', error));
@@ -8289,27 +8356,16 @@ const AppContent: React.FC = () => {
       : null;
     // Debe registrarse antes de cualquier await de persistencia: el poll nativo
     // corre cada segundo y podría aplicar una revisión Cliente en ese intervalo.
-    if (masterPendingSync) pendingMasterTableSyncRef.current = masterPendingSync;
+    if (masterPendingSync) {
+      pendingMasterTableSyncRef.current = masterPendingSync;
+      writePendingTableSyncMirror(masterPendingSync);
+    }
     writeCriticalCollectionsMirror(validTickets, cashMovements);
     setParkedTickets(validTickets);
     const persistMasterTickets = async () => {
-      const nextTicketIds = new Set(
-        validTickets
-          .map(ticket => String(ticket?.id || '').trim())
-          .filter(Boolean)
-      );
-      const persistedTickets = await db.get('parkedTickets').catch(() => []) as ParkedTicket[] | null;
-      const staleTickets = [
-        ...(Array.isArray(parkedTickets) ? parkedTickets : []),
-        ...(Array.isArray(persistedTickets) ? persistedTickets : []),
-      ].filter(ticket => {
-        const ticketId = String(ticket?.id || '').trim();
-        return ticketId && !nextTicketIds.has(ticketId);
-      });
-      await Promise.allSettled([
-        ...staleTickets.map(ticket => db.deleteDocument('parkedTickets' as any, String(ticket.id))),
-        ...validTickets.map(ticket => db.saveDocument('parkedTickets' as any, ticket as any)),
-      ]);
+      // En Android, saveCollection produce un solo executeSet transaccional:
+      // DELETE de la colección seguido por todos los UPSERT. La operación queda
+      // atómica y evita la cadena de transacciones por cada ticket.
       await db.save('parkedTickets', validTickets);
     };
 
@@ -8347,9 +8403,15 @@ const AppContent: React.FC = () => {
         const effectiveSharedTickets = newerPendingSync && newerPendingSync !== masterPendingSync
           ? mergePendingClientTableTickets(sharedTickets, newerPendingSync)
           : sharedTickets;
-        setParkedTickets(effectiveSharedTickets);
-        if (Array.isArray(result?.tables)) {
-          setTables(reconcileTablesWithParkedTickets(result.tables, effectiveSharedTickets));
+        const canApplyAcknowledgedSnapshot =
+          pendingMasterTableSyncRef.current === masterPendingSync
+          && currentViewRef.current === 'TABLE_MAP'
+          && !activeTableEditLockRef.current;
+        if (canApplyAcknowledgedSnapshot) {
+          setParkedTickets(effectiveSharedTickets);
+          if (Array.isArray(result?.tables)) {
+            setTables(reconcileTablesWithParkedTickets(result.tables, effectiveSharedTickets));
+          }
         }
         const responseRevision = Number(result?.revision || 0);
         if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
@@ -8357,18 +8419,27 @@ const AppContent: React.FC = () => {
         }
         if (pendingMasterTableSyncRef.current === masterPendingSync) {
           pendingMasterTableSyncRef.current = null;
+          writePendingTableSyncMirror({
+            id: 'current',
+            status: 'EMPTY',
+            queuedAt: new Date().toISOString(),
+            parkedTickets: [],
+          });
         }
       };
       const queuedSync = parkedTicketSyncQueueRef.current
         .catch(() => undefined)
         .then(() => new Promise<void>(resolve => window.requestAnimationFrame(() => window.setTimeout(resolve, 0))))
+        .then(waitForTableInteractionIdle)
         .then(syncOperation);
       parkedTicketSyncQueueRef.current = queuedSync.catch(() => undefined);
       void queuedSync.catch(error => console.warn('[TABLE_SYNC] Reconciliación Master diferida:', error));
       return;
     }
     window.setTimeout(() => {
-      void persistMasterTickets().catch(error => console.warn('[TABLE_SYNC] Persistencia local diferida:', error));
+      void waitForTableInteractionIdle()
+        .then(persistMasterTickets)
+        .catch(error => console.warn('[TABLE_SYNC] Persistencia local diferida:', error));
     }, 0);
   };
 
@@ -11058,6 +11129,7 @@ const AppContent: React.FC = () => {
                 onUpdateParkedTickets={handleUpdateParkedTickets}
                 currencySymbol={config.currencySymbol}
                 currentUser={currentUser!}
+                localTableLockOwnerId={String(deviceId || getCurrentTerminal()?.config?.currentDeviceId || '')}
                 isAdmin={currentUser?.role === 'ADMIN'}
                 roles={roles}
                 bloqueoMeseros={getCurrentTerminal()?.config?.operational?.bloqueo_meseros}
@@ -11225,6 +11297,10 @@ const AppContent: React.FC = () => {
             onOpenTableMap={async () => {
               const changeTrace = getLatestPosInteraction('CHANGE_TABLE');
               markInteractionStateUpdate(changeTrace, 3);
+              const releasingTableId = String(activeTableEditLockRef.current?.tableId || '');
+              // El lock local se retira en esta misma tarea. La liberación remota
+              // permanece detrás de la barrera durable y no bloquea el mapa.
+              void releaseActiveTableEditLock({ deferRemote: true, trace: changeTrace });
               setActiveTable(null);
               setViewData(null);
               setCurrentView('TABLE_MAP');
@@ -11232,10 +11308,12 @@ const AppContent: React.FC = () => {
               // no bloquear la navegación por red, SQLite ni heartbeat.
               window.setTimeout(() => {
                 void measureInteractionStage(changeTrace, 'SYNC_START', 'SYNC_END', async () => {
-                  const released = await releaseActiveTableEditLock();
+                  const pendingRelease = pendingTableLockReleasesRef.current.get(releasingTableId);
+                  const released = pendingRelease ? await pendingRelease.promise : true;
                   if (!released) {
                     console.warn('No se pudo confirmar la liberación de la mesa; se reconciliará el snapshot autoritativo.');
                   }
+                  if (currentViewRef.current !== 'TABLE_MAP' || activeTableEditLockRef.current) return;
                   await fetchTables();
                 }).catch((error) => console.error('Failed to refresh tables on TABLE_MAP view:', error));
               }, 0);
@@ -11306,8 +11384,7 @@ const AppContent: React.FC = () => {
                 status: 'OCCUPIED'
               });
             }}
-            onTableOrderClosed={async (table, _closedOrderId, remainingTickets = []) => {
-              await clearActiveCartDraftStorage().catch((error) => console.warn('No se pudo limpiar borrador activo tras cerrar mesa:', error));
+            onTableOrderClosed={(table, _closedOrderId, remainingTickets = []) => {
               const closedOrderId = _closedOrderId ? String(_closedOrderId) : '';
               if (closedOrderId) {
                 closedRestaurantOrderIdsRef.current.add(closedOrderId);
@@ -11348,29 +11425,32 @@ const AppContent: React.FC = () => {
                     barTabName: undefined,
                   } as Table);
 
-              setTables(prev => {
-                const base = prev.some(t => t.id === nextTable.id)
-                  ? prev.map(t => t.id === nextTable.id ? nextTable : t)
-                  : [...prev, nextTable];
-                const reconciled = reconcileTablesWithParkedTickets(base, effectiveRemainingTickets);
-                db.save('tables', reconciled).catch(error => console.error('Failed to persist table release:', error));
-                return reconciled;
-              });
+              const base = tables.some(t => t.id === nextTable.id)
+                ? tables.map(t => t.id === nextTable.id ? nextTable : t)
+                : [...tables, nextTable];
+              const reconciled = reconcileTablesWithParkedTickets(base, effectiveRemainingTickets);
 
-              try {
-                await fetch(resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`), {
-                  method: 'PUT',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(nextTable)
-                });
-              } catch (error) {
-                console.warn('No se pudo persistir estado libre de mesa en API:', error);
-              }
-
-              const editLockReleased = await releaseActiveTableEditLock();
-              if (!editLockReleased) {
-                console.warn('La mesa se cerró, pero no se pudo confirmar la liberación inmediata del bloqueo de edición.');
-              }
+              // La mesa vacía también sigue el contrato LOCAL_COMMITTED: la UI y
+              // el lock local cambian en esta misma tarea. SQLite, HTTP y la
+              // liberación remota conservan su orden, pero nunca bloquean volver
+              // al mapa ni la siguiente interacción del operador.
+              setTables(reconciled);
+              void releaseActiveTableEditLock({ deferRemote: true });
+              window.setTimeout(() => {
+                void (async () => {
+                  await clearActiveCartDraftStorage().catch((error) => console.warn('No se pudo limpiar borrador activo tras cerrar mesa:', error));
+                  await db.save('tables', reconciled).catch(error => console.error('Failed to persist table release:', error));
+                  try {
+                    await fetch(resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`), {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(nextTable)
+                    });
+                  } catch (error) {
+                    console.warn('No se pudo persistir estado libre de mesa en API:', error);
+                  }
+                })();
+              }, 0);
             }}
             onOpenAgenda={() => setCurrentView('AGENDA')}
             onTransactionComplete={handleTransactionComplete}

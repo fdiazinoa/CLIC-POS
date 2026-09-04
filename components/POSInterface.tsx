@@ -6385,8 +6385,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             const isReleasedOrder = String(p.id) === releasedOrderId;
             return !isReleasedOrder;
          });
-         await Promise.resolve(onUpdateParkedTickets(remaining));
-         await Promise.resolve(onTableOrderClosed?.(tableToRelease, tableToRelease.currentOrderId, remaining));
+         // El journal local se escribe de forma síncrona dentro del callback;
+         // SQLite/Outbox continúan en su cola sin bloquear el regreso al mapa.
+         void Promise.resolve(onUpdateParkedTickets(remaining)).catch(() => {
+            setErrorToast('No se pudo confirmar con la Master. La liberación quedó pendiente localmente.');
+            window.setTimeout(() => setErrorToast(null), 3500);
+         });
+         void Promise.resolve(onTableOrderClosed?.(tableToRelease, tableToRelease.currentOrderId, remaining));
          if (remaining.some(ticket => String(ticket.tableId ?? '') === releasedTableId)) {
             onUpdateCart([]);
             onSelectCustomer(null);
@@ -6400,7 +6405,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return true;
          }
       } else {
-         await Promise.resolve(onTableOrderClosed?.(tableToRelease, undefined, parkedTickets));
+         void Promise.resolve(onTableOrderClosed?.(tableToRelease, undefined, parkedTickets));
       }
 
       onUpdateCart([]);
