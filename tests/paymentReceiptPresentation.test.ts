@@ -98,14 +98,17 @@ test('un pago mixto distingue tarjeta y efectivo recibido sin total aplicado dup
 });
 
 test('un pago pendiente conserva su importe pero no se cuenta como dinero cobrado', () => {
-  const fields = buildTransactionSettlementFields([{
+  const pendingPayment = {
     id: 'credit-1',
-    method: 'CREDIT',
+    method: 'CREDIT' as const,
     methodLabel: 'Pendiente',
     amount: 1_100,
     timestamp: new Date('2026-09-04T15:20:00.000Z'),
-  }], 1_100, 'DOP');
+  };
+  const summary = buildPaymentSettlementSummary([pendingPayment], 1_100, 'DOP');
+  const fields = buildTransactionSettlementFields([pendingPayment], 1_100, 'DOP');
 
+  assert.equal(summary.remainingBase, 0);
   assert.equal(fields.settlementReceivedBase, 0);
   assert.equal(fields.settlementAppliedBase, 0);
   assert.equal(fields.settlementChangeBase, 0);
@@ -118,11 +121,14 @@ test('un pago pendiente conserva su importe pero no se cuenta como dinero cobrad
 });
 
 test('efectivo más pendiente cuadra SALE_POSTED sin depender del orden de pagos', () => {
-  const fields = buildTransactionSettlementFields([
+  const payments = [
     { id: 'credit-1', method: 'CREDIT', methodLabel: 'Pendiente', amount: 700, timestamp: new Date('2026-09-04T15:20:00.000Z') },
     { id: 'cash-1', method: 'CASH', methodLabel: 'Efectivo', amount: 400, timestamp: new Date('2026-09-04T15:20:00.000Z') },
-  ], 1_100, 'DOP');
+  ] as const;
+  const summary = buildPaymentSettlementSummary([...payments], 1_100, 'DOP');
+  const fields = buildTransactionSettlementFields([...payments], 1_100, 'DOP');
 
+  assert.equal(summary.remainingBase, 0);
   assert.equal(fields.settlementReceivedBase, 400);
   assert.equal(fields.settlementAppliedBase, 400);
   assert.equal(fields.settlementChangeBase, 0);

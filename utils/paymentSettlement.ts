@@ -128,9 +128,7 @@ export const buildPaymentSettlementSummary = (
         const changeBase = isDeferredCredit
             ? 0
             : roundToTwo(Math.max(0, receivedBase - appliedBase));
-        if (!isDeferredCredit) {
-            remainingToApply = roundToTwo(Math.max(0, remainingToApply - receivedBase));
-        }
+        remainingToApply = roundToTwo(Math.max(0, remainingToApply - receivedBase));
 
         const normalizedPayment: PaymentEntry = {
             ...payment,
@@ -173,7 +171,10 @@ export const buildPaymentSettlementSummary = (
     const totalReceivedBase = roundToTwo(settledLines.reduce((sum, line) => sum + line.receivedBase, 0));
     const totalAppliedBase = roundToTwo(settledLines.reduce((sum, line) => sum + line.appliedBase, 0));
     const totalChangeBase = roundToTwo(settledLines.reduce((sum, line) => sum + line.changeBase, 0));
-    const remainingBase = roundToTwo(Math.max(0, absoluteTotal - totalAppliedBase));
+    // The checkout remainder tracks how much of the ticket still needs a payment
+    // method assigned. Deferred credit satisfies that allocation without becoming
+    // cash settlement, so keep it separate from settlementAppliedBase.
+    const remainingBase = remainingToApply;
     const foreignLines = settledLines.filter(line => line.isForeignCurrency && line.receivedOriginal > 0);
     const uniqueForeignCurrencies = Array.from(new Set(foreignLines.map(line => line.currencyCode)));
     const uniqueForeignRates = Array.from(new Set(foreignLines.map(line => line.exchangeRate.toFixed(6))));
