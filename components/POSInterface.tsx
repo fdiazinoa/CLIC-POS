@@ -1780,9 +1780,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       warehouses,
    ]);
    const isProductOutOfStock = useCallback((product: Product) => {
-      const trackInventory = product.operationalFlags?.trackInventory ?? config.features.stockTracking;
+      const trackInventory = product.operationalFlags?.trackInventory ?? config.features?.stockTracking ?? false;
       return Boolean(trackInventory && getScopedProductStock(product) <= 0);
-   }, [config.features.stockTracking, getScopedProductStock]);
+   }, [config.features?.stockTracking, getScopedProductStock]);
    const effectiveAllowedCategorySet = useMemo(() => {
       const configuredCategories = new Set(
          (activeTerminalConfig?.catalog?.allowedCategories || [])
@@ -3201,7 +3201,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       // 2. Stock validation
-      const trackInventory = product.operationalFlags?.trackInventory ?? config.features.stockTracking;
+      const trackInventory = product.operationalFlags?.trackInventory ?? config.features?.stockTracking ?? false;
       if (trackInventory && !options?.skipStockValidation) {
          const consumptionMode = resolveInventoryConsumptionMode(product);
          if (consumptionMode === 'COMPONENTS' && quantityToAdd > 0) {
@@ -3258,7 +3258,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       return true;
-   }, [activeTerminalConfig, cartInventoryDemandByProduct, cartQuantityByProduct, committedByProduct, config.features.stockTracking, getScopedProductStock, getTerminalWarehouseName, productById, productHasActiveTariff, productMatchesTerminalWarehouse, products, warehouses]);
+   }, [activeTerminalConfig, cartInventoryDemandByProduct, cartQuantityByProduct, committedByProduct, config.features?.stockTracking, getScopedProductStock, getTerminalWarehouseName, productById, productHasActiveTariff, productMatchesTerminalWarehouse, products, warehouses]);
 
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
 

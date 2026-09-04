@@ -8,6 +8,8 @@ import { applyTerminalConfigSnapshot } from '../utils/terminalConfigSnapshot';
 
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 const selectorSource = readFileSync(new URL('../components/TerminalSelector.tsx', import.meta.url), 'utf8');
+const posInterfaceSource = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
+const kioskBrowserSource = readFileSync(new URL('../components/kiosk/KioskProductBrowser.tsx', import.meta.url), 'utf8');
 
 test('ORDER_TAKER explícito prevalece sobre el rol STANDARD_POS persistido', () => {
   const config = getInitialConfig('Restaurante' as any);
@@ -65,4 +67,11 @@ test('la vinculación cliente conserva id local y modo ORDER_TAKER', () => {
     selectorSource,
     /erpBaseUrl: bindingMode === 'SLAVE' \? undefined : erpBaseUrl \|\| undefined/
   );
+});
+
+test('la toma de pedidos tolera snapshots Master sin features opcionales', () => {
+  assert.match(posInterfaceSource, /config\.features\?\.stockTracking \?\? false/);
+  assert.doesNotMatch(posInterfaceSource, /config\.features\.stockTracking/);
+  assert.match(kioskBrowserSource, /config\.features\?\.stockTracking \?\? false/);
+  assert.doesNotMatch(kioskBrowserSource, /config\.features\.stockTracking/);
 });

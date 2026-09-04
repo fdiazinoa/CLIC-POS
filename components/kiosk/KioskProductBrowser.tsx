@@ -536,7 +536,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
       return { canSell: false, reason: 'No disponible en este almacén', availableStock: 0 };
     }
 
-    const trackInventory = product.operationalFlags?.trackInventory ?? config.features.stockTracking;
+    const trackInventory = product.operationalFlags?.trackInventory ?? config.features?.stockTracking ?? false;
     const productAllowsNegative = product.operationalFlags?.allowNegativeStock ?? false;
     const terminalAllowsNegative = activeTerminalConfig?.workflow?.inventory?.allowNegativeStock ?? false;
     const allowsNegative = productAllowsNegative && terminalAllowsNegative;
@@ -555,7 +555,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
   }, [
     activeTerminalConfig?.workflow?.inventory?.allowNegativeStock,
     cart,
-    config.features.stockTracking,
+    config.features?.stockTracking,
     getScopedProductStock,
     productHasActiveTariff,
     productMatchesTerminalWarehouse,
