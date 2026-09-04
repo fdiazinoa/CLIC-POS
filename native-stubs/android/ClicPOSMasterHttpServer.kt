@@ -310,6 +310,8 @@ object ClicPOSMasterHttpServer {
                 terminal.optString("terminal_type"),
                 terminalConfig.optString("terminalType"),
                 terminalConfig.optString("terminal_type"),
+                terminalConfig.optJSONObject("deviceRole")?.optString("role").orEmpty(),
+                terminalConfig.optJSONObject("device_role")?.optString("role").orEmpty(),
                 "STANDARD_POS"
             )
             val masterTerminalId = firstNonBlank(
@@ -484,6 +486,8 @@ object ClicPOSMasterHttpServer {
             boundTerminal.optString("terminal_type"),
             terminalConfig.optString("terminalType"),
             terminalConfig.optString("terminal_type"),
+            terminalConfig.optJSONObject("deviceRole")?.optString("role").orEmpty(),
+            terminalConfig.optJSONObject("device_role")?.optString("role").orEmpty(),
             "STANDARD_POS"
         )
         val masterTerminalId = firstNonBlank(
