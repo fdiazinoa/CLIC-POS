@@ -9,12 +9,14 @@ test('Cierre Z usa teclado numérico interno en Android para todos los importes'
 
   assert.match(source, /Capacitor\.getPlatform\(\) === 'android'/);
   assert.match(source, /AndroidNumericKeypadDialog/);
-  assert.ok((source.match(/data-disable-native-soft-keyboard/g) || []).length >= 4);
-  assert.ok((source.match(/readOnly=\{isAndroid\}/g) || []).length >= 4);
+  // Cash and denominations are fixed inputs; one dynamic input covers every
+  // configured non-cash payment method selected for declaration.
+  assert.ok((source.match(/data-disable-native-soft-keyboard/g) || []).length >= 3);
+  assert.ok((source.match(/readOnly=\{isAndroid\}/g) || []).length >= 3);
   assert.match(source, /kind: 'DENOMINATION'/);
   assert.match(source, /kind: 'CASH'/);
-  assert.match(source, /kind: 'CARD'/);
-  assert.match(source, /kind: 'OTHER'/);
+  assert.match(source, /kind: 'PAYMENT_METHOD'/);
+  assert.match(source, /paymentMethodsToDeclare\.map/);
 });
 
 test('acciones de precio usan teclado interno y toleran artículos ERP sin price', () => {
