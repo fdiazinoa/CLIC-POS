@@ -2312,6 +2312,15 @@ export const applyTerminalConfigSnapshot = (
     effectiveAllowedWarehouseIds[0] ||
     '';
   const effectiveDeviceRole = resolveDeviceRoleValue([
+    // Explicit terminal identity is authoritative. A previously persisted
+    // deviceRole is only a fallback; otherwise an ORDER_TAKER snapshot can be
+    // silently rewritten to STANDARD_POS and lose its pairing on restart.
+    resolvedIdentity.terminalType,
+    resolvedIdentity.terminal_type,
+    effectiveResolved.terminalType,
+    effectiveResolved.terminal_type,
+    effectiveFallbackConfig.terminalType,
+    effectiveFallbackConfig.terminal_type,
     fallbackDeviceRole.role,
     fallbackDeviceRole.device_role,
     fallbackDeviceRole.deviceRole,
@@ -2324,20 +2333,14 @@ export const applyTerminalConfigSnapshot = (
     fallbackDeviceRoleSnake.device_role_code,
     effectiveFallbackConfig.deviceRole,
     effectiveFallbackConfig.device_role,
-    effectiveFallbackConfig.terminalType,
-    effectiveFallbackConfig.terminal_type,
     effectiveFallbackConfig.deviceType,
     effectiveFallbackConfig.device_type,
     effectiveResolved.deviceRole,
     effectiveResolved.device_role,
-    effectiveResolved.terminalType,
-    effectiveResolved.terminal_type,
     effectiveResolved.deviceType,
     effectiveResolved.device_type,
     resolvedIdentity.deviceRole,
     resolvedIdentity.device_role,
-    resolvedIdentity.terminalType,
-    resolvedIdentity.terminal_type,
     resolvedIdentity.deviceType,
     resolvedIdentity.device_type,
     resolvedIdentity.role_code,

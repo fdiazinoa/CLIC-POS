@@ -1426,11 +1426,18 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           || data.terminal_name
           || resolvedErpTerminalId
           || terminal.id;
-        const resolvedTerminalId =
-          resolvedErpTerminalId
-          || data.terminal_id
-          || initialConfigData.terminal_id
-          || terminal.id;
+        // A client operates with the local terminal id issued by the Master.
+        // The ERP UUID remains an alias for sync/auth, but persisting it as the
+        // active local id makes the terminal look unpaired after a restart.
+        const resolvedTerminalId = bindingMode === 'SLAVE'
+          ? data.terminal_id
+            || initialConfigData.terminal_id
+            || terminal.id
+            || resolvedErpTerminalId
+          : resolvedErpTerminalId
+            || data.terminal_id
+            || initialConfigData.terminal_id
+            || terminal.id;
         const syncProfile = {
           ...buildTerminalSyncProfile({
             bindingMode,
