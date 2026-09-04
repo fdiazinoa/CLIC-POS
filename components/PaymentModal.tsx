@@ -1,6 +1,6 @@
 import { allowsDefaultPaymentMethods } from '../utils/erpPaymentMethods';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo } from 'react';
 import {
    X, CreditCard, Banknote, QrCode, CheckCircle2,
    Trash2, Plus, Wallet, Printer, Mail, ShieldAlert,
@@ -40,6 +40,15 @@ import {
    dispatchAuditEventConfigUpdate,
 } from '../services/payments/paymentIntegrationAudit';
 import { paymentIntentService } from '../services/payments/PaymentIntentService';
+import {
+   beginPosInteraction,
+   expectInteractionRender,
+   markInteractionStage,
+   markInteractionStateUpdate,
+   markRenderEnd,
+   markRenderStart,
+   measureInteractionStage,
+} from '../utils/interactionPerformance';
 import {
    buildPaymentSettlementSummary,
    resolveCurrencySymbol,
@@ -232,6 +241,8 @@ type GatewayProgressOverlayState = {
 import SupervisorAuthModal from './SupervisorAuthModal';
 
 const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
+   markRenderStart('PAYMENT_MODAL');
+   useLayoutEffect(() => markRenderEnd('PAYMENT_MODAL'));
    const [payments, setPayments] = useState<PaymentEntry[]>([]);
    const [activeMethodKey, setActiveMethodKey] = useState<string>('');
    const [inputAmount, setInputAmount] = useState<string>('');
@@ -859,9 +870,13 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          return;
       }
 
+      const trace = beginPosInteraction('PAYMENT_CONFIRM', { paymentCount: payments.length, itemCount: items.length });
+      expectInteractionRender(trace, 'PAYMENT_MODAL');
+
       setFinalizeError(null);
       setSuccessNotice(null);
       setIsFinalizing(true);
+      markInteractionStateUpdate(trace, 3);
       try {
          let paymentsToConfirm = payments;
 
@@ -939,7 +954,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
             }
          }
 
-         paymentsToConfirm = await authorizePendingGatewayPayments(paymentsToConfirm);
+         paymentsToConfirm = await measureInteractionStage(
+            trace,
+            'SYNC_START',
+            'SYNC_END',
+            () => authorizePendingGatewayPayments(paymentsToConfirm),
+         );
          setPayments(paymentsToConfirm);
 
          let slowProcessTimer: number | undefined;
@@ -1038,6 +1058,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          setGatewayProgress(null);
       } finally {
          setIsFinalizing(false);
+         if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
       }
    };
 

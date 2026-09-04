@@ -5,6 +5,14 @@ import { Delete, KeyRound, Lock, User, UserCircle, Globe, ChevronDown, Fingerpri
 import { User as UserType, TerminalConfig } from '../types';
 import { biometricService } from '../services/BiometricAuthService';
 import AccessibilityToggle from './AccessibilityToggle';
+import {
+  beginPosInteraction,
+  expectInteractionRender,
+  markInteractionStage,
+  markInteractionStateUpdate,
+  markRenderEnd,
+  markRenderStart,
+} from '../utils/interactionPerformance';
 
 const suppressNativeSoftKeyboardForPin = Capacitor.isNativePlatform();
 
@@ -16,6 +24,7 @@ interface LoginScreenProps {
 }
 
 const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availableUsers, config }) => {
+  markRenderStart('LOGIN_PIN');
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserType | null>(null);
@@ -26,6 +35,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
   const [buildVersion, setBuildVersion] = useState<string>('');
   const pinInputRef = useRef<HTMLInputElement>(null);
   const biometricScanInFlightRef = useRef(false);
+  React.useLayoutEffect(() => markRenderEnd('LOGIN_PIN'));
   const usersByPin = React.useMemo(() => {
     const map = new Map<string, UserType>();
     for (const user of availableUsers) {
@@ -93,16 +103,16 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
   const checkLogin = React.useCallback((inputPin: string) => {
     const user = selectedUser?.pin === inputPin ? selectedUser : usersByPin.get(inputPin);
     if (user) {
-      setTimeout(() => onLogin(user), 200);
+      onLogin(user);
     } else {
-      setTimeout(() => {
-        setError(true);
-        setPin('');
-      }, 300);
+      setError(true);
+      setPin('');
     }
   }, [onLogin, selectedUser, usersByPin]);
 
   const handleKeyPress = React.useCallback((key: string) => {
+    const trace = beginPosInteraction('PIN_LOGIN', { source: 'keypad', key: key === 'BACK' ? 'BACK' : key === 'C' ? 'CLEAR' : 'DIGIT' });
+    expectInteractionRender(trace, 'LOGIN_PIN');
     setError(false);
     if (key === 'C') {
       setPin('');
@@ -116,13 +126,19 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
         return prev;
       });
     }
+    markInteractionStateUpdate(trace, 1);
+    markInteractionStage(trace, 'HANDLER_END');
     focusPinInput();
   }, [focusPinInput]);
 
   const handlePinInputChange = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const trace = beginPosInteraction('PIN_LOGIN', { source: 'hardware_input' });
+    expectInteractionRender(trace, 'LOGIN_PIN');
     const nextPin = event.target.value.replace(/\D/g, '').slice(0, 4);
     setError(false);
     setPin(nextPin);
+    markInteractionStateUpdate(trace, 1);
+    markInteractionStage(trace, 'HANDLER_END');
   }, []);
 
   // Use Effect for auto-check when PIN reaches 4 digits
