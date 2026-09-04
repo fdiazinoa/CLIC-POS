@@ -7294,6 +7294,11 @@ const AppContent: React.FC = () => {
     const previousCatalogDiagnosticStatus = localStorage.getItem(CATALOG_SYNC_STATUS_KEY);
     try {
       const setupResult = typeof pairingContext === 'object' && pairingContext !== null ? pairingContext : undefined;
+      const storedSetupMode = getStoredTerminalSetupMode();
+      const resolvedMasterIp = typeof pairingContext === 'string' ? pairingContext : setupResult?.masterIp;
+      const isLocalClientBinding = Boolean(resolvedMasterIp)
+        || storedSetupMode === 'CLIENT'
+        || storedSetupMode === 'ORDER_TAKER';
       const resolvedOperationalTerminalId =
         resolveRegisterTerminalCode(
           { terminalCode: setupResult?.terminalCode },
@@ -7303,7 +7308,7 @@ const AppContent: React.FC = () => {
           setupResult?.profile,
         )
         || terminalId;
-      const requiresCanonicalErpIdentity = Boolean(
+      const requiresCanonicalErpIdentity = !isLocalClientBinding && Boolean(
         setupResult?.erpBaseUrl
         || setupResult?.syncProfile?.contractedProduct === 'POS_ERP'
         || setupResult?.syncProfile?.cloudChannel === 'ERP_ACTIVE'
@@ -7319,7 +7324,6 @@ const AppContent: React.FC = () => {
       if (requiresCanonicalErpIdentity && !canonicalSetupErpTerminalId) {
         requireCanonicalErpTerminalId(setupResult);
       }
-      const resolvedMasterIp = typeof pairingContext === 'string' ? pairingContext : setupResult?.masterIp;
       const previouslyAssignedTerminal = (config.terminals || []).find(t => t.id === terminalId);
       const normalizedResolvedMasterIp = normalizeMasterHost(resolvedMasterIp || '');
       const reachableMasterBinding = normalizedResolvedMasterIp
@@ -7406,7 +7410,7 @@ const AppContent: React.FC = () => {
           setSyncDiagnostic(null);
         }
       }
-      if (!effectiveDeviceToken) {
+      if (!effectiveDeviceToken && !isLocalClientBinding) {
         const missingTokenError = new Error('DEVICE_TOKEN_MISSING_FROM_REGISTER: El ERP vinculó la terminal pero no devolvió deviceToken.');
         setTerminalBindingDiagnosticStatus('BOUND');
         setCatalogDiagnosticStatus('AUTH_ERROR');
@@ -7453,7 +7457,6 @@ const AppContent: React.FC = () => {
           ...(setupRegisterAuth.tokenExpiresAt ? { tokenExpiresAt: setupRegisterAuth.tokenExpiresAt } : {}),
         },
       };
-      const storedSetupMode = getStoredTerminalSetupMode();
       const updatedConfig = clearDuplicateDeviceAssignments(configWithAuthMetadata, deviceId, {
         activeTerminalId: terminalId,
         bindingTerminalId: setupResult?.erpTerminalId || terminalId,

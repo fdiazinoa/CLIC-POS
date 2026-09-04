@@ -56,4 +56,13 @@ test('la vinculación cliente conserva id local y modo ORDER_TAKER', () => {
     appSource,
     /const nextSetupMode: TerminalSetupMode = isSlave[\s\S]*?storedSetupMode === 'ORDER_TAKER' \? 'ORDER_TAKER' : 'CLIENT'/
   );
+  assert.match(
+    appSource,
+    /const isLocalClientBinding = Boolean\(resolvedMasterIp\)[\s\S]*?storedSetupMode === 'ORDER_TAKER'/
+  );
+  assert.match(appSource, /if \(!effectiveDeviceToken && !isLocalClientBinding\)/);
+  assert.match(
+    selectorSource,
+    /erpBaseUrl: bindingMode === 'SLAVE' \? undefined : erpBaseUrl \|\| undefined/
+  );
 });
