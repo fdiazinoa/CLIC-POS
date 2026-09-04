@@ -1541,7 +1541,11 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           terminalId: resolvedTerminalId,
           erpTerminalId: resolvedErpTerminalId,
           terminalCode: resolvedTerminalCode,
-          erpBaseUrl: erpBaseUrl || undefined,
+          // A Cliente/Toma de pedidos authenticates and syncs through its
+          // Maestra. Sending a remembered ERP URL incorrectly promotes this
+          // local bind to ERP-direct and requires credentials the Master does
+          // not issue.
+          erpBaseUrl: bindingMode === 'SLAVE' ? undefined : erpBaseUrl || undefined,
           terminalName: data.terminal_name || terminal.name || data.terminal_id || terminal.id,
           tenantId: initialConfigData.tenant_id || data.tenant_id || tenantId,
           companyId: data.company_id || undefined,
