@@ -98,4 +98,10 @@ test('table state is applied before deferred persistence and reconciliation', ()
   assert.match(appSource, /writeCriticalCollectionsMirror\(validTickets, cashMovements\);\s*setParkedTickets\(validTickets\)/);
   assert.match(appSource, /const persistMasterTickets = async/);
   assert.match(appSource, /setCurrentView\('TABLE_MAP'\);[\s\S]*window\.setTimeout\(\(\) =>/);
+  assert.match(posSource, /handleDispatchCommand\('table_exit', \{ backgroundTableExit: true \}\)/);
+  assert.match(posSource, /if \(!options\.backgroundTableExit\) onUpdateCart\(updatedCart\)/);
+  assert.ok(
+    posSource.indexOf('await Promise.resolve(onOpenTableMap())')
+      < posSource.indexOf("handleDispatchCommand('table_exit', { backgroundTableExit: true })"),
+  );
 });

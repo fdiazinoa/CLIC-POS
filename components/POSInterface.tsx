@@ -89,6 +89,7 @@ import {
    markInteractionStateUpdate,
    markRenderEnd,
    markRenderStart,
+   measureInteractionStage,
    PosInteractionTrace,
 } from '../utils/interactionPerformance';
 import {
@@ -5817,6 +5818,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const handleDispatchCommand = async (
       origin: 'manual' | 'table_exit' = 'manual',
+      options: { backgroundTableExit?: boolean } = {},
    ): Promise<ProductionDispatchOutcome> => {
       if (cart.length === 0) return 'CONTINUE_WITHOUT_DISPATCH';
 
@@ -6165,11 +6167,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                },
             } : item;
          });
-         onUpdateCart(updatedCart);
+         if (!options.backgroundTableExit) onUpdateCart(updatedCart);
 
          // 4. Save state to DB (Parking)
          if (activeTable) {
-            await handleParkCurrentTicket(undefined, updatedCart);
+            if (options.backgroundTableExit) {
+               // The map may already be visible and another table may be opened
+               // while production I/O completes. Update only the captured order;
+               // never write this result back into the live cart.
+               const liveTickets = parkedTicketsRef.current;
+               const activeOrderId = String(activeTable.currentOrderId || orderId);
+               const currentTicket = liveTickets.find(ticket => String(ticket.id) === activeOrderId);
+               if (currentTicket) {
+                  const dispatchedTicket = {
+                     ...currentTicket,
+                     items: updatedCart,
+                     total: updatedCart.reduce(
+                        (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
+                        0,
+                     ),
+                  };
+                  const nextTickets = liveTickets.map(ticket =>
+                     String(ticket.id) === activeOrderId ? dispatchedTicket : ticket
+                  );
+                  parkedTicketsRef.current = nextTickets;
+                  await Promise.resolve(onUpdateParkedTickets(nextTickets, { reason: 'explicit' }));
+               }
+            } else {
+               await handleParkCurrentTicket(undefined, updatedCart);
+            }
          }
 
          const parts = [
@@ -6523,6 +6549,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          ...(Array.isArray(parkedTickets) ? parkedTickets : []).filter(ticket => ticket.id !== tableOrder.id),
          tableOrder
       ];
+      parkedTicketsRef.current = updatedTickets;
       cancelTicketAutoSync();
       try {
          await Promise.resolve(onUpdateParkedTickets(updatedTickets, { reason: 'explicit' }));
@@ -6576,11 +6603,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             // Returning to the table map is the waiter safety net: dispatch only
             // fresh lines. The regular Cocina action already marks them dispatched,
             // so this path cannot send the same line twice.
-            if (cart.some(item => !item.dispatched)) {
-               const dispatchOutcome = await handleDispatchCommand('table_exit');
-               if (dispatchOutcome === 'DISPATCHED' || dispatchOutcome === 'CANCELLED') return;
-            }
+            const requiresBackgroundDispatch = cart.some(item => !item.dispatched);
             await saveActiveTableOrderForMap();
+            if (onOpenTableMap) await Promise.resolve(onOpenTableMap());
+            markInteractionStage(trace, 'HANDLER_END');
+            if (requiresBackgroundDispatch) {
+               window.setTimeout(() => {
+                  window.requestAnimationFrame(() => {
+                     void measureInteractionStage(trace, 'SYNC_START', 'SYNC_END', () =>
+                        handleDispatchCommand('table_exit', { backgroundTableExit: true })
+                     );
+                  });
+               }, 0);
+            }
+            return;
          }
       }
 
