@@ -8540,8 +8540,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               )}
 
                               {/* --- BLOQUE DE TOTALES --- */}
-                              <div className="space-y-1.5 pt-3 border-t border-dashed border-gray-200">
-                                 <div className="flex justify-between items-center text-xs font-bold text-gray-500">
+                              <div className="space-y-2 pt-3 border-t border-dashed border-gray-200">
+                                 <div className="flex justify-between items-center text-sm font-extrabold text-slate-700">
                                     <span>SUBTOTAL</span>
                                     <span>{formatCurrency(cartSubtotal, baseCurrency.symbol)}</span>
                                  </div>
@@ -8551,22 +8551,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        <span>-{formatCurrency(discountAmount, baseCurrency.symbol)}</span>
                                     </div>
                                  )}
-                                 <div className="flex justify-between items-start text-xs font-bold text-gray-500">
-                                    <div className="flex flex-col gap-0.5">
+                                 <div className="flex justify-between items-start text-sm font-extrabold text-slate-700">
+                                    <div className="flex flex-col gap-1">
                                        <div className="flex items-center gap-2">
                                           <span>IMPUESTOS</span>
                                           {primaryTaxLabel && (
-                                             <span className="text-[10px] font-black uppercase tracking-wide text-slate-400">
+                                             <span className="text-xs font-bold uppercase tracking-wide text-slate-600">
                                                 {primaryTaxLabel}
                                              </span>
                                           )}
                                        </div>
                                        {combinedTaxBreakdown.length > 0 && (
-                                          <div className="space-y-0.5 pt-0.5">
+                                          <div className="space-y-1 pt-0.5">
                                              {combinedTaxBreakdown.map((tax) => (
-                                                <div key={tax.id} className="flex items-center justify-between gap-4 text-[10px] font-bold text-slate-400">
+                                                <div key={tax.id} className="flex items-center justify-between gap-4 text-xs font-semibold text-slate-600">
                                                    <span>{tax.label}</span>
-                                                   <span>{formatCurrency(tax.amount, baseCurrency.symbol)}</span>
+                                                   <span className="font-bold tabular-nums text-slate-700">{formatCurrency(tax.amount, baseCurrency.symbol)}</span>
                                                 </div>
                                              ))}
                                           </div>
