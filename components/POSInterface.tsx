@@ -9,7 +9,7 @@ import {
    Scale as ScaleIcon, PauseCircle, LogOut, Minus, Plus, Edit3,
    ArrowRightLeft, Globe, DollarSign, Split,
    ChevronDown, Check, AlertCircle, Layers,
-   ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle,
+   ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle, BrushCleaning,
    MessageSquare, PlayCircle, Download, Lock, ArrowUpRight, Landmark,
    UserCheck, StickyNote, Inbox, Printer, QrCode, Box, Package, MapPin,
    Cloud, RefreshCw, CloudOff, Layout, ChefHat, Building2, ClipboardCheck, Undo2
@@ -149,6 +149,11 @@ import {
 } from '../utils/posCatalogPresentation';
 import { resolvePosCategoryGridPosition } from '../utils/posCategoryGrid';
 import { resolvePosTableHeaderLabel } from '../utils/posTableHeader';
+import {
+   detectCameraAvailability,
+   shouldUseDesktopSearchClearAction,
+   type CameraAvailability,
+} from '../utils/cameraCapability';
 
 // ... existing imports
 
@@ -2300,11 +2305,39 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showLoyaltyModal, setShowLoyaltyModal] = useState(false);
 
    const [isScannerOpen, setIsScannerOpen] = useState(false);
+   const [cameraAvailability, setCameraAvailability] = useState<CameraAvailability>('UNKNOWN');
    const scannerRef = useRef<Html5Qrcode | null>(null);
    const searchInputRef = useRef<HTMLInputElement>(null);
    const retailSearchInputRef = useRef<HTMLInputElement>(null);
    const parkAliasInputRef = useRef<HTMLInputElement>(null);
    const [showVirtualKeyboard, setShowVirtualKeyboard] = useState(false);
+
+   useEffect(() => {
+      if (activeDeviceProfile.formFactor !== DeviceFormFactor.DESKTOP_POS) {
+         setCameraAvailability('UNKNOWN');
+         return;
+      }
+
+      let cancelled = false;
+      void detectCameraAvailability().then(result => {
+         if (!cancelled) setCameraAvailability(result);
+      });
+      return () => {
+         cancelled = true;
+      };
+   }, [activeDeviceProfile.formFactor]);
+
+   const useDesktopSearchClearAction = shouldUseDesktopSearchClearAction(
+      activeDeviceProfile.formFactor,
+      cameraAvailability,
+   );
+
+   const clearCatalogSearch = useCallback(() => {
+      searchFilterTraceRef.current = null;
+      setSearchTerm('');
+      setCatalogSearchQuery('');
+      requestAnimationFrame(() => searchInputRef.current?.focus());
+   }, []);
 
    const [fiscalStatus, setFiscalStatus] = useState<{
       type: FiscalDocumentCode;
@@ -7299,7 +7332,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         onKeyDown={handleSearchKeyDown}
                         className="w-full h-11 md:h-12 pl-10 md:pl-12 pr-10 md:pr-12 py-0 bg-gray-100 rounded-xl md:rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
                      />
-                     <button onClick={() => setIsScannerOpen(true)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-lg md:rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
+                     <button
+                        type="button"
+                        onClick={useDesktopSearchClearAction ? clearCatalogSearch : () => setIsScannerOpen(true)}
+                        disabled={useDesktopSearchClearAction && searchTerm.length === 0}
+                        aria-label={useDesktopSearchClearAction ? 'Limpiar búsqueda' : 'Escanear con cámara'}
+                        title={useDesktopSearchClearAction ? 'Limpiar búsqueda' : 'Escanear con cámara'}
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-lg md:rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-white disabled:hover:text-gray-500"
+                     >
+                        {useDesktopSearchClearAction ? <BrushCleaning size={18} /> : <ScanBarcode size={18} />}
+                     </button>
                   </div>
 
                   {canReceiveConsignments && (
