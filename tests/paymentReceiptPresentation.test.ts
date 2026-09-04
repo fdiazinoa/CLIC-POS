@@ -3,9 +3,13 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
-  buildPaymentReceiptPresentation,
-  buildPaymentSettlementSummary,
+    buildPaymentReceiptPresentation,
+    buildPaymentSettlementSummary,
+    buildTransactionSettlementFields,
+    getPaymentAppliedBaseAmount,
+    getPaymentChangeBaseAmount,
 } from '../utils/paymentSettlement';
+import { assertSalePostedPayload, buildSalePostedPayload } from '../services/sync/SalePostedContract';
 import { buildEscPosTicketPayload } from '../services/printer/EscPosFormatter';
 
 const config = {
@@ -91,6 +95,56 @@ test('un pago mixto distingue tarjeta y efectivo recibido sin total aplicado dup
     { label: 'EFECTIVO RECIBIDO', value: 'RD$1000.00' },
   ]);
   assert.equal(presentation.change?.value, 'RD$450.40');
+});
+
+test('un pago pendiente conserva su importe pero no se cuenta como dinero cobrado', () => {
+  const fields = buildTransactionSettlementFields([{
+    id: 'credit-1',
+    method: 'CREDIT',
+    methodLabel: 'Pendiente',
+    amount: 1_100,
+    timestamp: new Date('2026-09-04T15:20:00.000Z'),
+  }], 1_100, 'DOP');
+
+  assert.equal(fields.settlementReceivedBase, 0);
+  assert.equal(fields.settlementAppliedBase, 0);
+  assert.equal(fields.settlementChangeBase, 0);
+  assert.equal(fields.payments[0].amount, 1_100);
+  assert.equal(getPaymentAppliedBaseAmount(fields.payments[0]), 0);
+  assert.equal(getPaymentChangeBaseAmount(fields.payments[0]), 0);
+
+  const presentation = present(fields.payments, 1_100);
+  assert.deepEqual(presentation.groups[0].rows, [{ label: 'PENDIENTE', value: 'RD$1100.00' }]);
+});
+
+test('efectivo más pendiente cuadra SALE_POSTED sin depender del orden de pagos', () => {
+  const fields = buildTransactionSettlementFields([
+    { id: 'credit-1', method: 'CREDIT', methodLabel: 'Pendiente', amount: 700, timestamp: new Date('2026-09-04T15:20:00.000Z') },
+    { id: 'cash-1', method: 'CASH', methodLabel: 'Efectivo', amount: 400, timestamp: new Date('2026-09-04T15:20:00.000Z') },
+  ], 1_100, 'DOP');
+
+  assert.equal(fields.settlementReceivedBase, 400);
+  assert.equal(fields.settlementAppliedBase, 400);
+  assert.equal(fields.settlementChangeBase, 0);
+  assert.equal(getPaymentAppliedBaseAmount(fields.payments[0]), 0);
+  assert.equal(getPaymentAppliedBaseAmount(fields.payments[1]), 400);
+
+  const transaction = {
+    id: 'TXN-MIXED-PENDING',
+    displayId: 'TCK-MIXED-PENDING',
+    documentType: 'TICKET',
+    status: 'PENDING',
+    date: '2026-09-04T15:20:00.000Z',
+    total: 1_100,
+    netAmount: 1_100,
+    taxAmount: 0,
+    discountAmount: 0,
+    items: [{ id: 'item-1', quantity: 1, price: 1_100, totalAmount: 1_100 }],
+    pendingBalance: 700,
+    ...fields,
+  };
+
+  assert.doesNotThrow(() => assertSalePostedPayload(buildSalePostedPayload(transaction)));
 });
 
 test('HTML y ESC/POS comparten la presentación y eliminan los totales duplicados', () => {
