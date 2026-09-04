@@ -59,6 +59,8 @@ test('la persistencia Master de tickets usa un solo reemplazo transaccional', ()
   assert.doesNotMatch(persistSource, /db\.saveDocument/);
   assert.doesNotMatch(persistSource, /db\.deleteDocument/);
   assert.doesNotMatch(persistSource, /db\.get\('parkedTickets'/);
+  assert.match(updateSource, /\.then\(waitForTableInteractionIdle\)/);
+  assert.match(updateSource, /writePendingTableSyncMirror\(masterPendingSync\)/);
 });
 
 test('el cambio visual dispara release local antes de reconciliar con la Master', () => {

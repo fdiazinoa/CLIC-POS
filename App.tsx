@@ -412,6 +412,7 @@ const FLOOR_PLAN_STORAGE_KEY = 'clic_pos_floor_plan_mirror_v1';
 const ACTIVE_USER_SESSION_STORAGE_KEY = 'clic_pos_active_user_session_v1';
 const FORCE_LOGIN_AFTER_EXIT_STORAGE_KEY = 'clic_pos_force_login_after_exit_v1';
 const PENDING_CLIENT_TABLE_SYNC_STORAGE_KEY = 'clic_pos_pending_client_table_sync_v1';
+const TABLE_PERSISTENCE_IDLE_MS = 250;
 
 type FloorPlanMirror = {
   rooms: Room[];
@@ -677,12 +678,16 @@ const writeCriticalCollectionsMirror = (parkedTickets: ParkedTicket[], cashMovem
 };
 
 const persistPendingClientTableSync = async (pending: PendingClientTableSync): Promise<void> => {
+  writePendingTableSyncMirror(pending);
+  await db.save('pendingClientTableSync' as any, pending);
+};
+
+const writePendingTableSyncMirror = (pending: PendingClientTableSync): void => {
   try {
     window.localStorage.setItem(PENDING_CLIENT_TABLE_SYNC_STORAGE_KEY, JSON.stringify(pending));
   } catch {
     // SQLite remains the durable fallback when localStorage is unavailable.
   }
-  await db.save('pendingClientTableSync' as any, pending);
 };
 
 const readPendingClientTableSync = async (): Promise<PendingClientTableSync | null> => {
@@ -1816,6 +1821,7 @@ const AppContent: React.FC = () => {
   const activeTableEditLockRef = useRef<ActiveTableEditLock | null>(null);
   const tableLockLifecycleVersionRef = useRef(0);
   const pendingTableLockReleasesRef = useRef<Map<string, PendingTableLockRelease>>(new Map());
+  const lastTableInteractionAtRef = useRef(0);
   const closedRestaurantOrderIdsRef = useRef<Set<string>>(new Set());
   /* original code */
   const [currentView, setCurrentView] = useState<ViewState>(() => {
@@ -5182,6 +5188,7 @@ const AppContent: React.FC = () => {
     }
 
     const tableId = String(lock.tableId);
+    lastTableInteractionAtRef.current = performance.now();
     const existingRelease = pendingTableLockReleasesRef.current.get(tableId);
     if (existingRelease?.lock.token === lock.token) {
       markInteractionStage(options.trace, 'LOCAL_UNLOCK');
@@ -5250,6 +5257,7 @@ const AppContent: React.FC = () => {
   const acquireTableEditLock = useCallback(async (table: Table): Promise<boolean> => {
     const tableId = String(table.id || '').trim();
     if (!tableId) return false;
+    lastTableInteractionAtRef.current = performance.now();
     const ownerId = String(deviceId || getCurrentTerminal()?.config?.currentDeviceId || '').trim();
     if (!ownerId) {
       alert('No se pudo identificar este dispositivo para bloquear la mesa.');
@@ -8238,6 +8246,14 @@ const AppContent: React.FC = () => {
   };
 
   // --- PERSISTENCE HANDLER FOR PARKED TICKETS ---
+  const waitForTableInteractionIdle = async (): Promise<void> => {
+    while (true) {
+      const remaining = TABLE_PERSISTENCE_IDLE_MS - (performance.now() - lastTableInteractionAtRef.current);
+      if (remaining <= 0) return;
+      await new Promise<void>(resolve => window.setTimeout(resolve, Math.ceil(remaining)));
+    }
+  };
+
   const handleUpdateParkedTickets = async (
     tickets: ParkedTicket[],
     options: ParkedTicketSyncOptions = { reason: 'explicit' },
@@ -8257,6 +8273,7 @@ const AppContent: React.FC = () => {
         parkedTickets: validTickets,
       };
       pendingClientTableSyncRef.current = pendingSync;
+      writePendingTableSyncMirror(pendingSync);
       writeCriticalCollectionsMirror(validTickets, cashMovements);
       setParkedTickets(validTickets);
       const persistLocal = () => Promise.allSettled([
@@ -8314,6 +8331,7 @@ const AppContent: React.FC = () => {
       const queuedSync = parkedTicketSyncQueueRef.current
         .catch(() => undefined)
         .then(() => new Promise<void>(resolve => window.requestAnimationFrame(() => window.setTimeout(resolve, 0))))
+        .then(waitForTableInteractionIdle)
         .then(syncOperation);
       parkedTicketSyncQueueRef.current = queuedSync.catch(() => undefined);
       void queuedSync.catch(error => console.warn('[TABLE_SYNC] Reconciliación cliente diferida:', error));
@@ -8335,7 +8353,10 @@ const AppContent: React.FC = () => {
       : null;
     // Debe registrarse antes de cualquier await de persistencia: el poll nativo
     // corre cada segundo y podría aplicar una revisión Cliente en ese intervalo.
-    if (masterPendingSync) pendingMasterTableSyncRef.current = masterPendingSync;
+    if (masterPendingSync) {
+      pendingMasterTableSyncRef.current = masterPendingSync;
+      writePendingTableSyncMirror(masterPendingSync);
+    }
     writeCriticalCollectionsMirror(validTickets, cashMovements);
     setParkedTickets(validTickets);
     const persistMasterTickets = async () => {
@@ -8395,18 +8416,27 @@ const AppContent: React.FC = () => {
         }
         if (pendingMasterTableSyncRef.current === masterPendingSync) {
           pendingMasterTableSyncRef.current = null;
+          writePendingTableSyncMirror({
+            id: 'current',
+            status: 'EMPTY',
+            queuedAt: new Date().toISOString(),
+            parkedTickets: [],
+          });
         }
       };
       const queuedSync = parkedTicketSyncQueueRef.current
         .catch(() => undefined)
         .then(() => new Promise<void>(resolve => window.requestAnimationFrame(() => window.setTimeout(resolve, 0))))
+        .then(waitForTableInteractionIdle)
         .then(syncOperation);
       parkedTicketSyncQueueRef.current = queuedSync.catch(() => undefined);
       void queuedSync.catch(error => console.warn('[TABLE_SYNC] Reconciliación Master diferida:', error));
       return;
     }
     window.setTimeout(() => {
-      void persistMasterTickets().catch(error => console.warn('[TABLE_SYNC] Persistencia local diferida:', error));
+      void waitForTableInteractionIdle()
+        .then(persistMasterTickets)
+        .catch(error => console.warn('[TABLE_SYNC] Persistencia local diferida:', error));
     }, 0);
   };
 
