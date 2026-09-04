@@ -1,5 +1,5 @@
 import { MobilePosNavigation } from './MobilePosNavigation';
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
 import {
    Search, Trash2, MoreVertical,
@@ -81,6 +81,16 @@ import VirtualKeyboard from './VirtualKeyboard';
 import SafetyGateModal from './SafetyGateModal';
 import { printReservation } from '../utils/printer';
 import MobileCartButton from './MobileCartButton';
+import {
+   beginPosInteraction,
+   expectInteractionRender,
+   getLatestPosInteraction,
+   markInteractionStage,
+   markInteractionStateUpdate,
+   markRenderEnd,
+   markRenderStart,
+   PosInteractionTrace,
+} from '../utils/interactionPerformance';
 import {
    calculateTaxBreakdownFromItems,
    consolidateTaxBreakdownForDisplay,
@@ -872,7 +882,7 @@ const ProductGridCard = React.memo(({
          onTouchMove={handleTouchMove}
          onTouchEnd={onProductTouchEnd}
          onTouchCancel={onProductTouchEnd}
-         style={{ touchAction: 'manipulation' }}
+         style={{ touchAction: 'manipulation', contentVisibility: 'auto', containIntrinsicSize: '214px' }}
          className={`pos-product-card w-full min-w-0 bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 transition-all group relative overflow-hidden ${
             warehouseSaleBlocked
                ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
@@ -893,7 +903,7 @@ const ProductGridCard = React.memo(({
       >
          {showProductImages && (
             <div className={`w-full min-w-0 ${usesSupermarketLayout ? 'h-full rounded-[1.35rem] mb-0 p-2.5' : usesExpandedCatalog ? 'h-full rounded-[1.1rem] mb-0 p-1.5' : isCompactMobileCard ? 'h-[6.75rem] rounded-[1.15rem] mb-1.5 p-2' : 'h-28 md:h-32 rounded-[1.5rem] mb-2.5'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
-               {imageSrc ? <img src={imageSrc} className={`w-full h-full ${usesSupermarketLayout || usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={usesSupermarketLayout ? 56 : 48} strokeWidth={1} /></div>}
+               {imageSrc ? <img src={imageSrc} loading="lazy" decoding="async" className={`w-full h-full ${usesSupermarketLayout || usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={usesSupermarketLayout ? 56 : 48} strokeWidth={1} /></div>}
 
                {isWeighted && (
                   <div className="absolute top-2 left-2 bg-emerald-500 text-white p-1.5 rounded-lg shadow-lg z-10 animate-in zoom-in-50" title="Requiere Balanza">
@@ -1143,6 +1153,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    rooms = [],
    productPrices: externalProductPrices = []
 }) => {
+   markRenderStart('POS_INTERACTION_VIEW');
    const cartEndRef = useRef<HTMLDivElement>(null);
    const posRootRef = useRef<HTMLDivElement>(null);
    const mobileFooterRef = useRef<HTMLDivElement>(null);
@@ -1158,6 +1169,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const onTableOrderSavedRef = useRef(onTableOrderSaved);
    const closedTableOrderIdsRef = useRef<Set<string>>(new Set());
    const paymentFinalizationInFlightRef = useRef(false);
+   const activeAddTraceRef = useRef<PosInteractionTrace | null>(null);
+   const checkoutTraceRef = useRef<PosInteractionTrace | null>(null);
+   const searchFilterTraceRef = useRef<PosInteractionTrace | null>(null);
+   useLayoutEffect(() => markRenderEnd('POS_INTERACTION_VIEW'));
    const activeTableHydrationRef = useRef<{ key: string; missingTicket: boolean } | null>(null);
    const kdsRetryInFlightRef = useRef(false);
    const productionRoutingPromptResolverRef = useRef<((decision: ProductionRoutingPromptDecision) => void) | null>(null);
@@ -2136,6 +2151,25 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const activeTariff = useMemo(() => (config.tariffs || []).find(t => t.id === activeTariffId), [config.tariffs, activeTariffId]);
 
    const [searchTerm, setSearchTerm] = useState('');
+   const [catalogSearchQuery, setCatalogSearchQuery] = useState('');
+   useEffect(() => {
+      const trace = searchFilterTraceRef.current;
+      const timer = window.setTimeout(() => {
+         markInteractionStage(trace, 'FILTER_START');
+         if (trace) expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
+         setCatalogSearchQuery(searchTerm);
+      }, 175);
+      return () => window.clearTimeout(timer);
+   }, [searchTerm]);
+
+   const handleCatalogSearchInput = useCallback((value: string) => {
+      const trace = beginPosInteraction('PRODUCT_SEARCH_INPUT', { inputLength: value.length });
+      searchFilterTraceRef.current = trace;
+      expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
+      setSearchTerm(value);
+      markInteractionStateUpdate(trace, 1);
+      markInteractionStage(trace, 'HANDLER_END');
+   }, []);
    const [categoryFilter, setCategoryFilter] = useState('ALL');
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
    const returnToTicketView = useCallback(() => {
@@ -3194,6 +3228,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
 
    const addToCart = useCallback(async (product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig'], consignmentPatch?: Pick<CartItem, 'consignmentId' | 'consignmentDocumentNo' | 'consignmentLineId'>) => {
+      const trace = activeAddTraceRef.current || beginPosInteraction('ADD_TICKET_ITEM', { source: 'programmatic', productId: product.id });
+      activeAddTraceRef.current = trace;
+      expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
+      try {
       if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
       if (!(await authorizeSubtotalizedEdit('Agregar artículo a ticket subtotalizado'))) return;
       if (quantity > 0 && !ensureSalesWithOpenZPermission()) return;
@@ -3248,6 +3286,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       if (existing && !usesSerial && !existing.dispatched) {
          targetCartId = existing.cartId!;
+         markInteractionStateUpdate(trace, (cart || []).length + 2);
          onUpdateCart(prev => {
             const editableCart = hasSubtotalizedCart ? clearCartSubtotalization(prev) : prev;
             const updatedItem = {
@@ -3290,11 +3329,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             trackingData,
             ...consignmentPatch,
          };
+         markInteractionStateUpdate(trace, (cart || []).length + 2);
          onUpdateCart(prev => [newItem, ...(hasSubtotalizedCart ? clearCartSubtotalization(prev) : prev)]);
       }
 
       // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
       setLastAddedCartId(targetCartId);
+      markInteractionStage(trace, 'HANDLER_END');
+      } finally {
+         if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
+         if (activeAddTraceRef.current === trace) activeAddTraceRef.current = null;
+      }
    }, [activeTerminalConfig, authorizeSubtotalizedEdit, blockRecoveredUberOrderMutation, canAddItemToCart, cart, ensureSalesWithOpenZPermission, getProductPrice, hasSubtotalizedCart, onUpdateCart]);
 
    const handleProductClick = useCallback((product: Product) => {
@@ -3508,6 +3553,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const handleProductCardClick = useCallback((product: Product) => {
       if (Date.now() - quickActionOpenedAtRef.current < 900) return;
       if (quickActionDataRef.current) return;
+      activeAddTraceRef.current = beginPosInteraction('ADD_TICKET_ITEM', { source: 'product_card', productId: product.id });
       handleProductClickRef.current(product);
    }, []);
 
@@ -3647,6 +3693,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const processBarcode = useCallback((code: string) => {
       const trimmed = code.trim();
       if (!trimmed) return;
+      const trace = beginPosInteraction('BARCODE_SCAN', { codeLength: trimmed.length });
+      activeAddTraceRef.current = trace;
+      expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
+      try {
       // A hardware scan is consumed even when routing/lookup finds no match.
       setSearchTerm('');
 
@@ -3732,6 +3782,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       setErrorToast('Código no encontrado');
       setTimeout(() => setErrorToast(null), 2000);
+      } finally {
+         markInteractionStateUpdate(trace, 1);
+         if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
+         if (activeAddTraceRef.current === trace) activeAddTraceRef.current = null;
+      }
    }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, transactionByScanCode, isReturnMode]);
 
    const isAnyModalOpen = !!(
@@ -4035,13 +4090,25 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       });
    }, [canonicalizeCategory, dedupedSalesCatalogProducts, displayCategory, productHasActiveTariff, warehouses]);
 
+   const sortedSalesCatalogProductEntries = useMemo(() => {
+      return [...salesCatalogProductEntries].sort((left, right) => {
+         const leftCategoryOrder = categoryLookup.presentationByCanonical.get(left.normalizedCategory)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
+         const rightCategoryOrder = categoryLookup.presentationByCanonical.get(right.normalizedCategory)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
+         if (leftCategoryOrder !== rightCategoryOrder) return leftCategoryOrder - rightCategoryOrder;
+         if (left.normalizedCategory !== right.normalizedCategory) {
+            return left.displayCategory.localeCompare(right.displayCategory, 'es', { sensitivity: 'base' });
+         }
+         return comparePosProducts(left.product, right.product);
+      });
+   }, [categoryLookup.presentationByCanonical, salesCatalogProductEntries]);
+
    const filteredProducts = useMemo(() => {
       const normalizedCategoryFilter = categoryFilter === 'ALL'
          ? 'ALL'
          : canonicalizeCategory(categoryFilter);
-      const normalizedSearch = normalizeSearchToken(searchTerm);
+      const normalizedSearch = normalizeSearchToken(catalogSearchQuery);
 
-      const filtered = salesCatalogProductEntries.filter((entry) => {
+      const filtered = sortedSalesCatalogProductEntries.filter((entry) => {
          const matchSearch = !normalizedSearch
             || entry.searchText.includes(normalizedSearch);
 
@@ -4055,20 +4122,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // Defensive: Ensure unique IDs to prevent React key warnings
       const seenIds = new Set();
-         return filtered.sort((left, right) => {
-            const leftCategoryOrder = categoryLookup.presentationByCanonical.get(left.normalizedCategory)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
-            const rightCategoryOrder = categoryLookup.presentationByCanonical.get(right.normalizedCategory)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
-            if (leftCategoryOrder !== rightCategoryOrder) return leftCategoryOrder - rightCategoryOrder;
-            if (left.normalizedCategory !== right.normalizedCategory) {
-               return left.displayCategory.localeCompare(right.displayCategory, 'es', { sensitivity: 'base' });
-            }
-            return comparePosProducts(left.product, right.product);
-         }).map((entry) => entry.product).filter(p => {
+      const result = filtered.map((entry) => entry.product).filter(p => {
             if (seenIds.has(p.id)) return false;
             seenIds.add(p.id);
             return true;
          });
-   }, [salesCatalogProductEntries, categoryFilter, searchTerm, canonicalizeCategory, effectiveAllowedCategorySet, categoryLookup.presentationByCanonical]);
+      const trace = searchFilterTraceRef.current;
+      if (trace?.stages.FILTER_START !== undefined && trace.stages.FILTER_END === undefined) {
+         trace.allocationsApprox += filtered.length + result.length + 1;
+         markInteractionStage(trace, 'FILTER_END');
+      }
+      return result;
+   }, [sortedSalesCatalogProductEntries, categoryFilter, catalogSearchQuery, canonicalizeCategory, effectiveAllowedCategorySet, categoryLookup.presentationByCanonical]);
 
    const submitProductTextSearch = useCallback((rawValue: string, focusTarget?: React.RefObject<HTMLInputElement>): boolean => {
       const normalizedTextSearch = normalizeSearchToken(rawValue);
@@ -4888,6 +4953,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          console.warn('[PAYMENT] Se ignoró un segundo intento de finalizar la misma venta.');
          return null;
       }
+      const paymentTrace = getLatestPosInteraction('PAYMENT_CONFIRM');
       paymentFinalizationInFlightRef.current = true;
          const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> => {
          let timeoutHandle: number | undefined;
@@ -5051,6 +5117,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          let finalNcf: string | undefined;
          let finalNcfType: FiscalDocumentCode | undefined;
+         markInteractionStage(paymentTrace, 'SQL_START');
 
          if (
             !isOrderTakerMode
@@ -5581,6 +5648,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          alert(`Error al finalizar venta: ${error?.message || 'Error desconocido'}`);
          return null;
       } finally {
+         if (paymentTrace?.stages.SQL_START !== undefined && paymentTrace.stages.SQL_END === undefined) {
+            markInteractionStage(paymentTrace, 'SQL_END');
+         }
          paymentFinalizationInFlightRef.current = false;
       }
    };
@@ -5655,6 +5725,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const proceedToCheckout = async () => {
+      const trace = checkoutTraceRef.current || beginPosInteraction('CHECKOUT_OPEN', { source: 'checkout_action' });
+      checkoutTraceRef.current = trace;
+      expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
       if (isOrderTakerMode) {
          await handleSendAndExit();
          return;
@@ -5704,6 +5777,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       setReturnToTableMapAfterPayment(false);
       setShowPaymentModal(true);
+      markInteractionStateUpdate(trace, 2);
+      markInteractionStage(trace, 'HANDLER_END');
+      checkoutTraceRef.current = null;
+   };
+
+   const startCheckoutInteraction = () => {
+      const trace = beginPosInteraction('CHECKOUT_OPEN', { cartItems: cart.length });
+      checkoutTraceRef.current = trace;
+      expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
    };
 
    const persistProductionRoutingAssignments = async (
@@ -6480,6 +6562,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const handleBackToMap = async () => {
+      const trace = beginPosInteraction('CHANGE_TABLE', { tableId: activeTable?.id || null, cartItems: cart.length });
+      expectInteractionRender(trace, 'APP_VIEW');
       if (blockRecoveredUberOrderMutation('volver al mapa de mesas')) return;
 
       setShowParkedList(false);
@@ -6501,6 +6585,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       if (onOpenTableMap) await Promise.resolve(onOpenTableMap());
+      markInteractionStage(trace, 'HANDLER_END');
    };
 
    const handleRestoreTicket = (parked: ParkedTicket) => {
@@ -7145,8 +7230,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         autoComplete="off"
                         placeholder="Buscar..."
                         value={searchTerm}
-                        onInput={(e) => setSearchTerm(e.currentTarget.value)}
-                        onChange={(e) => setSearchTerm(e.target.value)}
+                        onChange={(e) => handleCatalogSearchInput(e.target.value)}
                         onKeyDown={handleSearchKeyDown}
                         className="w-full h-11 md:h-12 pl-10 md:pl-12 pr-10 md:pr-12 py-0 bg-gray-100 rounded-xl md:rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
                      />
@@ -7260,9 +7344,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             {showVirtualKeyboard && (
                <div className="flex-none z-50">
                   <VirtualKeyboard
-                     onKeyPress={(key) => setSearchTerm(prev => prev + key)}
-                     onDelete={() => setSearchTerm(prev => prev.slice(0, -1))}
-                     onClear={() => setSearchTerm('')}
+                     onKeyPress={(key) => handleCatalogSearchInput(searchTerm + key)}
+                     onDelete={() => handleCatalogSearchInput(searchTerm.slice(0, -1))}
+                     onClear={() => handleCatalogSearchInput('')}
                      onClose={() => {
                         setShowVirtualKeyboard(false);
                         // Optional: trigger search enter logic if needed
@@ -7596,8 +7680,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            autoComplete="off"
                            placeholder="Escanear o buscar..."
                            value={searchTerm}
-                           onInput={(e) => setSearchTerm(e.currentTarget.value)}
-                           onChange={(e) => setSearchTerm(e.target.value)}
+                           onChange={(e) => handleCatalogSearchInput(e.target.value)}
                            onKeyDown={(e) => {
                               if (e.key === 'Enter') {
                                  handleRetailSearchSubmit(e.currentTarget.value);
@@ -8289,6 +8372,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               <button
                                  onClick={async () => {
                                     if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
+                                       startCheckoutInteraction();
                                        const validation = validateTerminalDocument(config, terminalId, 'TICKET');
                                        if (!validation.isValid) {
                                           alert(validation.error);
@@ -8412,6 +8496,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        <button
                                           onClick={async () => {
                                              if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
+                                                startCheckoutInteraction();
                                                 const validation = validateTerminalDocument(config, terminalId, 'TICKET');
                                                 if (!validation.isValid) {
                                                    alert(validation.error);
@@ -8442,6 +8527,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        <button
                                           onClick={async () => {
                                              if (cart.length > 0) {
+                                                startCheckoutInteraction();
                                                 if (!await canProceedWithOperationalSession()) return;
                                                 proceedToCheckout();
                                              }
@@ -8550,6 +8636,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <button
                         onClick={async () => {
                            if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
+                              startCheckoutInteraction();
                               if (!await canProceedWithOperationalSession()) return;
                               proceedToCheckout();
                            }
@@ -9261,6 +9348,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             isOpen={isScannerOpen}
             onClose={() => setIsScannerOpen(false)}
             onScan={async (code) => {
+               const trace = beginPosInteraction('BARCODE_SCAN', { source: 'camera' });
+               expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
+               try {
                // 0. Try Smart QR (JSON)
                const trimmed = code.trim();
                if (routeScannedCoupon(trimmed)) {
@@ -9330,6 +9420,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
 
                return { success: false, message: 'Producto no encontrado' };
+               } finally {
+                  markInteractionStage(trace, 'HANDLER_END');
+               }
             }}
          />
          {

@@ -1,9 +1,17 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { Delete, Lock, Fingerprint, User as UserIcon } from 'lucide-react';
 import { User as UserType, TerminalConfig } from '../types';
 import { biometricService } from '../services/BiometricAuthService';
 import './ModernLoginScreen.css';
+import {
+  beginPosInteraction,
+  expectInteractionRender,
+  markInteractionStage,
+  markInteractionStateUpdate,
+  markRenderEnd,
+  markRenderStart,
+} from '../utils/interactionPerformance';
 
 /** En WebView/Capacitor, enfocar un input numérico abre el teclado virtual y desplaza la UI; el PIN se sigue pudiendo digitar con teclado físico vía `keydown` global. */
 const suppressNativeSoftKeyboardForPin = Capacitor.isNativePlatform();
@@ -31,6 +39,7 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
   availableUsers,
   config
 }) => {
+  markRenderStart('LOGIN_PIN');
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserType | null>(null);
@@ -43,6 +52,7 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
   const [failedUserPhotos, setFailedUserPhotos] = useState<Record<string, boolean>>({});
   const pinInputRef = useRef<HTMLInputElement>(null);
   const biometricScanInFlightRef = useRef(false);
+  useLayoutEffect(() => markRenderEnd('LOGIN_PIN'));
   const usersByPin = useMemo(() => {
     const map = new Map<string, UserType>();
     for (const user of availableUsers) {
@@ -119,16 +129,16 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
   const checkLogin = useCallback((inputPin: string) => {
     const user = selectedUser?.pin === inputPin ? selectedUser : usersByPin.get(inputPin);
     if (user) {
-      window.setTimeout(() => onLogin(user), 200);
+      onLogin(user);
     } else {
-      window.setTimeout(() => {
-        setError(true);
-        setPin('');
-      }, 300);
+      setError(true);
+      setPin('');
     }
   }, [onLogin, selectedUser, usersByPin]);
 
   const handleKeyPress = useCallback((key: string) => {
+    const trace = beginPosInteraction('PIN_LOGIN', { source: 'keypad', key: key === 'BACK' ? 'BACK' : key === 'C' ? 'CLEAR' : 'DIGIT' });
+    expectInteractionRender(trace, 'LOGIN_PIN');
     setError(false);
     if (key === 'C') {
       setPin('');
@@ -140,13 +150,19 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
         return prev;
       });
     }
+    markInteractionStateUpdate(trace, 1);
+    markInteractionStage(trace, 'HANDLER_END');
     focusPinInput();
   }, [focusPinInput]);
 
   const handlePinInputChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const trace = beginPosInteraction('PIN_LOGIN', { source: 'hardware_input' });
+    expectInteractionRender(trace, 'LOGIN_PIN');
     const nextPin = event.target.value.replace(/\D/g, '').slice(0, 4);
     setError(false);
     setPin(nextPin);
+    markInteractionStateUpdate(trace, 1);
+    markInteractionStage(trace, 'HANDLER_END');
   }, []);
 
   useEffect(() => {

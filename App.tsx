@@ -1,7 +1,17 @@
 import { allowsDefaultPaymentMethods } from './utils/erpPaymentMethods';
 import { createStartupTrace } from './utils/startupTrace';
+import {
+  beginPosInteraction,
+  expectInteractionRender,
+  getLatestPosInteraction,
+  markInteractionStage,
+  markInteractionStateUpdate,
+  markRenderEnd,
+  markRenderStart,
+  measureInteractionStage,
+} from './utils/interactionPerformance';
 
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { v4 as uuidv4 } from 'uuid';
 import { Layout, LockKeyhole, Monitor, RefreshCw } from 'lucide-react';
@@ -1792,6 +1802,7 @@ const App: React.FC = () => {
 };
 
 const AppContent: React.FC = () => {
+  markRenderStart('APP_VIEW');
   const { clearSecurityState, setSupervisorPinValidator } = useKioskSecurityContext();
   // --- GLOBAL STATE ---
   const [activeTable, setActiveTable] = useState<Table | null>(null); // New state for selected table context
@@ -1813,6 +1824,7 @@ const AppContent: React.FC = () => {
   const currentUserRef = useRef<User | null>(null);
   const [scanTargetTicketId, setScanTargetTicketId] = useState<string | null>(null); // NEW: Auto-select ticket from scan
   const [restoringHistory, setRestoringHistory] = useState(false);
+  useLayoutEffect(() => markRenderEnd('APP_VIEW'));
   const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any));
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLandscape, setIsLandscape] = useState(window.innerWidth > window.innerHeight);
@@ -6825,8 +6837,11 @@ const AppContent: React.FC = () => {
       if (isNativeAndroidRuntime() && isNativeStandaloneTerminalRuntime(getCurrentTerminal())) {
         return;
       }
-      fetchTables();
-      const interval = setInterval(fetchTables, isClientTerminalMode() ? 3000 : 10000);
+      if (!isPosSaleActive()) void fetchTables();
+      const interval = setInterval(() => {
+        if (isPosSaleActive()) return;
+        void fetchTables();
+      }, isClientTerminalMode() ? 3000 : 10000);
       return () => clearInterval(interval);
     }
   }, [config.vertical, config.terminals, deviceId, currentView]);
@@ -7055,10 +7070,12 @@ const AppContent: React.FC = () => {
         && !activeTableEditLockRef.current
         && resolvePosSalesStartView(incomingConfig, currentTerminal.config) === 'TABLE_MAP'
       ) {
-        await fetchTables().catch((error) => {
-          console.warn('Failed to preload tables before applying the restaurant start view:', error);
-        });
         setCurrentView('TABLE_MAP');
+        window.setTimeout(() => {
+          void fetchTables().catch((error) => {
+            console.warn('Failed to reconcile tables after applying the restaurant start view:', error);
+          });
+        }, 250);
       }
 
       try {
@@ -8200,16 +8217,18 @@ const AppContent: React.FC = () => {
       pendingClientTableSyncRef.current = pendingSync;
       writeCriticalCollectionsMirror(validTickets, cashMovements);
       setParkedTickets(validTickets);
-      await Promise.allSettled([
+      const persistLocal = () => Promise.allSettled([
         db.save('parkedTickets', validTickets),
         persistPendingClientTableSync(pendingSync),
       ]);
 
       if (options.deferRemote) {
+        window.setTimeout(() => void persistLocal(), 0);
         return;
       }
 
       const syncOperation = async () => {
+        await persistLocal();
         const response = await fetch(resolveOperationalApiUrl('/api/mesas/parked-tickets'), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -8248,9 +8267,11 @@ const AppContent: React.FC = () => {
       };
       const queuedSync = parkedTicketSyncQueueRef.current
         .catch(() => undefined)
+        .then(() => new Promise<void>(resolve => window.requestAnimationFrame(() => window.setTimeout(resolve, 0))))
         .then(syncOperation);
       parkedTicketSyncQueueRef.current = queuedSync.catch(() => undefined);
-      return queuedSync;
+      void queuedSync.catch(error => console.warn('[TABLE_SYNC] Reconciliación cliente diferida:', error));
+      return;
     }
     const servesAsNativeMaster =
       isNativeAndroidRuntime() &&
@@ -8271,25 +8292,26 @@ const AppContent: React.FC = () => {
     if (masterPendingSync) pendingMasterTableSyncRef.current = masterPendingSync;
     writeCriticalCollectionsMirror(validTickets, cashMovements);
     setParkedTickets(validTickets);
-    const nextTicketIds = new Set(
-      validTickets
-        .map(ticket => String(ticket?.id || '').trim())
-        .filter(Boolean)
-    );
-    const persistedTickets = await db.get('parkedTickets').catch(() => []) as ParkedTicket[] | null;
-    const staleTickets = [
-      ...(Array.isArray(parkedTickets) ? parkedTickets : []),
-      ...(Array.isArray(persistedTickets) ? persistedTickets : []),
-    ].filter(ticket => {
-      const ticketId = String(ticket?.id || '').trim();
-      return ticketId && !nextTicketIds.has(ticketId);
-    });
-    // Persist to DB immediately and remove tickets that were closed/cleared.
-    await Promise.allSettled([
-      ...staleTickets.map(ticket => db.deleteDocument('parkedTickets' as any, String(ticket.id))),
-      ...validTickets.map(ticket => db.saveDocument('parkedTickets' as any, ticket as any)),
-    ]);
-    await db.save('parkedTickets', validTickets); // Uses 'settings' table logic or collection
+    const persistMasterTickets = async () => {
+      const nextTicketIds = new Set(
+        validTickets
+          .map(ticket => String(ticket?.id || '').trim())
+          .filter(Boolean)
+      );
+      const persistedTickets = await db.get('parkedTickets').catch(() => []) as ParkedTicket[] | null;
+      const staleTickets = [
+        ...(Array.isArray(parkedTickets) ? parkedTickets : []),
+        ...(Array.isArray(persistedTickets) ? persistedTickets : []),
+      ].filter(ticket => {
+        const ticketId = String(ticket?.id || '').trim();
+        return ticketId && !nextTicketIds.has(ticketId);
+      });
+      await Promise.allSettled([
+        ...staleTickets.map(ticket => db.deleteDocument('parkedTickets' as any, String(ticket.id))),
+        ...validTickets.map(ticket => db.saveDocument('parkedTickets' as any, ticket as any)),
+      ]);
+      await db.save('parkedTickets', validTickets);
+    };
 
     // La caja maestra Android también debe confirmar el cambio en el servidor
     // nativo antes de que el poll de estado pueda devolver el snapshot previo.
@@ -8299,6 +8321,7 @@ const AppContent: React.FC = () => {
       // El autoguardado y el cobro pueden coincidir. Serializar también en
       // Master evita que un snapshot anterior vuelva a insertar una orden ya cobrada.
       const syncOperation = async () => {
+        await persistMasterTickets();
         const response = await fetch(resolveOperationalApiUrl('/api/mesas/parked-tickets'), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -8338,10 +8361,15 @@ const AppContent: React.FC = () => {
       };
       const queuedSync = parkedTicketSyncQueueRef.current
         .catch(() => undefined)
+        .then(() => new Promise<void>(resolve => window.requestAnimationFrame(() => window.setTimeout(resolve, 0))))
         .then(syncOperation);
       parkedTicketSyncQueueRef.current = queuedSync.catch(() => undefined);
-      return queuedSync;
+      void queuedSync.catch(error => console.warn('[TABLE_SYNC] Reconciliación Master diferida:', error));
+      return;
     }
+    window.setTimeout(() => {
+      void persistMasterTickets().catch(error => console.warn('[TABLE_SYNC] Persistencia local diferida:', error));
+    }, 0);
   };
 
   const handleParkedOrderSplitFromMap = useCallback(
@@ -10862,6 +10890,9 @@ const AppContent: React.FC = () => {
           availableUsers: users,
           subVertical: config.subVertical,
           onLogin: async (u: User) => {
+            const trace = beginPosInteraction('OPEN_SALE_SCREEN', { userId: u.id });
+            expectInteractionRender(trace, 'APP_VIEW');
+            markInteractionStateUpdate(trace, 2);
             setCurrentUser(u);
             const role = getCurrentDeviceRole();
             const terminal = getCurrentTerminal();
@@ -10873,13 +10904,18 @@ const AppContent: React.FC = () => {
             else {
               // Multi-Vertical Startup Flow
               const salesStartView = resolvePosSalesStartView(config, terminal?.config);
-              if (salesStartView === 'TABLE_MAP') {
-                await fetchTables().catch((error) => {
-                  console.warn('Failed to preload tables after restaurant login:', error);
-                });
-              }
               setCurrentView(salesStartView);
+              if (salesStartView === 'TABLE_MAP') {
+                // Mostrar el mapa con el snapshot local ya hidratado. La red no
+                // participa en el camino crítico del PIN; solo reconcilia después.
+                window.setTimeout(() => {
+                  void measureInteractionStage(trace, 'SYNC_START', 'SYNC_END', fetchTables).catch((error) => {
+                    console.warn('Failed to reconcile tables after restaurant login:', error);
+                  });
+                }, 250);
+              }
             }
+            markInteractionStage(trace, 'HANDLER_END');
           }
         };
 
@@ -10925,14 +10961,10 @@ const AppContent: React.FC = () => {
                     alert('No se pudo liberar la mesa en la Caja Master. Reintente antes de abrirla nuevamente.');
                   }
                 }}
-                onTableClick={async (table) => {
+                onTableClick={(table) => {
                   console.log('Mesa seleccionada:', table.name);
-                  if (!(await acquireTableEditLock(table))) {
-                    return;
-                  }
-
                   const pendingClientSync = isClientTerminalMode()
-                    ? await readPendingClientTableSync()
+                    ? pendingClientTableSyncRef.current
                     : null;
                   const initialParkedTickets =
                     pendingClientSync?.tableId === String(table.id)
@@ -10968,15 +11000,6 @@ const AppContent: React.FC = () => {
                     let activeParkedTickets = initialParkedTickets;
                     let parked = activeParkedTickets.find(p => p.id === table.currentOrderId)
                       || (!isBarTableContext ? activeParkedTickets.find(p => String(p.tableId) === String(table.id)) : undefined);
-                    if (!parked && canUseLocalOperationalTableStore()) {
-                      const persistedTickets = await db.get('parkedTickets') as ParkedTicket[] | null;
-                      if (Array.isArray(persistedTickets)) {
-                        activeParkedTickets = persistedTickets;
-                        setParkedTickets(persistedTickets);
-                        parked = activeParkedTickets.find(p => p.id === table.currentOrderId)
-                          || (!isBarTableContext ? activeParkedTickets.find(p => String(p.tableId) === String(table.id)) : undefined);
-                      }
-                    }
                     const fromTx = (transactions || []).find(t => t.id === table.currentOrderId);
                     if (parked?.items?.length) {
                       const joinedSourceName = String((selectedTable as any).joinedSourceTableName || '').trim();
@@ -11002,16 +11025,6 @@ const AppContent: React.FC = () => {
                     let parked = !isBarTableContext
                       ? activeParkedTickets.find(p => String(p.tableId) === String(table.id))
                       : undefined;
-                    if (!parked && canUseLocalOperationalTableStore()) {
-                      const persistedTickets = await db.get('parkedTickets') as ParkedTicket[] | null;
-                      if (Array.isArray(persistedTickets)) {
-                        activeParkedTickets = persistedTickets;
-                        setParkedTickets(persistedTickets);
-                        parked = !isBarTableContext
-                          ? activeParkedTickets.find(p => String(p.tableId) === String(table.id))
-                          : undefined;
-                      }
-                    }
                     if (parked?.items?.length) {
                       const joinedSourceName = String((selectedTable as any).joinedSourceTableName || '').trim();
                       selectedTable = {
@@ -11028,6 +11041,8 @@ const AppContent: React.FC = () => {
                     }
                   }
 
+                  const openTrace = getLatestPosInteraction('OPEN_TABLE');
+                  markInteractionStateUpdate(openTrace, nextCart.length + 3);
                   setCart(nextCart);
                   setSelectedCustomer(nextSelectedCustomer);
                   setActiveTable(selectedTable);
@@ -11208,15 +11223,22 @@ const AppContent: React.FC = () => {
             onOpenInventoryTracking={(productId) => handleViewChange('TRACKING', { productId })}
             onOpenAudit={() => handleViewChange('INVENTORY_AUDIT')}
             onOpenTableMap={async () => {
-              const released = await releaseActiveTableEditLock();
-              if (!released) {
-                alert('No se pudo liberar la mesa en la Caja Master. Reintente para evitar que quede bloqueada.');
-                return;
-              }
+              const changeTrace = getLatestPosInteraction('CHANGE_TABLE');
+              markInteractionStateUpdate(changeTrace, 3);
               setActiveTable(null);
               setViewData(null);
               setCurrentView('TABLE_MAP');
-              await fetchTables().catch((error) => console.error('Failed to refresh tables on TABLE_MAP view:', error));
+              // Liberación y reconciliación ocurren después del cambio visual;
+              // no bloquear la navegación por red, SQLite ni heartbeat.
+              window.setTimeout(() => {
+                void measureInteractionStage(changeTrace, 'SYNC_START', 'SYNC_END', async () => {
+                  const released = await releaseActiveTableEditLock();
+                  if (!released) {
+                    console.warn('No se pudo confirmar la liberación de la mesa; se reconciliará el snapshot autoritativo.');
+                  }
+                  await fetchTables();
+                }).catch((error) => console.error('Failed to refresh tables on TABLE_MAP view:', error));
+              }, 0);
             }}
             onTableOrderSaved={async (table, ticket) => {
               const total = typeof ticket.total === 'number'

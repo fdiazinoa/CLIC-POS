@@ -32,6 +32,15 @@ import { getRenderableFloorTables } from '../utils/tableLayout';
 import { hasPendingKdsDispatch } from '../utils/kdsPresentation';
 import { resolveOperationalApiUrl } from '../utils/masterOperationalApi';
 import { requestJson } from '../services/network/httpClient';
+import {
+    beginPosInteraction,
+    expectInteractionRender,
+    getLatestPosInteraction,
+    markInteractionStage,
+    markInteractionStateUpdate,
+    markRenderEnd,
+    markRenderStart,
+} from '../utils/interactionPerformance';
 
 interface TableMapProps {
     rooms: Room[];
@@ -463,6 +472,8 @@ const TableMap: React.FC<TableMapProps> = ({
     onOpenTableLayoutDesigner,
     onChangeRoom
 }) => {
+    markRenderStart('TABLE_MAP_VIEW');
+    useLayoutEffect(() => markRenderEnd('TABLE_MAP_VIEW'));
     const [activeRoomId, setActiveRoomId] = useState<string>(initialRoomId || rooms[0]?.id || '');
     const [selectedTable, setSelectedTable] = useState<Table | null>(null);
     const [selectedBarTable, setSelectedBarTable] = useState<Table | null>(null);
@@ -481,6 +492,7 @@ const TableMap: React.FC<TableMapProps> = ({
     const [showRoomPicker, setShowRoomPicker] = useState(false);
     const [isControlCenterOpen, setIsControlCenterOpen] = useState(false);
     const [tableNotice, setTableNotice] = useState<TableNoticeState | null>(null);
+    const [openingTableId, setOpeningTableId] = useState<string | null>(null);
     const reduceMotion = useReducedMotion();
 
     const closeTablePreview = useCallback((table: Table, close: () => void) => {
@@ -922,8 +934,8 @@ const TableMap: React.FC<TableMapProps> = ({
         } as Table;
         const nextTables = (Array.isArray(tables) ? tables : []).map(candidate => candidate.id === table.id ? nextTable : candidate);
 
-        await Promise.resolve(onUpdateParkedTickets?.(nextTickets));
-        await Promise.resolve(onUpdateTables?.(nextTables));
+        void Promise.resolve(onUpdateParkedTickets?.(nextTickets)).catch(error => console.error('No se pudo persistir la cuenta:', error));
+        void Promise.resolve(onUpdateTables?.(nextTables)).catch(error => console.error('No se pudo persistir la mesa:', error));
         setSelectedAccountTable(nextTable);
         return ticket;
     }, [currentUser.id, currentUser.name, getTableTickets, onUpdateParkedTickets, onUpdateTables, parkedTickets, roomLabelById, tables]);
@@ -1217,8 +1229,8 @@ const TableMap: React.FC<TableMapProps> = ({
             return table;
         });
 
-        await Promise.resolve(onUpdateParkedTickets?.(nextParkedTickets));
-        await Promise.resolve(onUpdateTables?.(nextTables));
+        void Promise.resolve(onUpdateParkedTickets?.(nextParkedTickets)).catch(error => console.error('No se pudo persistir el movimiento:', error));
+        void Promise.resolve(onUpdateTables?.(nextTables)).catch(error => console.error('No se pudo persistir el mapa:', error));
         setTransferSelection(null);
 
         setTableNotice({
@@ -1298,6 +1310,7 @@ const TableMap: React.FC<TableMapProps> = ({
     }, [completeTableTransfer, isTableMoveTargetOccupied, resolveTicketForTable, transferSelection]);
 
     const handleTableAction = useCallback(async (table: Table) => {
+        const trace = getLatestPosInteraction('OPEN_TABLE');
         const primaryTableId = String(table.joinedSourceTableId || '').trim();
         const operationalTable = primaryTableId
             ? safeTables.find(candidate => String(candidate.id) === primaryTableId) || table
@@ -1305,6 +1318,7 @@ const TableMap: React.FC<TableMapProps> = ({
         if (onBeforeTableOpen && !(await onBeforeTableOpen(operationalTable))) {
             return;
         }
+        if (trace) expectInteractionRender(trace, 'APP_VIEW');
         const tableTickets = getTableTickets(operationalTable);
         if (isRestaurantMode && operationalTable.shape !== 'BAR' && tableTickets.length > 0) {
             setSelectedAccountTable(operationalTable);
@@ -1392,10 +1406,22 @@ const TableMap: React.FC<TableMapProps> = ({
                     : `Mesa bloqueada. Atendida por: ${model.table.waiterName || 'otro mesero'}`);
                 return;
             }
-            if (handleTransferTableClick(model.table)) return;
-            handleTableAction(model.table);
+            const operation = transferSelection ? 'CHANGE_TABLE' : 'OPEN_TABLE';
+            const trace = beginPosInteraction(operation, { tableId: model.table.id });
+            expectInteractionRender(trace, 'TABLE_MAP_VIEW');
+            markInteractionStateUpdate(trace, 1);
+            setOpeningTableId(String(model.table.id));
+            if (handleTransferTableClick(model.table)) {
+                markInteractionStage(trace, 'HANDLER_END');
+                setOpeningTableId(null);
+                return;
+            }
+            void handleTableAction(model.table).finally(() => {
+                markInteractionStage(trace, 'HANDLER_END');
+                setOpeningTableId(null);
+            });
         },
-        [handleTableAction, handleTransferTableClick]
+        [handleTableAction, handleTransferTableClick, transferSelection]
     );
 
     const handleZoom = useCallback((delta: number) => {
@@ -1671,6 +1697,12 @@ const TableMap: React.FC<TableMapProps> = ({
                 />
 
                 {!usesWhiteBackground && <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_20%_18%,rgba(56,189,248,0.22),transparent_48%),radial-gradient(circle_at_82%_78%,rgba(168,85,247,0.16),transparent_42%)]" />}
+
+                {openingTableId && (
+                    <div className="pointer-events-none absolute left-1/2 top-4 z-[70] -translate-x-1/2 rounded-full bg-sky-500 px-5 py-2 text-xs font-black uppercase tracking-widest text-slate-950 shadow-xl">
+                        Abriendo mesa…
+                    </div>
+                )}
 
                 <AnimatePresence>
                     {transferSelection && (

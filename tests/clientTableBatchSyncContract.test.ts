@@ -76,7 +76,9 @@ test('la cola pendiente solo se limpia después de una confirmación exitosa de 
     appSource.indexOf('const handleUpdateParkedTickets'),
     appSource.indexOf('const handleParkedOrderSplitFromMap'),
   );
-  assert.match(updateHandler, /if \(options\.deferRemote\) \{\s*return;/);
+  assert.match(updateHandler, /writeCriticalCollectionsMirror\(validTickets, cashMovements\);\s*setParkedTickets\(validTickets\);/);
+  assert.match(updateHandler, /if \(options\.deferRemote\) \{\s*window\.setTimeout\(\(\) => void persistLocal\(\), 0\);\s*return;/);
+  assert.match(updateHandler, /requestAnimationFrame\(\(\) => window\.setTimeout\(resolve, 0\)\)/);
   assert.match(updateHandler, /if \(!response\.ok \|\| result\?\.success === false\)/);
   assert.match(updateHandler, /await clearPendingClientTableSync\(\)/);
   assert.ok(
