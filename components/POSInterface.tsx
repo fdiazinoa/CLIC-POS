@@ -5675,7 +5675,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          } catch (error: any) {
             console.error('Split Transaction Error:', error);
-            alert(`Error de red: ${error.message}`);
+            alert(`No se pudo registrar la venta: ${error.message}`);
             return null;
          }
       } catch (error: any) {

@@ -1,4 +1,5 @@
 import { BusinessConfig, PaymentEntry, Transaction } from '../types';
+import { paymentEntryIsCxCCredit } from './creditRules';
 
 const roundToTwo = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
 
@@ -32,14 +33,18 @@ const getPaymentExchangeRate = (payment: Partial<PaymentEntry>, baseCurrencyCode
 };
 
 export const getPaymentAppliedBaseAmount = (payment: Partial<PaymentEntry>): number => {
-    const preferred = toNumber(payment.appliedAmount ?? payment.applied_amount ?? payment.amountApplied);
-    if (preferred > 0) return roundToTwo(preferred);
+    const preferred = payment.appliedAmount ?? payment.applied_amount ?? payment.amountApplied;
+    if (preferred !== undefined && preferred !== null) {
+        return roundToTwo(toNumber(preferred));
+    }
     return roundToTwo(toNumber(payment.amount));
 };
 
 export const getPaymentChangeBaseAmount = (payment: Partial<PaymentEntry>): number => {
-    const preferred = toNumber(payment.changeAmount ?? payment.change_amount);
-    if (preferred > 0) return roundToTwo(preferred);
+    const preferred = payment.changeAmount ?? payment.change_amount;
+    if (preferred !== undefined && preferred !== null) {
+        return roundToTwo(toNumber(preferred));
+    }
     const amount = roundToTwo(toNumber(payment.amount));
     const applied = getPaymentAppliedBaseAmount(payment);
     return roundToTwo(Math.max(0, amount - applied));
@@ -79,6 +84,7 @@ export type PaymentSettlementLine = {
     changeBase: number;
     changeCurrencyCode: string;
     isForeignCurrency: boolean;
+    isDeferredCredit: boolean;
     gatewayProvider?: string;
     gatewayAuthorizationCode?: string;
     gatewayReference?: string;
@@ -111,13 +117,20 @@ export const buildPaymentSettlementSummary = (
 
     const lines: PaymentSettlementLine[] = [];
     const normalizedPayments = (payments || []).map((payment) => {
+        const isDeferredCredit = paymentEntryIsCxCCredit(payment);
         const currencyCode = getPaymentCurrencyCode(payment, baseCurrencyCode);
         const exchangeRate = getPaymentExchangeRate(payment, baseCurrencyCode);
         const receivedBase = roundToTwo(toNumber(payment.amount));
         const receivedOriginal = getPaymentOriginalAmount(payment, baseCurrencyCode);
-        const appliedBase = roundToTwo(Math.min(receivedBase, remainingToApply));
-        const changeBase = roundToTwo(Math.max(0, receivedBase - appliedBase));
-        remainingToApply = roundToTwo(Math.max(0, remainingToApply - receivedBase));
+        const appliedBase = isDeferredCredit
+            ? 0
+            : roundToTwo(Math.min(receivedBase, remainingToApply));
+        const changeBase = isDeferredCredit
+            ? 0
+            : roundToTwo(Math.max(0, receivedBase - appliedBase));
+        if (!isDeferredCredit) {
+            remainingToApply = roundToTwo(Math.max(0, remainingToApply - receivedBase));
+        }
 
         const normalizedPayment: PaymentEntry = {
             ...payment,
@@ -147,6 +160,7 @@ export const buildPaymentSettlementSummary = (
             changeBase,
             changeCurrencyCode: changeBase > 0 ? baseCurrencyCode : '',
             isForeignCurrency: currencyCode !== baseCurrencyCode,
+            isDeferredCredit,
             gatewayProvider: normalizedPayment.gatewayProvider,
             gatewayAuthorizationCode: normalizedPayment.gatewayAuthorizationCode,
             gatewayReference: normalizedPayment.gatewayReference,
@@ -155,11 +169,12 @@ export const buildPaymentSettlementSummary = (
         return normalizedPayment;
     });
 
-    const totalReceivedBase = roundToTwo(normalizedPayments.reduce((sum, payment) => sum + roundToTwo(toNumber(payment.amount)), 0));
-    const totalAppliedBase = roundToTwo(normalizedPayments.reduce((sum, payment) => sum + getPaymentAppliedBaseAmount(payment), 0));
-    const totalChangeBase = roundToTwo(normalizedPayments.reduce((sum, payment) => sum + getPaymentChangeBaseAmount(payment), 0));
+    const settledLines = lines.filter(line => !line.isDeferredCredit);
+    const totalReceivedBase = roundToTwo(settledLines.reduce((sum, line) => sum + line.receivedBase, 0));
+    const totalAppliedBase = roundToTwo(settledLines.reduce((sum, line) => sum + line.appliedBase, 0));
+    const totalChangeBase = roundToTwo(settledLines.reduce((sum, line) => sum + line.changeBase, 0));
     const remainingBase = roundToTwo(Math.max(0, absoluteTotal - totalAppliedBase));
-    const foreignLines = lines.filter(line => line.isForeignCurrency && line.receivedOriginal > 0);
+    const foreignLines = settledLines.filter(line => line.isForeignCurrency && line.receivedOriginal > 0);
     const uniqueForeignCurrencies = Array.from(new Set(foreignLines.map(line => line.currencyCode)));
     const uniqueForeignRates = Array.from(new Set(foreignLines.map(line => line.exchangeRate.toFixed(6))));
 
@@ -297,7 +312,12 @@ export const buildPaymentReceiptPresentation = (
         const isTenderedAmountRelevant = line.isForeignCurrency || line.changeBase > 0.0001;
         const rows: PaymentReceiptRow[] = [];
 
-        if (isTenderedAmountRelevant) {
+        if (line.isDeferredCredit) {
+            rows.push({
+                label: methodLabel,
+                value: formatReceiptMoney(baseSymbol, line.receivedBase),
+            });
+        } else if (isTenderedAmountRelevant) {
             const receivedSymbol = line.isForeignCurrency
                 ? resolveCurrencySymbol(config, line.currencyCode, line.currencyCode)
                 : baseSymbol;
