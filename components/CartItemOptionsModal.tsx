@@ -19,6 +19,8 @@ interface CartItemOptionsModalProps {
   onClose: () => void;
   onUpdate: (updatedItem: CartItem | null, cartIdToDelete?: string) => void;
   canApplyDiscount: boolean;
+  canOverridePrice: boolean;
+  canEditQuantity: boolean;
   canVoidItem: boolean;
 }
 
@@ -31,6 +33,8 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   onClose,
   onUpdate,
   canApplyDiscount,
+  canOverridePrice,
+  canEditQuantity,
   canVoidItem
 }) => {
   const EPSILON = 0.01;
@@ -42,7 +46,9 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
 
   const [discountType, setDiscountType] = useState<'PERCENT' | 'FIXED'>('PERCENT');
   const [discountValue, setDiscountValue] = useState<string>('');
-  const [activeNumericField, setActiveNumericField] = useState<'PRICE' | 'DISCOUNT'>('DISCOUNT');
+  const [activeNumericField, setActiveNumericField] = useState<'PRICE' | 'DISCOUNT'>(
+    canApplyDiscount ? 'DISCOUNT' : 'PRICE'
+  );
   const [replacePriceOnNextKey, setReplacePriceOnNextKey] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const isAndroid = Capacitor.getPlatform() === 'android';
@@ -114,34 +120,36 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   };
 
   const handleSave = () => {
+    const nextQuantity = canEditQuantity ? quantity : item.quantity;
+    const nextPrice = canApplyDiscount || canOverridePrice ? price : item.price;
     const nextItem: CartItem = {
       ...item,
-      quantity,
-      price,
+      quantity: nextQuantity,
+      price: nextPrice,
       note,
       salespersonId
     };
 
     if (
-      Math.abs(price - item.price) <= EPSILON
+      Math.abs(nextPrice - item.price) <= EPSILON
       && (item.adjustmentSource === 'MANUAL_DISCOUNT' || item.adjustmentSource === 'MANUAL_PRICE_OVERRIDE')
     ) {
       nextItem.originalPrice = item.originalPrice;
       nextItem.discountAmount = item.discountAmount;
       nextItem.discountRate = item.discountRate;
       nextItem.adjustmentSource = item.adjustmentSource;
-    } else if (price < adjustmentBasePrice - EPSILON) {
+    } else if (nextPrice < adjustmentBasePrice - EPSILON) {
       nextItem.originalPrice = adjustmentBasePrice;
-      nextItem.discountAmount = Number(((adjustmentBasePrice - price) * quantity).toFixed(2));
+      nextItem.discountAmount = Number(((adjustmentBasePrice - nextPrice) * nextQuantity).toFixed(2));
       nextItem.discountRate = adjustmentBasePrice > 0
-        ? Number((((adjustmentBasePrice - price) / adjustmentBasePrice)).toFixed(4))
+        ? Number((((adjustmentBasePrice - nextPrice) / adjustmentBasePrice)).toFixed(4))
         : undefined;
       nextItem.adjustmentSource = 'MANUAL_DISCOUNT';
       delete nextItem.appliedPromotionId;
       delete nextItem.appliedPromotionCode;
       delete nextItem.appliedPromotionName;
       delete nextItem.promotionTrace;
-    } else if (Math.abs(price - adjustmentBasePrice) > EPSILON) {
+    } else if (Math.abs(nextPrice - adjustmentBasePrice) > EPSILON) {
       nextItem.originalPrice = adjustmentBasePrice;
       nextItem.discountAmount = undefined;
       nextItem.discountRate = undefined;
@@ -230,6 +238,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
         <div className="p-6 pt-2 overflow-y-auto space-y-6 custom-scrollbar">
 
           {/* 1. QUANTITY STEPPER (Touch Friendly) */}
+          {canEditQuantity && (
           <div className="bg-white p-4 rounded-[2rem] border border-gray-100 shadow-sm flex items-center justify-between">
             <button
               onClick={() => handleQuantityChange(-1)}
@@ -252,8 +261,10 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
               <Plus size={28} strokeWidth={3} />
             </button>
           </div>
+          )}
 
           {/* 2. STOCK BADGE */}
+          {!(!canEditQuantity && !canApplyDiscount && !canOverridePrice && !canVoidItem) && (
           <div className="bg-blue-50/50 px-5 py-3.5 rounded-2xl border border-blue-100/50 flex items-center justify-between">
             <div className="flex items-center gap-3 text-blue-600">
               <Package size={20} />
@@ -261,10 +272,13 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
             </div>
             <span className="text-lg font-black text-blue-700">{item.stock || 0} u.</span>
           </div>
+          )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start" data-layout="restaurant-item-options">
+          <div className={`grid grid-cols-1 gap-5 items-start ${(canApplyDiscount || canOverridePrice) ? 'md:grid-cols-2' : ''}`} data-layout="restaurant-item-options">
+            {(canApplyDiscount || canOverridePrice) && (
             <div className="space-y-4">
             {/* 3. PRICE INPUT */}
+            {canOverridePrice && (
             <div className="space-y-2">
               <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5 ml-1">
                 <DollarSign size={12} /> Precio Unitario
@@ -280,13 +294,14 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
                   onFocus={activatePriceKeypad}
                   onClick={activatePriceKeypad}
                   onChange={(event) => handlePriceValueChange(event.target.value)}
-                  disabled={!canApplyDiscount}
-                  className={`w-full pl-8 pr-4 py-4 rounded-2xl border-none font-black text-gray-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all ${activeNumericField === 'PRICE' && isAndroid ? 'bg-blue-50 ring-2 ring-blue-200' : 'bg-gray-50'} ${!canApplyDiscount ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  className={`w-full pl-8 pr-4 py-4 rounded-2xl border-none font-black text-gray-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all ${activeNumericField === 'PRICE' && isAndroid ? 'bg-blue-50 ring-2 ring-blue-200' : 'bg-gray-50'}`}
                 />
               </div>
             </div>
+            )}
 
             {/* 4. DISCOUNT INPUT */}
+            {canApplyDiscount && (
             <div className="space-y-2">
               <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5 ml-1">
                 <Tag size={12} /> Descuento
@@ -303,7 +318,6 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
                     onFocus={() => setActiveNumericField('DISCOUNT')}
                     onClick={() => setActiveNumericField('DISCOUNT')}
                     onChange={(e) => handleDiscountValueChange(e.target.value)}
-                    disabled={!canApplyDiscount}
                     className="w-full bg-gray-50 border-none rounded-l-2xl pl-4 pr-2 py-4 font-black text-gray-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all disabled:opacity-50"
                   />
                 </div>
@@ -326,6 +340,8 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
                   $
                 </button>
               </div>
+            </div>
+            )}
               {isAndroid && (
                 <div className="space-y-2">
                   <p className="text-[9px] font-black uppercase tracking-[0.16em] text-blue-500">
@@ -339,12 +355,11 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
                     maxValue={activeNumericField === 'DISCOUNT'
                       ? (discountType === 'PERCENT' ? 100 : adjustmentBasePrice)
                       : undefined}
-                    disabled={!canApplyDiscount}
                   />
                 </div>
               )}
             </div>
-            </div>
+            )}
 
             <div className="space-y-5">
           {/* 5. SELLER SELECT */}
@@ -390,14 +405,14 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
         <div className="p-6 bg-white border-t border-gray-50 flex gap-3">
 
           {/* DELETE BUTTON */}
-          <button
+          {canVoidItem && <button
             onClick={() => setIsDeleting(true)}
-            disabled={!canVoidItem}
-            className={`w-[25%] py-4 rounded-2xl font-black flex flex-col items-center justify-center gap-1 transition-all active:scale-95 ${canVoidItem ? 'bg-white border-2 border-red-50 text-red-500 hover:bg-red-50' : 'bg-gray-50 text-gray-300 opacity-50 cursor-not-allowed'}`}
+            className="w-[25%] py-4 rounded-2xl font-black flex flex-col items-center justify-center gap-1 transition-all active:scale-95 bg-white border-2 border-red-50 text-red-500 hover:bg-red-50"
           >
             <Trash2 size={24} />
             <span className="text-[8px] uppercase tracking-tighter">Eliminar</span>
           </button>
+          }
 
           {/* UPDATE BUTTON */}
           <button
@@ -409,7 +424,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
             </div>
             <div className="text-left">
               <span className="block text-lg leading-none mb-0.5">Actualizar Item</span>
-              <span className="text-[10px] font-bold opacity-70 uppercase tracking-wider">Total: {config.currencySymbol}{(price * quantity).toFixed(2)}</span>
+              <span className="text-[10px] font-bold opacity-70 uppercase tracking-wider">Total: {config.currencySymbol}{((canApplyDiscount || canOverridePrice ? price : item.price) * (canEditQuantity ? quantity : item.quantity)).toFixed(2)}</span>
             </div>
           </button>
 
