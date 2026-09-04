@@ -59,3 +59,16 @@ test('todas las salidas transaccionales usan el control compartido', () => {
   assert.match(labels, /export const printLabelsFromTemplate = async[\s\S]*runPrintTask/);
   assert.match(labels, /method: 'queued'[\s\S]*result\.printed remains false/);
 });
+
+test('el shim Android conserva el contrato de estado de la impresora nativa', () => {
+  const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  const nativeBridge = readFileSync(
+    new URL('../native-stubs/android/ClicPOSNativePrinterBridge.kt', import.meta.url),
+    'utf8',
+  );
+
+  for (const method of ['testPrinter', 'testPrinterConnection', 'getPrinterStatus', 'checkStatus']) {
+    assert.match(nativeBridge, new RegExp(`${method}: function \\(payload\\) \\{ return call\\('${method}', payload\\); \\}`));
+    assert.match(app, new RegExp(`${method}: \\(payload: unknown\\) => call\\('${method}', payload\\)`));
+  }
+});
