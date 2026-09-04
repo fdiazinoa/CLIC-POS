@@ -412,7 +412,10 @@ const FLOOR_PLAN_STORAGE_KEY = 'clic_pos_floor_plan_mirror_v1';
 const ACTIVE_USER_SESSION_STORAGE_KEY = 'clic_pos_active_user_session_v1';
 const FORCE_LOGIN_AFTER_EXIT_STORAGE_KEY = 'clic_pos_force_login_after_exit_v1';
 const PENDING_CLIENT_TABLE_SYNC_STORAGE_KEY = 'clic_pos_pending_client_table_sync_v1';
-const TABLE_PERSISTENCE_IDLE_MS = 250;
+// Un operador puede encadenar mesa → artículo → mesa en menos de un segundo.
+// El journal local ya está escrito; SQLite/Outbox esperan esta ventana para no
+// competir con la siguiente pintura, pero conservan orden FIFO después de ella.
+const TABLE_PERSISTENCE_IDLE_MS = 1_000;
 
 type FloorPlanMirror = {
   rooms: Room[];
