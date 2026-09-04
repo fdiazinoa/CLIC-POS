@@ -10,6 +10,7 @@ import { ThermalPrinterService } from '../services/printer/ThermalPrinterService
 import { ZReportRecoveryService } from '../services/recovery/ZReportRecoveryService';
 import { sendZReportEmailViaErp } from '../services/email/zReportEmailService';
 import { ALL_CLOSE_REPORT_SECTIONS, buildCloseReportDetails, resolveCloseReportSections } from '../utils/closeReportOptions';
+import { getZReportPaymentMethodSummary, paymentMethodSummaryTotal } from '../utils/zReportPaymentSummary';
 
 interface ZReportHistoryProps {
     config: BusinessConfig;
@@ -269,6 +270,7 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
         const hasDiscrepancy = Math.abs(totalDiscrepancy) > 0.01;
         const denominationBreakdown = r.denominationBreakdown || (r as any).denomination_breakdown || {};
         const hasDenominationBreakdown = Object.values(denominationBreakdown).some((lines: any) => Array.isArray(lines) && lines.length > 0);
+        const paymentMethodSummary = getZReportPaymentMethodSummary(r, config);
 
         return (
             <div className="fixed inset-0 z-50 bg-gray-50 flex flex-col min-h-0 animate-in slide-in-from-right duration-300">
@@ -357,9 +359,9 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
                         {/* Summary Cards */}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-                                <p className="text-xs text-gray-500 uppercase font-bold mb-1">Ventas Totales</p>
+                                <p className="text-xs text-gray-500 uppercase font-bold mb-1">Ventas Netas</p>
                                 <p className="text-2xl font-bold text-gray-800">
-                                    {formatCurrency(Object.values(r.totalsByMethod || {}).reduce((a, b) => a + (b as number), 0), r.baseCurrency)}
+                                    {formatCurrency(r.stats?.netSales ?? paymentMethodSummaryTotal(paymentMethodSummary), r.baseCurrency)}
                                 </p>
                             </div>
                             <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
@@ -468,17 +470,37 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
                         {/* Payment Methods */}
                         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
                             <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 font-bold text-gray-700 flex items-center gap-2">
-                                <DollarSign size={18} /> Métodos de Pago
+                                <DollarSign size={18} /> Formas de Pago
                             </div>
                             <div className="p-4 space-y-3">
-                                {Object.entries(r.totalsByMethod || {}).map(([method, amount]) => (
-                                    <div key={method} className="flex justify-between items-center border-b border-gray-50 last:border-0 pb-2 last:pb-0">
-                                        <span className="text-gray-600 font-medium">{method}</span>
-                                        <span className="font-bold text-gray-800">{formatCurrency(amount, r.baseCurrency)}</span>
+                                {paymentMethodSummary.map(line => (
+                                    <div key={line.methodId || `${line.methodType}-${line.name}`} className="flex justify-between items-center border-b border-gray-50 last:border-0 pb-2 last:pb-0">
+                                        <span className="text-gray-600 font-medium">{line.name}</span>
+                                        <span className="font-bold text-gray-800">{formatCurrency(line.amount, r.baseCurrency)}</span>
                                     </div>
                                 ))}
+                                <div className="flex justify-between items-center border-t border-gray-200 pt-3 font-black">
+                                    <span>Total formas de pago</span>
+                                    <span>{formatCurrency(paymentMethodSummaryTotal(paymentMethodSummary), r.baseCurrency)}</span>
+                                </div>
                             </div>
                         </div>
+
+                        {(r.paymentMethodDeclarations || []).length > 0 && (
+                            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                                <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 font-bold text-gray-700">Declaración de formas de pago</div>
+                                <div className="p-4 space-y-3">
+                                    {r.paymentMethodDeclarations!.map(line => (
+                                        <div key={line.methodId || `${line.methodType}-${line.name}`} className="grid grid-cols-4 gap-2 border-b border-gray-100 pb-2 text-sm">
+                                            <span className="font-bold text-gray-800">{line.name}</span>
+                                            <span className="text-right text-gray-500">Esp. {formatCurrency(line.expected, r.baseCurrency)}</span>
+                                            <span className="text-right text-gray-700">Dec. {formatCurrency(line.declared, r.baseCurrency)}</span>
+                                            <span className={`text-right font-bold ${Math.abs(line.difference) <= 0.01 ? 'text-emerald-600' : 'text-red-600'}`}>{formatCurrency(line.difference, r.baseCurrency)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
 
                         {/* Notes */}
                         {r.notes && (
@@ -609,7 +631,7 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
                             const totalsByMethod = report.totalsByMethod || {};
                             const cashDiscrepancy = report.cashDiscrepancy || {};
 
-                            const totalSales = Object.values(totalsByMethod).reduce((a, b) => a + (b as number), 0);
+                            const totalSales = report.stats?.netSales ?? Object.values(totalsByMethod).reduce((a, b) => a + (b as number), 0);
                             const totalDiscrepancy = Object.values(cashDiscrepancy).reduce((a, b) => a + (b as number), 0);
                             const hasDiscrepancy = Math.abs(totalDiscrepancy) > 0.01;
 

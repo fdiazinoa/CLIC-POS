@@ -92,6 +92,7 @@ import { calculateZReportStats } from './utils/analytics';
 import { buildServiceTypeReport } from './utils/orderServiceType';
 import { ALL_CLOSE_REPORT_SECTIONS, buildCloseReportDetails, resolveCloseReportSections } from './utils/closeReportOptions';
 import { buildCloseTaxSummary } from './utils/closeReceiptSummary';
+import { buildZReportPaymentMethodSummary } from './utils/zReportPaymentSummary';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
 import { calculateTransactionTaxSummary } from './utils/taxSummary';
 import { calculateTransactionFiscalSummary } from './utils/fiscalBreakdown';
@@ -9819,10 +9820,9 @@ const AppContent: React.FC = () => {
         throw new Error('Este cajero no tiene movimientos abiertos para generar Cierre X.');
       }
 
-      const totalsByMethod = terminalTransactions.flatMap(t => t?.payments || []).reduce((acc: Record<string, number>, p) => {
-        if (p && p.method) {
-          acc[p.method] = (acc[p.method] || 0) + Number(p.amount || 0);
-        }
+      const paymentMethodSummary = buildZReportPaymentMethodSummary(terminalTransactions, config);
+      const totalsByMethod = paymentMethodSummary.reduce((acc: Record<string, number>, line) => {
+        acc[line.methodType] = (acc[line.methodType] || 0) + Number(line.amount || 0);
         return acc;
       }, {});
 
@@ -9944,6 +9944,7 @@ const AppContent: React.FC = () => {
         closedByUserName: currentUser?.name || 'System',
         baseCurrency: baseCurrencyCode,
         totalsByMethod,
+        paymentMethodSummary,
         cashExpected: { [baseCurrencyCode]: expectedCash },
         cashCounted: { [baseCurrencyCode]: Number(cashCounted || 0) },
         cashDiscrepancy: { [baseCurrencyCode]: discrepancy },
@@ -10104,10 +10105,9 @@ const AppContent: React.FC = () => {
       console.log(`🔒 Shift Segregation: Found ${terminalTransactions.length} txns and ${terminalCashMovements.length} cash movements for ${terminalId}`);
 
       // 3. Totals and Stats from the exact transaction set being archived.
-      const totalsByMethod = terminalTransactions.flatMap(t => t?.payments || []).reduce((acc: Record<string, number>, p) => {
-        if (p && p.method) {
-          acc[p.method] = (acc[p.method] || 0) + p.amount;
-        }
+      const paymentMethodSummary = buildZReportPaymentMethodSummary(terminalTransactions, config);
+      const totalsByMethod = paymentMethodSummary.reduce((acc: Record<string, number>, line) => {
+        acc[line.methodType] = (acc[line.methodType] || 0) + Number(line.amount || 0);
         return acc;
       }, {});
 
@@ -10257,6 +10257,8 @@ const AppContent: React.FC = () => {
         closedByUserName: currentUser?.name || 'System',
         baseCurrency: ((config.currencies || []).find(c => c.isBase)?.code || (config.currencies || [])[0]?.code || 'DOP'),
         totalsByMethod,
+        paymentMethodSummary,
+        paymentMethodDeclarations: reportData?.paymentMethodDeclarations || [],
         cashExpected: reportData?.expectedCashByCurrency || {},
         cashCounted: reportData?.cashCountedByCurrency || {},
         cashDiscrepancy: reportData?.cashDiscrepancyByCurrency || {},

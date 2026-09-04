@@ -151,9 +151,17 @@
             <div class="summary-box">
                 <table style="margin: 0;">
                     <tr>
-                        <td style="border: none; padding: 5px;">Ventas Totales</td>
+                        <td style="border: none; padding: 5px;">Ventas brutas</td>
                         <td style="border: none; padding: 5px; text-align: right; font-size: 18px; font-weight: bold;">
-                            {{totalSales}}</td>
+                            {{grossSales}}</td>
+                    </tr>
+                    <tr>
+                        <td style="border: none; padding: 5px;">(-) Devoluciones</td>
+                        <td style="border: none; padding: 5px; text-align: right;">{{returnsTotal}}</td>
+                    </tr>
+                    <tr>
+                        <td style="border: none; padding: 5px; font-weight: bold;">Ventas netas</td>
+                        <td style="border: none; padding: 5px; text-align: right; font-size: 18px; font-weight: bold;">{{netSales}}</td>
                     </tr>
                     <tr>
                         <td style="border: none; padding: 5px;">Transacciones</td>
@@ -195,7 +203,7 @@
             </div>
 
             <!-- Payment Methods -->
-            <h3 style="font-size: 14px; text-transform: uppercase; color: #64748b; margin-bottom: 10px;">Métodos de Pago
+            <h3 style="font-size: 14px; text-transform: uppercase; color: #64748b; margin-bottom: 10px;">Formas de pago
             </h3>
             <table>
                 <thead>
@@ -215,16 +223,16 @@
             <table>
                 <thead>
                     <tr>
-                        <th>Moneda</th>
-                        <th style="text-align: right;">Esperado</th>
-                        <th style="text-align: right;">Contado</th>
-                        <th style="text-align: right;">Dif.</th>
+                        <th>Concepto</th>
+                        <th style="text-align: right;">Monto</th>
                     </tr>
                 </thead>
                 <tbody>
                     {{cashDetailsRows}}
                 </tbody>
             </table>
+
+            {{paymentDeclarationsSection}}
 
             <!-- Notes -->
             {{notesSection}}

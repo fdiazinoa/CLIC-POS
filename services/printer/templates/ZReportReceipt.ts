@@ -1,6 +1,7 @@
 import { BusinessConfig, ZReport } from '../../../types';
 import { resolveTerminalDisplayName } from '../../../utils/transactionHistoryPresentation';
 import { getCloseReceiptSummary, closeTaxLabel } from '../../../utils/closeReceiptSummary';
+import { getZReportPaymentMethodSummary, paymentMethodSummaryTotal } from '../../../utils/zReportPaymentSummary';
 
 export const generateZReportReceipt = (
   report: ZReport,
@@ -10,7 +11,6 @@ export const generateZReportReceipt = (
   const width = '80mm'; // Standard thermal paper width
   const isXReport = (report as any).reportType === 'X';
   const reportTitle = isXReport ? 'CIERRE X (ARQUEO)' : 'REPORTE DE CIERRE (Z)';
-  const totalsByMethod = report.totalsByMethod || {};
   const cashExpected = report.cashExpected || {};
   const cashCounted = report.cashCounted || {};
   const cashDiscrepancy = report.cashDiscrepancy || {};
@@ -27,6 +27,9 @@ export const generateZReportReceipt = (
     .some(lines => Array.isArray(lines) && lines.length > 0);
   const serviceTypeSummary = report.serviceTypeSummary || [];
   const closeSummary = getCloseReceiptSummary(report);
+  const paymentMethodSummary = getZReportPaymentMethodSummary(report, config);
+  const paymentMethodsTotal = paymentMethodSummaryTotal(paymentMethodSummary);
+  const paymentMethodDeclarations = report.paymentMethodDeclarations || [];
   const escapeLabel = (value: string) => value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 
   const formatCurrency = (amount: number) => {
@@ -125,14 +128,6 @@ export const generateZReportReceipt = (
         <span class="bold">${formatCurrency(stats.netSales || 0)}</span>
       </div>
       <div class="row">
-        <span>Recaud. Anticipos:</span>
-        <span>${formatCurrency(stats.advancementsTotal || 0)}</span>
-      </div>
-      <div class="row total-row">
-        <span>TOTAL REBROCADO:</span>
-        <span>${formatCurrency(Object.values(totalsByMethod).reduce((a, b) => a + Number(b || 0), 0))}</span>
-      </div>
-      <div class="row">
         <span>Transacciones:</span>
         <span>${report.transactionCount}</span>
       </div>
@@ -159,13 +154,14 @@ export const generateZReportReceipt = (
       
       <!-- PAYMENT METHODS -->
       ${!hiddenModules.includes('PAYMENTS') ? `
-      <div class="section-title">MÉTODOS DE PAGO</div>
-      ${Object.entries(totalsByMethod).map(([method, amount]) => `
+      <div class="section-title">FORMAS DE PAGO</div>
+      ${paymentMethodSummary.map(line => `
         <div class="row">
-          <span>${method}:</span>
-          <span>${formatCurrency(Number(amount || 0))}</span>
+          <span>${escapeLabel(line.name)}:</span>
+          <span>${formatCurrency(Number(line.amount || 0))}</span>
         </div>
       `).join('')}
+      <div class="row bold"><span>Total formas de pago:</span><span>${formatCurrency(paymentMethodsTotal)}</span></div>
       ` : ''}
 
       <!-- CASH DETAILS -->
@@ -178,12 +174,29 @@ export const generateZReportReceipt = (
     return `
           <div style="margin-bottom: 5px;">
             <div class="bold" style="text-decoration: underline;">${currency}</div>
-            <div class="row"><span>Esperado:</span> <span>${expected.toFixed(2)}</span></div>
-            <div class="row"><span>Contado:</span> <span>${counted.toFixed(2)}</span></div>
-            <div class="row"><span>Diferencia:</span> <span class="bold">${diff > 0 ? '+' : ''}${diff.toFixed(2)}</span></div>
+            ${currency === report.baseCurrency ? `
+            <div class="row"><span>Efectivo en ventas:</span> <span>${formatCurrency(report.cashSales || 0)}</span></div>
+            <div class="row"><span>(+) Entradas:</span> <span>${formatCurrency(report.cashIn || 0)}</span></div>
+            <div class="row"><span>(-) Salidas:</span> <span>${formatCurrency(report.cashOut || 0)}</span></div>
+            ` : ''}
+            <div class="row"><span>Efectivo esperado:</span> <span>${formatCurrency(expected)}</span></div>
+            <div class="row"><span>Efectivo contado:</span> <span>${formatCurrency(counted)}</span></div>
+            <div class="row"><span>Diferencia:</span> <span class="bold">${diff > 0 ? '+' : ''}${formatCurrency(diff)}</span></div>
           </div>
         `;
   }).join('')}
+      ` : ''}
+
+      ${!hiddenModules.includes('CASH_DETAILS') && paymentMethodDeclarations.length > 0 ? `
+      <div class="section-title">DECLARACIÓN DE FORMAS DE PAGO</div>
+      ${paymentMethodDeclarations.map(line => `
+        <div style="margin-bottom: 5px;">
+          <div class="bold">${escapeLabel(line.name)}</div>
+          <div class="row"><span>Esperado:</span><span>${formatCurrency(line.expected)}</span></div>
+          <div class="row"><span>Declarado:</span><span>${formatCurrency(line.declared)}</span></div>
+          <div class="row"><span>Diferencia:</span><span class="bold">${line.difference > 0 ? '+' : ''}${formatCurrency(line.difference)}</span></div>
+        </div>
+      `).join('')}
       ` : ''}
 
       ${!hiddenModules.includes('CASH_DETAILS') && cashMovementDetails.length > 0 ? `

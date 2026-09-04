@@ -146,6 +146,7 @@ test('envía al ERP los anexos seleccionados y calculados del cierre Z', async (
   });
 
   assert.equal(result.success, true);
+  assert.equal(sentBody.reportSchemaVersion, 2);
   assert.deepEqual(sentBody.report.enabledSections, ['SELLER_SUMMARY', 'ITEM_SUMMARY']);
   assert.equal(sentBody.report.reportDetails.sellerSummary[0].userName, 'Ana');
   assert.equal(sentBody.report.denominationBreakdown.DOP[0].total, 500);

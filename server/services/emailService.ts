@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { Resend } from 'resend';
 import { Customer, EmailConfig } from '../../types';
 import { db, getSetting } from '../db.js';
+import { getZReportPaymentMethodSummary, paymentMethodSummaryTotal } from '../../utils/zReportPaymentSummary';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -147,8 +148,10 @@ export class EmailService {
         html = html.replace(/{{time}}/g, new Date(reportData.closedAt).toLocaleTimeString());
 
         // Financials
-        const totalSales = Object.values(reportData.totalsByMethod as Record<string, number>).reduce((a, b) => a + b, 0);
-        html = html.replace(/{{totalSales}}/g, formatMoney(totalSales));
+        const stats = reportData.stats || { averageTicket: 0, itemsPerSale: 0, peakHour: 'N/A', topProduct: null };
+        html = html.replace(/{{grossSales}}/g, formatMoney(Number(stats.grossSales || 0)));
+        html = html.replace(/{{returnsTotal}}/g, formatMoney(Number(stats.returnsTotal || 0)));
+        html = html.replace(/{{netSales}}/g, formatMoney(Number(stats.netSales || 0)));
         html = html.replace(/{{transactionCount}}/g, reportData.transactionCount.toString());
 
         // Discrepancy
@@ -158,20 +161,24 @@ export class EmailService {
         html = html.replace(/{{discrepancyAmount}}/g, (totalDiscrepancy > 0 ? '+' : '') + formatMoney(totalDiscrepancy));
 
         // KPIs
-        const stats = reportData.stats || { averageTicket: 0, itemsPerSale: 0, peakHour: 'N/A', topProduct: null };
         html = html.replace(/{{avgTicket}}/g, formatMoney(stats.averageTicket));
         html = html.replace(/{{itemsPerSale}}/g, stats.itemsPerSale.toFixed(1));
         html = html.replace(/{{peakHour}}/g, stats.peakHour);
         html = html.replace(/{{topProduct}}/g, stats.topProduct?.name || 'N/A');
 
         // Payment Methods Rows
-        const paymentRows = Object.entries(reportData.totalsByMethod as Record<string, number>)
-            .map(([method, amount]) => `
+        const paymentMethodSummary = getZReportPaymentMethodSummary(reportData, undefined);
+        const paymentRows = paymentMethodSummary
+            .map(line => `
                 <tr>
-                    <td>${method}</td>
-                    <td style="text-align: right;">${formatMoney(amount)}</td>
+                    <td>${line.name}</td>
+                    <td style="text-align: right;">${formatMoney(line.amount)}</td>
                 </tr>
-            `).join('');
+            `).join('') + `
+                <tr class="total-row">
+                    <td>Total formas de pago</td>
+                    <td style="text-align: right;">${formatMoney(paymentMethodSummaryTotal(paymentMethodSummary))}</td>
+                </tr>`;
         html = html.replace(/{{paymentMethodsRows}}/g, paymentRows);
 
         // Cash Details Rows
@@ -184,14 +191,31 @@ export class EmailService {
 
                 return `
                     <tr>
-                        <td><strong>${curr}</strong></td>
-                        <td style="text-align: right;">${expected.toFixed(2)}</td>
-                        <td style="text-align: right;">${counted.toFixed(2)}</td>
-                        <td style="text-align: right; ${diffClass}">${diff > 0 ? '+' : ''}${diff.toFixed(2)}</td>
+                        <td><strong>${curr} · Efectivo en ventas</strong></td>
+                        <td style="text-align: right;">${formatMoney(Number(reportData.cashSales || 0))}</td>
+                    </tr>
+                    <tr><td>(+) Entradas</td><td style="text-align: right;">${formatMoney(Number(reportData.cashIn || 0))}</td></tr>
+                    <tr><td>(-) Salidas</td><td style="text-align: right;">${formatMoney(Number(reportData.cashOut || 0))}</td></tr>
+                    <tr><td>Efectivo esperado</td><td style="text-align: right;">${formatMoney(expected)}</td></tr>
+                    <tr><td>Efectivo contado</td><td style="text-align: right;">${formatMoney(counted)}</td></tr>
+                    <tr>
+                        <td>Diferencia</td>
+                        <td style="text-align: right; ${diffClass}">${diff > 0 ? '+' : ''}${formatMoney(diff)}</td>
                     </tr>
                 `;
             }).join('');
         html = html.replace(/{{cashDetailsRows}}/g, cashRows);
+
+        const paymentDeclarations = Array.isArray(reportData.paymentMethodDeclarations)
+            ? reportData.paymentMethodDeclarations
+            : [];
+        const declarationRows = paymentDeclarations.map((line: any) => `
+            <tr><td>${line.name}</td><td style="text-align:right;">${formatMoney(Number(line.expected || 0))}</td><td style="text-align:right;">${formatMoney(Number(line.declared || 0))}</td><td style="text-align:right;">${formatMoney(Number(line.difference || 0))}</td></tr>
+        `).join('');
+        html = html.replace(/{{paymentDeclarationsSection}}/g, declarationRows ? `
+            <h3 style="font-size:14px;text-transform:uppercase;color:#64748b;margin-bottom:10px;">Declaración de formas de pago</h3>
+            <table><thead><tr><th>Forma</th><th style="text-align:right;">Esperado</th><th style="text-align:right;">Declarado</th><th style="text-align:right;">Dif.</th></tr></thead><tbody>${declarationRows}</tbody></table>
+        ` : '');
 
         // Notes
         if (reportData.notes) {

@@ -331,6 +331,15 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
       });
    };
 
+   const handleToggleZReportPaymentDeclaration = (methodId: string) => {
+      if (!activeTerminal || isReadOnly) return;
+      const current = activeTerminal.config.workflow.session.zReportDeclaredPaymentMethodIds || [];
+      const next = current.includes(methodId)
+         ? current.filter(id => id !== methodId)
+         : [...current, methodId];
+      handleUpdateActiveConfig('workflow.session', 'zReportDeclaredPaymentMethodIds', next);
+   };
+
    const handleUpdateDeviceRole = (role: DeviceRole) => {
       if (!activeTerminal || isReadOnly) return;
       const currentRoleConfig = activeTerminal.config.deviceRole;
@@ -854,6 +863,37 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     disabled={isReadOnly}
                                  />
                               </div>
+                              <section className="rounded-[2rem] border border-slate-200 bg-white p-5 md:p-6 shadow-sm space-y-4">
+                                 <div>
+                                    <h4 className="text-lg font-black text-slate-800">Formas de pago a declarar</h4>
+                                    <p className="text-xs font-medium text-slate-500">El efectivo siempre se cuenta aparte. Selecciona los demás medios que el cajero debe declarar manualmente al cerrar.</p>
+                                 </div>
+                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {(config.paymentMethods || [])
+                                       .filter(method => method.isEnabled !== false && method.type !== 'CASH')
+                                       .map(method => {
+                                          const checked = (activeTerminal.config.workflow.session.zReportDeclaredPaymentMethodIds || []).includes(method.id);
+                                          return (
+                                             <label key={method.id} className={`flex items-center gap-3 rounded-2xl border p-4 transition ${checked ? 'border-indigo-300 bg-indigo-50' : 'border-slate-200 bg-slate-50'} ${isReadOnly ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
+                                                <input
+                                                   type="checkbox"
+                                                   checked={checked}
+                                                   onChange={() => handleToggleZReportPaymentDeclaration(method.id)}
+                                                   disabled={isReadOnly}
+                                                   className="h-5 w-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                                />
+                                                <span>
+                                                   <span className="block text-sm font-black text-slate-800">{method.name}</span>
+                                                   <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">{method.type}</span>
+                                                </span>
+                                             </label>
+                                          );
+                                       })}
+                                    {(config.paymentMethods || []).filter(method => method.isEnabled !== false && method.type !== 'CASH').length === 0 && (
+                                       <p className="text-sm text-slate-400">No hay formas no efectivas habilitadas.</p>
+                                    )}
+                                 </div>
+                              </section>
                               <section className="rounded-[2rem] border border-slate-200 bg-white p-5 md:p-6 shadow-sm space-y-5">
                                  <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                                     <div>
