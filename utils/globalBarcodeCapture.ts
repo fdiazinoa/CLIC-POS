@@ -99,8 +99,6 @@ export function attachGlobalBarcodeCapture(win: Window, options: BarcodeCaptureO
         }
         if (event.key.length !== 1) { cancel(); return; }
         completed = undefined;
-        // Focused search uses input as source of truth; Android may send both.
-        if (isEditable(el)) return;
         const now = Date.now();
         if (target !== el || now - lastAt > prefixTimeout) reset();
         target = el;
@@ -119,6 +117,17 @@ export function attachGlobalBarcodeCapture(win: Window, options: BarcodeCaptureO
         const value = el.value;
         completed = undefined;
         const now = Date.now();
+        // A hardware keyboard normally emits keydown before input. Keep the
+        // keydown buffer as a fallback for Android WebViews/readers that omit
+        // input, and treat the matching input event as a mirror—not a second
+        // character.
+        const mirrorsKeydown = target === el && now - lastAt <= prefixTimeout && value === code;
+        if (mirrorsKeydown) {
+            lastAt = now;
+            if (!value) { reset(); return; }
+            schedule();
+            return;
+        }
         const continuation = target === el && now - lastAt <= prefixTimeout && value === code + (input.data || '');
         const chunk = input.data ?? (input.inputType === 'insertText' && !code ? value : '');
         burst = continuation ? burst + chunk.length : (value === chunk ? chunk.length : 0);
