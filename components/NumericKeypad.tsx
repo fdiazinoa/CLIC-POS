@@ -7,6 +7,7 @@ interface NumericKeypadProps {
   onChange: (value: string) => void;
   allowDecimal?: boolean;
   maxValue?: number;
+  maxDecimalPlaces?: number;
   disabled?: boolean;
 }
 
@@ -17,10 +18,11 @@ const NumericKeypad: React.FC<NumericKeypadProps> = ({
   onChange,
   allowDecimal = true,
   maxValue,
+  maxDecimalPlaces,
   disabled = false,
 }) => {
   const handleKey = (key: string) => {
-    onChange(appendNumericCharacter(value, key, { allowDecimal, maxValue }));
+    onChange(appendNumericCharacter(value, key, { allowDecimal, maxValue, maxDecimalPlaces }));
   };
 
   return (

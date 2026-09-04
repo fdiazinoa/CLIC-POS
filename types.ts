@@ -733,6 +733,8 @@ export interface TerminalConfig {
       maxCashInDrawer: number;
       askGuestsOnTicketOpen: boolean;
       autoPrintZReport: boolean;
+      /** Imprime un comprobante al registrar una entrada o salida de efectivo. */
+      autoPrintCashMovementReceipt?: boolean;
       zReportEmails?: string;
       // New fields for Z Report Expansion
       checkOpenOrders: boolean;

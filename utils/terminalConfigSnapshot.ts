@@ -238,6 +238,12 @@ const mergeWorkflowSessionFromErpConfig = (
     merged.autoPrintZReport = autoPrint;
   }
 
+  const autoPrintCashMovement =
+    erpSession.autoPrintCashMovementReceipt ?? erpSession.auto_print_cash_movement_receipt;
+  if (typeof autoPrintCashMovement === 'boolean') {
+    merged.autoPrintCashMovementReceipt = autoPrintCashMovement;
+  }
+
   const emailZ = erpSession.emailZReport ?? erpSession.email_z_report;
   if (typeof emailZ === 'boolean') {
     merged.emailZReport = emailZ;

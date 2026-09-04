@@ -1,6 +1,7 @@
 export interface NumericInputOptions {
   allowDecimal?: boolean;
   maxValue?: number;
+  maxDecimalPlaces?: number;
 }
 
 export const appendNumericCharacter = (
@@ -8,7 +9,7 @@ export const appendNumericCharacter = (
   character: string,
   options: NumericInputOptions = {},
 ): string => {
-  const { allowDecimal = true, maxValue } = options;
+  const { allowDecimal = true, maxValue, maxDecimalPlaces } = options;
 
   if (character === '.') {
     if (!allowDecimal || currentValue.includes('.')) return currentValue;
@@ -16,6 +17,11 @@ export const appendNumericCharacter = (
   }
 
   if (!/^\d$/.test(character)) return currentValue;
+
+  const decimalPart = currentValue.split('.')[1];
+  if (decimalPart !== undefined && maxDecimalPlaces !== undefined && decimalPart.length >= maxDecimalPlaces) {
+    return currentValue;
+  }
 
   const nextValue = currentValue === '0' ? character : `${currentValue}${character}`;
   const numericValue = Number(nextValue);

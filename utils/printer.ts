@@ -1,8 +1,8 @@
 import { notifyBrowserPrint } from '../services/printer/BrowserPrint';
 import { PrintOutputError, runPrintTask } from '../services/printer/PrintFeedback';
-import { Transaction, BusinessConfig, Reservation, CartItem, Table } from '../types';
+import { Transaction, BusinessConfig, Reservation, CartItem, Table, CashMovement } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
-import { buildEscPosCashDrawerPayload, buildEscPosComandaPayload, buildEscPosReservationPayload, buildEscPosSubtotalPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload, shouldOpenDrawerForTransaction } from '../services/printer/EscPosFormatter';
+import { buildEscPosCashDrawerPayload, buildEscPosCashMovementReceiptPayload, buildEscPosComandaPayload, buildEscPosReservationPayload, buildEscPosSubtotalPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload, shouldOpenDrawerForTransaction } from '../services/printer/EscPosFormatter';
 import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRuntime';
 import { dbAdapter } from '../services/db';
 import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, consolidateTaxBreakdownForDisplay, formatTaxLineLabel } from './fiscalBreakdown';
@@ -35,6 +35,24 @@ export const openCashDrawerForTransaction = async (
     });
 
     return opened ? 'OPENED' : 'FAILED';
+};
+
+const printCashMovementReceiptInternal = async (
+    movement: CashMovement,
+    config: BusinessConfig,
+): Promise<boolean> => {
+    const escPosBase64 = buildEscPosCashMovementReceiptPayload(movement, config);
+    if (!escPosBase64) return false;
+
+    return PrintRouterService.routeAndPrintEscPos({
+        config,
+        escPosBase64,
+        role: 'TICKET',
+        terminalId: movement.terminalId,
+        jobType: 'CASH_MOVEMENT_RECEIPT',
+        referenceId: movement.id,
+        copies: 1,
+    });
 };
 
 const escapeHtml = (value: string): string => {
@@ -1250,3 +1268,5 @@ export const printPrecuenta = (...args: Parameters<typeof printPrecuentaInternal
     runPrintTask(`precuenta:${JSON.stringify(args[1])}`, 'Precuenta', () => printPrecuentaInternal(...args));
 export const printComanda = (...args: Parameters<typeof printComandaInternal>) =>
     runPrintTask(`comanda:${JSON.stringify(args[1])}`, 'Comanda', () => printComandaInternal(...args));
+export const printCashMovementReceipt = (...args: Parameters<typeof printCashMovementReceiptInternal>) =>
+    runPrintTask(`cash-movement:${args[0].id}`, 'Comprobante de entrada/salida', () => printCashMovementReceiptInternal(...args));

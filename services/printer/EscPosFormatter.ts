@@ -1,4 +1,4 @@
-import { BusinessConfig, CartItem, Reservation, Table, Transaction, ZReport } from '../../types';
+import { BusinessConfig, CartItem, CashMovement, Reservation, Table, Transaction, ZReport } from '../../types';
 import { findTaxByIdentifier } from '../../utils/taxIdentity';
 import { buildPaymentReceiptPresentation, buildPaymentSettlementSummary } from '../../utils/paymentSettlement';
 import { resolveTerminalSellerName } from '../../utils/terminalSnapshotSellers';
@@ -373,6 +373,39 @@ export const buildEscPosHardwareTestPayload = (data: EscPosHardwareTestData): st
   chunks.push(divider(width));
   chunks.push(align(1));
   pushTextLines(chunks, splitLines('CONEXION OPERATIVA', width));
+  chunks.push(align(0));
+  finalizeReceipt(chunks);
+
+  return toBase64(concat(chunks));
+};
+
+export const buildEscPosCashMovementReceiptPayload = (
+  movement: CashMovement,
+  config: BusinessConfig,
+): string | null => {
+  if (!movement || !Number.isFinite(Number(movement.amount)) || Number(movement.amount) <= 0) return null;
+
+  const width = RECEIPT_LINE_WIDTH;
+  const chunks: Uint8Array[] = [];
+  const title = movement.type === 'IN' ? 'COMPROBANTE DE ENTRADA' : 'COMPROBANTE DE SALIDA';
+  const currencySymbol = resolveCurrencySymbol(config, movement.currencyCode);
+
+  buildReceiptHeader(chunks, config, title, width);
+  pushPair(chunks, 'Referencia', movement.id, width);
+  pushPair(chunks, 'Fecha', new Date(movement.timestamp).toLocaleString(), width);
+  pushPair(chunks, 'Terminal', resolveTerminalDisplayName(movement.terminalId, config.terminals || []), width);
+  pushPair(chunks, 'Cajero', movement.userName || movement.userId || 'N/D', width);
+  chunks.push(divider(width));
+  pushTextLines(chunks, splitLines(`Concepto: ${movement.reason || 'Movimiento General'}`, width));
+  chunks.push(divider(width));
+  chunks.push(bold(true));
+  chunks.push(size(0x11));
+  pushPair(chunks, 'TOTAL', formatMoney(currencySymbol, Number(movement.amount)), width);
+  chunks.push(size(0x00));
+  chunks.push(bold(false));
+  chunks.push(divider(width));
+  chunks.push(align(1));
+  pushTextLines(chunks, splitLines('Movimiento registrado', width));
   chunks.push(align(0));
   finalizeReceipt(chunks);
 
