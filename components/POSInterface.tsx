@@ -154,6 +154,10 @@ import {
    shouldUseDesktopSearchClearAction,
    type CameraAvailability,
 } from '../utils/cameraCapability';
+import {
+   canReverseRestaurantDraftWithoutApproval,
+   hasKitchenDispatchEvidence,
+} from '../utils/restaurantHotReversal';
 
 // ... existing imports
 
@@ -527,19 +531,7 @@ const isKdsPendingCartItem = (item?: Partial<CartItem> | null): boolean => {
 };
 
 const isKitchenDispatchedCartItem = (item?: Partial<CartItem> | null): boolean => {
-   const status = String((item as any)?.kdsStatus || '').trim().toUpperCase();
-   return Boolean(
-      (item as any)?.dispatched ||
-      (item as any)?.kdsOrderId ||
-      (item as any)?.kdsAreaId ||
-      ((item as any)?.kdsItemIds && (item as any).kdsItemIds.length > 0) ||
-      status === 'ENVIADO' ||
-      status === 'PENDIENTE' ||
-      status === 'PENDING' ||
-      status === 'RETRY_PENDING' ||
-      status === 'DEVUELTO' ||
-      status === 'RETURN_PENDING'
-   );
+   return hasKitchenDispatchEvidence(item);
 };
 
 const buildKdsDispatchItems = (items: CartItem[], areaId?: string) => items.map((item, index) => ({
@@ -4762,6 +4754,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (cartIdToDelete || updatedItem === null) {
          const targetCartId = cartIdToDelete || editingItem?.cartId;
          const originalItem = (cart || []).find(i => i.cartId === targetCartId);
+         const isHotRestaurantReversal = canReverseRestaurantDraftWithoutApproval(isRestaurantMode, originalItem);
          if (isKitchenDispatchedCartItem(originalItem)) {
             alert(isKdsReturnedCartItem(originalItem)
                ? 'Este artículo ya fue devuelto en cocina y queda bloqueado para auditoría.'
@@ -4771,7 +4764,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          // Void Line Check
-         if (!isSubtotalizedMutation) {
+         if (!isSubtotalizedMutation && !isHotRestaurantReversal) {
             const authorized = await requestApproval({
                permission: 'POS_VOID_ITEM',
                actionDescription: 'Eliminar artículo del carrito',
@@ -4853,6 +4846,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const freshItems = cart.filter(item => !isKitchenDispatchedCartItem(item));
       const dispatchedItems = cart.filter(item => isKitchenDispatchedCartItem(item));
+      const allFreshItemsAreHotRestaurantDrafts = freshItems.every(item =>
+         canReverseRestaurantDraftWithoutApproval(isRestaurantMode, item)
+      );
 
       if (freshItems.length === 0) {
          alert('No hay artículos nuevos para borrar. Los artículos enviados a cocina deben devolverse.');
@@ -4865,15 +4861,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       if (!await clicConfirm(`${confirmMessage}\n\n¿Continuar?`)) return;
 
-      const authorized = await requestApproval({
-         permission: 'POS_VOID_ITEM',
-         actionDescription: 'Limpiar artículos nuevos del ticket',
-         context: {
-            ticketId: activeTable?.currentOrderId,
-            reason: `Limpiar ${freshItems.length} artículo(s) nuevo(s); mantener ${dispatchedItems.length} enviado(s) a cocina`,
-         }
-      });
-      if (!authorized) return;
+      if (!allFreshItemsAreHotRestaurantDrafts) {
+         const authorized = await requestApproval({
+            permission: 'POS_VOID_ITEM',
+            actionDescription: 'Limpiar artículos nuevos del ticket',
+            context: {
+               ticketId: activeTable?.currentOrderId,
+               reason: `Limpiar ${freshItems.length} artículo(s) nuevo(s); mantener ${dispatchedItems.length} enviado(s) a cocina`,
+            }
+         });
+         if (!authorized) return;
+      }
 
       onUpdateCart(dispatchedItems);
       setActiveCartItemId(null);
