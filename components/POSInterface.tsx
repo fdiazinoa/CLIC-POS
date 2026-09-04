@@ -157,6 +157,8 @@ import {
 import {
    canReverseRestaurantDraftWithoutApproval,
    hasKitchenDispatchEvidence,
+   markRestaurantLinesCommitted,
+   requiresRestaurantReductionApproval,
 } from '../utils/restaurantHotReversal';
 
 // ... existing imports
@@ -1805,6 +1807,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       operationalVertical === 'RESTAURANT' ||
       operationalVertical === 'RESTAURANTE' ||
       config.vertical === 'RESTAURANT';
+   const isRestaurantOrderContext = Boolean(
+      activeTable && (isRestaurantMode || activeTerminalConfig?.operational?.usa_mesas)
+   );
 
    useEffect(() => {
       if (!isRestaurantMode || !(Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android')) return;
@@ -2248,12 +2253,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!activeTable?.currentOrderId || cart.length > 0) return;
       const parked = parkedTickets.find(t => t.id === activeTable.currentOrderId);
       if (parked?.items?.length) {
-         onUpdateCart(parked.items);
+         onUpdateCart(markRestaurantLinesCommitted(parked.items, parked.timestamp));
          return;
       }
       const ord = (transactions || []).find(t => t.id === activeTable.currentOrderId);
       if (ord?.items?.length) {
-         onUpdateCart(ord.items);
+         onUpdateCart(markRestaurantLinesCommitted(ord.items));
       }
    }, [activeTable, parkedTickets, transactions, onUpdateCart, cart.length]);
 
@@ -4754,7 +4759,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (cartIdToDelete || updatedItem === null) {
          const targetCartId = cartIdToDelete || editingItem?.cartId;
          const originalItem = (cart || []).find(i => i.cartId === targetCartId);
-         const isHotRestaurantReversal = canReverseRestaurantDraftWithoutApproval(isRestaurantMode, originalItem);
+         const isHotRestaurantReversal = canReverseRestaurantDraftWithoutApproval(isRestaurantOrderContext, originalItem);
          if (isKitchenDispatchedCartItem(originalItem)) {
             alert(isKdsReturnedCartItem(originalItem)
                ? 'Este artículo ya fue devuelto en cocina y queda bloqueado para auditoría.'
@@ -4794,6 +4799,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                );
                return;
             }
+         }
+
+         if (
+            !isSubtotalizedMutation
+            && requiresRestaurantReductionApproval(isRestaurantOrderContext, originalItem, Number(updatedItem.quantity))
+         ) {
+            const authorized = await requestApproval({
+               permission: 'POS_VOID_ITEM',
+               actionDescription: 'Rebajar cantidad de artículo guardado en mesa',
+               context: {
+                  itemId: updatedItem.cartId,
+                  ticketId: activeTable?.currentOrderId,
+                  originalValue: originalItem.quantity,
+                  newValue: updatedItem.quantity,
+               }
+            });
+            if (!authorized) return;
          }
 
          // Stock Check (Quantity Increase)
@@ -4847,7 +4869,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const freshItems = cart.filter(item => !isKitchenDispatchedCartItem(item));
       const dispatchedItems = cart.filter(item => isKitchenDispatchedCartItem(item));
       const allFreshItemsAreHotRestaurantDrafts = freshItems.every(item =>
-         canReverseRestaurantDraftWithoutApproval(isRestaurantMode, item)
+         canReverseRestaurantDraftWithoutApproval(isRestaurantOrderContext, item)
       );
 
       if (freshItems.length === 0) {
@@ -6662,7 +6684,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const handleRestoreTicket = (parked: ParkedTicket) => {
-      onUpdateCart([...parked.items]);
+      onUpdateCart(markRestaurantLinesCommitted(parked.items, parked.timestamp));
       setOrderServiceType(parked.serviceType || 'DINE_IN');
       if (parked.customerId) {
          const found = (customers || []).find(c => c.id === parked.customerId);

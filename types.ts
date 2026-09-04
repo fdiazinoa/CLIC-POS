@@ -1737,6 +1737,7 @@ export interface CartItem extends Product {
   variantId?: string;
   variantBarcodes?: string[];
   dispatched?: boolean; // NEW: Track if item was sent to kitchen
+  restaurantCommittedAt?: string; // Línea guardada al salir de la mesa; cualquier reducción requiere autorización
   orderNumber?: string;
   tableDisplayLabel?: string;
   tableRoomLabel?: string;
