@@ -35,6 +35,7 @@ import {
 } from '../utils/creditRules';
 import TicketOptionsModal from './TicketOptionsModal';
 import CartItemOptionsModal from './CartItemOptionsModal';
+import { preserveCartItemCommercialFields, resolveCartItemEditCapabilities } from '../utils/cartItemEditPermissions';
 import ProductVariantSelector from './ProductVariantSelector';
 import { resolveVariantSalesPrice } from '../utils/variantSalesPrice';
 import ScaleModal from './ScaleModal';
@@ -1976,6 +1977,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const canCloseXReport = hasPermission('POS_CLOSE_X');
    const canCloseZReport = hasPermission('POS_CLOSE_Z');
    const canRegisterCashMovement = hasPermission('CASH_IN_OUT' as Permission);
+   const cartItemEditCapabilities = useMemo(
+      () => resolveCartItemEditCapabilities(userPermissions),
+      [userPermissions]
+   );
 
    const usesSupermarketLayout = useMemo(
       () => Boolean(!isMobile && isRetailMode),
@@ -8803,7 +8808,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
-         {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} salesUsers={salesUsers} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={!isKdsReturnedCartItem(editingItem)} canVoidItem={!editingItem.dispatched} />}
+         {editingItem && <CartItemOptionsModal
+            item={editingItem}
+            config={config}
+            users={users}
+            salesUsers={salesUsers}
+            roles={roles}
+            onClose={() => setEditingItem(null)}
+            onUpdate={(updatedItem, cartIdToDelete) => {
+               if (!cartItemEditCapabilities.annotationOnly) {
+                  void updateCartItem(updatedItem, cartIdToDelete);
+                  return;
+               }
+               if (!updatedItem || cartIdToDelete) return;
+               void updateCartItem(preserveCartItemCommercialFields(editingItem, updatedItem));
+            }}
+            canApplyDiscount={cartItemEditCapabilities.canApplyDiscount && !isKdsReturnedCartItem(editingItem)}
+            canOverridePrice={cartItemEditCapabilities.canOverridePrice && !isKdsReturnedCartItem(editingItem)}
+            canEditQuantity={cartItemEditCapabilities.canEditQuantity && !editingItem.dispatched}
+            canVoidItem={cartItemEditCapabilities.canVoidItem && !editingItem.dispatched}
+         />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} productSalesPrice={getProductPrice(selectedProductForVariants)} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, selectedVariant, variantInfo) => { addToCart(p, 1, pr, m, undefined, selectedVariant, variantInfo); setSelectedProductForVariants(null); }} />}
          {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(w) => { addToCart(productForScale, w); setProductForScale(null); }} />}
          {
