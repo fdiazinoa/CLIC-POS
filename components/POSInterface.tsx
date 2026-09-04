@@ -8281,11 +8281,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     <div className="flex items-center justify-between">
                                        <div className="flex flex-col">
                                           <div className="flex flex-col">
-                                             <div className="flex items-center gap-1 text-[10px] text-gray-500">
-                                                <span>{item.quantity} x {baseCurrency.symbol}{item.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                             <div className="flex items-center gap-1 text-sm font-bold leading-snug text-slate-700">
+                                                <span>{item.quantity} × {baseCurrency.symbol}{item.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                                 {item.modifiers && item.modifiers.length > 0 && <span className="text-blue-600 font-bold ml-1">+{item.modifiers.length} mod</span>}
                                              </div>
-                                             <div className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">
+                                             <div className="mt-0.5 text-[11px] font-semibold leading-snug text-slate-500">
                                                 {lineTaxSummary}
                                              </div>
                                              {item.consignmentDocumentNo && (
@@ -8308,11 +8308,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           )}
                                        </div>
 
-                                       {!isActiveCartItem ? (
-                                          <div className="flex items-center rounded-full bg-slate-50 px-2.5 py-1 text-[10px] font-black text-slate-600 shadow-sm">
-                                             {item.quantity} ud
-                                          </div>
-                                       ) : (
+                                       {isActiveCartItem && (
                                           <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 p-1">
                                              <button
                                                 type="button"
