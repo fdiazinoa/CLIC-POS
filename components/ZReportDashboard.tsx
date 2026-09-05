@@ -478,6 +478,8 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const configuredDeclarationIds = activeTerminalConfig?.workflow?.session?.zReportDeclaredPaymentMethodIds || [];
    const paymentMethodsToDeclare = paymentMethodSummary.filter(line => (
       line.methodType !== 'CASH'
+      && line.isPending !== true
+      && !['CREDIT', 'PENDING', 'PENDIENTE'].includes(String(line.methodType || '').toUpperCase())
       && configuredDeclarationIds.some(id => id.toLowerCase() === String(line.methodId || '').toLowerCase())
    ));
    const getPaymentDeclarationKey = (line: typeof paymentMethodSummary[number]) => (

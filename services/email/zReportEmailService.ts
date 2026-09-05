@@ -1,5 +1,12 @@
-import type { BusinessConfig, ZReport } from '../../types';
+import type {
+  BusinessConfig,
+  ZReport,
+  ZReportPaymentMethodDeclaration,
+  ZReportPaymentMethodLine,
+} from '../../types';
 import { resolveErpBaseUrl } from '../../utils/erpBaseUrl';
+import { isCreditLikeMarker } from '../../utils/creditRules';
+import { getZReportPaymentMethodSummary } from '../../utils/zReportPaymentSummary';
 import { requestJson, type RequestJsonResult } from '../network/httpClient';
 import { readTerminalCredentialsSync, type TerminalCredentials } from '../sync/TerminalCredentialStore';
 
@@ -25,6 +32,21 @@ type ZReportEmailDependencies = {
   refreshAuthorization?: () => Promise<void>;
 };
 
+export type ZReportEmailContractReport = Omit<
+  ZReport,
+  'stats' | 'cashExpected' | 'cashCounted' | 'cashDiscrepancy'
+> & {
+  stats: {
+    grossSales: number;
+    returnsTotal: number;
+    netSales: number;
+    [key: string]: unknown;
+  };
+  cashExpected: number;
+  cashCounted: number;
+  cashDiscrepancy: number;
+};
+
 const asText = (value: unknown): string | undefined => {
   const normalized = typeof value === 'string' ? value.trim() : '';
   return normalized || undefined;
@@ -39,6 +61,195 @@ const createDeliveryId = (reportId: string): string => {
     ? globalThis.crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return `${reportId}:${randomId}`;
+};
+
+const roundMoney = (value: unknown): number => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.round((numeric + Number.EPSILON) * 100) / 100;
+};
+
+const normalizeMarker = (value: unknown): string => String(value || '').trim().toUpperCase();
+
+const isPendingPaymentLine = (line: Partial<ZReportPaymentMethodLine>): boolean => (
+  line.isPending === true
+  || isCreditLikeMarker(line.methodType)
+  || isCreditLikeMarker(line.methodId)
+  || isCreditLikeMarker(line.name)
+);
+
+const resolveBaseCurrencyCode = (report: ZReport, config: BusinessConfig): string => (
+  String(report.baseCurrency || config.currencies?.find(currency => currency.isBase)?.code || 'DOP')
+    .trim()
+    .toUpperCase()
+);
+
+const currencyMapToBase = (
+  value: unknown,
+  baseCurrencyCode: string,
+  config: BusinessConfig,
+): number => {
+  if (typeof value === 'number') return roundMoney(value);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 0;
+
+  const total = Object.entries(value as Record<string, unknown>).reduce((sum, [currencyCode, amount]) => {
+    const normalizedCode = normalizeMarker(currencyCode);
+    const numericAmount = Number(amount);
+    if (!Number.isFinite(numericAmount)) return sum;
+    if (!normalizedCode || normalizedCode === baseCurrencyCode) return sum + numericAmount;
+
+    const configured = config.currencies?.find(currency => normalizeMarker(currency.code) === normalizedCode);
+    const rawCurrency = configured as (typeof configured & { exchange_rate?: number }) | undefined;
+    const rate = Number(configured?.buyRate || configured?.rate || rawCurrency?.exchange_rate || 0);
+    return rate > 0 ? sum + (numericAmount * rate) : sum;
+  }, 0);
+
+  return roundMoney(total);
+};
+
+const resolveDeclarationIds = (report: ZReport, config: BusinessConfig): string[] => {
+  const normalizedTerminalId = String(report.terminalId || '').trim().toLowerCase();
+  const terminal = (config.terminals || []).find(candidate => (
+    String(candidate.id || '').trim().toLowerCase() === normalizedTerminalId
+    || String(candidate.config?.erpTerminalId || '').trim().toLowerCase() === normalizedTerminalId
+  ));
+  const rawConfig = config as BusinessConfig & {
+    workflow?: { session?: Record<string, unknown> };
+    session?: Record<string, unknown>;
+  };
+  const session = (
+    terminal?.config?.workflow?.session
+    || rawConfig.workflow?.session
+    || rawConfig.session
+    || {}
+  ) as Record<string, unknown>;
+  const configured = session.zReportDeclaredPaymentMethodIds
+    ?? session.z_report_declared_payment_method_ids;
+  if (!Array.isArray(configured)) return [];
+  return configured.map(value => String(value || '').trim().toLowerCase()).filter(Boolean);
+};
+
+const buildEmailPaymentSummary = (
+  report: ZReport,
+  config: BusinessConfig,
+): { lines: ZReportPaymentMethodLine[]; cashSales: number } => {
+  const sourceLines = getZReportPaymentMethodSummary(report, config);
+  const sourceCashLines = sourceLines.filter(line => normalizeMarker(line.methodType) === 'CASH');
+  const configuredCash = (config.paymentMethods || []).find(method => (
+    normalizeMarker(method.type) === 'CASH' && method.isEnabled !== false
+  ));
+  const reportedCashSales = Number(report.cashSales);
+  const cashSales = roundMoney(Number.isFinite(reportedCashSales)
+    ? reportedCashSales
+    : sourceCashLines.reduce((sum, line) => sum + Number(line.amount || 0), 0));
+
+  const buckets = new Map<string, ZReportPaymentMethodLine>();
+  for (const line of sourceLines) {
+    const methodType = normalizeMarker(line.methodType) || 'OTHER';
+    if (methodType === 'CASH') continue;
+    const methodId = String(line.methodId || '').trim() || undefined;
+    const pending = isPendingPaymentLine(line);
+    const key = methodId
+      ? `id:${methodId.toLowerCase()}:${methodType}`
+      : `type:${methodType}:${String(line.name || '').trim().toLowerCase()}`;
+    const current = buckets.get(key);
+    buckets.set(key, {
+      methodId,
+      methodType,
+      name: pending ? 'Pendiente' : (String(line.name || '').trim() || 'Otro'),
+      amount: roundMoney((current?.amount || 0) + Number(line.amount || 0)),
+      ...(pending ? { isPending: true } : {}),
+    });
+  }
+
+  const lines = [...buckets.values()].filter(line => Math.abs(line.amount) > 0.0001);
+  if (cashSales > 0) {
+    const cashSource = sourceCashLines[0];
+    lines.unshift({
+      methodId: cashSource?.methodId || configuredCash?.id,
+      methodType: 'CASH',
+      name: configuredCash?.name || cashSource?.name || 'Efectivo',
+      amount: cashSales,
+    });
+  }
+  return { lines, cashSales };
+};
+
+const buildEmailPaymentDeclarations = (
+  report: ZReport,
+  summary: ZReportPaymentMethodLine[],
+  configuredIds: string[],
+): ZReportPaymentMethodDeclaration[] => {
+  if (configuredIds.length === 0) return [];
+  const selectedIds = new Set(configuredIds);
+  const existing = Array.isArray(report.paymentMethodDeclarations)
+    ? report.paymentMethodDeclarations
+    : [];
+
+  return summary
+    .filter(line => {
+      const methodId = String(line.methodId || '').trim().toLowerCase();
+      return Boolean(methodId)
+        && selectedIds.has(methodId)
+        && normalizeMarker(line.methodType) !== 'CASH'
+        && !isPendingPaymentLine(line);
+    })
+    .map(line => {
+      const saved = existing.find(candidate => (
+        String(candidate.methodId || '').trim().toLowerCase()
+        === String(line.methodId || '').trim().toLowerCase()
+      ));
+      const expected = roundMoney(line.amount);
+      const declared = roundMoney(saved?.declared);
+      return {
+        ...line,
+        expected,
+        declared,
+        difference: roundMoney(declared - expected),
+      };
+    });
+};
+
+/**
+ * Builds the ERP email contract without mutating the persisted Z report. The
+ * current operational model has no opening-fund component in expected cash, so
+ * it intentionally remains: cash sales + manual cash in - manual cash out.
+ */
+export const buildZReportEmailContractReport = (
+  report: ZReport,
+  config: BusinessConfig,
+): ZReportEmailContractReport => {
+  const baseCurrencyCode = resolveBaseCurrencyCode(report, config);
+  const { lines: paymentMethodSummary, cashSales } = buildEmailPaymentSummary(report, config);
+  const cashIn = roundMoney(report.cashIn);
+  const cashOut = roundMoney(report.cashOut);
+  const cashExpected = roundMoney(cashSales + cashIn - cashOut);
+  const cashCounted = currencyMapToBase(report.cashCounted, baseCurrencyCode, config);
+  const cashDiscrepancy = roundMoney(cashCounted - cashExpected);
+  const paymentMethodDeclarations = buildEmailPaymentDeclarations(
+    report,
+    paymentMethodSummary,
+    resolveDeclarationIds(report, config),
+  );
+
+  return {
+    ...report,
+    stats: {
+      ...(report.stats || {}),
+      grossSales: roundMoney(report.stats?.grossSales),
+      returnsTotal: roundMoney(report.stats?.returnsTotal),
+      netSales: roundMoney(report.stats?.netSales),
+    },
+    transactionCount: Number(report.transactionCount || 0),
+    paymentMethodSummary,
+    paymentMethodDeclarations,
+    cashSales,
+    cashIn,
+    cashOut,
+    cashExpected,
+    cashCounted,
+    cashDiscrepancy,
+  };
 };
 
 export const parseZReportEmailResponse = (
@@ -93,7 +304,7 @@ export const sendZReportEmailViaErp = async ({
     reportSchemaVersion: 2,
     companyInfo: config.companyInfo,
     currencySymbol: config.currencySymbol,
-    report,
+    report: buildZReportEmailContractReport(report, config),
   };
 
   const send = (activeCredentials: TerminalCredentials) => {
