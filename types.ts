@@ -1320,6 +1320,9 @@ export interface RoleDefinition {
   permissions: Permission[];
   maxDiscountPercent?: number;
   isSystem?: boolean;
+  isActive?: boolean;
+  version?: number;
+  syncSource?: 'LOCAL' | 'LOCAL_SEED' | 'ERP_SNAPSHOT';
   zReportConfig?: {
     hiddenModules: ZReportModule[];
   };
@@ -1334,6 +1337,8 @@ export interface User {
   photo?: string;
   biometrics?: UserBiometrics; // NEW: Biometric methods
   syncSource?: 'LOCAL' | 'LOCAL_SEED' | 'ERP_SNAPSHOT';
+  isActive?: boolean;
+  version?: number;
 }
 
 export interface UserBiometrics {

@@ -108,7 +108,7 @@ test('un padrón ERP válido retira semillas pero una respuesta vacía no las bo
   assert.deepEqual(offline, [legacySeed]);
 });
 
-test('un tenant ERP sin usuarios conserva el roster por defecto', () => {
+test('un tenant ERP nunca usa el roster local o demo como fuente de autorización', () => {
   const defaultUsers = [
     user('u1', 'Admin Master', { role: 'ADMIN', roleId: 'ADMIN', syncSource: 'LOCAL_SEED' }),
     user('u2', 'Cajero Principal', { syncSource: 'LOCAL_SEED' }),
@@ -117,14 +117,14 @@ test('un tenant ERP sin usuarios conserva el roster por defecto', () => {
   assert.deepEqual(selectPosUsersForRuntime(defaultUsers, {
     erpManaged: true,
     fallbackUsers: defaultUsers,
-  }), defaultUsers);
+  }), []);
   assert.deepEqual(selectPosUsersForRuntime([], {
     erpManaged: true,
     fallbackUsers: defaultUsers,
-  }), defaultUsers);
+  }), []);
 });
 
-test('un usuario local no oculta los defaults ni simula un padrón ERP', () => {
+test('un usuario local no puede operar cuando la autoridad es ERP', () => {
   const defaultUser = user('u1', 'Admin Master', {
     role: 'ADMIN',
     roleId: 'ADMIN',
@@ -135,7 +135,7 @@ test('un usuario local no oculta los defaults ni simula un padrón ERP', () => {
   assert.equal(hasErpSnapshotPosUsers([defaultUser, localUser]), false);
   assert.deepEqual(selectPosUsersForRuntime([defaultUser, localUser], {
     erpManaged: true,
-  }), [defaultUser, localUser]);
+  }), []);
 });
 
 test('los usuarios ERP sustituyen visualmente los defaults cuando existen', () => {
@@ -150,7 +150,7 @@ test('los usuarios ERP sustituyen visualmente los defaults cuando existen', () =
   assert.deepEqual(selectPosUsersForRuntime([defaultUser, localUser, erpUser], {
     erpManaged: true,
     fallbackUsers: [defaultUser],
-  }), [localUser, erpUser]);
+  }), [erpUser]);
   assert.deepEqual(selectPosUsersForRuntime([defaultUser, erpUser], {
     erpManaged: false,
   }), [defaultUser, erpUser]);

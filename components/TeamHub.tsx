@@ -20,6 +20,7 @@ interface TeamHubProps {
    onClose: () => void;
    mode?: TeamHubMode;
    canManageAttendance?: boolean;
+   erpManaged?: boolean;
 }
 
 // --- MOCK DATA FOR SHIFTS ---
@@ -108,7 +109,8 @@ const TeamHub: React.FC<TeamHubProps> = ({
    onUpdateRoles,
    onClose,
    mode = 'ADMIN',
-   canManageAttendance = false
+   canManageAttendance = false,
+   erpManaged = false
 }) => {
    const availableTabs = useMemo(
       () => resolveTeamHubTabs(mode, canManageAttendance),
@@ -191,6 +193,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
 
    // --- LOGIC: USER MANAGEMENT ---
    const handleSaveUser = () => {
+      if (erpManaged) return;
       if (!userForm.name || !userForm.pin || !userForm.role) return alert("Completa todos los campos");
 
       if (editingUser) {
@@ -213,12 +216,14 @@ const TeamHub: React.FC<TeamHubProps> = ({
    };
 
    const handleDeleteUser = async (id: string) => {
+      if (erpManaged) return;
       if (await clicConfirm("¿Eliminar usuario?")) {
          onUpdateUsers(users.filter(u => u.id !== id));
       }
    };
 
    const openUserModal = (user?: User) => {
+      if (erpManaged) return;
       if (user) {
          setEditingUser(user);
          setUserForm(user);
@@ -251,6 +256,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
 
    // --- LOGIC: ROLES ---
    const handleAddRole = () => {
+      if (erpManaged) return;
       const newRole: RoleDefinition = {
          id: `role_${Date.now()}`,
          name: 'Nuevo Rol',
@@ -263,6 +269,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
    };
 
    const handleUpdateRoleName = (roleId: string, newName: string) => {
+      if (erpManaged) return;
       onUpdateRoles(roles.map(r => r.id === roleId ? { ...r, name: newName } : r));
       // Update local state to reflect typing immediately
       if (editingRole && editingRole.id === roleId) {
@@ -272,6 +279,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
    };
 
    const togglePermission = (roleId: string, permKey: string) => {
+      if (erpManaged) return;
       const updatedRoles = roles.map(role => {
          if (role.id === roleId) {
             const permission = permKey as any; // Cast to any first to avoid strict check issues with string
@@ -293,6 +301,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
    };
 
    const handleSaveRoles = async () => {
+      if (erpManaged) return;
       setRoleSaveStatus('saving');
       await Promise.resolve(onUpdateRoles(roles));
       setRoleSaveStatus('saved');
@@ -300,6 +309,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
    };
 
    const handleDeleteRole = async (roleId: string) => {
+      if (erpManaged) return;
       if (await clicConfirm("¿Eliminar este rol?")) {
          onUpdateRoles(roles.filter(r => r.id !== roleId));
          if (editingRole?.id === roleId) setEditingRole(null);
@@ -451,6 +461,11 @@ const TeamHub: React.FC<TeamHubProps> = ({
                </button>
                )}
                </div>
+            {erpManaged && mode === 'ADMIN' && (
+               <div className="mb-4 mr-3 shrink-0 flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-black text-blue-700">
+                  <Lock size={14} /> Administrado por el ERP
+               </div>
+            )}
             <button onClick={onClose} className="mb-4 shrink-0 p-2 bg-gray-100 rounded-full text-gray-500 hover:bg-gray-200">
                <X size={20} />
             </button>
@@ -521,13 +536,15 @@ const TeamHub: React.FC<TeamHubProps> = ({
                         <h2 className="text-2xl font-black text-gray-800">Directorio de Equipo</h2>
                         <p className="text-gray-500 text-sm">Gestiona accesos y roles de empleados.</p>
                      </div>
-                     <button onClick={() => openUserModal()} className="px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 active:scale-95 transition-all flex items-center gap-2">
-                        <UserPlus size={18} /> Nuevo Usuario
-                     </button>
+                     {!erpManaged && (
+                        <button onClick={() => openUserModal()} className="px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 active:scale-95 transition-all flex items-center gap-2">
+                           <UserPlus size={18} /> Nuevo Usuario
+                        </button>
+                     )}
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 overflow-y-auto pb-20">
                      {users.map(user => {
-                        const role = roles.find(r => r.id === user.role);
+                        const role = roles.find(r => r.id === (user.roleId || user.role));
                         return (
                            <div key={user.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all group relative overflow-hidden">
                               <div className={`absolute top-0 right-0 w-20 h-20 bg-gradient-to-bl from-${role?.id === 'ADMIN' ? 'red' : 'indigo'}-50 to-transparent rounded-bl-full opacity-50`}></div>
@@ -541,10 +558,12 @@ const TeamHub: React.FC<TeamHubProps> = ({
                                        <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full uppercase tracking-wide">{role?.name || user.role}</span>
                                     </div>
                                  </div>
-                                 <div className="relative z-10 flex gap-2">
-                                    <button aria-label={`Editar ${user.name}`} title="Editar usuario" onClick={() => openUserModal(user)} className="p-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors"><Edit2 size={16} /></button>
-                                    <button aria-label={`Eliminar ${user.name}`} title="Eliminar usuario" onClick={() => handleDeleteUser(user.id)} className="p-2 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"><Trash2 size={16} /></button>
-                                 </div>
+                                 {!erpManaged && (
+                                    <div className="relative z-10 flex gap-2">
+                                       <button aria-label={`Editar ${user.name}`} title="Editar usuario" onClick={() => openUserModal(user)} className="p-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors"><Edit2 size={16} /></button>
+                                       <button aria-label={`Eliminar ${user.name}`} title="Eliminar usuario" onClick={() => handleDeleteUser(user.id)} className="p-2 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"><Trash2 size={16} /></button>
+                                    </div>
+                                 )}
                               </div>
                               <div className="flex items-center gap-2 text-xs text-gray-400 font-mono bg-gray-50 p-2 rounded-lg">
                                  <Lock size={12} /><span>PIN: ••••</span>
@@ -756,13 +775,15 @@ const TeamHub: React.FC<TeamHubProps> = ({
                   <div className="w-72 bg-white border-r border-gray-200 flex flex-col shrink-0">
                      <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                         <span className="text-xs font-black text-gray-500 uppercase tracking-widest">LISTA DE ROLES</span>
-                        <button
-                           onClick={handleAddRole}
-                           className="bg-purple-600 text-white p-2 rounded-lg hover:bg-purple-700 shadow-md transition-all active:scale-95 flex items-center justify-center"
-                           title="Crear Nuevo Rol"
-                        >
-                           <Plus size={18} strokeWidth={3} />
-                        </button>
+                        {!erpManaged && (
+                           <button
+                              onClick={handleAddRole}
+                              className="bg-purple-600 text-white p-2 rounded-lg hover:bg-purple-700 shadow-md transition-all active:scale-95 flex items-center justify-center"
+                              title="Crear Nuevo Rol"
+                           >
+                              <Plus size={18} strokeWidth={3} />
+                           </button>
+                        )}
                      </div>
 
                      <div className="flex-1 overflow-y-auto bg-slate-50/70 p-3">
@@ -799,7 +820,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
                                  </div>
                                  <div>
                                     {/* Editable Name if not system */}
-                                    {!editingRole.isSystem ? (
+                                    {!editingRole.isSystem && !erpManaged ? (
                                        <div className="relative group">
                                           <input
                                              type="text"
@@ -814,12 +835,12 @@ const TeamHub: React.FC<TeamHubProps> = ({
                                        <h2 className="text-3xl font-black text-gray-800">{editingRole.name}</h2>
                                     )}
                                  <p className="text-gray-500 text-sm mt-1">
-                                       {editingRole.isSystem ? 'Rol de sistema (Solo lectura parcial).' : 'Define los accesos para este perfil.'}
+                                       {erpManaged ? 'Permisos definidos por el ERP (solo lectura).' : editingRole.isSystem ? 'Rol de sistema (Solo lectura parcial).' : 'Define los accesos para este perfil.'}
                                     </p>
                                  </div>
                               </div>
 
-                              <div className="flex items-center gap-3">
+                              {!erpManaged && <div className="flex items-center gap-3">
                                  <button
                                     onClick={handleSaveRoles}
                                     disabled={roleSaveStatus === 'saving'}
@@ -836,7 +857,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
                                        <Trash2 size={16} /> Eliminar Rol
                                     </button>
                                  )}
-                              </div>
+                              </div>}
                            </div>
 
                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -865,7 +886,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
                                                 <div
                                                    key={perm.key}
                                                    onClick={() => togglePermission(editingRole.id, perm.key)}
-                                                   className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all cursor-pointer ${isEnabled
+                                                   className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all ${erpManaged ? 'cursor-default' : 'cursor-pointer'} ${isEnabled
                                                       ? 'bg-purple-50 border-purple-500 shadow-sm'
                                                       : 'bg-white border-gray-100 hover:border-gray-300'
                                                       }`}
@@ -909,6 +930,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
                                        <div
                                           key={moduleId}
                                           onClick={() => {
+                                             if (erpManaged) return;
                                              const currentHidden = editingRole.zReportConfig?.hiddenModules || [];
                                              let newHidden;
                                              if (isHidden) {
@@ -926,7 +948,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
                                              setEditingRole(newRole);
                                              onUpdateRoles(roles.map(r => r.id === newRole.id ? newRole : r));
                                           }}
-                                          className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all cursor-pointer ${isVisible
+                                          className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all ${erpManaged ? 'cursor-default' : 'cursor-pointer'} ${isVisible
                                              ? 'bg-blue-50 border-blue-500 shadow-sm'
                                              : 'bg-white border-gray-100 hover:border-gray-300 opacity-60'
                                              }`}
