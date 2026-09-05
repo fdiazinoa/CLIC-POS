@@ -8263,6 +8263,23 @@ const AppContent: React.FC = () => {
     }
   };
 
+  const handleTeamUsersUpdate = async (newUsers: User[]) => {
+    if (isErpManagedPosUserRuntime()) {
+      console.warn('[ERP_ROLE_AUTHORITY] Local POS user changes are disabled.');
+      return;
+    }
+    await handleUsersUpdate(newUsers);
+  };
+
+  const handleTeamRolesUpdate = async (newRoles: RoleDefinition[]) => {
+    if (isErpManagedPosUserRuntime()) {
+      console.warn('[ERP_ROLE_AUTHORITY] Local role and permission changes are disabled.');
+      return;
+    }
+    setRoles(newRoles);
+    await db.save('roles', newRoles);
+  };
+
   // --- PERSISTENCE HANDLER FOR PARKED TICKETS ---
   const waitForTableInteractionIdle = async (): Promise<void> => {
     while (true) {
@@ -11500,14 +11517,12 @@ const AppContent: React.FC = () => {
           <TeamHub
             users={users}
             roles={roles}
-            onUpdateUsers={handleUsersUpdate}
-            onUpdateRoles={async (nextRoles) => {
-              setRoles(nextRoles);
-              await db.save('roles', nextRoles);
-            }}
+            onUpdateUsers={handleTeamUsersUpdate}
+            onUpdateRoles={handleTeamRolesUpdate}
             onClose={() => setCurrentView('POS')}
             mode="ATTENDANCE"
             canManageAttendance={canManageAttendance}
+            erpManaged={isErpManagedPosUserRuntime()}
           />
         );
       }
@@ -11535,8 +11550,8 @@ const AppContent: React.FC = () => {
             onUpdateTransfers={async (t) => { setTransfers(t); await db.save('transfers', t); }}
             onUpdateSequences={async (s) => { setInternalSequences(s); await db.save('internalSequences', s); }}
             onUpdateConfig={handleConfigUpdate}
-            onUpdateUsers={handleUsersUpdate}
-            onUpdateRoles={async (r) => { setRoles(r); await db.save('roles', r); }}
+            onUpdateUsers={handleTeamUsersUpdate}
+            onUpdateRoles={handleTeamRolesUpdate}
             onUpdateProducts={async (p) => { setProducts(p); /* db.save('products', p) removed for efficiency */ syncManager.broadcastChange('products', null, 'UPDATE').catch(console.error); }}
             onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
             onUpdateCustomers={async (c) => { setCustomers(c); await db.save('customers', c); }}
@@ -11584,6 +11599,7 @@ const AppContent: React.FC = () => {
               else setCurrentView('POS');
             }}
             currentDeviceId={deviceId}
+            erpRoleAuthority={isErpManagedPosUserRuntime()}
             onUpdateRooms={async (newRooms) => { setRooms(newRooms); await db.save('rooms', newRooms); }}
           />
         );
@@ -11604,8 +11620,8 @@ const AppContent: React.FC = () => {
             onUpdateTransfers={async (t) => { setTransfers(t); await db.save('transfers', t); }}
             onUpdateSequences={async (s) => { setInternalSequences(s); await db.save('internalSequences', s); }}
             onUpdateConfig={handleConfigUpdate}
-            onUpdateUsers={handleUsersUpdate}
-            onUpdateRoles={async (r) => { setRoles(r); await db.save('roles', r); }}
+            onUpdateUsers={handleTeamUsersUpdate}
+            onUpdateRoles={handleTeamRolesUpdate}
             onUpdateProducts={async (p) => { setProducts(p); await db.save('products', p); }}
             onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
             onUpdateCustomers={async (c) => { setCustomers(c); await db.save('customers', c); }}
@@ -11647,6 +11663,7 @@ const AppContent: React.FC = () => {
             }}
             currentDeviceId={deviceId}
             terminalId={(config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1'}
+            erpRoleAuthority={isErpManagedPosUserRuntime()}
           />
         );
 

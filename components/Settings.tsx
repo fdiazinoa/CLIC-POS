@@ -134,6 +134,7 @@ interface SettingsProps {
   initialData?: any;
   rooms: Room[];
   onUpdateRooms?: (rooms: Room[]) => void;
+  erpRoleAuthority?: boolean;
 }
 
 type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'MASTER_NUMBER_RANGES' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
@@ -499,6 +500,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
             onUpdateRoles={props.onUpdateRoles}
             onClose={() => setCurrentView('HOME')}
             mode="ADMIN"
+            erpManaged={props.erpRoleAuthority}
           />
         );
 

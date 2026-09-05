@@ -196,12 +196,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
   {
     id: 'ADMIN',
     name: 'Administrador',
-    permissions: [
-      'ALL',
-      'POS_VOID_ITEM', 'POS_VOID_TICKET', 'POS_DISCOUNT',
-      'POS_PRICE_OVERRIDE', 'POS_OPEN_DRAWER', 'POS_RETURNS',
-      'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHECKOUT', 'POS_CHANGE_TARIFF', 'POS_VIEW_X_REPORT', 'POS_CLOSE_X', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'TABLE_CONTROL_CENTER', 'SETTINGS_ACCESS', 'POS_ALLOW_ZERO_PRICE'
-    ],
+    permissions: ['ALL'],
     isSystem: true,
     maxDiscountPercent: 100
   },

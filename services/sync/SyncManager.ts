@@ -24,8 +24,12 @@ import {
     resolvePosUserId,
     type SyncedPosUser,
 } from '../../utils/posUserReconciliation';
-import { DEFAULT_ROLES } from '../../constants';
 import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig, PurchaseOrder, StockTransfer, ProductStock, ProductPrice, TariffPrice, Warehouse, User, RoleDefinition, Permission } from '../../types';
+import {
+    buildAuthoritativeErpSecuritySnapshot,
+    normalizeErpPermissions,
+    normalizeErpRole,
+} from '../../utils/erpSecuritySnapshot';
 import {
     applyTerminalConfigSnapshot,
     extractTerminalConfigSnapshot,
@@ -4053,7 +4057,7 @@ class SyncManager {
             roleObject.id ??
             roleObject.code ??
             row.role
-        ) || 'CASHIER';
+        );
     }
 
     private normalizeSnapshotPosUser(raw: unknown): (User & { syncSource?: 'ERP_SNAPSHOT' }) | null {
@@ -4111,6 +4115,9 @@ class SyncManager {
         }
 
         const roleId = this.normalizeSnapshotRoleId(row);
+        if (!roleId) {
+            return null;
+        }
         const photo = this.snapshotText(
             row.photo ??
             row.avatar ??
@@ -4140,88 +4147,66 @@ class SyncManager {
         return explicitlyRemovesPosUser(raw);
     }
 
-    private normalizeSnapshotPermissions(value: unknown, fallback: Permission[]): Permission[] {
-        const values = Array.isArray(value)
-            ? value
-            : typeof value === 'string'
-                ? value.split(/[,\s|]+/)
-                : [];
-        const permissions = Array.from(new Set(
-            values
-                .map((permission) => this.snapshotText(permission).toUpperCase())
-                .filter(Boolean)
-        )) as Permission[];
-
-        return permissions.length > 0 ? permissions : fallback;
+    private normalizeSnapshotPermissions(value: unknown): Permission[] | null {
+        return normalizeErpPermissions(value);
     }
 
-    private normalizeSnapshotPosRole(raw: unknown): (RoleDefinition & { syncSource?: 'ERP_SNAPSHOT' }) | null {
+    private normalizeSnapshotPosRole(raw: unknown): RoleDefinition | null {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
             return null;
         }
 
-        const row = raw as Record<string, unknown>;
-        const id = this.snapshotText(
-            row.id ??
-            row.pos_role_id ??
-            row.posRoleId ??
-            row.pos_role_code ??
-            row.posRoleCode ??
-            row.role_id ??
-            row.roleId ??
-            row.code
-        );
-        if (!id) {
-            return null;
-        }
-
-        const fallbackRole = DEFAULT_ROLES.find((role) => role.id === id);
-        const name = this.snapshotText(row.name ?? row.nombre ?? row.label ?? row.description) || fallbackRole?.name || id;
-        const permissions = this.normalizeSnapshotPermissions(
-            row.permissions ?? row.permission_keys ?? row.permissionKeys ?? row.pos_permissions ?? row.posPermissions,
-            fallbackRole?.permissions || []
-        );
-        const maxDiscount = Number(row.maxDiscountPercent ?? row.max_discount_percent ?? fallbackRole?.maxDiscountPercent);
-        const isSystem = this.snapshotBool(row.isSystem ?? row.is_system) ?? fallbackRole?.isSystem;
-
-        return {
-            ...(fallbackRole || {}),
-            id,
-            name,
-            permissions,
-            ...(Number.isFinite(maxDiscount) ? { maxDiscountPercent: maxDiscount } : {}),
-            ...(typeof isSystem === 'boolean' ? { isSystem } : {}),
-            syncSource: 'ERP_SNAPSHOT',
-        };
+        return normalizeErpRole(raw);
     }
 
     private async applySnapshotPosRoles(incomingItems: unknown[]): Promise<number> {
         const normalizedRoles = (Array.isArray(incomingItems) ? incomingItems : [])
             .map((item) => this.normalizeSnapshotPosRole(item))
-            .filter(Boolean) as Array<RoleDefinition & { syncSource?: 'ERP_SNAPSHOT' }>;
+            .filter(Boolean) as RoleDefinition[];
 
-        if (normalizedRoles.length === 0) {
-            return 0;
+        if (normalizedRoles.length !== incomingItems.length) {
+            throw new Error('Snapshot de roles ERP inválido; no se modificó el catálogo local.');
         }
-
-        const existingRoles = ((await db.get('roles')) as Array<RoleDefinition & { syncSource?: 'ERP_SNAPSHOT' }>) || [];
-        const rolesById = new Map<string, RoleDefinition & { syncSource?: 'ERP_SNAPSHOT' }>();
-        [...DEFAULT_ROLES, ...(Array.isArray(existingRoles) ? existingRoles : [])].forEach((role) => {
-            if (role?.id) rolesById.set(role.id, role as RoleDefinition & { syncSource?: 'ERP_SNAPSHOT' });
-        });
-
-        normalizedRoles.forEach((role) => {
-            const existing = rolesById.get(role.id);
-            rolesById.set(role.id, {
-                ...(existing || {}),
-                ...role,
-                permissions: role.permissions.length > 0 ? role.permissions : existing?.permissions || [],
-            });
-        });
-
-        await db.save('roles', Array.from(rolesById.values()));
+        await db.save('roles', normalizedRoles);
         window.dispatchEvent(new CustomEvent('rolesUpdated'));
         return normalizedRoles.length;
+    }
+
+    private async applyAuthoritativeErpSecuritySnapshot(
+        roleRows: unknown[] | null,
+        userRows: unknown[] | null,
+    ): Promise<{ roles: number; users: number }> {
+        const previousRoles = ((await db.get('roles')) as RoleDefinition[]) || [];
+        const previousUsers = ((await db.get('users')) as User[]) || [];
+        const next = buildAuthoritativeErpSecuritySnapshot({
+            roleRows,
+            userRows,
+            existingRoles: Array.isArray(previousRoles) ? previousRoles : [],
+            existingUsers: Array.isArray(previousUsers) ? previousUsers : [],
+        });
+
+        try {
+            if (next.rolesChanged) await db.save('roles', next.roles);
+            if (next.usersChanged) await db.save('users', next.users);
+        } catch (error) {
+            // Best-effort rollback: roles and users form one logical security snapshot.
+            await Promise.allSettled([
+                db.save('roles', previousRoles),
+                db.save('users', previousUsers),
+            ]);
+            throw error;
+        }
+
+        if (next.rolesChanged) window.dispatchEvent(new CustomEvent('rolesUpdated'));
+        if (next.usersChanged) window.dispatchEvent(new CustomEvent('usersUpdated'));
+        console.info('[SYNC_SECURITY] authoritative_erp_snapshot_applied', {
+            roles: next.roles.length,
+            users: next.users.length,
+        });
+        return {
+            roles: next.rolesChanged ? next.roles.length : 0,
+            users: next.usersChanged ? next.users.length : 0,
+        };
     }
 
     private async applySnapshotPosUsers(
@@ -4568,13 +4553,18 @@ class SyncManager {
         results.productGroups = catalogClassificationResults.productGroups;
 
         const roleRows = this.collectSnapshotMasterRows(snapshot, ['pos_roles', 'roles']);
-        if (roleRows !== null) {
-            results.roles = await this.applySnapshotPosRoles(roleRows);
-        }
-
         const userRows = this.collectSnapshotMasterRows(snapshot, ['pos_users', 'users']);
-        if (userRows !== null) {
-            results.users = await this.applySnapshotPosUsers(userRows, options?.terminalIds || []);
+        if (syncPolicy.resolve().kind === 'ERP_ACTIVE' && (roleRows !== null || userRows !== null)) {
+            const security = await this.applyAuthoritativeErpSecuritySnapshot(roleRows, userRows);
+            results.roles = security.roles;
+            results.users = security.users;
+        } else {
+            if (roleRows !== null) {
+                results.roles = await this.applySnapshotPosRoles(roleRows);
+            }
+            if (userRows !== null) {
+                results.users = await this.applySnapshotPosUsers(userRows, options?.terminalIds || []);
+            }
         }
 
         const collections: Array<{

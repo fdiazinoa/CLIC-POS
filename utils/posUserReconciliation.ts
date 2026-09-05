@@ -61,25 +61,19 @@ export interface SelectPosUsersForRuntimeOptions {
   fallbackUsers?: SyncedPosUser[];
 }
 
-/**
- * ERP users take precedence over demo seeds. A locally-created operator is not
- * proof that the ERP roster arrived, so keep the seeds available until at least
- * one real ERP snapshot user exists. Local operators always remain visible.
- */
+/** ERP mode exposes only the last authoritative active roster persisted offline. */
 export const selectPosUsersForRuntime = (
   users: unknown,
-  { erpManaged, fallbackUsers = [] }: SelectPosUsersForRuntimeOptions,
+  { erpManaged }: SelectPosUsersForRuntimeOptions,
 ): SyncedPosUser[] => {
   const localUsers = Array.isArray(users) ? users as SyncedPosUser[] : [];
-  if (!erpManaged) return localUsers;
+  if (!erpManaged) return localUsers.filter((user) => user?.isActive !== false);
 
-  const operationalUsers = withoutDefaultSeedPosUsers(localUsers);
-  if (hasErpSnapshotPosUsers(localUsers)) return operationalUsers;
-
-  const preservedSeeds = localUsers.filter(isDefaultSeedPosUser);
-  if (preservedSeeds.length > 0) return [...preservedSeeds, ...operationalUsers];
-
-  return [...fallbackUsers.filter(isDefaultSeedPosUser), ...operationalUsers];
+  // In ERP mode neither demo seeds nor locally-created users may become an
+  // alternate authorization source while the terminal is offline.
+  return localUsers.filter((user) => (
+    user?.syncSource === 'ERP_SNAPSHOT' && user?.isActive !== false
+  ));
 };
 
 export const posUserRostersMatch = (left: unknown, right: unknown): boolean => {
@@ -94,6 +88,8 @@ export const posUserRostersMatch = (left: unknown, right: unknown): boolean => {
         roleId: asText(user?.roleId),
         photo: asText(user?.photo),
         syncSource: asText(user?.syncSource),
+        isActive: user?.isActive ?? true,
+        version: user?.version ?? null,
         biometrics: user?.biometrics ?? null,
       };
     })
