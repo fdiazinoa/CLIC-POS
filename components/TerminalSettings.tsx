@@ -870,7 +870,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  </div>
                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                     {(config.paymentMethods || [])
-                                       .filter(method => method.isEnabled !== false && method.type !== 'CASH')
+                                       .filter(method => method.isEnabled !== false && !['CASH', 'CREDIT', 'PENDING', 'PENDIENTE'].includes(String(method.type || '').toUpperCase()))
                                        .map(method => {
                                           const checked = (activeTerminal.config.workflow.session.zReportDeclaredPaymentMethodIds || []).includes(method.id);
                                           return (
@@ -889,7 +889,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                              </label>
                                           );
                                        })}
-                                    {(config.paymentMethods || []).filter(method => method.isEnabled !== false && method.type !== 'CASH').length === 0 && (
+                                    {(config.paymentMethods || []).filter(method => method.isEnabled !== false && !['CASH', 'CREDIT', 'PENDING', 'PENDIENTE'].includes(String(method.type || '').toUpperCase())).length === 0 && (
                                        <p className="text-sm text-slate-400">No hay formas no efectivas habilitadas.</p>
                                     )}
                                  </div>
