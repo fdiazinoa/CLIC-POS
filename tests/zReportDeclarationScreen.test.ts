@@ -18,15 +18,21 @@ test('el cierre no ciego muestra solo el resumen financiero y las formas de pago
 
 test('la captura prioriza formas declarables y luego el efectivo multimoneda', () => {
   assert.match(source, /className="order-1 bg-white[^\"]+"/);
-  assert.match(source, /className=\{`order-2 bg-white/);
+  assert.match(source, /className="order-2 bg-white/);
   assert.match(source, /Formas de pago a declarar/);
   assert.match(source, /Desglose de efectivo/);
   assert.match(source, /currenciesRequiringCashCount\.map/);
   assert.match(source, /getDenominationsForCurrency\(currencyCode\)/);
+  assert.match(source, /Efectivo · \{currencyCode\}/);
+  assert.match(source, /Calculado del desglose/);
+  assert.match(source, /aria-live="polite"/);
+  assert.match(source, /setSelectedCashCurrency\(currencyCode\)/);
+  assert.match(source, /lineTotal\.toFixed\(2\)/);
+  assert.match(source, /lg:grid-cols-2/);
 });
 
 test('el cierre ciego no revela esperados ni diferencias durante la captura', () => {
   assert.match(source, /!isBlindClose && hasValue && !useDenominationCount/);
   assert.match(source, /\{!isBlindClose && \(\s*<div className="flex items-center justify-between text-xs">/);
-  assert.match(source, /isBlindClose \? 'grid-cols-1' : 'grid-cols-2'/);
+  assert.match(source, /Esperado: \{symbol\}/);
 });
