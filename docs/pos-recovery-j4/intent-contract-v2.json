@@ -1,0 +1,218 @@
+{
+  "version": "pos.intent.bundle.j4",
+  "agreementStatus": "UNAGREED",
+  "hashRule": "SHA256(UTF8(JCS(intent)))",
+  "commonFields": [
+    "domain",
+    "command",
+    "version",
+    "commandId",
+    "scope",
+    "storageEpoch",
+    "openSetId",
+    "preparedAt",
+    "expectedSetRevision",
+    "expectedSeries",
+    "artifacts"
+  ],
+  "scopeFields": [
+    "tenantId",
+    "companyId",
+    "storeId",
+    "terminalId"
+  ],
+  "seriesFields": [
+    "seriesId",
+    "reservationId",
+    "expectedRevision",
+    "expectedNext"
+  ],
+  "artifactRefFields": [
+    "role",
+    "profileVersion",
+    "artifactHash"
+  ],
+  "commands": {
+    "SALE_CREATE": {
+      "version": 2,
+      "domain": "pos.intent.sale_create.v2",
+      "artifactRoles": [
+        "saleDraft",
+        "inventoryPlan",
+        "paymentEvidence",
+        "executionContext"
+      ],
+      "profileVersionByRole": {
+        "saleDraft": "pos.intent-artifact.saleDraft.j4",
+        "inventoryPlan": "pos.intent-artifact.inventoryPlan.j4",
+        "paymentEvidence": "pos.intent-artifact.paymentEvidence.j4",
+        "executionContext": "pos.intent-artifact.executionContext.j4"
+      },
+      "numbering": {
+        "presence": "REQUIRED",
+        "purpose": "TICKET"
+      }
+    },
+    "REFUND_CREATE": {
+      "version": 2,
+      "domain": "pos.intent.refund_create.v2",
+      "artifactRoles": [
+        "refundDraft",
+        "originalBefore",
+        "inventoryPlan",
+        "refundEvidence",
+        "executionContext"
+      ],
+      "profileVersionByRole": {
+        "refundDraft": "pos.intent-artifact.refundDraft.j4",
+        "originalBefore": "pos.intent-artifact.originalBefore.j4",
+        "inventoryPlan": "pos.intent-artifact.inventoryPlan.j4",
+        "refundEvidence": "pos.intent-artifact.refundEvidence.j4",
+        "executionContext": "pos.intent-artifact.executionContext.j4"
+      },
+      "numbering": {
+        "presence": "REQUIRED",
+        "purpose": "CREDIT_NOTE"
+      }
+    },
+    "COLLECTION_CREATE": {
+      "version": 2,
+      "domain": "pos.intent.collection_create.v2",
+      "artifactRoles": [
+        "collectionDraft",
+        "allocationPlan",
+        "documentsBefore",
+        "customerBefore",
+        "executionContext"
+      ],
+      "profileVersionByRole": {
+        "collectionDraft": "pos.intent-artifact.collectionDraft.j4",
+        "allocationPlan": "pos.intent-artifact.allocationPlan.j4",
+        "documentsBefore": "pos.intent-artifact.documentsBefore.j4",
+        "customerBefore": "pos.intent-artifact.customerBefore.j4",
+        "executionContext": "pos.intent-artifact.executionContext.j4"
+      },
+      "numbering": {
+        "presence": "REQUIRED",
+        "purpose": "PAYMENT_IN"
+      }
+    },
+    "BOOKING_ADVANCE_CREATE": {
+      "version": 2,
+      "domain": "pos.intent.booking_advance_create.v2",
+      "artifactRoles": [
+        "collectionDraft",
+        "bookingBefore",
+        "customerBefore",
+        "executionContext"
+      ],
+      "profileVersionByRole": {
+        "collectionDraft": "pos.intent-artifact.collectionDraft.j4",
+        "bookingBefore": "pos.intent-artifact.bookingBefore.j4",
+        "customerBefore": "pos.intent-artifact.customerBefore.j4",
+        "executionContext": "pos.intent-artifact.executionContext.j4"
+      },
+      "numbering": {
+        "presence": "OPTIONAL_EXPLICIT",
+        "purpose": "ADVANCE_RECEIPT"
+      }
+    },
+    "CASH_CREATE": {
+      "version": 2,
+      "domain": "pos.intent.cash_create.v2",
+      "artifactRoles": [
+        "cashDraft",
+        "executionContext"
+      ],
+      "profileVersionByRole": {
+        "cashDraft": "pos.intent-artifact.cashDraft.j4",
+        "executionContext": "pos.intent-artifact.executionContext.j4"
+      },
+      "numbering": {
+        "presence": "FORBIDDEN",
+        "purpose": "NONE"
+      }
+    },
+    "WALLET_POST": {
+      "version": 2,
+      "domain": "pos.intent.wallet_post.v2",
+      "artifactRoles": [
+        "walletDraft",
+        "walletBefore",
+        "linkedDocument",
+        "executionContext"
+      ],
+      "profileVersionByRole": {
+        "walletDraft": "pos.intent-artifact.walletDraft.j4",
+        "walletBefore": "pos.intent-artifact.walletBefore.j4",
+        "linkedDocument": "pos.intent-artifact.linkedDocument.j4",
+        "executionContext": "pos.intent-artifact.executionContext.j4"
+      },
+      "numbering": {
+        "presence": "FORBIDDEN",
+        "purpose": "NONE"
+      }
+    },
+    "FISCAL_REVISION": {
+      "version": 2,
+      "domain": "pos.intent.fiscal_revision.v2",
+      "artifactRoles": [
+        "originalBefore",
+        "fiscalResult",
+        "executionContext"
+      ],
+      "profileVersionByRole": {
+        "originalBefore": "pos.intent-artifact.originalBefore.j4",
+        "fiscalResult": "pos.intent-artifact.fiscalResult.j4",
+        "executionContext": "pos.intent-artifact.executionContext.j4"
+      },
+      "numbering": {
+        "presence": "FORBIDDEN",
+        "purpose": "NONE"
+      }
+    },
+    "CLOSE_SET": {
+      "version": 2,
+      "domain": "pos.intent.close_set.v2",
+      "artifactRoles": [
+        "memberSelection",
+        "configuration",
+        "declaration",
+        "previousClose",
+        "executionContext",
+        "closeControl"
+      ],
+      "profileVersionByRole": {
+        "memberSelection": "pos.intent-artifact.memberSelection.j4",
+        "configuration": "pos.intent-artifact.configuration.j4",
+        "declaration": "pos.intent-artifact.declaration.j4",
+        "previousClose": "pos.intent-artifact.previousClose.j4",
+        "executionContext": "pos.intent-artifact.executionContext.j4",
+        "closeControl": "pos.intent-artifact.closeControl.j4"
+      },
+      "numbering": {
+        "presence": "REQUIRED",
+        "purpose": "Z_REPORT"
+      }
+    }
+  },
+  "blockedCommands": [
+    "COMMERCIAL_VOID",
+    "CASH_REFUND_UNVERIFIED"
+  ],
+  "assignedAfterIntent": [
+    "journalSequence",
+    "newRevision",
+    "chainHash",
+    "displayNumber",
+    "seriesNumber",
+    "closedAt",
+    "openedAtFallback",
+    "manifestHash",
+    "sealHash",
+    "acceptanceDigest",
+    "transportAttempt",
+    "activationId"
+  ],
+  "note": "Explicit v2 proposal. v1 archived bindings are not upgraded. Semantic fixture acceptance is not operational authorization."
+}
