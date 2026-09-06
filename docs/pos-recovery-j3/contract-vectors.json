@@ -1,0 +1,822 @@
+{
+  "agreementStatus": "UNAGREED",
+  "exactZEligible": false,
+  "closeAuthorization": "NOT_GRANTED",
+  "notice": "Intent artifacts are synthetic binding stubs, NOT accepted native profiles. Registry context is hypothetical and independent of request.",
+  "artifacts": {
+    "6f96806a0be17ecd59808da653ac6cb92231c9c4d195415d20428d14d67a98eb": {
+      "schemaVersion": "pos.intent-artifact.inventoryPlan.j3",
+      "role": "inventoryPlan",
+      "document": {
+        "fixtureOnly": true,
+        "label": "inventoryPlan"
+      }
+    },
+    "af4e34469907c1c074e967639632e75df106475dd57239de6d517bb8d50f3a5e": {
+      "schemaVersion": "pos.intent-artifact.paymentEvidence.j3",
+      "role": "paymentEvidence",
+      "document": {
+        "fixtureOnly": true,
+        "label": "paymentEvidence"
+      }
+    },
+    "54a87b46ef13610ec964c3e5c1820e080bff8294f283a4a48d99bc0fedcbd83e": {
+      "schemaVersion": "pos.intent-artifact.saleDraft.j3",
+      "role": "saleDraft",
+      "document": {
+        "fixtureOnly": true,
+        "label": "saleDraft"
+      }
+    },
+    "064bf6ffa2a4299d9494ef0339835bd99e352f24a3e16afc01b9a761960dedcd": {
+      "schemaVersion": "pos.intent-artifact.originalBefore.j3",
+      "role": "originalBefore",
+      "document": {
+        "fixtureOnly": true,
+        "label": "originalBefore"
+      }
+    },
+    "f134c56f949478b10d8510f8bd5b44ca9b382bd3766f3539d4b3c54ec057bb1e": {
+      "schemaVersion": "pos.intent-artifact.refundDraft.j3",
+      "role": "refundDraft",
+      "document": {
+        "fixtureOnly": true,
+        "label": "refundDraft"
+      }
+    },
+    "f1424322bf9c0835767aaa3fdfadff65d2ccd1124c4ceb61b566caea1104ac5b": {
+      "schemaVersion": "pos.intent-artifact.refundEvidence.j3",
+      "role": "refundEvidence",
+      "document": {
+        "fixtureOnly": true,
+        "label": "refundEvidence"
+      }
+    },
+    "8878996492e3d4e2d665623e1eac1523b8ac1c3c089701958bc2d55ba68bacc1": {
+      "schemaVersion": "pos.intent-artifact.allocationPlan.j3",
+      "role": "allocationPlan",
+      "document": {
+        "fixtureOnly": true,
+        "label": "allocationPlan"
+      }
+    },
+    "ef79296acbd12640445f6fe3a2225ec8a2a6484eb6fc95cb8d9cbd0b6c2107b6": {
+      "schemaVersion": "pos.intent-artifact.collectionDraft.j3",
+      "role": "collectionDraft",
+      "document": {
+        "fixtureOnly": true,
+        "label": "collectionDraft"
+      }
+    },
+    "aaaf9af0ad7401e77746229d648cd8b697cfc4072769791d481aef41c36730b0": {
+      "schemaVersion": "pos.intent-artifact.customerBefore.j3",
+      "role": "customerBefore",
+      "document": {
+        "fixtureOnly": true,
+        "label": "customerBefore"
+      }
+    },
+    "fff8fd86232c314c6634e3df1085cf42cc795455320be8fa595433f35f0ba826": {
+      "schemaVersion": "pos.intent-artifact.documentsBefore.j3",
+      "role": "documentsBefore",
+      "document": {
+        "fixtureOnly": true,
+        "label": "documentsBefore"
+      }
+    },
+    "24160008303972be475fe62fb20c1fc1305baf567b61718407a24517a3b74706": {
+      "schemaVersion": "pos.intent-artifact.bookingBefore.j3",
+      "role": "bookingBefore",
+      "document": {
+        "fixtureOnly": true,
+        "label": "bookingBefore"
+      }
+    },
+    "c43a1ac005b17bc98586e943719e2e60bd469f9870e5eb440ca2c75689452088": {
+      "schemaVersion": "pos.intent-artifact.cashDraft.j3",
+      "role": "cashDraft",
+      "document": {
+        "fixtureOnly": true,
+        "label": "cashDraft"
+      }
+    },
+    "82156d9db98431758180a684b682872f6a2b827ef2d1d28a92bcf9dd45cc8975": {
+      "schemaVersion": "pos.intent-artifact.linkedDocument.j3",
+      "role": "linkedDocument",
+      "document": {
+        "fixtureOnly": true,
+        "label": "linkedDocument"
+      }
+    },
+    "05f70b4aef6d42f223317828d39b58021bb2fe73f61f787d400d9f3b03f015ce": {
+      "schemaVersion": "pos.intent-artifact.walletBefore.j3",
+      "role": "walletBefore",
+      "document": {
+        "fixtureOnly": true,
+        "label": "walletBefore"
+      }
+    },
+    "9647f39386ae9c2b55e5c50502f705bc209654365edd2e4fbb58dbfa8600fa2e": {
+      "schemaVersion": "pos.intent-artifact.walletDraft.j3",
+      "role": "walletDraft",
+      "document": {
+        "fixtureOnly": true,
+        "label": "walletDraft"
+      }
+    },
+    "6c57486097e2c13997a748ae8bcff2fac9ab7396ce9d86ef3552c8b0e7897695": {
+      "schemaVersion": "pos.intent-artifact.fiscalResult.j3",
+      "role": "fiscalResult",
+      "document": {
+        "fixtureOnly": true,
+        "label": "fiscalResult"
+      }
+    },
+    "18a48aed865e075771f2fea577952e210057f23b804a5f447d625668eebb2e1d": {
+      "schemaVersion": "pos.intent-artifact.configuration.j3",
+      "role": "configuration",
+      "document": {
+        "fixtureOnly": true,
+        "label": "configuration"
+      }
+    },
+    "0cff002c92a3b4c6eabd9947a1877eae05b49784282d3d263fd003b7ccefed02": {
+      "schemaVersion": "pos.intent-artifact.declaration.j3",
+      "role": "declaration",
+      "document": {
+        "fixtureOnly": true,
+        "label": "declaration"
+      }
+    },
+    "8c91bbeca360afeb3ad3e59ff5e00d4ce8d56667163e9f525a15fd6e7257e91a": {
+      "schemaVersion": "pos.intent-artifact.memberSelection.j3",
+      "role": "memberSelection",
+      "document": {
+        "fixtureOnly": true,
+        "label": "memberSelection"
+      }
+    },
+    "bb3a204e40badbc82267305cad25d0ed30d3cf819df1a1249d64d3e31d828a99": {
+      "schemaVersion": "pos.intent-artifact.previousClose.j3",
+      "role": "previousClose",
+      "document": {
+        "fixtureOnly": true,
+        "label": "previousClose"
+      }
+    }
+  },
+  "commands": [
+    {
+      "intent": {
+        "domain": "pos.intent.sale_create.v1",
+        "command": "SALE_CREATE",
+        "version": 1,
+        "commandId": "00000000-0000-4000-8000-000000000001",
+        "scope": {
+          "tenantId": "11111111-1111-4111-8111-111111111111",
+          "companyId": "22222222-2222-4222-8222-222222222222",
+          "storeId": "33333333-3333-4333-8333-333333333333",
+          "terminalId": "44444444-4444-4444-8444-444444444444"
+        },
+        "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "preparedAt": "2026-09-06T19:00:00.000Z",
+        "expectedSetRevision": "2",
+        "expectedSeries": [],
+        "artifacts": [
+          {
+            "role": "inventoryPlan",
+            "profileVersion": "pos.intent-artifact.inventoryPlan.j3",
+            "artifactHash": "6f96806a0be17ecd59808da653ac6cb92231c9c4d195415d20428d14d67a98eb"
+          },
+          {
+            "role": "paymentEvidence",
+            "profileVersion": "pos.intent-artifact.paymentEvidence.j3",
+            "artifactHash": "af4e34469907c1c074e967639632e75df106475dd57239de6d517bb8d50f3a5e"
+          },
+          {
+            "role": "saleDraft",
+            "profileVersion": "pos.intent-artifact.saleDraft.j3",
+            "artifactHash": "54a87b46ef13610ec964c3e5c1820e080bff8294f283a4a48d99bc0fedcbd83e"
+          }
+        ]
+      },
+      "vector": {
+        "name": "SALE_CREATE",
+        "input": {
+          "domain": "pos.intent.sale_create.v1",
+          "command": "SALE_CREATE",
+          "version": 1,
+          "commandId": "00000000-0000-4000-8000-000000000001",
+          "scope": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "companyId": "22222222-2222-4222-8222-222222222222",
+            "storeId": "33333333-3333-4333-8333-333333333333",
+            "terminalId": "44444444-4444-4444-8444-444444444444"
+          },
+          "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          "preparedAt": "2026-09-06T19:00:00.000Z",
+          "expectedSetRevision": "2",
+          "expectedSeries": [],
+          "artifacts": [
+            {
+              "role": "inventoryPlan",
+              "profileVersion": "pos.intent-artifact.inventoryPlan.j3",
+              "artifactHash": "6f96806a0be17ecd59808da653ac6cb92231c9c4d195415d20428d14d67a98eb"
+            },
+            {
+              "role": "paymentEvidence",
+              "profileVersion": "pos.intent-artifact.paymentEvidence.j3",
+              "artifactHash": "af4e34469907c1c074e967639632e75df106475dd57239de6d517bb8d50f3a5e"
+            },
+            {
+              "role": "saleDraft",
+              "profileVersion": "pos.intent-artifact.saleDraft.j3",
+              "artifactHash": "54a87b46ef13610ec964c3e5c1820e080bff8294f283a4a48d99bc0fedcbd83e"
+            }
+          ]
+        },
+        "canonicalUtf8": "{\"artifacts\":[{\"artifactHash\":\"6f96806a0be17ecd59808da653ac6cb92231c9c4d195415d20428d14d67a98eb\",\"profileVersion\":\"pos.intent-artifact.inventoryPlan.j3\",\"role\":\"inventoryPlan\"},{\"artifactHash\":\"af4e34469907c1c074e967639632e75df106475dd57239de6d517bb8d50f3a5e\",\"profileVersion\":\"pos.intent-artifact.paymentEvidence.j3\",\"role\":\"paymentEvidence\"},{\"artifactHash\":\"54a87b46ef13610ec964c3e5c1820e080bff8294f283a4a48d99bc0fedcbd83e\",\"profileVersion\":\"pos.intent-artifact.saleDraft.j3\",\"role\":\"saleDraft\"}],\"command\":\"SALE_CREATE\",\"commandId\":\"00000000-0000-4000-8000-000000000001\",\"domain\":\"pos.intent.sale_create.v1\",\"expectedSeries\":[],\"expectedSetRevision\":\"2\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"preparedAt\":\"2026-09-06T19:00:00.000Z\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\",\"version\":1}",
+        "utf8Hex": "7b22617274696661637473223a5b7b22617274696661637448617368223a2236663936383036613062653137656364353938303864613635336163366362393232333163396334643139353431356432303432386431346436376139386562222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e696e76656e746f7279506c616e2e6a33222c22726f6c65223a22696e76656e746f7279506c616e227d2c7b22617274696661637448617368223a2261663465333434363939303763316330373465393637363339363332653735646631303634373564643537323339646536643531376262386435306633613565222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e7061796d656e7445766964656e63652e6a33222c22726f6c65223a227061796d656e7445766964656e6365227d2c7b22617274696661637448617368223a2235346138376234366566313336313065633936346333653563313832306530383062666638323934663238336134613438643939626330666564636264383365222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e73616c6544726166742e6a33222c22726f6c65223a2273616c654472616674227d5d2c22636f6d6d616e64223a2253414c455f435245415445222c22636f6d6d616e644964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303031222c22646f6d61696e223a22706f732e696e74656e742e73616c655f6372656174652e7631222c226578706563746564536572696573223a5b5d2c2265787065637465645365745265766973696f6e223a2232222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c2270726570617265644174223a22323032362d30392d30365431393a30303a30302e3030305a222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363222c2276657273696f6e223a317d",
+        "sha256": "6d240e603823b610eb4625834d5f64b66f21b68ecf025c74836f25c4cc91f81e"
+      }
+    },
+    {
+      "intent": {
+        "domain": "pos.intent.refund_create.v1",
+        "command": "REFUND_CREATE",
+        "version": 1,
+        "commandId": "00000000-0000-4000-8000-000000000002",
+        "scope": {
+          "tenantId": "11111111-1111-4111-8111-111111111111",
+          "companyId": "22222222-2222-4222-8222-222222222222",
+          "storeId": "33333333-3333-4333-8333-333333333333",
+          "terminalId": "44444444-4444-4444-8444-444444444444"
+        },
+        "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "preparedAt": "2026-09-06T19:00:00.000Z",
+        "expectedSetRevision": "2",
+        "expectedSeries": [],
+        "artifacts": [
+          {
+            "role": "inventoryPlan",
+            "profileVersion": "pos.intent-artifact.inventoryPlan.j3",
+            "artifactHash": "6f96806a0be17ecd59808da653ac6cb92231c9c4d195415d20428d14d67a98eb"
+          },
+          {
+            "role": "originalBefore",
+            "profileVersion": "pos.intent-artifact.originalBefore.j3",
+            "artifactHash": "064bf6ffa2a4299d9494ef0339835bd99e352f24a3e16afc01b9a761960dedcd"
+          },
+          {
+            "role": "refundDraft",
+            "profileVersion": "pos.intent-artifact.refundDraft.j3",
+            "artifactHash": "f134c56f949478b10d8510f8bd5b44ca9b382bd3766f3539d4b3c54ec057bb1e"
+          },
+          {
+            "role": "refundEvidence",
+            "profileVersion": "pos.intent-artifact.refundEvidence.j3",
+            "artifactHash": "f1424322bf9c0835767aaa3fdfadff65d2ccd1124c4ceb61b566caea1104ac5b"
+          }
+        ]
+      },
+      "vector": {
+        "name": "REFUND_CREATE",
+        "input": {
+          "domain": "pos.intent.refund_create.v1",
+          "command": "REFUND_CREATE",
+          "version": 1,
+          "commandId": "00000000-0000-4000-8000-000000000002",
+          "scope": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "companyId": "22222222-2222-4222-8222-222222222222",
+            "storeId": "33333333-3333-4333-8333-333333333333",
+            "terminalId": "44444444-4444-4444-8444-444444444444"
+          },
+          "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          "preparedAt": "2026-09-06T19:00:00.000Z",
+          "expectedSetRevision": "2",
+          "expectedSeries": [],
+          "artifacts": [
+            {
+              "role": "inventoryPlan",
+              "profileVersion": "pos.intent-artifact.inventoryPlan.j3",
+              "artifactHash": "6f96806a0be17ecd59808da653ac6cb92231c9c4d195415d20428d14d67a98eb"
+            },
+            {
+              "role": "originalBefore",
+              "profileVersion": "pos.intent-artifact.originalBefore.j3",
+              "artifactHash": "064bf6ffa2a4299d9494ef0339835bd99e352f24a3e16afc01b9a761960dedcd"
+            },
+            {
+              "role": "refundDraft",
+              "profileVersion": "pos.intent-artifact.refundDraft.j3",
+              "artifactHash": "f134c56f949478b10d8510f8bd5b44ca9b382bd3766f3539d4b3c54ec057bb1e"
+            },
+            {
+              "role": "refundEvidence",
+              "profileVersion": "pos.intent-artifact.refundEvidence.j3",
+              "artifactHash": "f1424322bf9c0835767aaa3fdfadff65d2ccd1124c4ceb61b566caea1104ac5b"
+            }
+          ]
+        },
+        "canonicalUtf8": "{\"artifacts\":[{\"artifactHash\":\"6f96806a0be17ecd59808da653ac6cb92231c9c4d195415d20428d14d67a98eb\",\"profileVersion\":\"pos.intent-artifact.inventoryPlan.j3\",\"role\":\"inventoryPlan\"},{\"artifactHash\":\"064bf6ffa2a4299d9494ef0339835bd99e352f24a3e16afc01b9a761960dedcd\",\"profileVersion\":\"pos.intent-artifact.originalBefore.j3\",\"role\":\"originalBefore\"},{\"artifactHash\":\"f134c56f949478b10d8510f8bd5b44ca9b382bd3766f3539d4b3c54ec057bb1e\",\"profileVersion\":\"pos.intent-artifact.refundDraft.j3\",\"role\":\"refundDraft\"},{\"artifactHash\":\"f1424322bf9c0835767aaa3fdfadff65d2ccd1124c4ceb61b566caea1104ac5b\",\"profileVersion\":\"pos.intent-artifact.refundEvidence.j3\",\"role\":\"refundEvidence\"}],\"command\":\"REFUND_CREATE\",\"commandId\":\"00000000-0000-4000-8000-000000000002\",\"domain\":\"pos.intent.refund_create.v1\",\"expectedSeries\":[],\"expectedSetRevision\":\"2\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"preparedAt\":\"2026-09-06T19:00:00.000Z\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\",\"version\":1}",
+        "utf8Hex": "7b22617274696661637473223a5b7b22617274696661637448617368223a2236663936383036613062653137656364353938303864613635336163366362393232333163396334643139353431356432303432386431346436376139386562222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e696e76656e746f7279506c616e2e6a33222c22726f6c65223a22696e76656e746f7279506c616e227d2c7b22617274696661637448617368223a2230363462663666666132613432393964393439346566303333393833356264393965333532663234613365313661666330316239613736313936306465646364222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e6f726967696e616c4265666f72652e6a33222c22726f6c65223a226f726967696e616c4265666f7265227d2c7b22617274696661637448617368223a2266313334633536663934393437386231306438353130663862643562343463613962333832626433373636663335333964346233633534656330353762623165222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e726566756e6444726166742e6a33222c22726f6c65223a22726566756e644472616674227d2c7b22617274696661637448617368223a2266313432343332326266396330383335373637616161336664666164666636356432636364313132346334636562363162353636636165613131303461633562222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e726566756e6445766964656e63652e6a33222c22726f6c65223a22726566756e6445766964656e6365227d5d2c22636f6d6d616e64223a22524546554e445f435245415445222c22636f6d6d616e644964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303032222c22646f6d61696e223a22706f732e696e74656e742e726566756e645f6372656174652e7631222c226578706563746564536572696573223a5b5d2c2265787065637465645365745265766973696f6e223a2232222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c2270726570617265644174223a22323032362d30392d30365431393a30303a30302e3030305a222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363222c2276657273696f6e223a317d",
+        "sha256": "152aa7b5d58581120f0a89054dc6adb89025cdd9646501079db4d800062fefbe"
+      }
+    },
+    {
+      "intent": {
+        "domain": "pos.intent.collection_create.v1",
+        "command": "COLLECTION_CREATE",
+        "version": 1,
+        "commandId": "00000000-0000-4000-8000-000000000003",
+        "scope": {
+          "tenantId": "11111111-1111-4111-8111-111111111111",
+          "companyId": "22222222-2222-4222-8222-222222222222",
+          "storeId": "33333333-3333-4333-8333-333333333333",
+          "terminalId": "44444444-4444-4444-8444-444444444444"
+        },
+        "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "preparedAt": "2026-09-06T19:00:00.000Z",
+        "expectedSetRevision": "2",
+        "expectedSeries": [],
+        "artifacts": [
+          {
+            "role": "allocationPlan",
+            "profileVersion": "pos.intent-artifact.allocationPlan.j3",
+            "artifactHash": "8878996492e3d4e2d665623e1eac1523b8ac1c3c089701958bc2d55ba68bacc1"
+          },
+          {
+            "role": "collectionDraft",
+            "profileVersion": "pos.intent-artifact.collectionDraft.j3",
+            "artifactHash": "ef79296acbd12640445f6fe3a2225ec8a2a6484eb6fc95cb8d9cbd0b6c2107b6"
+          },
+          {
+            "role": "customerBefore",
+            "profileVersion": "pos.intent-artifact.customerBefore.j3",
+            "artifactHash": "aaaf9af0ad7401e77746229d648cd8b697cfc4072769791d481aef41c36730b0"
+          },
+          {
+            "role": "documentsBefore",
+            "profileVersion": "pos.intent-artifact.documentsBefore.j3",
+            "artifactHash": "fff8fd86232c314c6634e3df1085cf42cc795455320be8fa595433f35f0ba826"
+          }
+        ]
+      },
+      "vector": {
+        "name": "COLLECTION_CREATE",
+        "input": {
+          "domain": "pos.intent.collection_create.v1",
+          "command": "COLLECTION_CREATE",
+          "version": 1,
+          "commandId": "00000000-0000-4000-8000-000000000003",
+          "scope": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "companyId": "22222222-2222-4222-8222-222222222222",
+            "storeId": "33333333-3333-4333-8333-333333333333",
+            "terminalId": "44444444-4444-4444-8444-444444444444"
+          },
+          "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          "preparedAt": "2026-09-06T19:00:00.000Z",
+          "expectedSetRevision": "2",
+          "expectedSeries": [],
+          "artifacts": [
+            {
+              "role": "allocationPlan",
+              "profileVersion": "pos.intent-artifact.allocationPlan.j3",
+              "artifactHash": "8878996492e3d4e2d665623e1eac1523b8ac1c3c089701958bc2d55ba68bacc1"
+            },
+            {
+              "role": "collectionDraft",
+              "profileVersion": "pos.intent-artifact.collectionDraft.j3",
+              "artifactHash": "ef79296acbd12640445f6fe3a2225ec8a2a6484eb6fc95cb8d9cbd0b6c2107b6"
+            },
+            {
+              "role": "customerBefore",
+              "profileVersion": "pos.intent-artifact.customerBefore.j3",
+              "artifactHash": "aaaf9af0ad7401e77746229d648cd8b697cfc4072769791d481aef41c36730b0"
+            },
+            {
+              "role": "documentsBefore",
+              "profileVersion": "pos.intent-artifact.documentsBefore.j3",
+              "artifactHash": "fff8fd86232c314c6634e3df1085cf42cc795455320be8fa595433f35f0ba826"
+            }
+          ]
+        },
+        "canonicalUtf8": "{\"artifacts\":[{\"artifactHash\":\"8878996492e3d4e2d665623e1eac1523b8ac1c3c089701958bc2d55ba68bacc1\",\"profileVersion\":\"pos.intent-artifact.allocationPlan.j3\",\"role\":\"allocationPlan\"},{\"artifactHash\":\"ef79296acbd12640445f6fe3a2225ec8a2a6484eb6fc95cb8d9cbd0b6c2107b6\",\"profileVersion\":\"pos.intent-artifact.collectionDraft.j3\",\"role\":\"collectionDraft\"},{\"artifactHash\":\"aaaf9af0ad7401e77746229d648cd8b697cfc4072769791d481aef41c36730b0\",\"profileVersion\":\"pos.intent-artifact.customerBefore.j3\",\"role\":\"customerBefore\"},{\"artifactHash\":\"fff8fd86232c314c6634e3df1085cf42cc795455320be8fa595433f35f0ba826\",\"profileVersion\":\"pos.intent-artifact.documentsBefore.j3\",\"role\":\"documentsBefore\"}],\"command\":\"COLLECTION_CREATE\",\"commandId\":\"00000000-0000-4000-8000-000000000003\",\"domain\":\"pos.intent.collection_create.v1\",\"expectedSeries\":[],\"expectedSetRevision\":\"2\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"preparedAt\":\"2026-09-06T19:00:00.000Z\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\",\"version\":1}",
+        "utf8Hex": "7b22617274696661637473223a5b7b22617274696661637448617368223a2238383738393936343932653364346532643636353632336531656163313532336238616331633363303839373031393538626332643535626136386261636331222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e616c6c6f636174696f6e506c616e2e6a33222c22726f6c65223a22616c6c6f636174696f6e506c616e227d2c7b22617274696661637448617368223a2265663739323936616362643132363430343435663666653361323232356563386132613634383465623666633935636238643963626430623663323130376236222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e636f6c6c656374696f6e44726166742e6a33222c22726f6c65223a22636f6c6c656374696f6e4472616674227d2c7b22617274696661637448617368223a2261616166396166306164373430316537373734363232396436343863643862363937636663343037323736393739316434383161656634316333363733306230222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e637573746f6d65724265666f72652e6a33222c22726f6c65223a22637573746f6d65724265666f7265227d2c7b22617274696661637448617368223a2266666638666438363233326333313463363633346533646631303835636634326363373935343535333230626538666135393534333366333566306261383236222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e646f63756d656e74734265666f72652e6a33222c22726f6c65223a22646f63756d656e74734265666f7265227d5d2c22636f6d6d616e64223a22434f4c4c454354494f4e5f435245415445222c22636f6d6d616e644964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303033222c22646f6d61696e223a22706f732e696e74656e742e636f6c6c656374696f6e5f6372656174652e7631222c226578706563746564536572696573223a5b5d2c2265787065637465645365745265766973696f6e223a2232222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c2270726570617265644174223a22323032362d30392d30365431393a30303a30302e3030305a222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363222c2276657273696f6e223a317d",
+        "sha256": "5d03296bb1c289f28e34f950fa0ff17c92f4b832ee45339ace988184664375fa"
+      }
+    },
+    {
+      "intent": {
+        "domain": "pos.intent.booking_advance_create.v1",
+        "command": "BOOKING_ADVANCE_CREATE",
+        "version": 1,
+        "commandId": "00000000-0000-4000-8000-000000000004",
+        "scope": {
+          "tenantId": "11111111-1111-4111-8111-111111111111",
+          "companyId": "22222222-2222-4222-8222-222222222222",
+          "storeId": "33333333-3333-4333-8333-333333333333",
+          "terminalId": "44444444-4444-4444-8444-444444444444"
+        },
+        "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "preparedAt": "2026-09-06T19:00:00.000Z",
+        "expectedSetRevision": "2",
+        "expectedSeries": [],
+        "artifacts": [
+          {
+            "role": "bookingBefore",
+            "profileVersion": "pos.intent-artifact.bookingBefore.j3",
+            "artifactHash": "24160008303972be475fe62fb20c1fc1305baf567b61718407a24517a3b74706"
+          },
+          {
+            "role": "collectionDraft",
+            "profileVersion": "pos.intent-artifact.collectionDraft.j3",
+            "artifactHash": "ef79296acbd12640445f6fe3a2225ec8a2a6484eb6fc95cb8d9cbd0b6c2107b6"
+          },
+          {
+            "role": "customerBefore",
+            "profileVersion": "pos.intent-artifact.customerBefore.j3",
+            "artifactHash": "aaaf9af0ad7401e77746229d648cd8b697cfc4072769791d481aef41c36730b0"
+          }
+        ]
+      },
+      "vector": {
+        "name": "BOOKING_ADVANCE_CREATE",
+        "input": {
+          "domain": "pos.intent.booking_advance_create.v1",
+          "command": "BOOKING_ADVANCE_CREATE",
+          "version": 1,
+          "commandId": "00000000-0000-4000-8000-000000000004",
+          "scope": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "companyId": "22222222-2222-4222-8222-222222222222",
+            "storeId": "33333333-3333-4333-8333-333333333333",
+            "terminalId": "44444444-4444-4444-8444-444444444444"
+          },
+          "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          "preparedAt": "2026-09-06T19:00:00.000Z",
+          "expectedSetRevision": "2",
+          "expectedSeries": [],
+          "artifacts": [
+            {
+              "role": "bookingBefore",
+              "profileVersion": "pos.intent-artifact.bookingBefore.j3",
+              "artifactHash": "24160008303972be475fe62fb20c1fc1305baf567b61718407a24517a3b74706"
+            },
+            {
+              "role": "collectionDraft",
+              "profileVersion": "pos.intent-artifact.collectionDraft.j3",
+              "artifactHash": "ef79296acbd12640445f6fe3a2225ec8a2a6484eb6fc95cb8d9cbd0b6c2107b6"
+            },
+            {
+              "role": "customerBefore",
+              "profileVersion": "pos.intent-artifact.customerBefore.j3",
+              "artifactHash": "aaaf9af0ad7401e77746229d648cd8b697cfc4072769791d481aef41c36730b0"
+            }
+          ]
+        },
+        "canonicalUtf8": "{\"artifacts\":[{\"artifactHash\":\"24160008303972be475fe62fb20c1fc1305baf567b61718407a24517a3b74706\",\"profileVersion\":\"pos.intent-artifact.bookingBefore.j3\",\"role\":\"bookingBefore\"},{\"artifactHash\":\"ef79296acbd12640445f6fe3a2225ec8a2a6484eb6fc95cb8d9cbd0b6c2107b6\",\"profileVersion\":\"pos.intent-artifact.collectionDraft.j3\",\"role\":\"collectionDraft\"},{\"artifactHash\":\"aaaf9af0ad7401e77746229d648cd8b697cfc4072769791d481aef41c36730b0\",\"profileVersion\":\"pos.intent-artifact.customerBefore.j3\",\"role\":\"customerBefore\"}],\"command\":\"BOOKING_ADVANCE_CREATE\",\"commandId\":\"00000000-0000-4000-8000-000000000004\",\"domain\":\"pos.intent.booking_advance_create.v1\",\"expectedSeries\":[],\"expectedSetRevision\":\"2\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"preparedAt\":\"2026-09-06T19:00:00.000Z\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\",\"version\":1}",
+        "utf8Hex": "7b22617274696661637473223a5b7b22617274696661637448617368223a2232343136303030383330333937326265343735666536326662323063316663313330356261663536376236313731383430376132343531376133623734373036222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e626f6f6b696e674265666f72652e6a33222c22726f6c65223a22626f6f6b696e674265666f7265227d2c7b22617274696661637448617368223a2265663739323936616362643132363430343435663666653361323232356563386132613634383465623666633935636238643963626430623663323130376236222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e636f6c6c656374696f6e44726166742e6a33222c22726f6c65223a22636f6c6c656374696f6e4472616674227d2c7b22617274696661637448617368223a2261616166396166306164373430316537373734363232396436343863643862363937636663343037323736393739316434383161656634316333363733306230222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e637573746f6d65724265666f72652e6a33222c22726f6c65223a22637573746f6d65724265666f7265227d5d2c22636f6d6d616e64223a22424f4f4b494e475f414456414e43455f435245415445222c22636f6d6d616e644964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303034222c22646f6d61696e223a22706f732e696e74656e742e626f6f6b696e675f616476616e63655f6372656174652e7631222c226578706563746564536572696573223a5b5d2c2265787065637465645365745265766973696f6e223a2232222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c2270726570617265644174223a22323032362d30392d30365431393a30303a30302e3030305a222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363222c2276657273696f6e223a317d",
+        "sha256": "f8e1524f34085404d809b6d8f33db4dbdb9569b2cb1b70fceb73207e3e24a58c"
+      }
+    },
+    {
+      "intent": {
+        "domain": "pos.intent.cash_create.v1",
+        "command": "CASH_CREATE",
+        "version": 1,
+        "commandId": "00000000-0000-4000-8000-000000000005",
+        "scope": {
+          "tenantId": "11111111-1111-4111-8111-111111111111",
+          "companyId": "22222222-2222-4222-8222-222222222222",
+          "storeId": "33333333-3333-4333-8333-333333333333",
+          "terminalId": "44444444-4444-4444-8444-444444444444"
+        },
+        "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "preparedAt": "2026-09-06T19:00:00.000Z",
+        "expectedSetRevision": "2",
+        "expectedSeries": [],
+        "artifacts": [
+          {
+            "role": "cashDraft",
+            "profileVersion": "pos.intent-artifact.cashDraft.j3",
+            "artifactHash": "c43a1ac005b17bc98586e943719e2e60bd469f9870e5eb440ca2c75689452088"
+          }
+        ]
+      },
+      "vector": {
+        "name": "CASH_CREATE",
+        "input": {
+          "domain": "pos.intent.cash_create.v1",
+          "command": "CASH_CREATE",
+          "version": 1,
+          "commandId": "00000000-0000-4000-8000-000000000005",
+          "scope": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "companyId": "22222222-2222-4222-8222-222222222222",
+            "storeId": "33333333-3333-4333-8333-333333333333",
+            "terminalId": "44444444-4444-4444-8444-444444444444"
+          },
+          "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          "preparedAt": "2026-09-06T19:00:00.000Z",
+          "expectedSetRevision": "2",
+          "expectedSeries": [],
+          "artifacts": [
+            {
+              "role": "cashDraft",
+              "profileVersion": "pos.intent-artifact.cashDraft.j3",
+              "artifactHash": "c43a1ac005b17bc98586e943719e2e60bd469f9870e5eb440ca2c75689452088"
+            }
+          ]
+        },
+        "canonicalUtf8": "{\"artifacts\":[{\"artifactHash\":\"c43a1ac005b17bc98586e943719e2e60bd469f9870e5eb440ca2c75689452088\",\"profileVersion\":\"pos.intent-artifact.cashDraft.j3\",\"role\":\"cashDraft\"}],\"command\":\"CASH_CREATE\",\"commandId\":\"00000000-0000-4000-8000-000000000005\",\"domain\":\"pos.intent.cash_create.v1\",\"expectedSeries\":[],\"expectedSetRevision\":\"2\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"preparedAt\":\"2026-09-06T19:00:00.000Z\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\",\"version\":1}",
+        "utf8Hex": "7b22617274696661637473223a5b7b22617274696661637448617368223a2263343361316163303035623137626339383538366539343337313965326536306264343639663938373065356562343430636132633735363839343532303838222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e6361736844726166742e6a33222c22726f6c65223a22636173684472616674227d5d2c22636f6d6d616e64223a22434153485f435245415445222c22636f6d6d616e644964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303035222c22646f6d61696e223a22706f732e696e74656e742e636173685f6372656174652e7631222c226578706563746564536572696573223a5b5d2c2265787065637465645365745265766973696f6e223a2232222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c2270726570617265644174223a22323032362d30392d30365431393a30303a30302e3030305a222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363222c2276657273696f6e223a317d",
+        "sha256": "26a4ca08127cb875d656571b3fc6f71333e90cea96a601476a97f9fbeb9ae6de"
+      }
+    },
+    {
+      "intent": {
+        "domain": "pos.intent.wallet_post.v1",
+        "command": "WALLET_POST",
+        "version": 1,
+        "commandId": "00000000-0000-4000-8000-000000000006",
+        "scope": {
+          "tenantId": "11111111-1111-4111-8111-111111111111",
+          "companyId": "22222222-2222-4222-8222-222222222222",
+          "storeId": "33333333-3333-4333-8333-333333333333",
+          "terminalId": "44444444-4444-4444-8444-444444444444"
+        },
+        "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "preparedAt": "2026-09-06T19:00:00.000Z",
+        "expectedSetRevision": "2",
+        "expectedSeries": [],
+        "artifacts": [
+          {
+            "role": "linkedDocument",
+            "profileVersion": "pos.intent-artifact.linkedDocument.j3",
+            "artifactHash": "82156d9db98431758180a684b682872f6a2b827ef2d1d28a92bcf9dd45cc8975"
+          },
+          {
+            "role": "walletBefore",
+            "profileVersion": "pos.intent-artifact.walletBefore.j3",
+            "artifactHash": "05f70b4aef6d42f223317828d39b58021bb2fe73f61f787d400d9f3b03f015ce"
+          },
+          {
+            "role": "walletDraft",
+            "profileVersion": "pos.intent-artifact.walletDraft.j3",
+            "artifactHash": "9647f39386ae9c2b55e5c50502f705bc209654365edd2e4fbb58dbfa8600fa2e"
+          }
+        ]
+      },
+      "vector": {
+        "name": "WALLET_POST",
+        "input": {
+          "domain": "pos.intent.wallet_post.v1",
+          "command": "WALLET_POST",
+          "version": 1,
+          "commandId": "00000000-0000-4000-8000-000000000006",
+          "scope": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "companyId": "22222222-2222-4222-8222-222222222222",
+            "storeId": "33333333-3333-4333-8333-333333333333",
+            "terminalId": "44444444-4444-4444-8444-444444444444"
+          },
+          "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          "preparedAt": "2026-09-06T19:00:00.000Z",
+          "expectedSetRevision": "2",
+          "expectedSeries": [],
+          "artifacts": [
+            {
+              "role": "linkedDocument",
+              "profileVersion": "pos.intent-artifact.linkedDocument.j3",
+              "artifactHash": "82156d9db98431758180a684b682872f6a2b827ef2d1d28a92bcf9dd45cc8975"
+            },
+            {
+              "role": "walletBefore",
+              "profileVersion": "pos.intent-artifact.walletBefore.j3",
+              "artifactHash": "05f70b4aef6d42f223317828d39b58021bb2fe73f61f787d400d9f3b03f015ce"
+            },
+            {
+              "role": "walletDraft",
+              "profileVersion": "pos.intent-artifact.walletDraft.j3",
+              "artifactHash": "9647f39386ae9c2b55e5c50502f705bc209654365edd2e4fbb58dbfa8600fa2e"
+            }
+          ]
+        },
+        "canonicalUtf8": "{\"artifacts\":[{\"artifactHash\":\"82156d9db98431758180a684b682872f6a2b827ef2d1d28a92bcf9dd45cc8975\",\"profileVersion\":\"pos.intent-artifact.linkedDocument.j3\",\"role\":\"linkedDocument\"},{\"artifactHash\":\"05f70b4aef6d42f223317828d39b58021bb2fe73f61f787d400d9f3b03f015ce\",\"profileVersion\":\"pos.intent-artifact.walletBefore.j3\",\"role\":\"walletBefore\"},{\"artifactHash\":\"9647f39386ae9c2b55e5c50502f705bc209654365edd2e4fbb58dbfa8600fa2e\",\"profileVersion\":\"pos.intent-artifact.walletDraft.j3\",\"role\":\"walletDraft\"}],\"command\":\"WALLET_POST\",\"commandId\":\"00000000-0000-4000-8000-000000000006\",\"domain\":\"pos.intent.wallet_post.v1\",\"expectedSeries\":[],\"expectedSetRevision\":\"2\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"preparedAt\":\"2026-09-06T19:00:00.000Z\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\",\"version\":1}",
+        "utf8Hex": "7b22617274696661637473223a5b7b22617274696661637448617368223a2238323135366439646239383433313735383138306136383462363832383732663661326238323765663264316432386139326263663964643435636338393735222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e6c696e6b6564446f63756d656e742e6a33222c22726f6c65223a226c696e6b6564446f63756d656e74227d2c7b22617274696661637448617368223a2230356637306234616566366434326632323333313738323864333962353830323162623266653733663631663738376434303064396633623033663031356365222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e77616c6c65744265666f72652e6a33222c22726f6c65223a2277616c6c65744265666f7265227d2c7b22617274696661637448617368223a2239363437663339333836616539633262353565356335303530326637303562633230393635343336356564643265346662623538646266613836303066613265222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e77616c6c657444726166742e6a33222c22726f6c65223a2277616c6c65744472616674227d5d2c22636f6d6d616e64223a2257414c4c45545f504f5354222c22636f6d6d616e644964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303036222c22646f6d61696e223a22706f732e696e74656e742e77616c6c65745f706f73742e7631222c226578706563746564536572696573223a5b5d2c2265787065637465645365745265766973696f6e223a2232222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c2270726570617265644174223a22323032362d30392d30365431393a30303a30302e3030305a222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363222c2276657273696f6e223a317d",
+        "sha256": "79fd433877aa198585f4bf5923bc848be34d39455025962832710cb300791df0"
+      }
+    },
+    {
+      "intent": {
+        "domain": "pos.intent.fiscal_revision.v1",
+        "command": "FISCAL_REVISION",
+        "version": 1,
+        "commandId": "00000000-0000-4000-8000-000000000007",
+        "scope": {
+          "tenantId": "11111111-1111-4111-8111-111111111111",
+          "companyId": "22222222-2222-4222-8222-222222222222",
+          "storeId": "33333333-3333-4333-8333-333333333333",
+          "terminalId": "44444444-4444-4444-8444-444444444444"
+        },
+        "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "preparedAt": "2026-09-06T19:00:00.000Z",
+        "expectedSetRevision": "2",
+        "expectedSeries": [],
+        "artifacts": [
+          {
+            "role": "fiscalResult",
+            "profileVersion": "pos.intent-artifact.fiscalResult.j3",
+            "artifactHash": "6c57486097e2c13997a748ae8bcff2fac9ab7396ce9d86ef3552c8b0e7897695"
+          },
+          {
+            "role": "originalBefore",
+            "profileVersion": "pos.intent-artifact.originalBefore.j3",
+            "artifactHash": "064bf6ffa2a4299d9494ef0339835bd99e352f24a3e16afc01b9a761960dedcd"
+          }
+        ]
+      },
+      "vector": {
+        "name": "FISCAL_REVISION",
+        "input": {
+          "domain": "pos.intent.fiscal_revision.v1",
+          "command": "FISCAL_REVISION",
+          "version": 1,
+          "commandId": "00000000-0000-4000-8000-000000000007",
+          "scope": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "companyId": "22222222-2222-4222-8222-222222222222",
+            "storeId": "33333333-3333-4333-8333-333333333333",
+            "terminalId": "44444444-4444-4444-8444-444444444444"
+          },
+          "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          "preparedAt": "2026-09-06T19:00:00.000Z",
+          "expectedSetRevision": "2",
+          "expectedSeries": [],
+          "artifacts": [
+            {
+              "role": "fiscalResult",
+              "profileVersion": "pos.intent-artifact.fiscalResult.j3",
+              "artifactHash": "6c57486097e2c13997a748ae8bcff2fac9ab7396ce9d86ef3552c8b0e7897695"
+            },
+            {
+              "role": "originalBefore",
+              "profileVersion": "pos.intent-artifact.originalBefore.j3",
+              "artifactHash": "064bf6ffa2a4299d9494ef0339835bd99e352f24a3e16afc01b9a761960dedcd"
+            }
+          ]
+        },
+        "canonicalUtf8": "{\"artifacts\":[{\"artifactHash\":\"6c57486097e2c13997a748ae8bcff2fac9ab7396ce9d86ef3552c8b0e7897695\",\"profileVersion\":\"pos.intent-artifact.fiscalResult.j3\",\"role\":\"fiscalResult\"},{\"artifactHash\":\"064bf6ffa2a4299d9494ef0339835bd99e352f24a3e16afc01b9a761960dedcd\",\"profileVersion\":\"pos.intent-artifact.originalBefore.j3\",\"role\":\"originalBefore\"}],\"command\":\"FISCAL_REVISION\",\"commandId\":\"00000000-0000-4000-8000-000000000007\",\"domain\":\"pos.intent.fiscal_revision.v1\",\"expectedSeries\":[],\"expectedSetRevision\":\"2\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"preparedAt\":\"2026-09-06T19:00:00.000Z\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\",\"version\":1}",
+        "utf8Hex": "7b22617274696661637473223a5b7b22617274696661637448617368223a2236633537343836303937653263313339393761373438616538626366663266616339616237333936636539643836656633353532633862306537383937363935222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e66697363616c526573756c742e6a33222c22726f6c65223a2266697363616c526573756c74227d2c7b22617274696661637448617368223a2230363462663666666132613432393964393439346566303333393833356264393965333532663234613365313661666330316239613736313936306465646364222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e6f726967696e616c4265666f72652e6a33222c22726f6c65223a226f726967696e616c4265666f7265227d5d2c22636f6d6d616e64223a2246495343414c5f5245564953494f4e222c22636f6d6d616e644964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303037222c22646f6d61696e223a22706f732e696e74656e742e66697363616c5f7265766973696f6e2e7631222c226578706563746564536572696573223a5b5d2c2265787065637465645365745265766973696f6e223a2232222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c2270726570617265644174223a22323032362d30392d30365431393a30303a30302e3030305a222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363222c2276657273696f6e223a317d",
+        "sha256": "3f66a7aee0bf0e1ddb6e7cd3b4412ccce84bd51c5049e19f79dc945e3c80cd69"
+      }
+    },
+    {
+      "intent": {
+        "domain": "pos.intent.close_set.v1",
+        "command": "CLOSE_SET",
+        "version": 1,
+        "commandId": "00000000-0000-4000-8000-000000000008",
+        "scope": {
+          "tenantId": "11111111-1111-4111-8111-111111111111",
+          "companyId": "22222222-2222-4222-8222-222222222222",
+          "storeId": "33333333-3333-4333-8333-333333333333",
+          "terminalId": "44444444-4444-4444-8444-444444444444"
+        },
+        "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "preparedAt": "2026-09-06T19:00:00.000Z",
+        "expectedSetRevision": "2",
+        "expectedSeries": [],
+        "artifacts": [
+          {
+            "role": "configuration",
+            "profileVersion": "pos.intent-artifact.configuration.j3",
+            "artifactHash": "18a48aed865e075771f2fea577952e210057f23b804a5f447d625668eebb2e1d"
+          },
+          {
+            "role": "declaration",
+            "profileVersion": "pos.intent-artifact.declaration.j3",
+            "artifactHash": "0cff002c92a3b4c6eabd9947a1877eae05b49784282d3d263fd003b7ccefed02"
+          },
+          {
+            "role": "memberSelection",
+            "profileVersion": "pos.intent-artifact.memberSelection.j3",
+            "artifactHash": "8c91bbeca360afeb3ad3e59ff5e00d4ce8d56667163e9f525a15fd6e7257e91a"
+          },
+          {
+            "role": "previousClose",
+            "profileVersion": "pos.intent-artifact.previousClose.j3",
+            "artifactHash": "bb3a204e40badbc82267305cad25d0ed30d3cf819df1a1249d64d3e31d828a99"
+          }
+        ]
+      },
+      "vector": {
+        "name": "CLOSE_SET",
+        "input": {
+          "domain": "pos.intent.close_set.v1",
+          "command": "CLOSE_SET",
+          "version": 1,
+          "commandId": "00000000-0000-4000-8000-000000000008",
+          "scope": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "companyId": "22222222-2222-4222-8222-222222222222",
+            "storeId": "33333333-3333-4333-8333-333333333333",
+            "terminalId": "44444444-4444-4444-8444-444444444444"
+          },
+          "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          "preparedAt": "2026-09-06T19:00:00.000Z",
+          "expectedSetRevision": "2",
+          "expectedSeries": [],
+          "artifacts": [
+            {
+              "role": "configuration",
+              "profileVersion": "pos.intent-artifact.configuration.j3",
+              "artifactHash": "18a48aed865e075771f2fea577952e210057f23b804a5f447d625668eebb2e1d"
+            },
+            {
+              "role": "declaration",
+              "profileVersion": "pos.intent-artifact.declaration.j3",
+              "artifactHash": "0cff002c92a3b4c6eabd9947a1877eae05b49784282d3d263fd003b7ccefed02"
+            },
+            {
+              "role": "memberSelection",
+              "profileVersion": "pos.intent-artifact.memberSelection.j3",
+              "artifactHash": "8c91bbeca360afeb3ad3e59ff5e00d4ce8d56667163e9f525a15fd6e7257e91a"
+            },
+            {
+              "role": "previousClose",
+              "profileVersion": "pos.intent-artifact.previousClose.j3",
+              "artifactHash": "bb3a204e40badbc82267305cad25d0ed30d3cf819df1a1249d64d3e31d828a99"
+            }
+          ]
+        },
+        "canonicalUtf8": "{\"artifacts\":[{\"artifactHash\":\"18a48aed865e075771f2fea577952e210057f23b804a5f447d625668eebb2e1d\",\"profileVersion\":\"pos.intent-artifact.configuration.j3\",\"role\":\"configuration\"},{\"artifactHash\":\"0cff002c92a3b4c6eabd9947a1877eae05b49784282d3d263fd003b7ccefed02\",\"profileVersion\":\"pos.intent-artifact.declaration.j3\",\"role\":\"declaration\"},{\"artifactHash\":\"8c91bbeca360afeb3ad3e59ff5e00d4ce8d56667163e9f525a15fd6e7257e91a\",\"profileVersion\":\"pos.intent-artifact.memberSelection.j3\",\"role\":\"memberSelection\"},{\"artifactHash\":\"bb3a204e40badbc82267305cad25d0ed30d3cf819df1a1249d64d3e31d828a99\",\"profileVersion\":\"pos.intent-artifact.previousClose.j3\",\"role\":\"previousClose\"}],\"command\":\"CLOSE_SET\",\"commandId\":\"00000000-0000-4000-8000-000000000008\",\"domain\":\"pos.intent.close_set.v1\",\"expectedSeries\":[],\"expectedSetRevision\":\"2\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"preparedAt\":\"2026-09-06T19:00:00.000Z\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\",\"version\":1}",
+        "utf8Hex": "7b22617274696661637473223a5b7b22617274696661637448617368223a2231386134386165643836356530373537373166326665613537373935326532313030353766323362383034613566343437643632353636386565626232653164222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e636f6e66696775726174696f6e2e6a33222c22726f6c65223a22636f6e66696775726174696f6e227d2c7b22617274696661637448617368223a2230636666303032633932613362346336656162643939343761313837376561653035623439373834323832643364323633666430303362376363656665643032222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e6465636c61726174696f6e2e6a33222c22726f6c65223a226465636c61726174696f6e227d2c7b22617274696661637448617368223a2238633931626265636133363061666562336164336535396666356530306434636538643536363637313633653966353235613135666436653732353765393161222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e6d656d62657253656c656374696f6e2e6a33222c22726f6c65223a226d656d62657253656c656374696f6e227d2c7b22617274696661637448617368223a2262623361323034653430626164626338323236373330356361643235643065643330643363663831396466316131323439643634643365333164383238613939222c2270726f66696c6556657273696f6e223a22706f732e696e74656e742d61727469666163742e70726576696f7573436c6f73652e6a33222c22726f6c65223a2270726576696f7573436c6f7365227d5d2c22636f6d6d616e64223a22434c4f53455f534554222c22636f6d6d616e644964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303038222c22646f6d61696e223a22706f732e696e74656e742e636c6f73655f7365742e7631222c226578706563746564536572696573223a5b5d2c2265787065637465645365745265766973696f6e223a2232222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c2270726570617265644174223a22323032362d30392d30365431393a30303a30302e3030305a222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363222c2276657273696f6e223a317d",
+        "sha256": "a9f1fa73e8e94cd5d5066ef1f7c9cf851459b2a4231a1983eed544b17d4dafc9"
+      }
+    }
+  ],
+  "anchorRequest": {
+    "registryId": "root-fixture-1",
+    "scope": {
+      "tenantId": "11111111-1111-4111-8111-111111111111",
+      "companyId": "22222222-2222-4222-8222-222222222222",
+      "storeId": "33333333-3333-4333-8333-333333333333",
+      "terminalId": "44444444-4444-4444-8444-444444444444"
+    },
+    "anchor": {
+      "domain": "pos.journal.resume.v1",
+      "scope": {
+        "tenantId": "11111111-1111-4111-8111-111111111111",
+        "companyId": "22222222-2222-4222-8222-222222222222",
+        "storeId": "33333333-3333-4333-8333-333333333333",
+        "terminalId": "44444444-4444-4444-8444-444444444444"
+      },
+      "mode": "NEW_EPOCH",
+      "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      "priorStorageEpoch": "55555555-5555-4555-8555-555555555555",
+      "priorOpenSetId": "66666666-6666-4666-8666-666666666666",
+      "priorFinalSequence": "2",
+      "priorChainHash": "689a0913774c79ec777d03bb15eca7eb35668e641e3cce867d8a7f26db5d7428",
+      "priorAcceptanceDigest": "c2b12b9e75ac70686528d0b378e2b58b009a4525177535667f748f83fd4b6ca5"
+    }
+  },
+  "fixtureRegistry": {
+    "root-fixture-1": {
+      "scope": {
+        "tenantId": "11111111-1111-4111-8111-111111111111",
+        "companyId": "22222222-2222-4222-8222-222222222222",
+        "storeId": "33333333-3333-4333-8333-333333333333",
+        "terminalId": "44444444-4444-4444-8444-444444444444"
+      },
+      "technicalAcceptance": "ACCEPTED",
+      "commercialApplication": "FAILED",
+      "retentionState": "AVAILABLE",
+      "priorAcceptanceDigest": "c2b12b9e75ac70686528d0b378e2b58b009a4525177535667f748f83fd4b6ca5",
+      "priorChainHash": "689a0913774c79ec777d03bb15eca7eb35668e641e3cce867d8a7f26db5d7428",
+      "priorStorageEpoch": "55555555-5555-4555-8555-555555555555",
+      "priorOpenSetId": "66666666-6666-4666-8666-666666666666",
+      "priorFinalSequence": "2"
+    }
+  }
+}
