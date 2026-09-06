@@ -1,3 +1,4 @@
+import CheckoutTrackingSettings from './CheckoutTrackingSettings';
 
 import React, { useEffect, useState } from 'react';
 import {
@@ -137,7 +138,7 @@ interface SettingsProps {
   erpRoleAuthority?: boolean;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'MASTER_NUMBER_RANGES' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
+type SettingsView = 'CHECKOUT_TRACKING' | 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'MASTER_NUMBER_RANGES' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -847,6 +848,9 @@ const Settings: React.FC<SettingsProps> = (props) => {
           />
         );
 
+      case 'CHECKOUT_TRACKING':
+        return hasPermission('SETTINGS_ACCESS') ? <CheckoutTrackingSettings config={props.config} currentDeviceId={props.currentDeviceId} onClose={() => setCurrentView('HOME')} /> : null;
+
       case 'LOGS':
 
         return (
@@ -1000,6 +1004,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   <SettingsCard icon={Hash} label="Rangos de maestros" description="Códigos offline y disponibilidad" color="bg-cyan-700" onClick={() => setCurrentView('MASTER_NUMBER_RANGES')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Cloud} label={isCheckingApkUpdate ? "Buscando APK..." : "Actualizar APK"} description="Buscar y descargar release POS" color="bg-sky-700" onClick={handleManualApkUpdateCheck} locked={!hasPermission('SETTINGS_ACCESS') || isCheckingApkUpdate} />
                   <SettingsCard icon={ShieldAlert} label="Seguridad y Datos" description="Backups y Modo Kiosco" color="bg-red-600" onClick={() => setCurrentView('SECURITY')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={ListChecks} label="Activar log de seguimiento" description="Diagnóstico temporal de mesas y cobros" color="bg-slate-700" onClick={() => setCurrentView('CHECKOUT_TRACKING')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={History} label="Traza de Auditoría" description="Logs de Operaciones" color="bg-orange-500" onClick={() => setCurrentView('LOGS')} locked={!hasPermission('AUDIT_LOG_VIEW')} />
                   <SettingsCard icon={BarChart3} label="Informes y Analítica" description="BI, Snapshots y KPIs" color="bg-blue-700" onClick={() => setCurrentView('REPORTS')} locked={!hasPermission('REPORTS_VIEW_SALES')} />
                 </div>

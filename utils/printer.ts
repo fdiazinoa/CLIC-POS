@@ -1,3 +1,4 @@
+import { recordCheckoutDiagnostic } from '../services/CheckoutDiagnostics';
 import { notifyBrowserPrint } from '../services/printer/BrowserPrint';
 import { PrintOutputError, runPrintTask } from '../services/printer/PrintFeedback';
 import { Transaction, BusinessConfig, Reservation, CartItem, Table, CashMovement } from '../types';
@@ -1260,8 +1261,17 @@ const printComandaInternal = async (
 // Shared feedback also covers callers that do not inspect the boolean result.
 const printGatewayVoucher = (...args: Parameters<typeof printGatewayVoucherInternal>) =>
     runPrintTask(`voucher:${args[1].referenceId}:${args[1].copyLabel}`, `Voucher ${args[1].copyLabel}`, () => printGatewayVoucherInternal(...args));
-export const printTicket = (...args: Parameters<typeof printTicketInternal>) =>
-    runPrintTask(`ticket:${args[0].id}`, 'Ticket', () => printTicketInternal(...args));
+export const printTicket = (...args: Parameters<typeof printTicketInternal>) => {
+    const transaction = args[0];
+    recordCheckoutDiagnostic('PRINT_REQUEST', { transactionId: transaction.id, displayId: transaction.displayId, items: transaction.items, total: transaction.total });
+    const result = runPrintTask(`ticket:${transaction.id}`, 'Ticket', () => printTicketInternal(...args));
+    void result.then(accepted => {
+        recordCheckoutDiagnostic('PRINT_RESULT', { transactionId: transaction.id, displayId: transaction.displayId, status: accepted ? 'ACCEPTED_BY_PRINT_PIPELINE' : 'NOT_ACCEPTED' });
+    }, () => {
+        recordCheckoutDiagnostic('PRINT_RESULT', { transactionId: transaction.id, displayId: transaction.displayId, status: 'ERROR' });
+    });
+    return result;
+};
 export const printReservation = (...args: Parameters<typeof printReservationInternal>) =>
     runPrintTask(`reservation:${args[0].id}`, 'Reserva', () => printReservationInternal(...args));
 export const printPrecuenta = (...args: Parameters<typeof printPrecuentaInternal>) =>

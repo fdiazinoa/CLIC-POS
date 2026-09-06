@@ -1,3 +1,4 @@
+import { recordCheckoutDiagnostic } from './CheckoutDiagnostics';
 import { Customer, Transaction, DocumentType, DocumentSeries } from '../types';
 import { db } from '../utils/db';
 import { normalizeTransactionForSync } from './sync/sourceIdentity';
@@ -368,6 +369,7 @@ class TransactionService {
         data: Partial<Transaction>,
         options: { deferDurablePersistence?: boolean } = {},
     ): Promise<Transaction> {
+        recordCheckoutDiagnostic('TRANSACTION_CREATE_INPUT', { items: data.items, total: data.total, transactionId: data.id, payments: data.payments, terminalId: data.terminalId });
         // Validate required fields
         if (!data.documentType) {
             throw new Error('documentType is required');
@@ -493,12 +495,14 @@ class TransactionService {
         };
 
         const normalizedTransaction = normalizeTransactionForSync(transaction);
+        recordCheckoutDiagnostic('TRANSACTION_CREATED', { items: normalizedTransaction.items, total: normalizedTransaction.total, transactionId: normalizedTransaction.id, displayId: normalizedTransaction.displayId, payments: normalizedTransaction.payments, terminalId: normalizedTransaction.terminalId });
 
         const deferToFinancialCommit = options.deferDurablePersistence === true
             && isSyncFeatureEnabled('sqlite_outbox_v2');
         if (!deferToFinancialCommit) {
             // Legacy persistence remains unchanged while POS-2A is dark.
             await db.saveDocument('transactions', normalizedTransaction);
+            recordCheckoutDiagnostic('LEGACY_PERSIST_OK', { items: normalizedTransaction.items, total: normalizedTransaction.total, transactionId: normalizedTransaction.id, displayId: normalizedTransaction.displayId });
             try {
                 await db.saveDocument('transactionHistory', {
                     ...normalizedTransaction,

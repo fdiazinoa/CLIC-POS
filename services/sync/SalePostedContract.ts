@@ -1,3 +1,4 @@
+import { recordCheckoutDiagnostic } from '../CheckoutDiagnostics';
 import type { Transaction } from '../../types';
 import { customerNumberIdentity } from './customerIdentityContract';
 
@@ -379,6 +380,7 @@ export const buildSalePostedPayload = (
         summary: buildSalePostedSummary(transaction),
         occurred_at: toOccurredAt(asRecord(transaction)),
     };
+    recordCheckoutDiagnostic('OUTBOX_BUILD', { items: transaction.items, total: transaction.total, transactionId: transaction.id, displayId: transaction.displayId, summaryItemCount: payload.summary.item_count });
     assertSalePostedPayload(payload);
     return payload;
 };
