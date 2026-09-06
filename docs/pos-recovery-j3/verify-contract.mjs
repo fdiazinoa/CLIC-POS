@@ -8,6 +8,14 @@ const spec=read('intent-contract.json');
 const exact=(o,keys,code)=>assert.deepEqual(Object.keys(o).sort(),[...keys].sort(),code);
 const decimal=v=>assert(typeof v==='string'&&/^(0|[1-9][0-9]*)$/.test(v),'DECIMAL');
 const uuid=v=>assert(typeof v==='string'&&/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(v),'UUID');
+export const assignedDraftFields = [...new Set([...spec.assignedAfterIntent,'displayId','sequenceNumber'])];
+export function checkArtifact(a){
+ exact(a,['schemaVersion','role','document'],'ARTIFACT_ENVELOPE');
+ assert(a.document && typeof a.document==='object' && !Array.isArray(a.document),'ARTIFACT_DOCUMENT');
+ if(['saleDraft','refundDraft','collectionDraft','cashDraft','walletDraft'].includes(a.role)){
+  const inspect=o=>{if(!o||typeof o!=='object')return;for(const key of Object.keys(o)){assert(!assignedDraftFields.includes(key),'ASSIGNED_FIELD_IN_DRAFT');inspect(o[key]);}};inspect(a.document);
+ }
+}
 export function checkIntent(i,artifacts){
  exact(i,spec.commonFields,'INTENT_FIELDS');
  const s=spec.commands[i.command];assert(s,'COMMAND');
@@ -15,23 +23,29 @@ export function checkIntent(i,artifacts){
  uuid(i.commandId);uuid(i.storageEpoch);uuid(i.openSetId);
  exact(i.scope,spec.scopeFields,'SCOPE_FIELDS');Object.values(i.scope).forEach(uuid);
  assert(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(i.preparedAt)&&Number.isFinite(Date.parse(i.preparedAt)),'PREPARED_AT');
+ assert.equal(new Date(i.preparedAt).toISOString(),i.preparedAt,'PREPARED_AT_CALENDAR');
  decimal(i.expectedSetRevision);
  const seriesIds=new Set();
- for(const r of i.expectedSeries){exact(r,spec.seriesFields,'SERIES_FIELDS');assert(!seriesIds.has(r.seriesId),'DUPLICATE_SERIES');seriesIds.add(r.seriesId);assert(typeof r.seriesId==='string'&&r.seriesId,'SERIES_ID');assert(r.reservationId===null||typeof r.reservationId==='string','RESERVATION');decimal(r.expectedRevision);decimal(r.expectedNext);}
+ for(const r of i.expectedSeries){exact(r,spec.seriesFields,'SERIES_FIELDS');assert(!seriesIds.has(r.seriesId),'DUPLICATE_SERIES');seriesIds.add(r.seriesId);assert(typeof r.seriesId==='string'&&r.seriesId,'SERIES_ID');assert(r.reservationId===null||(typeof r.reservationId==='string'&&r.reservationId.trim().length>0),'EMPTY_RESERVATION');decimal(r.expectedRevision);decimal(r.expectedNext);}
  assert.deepEqual(i.expectedSeries.map(x=>x.seriesId),[...seriesIds].sort(),'SERIES_ORDER');
  assert.deepEqual(i.artifacts.map(x=>x.role),[...s.artifactRoles].sort(),'ARTIFACT_ROLES');
- for(const r of i.artifacts){exact(r,spec.artifactRefFields,'REF_FIELDS');assert.equal(r.profileVersion,s.profileVersionByRole[r.role],'PROFILE_VERSION');const a=artifacts[r.artifactHash];assert(a,'MISSING_ARTIFACT');assert.equal(a.role,r.role,'ROLE');assert.equal(a.schemaVersion,r.profileVersion,'PROFILE');assert.equal(hash(a),r.artifactHash,'ARTIFACT_HASH');}
+ for(const r of i.artifacts){exact(r,spec.artifactRefFields,'REF_FIELDS');assert.equal(r.profileVersion,s.profileVersionByRole[r.role],'PROFILE_VERSION');const a=artifacts[r.artifactHash];assert(a,'MISSING_ARTIFACT');checkArtifact(a);assert.equal(a.role,r.role,'ROLE');assert.equal(a.schemaVersion,r.profileVersion,'PROFILE');assert.equal(hash(a),r.artifactHash,'ARTIFACT_HASH');}
  return hash(i);
 }
 // Independent fixture context stands in for an authenticated, durable ERP registry.
 // The import cannot supply/replace that context. No real registry access occurs.
 export function checkAnchor(request,registry){
+ assert.equal(request.anchor.domain,'pos.journal.resume.v1','ANCHOR_DOMAIN');
+ assert(['NEW_EPOCH','SAME_EPOCH_SUFFIX'].includes(request.anchor.mode),'ANCHOR_MODE');
  const r=registry[request.registryId];assert(r,'UNKNOWN_ROOT');
  assert.equal(r.technicalAcceptance,'ACCEPTED','NOT_ACCEPTED');
  assert.equal(r.retentionState,'AVAILABLE','ARCHIVE_UNAVAILABLE');
  assert.equal(canonical(r.scope),canonical(request.scope),'ROOT_SCOPE');
  for(const k of ['priorAcceptanceDigest','priorChainHash','priorStorageEpoch','priorOpenSetId','priorFinalSequence'])assert.equal(request.anchor[k],r[k],'ROOT_BINDING');
  assert.equal(canonical(request.anchor.scope),canonical(request.scope),'ANCHOR_SCOPE');
+ assert.notEqual(request.anchor.openSetId,r.priorOpenSetId,'REUSED_OPEN_SET');
+ if(request.anchor.mode==='NEW_EPOCH') assert.notEqual(request.anchor.storageEpoch,r.priorStorageEpoch,'REUSED_EPOCH');
+ else assert.equal(request.anchor.storageEpoch,r.priorStorageEpoch,'WRONG_EPOCH');
  // RECEIVED/FAILED commercial application does not invalidate technical identity.
  return 'BOUND_TO_FIXTURE_ROOT_NOT_AUTHENTICATED';
 }

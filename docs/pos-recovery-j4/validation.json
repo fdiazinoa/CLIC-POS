@@ -1,0 +1,32 @@
+{
+  "agreementStatus": "UNAGREED",
+  "baseCommit": "0c03f7c4171a05350b6c3c8b59f49f5b538a4ad7",
+  "erpInputCommit": "10eef7a1",
+  "erpInputZipSha256": "525832db7eba42427d9594c23addad23c1c4629ec327adea125615c51f4ab186",
+  "erpChecksums": "PASS",
+  "erpCommandsExecuted": [
+    "POS J3 verify-contract.mjs",
+    "POS J3 verify-bytes.py",
+    "ERP verify-j3.mjs",
+    "ERP verify-fixtures.mjs",
+    "ERP verify-schema.py",
+    "ERP verify-r4.py",
+    "ERP verify-j2.mjs"
+  ],
+  "erpIndependentNegatives": 89,
+  "publishedJsonFilesUnchanged": 11,
+  "legacyPosBindingCases": 8,
+  "legacyPosNegativeCases": 46,
+  "j4PositiveCases": 8,
+  "j4IndependentRehashedNegatives": 167,
+  "j4IndependentByteVectors": 8,
+  "exactZEligible": false,
+  "closeAuthorization": "NOT_GRANTED",
+  "limitations": [
+    "v1 fixtures prove historical binding only",
+    "v2 semantic examples are limited subprofiles, not universal native validators",
+    "No native calculator or renderer certification",
+    "No registry authority, backend atomicity, CAS or reserve guarantees proved",
+    "No operational DB, journal, endpoints, migrations, device or business operations executed"
+  ]
+}
