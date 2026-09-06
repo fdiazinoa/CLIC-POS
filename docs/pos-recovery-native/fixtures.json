@@ -1,0 +1,905 @@
+{
+  "status": "PROPOSED_NOT_AUTHORIZED_FOR_RESTORE",
+  "sourceCommit": "4d5710875c352af367f2f82701e80102060dd68a",
+  "fixedNow": "2026-09-06T16:00:00.000Z",
+  "baseCurrencyCode": "DOP",
+  "fixtures": [
+    {
+      "id": "P01_USD",
+      "transactions": [
+        {
+          "id": "sale-fixture",
+          "displayId": "T-001",
+          "date": "2026-09-05T23:59:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "documentType": "TICKET",
+          "status": "COMPLETED",
+          "items": [
+            {
+              "id": "product-fixture",
+              "cartId": "cart-line-fixture",
+              "name": "Producto ficticio",
+              "quantity": 1,
+              "price": 550,
+              "category": "fixture",
+              "images": [],
+              "attributes": [],
+              "variants": [],
+              "tariffs": [],
+              "appliedTaxIds": [],
+              "netAmount": 550,
+              "taxAmount": 0,
+              "totalAmount": 550
+            }
+          ],
+          "payments": [
+            {
+              "id": "pay-usd",
+              "method": "CASH",
+              "amount": 600,
+              "timestamp": "2026-09-05T23:59:00-04:00",
+              "currencyCode": "USD",
+              "amountOriginal": 10,
+              "exchangeRate": 60,
+              "appliedAmount": 550,
+              "changeAmount": 50,
+              "changeCurrencyCode": "DOP"
+            }
+          ],
+          "total": 550,
+          "netAmount": 550,
+          "taxAmount": 0,
+          "discountAmount": 0,
+          "fiscalMode": "NONE"
+        }
+      ],
+      "cashMovements": [],
+      "collections": [],
+      "closedReferences": [],
+      "expected": {
+        "cashExpected": {
+          "USD": 10,
+          "DOP": -50
+        },
+        "collectionsTotal": 0,
+        "returnsTotal": 0,
+        "openedAt": "2026-09-06T03:59:00.000Z"
+      }
+    },
+    {
+      "id": "P02_COLLECTION",
+      "transactions": [],
+      "cashMovements": [],
+      "collections": [
+        {
+          "id": "collection-fixture",
+          "displayId": "R-001",
+          "customerId": "customer-fixture",
+          "customerName": "Cliente ficticio",
+          "date": "2026-09-06T00:10:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "totalAmount": 100,
+          "method": "CASH",
+          "currencyCode": "DOP",
+          "exchangeRate": 1,
+          "receivedAmountOriginal": 100,
+          "receivedAmountBase": 100,
+          "appliedAmountBase": 80,
+          "unappliedAmountBase": 20,
+          "allocations": [
+            {
+              "id": "alloc-fixture",
+              "collectionId": "collection-fixture",
+              "transactionId": "closed-fixture",
+              "amount": 80,
+              "timestamp": "2026-09-05T23:59:00-04:00"
+            }
+          ]
+        }
+      ],
+      "closedReferences": [
+        {
+          "id": "closed-fixture",
+          "displayId": "T-001",
+          "date": "2026-09-05T23:59:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "documentType": "TICKET",
+          "status": "COMPLETED",
+          "items": [
+            {
+              "id": "product-fixture",
+              "cartId": "cart-line-fixture",
+              "name": "Producto ficticio",
+              "quantity": 1,
+              "price": 550,
+              "category": "fixture",
+              "images": [],
+              "attributes": [],
+              "variants": [],
+              "tariffs": [],
+              "appliedTaxIds": [],
+              "netAmount": 550,
+              "taxAmount": 0,
+              "totalAmount": 550
+            }
+          ],
+          "payments": [
+            {
+              "id": "pay-usd",
+              "method": "CASH",
+              "amount": 600,
+              "timestamp": "2026-09-05T23:59:00-04:00",
+              "currencyCode": "USD",
+              "amountOriginal": 10,
+              "exchangeRate": 60,
+              "appliedAmount": 550,
+              "changeAmount": 50,
+              "changeCurrencyCode": "DOP"
+            }
+          ],
+          "total": 550,
+          "netAmount": 550,
+          "taxAmount": 0,
+          "discountAmount": 0,
+          "fiscalMode": "NONE",
+          "zReportId": "z-previous",
+          "zReportSequence": "Z-001"
+        }
+      ],
+      "expected": {
+        "cashExpected": {},
+        "collectionsTotal": 100,
+        "returnsTotal": 0,
+        "openedAt": "2026-09-06T16:00:00.000Z"
+      }
+    },
+    {
+      "id": "P03_REFUND_STORE_CREDIT",
+      "transactions": [
+        {
+          "id": "refund-fixture",
+          "displayId": "NC-001",
+          "date": "2026-09-05T23:59:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "documentType": "REFUND",
+          "status": "REFUNDED",
+          "items": [
+            {
+              "id": "product-fixture",
+              "cartId": "cart-line-fixture",
+              "name": "Producto ficticio",
+              "quantity": 1,
+              "price": 50,
+              "category": "fixture",
+              "images": [],
+              "attributes": [],
+              "variants": [],
+              "tariffs": [],
+              "appliedTaxIds": [],
+              "netAmount": 50,
+              "taxAmount": 0,
+              "totalAmount": 50
+            }
+          ],
+          "payments": [
+            {
+              "id": "refund-pay",
+              "method": "STORE_CREDIT",
+              "methodLabel": "Nota de crédito",
+              "amount": 50,
+              "timestamp": "2026-09-05T23:59:00-04:00"
+            }
+          ],
+          "total": 50,
+          "netAmount": 50,
+          "taxAmount": 0,
+          "discountAmount": 0,
+          "fiscalMode": "NONE",
+          "originalTransactionId": "closed-fixture"
+        }
+      ],
+      "cashMovements": [
+        {
+          "id": "fund-fixture",
+          "type": "IN",
+          "amount": 1000,
+          "reason": "Fondo explícito ficticio",
+          "timestamp": "2026-09-05T23:59:00-04:00",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "terminalId": "fixture-terminal",
+          "currencyCode": "DOP"
+        }
+      ],
+      "collections": [],
+      "closedReferences": [
+        {
+          "id": "closed-fixture",
+          "displayId": "T-001",
+          "date": "2026-09-05T23:59:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "documentType": "TICKET",
+          "status": "COMPLETED",
+          "items": [
+            {
+              "id": "product-fixture",
+              "cartId": "cart-line-fixture",
+              "name": "Producto ficticio",
+              "quantity": 1,
+              "price": 550,
+              "category": "fixture",
+              "images": [],
+              "attributes": [],
+              "variants": [],
+              "tariffs": [],
+              "appliedTaxIds": [],
+              "netAmount": 550,
+              "taxAmount": 0,
+              "totalAmount": 550
+            }
+          ],
+          "payments": [
+            {
+              "id": "pay-usd",
+              "method": "CASH",
+              "amount": 600,
+              "timestamp": "2026-09-05T23:59:00-04:00",
+              "currencyCode": "USD",
+              "amountOriginal": 10,
+              "exchangeRate": 60,
+              "appliedAmount": 550,
+              "changeAmount": 50,
+              "changeCurrencyCode": "DOP"
+            }
+          ],
+          "total": 550,
+          "netAmount": 550,
+          "taxAmount": 0,
+          "discountAmount": 0,
+          "fiscalMode": "NONE",
+          "zReportId": "z-previous",
+          "zReportSequence": "Z-001"
+        }
+      ],
+      "expected": {
+        "cashExpected": {
+          "DOP": 1000
+        },
+        "collectionsTotal": 0,
+        "returnsTotal": 50,
+        "openedAt": "2026-09-06T03:59:00.000Z"
+      }
+    },
+    {
+      "id": "P04_REFUND_CARD",
+      "transactions": [
+        {
+          "id": "refund-fixture",
+          "displayId": "NC-001",
+          "date": "2026-09-05T23:59:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "documentType": "REFUND",
+          "status": "REFUNDED",
+          "items": [
+            {
+              "id": "product-fixture",
+              "cartId": "cart-line-fixture",
+              "name": "Producto ficticio",
+              "quantity": 1,
+              "price": 50,
+              "category": "fixture",
+              "images": [],
+              "attributes": [],
+              "variants": [],
+              "tariffs": [],
+              "appliedTaxIds": [],
+              "netAmount": 50,
+              "taxAmount": 0,
+              "totalAmount": 50
+            }
+          ],
+          "payments": [
+            {
+              "id": "refund-pay",
+              "method": "CARD",
+              "methodLabel": "Nota de crédito",
+              "amount": 50,
+              "timestamp": "2026-09-05T23:59:00-04:00",
+              "gatewayTransactionType": "REFUND"
+            }
+          ],
+          "total": 50,
+          "netAmount": 50,
+          "taxAmount": 0,
+          "discountAmount": 0,
+          "fiscalMode": "NONE",
+          "originalTransactionId": "closed-fixture"
+        }
+      ],
+      "cashMovements": [
+        {
+          "id": "fund-fixture",
+          "type": "IN",
+          "amount": 1000,
+          "reason": "Fondo explícito ficticio",
+          "timestamp": "2026-09-05T23:59:00-04:00",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "terminalId": "fixture-terminal",
+          "currencyCode": "DOP"
+        }
+      ],
+      "collections": [],
+      "closedReferences": [
+        {
+          "id": "closed-fixture",
+          "displayId": "T-001",
+          "date": "2026-09-05T23:59:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "documentType": "TICKET",
+          "status": "COMPLETED",
+          "items": [
+            {
+              "id": "product-fixture",
+              "cartId": "cart-line-fixture",
+              "name": "Producto ficticio",
+              "quantity": 1,
+              "price": 550,
+              "category": "fixture",
+              "images": [],
+              "attributes": [],
+              "variants": [],
+              "tariffs": [],
+              "appliedTaxIds": [],
+              "netAmount": 550,
+              "taxAmount": 0,
+              "totalAmount": 550
+            }
+          ],
+          "payments": [
+            {
+              "id": "pay-usd",
+              "method": "CASH",
+              "amount": 600,
+              "timestamp": "2026-09-05T23:59:00-04:00",
+              "currencyCode": "USD",
+              "amountOriginal": 10,
+              "exchangeRate": 60,
+              "appliedAmount": 550,
+              "changeAmount": 50,
+              "changeCurrencyCode": "DOP"
+            }
+          ],
+          "total": 550,
+          "netAmount": 550,
+          "taxAmount": 0,
+          "discountAmount": 0,
+          "fiscalMode": "NONE",
+          "zReportId": "z-previous",
+          "zReportSequence": "Z-001"
+        }
+      ],
+      "expected": {
+        "cashExpected": {
+          "DOP": 1000
+        },
+        "collectionsTotal": 0,
+        "returnsTotal": 50,
+        "openedAt": "2026-09-06T03:59:00.000Z"
+      }
+    },
+    {
+      "id": "P05_CARD_VOID_IS_REFUND_DOCUMENT",
+      "transactions": [
+        {
+          "id": "refund-fixture",
+          "displayId": "NC-001",
+          "date": "2026-09-05T23:59:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "documentType": "REFUND",
+          "status": "REFUNDED",
+          "items": [
+            {
+              "id": "product-fixture",
+              "cartId": "cart-line-fixture",
+              "name": "Producto ficticio",
+              "quantity": 1,
+              "price": 50,
+              "category": "fixture",
+              "images": [],
+              "attributes": [],
+              "variants": [],
+              "tariffs": [],
+              "appliedTaxIds": [],
+              "netAmount": 50,
+              "taxAmount": 0,
+              "totalAmount": 50
+            }
+          ],
+          "payments": [
+            {
+              "id": "refund-pay",
+              "method": "CARD",
+              "methodLabel": "Nota de crédito",
+              "amount": 50,
+              "timestamp": "2026-09-05T23:59:00-04:00",
+              "gatewayTransactionType": "VOID"
+            }
+          ],
+          "total": 50,
+          "netAmount": 50,
+          "taxAmount": 0,
+          "discountAmount": 0,
+          "fiscalMode": "NONE",
+          "originalTransactionId": "closed-fixture"
+        }
+      ],
+      "cashMovements": [
+        {
+          "id": "fund-fixture",
+          "type": "IN",
+          "amount": 1000,
+          "reason": "Fondo explícito ficticio",
+          "timestamp": "2026-09-05T23:59:00-04:00",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "terminalId": "fixture-terminal",
+          "currencyCode": "DOP"
+        }
+      ],
+      "collections": [],
+      "closedReferences": [
+        {
+          "id": "closed-fixture",
+          "displayId": "T-001",
+          "date": "2026-09-05T23:59:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "documentType": "TICKET",
+          "status": "COMPLETED",
+          "items": [
+            {
+              "id": "product-fixture",
+              "cartId": "cart-line-fixture",
+              "name": "Producto ficticio",
+              "quantity": 1,
+              "price": 550,
+              "category": "fixture",
+              "images": [],
+              "attributes": [],
+              "variants": [],
+              "tariffs": [],
+              "appliedTaxIds": [],
+              "netAmount": 550,
+              "taxAmount": 0,
+              "totalAmount": 550
+            }
+          ],
+          "payments": [
+            {
+              "id": "pay-usd",
+              "method": "CASH",
+              "amount": 600,
+              "timestamp": "2026-09-05T23:59:00-04:00",
+              "currencyCode": "USD",
+              "amountOriginal": 10,
+              "exchangeRate": 60,
+              "appliedAmount": 550,
+              "changeAmount": 50,
+              "changeCurrencyCode": "DOP"
+            }
+          ],
+          "total": 550,
+          "netAmount": 550,
+          "taxAmount": 0,
+          "discountAmount": 0,
+          "fiscalMode": "NONE",
+          "zReportId": "z-previous",
+          "zReportSequence": "Z-001"
+        }
+      ],
+      "expected": {
+        "cashExpected": {
+          "DOP": 1000
+        },
+        "collectionsTotal": 0,
+        "returnsTotal": 50,
+        "openedAt": "2026-09-06T03:59:00.000Z"
+      }
+    },
+    {
+      "id": "P06_UNVERIFIED_CASH_REFUND_DIAGNOSTIC",
+      "transactions": [
+        {
+          "id": "refund-fixture",
+          "displayId": "NC-001",
+          "date": "2026-09-05T23:59:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "documentType": "REFUND",
+          "status": "REFUNDED",
+          "items": [
+            {
+              "id": "product-fixture",
+              "cartId": "cart-line-fixture",
+              "name": "Producto ficticio",
+              "quantity": 1,
+              "price": 50,
+              "category": "fixture",
+              "images": [],
+              "attributes": [],
+              "variants": [],
+              "tariffs": [],
+              "appliedTaxIds": [],
+              "netAmount": 50,
+              "taxAmount": 0,
+              "totalAmount": 50
+            }
+          ],
+          "payments": [
+            {
+              "id": "refund-pay",
+              "method": "CASH",
+              "methodLabel": "Nota de crédito",
+              "amount": 50,
+              "timestamp": "2026-09-05T23:59:00-04:00"
+            }
+          ],
+          "total": 50,
+          "netAmount": 50,
+          "taxAmount": 0,
+          "discountAmount": 0,
+          "fiscalMode": "NONE",
+          "originalTransactionId": "closed-fixture"
+        }
+      ],
+      "cashMovements": [
+        {
+          "id": "fund-fixture",
+          "type": "IN",
+          "amount": 1000,
+          "reason": "Fondo explícito ficticio",
+          "timestamp": "2026-09-05T23:59:00-04:00",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "terminalId": "fixture-terminal",
+          "currencyCode": "DOP"
+        }
+      ],
+      "collections": [],
+      "closedReferences": [
+        {
+          "id": "closed-fixture",
+          "displayId": "T-001",
+          "date": "2026-09-05T23:59:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "documentType": "TICKET",
+          "status": "COMPLETED",
+          "items": [
+            {
+              "id": "product-fixture",
+              "cartId": "cart-line-fixture",
+              "name": "Producto ficticio",
+              "quantity": 1,
+              "price": 550,
+              "category": "fixture",
+              "images": [],
+              "attributes": [],
+              "variants": [],
+              "tariffs": [],
+              "appliedTaxIds": [],
+              "netAmount": 550,
+              "taxAmount": 0,
+              "totalAmount": 550
+            }
+          ],
+          "payments": [
+            {
+              "id": "pay-usd",
+              "method": "CASH",
+              "amount": 600,
+              "timestamp": "2026-09-05T23:59:00-04:00",
+              "currencyCode": "USD",
+              "amountOriginal": 10,
+              "exchangeRate": 60,
+              "appliedAmount": 550,
+              "changeAmount": 50,
+              "changeCurrencyCode": "DOP"
+            }
+          ],
+          "total": 550,
+          "netAmount": 550,
+          "taxAmount": 0,
+          "discountAmount": 0,
+          "fiscalMode": "NONE",
+          "zReportId": "z-previous",
+          "zReportSequence": "Z-001"
+        }
+      ],
+      "expected": {
+        "cashExpected": {
+          "DOP": 1050
+        },
+        "collectionsTotal": 0,
+        "returnsTotal": 50,
+        "openedAt": "2026-09-06T03:59:00.000Z"
+      }
+    },
+    {
+      "id": "P07_BOOKING_ADVANCE",
+      "transactions": [],
+      "cashMovements": [],
+      "collections": [
+        {
+          "id": "advance-fixture",
+          "displayId": "ANT-001",
+          "customerId": "customer-fixture",
+          "customerName": "Cliente ficticio",
+          "date": "2026-09-06T00:10:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "totalAmount": 30,
+          "method": "CASH",
+          "currencyCode": "DOP",
+          "exchangeRate": 1,
+          "receivedAmountOriginal": 30,
+          "receivedAmountBase": 30,
+          "appliedAmountBase": 0,
+          "unappliedAmountBase": 30,
+          "allocations": [],
+          "bookingActivityId": "booking-fixture"
+        }
+      ],
+      "closedReferences": [
+        {
+          "id": "closed-fixture",
+          "displayId": "T-001",
+          "date": "2026-09-05T23:59:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "documentType": "TICKET",
+          "status": "COMPLETED",
+          "items": [
+            {
+              "id": "product-fixture",
+              "cartId": "cart-line-fixture",
+              "name": "Producto ficticio",
+              "quantity": 1,
+              "price": 550,
+              "category": "fixture",
+              "images": [],
+              "attributes": [],
+              "variants": [],
+              "tariffs": [],
+              "appliedTaxIds": [],
+              "netAmount": 550,
+              "taxAmount": 0,
+              "totalAmount": 550
+            }
+          ],
+          "payments": [
+            {
+              "id": "pay-usd",
+              "method": "CASH",
+              "amount": 600,
+              "timestamp": "2026-09-05T23:59:00-04:00",
+              "currencyCode": "USD",
+              "amountOriginal": 10,
+              "exchangeRate": 60,
+              "appliedAmount": 550,
+              "changeAmount": 50,
+              "changeCurrencyCode": "DOP"
+            }
+          ],
+          "total": 550,
+          "netAmount": 550,
+          "taxAmount": 0,
+          "discountAmount": 0,
+          "fiscalMode": "NONE",
+          "zReportId": "z-previous",
+          "zReportSequence": "Z-001"
+        }
+      ],
+      "expected": {
+        "cashExpected": {},
+        "collectionsTotal": 30,
+        "returnsTotal": 0,
+        "openedAt": "2026-09-06T16:00:00.000Z"
+      }
+    },
+    {
+      "id": "P08_CROSS_MIDNIGHT",
+      "transactions": [
+        {
+          "id": "sale-fixture",
+          "displayId": "T-001",
+          "date": "2026-09-05T23:59:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "documentType": "TICKET",
+          "status": "COMPLETED",
+          "items": [
+            {
+              "id": "product-fixture",
+              "cartId": "cart-line-fixture",
+              "name": "Producto ficticio",
+              "quantity": 1,
+              "price": 550,
+              "category": "fixture",
+              "images": [],
+              "attributes": [],
+              "variants": [],
+              "tariffs": [],
+              "appliedTaxIds": [],
+              "netAmount": 550,
+              "taxAmount": 0,
+              "totalAmount": 550
+            }
+          ],
+          "payments": [
+            {
+              "id": "pay-usd",
+              "method": "CASH",
+              "amount": 600,
+              "timestamp": "2026-09-05T23:59:00-04:00",
+              "currencyCode": "USD",
+              "amountOriginal": 10,
+              "exchangeRate": 60,
+              "appliedAmount": 550,
+              "changeAmount": 50,
+              "changeCurrencyCode": "DOP"
+            }
+          ],
+          "total": 550,
+          "netAmount": 550,
+          "taxAmount": 0,
+          "discountAmount": 0,
+          "fiscalMode": "NONE"
+        }
+      ],
+      "cashMovements": [],
+      "collections": [
+        {
+          "id": "collection-fixture",
+          "displayId": "R-001",
+          "customerId": "customer-fixture",
+          "customerName": "Cliente ficticio",
+          "date": "2026-09-06T00:10:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "totalAmount": 100,
+          "method": "CASH",
+          "currencyCode": "DOP",
+          "exchangeRate": 1,
+          "receivedAmountOriginal": 100,
+          "receivedAmountBase": 100,
+          "appliedAmountBase": 80,
+          "unappliedAmountBase": 20,
+          "allocations": [
+            {
+              "id": "alloc-fixture",
+              "collectionId": "collection-fixture",
+              "transactionId": "closed-fixture",
+              "amount": 80,
+              "timestamp": "2026-09-05T23:59:00-04:00"
+            }
+          ]
+        }
+      ],
+      "closedReferences": [
+        {
+          "id": "closed-fixture",
+          "displayId": "T-001",
+          "date": "2026-09-05T23:59:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "documentType": "TICKET",
+          "status": "COMPLETED",
+          "items": [
+            {
+              "id": "product-fixture",
+              "cartId": "cart-line-fixture",
+              "name": "Producto ficticio",
+              "quantity": 1,
+              "price": 550,
+              "category": "fixture",
+              "images": [],
+              "attributes": [],
+              "variants": [],
+              "tariffs": [],
+              "appliedTaxIds": [],
+              "netAmount": 550,
+              "taxAmount": 0,
+              "totalAmount": 550
+            }
+          ],
+          "payments": [
+            {
+              "id": "pay-usd",
+              "method": "CASH",
+              "amount": 600,
+              "timestamp": "2026-09-05T23:59:00-04:00",
+              "currencyCode": "USD",
+              "amountOriginal": 10,
+              "exchangeRate": 60,
+              "appliedAmount": 550,
+              "changeAmount": 50,
+              "changeCurrencyCode": "DOP"
+            }
+          ],
+          "total": 550,
+          "netAmount": 550,
+          "taxAmount": 0,
+          "discountAmount": 0,
+          "fiscalMode": "NONE",
+          "zReportId": "z-previous",
+          "zReportSequence": "Z-001"
+        }
+      ],
+      "expected": {
+        "cashExpected": {
+          "USD": 10,
+          "DOP": -50
+        },
+        "collectionsTotal": 100,
+        "returnsTotal": 0,
+        "openedAt": "2026-09-06T03:59:00.000Z"
+      }
+    }
+  ],
+  "zReportShapeExample": {
+    "id": "z-fixture",
+    "terminalId": "fixture-terminal",
+    "sequenceNumber": "Z-002",
+    "openedAt": "2026-09-05T23:59:00-04:00",
+    "closedAt": "2026-09-06T16:00:00.000Z",
+    "closedByUserId": "fixture-user",
+    "closedByUserName": "Cajero ficticio",
+    "baseCurrency": "DOP",
+    "totalsByMethod": {
+      "CASH": 550
+    },
+    "cashExpected": {
+      "USD": 10,
+      "DOP": -50
+    },
+    "cashCounted": {
+      "USD": 10,
+      "DOP": 0
+    },
+    "cashDiscrepancy": {
+      "USD": 0,
+      "DOP": 50
+    },
+    "cashSales": 600,
+    "cashIn": 0,
+    "cashOut": 50,
+    "transactionCount": 1,
+    "notes": "Synthetic schema-only example; declaration is not a physical count or executed close."
+  }
+}
