@@ -1,3 +1,4 @@
+import { recordCheckoutDiagnostic } from './services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from './utils/erpPaymentMethods';
 import { createStartupTrace } from './utils/startupTrace';
 import {
@@ -5523,6 +5524,7 @@ const AppContent: React.FC = () => {
     if (role === DeviceRole.SELF_CHECKOUT) {
       clearSecurityState();
       setCurrentUser(null);
+      recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'APP_CLEAR_01' });
       setCart([]);
     }
     setCurrentView(targetView);
@@ -12185,6 +12187,7 @@ const AppContent: React.FC = () => {
             onCheckout={() => handleViewChange('KIOSK_PAYMENT')}
             onCancel={() => {
               clearSecurityState();
+              recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'APP_CLEAR_02' });
               setCart([]);
               setSelectedCustomer(null);
               clearKioskCoupon();
@@ -12461,6 +12464,7 @@ const AppContent: React.FC = () => {
             }}
             onCancel={() => {
               clearSecurityState();
+              recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'APP_CLEAR_03' });
               setCart([]);
               setSelectedCustomer(null);
               clearKioskCoupon();
@@ -12631,6 +12635,7 @@ const AppContent: React.FC = () => {
             onTimeout={() => {
               if (currentView !== 'KIOSK_WELCOME') {
                 clearSecurityState();
+                recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'APP_CLEAR_04' });
                 setCart([]);
                 setSelectedCustomer(null);
                 clearKioskCoupon();

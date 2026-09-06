@@ -1,3 +1,4 @@
+import { recordCheckoutDiagnostic } from '../CheckoutDiagnostics';
 import type {
     DatabaseAdapter,
     DurableOutboxStatus,
@@ -84,7 +85,13 @@ export class DurableOutboxRepository {
                 throw error;
             }
         }
+        const transaction = input.outboxEvent.payload?.transaction;
+        const diagnostic = { items: transaction?.items, total: transaction?.total, transactionId: transaction?.id,
+            displayId: transaction?.displayId, eventId: input.outboxEvent.eventId, aggregateId: input.outboxEvent.aggregateId,
+            summaryItemCount: input.outboxEvent.payload?.summary?.item_count };
+        recordCheckoutDiagnostic('FINANCIAL_COMMIT_START', diagnostic);
         await this.database.commitFinancialTransaction(input);
+        recordCheckoutDiagnostic('FINANCIAL_COMMIT_OK', diagnostic);
         await this.refreshMetrics();
     }
 

@@ -1,3 +1,4 @@
+import { recordCheckoutDiagnostic } from '../services/CheckoutDiagnostics';
 import { MobilePosNavigation } from './MobilePosNavigation';
 import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -1909,6 +1910,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       if (!orderId) {
          if (isNewTableContext) {
+            recordCheckoutDiagnostic('TABLE_CART_CLEAR', { items: cart, tableId: activeTable.id, orderId, reason: !orderId ? 'TABLE_WITHOUT_ORDER' : 'ORDER_NOT_FOUND' });
             onUpdateCart([]);
             setOrderServiceType('DINE_IN');
             if (!selectedCustomer) onSelectCustomer(null);
@@ -1925,6 +1927,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!ticket) {
          if (isNewTableContext) {
             console.warn(`Ticket ${orderId} no encontrado para la mesa activa. Se limpia el carrito para evitar heredar otra mesa.`);
+            recordCheckoutDiagnostic('TABLE_CART_CLEAR', { items: cart, tableId: activeTable.id, orderId, reason: !orderId ? 'TABLE_WITHOUT_ORDER' : 'ORDER_NOT_FOUND' });
             onUpdateCart([]);
             if (!selectedCustomer) onSelectCustomer(null);
          }
@@ -1935,6 +1938,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (shouldHydrate) {
          const ticketItems = ticket.items || [];
          if (buildCartDigest(ticketItems) !== buildCartDigest(cart)) {
+            recordCheckoutDiagnostic('TABLE_CART_REPLACE', { items: ticketItems, expectedItemCount: cart.length, tableId: activeTable.id, orderId, reason: 'TABLE_HYDRATION' });
             onUpdateCart(ticketItems);
          }
          if (ticket.customerId) {
@@ -4463,6 +4467,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const amountDueNow = activeRecoveredReservation
       ? (isRecoveredUberOrder ? 0 : reservationBalanceDue)
       : nextPaymentFractionPart?.amount ?? cartTotal;
+   useEffect(() => {
+      recordCheckoutDiagnostic('CART_RENDER', { items: processedCart, expectedItemCount: cart.length, total: cartTotal,
+         tableId: activeTable?.id, orderId: activeTable?.currentOrderId, terminalId: activeTerminalId });
+   }, [processedCart, cartTotal, activeTable?.id, activeTable?.currentOrderId]);
+
    const canCheckoutWithFiscalPolicy = isOrderTakerMode || isFiscalModeDisabled || fiscalStatus.hasNCF;
    const checkoutActionLabel = isOrderTakerMode
       ? 'GUARDAR PEDIDO'
@@ -4701,6 +4710,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setReservationAdvanceInput('0');
       setReservationDeliveryDate('');
       setReservationCustomerId('');
+      recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_03' });
       onUpdateCart([]);
       onSelectCustomer(null);
       setActiveRecoveredReservation(null);
@@ -4865,6 +4875,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (activeTable) {
             await releaseActiveEmptyTable({ force: true });
          } else {
+            recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_04' });
             onUpdateCart([]);
          }
          return;
@@ -5009,6 +5020,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
    const handlePaymentConfirm = async (payments: PaymentEntry[], voluntaryTip?: number): Promise<Transaction | null> => {
+      recordCheckoutDiagnostic('CHECKOUT_CONFIRM', { items: processedCart, expectedItemCount: cart.length, total: cartTotal, payments, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, terminalId: activeTerminalId });
       if (paymentFinalizationInFlightRef.current) {
          console.warn('[PAYMENT] Se ignoró un segundo intento de finalizar la misma venta.');
          return null;
@@ -5425,6 +5437,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                   if (result.sale) commitAppliedCoupon(result.sale);
 
+                  recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_05' });
                   onUpdateCart([]);
                   if (redeemedCoupon) setGlobalDiscount({ type: 'PERCENT', value: 0 });
                   setRedeemedCoupon(null);
@@ -5447,6 +5460,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      data.result.sale = await syncConsignmentSettlement(data.result.sale);
                      commitAppliedCoupon(data.result.sale);
                   }
+                  recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_06' });
                   onUpdateCart([]);
                   if (redeemedCoupon) setGlobalDiscount({ type: 'PERCENT', value: 0 });
                   setRedeemedCoupon(null);
@@ -5681,6 +5695,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   // For now, mostly relevant for Tables.
                }
 
+               recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_07' });
                onUpdateCart([]);
                if (redeemedCoupon) setGlobalDiscount({ type: 'PERCENT', value: 0 });
                setRedeemedCoupon(null);
@@ -5836,6 +5851,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return;
       }
       setReturnToTableMapAfterPayment(false);
+      recordCheckoutDiagnostic('CHECKOUT_OPEN', { items: processedCart, expectedItemCount: cart.length, total: cartTotal, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, terminalId: activeTerminalId });
       setShowPaymentModal(true);
       markInteractionStateUpdate(trace, 2);
       markInteractionStage(trace, 'HANDLER_END');
@@ -6452,6 +6468,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          });
          void Promise.resolve(onTableOrderClosed?.(tableToRelease, tableToRelease.currentOrderId, remaining));
          if (remaining.some(ticket => String(ticket.tableId ?? '') === releasedTableId)) {
+            recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_08' });
             onUpdateCart([]);
             onSelectCustomer(null);
             setActiveRecoveredReservation(null);
@@ -6467,6 +6484,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          void Promise.resolve(onTableOrderClosed?.(tableToRelease, undefined, parkedTickets));
       }
 
+      recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_09' });
       onUpdateCart([]);
       onSelectCustomer(null);
       setActiveRecoveredReservation(null);
@@ -6624,6 +6642,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       await Promise.resolve(onTableOrderSaved?.(activeTable, tableOrder));
 
+      recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_10' });
       onUpdateCart([]);
       onSelectCustomer(null);
       setActiveRecoveredReservation(null);
@@ -8801,6 +8820,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             />
          )}
          {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={nextPaymentFractionPart && cartTotal > 0 ? cartTax * (amountDueNow / cartTotal) : cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => {
+            recordCheckoutDiagnostic('PAYMENT_CLOSE');
             setShowPaymentModal(false);
             if (returnToTableMapAfterPayment && onOpenTableMap) {
                setReturnToTableMapAfterPayment(false);

@@ -1,3 +1,4 @@
+import { recordCheckoutDiagnostic } from '../CheckoutDiagnostics';
 import { apiSyncAdapter } from './ApiSyncAdapter';
 import {
     durableOutboxRepository,
@@ -168,6 +169,14 @@ export class DurableOutboxBatchSender {
 
         let response: any;
         try {
+            for (const event of selection.events) {
+                if (event.eventType === 'SALE_POSTED') recordCheckoutDiagnostic('OUTBOX_SEND', {
+                    items: event.payload.transaction?.items, total: event.payload.transaction?.total,
+                    transactionId: event.payload.transaction?.id, displayId: event.payload.transaction?.displayId,
+                    eventId: event.eventId, aggregateId: event.aggregateId, status: event.status,
+                    summaryItemCount: event.payload.summary?.item_count,
+                });
+            }
             response = await this.transport(selection.events.map(toDurableWireEvent));
             syncMetrics.increment('pushes_total');
         } catch (error) {
@@ -191,6 +200,7 @@ export class DurableOutboxBatchSender {
         for (const record of selection.events) {
             const result = results.get(record.eventId);
             const status = normalizeStatus(result);
+            recordCheckoutDiagnostic('OUTBOX_RESULT', { transactionId: record.aggregateId, eventId: record.eventId, status });
             if (['APPLIED', 'APPLIED_ERP', 'DUPLICATE', 'DUPLICATE_APPLIED', 'ALREADY_APPLIED'].includes(status)) {
                 await this.repository.markAppliedErp(record.eventId, now);
                 summary.applied++;

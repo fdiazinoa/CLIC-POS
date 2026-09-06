@@ -1,3 +1,4 @@
+import { recordCheckoutDiagnostic } from '../services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from '../utils/erpPaymentMethods';
 
 import React, { useState, useEffect, useLayoutEffect, useMemo } from 'react';
@@ -859,6 +860,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    const handleRemovePayment = (id: string) => { setPayments(prev => prev.filter(p => p.id !== id)); };
 
    const handleFinalize = async () => {
+      recordCheckoutDiagnostic('PAYMENT_MODAL_CONFIRM', { items, total, payments });
       if (isFinalizing || isProcessingGateway) return;
       if (!canFinalize) {
          alert("Monto insuficiente");
@@ -969,6 +971,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                setFinalizeError('El cobro está tardando más de lo esperado, espere unos segundos...');
             }, 15000);
             const txn = await onConfirm(paymentsToConfirm, voluntaryTip);
+            recordCheckoutDiagnostic('PAYMENT_RESULT', { items: txn?.items, total: txn?.total, transactionId: txn?.id, displayId: txn?.displayId, status: txn ? 'RETURNED' : 'NO_TRANSACTION' });
 
             if (txn) {
                if (slowProcessTimer) {
