@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import type { BusinessConfig } from '../types';
-import { getCheckoutTrackingSession, readCheckoutDiagnostics, readCheckoutDeliveryStatus, setCheckoutTrackingEnabled } from '../services/CheckoutDiagnostics';
+import { setCheckoutCaptureContext, getCheckoutTrackingSession, readCheckoutDiagnostics, readCheckoutDeliveryStatus, setCheckoutTrackingEnabled } from '../services/CheckoutDiagnostics';
 import { readInstalledPosApkVersion } from '../services/version/posApkUpdateService';
 import { readTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
 import { ExportUtils } from '../utils/ExportUtils';
@@ -26,6 +26,7 @@ export default function CheckoutTrackingSettings({ config, currentDeviceId, onCl
             const version = enabled ? null : await readInstalledPosApkVersion();
             const terminal = config.terminals?.find(candidate => currentDeviceId && candidate.config?.currentDeviceId === currentDeviceId);
             const credentials = readTerminalCredentialsSync();
+            if (version) setCheckoutCaptureContext({versionName:version.versionName,versionCode:version.versionCode,mode:config.vertical === 'RESTAURANT' ? 'RESTAURANT' : 'RETAIL'});
             setSession(setCheckoutTrackingEnabled(!enabled, {
                 versionName: version?.versionName ?? null, versionCode: version?.versionCode ?? null,
                 terminalId: credentials.erpTerminalId ?? terminal?.id ?? null, deviceId: credentials.deviceId ?? currentDeviceId ?? null,

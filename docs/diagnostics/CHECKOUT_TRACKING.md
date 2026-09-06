@@ -46,3 +46,11 @@ Benchmark reproducible: `npx tsx scripts/benchmark-checkout-diagnostics.ts`. En 
 98 pruebas: logger, matriz Android obligatoria, contrato SALE_POSTED, persistencia/outbox y latencia existente. npm ci y build TypeScript/Vite correctos. Lint no puede arrancar porque falta eslint.config.* en el repositorio base.
 
 Prueba en emulador autorizada: actualización conservando datos; activar/desactivar; registrar eventos sintéticos marcados; verificar persistencia tras reinicio y exportación; medir CPU en el WebView. No crear ventas/pagos/cierres contables para esta comprobación.
+
+## Precisión de evidencia desde 1.1.296
+
+- `details.operating_mode` indica RETAIL o RESTAURANT cuando el POS conoce el modo operativo. `captured_apk_version`/`captured_apk_code` indican la versión leída del puente nativo durante ese arranque. Los registros antiguos sin ese contexto permanecen desconocidos; nunca se les asigna la versión nueva. La versión de apertura de sesión no cambia.
+- Totales ausentes se omiten en el HTTP para que el ERP preserve null; cero real sigue siendo cero. El mensaje muestra «No registrado». Los ceros históricos ya almacenados no se reinterpretan.
+- Solicitudes de confirmación usan CHECKOUT_OPENED con mensaje de fase; PAYMENT_CONFIRMED se reserva al resultado del checkout. `details.phase` y `source_stage` conservan el punto exacto. Transacción construida y persistida se distinguen.
+- PRINT_DELIVERY_PLAN explica si el comprobante espera el botón manual, irá por correo, impresión automática del procesador o flujo de abono. No equivale a impresión.
+- El wrapper compartido observa ticket, precuenta y comanda y devuelve exactamente la misma promesa. Su aceptación nunca acredita salida de papel.

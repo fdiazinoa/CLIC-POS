@@ -1,4 +1,4 @@
-import { recordCheckoutDiagnostic } from '../services/CheckoutDiagnostics';
+import { trackCheckoutPrint } from '../services/CheckoutPrintTracking';
 import { notifyBrowserPrint } from '../services/printer/BrowserPrint';
 import { PrintOutputError, runPrintTask } from '../services/printer/PrintFeedback';
 import { Transaction, BusinessConfig, Reservation, CartItem, Table, CashMovement } from '../types';
@@ -1263,20 +1263,14 @@ const printGatewayVoucher = (...args: Parameters<typeof printGatewayVoucherInter
     runPrintTask(`voucher:${args[1].referenceId}:${args[1].copyLabel}`, `Voucher ${args[1].copyLabel}`, () => printGatewayVoucherInternal(...args));
 export const printTicket = (...args: Parameters<typeof printTicketInternal>) => {
     const transaction = args[0];
-    recordCheckoutDiagnostic('PRINT_REQUEST', { transactionId: transaction.id, displayId: transaction.displayId, items: transaction.items, total: transaction.total });
-    const result = runPrintTask(`ticket:${transaction.id}`, 'Ticket', () => printTicketInternal(...args));
-    void result.then(accepted => {
-        recordCheckoutDiagnostic('PRINT_RESULT', { transactionId: transaction.id, displayId: transaction.displayId, status: accepted ? 'ACCEPTED_BY_PRINT_PIPELINE' : 'NOT_ACCEPTED' });
-    }, () => {
-        recordCheckoutDiagnostic('PRINT_RESULT', { transactionId: transaction.id, displayId: transaction.displayId, status: 'ERROR' });
-    });
-    return result;
+    return trackCheckoutPrint({transactionId:transaction.id,displayId:transaction.displayId,items:transaction.items,total:transaction.total,reason:'TICKET'},
+        ()=>runPrintTask(`ticket:${transaction.id}`, 'Ticket', () => printTicketInternal(...args)));
 };
 export const printReservation = (...args: Parameters<typeof printReservationInternal>) =>
     runPrintTask(`reservation:${args[0].id}`, 'Reserva', () => printReservationInternal(...args));
 export const printPrecuenta = (...args: Parameters<typeof printPrecuentaInternal>) =>
-    runPrintTask(`precuenta:${JSON.stringify(args[1])}`, 'Precuenta', () => printPrecuentaInternal(...args));
+    trackCheckoutPrint({items:args[1].items,total:args[1].finalTotal,tableId:args[1].table?.id,reason:'PRECUENTA'}, ()=>runPrintTask(`precuenta:${JSON.stringify(args[1])}`, 'Precuenta', () => printPrecuentaInternal(...args)));
 export const printComanda = (...args: Parameters<typeof printComandaInternal>) =>
-    runPrintTask(`comanda:${JSON.stringify(args[1])}`, 'Comanda', () => printComandaInternal(...args));
+    trackCheckoutPrint({items:args[1].items,tableId:args[1].table?.id,orderId:args[1].orderNumber,reason:'COMANDA'}, ()=>runPrintTask(`comanda:${JSON.stringify(args[1])}`, 'Comanda', () => printComandaInternal(...args)));
 export const printCashMovementReceipt = (...args: Parameters<typeof printCashMovementReceiptInternal>) =>
     runPrintTask(`cash-movement:${args[0].id}`, 'Comprobante de entrada/salida', () => printCashMovementReceiptInternal(...args));

@@ -8,9 +8,17 @@ export type CheckoutDiagnosticInput = {
     status?: unknown; reason?: unknown; summaryItemCount?: unknown; expectedItemCount?: unknown;
 };
 export interface TrackingSession { id: string; startedAt: string; expiresAt: string; versionName: string | null; versionCode: number | null; terminalId: string | null; deviceId: string | null }
+export type CaptureContext = { mode: 'RETAIL' | 'RESTAURANT' | null; versionName: string | null; versionCode: number | null };
+let captureContext: CaptureContext = { mode:null, versionName:null, versionCode:null };
+export const setCheckoutCaptureContext = (patch: Partial<CaptureContext>) => { captureContext = {...captureContext,...patch}; };
+// Read native version once per boot, outside checkout; never infer it from a restored session.
+if (typeof window !== 'undefined') {
+    void import('./version/posApkUpdateService').then(m=>m.readInstalledPosApkVersion())
+        .then(v=>setCheckoutCaptureContext({versionName:v.versionName,versionCode:v.versionCode})).catch(()=>{});
+}
 export interface CheckoutDiagnosticRecord {
     id: string; at: string; checkoutId: string | null; stage: string; session: TrackingSession | null;
-    data: Record<string, unknown>; anomaly: boolean;
+    data: Record<string, unknown>; anomaly: boolean; capture?: CaptureContext;
 }
 export interface CheckoutDiagnosticIncident { id: string; at: string; records: CheckoutDiagnosticRecord[] }
 export type DiagnosticWriter = (records: CheckoutDiagnosticRecord[], incidents: CheckoutDiagnosticIncident[]) => Promise<void>;
@@ -84,7 +92,7 @@ export class CheckoutDiagnosticRecorder {
             const record: CheckoutDiagnosticRecord = {
                 id: `${this.bootId}:${++this.sequence}`, at: new Date().toISOString(), stage, session: this.session ? { ...this.session } : null,
                 checkoutId: transactionId ? this.transactionCheckouts.get(transactionId) || null : this.checkoutId,
-                data, anomaly: emptyFinancial || clearedWhilePaying,
+                data, capture: {...captureContext}, anomaly: emptyFinancial || clearedWhilePaying,
             };
             this.recent.push(record);
             if (this.recent.length > 128) this.recent.shift();

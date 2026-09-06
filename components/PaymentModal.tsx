@@ -985,6 +985,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                const preferredReceiptEmail = finalizedTransaction.customerSnapshot?.email || customer?.email;
                const shouldEmailReceiptOnly = Boolean(customer?.prefersEmail && preferredReceiptEmail);
 
+               recordCheckoutDiagnostic('PRINT_DELIVERY_PLAN', {transactionId:txn.id,displayId:txn.displayId,
+                  status:isInstallmentPayment ? 'INSTALLMENT_FLOW' : shouldEmailReceiptOnly ? 'EMAIL_ONLY' : gatewayPayments.length ? 'AUTO_GATEWAY_PRINT' : 'MANUAL_PRINT_BUTTON',
+                  reason:'PLAN_ONLY_NOT_PRINT_CONFIRMATION'});
+
                // The sale is already durable. Render success before touching any
                // printer, cash drawer, email service or payment-gateway receipt.
                setSuccessNotice(null);
