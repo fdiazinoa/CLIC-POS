@@ -1,0 +1,55 @@
+{
+  "validationStage": "FINAL_SEAL_CANDIDATE",
+  "activationId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  "manifest": {
+    "schemaVersion": "pos.close-manifest.v1",
+    "closeId": "99999999-9999-4999-8999-999999999999",
+    "closeEventId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "previousCloseProof": "PROVEN_FIRST",
+    "previousCloseId": null,
+    "revision": "1",
+    "calculationVersion": "fixture-only-not-native",
+    "terminalId": "44444444-4444-4444-8444-444444444444",
+    "storageEpoch": "55555555-5555-4555-8555-555555555555",
+    "openSetId": "66666666-6666-4666-8666-666666666666",
+    "sealedThrough": "2",
+    "members": [
+      {
+        "kind": "CASH_MOVEMENT",
+        "originalId": "CM-SYNTHETIC-1",
+        "revision": "2",
+        "originalContentHash": "444faef87757e6595ab3fce8d4eef86129628ad7417b201cecd5a66d2af9e3d6",
+        "commercialType": null
+      }
+    ],
+    "dependencies": [],
+    "configurationHash": "f78a5a9519dbcf49addf97edc282ca580c32951acf38844a6041121e276e1e02",
+    "declarationHash": "c16952266b3d699fb6509aa6c157aadf8aa745a0d8c722be74279dfe7edea6d9",
+    "reportHash": "b916c16dfc9fd4f6e134f03b3ff75aebaa8cf255045a06798ee7f22b865b6be7"
+  },
+  "expectedRevisions": {
+    "scope": "1",
+    "originals": "2",
+    "membership": "1",
+    "close": "0",
+    "series": "1",
+    "configuration": "1",
+    "configurationHash": "f78a5a9519dbcf49addf97edc282ca580c32951acf38844a6041121e276e1e02"
+  },
+  "checkpoint": {
+    "storageEpoch": "55555555-5555-4555-8555-555555555555",
+    "openSetId": "66666666-6666-4666-8666-666666666666",
+    "highestCommitted": "2",
+    "contiguousReceived": "2",
+    "highestReceived": "2",
+    "gaps": [],
+    "chainHash": "b267c681e7352ea05d01967f36e0f5bfa4492fca7e61632d04b5cd4f7649be1f",
+    "finalSeal": {
+      "scope": "OPEN_SET",
+      "finalSequence": "2",
+      "chainHash": "b267c681e7352ea05d01967f36e0f5bfa4492fca7e61632d04b5cd4f7649be1f"
+    },
+    "unknownTailPossible": false,
+    "exactZEligible": false
+  }
+}

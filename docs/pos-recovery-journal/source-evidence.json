@@ -1,0 +1,106 @@
+{
+  "sourceCommit": "2e200a2ff7854cbb08fa8218cffb09dbdb7bdf57",
+  "erpInputCommit": "a7e490d633dd010a1403676f186ace84004b84a2",
+  "files": [
+    {
+      "path": "services/db/index.ts",
+      "sha256": "1411483489eaedddf028b7ac302b73bed446874883240df25a52cde41067b85c"
+    },
+    {
+      "path": "utils/db.ts",
+      "sha256": "1c47cfca7fb9635800296ce06c718693aeeced81023e5530e1b2ae20c3fd836d"
+    },
+    {
+      "path": "services/db/DatabaseAdapter.ts",
+      "sha256": "23dacd85bd5d3087adce950a8de00f179acb8b69ac62b34cc20b512d375f37af"
+    },
+    {
+      "path": "services/db/adapters/CapacitorSQLiteAdapter.ts",
+      "sha256": "78a4f95c5f700bb0d014148c625a54d0ecb44d318cdb7876bd9dba914c4f1c11"
+    },
+    {
+      "path": "services/db/adapters/IndexedDBAdapter.ts",
+      "sha256": "095595d451a6fb3f32fc33ef0d46fa8724822ee80cec56839c5a71e735230b2a"
+    },
+    {
+      "path": "services/db/adapters/SQLiteWASMAdapter.ts",
+      "sha256": "79156a0fb8ad3ea601dec3217b8b6d31c558106d9b1df327919accaa4bbfa403"
+    },
+    {
+      "path": "services/db/adapters/LocalStorageAdapter.ts",
+      "sha256": "36cfea23c672aacd7193e9acc7da7ce980eb94cdee2ba177b5ee4cfc555ba2e6"
+    },
+    {
+      "path": "services/db/adapters/NetworkAdapter.ts",
+      "sha256": "f6d8a7b33db4d9c65c71cfbc2e1693b2d32ca88e3589733718f4b75f115db34c"
+    },
+    {
+      "path": "services/sync/DurableOutboxSchema.ts",
+      "sha256": "bd071f2a8f71ba16a992e3e7bc6cc185bb79a86bfb51a463ed7e0804698293e1"
+    },
+    {
+      "path": "services/sync/DurableOutboxRepository.ts",
+      "sha256": "8653ea802d48b4a4f6d9ef134cf3ecffa26c1ec471be8d47204c9e3887dd8f3f"
+    },
+    {
+      "path": "services/sync/DurableOutboxBatchSender.ts",
+      "sha256": "0d8ce233f37809727d8941506e9f48352f63b85ef4b610e16c416633f13f83be"
+    },
+    {
+      "path": "services/sync/SyncFeatureFlags.ts",
+      "sha256": "b00af2a21924f6d8897cb2641770bc2ec8bf7c5fa9d2216a59ad20ddae1775c5"
+    },
+    {
+      "path": "App.tsx",
+      "sha256": "a61f4260fa1648624e9b315e62123f0ce27d04cda5e5f25f54eb8cf806bbefc2"
+    },
+    {
+      "path": "services/transactionService.ts",
+      "sha256": "f790aae585ab47801e30221f2fc0dcbf9c41fe8fd21c578cb2c24568b622ed3b"
+    },
+    {
+      "path": "services/localRefundPersistence.ts",
+      "sha256": "b3a8219004d9a5f86b8af9a9d1d4718d8339d4ec3f7cdd23f28e4b661960f0f6"
+    },
+    {
+      "path": "services/AgendaService.ts",
+      "sha256": "267713bd441943acce77d9ae8cd43a8608dc282f04d2e96abb28136bd75f6e75"
+    },
+    {
+      "path": "components/AccountReceivableModal.tsx",
+      "sha256": "d0bff59c81d934eaeb898cb0135cd9950d49663fa45bd1fe52ee76faaf2b9ff3"
+    },
+    {
+      "path": "components/ZReportDashboard.tsx",
+      "sha256": "9cd25eea8e9d6a53c21ed815186ceb6c8ce36c7477dea7734c211171631f8e06"
+    },
+    {
+      "path": "utils/analytics.ts",
+      "sha256": "20e50aee8ef3bd181da9885454a08f662179ae863b136094e6aeb96284022ecd"
+    },
+    {
+      "path": "utils/closeReportOptions.ts",
+      "sha256": "42873163e7042d0eadc2fb2f751b9def1ab47b4c5730e0c31e6a4c5600daf06f"
+    },
+    {
+      "path": "utils/fiscalBreakdown.ts",
+      "sha256": "b14743b4cac9ce9de62018a81416904c69dad56ccf17286a14f670064b8db00e"
+    },
+    {
+      "path": "utils/zReportPaymentSummary.ts",
+      "sha256": "299c770534ecbbef3dbc173a6f9abfbd7bc7d6353eb069171a8b370f25cc51ba"
+    },
+    {
+      "path": "server/routes/sync.ts",
+      "sha256": "a80e504ef96306f4780b8143ed7360fc43ae0068e6fc1faf34ee8cd0ba885c86"
+    },
+    {
+      "path": "server/services/terminalOperationalState.ts",
+      "sha256": "ea2310ad53d61d2d527f93fcc85c11f1d55db2e848a89fc4c539422d16d8b37d"
+    },
+    {
+      "path": "tests/durableOutboxV2.test.ts",
+      "sha256": "7fd48b8e669330f2503563f3599bc8fcc9cb79cf19cfc4ff0a70e76aa1c4dec3"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "agreementStatus": "UNAGREED",
+  "sourceCommit": "2e200a2ff7854cbb08fa8218cffb09dbdb7bdf57",
+  "erpInputCommit": "a7e490d633dd010a1403676f186ace84004b84a2",
+  "sourceFilesVerified": 25,
+  "canonicalVectors": 7,
+  "graphDigests": 13,
+  "negativeCases": 20,
+  "pythonIndependentByteDigests": 20,
+  "erpR4FullCandidate": "FINAL_SEAL_COHERENT_NOT_AUTHORIZED",
+  "exactZEligible": false,
+  "closeAuthorization": "NOT_GRANTED",
+  "notExecuted": [
+    "POS runtime",
+    "cash calculator",
+    "database migrations",
+    "native crash tests",
+    "production endpoints"
+  ],
+  "limitations": [
+    "Fixtures are synthetic and not complete native original profiles",
+    "Byte/hash checks do not prove absence of an unsent tail",
+    "No atomicity or concurrency certification",
+    "JCS raw duplicate-key parser not implemented"
+  ]
+}
