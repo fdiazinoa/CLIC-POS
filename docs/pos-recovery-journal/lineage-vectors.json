@@ -1,0 +1,1234 @@
+{
+  "agreementStatus": "UNAGREED",
+  "exactZEligible": false,
+  "closeAuthorization": "NOT_GRANTED",
+  "notice": "Independent scenarios with fixture-pinned archive roots, not issued by ERP; no claim of a lost open tail being recovered.",
+  "scenarios": [
+    {
+      "name": "NEW_EPOCH",
+      "trustedArchiveDigest": "c2b12b9e75ac70686528d0b378e2b58b009a4525177535667f748f83fd4b6ca5",
+      "input": {
+        "archive": {
+          "scope": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "companyId": "22222222-2222-4222-8222-222222222222",
+            "storeId": "33333333-3333-4333-8333-333333333333",
+            "terminalId": "44444444-4444-4444-8444-444444444444"
+          },
+          "storageEpoch": "55555555-5555-4555-8555-555555555555",
+          "openSetId": "66666666-6666-4666-8666-666666666666",
+          "operations": [
+            {
+              "sequence": "1",
+              "revision": "1",
+              "commandId": "77777777-7777-4777-8777-777777777777",
+              "originalSchemaVersion": "fixture.transaction.v1",
+              "kind": "TRANSACTION",
+              "originalId": "SALE-CLOSED",
+              "commercialType": "TICKET",
+              "original": {
+                "id": "SALE-CLOSED",
+                "total": 100,
+                "pendingBalance": 100,
+                "documentType": "TICKET",
+                "status": "COMPLETED",
+                "date": "2026-09-05T23:50:00.000-04:00"
+              }
+            },
+            {
+              "sequence": "2",
+              "revision": "2",
+              "commandId": "88888888-8888-4888-8888-888888888888",
+              "originalSchemaVersion": "fixture.transaction.v1",
+              "kind": "TRANSACTION",
+              "originalId": "SALE-CLOSED",
+              "commercialType": "TICKET",
+              "original": {
+                "id": "SALE-CLOSED",
+                "total": 100,
+                "pendingBalance": 100,
+                "documentType": "TICKET",
+                "status": "COMPLETED",
+                "date": "2026-09-05T23:50:00.000-04:00",
+                "fiscalStatus": "ACCEPTED"
+              }
+            }
+          ],
+          "configuration": {
+            "schemaVersion": "fixture.config.v1",
+            "baseCurrency": "DOP",
+            "timeZone": "America/Santo_Domingo",
+            "locale": "es-DO",
+            "calculationInputOrder": {
+              "transactions": [
+                {
+                  "kind": "TRANSACTION",
+                  "originalId": "SALE-CLOSED",
+                  "revision": "2"
+                }
+              ],
+              "cashMovements": [],
+              "collections": []
+            }
+          },
+          "declaration": {
+            "schemaVersion": "fixture.declaration.v1",
+            "cashCountedByCurrency": {
+              "DOP": 1000
+            },
+            "notes": "Ejemplo sintético; no cierre ejecutado"
+          },
+          "report": {
+            "id": "99999999-9999-4999-8999-999999999999",
+            "closedAt": "2026-09-06T04:05:00.000Z",
+            "cashExpected": {
+              "DOP": 1000
+            }
+          },
+          "manifest": {
+            "schemaVersion": "pos.close-manifest.v1",
+            "closeId": "99999999-9999-4999-8999-999999999999",
+            "closeEventId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "previousCloseProof": "PROVEN_FIRST",
+            "previousCloseId": null,
+            "revision": "1",
+            "calculationVersion": "fixture-only-not-native"
+          }
+        },
+        "scope": {
+          "tenantId": "11111111-1111-4111-8111-111111111111",
+          "companyId": "22222222-2222-4222-8222-222222222222",
+          "storeId": "33333333-3333-4333-8333-333333333333",
+          "terminalId": "44444444-4444-4444-8444-444444444444"
+        },
+        "mode": "NEW_EPOCH",
+        "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "operations": [
+          {
+            "sequence": "1",
+            "revision": "3",
+            "commandId": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+            "originalSchemaVersion": "fixture.transaction.v1",
+            "kind": "TRANSACTION",
+            "originalId": "SALE-CLOSED",
+            "commercialType": "TICKET",
+            "previousContentHash": "7b93e229332ce5a9c2798de225c9451d88db390033e768a8c406432698663312",
+            "original": {
+              "id": "SALE-CLOSED",
+              "total": 100,
+              "pendingBalance": 50,
+              "documentType": "TICKET",
+              "status": "COMPLETED",
+              "date": "2026-09-05T23:50:00.000-04:00",
+              "fiscalStatus": "ACCEPTED",
+              "updatedAt": "2026-09-06T00:10:00.000-04:00"
+            }
+          },
+          {
+            "sequence": "2",
+            "revision": "1",
+            "commandId": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+            "originalSchemaVersion": "fixture.collection.v1",
+            "kind": "COLLECTION",
+            "originalId": "COLLECTION-NEW",
+            "commercialType": null,
+            "previousContentHash": null,
+            "original": {
+              "id": "COLLECTION-NEW",
+              "date": "2026-09-06T00:10:00.000-04:00",
+              "totalAmount": 50,
+              "receivedAmountBase": 50,
+              "appliedAmountBase": 50,
+              "allocations": [
+                {
+                  "id": "AL-1",
+                  "collectionId": "COLLECTION-NEW",
+                  "transactionId": "SALE-CLOSED",
+                  "amount": 50,
+                  "timestamp": "2026-09-06T00:10:00.000-04:00"
+                }
+              ]
+            }
+          }
+        ],
+        "selection": {
+          "members": [
+            {
+              "kind": "COLLECTION",
+              "originalId": "COLLECTION-NEW",
+              "revision": "1"
+            }
+          ],
+          "dependencies": [
+            {
+              "kind": "TRANSACTION",
+              "originalId": "SALE-CLOSED",
+              "revision": "3"
+            }
+          ]
+        },
+        "configuration": {
+          "schemaVersion": "fixture.config.v1",
+          "baseCurrency": "DOP",
+          "timeZone": "America/Santo_Domingo",
+          "locale": "es-DO",
+          "calculationInputOrder": {
+            "transactions": [],
+            "cashMovements": [],
+            "collections": [
+              {
+                "kind": "COLLECTION",
+                "originalId": "COLLECTION-NEW",
+                "revision": "1"
+              }
+            ]
+          },
+          "resumeAnchor": {
+            "domain": "pos.journal.resume.v1",
+            "scope": {
+              "tenantId": "11111111-1111-4111-8111-111111111111",
+              "companyId": "22222222-2222-4222-8222-222222222222",
+              "storeId": "33333333-3333-4333-8333-333333333333",
+              "terminalId": "44444444-4444-4444-8444-444444444444"
+            },
+            "mode": "NEW_EPOCH",
+            "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            "priorStorageEpoch": "55555555-5555-4555-8555-555555555555",
+            "priorOpenSetId": "66666666-6666-4666-8666-666666666666",
+            "priorFinalSequence": "2",
+            "priorChainHash": "689a0913774c79ec777d03bb15eca7eb35668e641e3cce867d8a7f26db5d7428",
+            "priorAcceptanceDigest": "c2b12b9e75ac70686528d0b378e2b58b009a4525177535667f748f83fd4b6ca5"
+          }
+        },
+        "declaration": {
+          "notice": "Synthetic declaration; no payment or closure executed"
+        },
+        "report": {
+          "id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "notice": "Hash-only report; no cash total asserted"
+        },
+        "manifest": {
+          "schemaVersion": "pos.close-manifest.v1",
+          "closeId": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "closeEventId": "abababab-abab-4bab-8bab-abababababab",
+          "previousCloseProof": "EXPLICIT_PREVIOUS",
+          "previousCloseId": "99999999-9999-4999-8999-999999999999",
+          "revision": "1",
+          "calculationVersion": "fixture-only-not-native"
+        }
+      },
+      "expected": {
+        "vectors": [
+          {
+            "name": "resume-anchor",
+            "input": {
+              "domain": "pos.journal.resume.v1",
+              "scope": {
+                "tenantId": "11111111-1111-4111-8111-111111111111",
+                "companyId": "22222222-2222-4222-8222-222222222222",
+                "storeId": "33333333-3333-4333-8333-333333333333",
+                "terminalId": "44444444-4444-4444-8444-444444444444"
+              },
+              "mode": "NEW_EPOCH",
+              "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              "priorStorageEpoch": "55555555-5555-4555-8555-555555555555",
+              "priorOpenSetId": "66666666-6666-4666-8666-666666666666",
+              "priorFinalSequence": "2",
+              "priorChainHash": "689a0913774c79ec777d03bb15eca7eb35668e641e3cce867d8a7f26db5d7428",
+              "priorAcceptanceDigest": "c2b12b9e75ac70686528d0b378e2b58b009a4525177535667f748f83fd4b6ca5"
+            },
+            "canonicalUtf8": "{\"domain\":\"pos.journal.resume.v1\",\"mode\":\"NEW_EPOCH\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"priorAcceptanceDigest\":\"c2b12b9e75ac70686528d0b378e2b58b009a4525177535667f748f83fd4b6ca5\",\"priorChainHash\":\"689a0913774c79ec777d03bb15eca7eb35668e641e3cce867d8a7f26db5d7428\",\"priorFinalSequence\":\"2\",\"priorOpenSetId\":\"66666666-6666-4666-8666-666666666666\",\"priorStorageEpoch\":\"55555555-5555-4555-8555-555555555555\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\"}",
+            "utf8Hex": "7b22646f6d61696e223a22706f732e6a6f75726e616c2e726573756d652e7631222c226d6f6465223a224e45575f45504f4348222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c227072696f72416363657074616e6365446967657374223a2263326231326239653735616337303638363532386430623337386532623538623030396134353235313737353335363637663734386638336664346236636135222c227072696f72436861696e48617368223a2236383961303931333737346337396563373737643033626231356563613765623335363638653634316533636365383637643861376632366462356437343238222c227072696f7246696e616c53657175656e6365223a2232222c227072696f724f70656e5365744964223a2236363636363636362d363636362d343636362d383636362d363636363636363636363636222c227072696f7253746f7261676545706f6368223a2235353535353535352d353535352d343535352d383535352d353535353535353535353535222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363227d",
+            "sha256": "21c2d066cf1d8536c3c3c4b8f72002a439f5d4ece8f9200144aaae1bd862efa8"
+          },
+          {
+            "name": "genesis",
+            "input": {
+              "domain": "pos.journal.genesis.v1",
+              "scope": {
+                "tenantId": "11111111-1111-4111-8111-111111111111",
+                "companyId": "22222222-2222-4222-8222-222222222222",
+                "storeId": "33333333-3333-4333-8333-333333333333",
+                "terminalId": "44444444-4444-4444-8444-444444444444"
+              },
+              "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+            },
+            "canonicalUtf8": "{\"domain\":\"pos.journal.genesis.v1\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\"}",
+            "utf8Hex": "7b22646f6d61696e223a22706f732e6a6f75726e616c2e67656e657369732e7631222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363227d",
+            "sha256": "c4ed0e6bee58544d450b05e85a312ce3328598922a760804f2e9d158d9beb67a"
+          },
+          {
+            "name": "original-1",
+            "input": {
+              "scope": {
+                "tenantId": "11111111-1111-4111-8111-111111111111",
+                "companyId": "22222222-2222-4222-8222-222222222222",
+                "storeId": "33333333-3333-4333-8333-333333333333",
+                "terminalId": "44444444-4444-4444-8444-444444444444"
+              },
+              "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              "sequence": "1",
+              "kind": "TRANSACTION",
+              "originalId": "SALE-CLOSED",
+              "revision": "3",
+              "original": {
+                "id": "SALE-CLOSED",
+                "total": 100,
+                "pendingBalance": 50,
+                "documentType": "TICKET",
+                "status": "COMPLETED",
+                "date": "2026-09-05T23:50:00.000-04:00",
+                "fiscalStatus": "ACCEPTED",
+                "updatedAt": "2026-09-06T00:10:00.000-04:00"
+              }
+            },
+            "canonicalUtf8": "{\"kind\":\"TRANSACTION\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"original\":{\"date\":\"2026-09-05T23:50:00.000-04:00\",\"documentType\":\"TICKET\",\"fiscalStatus\":\"ACCEPTED\",\"id\":\"SALE-CLOSED\",\"pendingBalance\":50,\"status\":\"COMPLETED\",\"total\":100,\"updatedAt\":\"2026-09-06T00:10:00.000-04:00\"},\"originalId\":\"SALE-CLOSED\",\"revision\":\"3\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"sequence\":\"1\",\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\"}",
+            "utf8Hex": "7b226b696e64223a225452414e53414354494f4e222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c226f726967696e616c223a7b2264617465223a22323032362d30392d30355432333a35303a30302e3030302d30343a3030222c22646f63756d656e7454797065223a225449434b4554222c2266697363616c537461747573223a224143434550544544222c226964223a2253414c452d434c4f534544222c2270656e64696e6742616c616e6365223a35302c22737461747573223a22434f4d504c45544544222c22746f74616c223a3130302c22757064617465644174223a22323032362d30392d30365430303a31303a30302e3030302d30343a3030227d2c226f726967696e616c4964223a2253414c452d434c4f534544222c227265766973696f6e223a2233222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273657175656e6365223a2231222c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363227d",
+            "sha256": "c1b7dcb4c92f490e5b828dbbd11246ecf9816270f689bd3ae01a7b8b8ca0dbda"
+          },
+          {
+            "name": "entry-1",
+            "input": {
+              "domain": "pos.journal.entry.v1",
+              "scope": {
+                "tenantId": "11111111-1111-4111-8111-111111111111",
+                "companyId": "22222222-2222-4222-8222-222222222222",
+                "storeId": "33333333-3333-4333-8333-333333333333",
+                "terminalId": "44444444-4444-4444-8444-444444444444"
+              },
+              "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              "sequence": "1",
+              "commandId": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+              "originalSchemaVersion": "fixture.transaction.v1",
+              "kind": "TRANSACTION",
+              "originalId": "SALE-CLOSED",
+              "revision": "3",
+              "previousContentHash": "7b93e229332ce5a9c2798de225c9451d88db390033e768a8c406432698663312",
+              "originalContentHash": "c1b7dcb4c92f490e5b828dbbd11246ecf9816270f689bd3ae01a7b8b8ca0dbda"
+            },
+            "canonicalUtf8": "{\"commandId\":\"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee\",\"domain\":\"pos.journal.entry.v1\",\"kind\":\"TRANSACTION\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"originalContentHash\":\"c1b7dcb4c92f490e5b828dbbd11246ecf9816270f689bd3ae01a7b8b8ca0dbda\",\"originalId\":\"SALE-CLOSED\",\"originalSchemaVersion\":\"fixture.transaction.v1\",\"previousContentHash\":\"7b93e229332ce5a9c2798de225c9451d88db390033e768a8c406432698663312\",\"revision\":\"3\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"sequence\":\"1\",\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\"}",
+            "utf8Hex": "7b22636f6d6d616e644964223a2265656565656565652d656565652d346565652d386565652d656565656565656565656565222c22646f6d61696e223a22706f732e6a6f75726e616c2e656e7472792e7631222c226b696e64223a225452414e53414354494f4e222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c226f726967696e616c436f6e74656e7448617368223a2263316237646362346339326634393065356238323864626264313132343665636639383136323730663638396264336165303161376238623863613064626461222c226f726967696e616c4964223a2253414c452d434c4f534544222c226f726967696e616c536368656d6156657273696f6e223a22666978747572652e7472616e73616374696f6e2e7631222c2270726576696f7573436f6e74656e7448617368223a2237623933653232393333326365356139633237393864653232356339343531643838646233393030333365373638613863343036343332363938363633333132222c227265766973696f6e223a2233222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273657175656e6365223a2231222c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363227d",
+            "sha256": "18e4bf0e34d95363fcf45a39c5ed023cbf1582b23066cdb20a02ecc3578a9a2c"
+          },
+          {
+            "name": "chain-1",
+            "input": {
+              "domain": "pos.journal.chain.v1",
+              "previousChainHash": "c4ed0e6bee58544d450b05e85a312ce3328598922a760804f2e9d158d9beb67a",
+              "entryHash": "18e4bf0e34d95363fcf45a39c5ed023cbf1582b23066cdb20a02ecc3578a9a2c"
+            },
+            "canonicalUtf8": "{\"domain\":\"pos.journal.chain.v1\",\"entryHash\":\"18e4bf0e34d95363fcf45a39c5ed023cbf1582b23066cdb20a02ecc3578a9a2c\",\"previousChainHash\":\"c4ed0e6bee58544d450b05e85a312ce3328598922a760804f2e9d158d9beb67a\"}",
+            "utf8Hex": "7b22646f6d61696e223a22706f732e6a6f75726e616c2e636861696e2e7631222c22656e74727948617368223a2231386534626630653334643935333633666366343561333963356564303233636266313538326232333036366364623230613032656363333537386139613263222c2270726576696f7573436861696e48617368223a2263346564306536626565353835343464343530623035653835613331326365333332383539383932326137363038303466326539643135386439626562363761227d",
+            "sha256": "f03a917ef2f3b888f8ad42871930dfde389cf738381578cb7df085fb8b38703f"
+          },
+          {
+            "name": "original-2",
+            "input": {
+              "scope": {
+                "tenantId": "11111111-1111-4111-8111-111111111111",
+                "companyId": "22222222-2222-4222-8222-222222222222",
+                "storeId": "33333333-3333-4333-8333-333333333333",
+                "terminalId": "44444444-4444-4444-8444-444444444444"
+              },
+              "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              "sequence": "2",
+              "kind": "COLLECTION",
+              "originalId": "COLLECTION-NEW",
+              "revision": "1",
+              "original": {
+                "id": "COLLECTION-NEW",
+                "date": "2026-09-06T00:10:00.000-04:00",
+                "totalAmount": 50,
+                "receivedAmountBase": 50,
+                "appliedAmountBase": 50,
+                "allocations": [
+                  {
+                    "id": "AL-1",
+                    "collectionId": "COLLECTION-NEW",
+                    "transactionId": "SALE-CLOSED",
+                    "amount": 50,
+                    "timestamp": "2026-09-06T00:10:00.000-04:00"
+                  }
+                ]
+              }
+            },
+            "canonicalUtf8": "{\"kind\":\"COLLECTION\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"original\":{\"allocations\":[{\"amount\":50,\"collectionId\":\"COLLECTION-NEW\",\"id\":\"AL-1\",\"timestamp\":\"2026-09-06T00:10:00.000-04:00\",\"transactionId\":\"SALE-CLOSED\"}],\"appliedAmountBase\":50,\"date\":\"2026-09-06T00:10:00.000-04:00\",\"id\":\"COLLECTION-NEW\",\"receivedAmountBase\":50,\"totalAmount\":50},\"originalId\":\"COLLECTION-NEW\",\"revision\":\"1\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"sequence\":\"2\",\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\"}",
+            "utf8Hex": "7b226b696e64223a22434f4c4c454354494f4e222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c226f726967696e616c223a7b22616c6c6f636174696f6e73223a5b7b22616d6f756e74223a35302c22636f6c6c656374696f6e4964223a22434f4c4c454354494f4e2d4e4557222c226964223a22414c2d31222c2274696d657374616d70223a22323032362d30392d30365430303a31303a30302e3030302d30343a3030222c227472616e73616374696f6e4964223a2253414c452d434c4f534544227d5d2c226170706c696564416d6f756e7442617365223a35302c2264617465223a22323032362d30392d30365430303a31303a30302e3030302d30343a3030222c226964223a22434f4c4c454354494f4e2d4e4557222c227265636569766564416d6f756e7442617365223a35302c22746f74616c416d6f756e74223a35307d2c226f726967696e616c4964223a22434f4c4c454354494f4e2d4e4557222c227265766973696f6e223a2231222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273657175656e6365223a2232222c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363227d",
+            "sha256": "f0990cc5bd6497f274f1f419608c8199b2b12360863c8b92974b2c87bf0c6890"
+          },
+          {
+            "name": "entry-2",
+            "input": {
+              "domain": "pos.journal.entry.v1",
+              "scope": {
+                "tenantId": "11111111-1111-4111-8111-111111111111",
+                "companyId": "22222222-2222-4222-8222-222222222222",
+                "storeId": "33333333-3333-4333-8333-333333333333",
+                "terminalId": "44444444-4444-4444-8444-444444444444"
+              },
+              "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              "sequence": "2",
+              "commandId": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+              "originalSchemaVersion": "fixture.collection.v1",
+              "kind": "COLLECTION",
+              "originalId": "COLLECTION-NEW",
+              "revision": "1",
+              "previousContentHash": null,
+              "originalContentHash": "f0990cc5bd6497f274f1f419608c8199b2b12360863c8b92974b2c87bf0c6890"
+            },
+            "canonicalUtf8": "{\"commandId\":\"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee\",\"domain\":\"pos.journal.entry.v1\",\"kind\":\"COLLECTION\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"originalContentHash\":\"f0990cc5bd6497f274f1f419608c8199b2b12360863c8b92974b2c87bf0c6890\",\"originalId\":\"COLLECTION-NEW\",\"originalSchemaVersion\":\"fixture.collection.v1\",\"previousContentHash\":null,\"revision\":\"1\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"sequence\":\"2\",\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\"}",
+            "utf8Hex": "7b22636f6d6d616e644964223a2265656565656565652d656565652d346565652d386565652d656565656565656565656565222c22646f6d61696e223a22706f732e6a6f75726e616c2e656e7472792e7631222c226b696e64223a22434f4c4c454354494f4e222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c226f726967696e616c436f6e74656e7448617368223a2266303939306363356264363439376632373466316634313936303863383139396232623132333630383633633862393239373462326338376266306336383930222c226f726967696e616c4964223a22434f4c4c454354494f4e2d4e4557222c226f726967696e616c536368656d6156657273696f6e223a22666978747572652e636f6c6c656374696f6e2e7631222c2270726576696f7573436f6e74656e7448617368223a6e756c6c2c227265766973696f6e223a2231222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273657175656e6365223a2232222c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363227d",
+            "sha256": "c4d4e5cdfd389c12e602357d6481beab33a5c5fb314583e71ea04f5d98315b23"
+          },
+          {
+            "name": "chain-2",
+            "input": {
+              "domain": "pos.journal.chain.v1",
+              "previousChainHash": "f03a917ef2f3b888f8ad42871930dfde389cf738381578cb7df085fb8b38703f",
+              "entryHash": "c4d4e5cdfd389c12e602357d6481beab33a5c5fb314583e71ea04f5d98315b23"
+            },
+            "canonicalUtf8": "{\"domain\":\"pos.journal.chain.v1\",\"entryHash\":\"c4d4e5cdfd389c12e602357d6481beab33a5c5fb314583e71ea04f5d98315b23\",\"previousChainHash\":\"f03a917ef2f3b888f8ad42871930dfde389cf738381578cb7df085fb8b38703f\"}",
+            "utf8Hex": "7b22646f6d61696e223a22706f732e6a6f75726e616c2e636861696e2e7631222c22656e74727948617368223a2263346434653563646664333839633132653630323335376436343831626561623333613563356662333134353833653731656130346635643938333135623233222c2270726576696f7573436861696e48617368223a2266303361393137656632663362383838663861643432383731393330646664653338396366373338333831353738636237646630383566623862333837303366227d",
+            "sha256": "ad51834d919a3c70e0fd1d195ab0e12109435215032cb185b25800d9854e0bdb"
+          },
+          {
+            "name": "configuration",
+            "input": {
+              "schemaVersion": "fixture.config.v1",
+              "baseCurrency": "DOP",
+              "timeZone": "America/Santo_Domingo",
+              "locale": "es-DO",
+              "calculationInputOrder": {
+                "transactions": [],
+                "cashMovements": [],
+                "collections": [
+                  {
+                    "kind": "COLLECTION",
+                    "originalId": "COLLECTION-NEW",
+                    "revision": "1"
+                  }
+                ]
+              },
+              "resumeAnchor": {
+                "domain": "pos.journal.resume.v1",
+                "scope": {
+                  "tenantId": "11111111-1111-4111-8111-111111111111",
+                  "companyId": "22222222-2222-4222-8222-222222222222",
+                  "storeId": "33333333-3333-4333-8333-333333333333",
+                  "terminalId": "44444444-4444-4444-8444-444444444444"
+                },
+                "mode": "NEW_EPOCH",
+                "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                "priorStorageEpoch": "55555555-5555-4555-8555-555555555555",
+                "priorOpenSetId": "66666666-6666-4666-8666-666666666666",
+                "priorFinalSequence": "2",
+                "priorChainHash": "689a0913774c79ec777d03bb15eca7eb35668e641e3cce867d8a7f26db5d7428",
+                "priorAcceptanceDigest": "c2b12b9e75ac70686528d0b378e2b58b009a4525177535667f748f83fd4b6ca5"
+              }
+            },
+            "canonicalUtf8": "{\"baseCurrency\":\"DOP\",\"calculationInputOrder\":{\"cashMovements\":[],\"collections\":[{\"kind\":\"COLLECTION\",\"originalId\":\"COLLECTION-NEW\",\"revision\":\"1\"}],\"transactions\":[]},\"locale\":\"es-DO\",\"resumeAnchor\":{\"domain\":\"pos.journal.resume.v1\",\"mode\":\"NEW_EPOCH\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"priorAcceptanceDigest\":\"c2b12b9e75ac70686528d0b378e2b58b009a4525177535667f748f83fd4b6ca5\",\"priorChainHash\":\"689a0913774c79ec777d03bb15eca7eb35668e641e3cce867d8a7f26db5d7428\",\"priorFinalSequence\":\"2\",\"priorOpenSetId\":\"66666666-6666-4666-8666-666666666666\",\"priorStorageEpoch\":\"55555555-5555-4555-8555-555555555555\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\"},\"schemaVersion\":\"fixture.config.v1\",\"timeZone\":\"America/Santo_Domingo\"}",
+            "utf8Hex": "7b226261736543757272656e6379223a22444f50222c2263616c63756c6174696f6e496e7075744f72646572223a7b22636173684d6f76656d656e7473223a5b5d2c22636f6c6c656374696f6e73223a5b7b226b696e64223a22434f4c4c454354494f4e222c226f726967696e616c4964223a22434f4c4c454354494f4e2d4e4557222c227265766973696f6e223a2231227d5d2c227472616e73616374696f6e73223a5b5d7d2c226c6f63616c65223a2265732d444f222c22726573756d65416e63686f72223a7b22646f6d61696e223a22706f732e6a6f75726e616c2e726573756d652e7631222c226d6f6465223a224e45575f45504f4348222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c227072696f72416363657074616e6365446967657374223a2263326231326239653735616337303638363532386430623337386532623538623030396134353235313737353335363637663734386638336664346236636135222c227072696f72436861696e48617368223a2236383961303931333737346337396563373737643033626231356563613765623335363638653634316533636365383637643861376632366462356437343238222c227072696f7246696e616c53657175656e6365223a2232222c227072696f724f70656e5365744964223a2236363636363636362d363636362d343636362d383636362d363636363636363636363636222c227072696f7253746f7261676545706f6368223a2235353535353535352d353535352d343535352d383535352d353535353535353535353535222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363227d2c22736368656d6156657273696f6e223a22666978747572652e636f6e6669672e7631222c2274696d655a6f6e65223a22416d65726963612f53616e746f5f446f6d696e676f227d",
+            "sha256": "09430cabe8b003378751bce548954afd46ae65095403c1cf851b7c7f3b0a2a38"
+          },
+          {
+            "name": "declaration",
+            "input": {
+              "notice": "Synthetic declaration; no payment or closure executed"
+            },
+            "canonicalUtf8": "{\"notice\":\"Synthetic declaration; no payment or closure executed\"}",
+            "utf8Hex": "7b226e6f74696365223a2253796e746865746963206465636c61726174696f6e3b206e6f207061796d656e74206f7220636c6f73757265206578656375746564227d",
+            "sha256": "43db7277530570fd49d59c7748fdf5108aa09c48afcc1e90899f52e18a55e5ee"
+          },
+          {
+            "name": "report",
+            "input": {
+              "id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+              "notice": "Hash-only report; no cash total asserted"
+            },
+            "canonicalUtf8": "{\"id\":\"ffffffff-ffff-4fff-8fff-ffffffffffff\",\"notice\":\"Hash-only report; no cash total asserted\"}",
+            "utf8Hex": "7b226964223a2266666666666666662d666666662d346666662d386666662d666666666666666666666666222c226e6f74696365223a22486173682d6f6e6c79207265706f72743b206e6f206361736820746f74616c206173736572746564227d",
+            "sha256": "1c1999503a5e70c83ed857552fc3fe4bbd9c1a9ce3541583158bd9b15a116ea7"
+          },
+          {
+            "name": "manifest",
+            "input": {
+              "schemaVersion": "pos.close-manifest.v1",
+              "closeId": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+              "closeEventId": "abababab-abab-4bab-8bab-abababababab",
+              "previousCloseProof": "EXPLICIT_PREVIOUS",
+              "previousCloseId": "99999999-9999-4999-8999-999999999999",
+              "revision": "1",
+              "calculationVersion": "fixture-only-not-native",
+              "terminalId": "44444444-4444-4444-8444-444444444444",
+              "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              "sealedThrough": "2",
+              "members": [
+                {
+                  "kind": "COLLECTION",
+                  "originalId": "COLLECTION-NEW",
+                  "revision": "1",
+                  "originalContentHash": "f0990cc5bd6497f274f1f419608c8199b2b12360863c8b92974b2c87bf0c6890",
+                  "commercialType": null
+                }
+              ],
+              "dependencies": [
+                {
+                  "kind": "TRANSACTION",
+                  "originalId": "SALE-CLOSED",
+                  "revision": "3",
+                  "originalContentHash": "c1b7dcb4c92f490e5b828dbbd11246ecf9816270f689bd3ae01a7b8b8ca0dbda",
+                  "commercialType": "TICKET",
+                  "role": "READ_ONLY"
+                }
+              ],
+              "configurationHash": "09430cabe8b003378751bce548954afd46ae65095403c1cf851b7c7f3b0a2a38",
+              "declarationHash": "43db7277530570fd49d59c7748fdf5108aa09c48afcc1e90899f52e18a55e5ee",
+              "reportHash": "1c1999503a5e70c83ed857552fc3fe4bbd9c1a9ce3541583158bd9b15a116ea7"
+            },
+            "canonicalUtf8": "{\"calculationVersion\":\"fixture-only-not-native\",\"closeEventId\":\"abababab-abab-4bab-8bab-abababababab\",\"closeId\":\"ffffffff-ffff-4fff-8fff-ffffffffffff\",\"configurationHash\":\"09430cabe8b003378751bce548954afd46ae65095403c1cf851b7c7f3b0a2a38\",\"declarationHash\":\"43db7277530570fd49d59c7748fdf5108aa09c48afcc1e90899f52e18a55e5ee\",\"dependencies\":[{\"commercialType\":\"TICKET\",\"kind\":\"TRANSACTION\",\"originalContentHash\":\"c1b7dcb4c92f490e5b828dbbd11246ecf9816270f689bd3ae01a7b8b8ca0dbda\",\"originalId\":\"SALE-CLOSED\",\"revision\":\"3\",\"role\":\"READ_ONLY\"}],\"members\":[{\"commercialType\":null,\"kind\":\"COLLECTION\",\"originalContentHash\":\"f0990cc5bd6497f274f1f419608c8199b2b12360863c8b92974b2c87bf0c6890\",\"originalId\":\"COLLECTION-NEW\",\"revision\":\"1\"}],\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"previousCloseId\":\"99999999-9999-4999-8999-999999999999\",\"previousCloseProof\":\"EXPLICIT_PREVIOUS\",\"reportHash\":\"1c1999503a5e70c83ed857552fc3fe4bbd9c1a9ce3541583158bd9b15a116ea7\",\"revision\":\"1\",\"schemaVersion\":\"pos.close-manifest.v1\",\"sealedThrough\":\"2\",\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"}",
+            "utf8Hex": "7b2263616c63756c6174696f6e56657273696f6e223a22666978747572652d6f6e6c792d6e6f742d6e6174697665222c22636c6f73654576656e744964223a2261626162616261622d616261622d346261622d386261622d616261626162616261626162222c22636c6f73654964223a2266666666666666662d666666662d346666662d386666662d666666666666666666666666222c22636f6e66696775726174696f6e48617368223a2230393433306361626538623030333337383735316263653534383935346166643436616536353039353430336331636638353162376337663362306132613338222c226465636c61726174696f6e48617368223a2234336462373237373533303537306664343964353963373734386664663531303861613039633438616663633165393038393966353265313861353565356565222c22646570656e64656e63696573223a5b7b22636f6d6d65726369616c54797065223a225449434b4554222c226b696e64223a225452414e53414354494f4e222c226f726967696e616c436f6e74656e7448617368223a2263316237646362346339326634393065356238323864626264313132343665636639383136323730663638396264336165303161376238623863613064626461222c226f726967696e616c4964223a2253414c452d434c4f534544222c227265766973696f6e223a2233222c22726f6c65223a22524541445f4f4e4c59227d5d2c226d656d62657273223a5b7b22636f6d6d65726369616c54797065223a6e756c6c2c226b696e64223a22434f4c4c454354494f4e222c226f726967696e616c436f6e74656e7448617368223a2266303939306363356264363439376632373466316634313936303863383139396232623132333630383633633862393239373462326338376266306336383930222c226f726967696e616c4964223a22434f4c4c454354494f4e2d4e4557222c227265766973696f6e223a2231227d5d2c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c2270726576696f7573436c6f73654964223a2239393939393939392d393939392d343939392d383939392d393939393939393939393939222c2270726576696f7573436c6f736550726f6f66223a224558504c494349545f50524556494f5553222c227265706f727448617368223a2231633139393935303361356537306338336564383537353532666333666534626264396331613963653335343135383331353862643962313561313136656137222c227265766973696f6e223a2231222c22736368656d6156657273696f6e223a22706f732e636c6f73652d6d616e69666573742e7631222c227365616c65645468726f756768223a2232222c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d",
+            "sha256": "31def8ad153ab998b6ed24b9160aef6bc4c96670af5284a796baee66669f8ef3"
+          },
+          {
+            "name": "seal",
+            "input": {
+              "domain": "pos.open-set.seal.v1",
+              "scope": {
+                "tenantId": "11111111-1111-4111-8111-111111111111",
+                "companyId": "22222222-2222-4222-8222-222222222222",
+                "storeId": "33333333-3333-4333-8333-333333333333",
+                "terminalId": "44444444-4444-4444-8444-444444444444"
+              },
+              "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              "finalSequence": "2",
+              "chainHash": "ad51834d919a3c70e0fd1d195ab0e12109435215032cb185b25800d9854e0bdb",
+              "manifestHash": "31def8ad153ab998b6ed24b9160aef6bc4c96670af5284a796baee66669f8ef3",
+              "closeId": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+              "closeEventId": "abababab-abab-4bab-8bab-abababababab"
+            },
+            "canonicalUtf8": "{\"chainHash\":\"ad51834d919a3c70e0fd1d195ab0e12109435215032cb185b25800d9854e0bdb\",\"closeEventId\":\"abababab-abab-4bab-8bab-abababababab\",\"closeId\":\"ffffffff-ffff-4fff-8fff-ffffffffffff\",\"domain\":\"pos.open-set.seal.v1\",\"finalSequence\":\"2\",\"manifestHash\":\"31def8ad153ab998b6ed24b9160aef6bc4c96670af5284a796baee66669f8ef3\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"storageEpoch\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\"}",
+            "utf8Hex": "7b22636861696e48617368223a2261643531383334643931396133633730653066643164313935616230653132313039343335323135303332636231383562323538303064393835346530626462222c22636c6f73654576656e744964223a2261626162616261622d616261622d346261622d386261622d616261626162616261626162222c22636c6f73654964223a2266666666666666662d666666662d346666662d386666662d666666666666666666666666222c22646f6d61696e223a22706f732e6f70656e2d7365742e7365616c2e7631222c2266696e616c53657175656e6365223a2232222c226d616e696665737448617368223a2233316465663861643135336162393938623665643234623931363061656636626334633936363730616635323834613739366261656536363636396638656633222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273746f7261676545706f6368223a2263636363636363632d636363632d346363632d386363632d636363636363636363636363227d",
+            "sha256": "43e4c557ecc8ebee6ed126ab0aceca81a996237e1c8f681a803a33a73eb21906"
+          },
+          {
+            "name": "acceptance",
+            "input": {
+              "domain": "pos.close.acceptance.v1",
+              "scope": {
+                "tenantId": "11111111-1111-4111-8111-111111111111",
+                "companyId": "22222222-2222-4222-8222-222222222222",
+                "storeId": "33333333-3333-4333-8333-333333333333",
+                "terminalId": "44444444-4444-4444-8444-444444444444"
+              },
+              "closeId": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+              "closeEventId": "abababab-abab-4bab-8bab-abababababab",
+              "manifestHash": "31def8ad153ab998b6ed24b9160aef6bc4c96670af5284a796baee66669f8ef3",
+              "sealHash": "43e4c557ecc8ebee6ed126ab0aceca81a996237e1c8f681a803a33a73eb21906"
+            },
+            "canonicalUtf8": "{\"closeEventId\":\"abababab-abab-4bab-8bab-abababababab\",\"closeId\":\"ffffffff-ffff-4fff-8fff-ffffffffffff\",\"domain\":\"pos.close.acceptance.v1\",\"manifestHash\":\"31def8ad153ab998b6ed24b9160aef6bc4c96670af5284a796baee66669f8ef3\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"sealHash\":\"43e4c557ecc8ebee6ed126ab0aceca81a996237e1c8f681a803a33a73eb21906\"}",
+            "utf8Hex": "7b22636c6f73654576656e744964223a2261626162616261622d616261622d346261622d386261622d616261626162616261626162222c22636c6f73654964223a2266666666666666662d666666662d346666662d386666662d666666666666666666666666222c22646f6d61696e223a22706f732e636c6f73652e616363657074616e63652e7631222c226d616e696665737448617368223a2233316465663861643135336162393938623665643234623931363061656636626334633936363730616635323834613739366261656536363636396638656633222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c227365616c48617368223a2234336534633535376563633865626565366564313236616230616365636138316139393632333765316338663638316138303361333361373365623231393036227d",
+            "sha256": "a4c94db367bae65b327f0dfc4e1dc979d2d2cce2be04f0bbc90f2109b17637a8"
+          }
+        ],
+        "history": [
+          {
+            "kind": "TRANSACTION",
+            "originalId": "SALE-CLOSED",
+            "revision": "1",
+            "originalContentHash": "156d4cf7692a29c79f4c615536b256b8422f47882c034e3ad8db4f47f6621e78",
+            "commercialType": "TICKET"
+          },
+          {
+            "kind": "TRANSACTION",
+            "originalId": "SALE-CLOSED",
+            "revision": "2",
+            "originalContentHash": "7b93e229332ce5a9c2798de225c9451d88db390033e768a8c406432698663312",
+            "commercialType": "TICKET"
+          },
+          {
+            "kind": "TRANSACTION",
+            "originalId": "SALE-CLOSED",
+            "revision": "3",
+            "originalContentHash": "c1b7dcb4c92f490e5b828dbbd11246ecf9816270f689bd3ae01a7b8b8ca0dbda",
+            "commercialType": "TICKET"
+          },
+          {
+            "kind": "COLLECTION",
+            "originalId": "COLLECTION-NEW",
+            "revision": "1",
+            "originalContentHash": "f0990cc5bd6497f274f1f419608c8199b2b12360863c8b92974b2c87bf0c6890",
+            "commercialType": null
+          }
+        ],
+        "manifest": {
+          "schemaVersion": "pos.close-manifest.v1",
+          "closeId": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "closeEventId": "abababab-abab-4bab-8bab-abababababab",
+          "previousCloseProof": "EXPLICIT_PREVIOUS",
+          "previousCloseId": "99999999-9999-4999-8999-999999999999",
+          "revision": "1",
+          "calculationVersion": "fixture-only-not-native",
+          "terminalId": "44444444-4444-4444-8444-444444444444",
+          "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          "sealedThrough": "2",
+          "members": [
+            {
+              "kind": "COLLECTION",
+              "originalId": "COLLECTION-NEW",
+              "revision": "1",
+              "originalContentHash": "f0990cc5bd6497f274f1f419608c8199b2b12360863c8b92974b2c87bf0c6890",
+              "commercialType": null
+            }
+          ],
+          "dependencies": [
+            {
+              "kind": "TRANSACTION",
+              "originalId": "SALE-CLOSED",
+              "revision": "3",
+              "originalContentHash": "c1b7dcb4c92f490e5b828dbbd11246ecf9816270f689bd3ae01a7b8b8ca0dbda",
+              "commercialType": "TICKET",
+              "role": "READ_ONLY"
+            }
+          ],
+          "configurationHash": "09430cabe8b003378751bce548954afd46ae65095403c1cf851b7c7f3b0a2a38",
+          "declarationHash": "43db7277530570fd49d59c7748fdf5108aa09c48afcc1e90899f52e18a55e5ee",
+          "reportHash": "1c1999503a5e70c83ed857552fc3fe4bbd9c1a9ce3541583158bd9b15a116ea7"
+        },
+        "seal": {
+          "domain": "pos.open-set.seal.v1",
+          "scope": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "companyId": "22222222-2222-4222-8222-222222222222",
+            "storeId": "33333333-3333-4333-8333-333333333333",
+            "terminalId": "44444444-4444-4444-8444-444444444444"
+          },
+          "storageEpoch": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          "finalSequence": "2",
+          "chainHash": "ad51834d919a3c70e0fd1d195ab0e12109435215032cb185b25800d9854e0bdb",
+          "manifestHash": "31def8ad153ab998b6ed24b9160aef6bc4c96670af5284a796baee66669f8ef3",
+          "closeId": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "closeEventId": "abababab-abab-4bab-8bab-abababababab"
+        },
+        "acceptanceDigest": "a4c94db367bae65b327f0dfc4e1dc979d2d2cce2be04f0bbc90f2109b17637a8",
+        "archiveAcceptanceDigest": "c2b12b9e75ac70686528d0b378e2b58b009a4525177535667f748f83fd4b6ca5"
+      }
+    },
+    {
+      "name": "SAME_EPOCH_SUFFIX",
+      "trustedArchiveDigest": "c2b12b9e75ac70686528d0b378e2b58b009a4525177535667f748f83fd4b6ca5",
+      "input": {
+        "archive": {
+          "scope": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "companyId": "22222222-2222-4222-8222-222222222222",
+            "storeId": "33333333-3333-4333-8333-333333333333",
+            "terminalId": "44444444-4444-4444-8444-444444444444"
+          },
+          "storageEpoch": "55555555-5555-4555-8555-555555555555",
+          "openSetId": "66666666-6666-4666-8666-666666666666",
+          "operations": [
+            {
+              "sequence": "1",
+              "revision": "1",
+              "commandId": "77777777-7777-4777-8777-777777777777",
+              "originalSchemaVersion": "fixture.transaction.v1",
+              "kind": "TRANSACTION",
+              "originalId": "SALE-CLOSED",
+              "commercialType": "TICKET",
+              "original": {
+                "id": "SALE-CLOSED",
+                "total": 100,
+                "pendingBalance": 100,
+                "documentType": "TICKET",
+                "status": "COMPLETED",
+                "date": "2026-09-05T23:50:00.000-04:00"
+              }
+            },
+            {
+              "sequence": "2",
+              "revision": "2",
+              "commandId": "88888888-8888-4888-8888-888888888888",
+              "originalSchemaVersion": "fixture.transaction.v1",
+              "kind": "TRANSACTION",
+              "originalId": "SALE-CLOSED",
+              "commercialType": "TICKET",
+              "original": {
+                "id": "SALE-CLOSED",
+                "total": 100,
+                "pendingBalance": 100,
+                "documentType": "TICKET",
+                "status": "COMPLETED",
+                "date": "2026-09-05T23:50:00.000-04:00",
+                "fiscalStatus": "ACCEPTED"
+              }
+            }
+          ],
+          "configuration": {
+            "schemaVersion": "fixture.config.v1",
+            "baseCurrency": "DOP",
+            "timeZone": "America/Santo_Domingo",
+            "locale": "es-DO",
+            "calculationInputOrder": {
+              "transactions": [
+                {
+                  "kind": "TRANSACTION",
+                  "originalId": "SALE-CLOSED",
+                  "revision": "2"
+                }
+              ],
+              "cashMovements": [],
+              "collections": []
+            }
+          },
+          "declaration": {
+            "schemaVersion": "fixture.declaration.v1",
+            "cashCountedByCurrency": {
+              "DOP": 1000
+            },
+            "notes": "Ejemplo sintético; no cierre ejecutado"
+          },
+          "report": {
+            "id": "99999999-9999-4999-8999-999999999999",
+            "closedAt": "2026-09-06T04:05:00.000Z",
+            "cashExpected": {
+              "DOP": 1000
+            }
+          },
+          "manifest": {
+            "schemaVersion": "pos.close-manifest.v1",
+            "closeId": "99999999-9999-4999-8999-999999999999",
+            "closeEventId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "previousCloseProof": "PROVEN_FIRST",
+            "previousCloseId": null,
+            "revision": "1",
+            "calculationVersion": "fixture-only-not-native"
+          }
+        },
+        "scope": {
+          "tenantId": "11111111-1111-4111-8111-111111111111",
+          "companyId": "22222222-2222-4222-8222-222222222222",
+          "storeId": "33333333-3333-4333-8333-333333333333",
+          "terminalId": "44444444-4444-4444-8444-444444444444"
+        },
+        "mode": "SAME_EPOCH_SUFFIX",
+        "storageEpoch": "55555555-5555-4555-8555-555555555555",
+        "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "operations": [
+          {
+            "sequence": "3",
+            "revision": "3",
+            "commandId": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+            "originalSchemaVersion": "fixture.transaction.v1",
+            "kind": "TRANSACTION",
+            "originalId": "SALE-CLOSED",
+            "commercialType": "TICKET",
+            "previousContentHash": "7b93e229332ce5a9c2798de225c9451d88db390033e768a8c406432698663312",
+            "original": {
+              "id": "SALE-CLOSED",
+              "total": 100,
+              "pendingBalance": 50,
+              "documentType": "TICKET",
+              "status": "COMPLETED",
+              "date": "2026-09-05T23:50:00.000-04:00",
+              "fiscalStatus": "ACCEPTED",
+              "updatedAt": "2026-09-06T00:10:00.000-04:00"
+            }
+          },
+          {
+            "sequence": "4",
+            "revision": "1",
+            "commandId": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+            "originalSchemaVersion": "fixture.collection.v1",
+            "kind": "COLLECTION",
+            "originalId": "COLLECTION-NEW",
+            "commercialType": null,
+            "previousContentHash": null,
+            "original": {
+              "id": "COLLECTION-NEW",
+              "date": "2026-09-06T00:10:00.000-04:00",
+              "totalAmount": 50,
+              "receivedAmountBase": 50,
+              "appliedAmountBase": 50,
+              "allocations": [
+                {
+                  "id": "AL-1",
+                  "collectionId": "COLLECTION-NEW",
+                  "transactionId": "SALE-CLOSED",
+                  "amount": 50,
+                  "timestamp": "2026-09-06T00:10:00.000-04:00"
+                }
+              ]
+            }
+          }
+        ],
+        "selection": {
+          "members": [
+            {
+              "kind": "COLLECTION",
+              "originalId": "COLLECTION-NEW",
+              "revision": "1"
+            }
+          ],
+          "dependencies": [
+            {
+              "kind": "TRANSACTION",
+              "originalId": "SALE-CLOSED",
+              "revision": "3"
+            }
+          ]
+        },
+        "configuration": {
+          "schemaVersion": "fixture.config.v1",
+          "baseCurrency": "DOP",
+          "timeZone": "America/Santo_Domingo",
+          "locale": "es-DO",
+          "calculationInputOrder": {
+            "transactions": [],
+            "cashMovements": [],
+            "collections": [
+              {
+                "kind": "COLLECTION",
+                "originalId": "COLLECTION-NEW",
+                "revision": "1"
+              }
+            ]
+          },
+          "resumeAnchor": {
+            "domain": "pos.journal.resume.v1",
+            "scope": {
+              "tenantId": "11111111-1111-4111-8111-111111111111",
+              "companyId": "22222222-2222-4222-8222-222222222222",
+              "storeId": "33333333-3333-4333-8333-333333333333",
+              "terminalId": "44444444-4444-4444-8444-444444444444"
+            },
+            "mode": "SAME_EPOCH_SUFFIX",
+            "storageEpoch": "55555555-5555-4555-8555-555555555555",
+            "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            "priorStorageEpoch": "55555555-5555-4555-8555-555555555555",
+            "priorOpenSetId": "66666666-6666-4666-8666-666666666666",
+            "priorFinalSequence": "2",
+            "priorChainHash": "689a0913774c79ec777d03bb15eca7eb35668e641e3cce867d8a7f26db5d7428",
+            "priorAcceptanceDigest": "c2b12b9e75ac70686528d0b378e2b58b009a4525177535667f748f83fd4b6ca5"
+          }
+        },
+        "declaration": {
+          "notice": "Synthetic declaration; no payment or closure executed"
+        },
+        "report": {
+          "id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "notice": "Hash-only report; no cash total asserted"
+        },
+        "manifest": {
+          "schemaVersion": "pos.close-manifest.v1",
+          "closeId": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "closeEventId": "abababab-abab-4bab-8bab-abababababab",
+          "previousCloseProof": "EXPLICIT_PREVIOUS",
+          "previousCloseId": "99999999-9999-4999-8999-999999999999",
+          "revision": "1",
+          "calculationVersion": "fixture-only-not-native"
+        }
+      },
+      "expected": {
+        "vectors": [
+          {
+            "name": "resume-anchor",
+            "input": {
+              "domain": "pos.journal.resume.v1",
+              "scope": {
+                "tenantId": "11111111-1111-4111-8111-111111111111",
+                "companyId": "22222222-2222-4222-8222-222222222222",
+                "storeId": "33333333-3333-4333-8333-333333333333",
+                "terminalId": "44444444-4444-4444-8444-444444444444"
+              },
+              "mode": "SAME_EPOCH_SUFFIX",
+              "storageEpoch": "55555555-5555-4555-8555-555555555555",
+              "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              "priorStorageEpoch": "55555555-5555-4555-8555-555555555555",
+              "priorOpenSetId": "66666666-6666-4666-8666-666666666666",
+              "priorFinalSequence": "2",
+              "priorChainHash": "689a0913774c79ec777d03bb15eca7eb35668e641e3cce867d8a7f26db5d7428",
+              "priorAcceptanceDigest": "c2b12b9e75ac70686528d0b378e2b58b009a4525177535667f748f83fd4b6ca5"
+            },
+            "canonicalUtf8": "{\"domain\":\"pos.journal.resume.v1\",\"mode\":\"SAME_EPOCH_SUFFIX\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"priorAcceptanceDigest\":\"c2b12b9e75ac70686528d0b378e2b58b009a4525177535667f748f83fd4b6ca5\",\"priorChainHash\":\"689a0913774c79ec777d03bb15eca7eb35668e641e3cce867d8a7f26db5d7428\",\"priorFinalSequence\":\"2\",\"priorOpenSetId\":\"66666666-6666-4666-8666-666666666666\",\"priorStorageEpoch\":\"55555555-5555-4555-8555-555555555555\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"storageEpoch\":\"55555555-5555-4555-8555-555555555555\"}",
+            "utf8Hex": "7b22646f6d61696e223a22706f732e6a6f75726e616c2e726573756d652e7631222c226d6f6465223a2253414d455f45504f43485f535546464958222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c227072696f72416363657074616e6365446967657374223a2263326231326239653735616337303638363532386430623337386532623538623030396134353235313737353335363637663734386638336664346236636135222c227072696f72436861696e48617368223a2236383961303931333737346337396563373737643033626231356563613765623335363638653634316533636365383637643861376632366462356437343238222c227072696f7246696e616c53657175656e6365223a2232222c227072696f724f70656e5365744964223a2236363636363636362d363636362d343636362d383636362d363636363636363636363636222c227072696f7253746f7261676545706f6368223a2235353535353535352d353535352d343535352d383535352d353535353535353535353535222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273746f7261676545706f6368223a2235353535353535352d353535352d343535352d383535352d353535353535353535353535227d",
+            "sha256": "1166dd94d5ab49eec210cca3b67fec66c4c0545172ad26c7ad778c5920557342"
+          },
+          {
+            "name": "original-3",
+            "input": {
+              "scope": {
+                "tenantId": "11111111-1111-4111-8111-111111111111",
+                "companyId": "22222222-2222-4222-8222-222222222222",
+                "storeId": "33333333-3333-4333-8333-333333333333",
+                "terminalId": "44444444-4444-4444-8444-444444444444"
+              },
+              "storageEpoch": "55555555-5555-4555-8555-555555555555",
+              "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              "sequence": "3",
+              "kind": "TRANSACTION",
+              "originalId": "SALE-CLOSED",
+              "revision": "3",
+              "original": {
+                "id": "SALE-CLOSED",
+                "total": 100,
+                "pendingBalance": 50,
+                "documentType": "TICKET",
+                "status": "COMPLETED",
+                "date": "2026-09-05T23:50:00.000-04:00",
+                "fiscalStatus": "ACCEPTED",
+                "updatedAt": "2026-09-06T00:10:00.000-04:00"
+              }
+            },
+            "canonicalUtf8": "{\"kind\":\"TRANSACTION\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"original\":{\"date\":\"2026-09-05T23:50:00.000-04:00\",\"documentType\":\"TICKET\",\"fiscalStatus\":\"ACCEPTED\",\"id\":\"SALE-CLOSED\",\"pendingBalance\":50,\"status\":\"COMPLETED\",\"total\":100,\"updatedAt\":\"2026-09-06T00:10:00.000-04:00\"},\"originalId\":\"SALE-CLOSED\",\"revision\":\"3\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"sequence\":\"3\",\"storageEpoch\":\"55555555-5555-4555-8555-555555555555\"}",
+            "utf8Hex": "7b226b696e64223a225452414e53414354494f4e222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c226f726967696e616c223a7b2264617465223a22323032362d30392d30355432333a35303a30302e3030302d30343a3030222c22646f63756d656e7454797065223a225449434b4554222c2266697363616c537461747573223a224143434550544544222c226964223a2253414c452d434c4f534544222c2270656e64696e6742616c616e6365223a35302c22737461747573223a22434f4d504c45544544222c22746f74616c223a3130302c22757064617465644174223a22323032362d30392d30365430303a31303a30302e3030302d30343a3030227d2c226f726967696e616c4964223a2253414c452d434c4f534544222c227265766973696f6e223a2233222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273657175656e6365223a2233222c2273746f7261676545706f6368223a2235353535353535352d353535352d343535352d383535352d353535353535353535353535227d",
+            "sha256": "2f5db31be2a7290497865dc03b1e82f12d54244c56f81e3de709c778c1169211"
+          },
+          {
+            "name": "entry-3",
+            "input": {
+              "domain": "pos.journal.entry.v1",
+              "scope": {
+                "tenantId": "11111111-1111-4111-8111-111111111111",
+                "companyId": "22222222-2222-4222-8222-222222222222",
+                "storeId": "33333333-3333-4333-8333-333333333333",
+                "terminalId": "44444444-4444-4444-8444-444444444444"
+              },
+              "storageEpoch": "55555555-5555-4555-8555-555555555555",
+              "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              "sequence": "3",
+              "commandId": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+              "originalSchemaVersion": "fixture.transaction.v1",
+              "kind": "TRANSACTION",
+              "originalId": "SALE-CLOSED",
+              "revision": "3",
+              "previousContentHash": "7b93e229332ce5a9c2798de225c9451d88db390033e768a8c406432698663312",
+              "originalContentHash": "2f5db31be2a7290497865dc03b1e82f12d54244c56f81e3de709c778c1169211"
+            },
+            "canonicalUtf8": "{\"commandId\":\"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee\",\"domain\":\"pos.journal.entry.v1\",\"kind\":\"TRANSACTION\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"originalContentHash\":\"2f5db31be2a7290497865dc03b1e82f12d54244c56f81e3de709c778c1169211\",\"originalId\":\"SALE-CLOSED\",\"originalSchemaVersion\":\"fixture.transaction.v1\",\"previousContentHash\":\"7b93e229332ce5a9c2798de225c9451d88db390033e768a8c406432698663312\",\"revision\":\"3\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"sequence\":\"3\",\"storageEpoch\":\"55555555-5555-4555-8555-555555555555\"}",
+            "utf8Hex": "7b22636f6d6d616e644964223a2265656565656565652d656565652d346565652d386565652d656565656565656565656565222c22646f6d61696e223a22706f732e6a6f75726e616c2e656e7472792e7631222c226b696e64223a225452414e53414354494f4e222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c226f726967696e616c436f6e74656e7448617368223a2232663564623331626532613732393034393738363564633033623165383266313264353432343463353666383165336465373039633737386331313639323131222c226f726967696e616c4964223a2253414c452d434c4f534544222c226f726967696e616c536368656d6156657273696f6e223a22666978747572652e7472616e73616374696f6e2e7631222c2270726576696f7573436f6e74656e7448617368223a2237623933653232393333326365356139633237393864653232356339343531643838646233393030333365373638613863343036343332363938363633333132222c227265766973696f6e223a2233222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273657175656e6365223a2233222c2273746f7261676545706f6368223a2235353535353535352d353535352d343535352d383535352d353535353535353535353535227d",
+            "sha256": "920ae05d47faf602b5bd1abfb98617019988d583992cae219c54651ba35dba56"
+          },
+          {
+            "name": "chain-3",
+            "input": {
+              "domain": "pos.journal.chain.v1",
+              "previousChainHash": "689a0913774c79ec777d03bb15eca7eb35668e641e3cce867d8a7f26db5d7428",
+              "entryHash": "920ae05d47faf602b5bd1abfb98617019988d583992cae219c54651ba35dba56"
+            },
+            "canonicalUtf8": "{\"domain\":\"pos.journal.chain.v1\",\"entryHash\":\"920ae05d47faf602b5bd1abfb98617019988d583992cae219c54651ba35dba56\",\"previousChainHash\":\"689a0913774c79ec777d03bb15eca7eb35668e641e3cce867d8a7f26db5d7428\"}",
+            "utf8Hex": "7b22646f6d61696e223a22706f732e6a6f75726e616c2e636861696e2e7631222c22656e74727948617368223a2239323061653035643437666166363032623562643161626662393836313730313939383864353833393932636165323139633534363531626133356462613536222c2270726576696f7573436861696e48617368223a2236383961303931333737346337396563373737643033626231356563613765623335363638653634316533636365383637643861376632366462356437343238227d",
+            "sha256": "cf7b4632a4f7e75089e96279a134797bf6bd8060ca2ff1b78e1d879bd8e60702"
+          },
+          {
+            "name": "original-4",
+            "input": {
+              "scope": {
+                "tenantId": "11111111-1111-4111-8111-111111111111",
+                "companyId": "22222222-2222-4222-8222-222222222222",
+                "storeId": "33333333-3333-4333-8333-333333333333",
+                "terminalId": "44444444-4444-4444-8444-444444444444"
+              },
+              "storageEpoch": "55555555-5555-4555-8555-555555555555",
+              "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              "sequence": "4",
+              "kind": "COLLECTION",
+              "originalId": "COLLECTION-NEW",
+              "revision": "1",
+              "original": {
+                "id": "COLLECTION-NEW",
+                "date": "2026-09-06T00:10:00.000-04:00",
+                "totalAmount": 50,
+                "receivedAmountBase": 50,
+                "appliedAmountBase": 50,
+                "allocations": [
+                  {
+                    "id": "AL-1",
+                    "collectionId": "COLLECTION-NEW",
+                    "transactionId": "SALE-CLOSED",
+                    "amount": 50,
+                    "timestamp": "2026-09-06T00:10:00.000-04:00"
+                  }
+                ]
+              }
+            },
+            "canonicalUtf8": "{\"kind\":\"COLLECTION\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"original\":{\"allocations\":[{\"amount\":50,\"collectionId\":\"COLLECTION-NEW\",\"id\":\"AL-1\",\"timestamp\":\"2026-09-06T00:10:00.000-04:00\",\"transactionId\":\"SALE-CLOSED\"}],\"appliedAmountBase\":50,\"date\":\"2026-09-06T00:10:00.000-04:00\",\"id\":\"COLLECTION-NEW\",\"receivedAmountBase\":50,\"totalAmount\":50},\"originalId\":\"COLLECTION-NEW\",\"revision\":\"1\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"sequence\":\"4\",\"storageEpoch\":\"55555555-5555-4555-8555-555555555555\"}",
+            "utf8Hex": "7b226b696e64223a22434f4c4c454354494f4e222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c226f726967696e616c223a7b22616c6c6f636174696f6e73223a5b7b22616d6f756e74223a35302c22636f6c6c656374696f6e4964223a22434f4c4c454354494f4e2d4e4557222c226964223a22414c2d31222c2274696d657374616d70223a22323032362d30392d30365430303a31303a30302e3030302d30343a3030222c227472616e73616374696f6e4964223a2253414c452d434c4f534544227d5d2c226170706c696564416d6f756e7442617365223a35302c2264617465223a22323032362d30392d30365430303a31303a30302e3030302d30343a3030222c226964223a22434f4c4c454354494f4e2d4e4557222c227265636569766564416d6f756e7442617365223a35302c22746f74616c416d6f756e74223a35307d2c226f726967696e616c4964223a22434f4c4c454354494f4e2d4e4557222c227265766973696f6e223a2231222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273657175656e6365223a2234222c2273746f7261676545706f6368223a2235353535353535352d353535352d343535352d383535352d353535353535353535353535227d",
+            "sha256": "e17668a90e43259119da5c7442c1d77e9d71376b9d66f9647cd170e1ab9baede"
+          },
+          {
+            "name": "entry-4",
+            "input": {
+              "domain": "pos.journal.entry.v1",
+              "scope": {
+                "tenantId": "11111111-1111-4111-8111-111111111111",
+                "companyId": "22222222-2222-4222-8222-222222222222",
+                "storeId": "33333333-3333-4333-8333-333333333333",
+                "terminalId": "44444444-4444-4444-8444-444444444444"
+              },
+              "storageEpoch": "55555555-5555-4555-8555-555555555555",
+              "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              "sequence": "4",
+              "commandId": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+              "originalSchemaVersion": "fixture.collection.v1",
+              "kind": "COLLECTION",
+              "originalId": "COLLECTION-NEW",
+              "revision": "1",
+              "previousContentHash": null,
+              "originalContentHash": "e17668a90e43259119da5c7442c1d77e9d71376b9d66f9647cd170e1ab9baede"
+            },
+            "canonicalUtf8": "{\"commandId\":\"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee\",\"domain\":\"pos.journal.entry.v1\",\"kind\":\"COLLECTION\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"originalContentHash\":\"e17668a90e43259119da5c7442c1d77e9d71376b9d66f9647cd170e1ab9baede\",\"originalId\":\"COLLECTION-NEW\",\"originalSchemaVersion\":\"fixture.collection.v1\",\"previousContentHash\":null,\"revision\":\"1\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"sequence\":\"4\",\"storageEpoch\":\"55555555-5555-4555-8555-555555555555\"}",
+            "utf8Hex": "7b22636f6d6d616e644964223a2265656565656565652d656565652d346565652d386565652d656565656565656565656565222c22646f6d61696e223a22706f732e6a6f75726e616c2e656e7472792e7631222c226b696e64223a22434f4c4c454354494f4e222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c226f726967696e616c436f6e74656e7448617368223a2265313736363861393065343332353931313964613563373434326331643737653964373133373662396436366639363437636431373065316162396261656465222c226f726967696e616c4964223a22434f4c4c454354494f4e2d4e4557222c226f726967696e616c536368656d6156657273696f6e223a22666978747572652e636f6c6c656374696f6e2e7631222c2270726576696f7573436f6e74656e7448617368223a6e756c6c2c227265766973696f6e223a2231222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273657175656e6365223a2234222c2273746f7261676545706f6368223a2235353535353535352d353535352d343535352d383535352d353535353535353535353535227d",
+            "sha256": "ca855f719ef9f9663a77df43e29dcda8b1ed35f03d64382ba9907dbe4dc4c2c3"
+          },
+          {
+            "name": "chain-4",
+            "input": {
+              "domain": "pos.journal.chain.v1",
+              "previousChainHash": "cf7b4632a4f7e75089e96279a134797bf6bd8060ca2ff1b78e1d879bd8e60702",
+              "entryHash": "ca855f719ef9f9663a77df43e29dcda8b1ed35f03d64382ba9907dbe4dc4c2c3"
+            },
+            "canonicalUtf8": "{\"domain\":\"pos.journal.chain.v1\",\"entryHash\":\"ca855f719ef9f9663a77df43e29dcda8b1ed35f03d64382ba9907dbe4dc4c2c3\",\"previousChainHash\":\"cf7b4632a4f7e75089e96279a134797bf6bd8060ca2ff1b78e1d879bd8e60702\"}",
+            "utf8Hex": "7b22646f6d61696e223a22706f732e6a6f75726e616c2e636861696e2e7631222c22656e74727948617368223a2263613835356637313965663966393636336137376466343365323964636461386231656433356630336436343338326261393930376462653464633463326333222c2270726576696f7573436861696e48617368223a2263663762343633326134663765373530383965393632373961313334373937626636626438303630636132666631623738653164383739626438653630373032227d",
+            "sha256": "9c258d493c9af812c4f35431d16d72abc94e6d3c46c099cf57f2e36bae3b6c42"
+          },
+          {
+            "name": "configuration",
+            "input": {
+              "schemaVersion": "fixture.config.v1",
+              "baseCurrency": "DOP",
+              "timeZone": "America/Santo_Domingo",
+              "locale": "es-DO",
+              "calculationInputOrder": {
+                "transactions": [],
+                "cashMovements": [],
+                "collections": [
+                  {
+                    "kind": "COLLECTION",
+                    "originalId": "COLLECTION-NEW",
+                    "revision": "1"
+                  }
+                ]
+              },
+              "resumeAnchor": {
+                "domain": "pos.journal.resume.v1",
+                "scope": {
+                  "tenantId": "11111111-1111-4111-8111-111111111111",
+                  "companyId": "22222222-2222-4222-8222-222222222222",
+                  "storeId": "33333333-3333-4333-8333-333333333333",
+                  "terminalId": "44444444-4444-4444-8444-444444444444"
+                },
+                "mode": "SAME_EPOCH_SUFFIX",
+                "storageEpoch": "55555555-5555-4555-8555-555555555555",
+                "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                "priorStorageEpoch": "55555555-5555-4555-8555-555555555555",
+                "priorOpenSetId": "66666666-6666-4666-8666-666666666666",
+                "priorFinalSequence": "2",
+                "priorChainHash": "689a0913774c79ec777d03bb15eca7eb35668e641e3cce867d8a7f26db5d7428",
+                "priorAcceptanceDigest": "c2b12b9e75ac70686528d0b378e2b58b009a4525177535667f748f83fd4b6ca5"
+              }
+            },
+            "canonicalUtf8": "{\"baseCurrency\":\"DOP\",\"calculationInputOrder\":{\"cashMovements\":[],\"collections\":[{\"kind\":\"COLLECTION\",\"originalId\":\"COLLECTION-NEW\",\"revision\":\"1\"}],\"transactions\":[]},\"locale\":\"es-DO\",\"resumeAnchor\":{\"domain\":\"pos.journal.resume.v1\",\"mode\":\"SAME_EPOCH_SUFFIX\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"priorAcceptanceDigest\":\"c2b12b9e75ac70686528d0b378e2b58b009a4525177535667f748f83fd4b6ca5\",\"priorChainHash\":\"689a0913774c79ec777d03bb15eca7eb35668e641e3cce867d8a7f26db5d7428\",\"priorFinalSequence\":\"2\",\"priorOpenSetId\":\"66666666-6666-4666-8666-666666666666\",\"priorStorageEpoch\":\"55555555-5555-4555-8555-555555555555\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"storageEpoch\":\"55555555-5555-4555-8555-555555555555\"},\"schemaVersion\":\"fixture.config.v1\",\"timeZone\":\"America/Santo_Domingo\"}",
+            "utf8Hex": "7b226261736543757272656e6379223a22444f50222c2263616c63756c6174696f6e496e7075744f72646572223a7b22636173684d6f76656d656e7473223a5b5d2c22636f6c6c656374696f6e73223a5b7b226b696e64223a22434f4c4c454354494f4e222c226f726967696e616c4964223a22434f4c4c454354494f4e2d4e4557222c227265766973696f6e223a2231227d5d2c227472616e73616374696f6e73223a5b5d7d2c226c6f63616c65223a2265732d444f222c22726573756d65416e63686f72223a7b22646f6d61696e223a22706f732e6a6f75726e616c2e726573756d652e7631222c226d6f6465223a2253414d455f45504f43485f535546464958222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c227072696f72416363657074616e6365446967657374223a2263326231326239653735616337303638363532386430623337386532623538623030396134353235313737353335363637663734386638336664346236636135222c227072696f72436861696e48617368223a2236383961303931333737346337396563373737643033626231356563613765623335363638653634316533636365383637643861376632366462356437343238222c227072696f7246696e616c53657175656e6365223a2232222c227072696f724f70656e5365744964223a2236363636363636362d363636362d343636362d383636362d363636363636363636363636222c227072696f7253746f7261676545706f6368223a2235353535353535352d353535352d343535352d383535352d353535353535353535353535222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273746f7261676545706f6368223a2235353535353535352d353535352d343535352d383535352d353535353535353535353535227d2c22736368656d6156657273696f6e223a22666978747572652e636f6e6669672e7631222c2274696d655a6f6e65223a22416d65726963612f53616e746f5f446f6d696e676f227d",
+            "sha256": "a7fe544a885d70d75f4a860526e9d06e202049791f34173f2c387a02c2e505b4"
+          },
+          {
+            "name": "declaration",
+            "input": {
+              "notice": "Synthetic declaration; no payment or closure executed"
+            },
+            "canonicalUtf8": "{\"notice\":\"Synthetic declaration; no payment or closure executed\"}",
+            "utf8Hex": "7b226e6f74696365223a2253796e746865746963206465636c61726174696f6e3b206e6f207061796d656e74206f7220636c6f73757265206578656375746564227d",
+            "sha256": "43db7277530570fd49d59c7748fdf5108aa09c48afcc1e90899f52e18a55e5ee"
+          },
+          {
+            "name": "report",
+            "input": {
+              "id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+              "notice": "Hash-only report; no cash total asserted"
+            },
+            "canonicalUtf8": "{\"id\":\"ffffffff-ffff-4fff-8fff-ffffffffffff\",\"notice\":\"Hash-only report; no cash total asserted\"}",
+            "utf8Hex": "7b226964223a2266666666666666662d666666662d346666662d386666662d666666666666666666666666222c226e6f74696365223a22486173682d6f6e6c79207265706f72743b206e6f206361736820746f74616c206173736572746564227d",
+            "sha256": "1c1999503a5e70c83ed857552fc3fe4bbd9c1a9ce3541583158bd9b15a116ea7"
+          },
+          {
+            "name": "manifest",
+            "input": {
+              "schemaVersion": "pos.close-manifest.v1",
+              "closeId": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+              "closeEventId": "abababab-abab-4bab-8bab-abababababab",
+              "previousCloseProof": "EXPLICIT_PREVIOUS",
+              "previousCloseId": "99999999-9999-4999-8999-999999999999",
+              "revision": "1",
+              "calculationVersion": "fixture-only-not-native",
+              "terminalId": "44444444-4444-4444-8444-444444444444",
+              "storageEpoch": "55555555-5555-4555-8555-555555555555",
+              "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              "sealedThrough": "4",
+              "members": [
+                {
+                  "kind": "COLLECTION",
+                  "originalId": "COLLECTION-NEW",
+                  "revision": "1",
+                  "originalContentHash": "e17668a90e43259119da5c7442c1d77e9d71376b9d66f9647cd170e1ab9baede",
+                  "commercialType": null
+                }
+              ],
+              "dependencies": [
+                {
+                  "kind": "TRANSACTION",
+                  "originalId": "SALE-CLOSED",
+                  "revision": "3",
+                  "originalContentHash": "2f5db31be2a7290497865dc03b1e82f12d54244c56f81e3de709c778c1169211",
+                  "commercialType": "TICKET",
+                  "role": "READ_ONLY"
+                }
+              ],
+              "configurationHash": "a7fe544a885d70d75f4a860526e9d06e202049791f34173f2c387a02c2e505b4",
+              "declarationHash": "43db7277530570fd49d59c7748fdf5108aa09c48afcc1e90899f52e18a55e5ee",
+              "reportHash": "1c1999503a5e70c83ed857552fc3fe4bbd9c1a9ce3541583158bd9b15a116ea7"
+            },
+            "canonicalUtf8": "{\"calculationVersion\":\"fixture-only-not-native\",\"closeEventId\":\"abababab-abab-4bab-8bab-abababababab\",\"closeId\":\"ffffffff-ffff-4fff-8fff-ffffffffffff\",\"configurationHash\":\"a7fe544a885d70d75f4a860526e9d06e202049791f34173f2c387a02c2e505b4\",\"declarationHash\":\"43db7277530570fd49d59c7748fdf5108aa09c48afcc1e90899f52e18a55e5ee\",\"dependencies\":[{\"commercialType\":\"TICKET\",\"kind\":\"TRANSACTION\",\"originalContentHash\":\"2f5db31be2a7290497865dc03b1e82f12d54244c56f81e3de709c778c1169211\",\"originalId\":\"SALE-CLOSED\",\"revision\":\"3\",\"role\":\"READ_ONLY\"}],\"members\":[{\"commercialType\":null,\"kind\":\"COLLECTION\",\"originalContentHash\":\"e17668a90e43259119da5c7442c1d77e9d71376b9d66f9647cd170e1ab9baede\",\"originalId\":\"COLLECTION-NEW\",\"revision\":\"1\"}],\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"previousCloseId\":\"99999999-9999-4999-8999-999999999999\",\"previousCloseProof\":\"EXPLICIT_PREVIOUS\",\"reportHash\":\"1c1999503a5e70c83ed857552fc3fe4bbd9c1a9ce3541583158bd9b15a116ea7\",\"revision\":\"1\",\"schemaVersion\":\"pos.close-manifest.v1\",\"sealedThrough\":\"4\",\"storageEpoch\":\"55555555-5555-4555-8555-555555555555\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"}",
+            "utf8Hex": "7b2263616c63756c6174696f6e56657273696f6e223a22666978747572652d6f6e6c792d6e6f742d6e6174697665222c22636c6f73654576656e744964223a2261626162616261622d616261622d346261622d386261622d616261626162616261626162222c22636c6f73654964223a2266666666666666662d666666662d346666662d386666662d666666666666666666666666222c22636f6e66696775726174696f6e48617368223a2261376665353434613838356437306437356634613836303532366539643036653230323034393739316633343137336632633338376130326332653530356234222c226465636c61726174696f6e48617368223a2234336462373237373533303537306664343964353963373734386664663531303861613039633438616663633165393038393966353265313861353565356565222c22646570656e64656e63696573223a5b7b22636f6d6d65726369616c54797065223a225449434b4554222c226b696e64223a225452414e53414354494f4e222c226f726967696e616c436f6e74656e7448617368223a2232663564623331626532613732393034393738363564633033623165383266313264353432343463353666383165336465373039633737386331313639323131222c226f726967696e616c4964223a2253414c452d434c4f534544222c227265766973696f6e223a2233222c22726f6c65223a22524541445f4f4e4c59227d5d2c226d656d62657273223a5b7b22636f6d6d65726369616c54797065223a6e756c6c2c226b696e64223a22434f4c4c454354494f4e222c226f726967696e616c436f6e74656e7448617368223a2265313736363861393065343332353931313964613563373434326331643737653964373133373662396436366639363437636431373065316162396261656465222c226f726967696e616c4964223a22434f4c4c454354494f4e2d4e4557222c227265766973696f6e223a2231227d5d2c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c2270726576696f7573436c6f73654964223a2239393939393939392d393939392d343939392d383939392d393939393939393939393939222c2270726576696f7573436c6f736550726f6f66223a224558504c494349545f50524556494f5553222c227265706f727448617368223a2231633139393935303361356537306338336564383537353532666333666534626264396331613963653335343135383331353862643962313561313136656137222c227265766973696f6e223a2231222c22736368656d6156657273696f6e223a22706f732e636c6f73652d6d616e69666573742e7631222c227365616c65645468726f756768223a2234222c2273746f7261676545706f6368223a2235353535353535352d353535352d343535352d383535352d353535353535353535353535222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d",
+            "sha256": "28c0bfe8f79d9447e238b433775a2ca3a882c1e0328937d97fe78c3d3db3c7ca"
+          },
+          {
+            "name": "seal",
+            "input": {
+              "domain": "pos.open-set.seal.v1",
+              "scope": {
+                "tenantId": "11111111-1111-4111-8111-111111111111",
+                "companyId": "22222222-2222-4222-8222-222222222222",
+                "storeId": "33333333-3333-4333-8333-333333333333",
+                "terminalId": "44444444-4444-4444-8444-444444444444"
+              },
+              "storageEpoch": "55555555-5555-4555-8555-555555555555",
+              "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              "finalSequence": "4",
+              "chainHash": "9c258d493c9af812c4f35431d16d72abc94e6d3c46c099cf57f2e36bae3b6c42",
+              "manifestHash": "28c0bfe8f79d9447e238b433775a2ca3a882c1e0328937d97fe78c3d3db3c7ca",
+              "closeId": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+              "closeEventId": "abababab-abab-4bab-8bab-abababababab"
+            },
+            "canonicalUtf8": "{\"chainHash\":\"9c258d493c9af812c4f35431d16d72abc94e6d3c46c099cf57f2e36bae3b6c42\",\"closeEventId\":\"abababab-abab-4bab-8bab-abababababab\",\"closeId\":\"ffffffff-ffff-4fff-8fff-ffffffffffff\",\"domain\":\"pos.open-set.seal.v1\",\"finalSequence\":\"4\",\"manifestHash\":\"28c0bfe8f79d9447e238b433775a2ca3a882c1e0328937d97fe78c3d3db3c7ca\",\"openSetId\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"storageEpoch\":\"55555555-5555-4555-8555-555555555555\"}",
+            "utf8Hex": "7b22636861696e48617368223a2239633235386434393363396166383132633466333534333164313664373261626339346536643363343663303939636635376632653336626165336236633432222c22636c6f73654576656e744964223a2261626162616261622d616261622d346261622d386261622d616261626162616261626162222c22636c6f73654964223a2266666666666666662d666666662d346666662d386666662d666666666666666666666666222c22646f6d61696e223a22706f732e6f70656e2d7365742e7365616c2e7631222c2266696e616c53657175656e6365223a2234222c226d616e696665737448617368223a2232386330626665386637396439343437653233386234333337373561326361336138383263316530333238393337643937666537386333643364623363376361222c226f70656e5365744964223a2264646464646464642d646464642d346464642d386464642d646464646464646464646464222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c2273746f7261676545706f6368223a2235353535353535352d353535352d343535352d383535352d353535353535353535353535227d",
+            "sha256": "10826643b6c11e608e87988f7f5420462c284919bddfd60ef56cc62dab3b1e12"
+          },
+          {
+            "name": "acceptance",
+            "input": {
+              "domain": "pos.close.acceptance.v1",
+              "scope": {
+                "tenantId": "11111111-1111-4111-8111-111111111111",
+                "companyId": "22222222-2222-4222-8222-222222222222",
+                "storeId": "33333333-3333-4333-8333-333333333333",
+                "terminalId": "44444444-4444-4444-8444-444444444444"
+              },
+              "closeId": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+              "closeEventId": "abababab-abab-4bab-8bab-abababababab",
+              "manifestHash": "28c0bfe8f79d9447e238b433775a2ca3a882c1e0328937d97fe78c3d3db3c7ca",
+              "sealHash": "10826643b6c11e608e87988f7f5420462c284919bddfd60ef56cc62dab3b1e12"
+            },
+            "canonicalUtf8": "{\"closeEventId\":\"abababab-abab-4bab-8bab-abababababab\",\"closeId\":\"ffffffff-ffff-4fff-8fff-ffffffffffff\",\"domain\":\"pos.close.acceptance.v1\",\"manifestHash\":\"28c0bfe8f79d9447e238b433775a2ca3a882c1e0328937d97fe78c3d3db3c7ca\",\"scope\":{\"companyId\":\"22222222-2222-4222-8222-222222222222\",\"storeId\":\"33333333-3333-4333-8333-333333333333\",\"tenantId\":\"11111111-1111-4111-8111-111111111111\",\"terminalId\":\"44444444-4444-4444-8444-444444444444\"},\"sealHash\":\"10826643b6c11e608e87988f7f5420462c284919bddfd60ef56cc62dab3b1e12\"}",
+            "utf8Hex": "7b22636c6f73654576656e744964223a2261626162616261622d616261622d346261622d386261622d616261626162616261626162222c22636c6f73654964223a2266666666666666662d666666662d346666662d386666662d666666666666666666666666222c22646f6d61696e223a22706f732e636c6f73652e616363657074616e63652e7631222c226d616e696665737448617368223a2232386330626665386637396439343437653233386234333337373561326361336138383263316530333238393337643937666537386333643364623363376361222c2273636f7065223a7b22636f6d70616e794964223a2232323232323232322d323232322d343232322d383232322d323232323232323232323232222c2273746f72654964223a2233333333333333332d333333332d343333332d383333332d333333333333333333333333222c2274656e616e744964223a2231313131313131312d313131312d343131312d383131312d313131313131313131313131222c227465726d696e616c4964223a2234343434343434342d343434342d343434342d383434342d343434343434343434343434227d2c227365616c48617368223a2231303832363634336236633131653630386538373938386637663534323034363263323834393139626464666436306566353663633632646162336231653132227d",
+            "sha256": "c2d031c51dc63e3d404aeef4aee30b7f969b2fcdb388458f3ce26f485c4c9edc"
+          }
+        ],
+        "history": [
+          {
+            "kind": "TRANSACTION",
+            "originalId": "SALE-CLOSED",
+            "revision": "1",
+            "originalContentHash": "156d4cf7692a29c79f4c615536b256b8422f47882c034e3ad8db4f47f6621e78",
+            "commercialType": "TICKET"
+          },
+          {
+            "kind": "TRANSACTION",
+            "originalId": "SALE-CLOSED",
+            "revision": "2",
+            "originalContentHash": "7b93e229332ce5a9c2798de225c9451d88db390033e768a8c406432698663312",
+            "commercialType": "TICKET"
+          },
+          {
+            "kind": "TRANSACTION",
+            "originalId": "SALE-CLOSED",
+            "revision": "3",
+            "originalContentHash": "2f5db31be2a7290497865dc03b1e82f12d54244c56f81e3de709c778c1169211",
+            "commercialType": "TICKET"
+          },
+          {
+            "kind": "COLLECTION",
+            "originalId": "COLLECTION-NEW",
+            "revision": "1",
+            "originalContentHash": "e17668a90e43259119da5c7442c1d77e9d71376b9d66f9647cd170e1ab9baede",
+            "commercialType": null
+          }
+        ],
+        "manifest": {
+          "schemaVersion": "pos.close-manifest.v1",
+          "closeId": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "closeEventId": "abababab-abab-4bab-8bab-abababababab",
+          "previousCloseProof": "EXPLICIT_PREVIOUS",
+          "previousCloseId": "99999999-9999-4999-8999-999999999999",
+          "revision": "1",
+          "calculationVersion": "fixture-only-not-native",
+          "terminalId": "44444444-4444-4444-8444-444444444444",
+          "storageEpoch": "55555555-5555-4555-8555-555555555555",
+          "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          "sealedThrough": "4",
+          "members": [
+            {
+              "kind": "COLLECTION",
+              "originalId": "COLLECTION-NEW",
+              "revision": "1",
+              "originalContentHash": "e17668a90e43259119da5c7442c1d77e9d71376b9d66f9647cd170e1ab9baede",
+              "commercialType": null
+            }
+          ],
+          "dependencies": [
+            {
+              "kind": "TRANSACTION",
+              "originalId": "SALE-CLOSED",
+              "revision": "3",
+              "originalContentHash": "2f5db31be2a7290497865dc03b1e82f12d54244c56f81e3de709c778c1169211",
+              "commercialType": "TICKET",
+              "role": "READ_ONLY"
+            }
+          ],
+          "configurationHash": "a7fe544a885d70d75f4a860526e9d06e202049791f34173f2c387a02c2e505b4",
+          "declarationHash": "43db7277530570fd49d59c7748fdf5108aa09c48afcc1e90899f52e18a55e5ee",
+          "reportHash": "1c1999503a5e70c83ed857552fc3fe4bbd9c1a9ce3541583158bd9b15a116ea7"
+        },
+        "seal": {
+          "domain": "pos.open-set.seal.v1",
+          "scope": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "companyId": "22222222-2222-4222-8222-222222222222",
+            "storeId": "33333333-3333-4333-8333-333333333333",
+            "terminalId": "44444444-4444-4444-8444-444444444444"
+          },
+          "storageEpoch": "55555555-5555-4555-8555-555555555555",
+          "openSetId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          "finalSequence": "4",
+          "chainHash": "9c258d493c9af812c4f35431d16d72abc94e6d3c46c099cf57f2e36bae3b6c42",
+          "manifestHash": "28c0bfe8f79d9447e238b433775a2ca3a882c1e0328937d97fe78c3d3db3c7ca",
+          "closeId": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "closeEventId": "abababab-abab-4bab-8bab-abababababab"
+        },
+        "acceptanceDigest": "c2d031c51dc63e3d404aeef4aee30b7f969b2fcdb388458f3ce26f485c4c9edc",
+        "archiveAcceptanceDigest": "c2b12b9e75ac70686528d0b378e2b58b009a4525177535667f748f83fd4b6ca5"
+      }
+    }
+  ]
+}

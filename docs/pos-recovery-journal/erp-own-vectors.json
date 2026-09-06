@@ -1,0 +1,56 @@
+[
+  {
+    "name": "nested-numeric-keys",
+    "input": {
+      "2": {
+        "2": "b",
+        "10": "a"
+      },
+      "10": [
+        2,
+        1
+      ]
+    },
+    "canonicalUtf8": "{\"10\":[2,1],\"2\":{\"10\":\"a\",\"2\":\"b\"}}",
+    "utf8Hex": "7b223130223a5b322c315d2c2232223a7b223130223a2261222c2232223a2262227d7d",
+    "sha256": "f481e33e87c9b398627db081ca11e62fd75046faa2e5bb6560c8c1830d61caa5"
+  },
+  {
+    "name": "utf16-and-numeric-keys",
+    "input": {
+      "": 0,
+      "😀": 1,
+      "2": 2,
+      "10": 10
+    },
+    "canonicalUtf8": "{\"10\":10,\"2\":2,\"😀\":1,\"\":0}",
+    "utf8Hex": "7b223130223a31302c2232223a322c22f09f9880223a312c22ee8080223a307d",
+    "sha256": "5a223c6e182b5ac03764b65ffa5a0058958c76a66114219969a6dd8046a71648"
+  },
+  {
+    "name": "calculation-order-preserved",
+    "input": [
+      {
+        "originalId": "z",
+        "revision": "2"
+      },
+      {
+        "originalId": "a",
+        "revision": "1"
+      }
+    ],
+    "canonicalUtf8": "[{\"originalId\":\"z\",\"revision\":\"2\"},{\"originalId\":\"a\",\"revision\":\"1\"}]",
+    "utf8Hex": "5b7b226f726967696e616c4964223a227a222c227265766973696f6e223a2232227d2c7b226f726967696e616c4964223a2261222c227265766973696f6e223a2231227d5d",
+    "sha256": "c43967ce7e415c975d13a6abf905c7aa534553a917554b56ff5305ee2480f195"
+  },
+  {
+    "name": "counter-precision",
+    "input": {
+      "revision": "9007199254740993",
+      "previous": null
+    },
+    "canonicalUtf8": "{\"previous\":null,\"revision\":\"9007199254740993\"}",
+    "utf8Hex": "7b2270726576696f7573223a6e756c6c2c227265766973696f6e223a2239303037313939323534373430393933227d",
+    "sha256": "3a63511a15cfcb5a2d7a30f45fe327ddf3e9c9c98857f65854b57a9ed72fef3c"
+  }
+]

@@ -1,5 +1,7 @@
 # Entrega POS J1 para contraste ERP
 
+> Actualización: leer primero [POS_RESPONSE_J2.md](POS_RESPONSE_J2.md), que responde la revisión ERP de estos ocho puntos. Este handoff J1 se conserva como antecedente. J2 añade corrección de tipos y vectores de continuidad; sigue sin autorización de implementación.
+
 Esta es una solicitud de revisión documental, no de implementación. Entrada ERP: R4 invariantes `a7e490d6`; fuente POS auditada: `2e200a2`. Los dos huecos R4 (igualdades conjuntas y una revisión por identidad) están atendidos por el paquete recibido. Proponemos ahora concretar el journal/commit local y las preimágenes sin habilitar recuperación.
 
 Leer README.md, source-evidence.json y vectors.json de este directorio. Ejecutar los dos verificadores offline; no se necesita repositorio POS externo para los vectores, ni se deben ejecutar servicios o bases. Los originales de hashing son sintéticos y parciales, no nuevos perfiles nativos aprobados.
