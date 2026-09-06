@@ -1,0 +1,88 @@
+{
+  "status": "PASS",
+  "sourceCommit": "4d5710875c352af367f2f82701e80102060dd68a",
+  "sourceHashes": {
+    "components/ZReportDashboard.tsx": "9cd25eea8e9d6a53c21ed815186ceb6c8ce36c7477dea7734c211171631f8e06",
+    "App.tsx": "a61f4260fa1648624e9b315e62123f0ce27d04cda5e5f25f54eb8cf806bbefc2",
+    "utils/paymentSettlement.ts": "fe32bf8420137988773558a59c44a1b1c7c411f8dfc7b6616bfcedf9645a8517",
+    "utils/creditRules.ts": "107f4d00ad784d5ba2b9cb128506411cc21f0dda5b17201fa21008c72b4e0acf",
+    "utils/analytics.ts": "20e50aee8ef3bd181da9885454a08f662179ae863b136094e6aeb96284022ecd"
+  },
+  "results": [
+    {
+      "id": "P01_USD",
+      "cashExpected": {
+        "USD": 10,
+        "DOP": -50
+      },
+      "collectionsTotal": 0,
+      "returnsTotal": 0,
+      "openedAt": "2026-09-06T03:59:00.000Z"
+    },
+    {
+      "id": "P02_COLLECTION",
+      "cashExpected": {},
+      "collectionsTotal": 100,
+      "returnsTotal": 0,
+      "openedAt": "2026-09-06T16:00:00.000Z"
+    },
+    {
+      "id": "P03_REFUND_STORE_CREDIT",
+      "cashExpected": {
+        "DOP": 1000
+      },
+      "collectionsTotal": 0,
+      "returnsTotal": 50,
+      "openedAt": "2026-09-06T03:59:00.000Z"
+    },
+    {
+      "id": "P04_REFUND_CARD",
+      "cashExpected": {
+        "DOP": 1000
+      },
+      "collectionsTotal": 0,
+      "returnsTotal": 50,
+      "openedAt": "2026-09-06T03:59:00.000Z"
+    },
+    {
+      "id": "P05_CARD_VOID_IS_REFUND_DOCUMENT",
+      "cashExpected": {
+        "DOP": 1000
+      },
+      "collectionsTotal": 0,
+      "returnsTotal": 50,
+      "openedAt": "2026-09-06T03:59:00.000Z"
+    },
+    {
+      "id": "P06_UNVERIFIED_CASH_REFUND_DIAGNOSTIC",
+      "cashExpected": {
+        "DOP": 1050
+      },
+      "collectionsTotal": 0,
+      "returnsTotal": 50,
+      "openedAt": "2026-09-06T03:59:00.000Z"
+    },
+    {
+      "id": "P07_BOOKING_ADVANCE",
+      "cashExpected": {},
+      "collectionsTotal": 30,
+      "returnsTotal": 0,
+      "openedAt": "2026-09-06T16:00:00.000Z"
+    },
+    {
+      "id": "P08_CROSS_MIDNIGHT",
+      "cashExpected": {
+        "USD": 10,
+        "DOP": -50
+      },
+      "collectionsTotal": 100,
+      "returnsTotal": 0,
+      "openedAt": "2026-09-06T03:59:00.000Z"
+    }
+  ],
+  "limitations": [
+    "No UI execution, database, HTTP, restoration, Z emission or distributed-protocol tests.",
+    "Existing Z shape fixture is schema-only; no physical count is asserted.",
+    "Inputs are synthetic and preselected; terminal isolation/selectors are not tested here."
+  ]
+}

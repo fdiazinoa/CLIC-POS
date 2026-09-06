@@ -1,0 +1,503 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "PROPOSED minimum operational projections, not full native types nor permission to restore/close. Legacy missing required fields must remain evidence with diagnostics, not fabricated defaults. Semantic and membership checks are separate.",
+  "$defs": {
+    "Line": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cartId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quantity": {
+          "type": "number"
+        },
+        "price": {
+          "type": "number"
+        },
+        "appliedTaxIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "netAmount": {
+          "type": "number"
+        },
+        "taxAmount": {
+          "type": "number"
+        },
+        "totalAmount": {
+          "type": "number"
+        },
+        "discountAmount": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "cartId",
+        "name",
+        "quantity",
+        "price"
+      ],
+      "additionalProperties": true
+    },
+    "Payment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "amount": {
+          "type": "number"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "currencyCode": {
+          "type": "string",
+          "minLength": 1
+        },
+        "amountOriginal": {
+          "type": "number"
+        },
+        "exchangeRate": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "appliedAmount": {
+          "type": "number"
+        },
+        "changeAmount": {
+          "type": "number"
+        },
+        "changeCurrencyCode": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "amount",
+        "timestamp"
+      ],
+      "additionalProperties": true
+    },
+    "Transaction": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "date": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "terminalId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "userName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "documentType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/Line"
+          }
+        },
+        "total": {
+          "type": "number"
+        },
+        "payments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Payment"
+          }
+        },
+        "taxAmount": {
+          "type": "number"
+        },
+        "netAmount": {
+          "type": "number"
+        },
+        "discountAmount": {
+          "type": "number"
+        },
+        "originalTransactionId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "date",
+        "terminalId",
+        "userId",
+        "userName",
+        "documentType",
+        "status",
+        "items",
+        "total",
+        "payments"
+      ],
+      "additionalProperties": true
+    },
+    "Refund": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Transaction"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "documentType": {
+              "const": "REFUND"
+            },
+            "status": {
+              "const": "REFUNDED"
+            },
+            "originalTransactionId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "originalTransactionId"
+          ],
+          "additionalProperties": true
+        }
+      ]
+    },
+    "Allocation": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "collectionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "transactionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "amount": {
+          "type": "number"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "collectionId",
+        "transactionId",
+        "amount",
+        "timestamp"
+      ],
+      "additionalProperties": true
+    },
+    "Collection": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "customerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "customerName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "date": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "totalAmount": {
+          "type": "number"
+        },
+        "method": {
+          "enum": [
+            "CASH",
+            "CARD",
+            "TRANSFER",
+            "CHECK",
+            "WALLET"
+          ]
+        },
+        "terminalId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "userName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "currencyCode": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exchangeRate": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "receivedAmountOriginal": {
+          "type": "number"
+        },
+        "receivedAmountBase": {
+          "type": "number"
+        },
+        "appliedAmountBase": {
+          "type": "number"
+        },
+        "unappliedAmountBase": {
+          "type": "number"
+        },
+        "allocations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Allocation"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "displayId",
+        "customerId",
+        "customerName",
+        "date",
+        "totalAmount",
+        "method",
+        "terminalId",
+        "userId",
+        "userName",
+        "currencyCode",
+        "exchangeRate",
+        "receivedAmountOriginal",
+        "receivedAmountBase",
+        "appliedAmountBase",
+        "unappliedAmountBase",
+        "allocations"
+      ],
+      "additionalProperties": true
+    },
+    "BookingAdvance": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Collection"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "bookingActivityId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "bookingActivityId"
+          ],
+          "additionalProperties": true
+        }
+      ]
+    },
+    "CashMovement": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "enum": [
+            "IN",
+            "OUT"
+          ]
+        },
+        "amount": {
+          "type": "number"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "userName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "terminalId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "currencyCode": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "amount",
+        "reason",
+        "timestamp",
+        "userId",
+        "userName",
+        "terminalId",
+        "currencyCode"
+      ],
+      "additionalProperties": true
+    },
+    "ZReport": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "terminalId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sequenceNumber": {
+          "type": "string",
+          "minLength": 1
+        },
+        "openedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "closedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "closedByUserId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "closedByUserName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseCurrency": {
+          "type": "string",
+          "minLength": 1
+        },
+        "totalsByMethod": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "cashExpected": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "cashCounted": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "cashDiscrepancy": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "cashSales": {
+          "type": "number"
+        },
+        "cashIn": {
+          "type": "number"
+        },
+        "cashOut": {
+          "type": "number"
+        },
+        "transactionCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "terminalId",
+        "sequenceNumber",
+        "openedAt",
+        "closedAt",
+        "closedByUserId",
+        "closedByUserName",
+        "baseCurrency",
+        "totalsByMethod",
+        "cashExpected",
+        "cashCounted",
+        "cashDiscrepancy",
+        "cashSales",
+        "cashIn",
+        "cashOut",
+        "transactionCount",
+        "notes"
+      ],
+      "additionalProperties": true
+    }
+  }
+}
