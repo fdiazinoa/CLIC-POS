@@ -1,0 +1,161 @@
+{
+  "legacy": "UNKNOWN",
+  "exactZEligible": false,
+  "closeAuthorization": "NOT_GRANTED",
+  "erpInputSha256": "eae198f195791019338d704784171791976a961afbd4c52a86a08aa90514118e",
+  "commands": [
+    {
+      "command": [
+        "node",
+        "docs/pos-pending-day-recovery/pos-j4-evidence/docs/pos-recovery-j3/verify-contract.mjs"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: 8 versioned intent bindings; 46 negatives; fixture-root checks. No native-profile, authenticity or recoverability certification.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/private/tmp/clic-pos-recovery-contract-review/venv/bin/python",
+        "docs/pos-pending-day-recovery/pos-j4-evidence/docs/pos-recovery-j3/verify-bytes.py"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: 8 intent byte/digests independently checked; no business semantics certified.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "node",
+        "docs/pos-pending-day-recovery/pos-j4-evidence/docs/pos-recovery-j4/verify-semantics.mjs"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: 8 v2 semantic fixtures, no native/runtime/concurrency certification.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "node",
+        "docs/pos-pending-day-recovery/pos-j4-evidence/docs/pos-recovery-j4/verify-negatives.mjs"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: 167 independent rehashed negatives; leap-date and historical-number positives; close IDs bound to intentHash. No operational authorization.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/private/tmp/clic-pos-recovery-contract-review/venv/bin/python",
+        "docs/pos-pending-day-recovery/pos-j4-evidence/docs/pos-recovery-j4/verify-bytes.py"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: 8 new v2 intent vectors independently verified; published vectors unchanged.\nPASS: published JSON bytes preserved.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "node",
+        "docs/pos-pending-day-recovery/verify-fixtures.mjs"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: 4 download/import packages + 1 separate close candidate; 3 byte vectors; POS-reported F01/F02/F04; legacy UNKNOWN; no native recovery certification or close grants; 5 negative cases. POS calculator not executed here.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "node",
+        "docs/pos-pending-day-recovery/verify-j2.mjs"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: J2 checksums; 7 historical files unchanged; 51 cross-checked ERP byte/hash vectors; UTF-16/numeric-key positives and negatives; 5 recomputed-graph rejections; 2 lineage scenarios and untrusted-anchor rejections. No recovery certification.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "node",
+        "docs/pos-pending-day-recovery/verify-j3.mjs"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: J3 checksum; 8 intent bindings; 89 independent ERP negatives including rehashed artifacts/retries and 11 root cases. Native semantics, durable provenance and operational acceptance NOT certified.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "node",
+        "docs/pos-pending-day-recovery/verify-j4.mjs"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: checksums and historical bytes; 16 v1/v2 bindings; 4 historical-role positives; 157 independent rehashed negatives; 3 new POS limitations reproduced and blocked by documentary ERP guards. No runtime or recovery authorization.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/private/tmp/clic-pos-recovery-contract-review/venv/bin/python",
+        "docs/pos-pending-day-recovery/verify-schema.py"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: three separate draft 2020-12 schemas; 42 envelopes; 10 negative checks; 15 original assessments (none certified). POS native profiles remain unagreed.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/private/tmp/clic-pos-recovery-contract-review/venv/bin/python",
+        "docs/pos-pending-day-recovery/verify-r4.py"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: evidence SHA256SUMS; 14 serializer cases / 6 timestamps; 13 unchanged originals; profile negatives; 7 protocol negatives; 6 acceptance decision cases; 4 full-candidate positives / 14 independent negatives; 2 UTF-16 positives / 6 negatives. No runtime or concurrency certification.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "node",
+        "docs/pos-recovery-j3/verify-contract.mjs"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: 8 versioned intent bindings; 46 negatives; fixture-root checks. No native-profile, authenticity or recoverability certification.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/private/tmp/clic-pos-recovery-contract-review/venv/bin/python",
+        "docs/pos-recovery-j3/verify-bytes.py"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: 8 intent byte/digests independently checked; no business semantics certified.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "node",
+        "docs/pos-recovery-j4/verify-semantics.mjs"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: 8 v2 semantic fixtures, no native/runtime/concurrency certification.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "node",
+        "docs/pos-recovery-j4/verify-negatives.mjs"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: 167 independent rehashed negatives; leap-date and historical-number positives; close IDs bound to intentHash. No operational authorization.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/private/tmp/clic-pos-recovery-contract-review/venv/bin/python",
+        "docs/pos-recovery-j4/verify-bytes.py"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: 8 new v2 intent vectors independently verified; published vectors unchanged.\nPASS: published JSON bytes preserved.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "node",
+        "docs/pos-recovery-j5/verify-regressions.mjs"
+      ],
+      "exitCode": 0,
+      "stdout": "PASS: 20 independent rehashed negatives; 11 positives; aggregate 2+2/2 rejected, 1+1/2 accepted; TRACKED blocked; explicit DOP change. Legacy UNKNOWN, exactZEligible=false, closeAuthorization=NOT_GRANTED.\n",
+      "stderr": ""
+    }
+  ]
+}
