@@ -1,15 +1,23 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import type { BusinessConfig } from '../types';
-import { getCheckoutTrackingSession, readCheckoutDiagnostics, setCheckoutTrackingEnabled } from '../services/CheckoutDiagnostics';
+import { setCheckoutCaptureContext, getCheckoutTrackingSession, readCheckoutDiagnostics, readCheckoutDeliveryStatus, setCheckoutTrackingEnabled } from '../services/CheckoutDiagnostics';
 import { readInstalledPosApkVersion } from '../services/version/posApkUpdateService';
+import { readTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
 import { ExportUtils } from '../utils/ExportUtils';
 
 export default function CheckoutTrackingSettings({ config, currentDeviceId, onClose }: { config: BusinessConfig; currentDeviceId?: string; onClose: () => void }) {
     const [session, setSession] = useState(getCheckoutTrackingSession);
     const [busy, setBusy] = useState(false);
     const [message, setMessage] = useState('');
+    const [delivery, setDelivery] = useState<Awaited<ReturnType<typeof readCheckoutDeliveryStatus>> | null>(null);
+    useEffect(() => {
+        let live=true;
+        const refresh=()=>void readCheckoutDeliveryStatus().then(value=>{if(live)setDelivery(value);}).catch(()=>{});
+        refresh();const timer=setInterval(refresh,10000);
+        return ()=>{live=false;clearInterval(timer);};
+    },[]);
     const enabled = Boolean(session && Date.parse(session.expiresAt) > Date.now());
     const toggle = async () => {
         setBusy(true);
@@ -17,9 +25,11 @@ export default function CheckoutTrackingSettings({ config, currentDeviceId, onCl
         try {
             const version = enabled ? null : await readInstalledPosApkVersion();
             const terminal = config.terminals?.find(candidate => currentDeviceId && candidate.config?.currentDeviceId === currentDeviceId);
+            const credentials = readTerminalCredentialsSync();
+            if (version) setCheckoutCaptureContext({versionName:version.versionName,versionCode:version.versionCode,mode:config.vertical === 'RESTAURANT' ? 'RESTAURANT' : 'RETAIL'});
             setSession(setCheckoutTrackingEnabled(!enabled, {
                 versionName: version?.versionName ?? null, versionCode: version?.versionCode ?? null,
-                terminalId: terminal?.id ?? null, deviceId: currentDeviceId ?? null,
+                terminalId: credentials.erpTerminalId ?? terminal?.id ?? null, deviceId: credentials.deviceId ?? currentDeviceId ?? null,
             }));
         } catch { setMessage('No se pudo cambiar el seguimiento. Las ventas continúan normalmente.'); }
         finally { setBusy(false); }
@@ -52,7 +62,12 @@ export default function CheckoutTrackingSettings({ config, currentDeviceId, onCl
         <p className="text-sm text-gray-600">{enabled && session
             ? `Activo hasta ${new Date(session.expiresAt).toLocaleString()}. Sesión: ${session.id}`
             : 'Desactivado. Al activarlo, finalizará automáticamente después de 24 horas.'}</p>
-        <p className="text-sm text-gray-600">Los registros se guardan localmente en segundo plano. En esta versión, el envío al ERP está pendiente de integración.</p>
+        <p className="text-sm text-gray-600">Los registros se guardan localmente y se envían al ERP en segundo plano. Puedes verlos en Auditoría → Seguimiento POS. Al desactivar, termina la captura y se completa el envío pendiente.</p>
+        {delivery && <p className="text-sm text-gray-600" role="status">
+            Pendientes: {delivery.pending}. Último envío confirmado: {delivery.lastAckAt ? new Date(delivery.lastAckAt).toLocaleString() : 'Todavía sin confirmación'}.
+            {delivery.lastError && ` Estado: ${delivery.lastError}.`}
+            {delivery.blocked > 0 && ` ${delivery.blocked} registros requieren revisión; puedes exportarlos localmente.`}
+        </p>}
         <button onClick={() => void exportLog()} disabled={busy} className="rounded-xl bg-blue-700 px-4 py-3 font-semibold text-white disabled:opacity-50">Exportar log de seguimiento</button>
         {message && <p role="status" className="text-sm break-words">{message}</p>}
     </section>;

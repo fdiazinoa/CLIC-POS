@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { diagnosticEvent } from './CheckoutDiagnosticDelivery';
 /** Diagnostic-only recorder: never changes checkout data, validates a sale or awaits I/O. */
 export type CheckoutDiagnosticInput = {
     items?: unknown; payments?: unknown; total?: unknown;
@@ -7,9 +8,17 @@ export type CheckoutDiagnosticInput = {
     status?: unknown; reason?: unknown; summaryItemCount?: unknown; expectedItemCount?: unknown;
 };
 export interface TrackingSession { id: string; startedAt: string; expiresAt: string; versionName: string | null; versionCode: number | null; terminalId: string | null; deviceId: string | null }
+export type CaptureContext = { mode: 'RETAIL' | 'RESTAURANT' | null; versionName: string | null; versionCode: number | null };
+let captureContext: CaptureContext = { mode:null, versionName:null, versionCode:null };
+export const setCheckoutCaptureContext = (patch: Partial<CaptureContext>) => { captureContext = {...captureContext,...patch}; };
+// Read native version once per boot, outside checkout; never infer it from a restored session.
+if (typeof window !== 'undefined') {
+    void import('./version/posApkUpdateService').then(m=>m.readInstalledPosApkVersion())
+        .then(v=>setCheckoutCaptureContext({versionName:v.versionName,versionCode:v.versionCode})).catch(()=>{});
+}
 export interface CheckoutDiagnosticRecord {
     id: string; at: string; checkoutId: string | null; stage: string; session: TrackingSession | null;
-    data: Record<string, unknown>; anomaly: boolean;
+    data: Record<string, unknown>; anomaly: boolean; capture?: CaptureContext;
 }
 export interface CheckoutDiagnosticIncident { id: string; at: string; records: CheckoutDiagnosticRecord[] }
 export type DiagnosticWriter = (records: CheckoutDiagnosticRecord[], incidents: CheckoutDiagnosticIncident[]) => Promise<void>;
@@ -83,7 +92,7 @@ export class CheckoutDiagnosticRecorder {
             const record: CheckoutDiagnosticRecord = {
                 id: `${this.bootId}:${++this.sequence}`, at: new Date().toISOString(), stage, session: this.session ? { ...this.session } : null,
                 checkoutId: transactionId ? this.transactionCheckouts.get(transactionId) || null : this.checkoutId,
-                data, anomaly: emptyFinancial || clearedWhilePaying,
+                data, capture: {...captureContext}, anomaly: emptyFinancial || clearedWhilePaying,
             };
             this.recent.push(record);
             if (this.recent.length > 128) this.recent.shift();
@@ -119,13 +128,21 @@ export class CheckoutDiagnosticRecorder {
 
 let diagnosticsDb: Promise<IDBDatabase> | undefined;
 const openDiagnosticsDb = () => diagnosticsDb ||= new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open('clic_pos_checkout_diagnostics_v1', 1);
+    const request = indexedDB.open('clic_pos_checkout_diagnostics_v1', 2);
     request.onupgradeneeded = () => {
-        request.result.createObjectStore('records', { autoIncrement: true });
-        request.result.createObjectStore('incidents', { keyPath: 'id' }).createIndex('at', 'at');
+        const db = request.result;
+        if (!db.objectStoreNames.contains('records')) db.createObjectStore('records', { autoIncrement: true });
+        if (!db.objectStoreNames.contains('incidents')) db.createObjectStore('incidents', { keyPath: 'id' }).createIndex('at', 'at');
+        const delivery = db.createObjectStore('delivery', { keyPath: 'sequence', autoIncrement: true });
+        delivery.createIndex('recordId','event.record_id',{unique:true});
+        delivery.createIndex('priority','priority');
+        db.createObjectStore('deliveryState', {keyPath:'id'});
+        // Upgrade existing local logs once, retaining their original session and identity.
+        const cursor = request.transaction!.objectStore('records').openCursor();
+        cursor.onsuccess = () => { if (cursor.result) { queueDiagnostic(delivery,cursor.result.value); cursor.result.continue(); } else trimDelivery(delivery); };
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onsuccess = () => { request.result.onversionchange = () => { request.result.close(); diagnosticsDb = undefined; }; resolve(request.result); };
+    request.onerror = () => { diagnosticsDb = undefined; reject(request.error); };
 });
 const trimStore = (store: IDBObjectStore, limit: number, chronological = false) => {
     const count = store.count();
@@ -138,17 +155,46 @@ const trimStore = (store: IDBObjectStore, limit: number, chronological = false) 
         };
     };
 };
+const queueDiagnostic = (store: IDBObjectStore, record: CheckoutDiagnosticRecord) => {
+    if (!record.session?.terminalId || !record.session.deviceId || !record.session.versionName) return;
+    if (Date.parse(record.session.expiresAt) <= Date.now()) return;
+    const row = { session:record.session,event:diagnosticEvent(record,0),priority:record.anomaly?1:0 };
+    const added=store.add(row);
+    added.onsuccess=()=>store.put({...row,sequence:Number(added.result),event:{...row.event,local_sequence:Number(added.result)}});
+};
+const trimDelivery = (store: IDBObjectStore) => {
+    const count=store.count();count.onsuccess=()=>{let extra=count.result-500;if(extra<=0)return;
+        const cursor=store.index('priority').openCursor();cursor.onsuccess=()=>{if(cursor.result&&extra-->0){cursor.result.delete();cursor.result.continue();}};
+    };
+};
+let deliveryTimer: ReturnType<typeof setTimeout> | undefined;
+let transport: Awaited<ReturnType<typeof import('./CheckoutDiagnosticTransport')['createDiagnosticTransport']>> | undefined;
+const scheduleDelivery = () => {
+    if(typeof window==='undefined'||deliveryTimer) return;
+    deliveryTimer=setTimeout(()=>{ deliveryTimer=undefined;
+        void import('./CheckoutDiagnosticTransport').then(async module=>{
+            transport ||= module.createDiagnosticTransport(openDiagnosticsDb);
+            if(await transport.run()) scheduleDelivery();
+        }).catch(()=>scheduleDelivery());
+    },10000);
+};
+export const readCheckoutDeliveryStatus = async () => {
+    const module=await import('./CheckoutDiagnosticTransport');return module.deliveryStatus(await openDiagnosticsDb());
+};
+// Resume persisted delivery after an app restart, even if capture was subsequently disabled.
+if(typeof window!=='undefined') scheduleDelivery();
 const writeDiagnostics: DiagnosticWriter = async (records, incidents) => {
     const database = await openDiagnosticsDb();
     await new Promise<void>((resolve, reject) => {
-        const transaction = database.transaction(['records', 'incidents'], 'readwrite');
+        const transaction = database.transaction(['records', 'incidents', 'delivery'], 'readwrite');
         const rows = transaction.objectStore('records');
         const pinned = transaction.objectStore('incidents');
-        records.forEach(record => rows.add(record));
+        records.forEach(record => { rows.add(record); queueDiagnostic(transaction.objectStore('delivery'),record); });
+        trimDelivery(transaction.objectStore('delivery'));
         incidents.forEach(incident => pinned.put(incident));
         trimStore(rows, 1000);
         trimStore(pinned, 10, true);
-        transaction.oncomplete = () => resolve();
+        transaction.oncomplete = () => { scheduleDelivery(); resolve(); };
         transaction.onerror = () => reject(transaction.error);
         transaction.onabort = () => reject(transaction.error);
     });

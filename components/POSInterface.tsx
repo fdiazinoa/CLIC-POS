@@ -1,4 +1,4 @@
-import { recordCheckoutDiagnostic } from '../services/CheckoutDiagnostics';
+import { recordCheckoutDiagnostic, setCheckoutCaptureContext } from '../services/CheckoutDiagnostics';
 import { MobilePosNavigation } from './MobilePosNavigation';
 import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -1809,6 +1809,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       operationalVertical === 'RESTAURANT' ||
       operationalVertical === 'RESTAURANTE' ||
       config.vertical === 'RESTAURANT';
+   useEffect(() => { setCheckoutCaptureContext({mode:isRestaurantMode ? 'RESTAURANT' : 'RETAIL'}); }, [isRestaurantMode]);
    const isRestaurantOrderContext = Boolean(
       activeTable && (isRestaurantMode || activeTerminalConfig?.operational?.usa_mesas)
    );
