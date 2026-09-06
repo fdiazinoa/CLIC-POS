@@ -1,6 +1,6 @@
 // J2 documentary model. Trust anchors are explicit fixture inputs, NOT ERP credentials/proofs.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { buildGraph, validateGraph, validateCalculationInput, canonical, vector } from './verify-vectors.mjs';
 
@@ -171,6 +171,6 @@ export function verifyLineage(bundle) {
   console.log(`PASS: ${bundle.scenarios.length} anchored continuation scenarios; reverse calculation order preserved; ${negatives} semantic negatives. No operational recovery certification.`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   verifyLineage(JSON.parse(readFileSync(new URL('./lineage-vectors.json', import.meta.url), 'utf8')));
 }

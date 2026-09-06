@@ -1,7 +1,7 @@
 // Offline proposal model only. No application imports, DB, HTTP or operational writes.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const validString = value => {
@@ -180,7 +180,7 @@ export function verify(bundle) {
   console.log(`PASS: ${bundle.canonicalization.length} canonical vectors; ${bundle.graph.vectors.length} graph digests; ${negatives} negatives. Offline proposal only; no runtime/cash/atomicity certification.`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   verify(JSON.parse(readFileSync(new URL('./vectors.json', import.meta.url), 'utf8')));
   const erpVectors = JSON.parse(readFileSync(new URL('./erp-own-vectors.json', import.meta.url), 'utf8'));
   for (const v of erpVectors) {
