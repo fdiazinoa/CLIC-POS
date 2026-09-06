@@ -6,6 +6,10 @@ from pathlib import Path
 root = Path(__file__).parent
 bundle = json.loads((root / 'vectors.json').read_text())
 vectors = bundle['canonicalization'] + bundle['graph']['vectors']
+vectors += json.loads((root / 'erp-own-vectors.json').read_text())
+lineage = json.loads((root / 'lineage-vectors.json').read_text())
+for scenario in lineage['scenarios']:
+    vectors += scenario['expected']['vectors']
 for vector in vectors:
     raw = bytes.fromhex(vector['utf8Hex'])
     assert raw == vector['canonicalUtf8'].encode('utf-8'), vector['name']

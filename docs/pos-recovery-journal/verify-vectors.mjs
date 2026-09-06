@@ -1,7 +1,7 @@
 // Offline proposal model only. No application imports, DB, HTTP or operational writes.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const validString = value => {
@@ -49,6 +49,32 @@ const compare = (a, b) => {
   }
   return 0;
 };
+
+export function validateCalculationInput(order, manifest) {
+  assert(order && Object.getPrototypeOf(order) === Object.prototype, 'INPUT_ORDER_OBJECT');
+  same(Object.keys(order).sort(), ['cashMovements', 'collections', 'transactions'], 'INPUT_ORDER_KEYS');
+  const expectedTypes = { transactions: 'TRANSACTION', cashMovements: 'CASH_MOVEMENT', collections: 'COLLECTION' };
+  const selected = new Map(manifest.members.map(m => [identity(m), m]));
+  assert.equal(selected.size, manifest.members.length, 'DUPLICATE_MEMBER');
+  const deps = new Set(manifest.dependencies.map(identity));
+  const seen = new Set();
+  for (const [name, kind] of Object.entries(expectedTypes)) {
+    assert(Array.isArray(order[name]), 'INPUT_ORDER_ARRAY');
+    for (const ref of order[name]) {
+      same(Object.keys(ref).sort(), ['kind', 'originalId', 'revision'], 'INPUT_REFERENCE_KEYS');
+      assert.equal(ref.kind, kind, 'INPUT_KIND');
+      const id = identity(ref);
+      assert(!deps.has(id), 'INPUT_DEPENDENCY');
+      assert(!seen.has(id), 'INPUT_DUPLICATE');
+      const member = selected.get(id);
+      assert(member, 'INPUT_NOT_SELECTED');
+      assert.equal(ref.revision, member.revision, 'INPUT_REVISION');
+      seen.add(id);
+    }
+  }
+  assert.equal(seen.size, manifest.members.filter(m => m.kind !== 'WALLET').length, 'INPUT_OMISSION');
+  // No sorting or mutation of the input arrays: they retain calculation order.
+}
 
 export function buildGraph(input) {
   const { scope, storageEpoch, openSetId, operations, report, configuration, declaration, manifest: supplied } = input;
@@ -102,11 +128,7 @@ export function validateGraph(input, graph) {
   assert.equal(new Set(depIds).size, depIds.length, 'DUPLICATE_DEPENDENCY');
   assert(!depIds.some(id => selectedIds.includes(id)), 'MEMBER_DEPENDENCY_INTERSECTION');
   same(graph.manifest.members, [...graph.manifest.members].sort(compare), 'ORDER');
-  const order = input.configuration.calculationInputOrder;
-  const ordered = [...order.transactions, ...order.cashMovements, ...order.collections];
-  const refs = graph.manifest.members.filter(m => m.kind !== 'WALLET')
-    .map(({ kind, originalId, revision }) => ({ kind, originalId, revision }));
-  same([...ordered].sort(compare), refs.sort(compare), 'CALCULATION_INPUT_SET');
+  validateCalculationInput(input.configuration.calculationInputOrder, graph.manifest);
   same(graph, buildGraph(input), 'GRAPH_MISMATCH');
 }
 
@@ -135,6 +157,16 @@ export function verify(bundle) {
   badGraph(b => { b.input.report.id = 'different-close'; });
   badGraph(b => { b.graph.manifest.closeEventId = b.graph.manifest.closeId; });
   badGraph(b => { b.input.configuration.calculationInputOrder.cashMovements = []; });
+  // Semantic negatives recompute every digest; corruption checks alone are insufficient.
+  for (const mutate of [
+    b => { const o = b.configuration.calculationInputOrder; o.transactions = o.cashMovements; o.cashMovements = []; },
+    b => { b.configuration.calculationInputOrder.cashMovements[0].revision = '1'; },
+    b => { b.configuration.calculationInputOrder.cashMovements.push(b.configuration.calculationInputOrder.cashMovements[0]); },
+    b => { b.configuration.calculationInputOrder.cashMovements = []; },
+  ]) {
+    const input = structuredClone(bundle.input); mutate(input);
+    assert.throws(() => validateGraph(input, buildGraph(input))); negatives++;
+  }
   for (const bad of [NaN, Infinity, undefined, 1n, new Date(0), '\ud800', { value: undefined }]) {
     assert.throws(() => canonical(bad)); negatives++;
   }
@@ -148,6 +180,13 @@ export function verify(bundle) {
   console.log(`PASS: ${bundle.canonicalization.length} canonical vectors; ${bundle.graph.vectors.length} graph digests; ${negatives} negatives. Offline proposal only; no runtime/cash/atomicity certification.`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   verify(JSON.parse(readFileSync(new URL('./vectors.json', import.meta.url), 'utf8')));
+  const erpVectors = JSON.parse(readFileSync(new URL('./erp-own-vectors.json', import.meta.url), 'utf8'));
+  for (const v of erpVectors) {
+    assert.equal(canonical(v.input), v.canonicalUtf8);
+    assert.equal(hash(v.input), v.sha256);
+    assert.equal(Buffer.from(v.canonicalUtf8).toString('hex'), v.utf8Hex);
+  }
+  console.log(`PASS: ${erpVectors.length} unchanged ERP canonicalization vectors.`);
 }

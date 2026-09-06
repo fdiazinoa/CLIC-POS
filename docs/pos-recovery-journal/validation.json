@@ -1,26 +1,37 @@
 {
   "agreementStatus": "UNAGREED",
-  "sourceCommit": "2e200a2ff7854cbb08fa8218cffb09dbdb7bdf57",
-  "erpInputCommit": "a7e490d633dd010a1403676f186ace84004b84a2",
+  "revision": "J2",
+  "baseCommit": "2e353b43456e04ad92aac8a0c9b1210dc33d18b9",
+  "operationalSourceCommit": "2e200a2ff7854cbb08fa8218cffb09dbdb7bdf57",
+  "erpReviewSha256": "07c980934cbedc8c1e602d5b3c4f614a0a2c4d3822e15f1e0337a75baa2bd884",
   "sourceFilesVerified": 25,
-  "canonicalVectors": 7,
-  "graphDigests": 13,
-  "negativeCases": 20,
-  "pythonIndependentByteDigests": 20,
-  "erpR4FullCandidate": "FINAL_SEAL_COHERENT_NOT_AUTHORIZED",
+  "erpVerifyIndependent": "PASS: 20 bytes/digests; 13 reconstructed preimages; 4 ERP vectors",
+  "erpVerifyReview": "PASS: reproduces original J1 type bug and original R4 UTF-16 bug; no correction in input archives",
+  "j1OriginalVectorsUnchanged": true,
+  "j1CanonicalVectors": 7,
+  "j1GraphDigests": 13,
+  "erpOwnVectors": 4,
+  "j1VerifierNegatives": 24,
+  "lineageScenarios": [
+    "NEW_EPOCH",
+    "SAME_EPOCH_SUFFIX"
+  ],
+  "lineageSemanticNegatives": 24,
+  "pythonByteDigests": 51,
+  "erpReportedPosBugRetest": "REJECTED INPUT_KIND with recomputed hashes",
   "exactZEligible": false,
   "closeAuthorization": "NOT_GRANTED",
   "notExecuted": [
-    "POS runtime",
-    "cash calculator",
-    "database migrations",
-    "native crash tests",
-    "production endpoints"
+    "runtime POS",
+    "database writes/migrations",
+    "journal/endpoints",
+    "cash calculation",
+    "native crashes/concurrency"
   ],
   "limitations": [
-    "Fixtures are synthetic and not complete native original profiles",
-    "Byte/hash checks do not prove absence of an unsent tail",
-    "No atomicity or concurrency certification",
-    "JCS raw duplicate-key parser not implemented"
+    "Fixture trust anchors are not remotely authenticated or issued by ERP",
+    "Partial parser/numeric corpus; no general JCS certification",
+    "No proof for lost open tails",
+    "Operational atomicity and concurrent acceptance remain pending"
   ]
 }

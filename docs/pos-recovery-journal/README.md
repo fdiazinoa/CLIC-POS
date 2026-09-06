@@ -1,5 +1,7 @@
 # POS: journal, commit de cierre y vectores de integridad — propuesta J1
 
+> Revisión vigente de los verificadores: [POS_RESPONSE_J2.md](POS_RESPONSE_J2.md). J2 corrige tipos/selección de calculationInputOrder y añade anclajes de documentos cerrados/épocas. El diseño J1 de abajo es antecedente propuesto, no implementación. Ejecutar también `node docs/pos-recovery-journal/verify-lineage.mjs`.
+
 Estado: **PROPOSED / UNAGREED**. Fuente POS `2e200a2ff7854cbb08fa8218cffb09dbdb7bdf57` de `origin/develop`; revisión ERP recibida `a7e490d633dd010a1403676f186ace84004b84a2` (R4 invariantes). Fecha 2026-09-06. Solo documentación y modelos offline, sin migraciones, endpoints, llamadas a DB operacional ni cambios de cálculo. La respuesta POS R3 `c266200` se mantiene como evidencia, aunque su PR todavía no forma parte de esta base.
 
 La propuesta no certifica legacy ni autoriza un cierre: `coverage=UNKNOWN`, `exactZEligible=false`, `closeAuthorization=NOT_GRANTED`. No hay sesión de caja durable demostrada. `openSetId` será pertenencia operacional nueva, no una sesión histórica reconstruida.
