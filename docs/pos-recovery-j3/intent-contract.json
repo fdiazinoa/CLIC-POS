@@ -1,0 +1,168 @@
+{
+  "version": "pos.intent.bundle.j3",
+  "agreementStatus": "UNAGREED",
+  "hashRule": "SHA256(UTF8(JCS(intent)))",
+  "commonFields": [
+    "domain",
+    "command",
+    "version",
+    "commandId",
+    "scope",
+    "storageEpoch",
+    "openSetId",
+    "preparedAt",
+    "expectedSetRevision",
+    "expectedSeries",
+    "artifacts"
+  ],
+  "scopeFields": [
+    "tenantId",
+    "companyId",
+    "storeId",
+    "terminalId"
+  ],
+  "seriesFields": [
+    "seriesId",
+    "reservationId",
+    "expectedRevision",
+    "expectedNext"
+  ],
+  "artifactRefFields": [
+    "role",
+    "profileVersion",
+    "artifactHash"
+  ],
+  "commands": {
+    "SALE_CREATE": {
+      "version": 1,
+      "domain": "pos.intent.sale_create.v1",
+      "artifactRoles": [
+        "saleDraft",
+        "inventoryPlan",
+        "paymentEvidence"
+      ],
+      "profileVersionByRole": {
+        "saleDraft": "pos.intent-artifact.saleDraft.j3",
+        "inventoryPlan": "pos.intent-artifact.inventoryPlan.j3",
+        "paymentEvidence": "pos.intent-artifact.paymentEvidence.j3"
+      }
+    },
+    "REFUND_CREATE": {
+      "version": 1,
+      "domain": "pos.intent.refund_create.v1",
+      "artifactRoles": [
+        "refundDraft",
+        "originalBefore",
+        "inventoryPlan",
+        "refundEvidence"
+      ],
+      "profileVersionByRole": {
+        "refundDraft": "pos.intent-artifact.refundDraft.j3",
+        "originalBefore": "pos.intent-artifact.originalBefore.j3",
+        "inventoryPlan": "pos.intent-artifact.inventoryPlan.j3",
+        "refundEvidence": "pos.intent-artifact.refundEvidence.j3"
+      }
+    },
+    "COLLECTION_CREATE": {
+      "version": 1,
+      "domain": "pos.intent.collection_create.v1",
+      "artifactRoles": [
+        "collectionDraft",
+        "allocationPlan",
+        "documentsBefore",
+        "customerBefore"
+      ],
+      "profileVersionByRole": {
+        "collectionDraft": "pos.intent-artifact.collectionDraft.j3",
+        "allocationPlan": "pos.intent-artifact.allocationPlan.j3",
+        "documentsBefore": "pos.intent-artifact.documentsBefore.j3",
+        "customerBefore": "pos.intent-artifact.customerBefore.j3"
+      }
+    },
+    "BOOKING_ADVANCE_CREATE": {
+      "version": 1,
+      "domain": "pos.intent.booking_advance_create.v1",
+      "artifactRoles": [
+        "collectionDraft",
+        "bookingBefore",
+        "customerBefore"
+      ],
+      "profileVersionByRole": {
+        "collectionDraft": "pos.intent-artifact.collectionDraft.j3",
+        "bookingBefore": "pos.intent-artifact.bookingBefore.j3",
+        "customerBefore": "pos.intent-artifact.customerBefore.j3"
+      }
+    },
+    "CASH_CREATE": {
+      "version": 1,
+      "domain": "pos.intent.cash_create.v1",
+      "artifactRoles": [
+        "cashDraft"
+      ],
+      "profileVersionByRole": {
+        "cashDraft": "pos.intent-artifact.cashDraft.j3"
+      }
+    },
+    "WALLET_POST": {
+      "version": 1,
+      "domain": "pos.intent.wallet_post.v1",
+      "artifactRoles": [
+        "walletDraft",
+        "walletBefore",
+        "linkedDocument"
+      ],
+      "profileVersionByRole": {
+        "walletDraft": "pos.intent-artifact.walletDraft.j3",
+        "walletBefore": "pos.intent-artifact.walletBefore.j3",
+        "linkedDocument": "pos.intent-artifact.linkedDocument.j3"
+      }
+    },
+    "FISCAL_REVISION": {
+      "version": 1,
+      "domain": "pos.intent.fiscal_revision.v1",
+      "artifactRoles": [
+        "originalBefore",
+        "fiscalResult"
+      ],
+      "profileVersionByRole": {
+        "originalBefore": "pos.intent-artifact.originalBefore.j3",
+        "fiscalResult": "pos.intent-artifact.fiscalResult.j3"
+      }
+    },
+    "CLOSE_SET": {
+      "version": 1,
+      "domain": "pos.intent.close_set.v1",
+      "artifactRoles": [
+        "memberSelection",
+        "configuration",
+        "declaration",
+        "previousClose"
+      ],
+      "profileVersionByRole": {
+        "memberSelection": "pos.intent-artifact.memberSelection.j3",
+        "configuration": "pos.intent-artifact.configuration.j3",
+        "declaration": "pos.intent-artifact.declaration.j3",
+        "previousClose": "pos.intent-artifact.previousClose.j3"
+      }
+    }
+  },
+  "blockedCommands": [
+    "COMMERCIAL_VOID",
+    "CASH_REFUND_UNVERIFIED"
+  ],
+  "assignedAfterIntent": [
+    "journalSequence",
+    "newRevision",
+    "chainHash",
+    "displayNumber",
+    "seriesNumber",
+    "closedAt",
+    "openedAtFallback",
+    "manifestHash",
+    "sealHash",
+    "acceptanceDigest",
+    "transportAttempt",
+    "activationId"
+  ],
+  "note": "Closed intent envelope and role bindings. Artifact semantic profiles remain proposed; structural/hash PASS never grants native recovery."
+}

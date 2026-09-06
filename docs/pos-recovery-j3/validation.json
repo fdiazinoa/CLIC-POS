@@ -1,0 +1,24 @@
+{
+  "agreementStatus": "UNAGREED",
+  "baseCommit": "989f0534f6060b598686a9cf0b9ed9bb9a834d70",
+  "erpCommit": "d680fa91",
+  "erpZipSha256": "b3a862e77148175b55923a323dccf5cf21a987900837d1e05abd916191df5602",
+  "erpSevenCommands": "PASS",
+  "erpChecksums": "PASS",
+  "posJ2ByteIdentity": true,
+  "nativeDeclarations": 156,
+  "nativeOpenShapes": 16,
+  "nativeDefinitionsSha256": "bc0f77f5ad904edd9a00d72184d9388b992bd39e023fea70f4858115f0072e0b",
+  "intentBindingCases": 8,
+  "negativeCases": 46,
+  "independentPythonDigests": 8,
+  "exactZEligible": false,
+  "closeAuthorization": "NOT_GRANTED",
+  "limitations": [
+    "Artifact roles are semantically proposed, not complete certified native JSON schemas",
+    "Intent fixtures contain binding stubs; they are not operational originals",
+    "Configuration/printing read coverage not proven",
+    "Registry is synthetic, not authenticated or durable evidence",
+    "No production, runtime, DB, endpoint, calculation or crash tests executed"
+  ]
+}

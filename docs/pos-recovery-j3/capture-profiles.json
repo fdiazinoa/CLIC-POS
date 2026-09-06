@@ -1,0 +1,126 @@
+{
+  "version": "pos.capture.proposal.j3",
+  "agreementStatus": "UNAGREED",
+  "exactZEligible": false,
+  "closeAuthorization": "NOT_GRANTED",
+  "profiles": {
+    "TRANSACTION": {
+      "nativeRoots": [
+        "Transaction",
+        "CartItem",
+        "PaymentEntry"
+      ],
+      "capture": "Full JSON native object before direct/batch serializer; all root/item/payment fields retained, including unknown observed fields.",
+      "extraRequirements": [
+        "cartId separate from product id",
+        "all historical tax and payment FX/change values",
+        "refund original reference and gateway disposition",
+        "revision ancestry and membership external"
+      ],
+      "unresolved": [
+        "Transaction.payments any[]",
+        "gateway and fiscal extensions",
+        "commercial VOID and CASH/multicurrency refund semantics"
+      ]
+    },
+    "CASH_MOVEMENT": {
+      "nativeRoots": [
+        "CashMovement"
+      ],
+      "capture": "Full native JSON; scope and historical currency proven separately.",
+      "extraRequirements": [
+        "opening movement evidence, not fixedCashFund configuration"
+      ],
+      "unresolved": [
+        "native optional currency/terminal cannot be invented"
+      ]
+    },
+    "COLLECTION": {
+      "nativeRoots": [
+        "Collection",
+        "CollectionAllocation"
+      ],
+      "capture": "Full Collection with allocations; Advance is same identity with bookingActivityId.",
+      "extraRequirements": [
+        "received original/base, applied/unapplied base, rate, currency",
+        "document heads and historical booking linkage"
+      ],
+      "unresolved": [
+        "ERP receiver and durable application states"
+      ]
+    },
+    "WALLET": {
+      "nativeRoots": [
+        "WalletTransaction",
+        "Wallet"
+      ],
+      "capture": "Full movement plus separate historical wallet context; preserve signed amount and referenceId literally.",
+      "extraRequirements": [
+        "historical currency/customer and resolved technical link or UNKNOWN"
+      ],
+      "unresolved": [
+        "independent ERP receiver",
+        "referenceId may be displayId"
+      ]
+    },
+    "Z_REPORT": {
+      "nativeRoots": [
+        "ZReport"
+      ],
+      "capture": "Entire original including every persisted annex/aliases/declarations and repeat metadata; no recalculation during import.",
+      "extraRequirements": [
+        "original member selection, configuration, declaration, environment and series evidence"
+      ],
+      "unresolved": [
+        "full print environment/assets",
+        "lost openedAt/declaration cannot be reconstructed"
+      ]
+    }
+  },
+  "nativeDefinitions": "native-closure.json",
+  "captureRules": {
+    "timestamps": "New capture converts valid Date only at declared PaymentEntry.timestamp to ISO UTC ms; string dates preserved. Other Date paths require declared rule or reject. Invalid/null not replaced by NOW.",
+    "absent": "Absent stays absent; explicit null and zero preserved. Unknown observed JSON retained with validation UNKNOWN. Undefined/function/nonfinite are not JSON: fail capture profile rather than silently erase.",
+    "historical": "Direct/batch originals stay immutable, never completed from current masters.",
+    "number": "No change to native money precision or rounding. Counters decimal strings. Raw numeric lexeme precision not reconstructable after parse.",
+    "raw": "Future ingress rejects duplicate JSON keys; not implemented."
+  },
+  "configuration": {
+    "version": "pos.calculation-context.j3",
+    "requiredBlocks": [
+      "sourceVersions",
+      "effectiveTimeZone",
+      "effectiveLocale",
+      "currencies",
+      "paymentMethods",
+      "taxes",
+      "taxRate",
+      "serviceTaxPolicies",
+      "terminalTaxDefaults",
+      "closeOptions",
+      "resolvedBaseCurrency",
+      "calculationInputOrder",
+      "resumeAnchor",
+      "readCoverage"
+    ],
+    "blockRules": {
+      "sourceVersions": "Hashes of all calculation dependencies and selector version; no default current version",
+      "currencies": "Complete ordered CurrencyConfig[]",
+      "paymentMethods": "Ordered PaymentMethodDefinition[] excluding integrationConfig; exclusion explicit in this new profile, never applied retroactively to original. All other fields preserved.",
+      "taxes": "Complete ordered TaxDefinition[] and observed taxRate",
+      "serviceTaxPolicies": "Both config aliases and terminal effective policy if consulted; absent recorded explicitly",
+      "terminalTaxDefaults": "Effective operational.defaultTaxIds, explicit absence and resolver version",
+      "closeOptions": "Exact effective session cash-fund, denomination and report-section options by operator; include resolved options plus captured source",
+      "resumeAnchor": "Full accepted-provisionally J2 object or explicit PROVEN_FIRST evidence; never inferred null",
+      "readCoverage": "Inventory of configuration paths read by each selector/calculator; unexpected read blocks exactness. No dynamic instrumentation implemented."
+    },
+    "unknownBlocksBlockExact": true,
+    "forbiddenBlocks": [
+      "integrations credentials",
+      "paymentMethods.integrationConfig",
+      "email credentials",
+      "device tokens"
+    ],
+    "printing": "Separate versioned print-context snapshot of public company/receipt/assets/locale/printer layout and persisted annexes. Exact reproduction not certified until renderer dependencies inventoried."
+  }
+}
