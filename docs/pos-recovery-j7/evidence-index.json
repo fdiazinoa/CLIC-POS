@@ -1,0 +1,104 @@
+{
+  "version": "pos.p0.evidence-index.j7.v1",
+  "legacy": "UNKNOWN",
+  "exactZEligible": false,
+  "closeAuthorization": "NOT_GRANTED",
+  "entries": [
+    {
+      "blocker": "B02",
+      "artifact": "docs/pos-recovery-j7/source-excerpts.json",
+      "relatedArtifacts": [
+        "docs/pos-recovery-j6/native-closure.json",
+        "docs/pos-recovery-j3/capture-profiles.json"
+      ],
+      "sourceCommit": "4791868df8da4617c220f00103fd774ecd44cccf",
+      "version": "pos.p0.evidence.j7.v1",
+      "procedure": "python3 docs/pos-recovery-j7/verify-evidence.py inputs/pos-recovery-erp-j6-64cabf53.zip --source (solo en checkout con git); omitir --source en ZIP",
+      "result": "STATIC_SOURCE_CONFIRMED_NOT_ACCEPTANCE",
+      "acceptance": "PENDING",
+      "missingEvidence": [
+        "Schemas completos por canal y clasificación de extensiones/ausente/null/unknown",
+        "Pares local/directo/batch con todos los productores y confirmación receptor/persistencia ERP",
+        "Timestamps originales preservados sin fallback; políticas de canal elegidas por usuario"
+      ],
+      "runtimeEvidence": "PENDING_AUTHORIZED_PHASE",
+      "owner": "POS evidence; ERP confirms preservation independently"
+    },
+    {
+      "blocker": "B03",
+      "artifact": "docs/pos-recovery-j7/source-excerpts.json",
+      "relatedArtifacts": [
+        "docs/pos-recovery-j7/source-excerpts.json"
+      ],
+      "sourceCommit": "4791868df8da4617c220f00103fd774ecd44cccf",
+      "version": "pos.p0.evidence.j7.v1",
+      "procedure": "python3 docs/pos-recovery-j7/verify-evidence.py inputs/pos-recovery-erp-j6-64cabf53.zip --source (solo en checkout con git); omitir --source en ZIP",
+      "result": "STATIC_SOURCE_CONFIRMED_NOT_ACCEPTANCE",
+      "acceptance": "PENDING",
+      "missingEvidence": [
+        "Tabla normativa por campo/moneda/unidad, modo y etapa",
+        "Oráculo nativo aislado y fronteras/acumulación con contraste independiente",
+        "No confundir redondeos encontrados ni tolerancia 1e-8 con política global"
+      ],
+      "runtimeEvidence": "PENDING_AUTHORIZED_PHASE",
+      "owner": "POS evidence; ERP confirms preservation independently"
+    },
+    {
+      "blocker": "B04",
+      "artifact": "docs/pos-recovery-j7/source-excerpts.json",
+      "relatedArtifacts": [
+        "docs/pos-recovery-j3/capture-profiles.json"
+      ],
+      "sourceCommit": "4791868df8da4617c220f00103fd774ecd44cccf",
+      "version": "pos.p0.evidence.j7.v1",
+      "procedure": "python3 docs/pos-recovery-j7/verify-evidence.py inputs/pos-recovery-erp-j6-64cabf53.zip --source (solo en checkout con git); omitir --source en ZIP",
+      "result": "STATIC_SOURCE_CONFIRMED_NOT_ACCEPTANCE",
+      "acceptance": "PENDING",
+      "missingEvidence": [
+        "Mapa transitivo e instrumentación offline de todas las lecturas",
+        "Tipos/valores históricos/versiones/hashes/resolvers de 14 bloques",
+        "Cobertura reloj/locale/orden y ausencia de defaults actuales"
+      ],
+      "runtimeEvidence": "PENDING_AUTHORIZED_PHASE",
+      "owner": "POS evidence; ERP confirms preservation independently"
+    },
+    {
+      "blocker": "B05",
+      "artifact": "docs/pos-recovery-j7/source-excerpts.json",
+      "relatedArtifacts": [
+        "docs/pos-recovery-j7/source-excerpts.json"
+      ],
+      "sourceCommit": "4791868df8da4617c220f00103fd774ecd44cccf",
+      "version": "pos.p0.evidence.j7.v1",
+      "procedure": "python3 docs/pos-recovery-j7/verify-evidence.py inputs/pos-recovery-erp-j6-64cabf53.zip --source (solo en checkout con git); omitir --source en ZIP",
+      "result": "STATIC_SOURCE_CONFIRMED_NOT_ACCEPTANCE",
+      "acceptance": "PENDING",
+      "missingEvidence": [
+        "Tipo completo de declaración y política histórica confirmada por operador",
+        "Evidencia durable de apertura; mínimo de movimientos/now no la acredita",
+        "Persistencia de esos valores en cada backend y ERP no probada"
+      ],
+      "runtimeEvidence": "PENDING_AUTHORIZED_PHASE",
+      "owner": "POS evidence; ERP confirms preservation independently"
+    },
+    {
+      "blocker": "B06",
+      "artifact": "docs/pos-recovery-j7/source-excerpts.json",
+      "relatedArtifacts": [
+        "docs/pos-recovery-journal/lineage-vectors.json"
+      ],
+      "sourceCommit": "4791868df8da4617c220f00103fd774ecd44cccf",
+      "version": "pos.p0.evidence.j7.v1",
+      "procedure": "python3 docs/pos-recovery-j7/verify-evidence.py inputs/pos-recovery-erp-j6-64cabf53.zip --source (solo en checkout con git); omitir --source en ZIP",
+      "result": "STATIC_SOURCE_CONFIRMED_NOT_ACCEPTANCE",
+      "acceptance": "PENDING",
+      "missingEvidence": [
+        "Oráculo nativo aislado completo y comparación Z/anexos",
+        "Selección/revisión/orden/IDs exactos entre fechas y dependencias de documentos cerrados",
+        "Recepción/persistencia y completitud de la jornada no probadas por selección local"
+      ],
+      "runtimeEvidence": "PENDING_AUTHORIZED_PHASE",
+      "owner": "POS evidence; ERP confirms preservation independently"
+    }
+  ]
+}
