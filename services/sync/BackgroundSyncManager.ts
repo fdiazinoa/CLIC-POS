@@ -1,3 +1,5 @@
+import { pendingOperationsRecovery } from '../recovery/recoveryService';
+import { isRecoveredOperation } from '../recovery/PendingOperationsRecovery';
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
 import { apiSyncAdapter } from './ApiSyncAdapter';
@@ -200,6 +202,7 @@ class BackgroundSyncManager {
     }
 
     private isOperationalSyncPending(item: any, collectionName: string): boolean {
+        if (isRecoveredOperation(item)) return false;
         const retryAfter = Date.parse(String(item?.syncRetryAfter || ''));
         if (Number.isFinite(retryAfter) && retryAfter > Date.now()) {
             const delay = Math.max(1000, retryAfter - Date.now());
@@ -248,6 +251,7 @@ class BackgroundSyncManager {
      * This prevents replaying historical/master documents accidentally present locally.
      */
     private shouldSyncItem(collectionName: string, item: any): boolean {
+        if (isRecoveredOperation(item)) return false;
         if (permissionService.isMasterTerminal()) return true;
 
         const normalizeTerminalId = (value: any) =>
@@ -321,6 +325,9 @@ class BackgroundSyncManager {
         let pausedForSaleActivity = false;
 
         try {
+            if (isSyncFeatureEnabled('pending_operations_recovery')) {
+                await pendingOperationsRecovery.sendPending().catch(error => collectionErrors.push(`originals: ${error.message}`));
+            }
             const receiptQueue = await transferReceiptService.processDue();
             const retryingReceipts = receiptQueue.filter(item => item.status === 'RETRY_WAIT');
             if (retryingReceipts.length > 0) {
@@ -472,7 +479,7 @@ class BackgroundSyncManager {
 
         // Filter pending items and sort by date (FIFO)
         const pending = data.filter(item =>
-            (this.shouldSyncItem(collectionName, item) || (collectionName === 'transactions' && item._forceSyncReplay === true)) &&
+            !isRecoveredOperation(item) && (this.shouldSyncItem(collectionName, item) || (collectionName === 'transactions' && item._forceSyncReplay === true)) &&
             this.isOperationalSyncPending(item, collectionName)
         );
 
@@ -777,6 +784,7 @@ class BackgroundSyncManager {
                 const txnDate = this.resolveItemDate(txn);
                 if (!txnDate || txnDate.getTime() < cutoffMs) continue;
 
+                if (isRecoveredOperation(txn)) continue;
                 const hasLegacyMissingStatus = txn?.syncStatus === undefined || txn?.syncStatus === null || txn?.syncStatus === '';
                 const shouldReplayCompleted = txn?.syncStatus === 'COMPLETED';
 

@@ -3,9 +3,11 @@ export type SyncFeatureFlagName =
     | 'sync_hint_v2'
     | 'heartbeat_v2'
     | 'private_realtime'
-    | 'sqlite_outbox_v2';
+    | 'sqlite_outbox_v2'
+    | 'pending_operations_recovery';
 
 const DEFAULTS: Record<SyncFeatureFlagName, boolean> = {
+    pending_operations_recovery: false,
     adaptive_polling: true,
     sync_hint_v2: true,
     heartbeat_v2: true,
@@ -16,6 +18,7 @@ const DEFAULTS: Record<SyncFeatureFlagName, boolean> = {
 };
 
 const ENV_KEYS: Record<SyncFeatureFlagName, string> = {
+    pending_operations_recovery: 'VITE_PENDING_OPERATIONS_RECOVERY_ENABLED',
     adaptive_polling: 'VITE_ADAPTIVE_POLLING_ENABLED',
     sync_hint_v2: 'VITE_SYNC_HINT_V2_ENABLED',
     heartbeat_v2: 'VITE_HEARTBEAT_V2_ENABLED',

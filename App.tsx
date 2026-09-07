@@ -1,3 +1,4 @@
+import { isRecoveredOperation } from './services/recovery/PendingOperationsRecovery';
 import { recordCheckoutDiagnostic } from './services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from './utils/erpPaymentMethods';
 import { createStartupTrace } from './utils/startupTrace';
@@ -10121,6 +10122,11 @@ const AppContent: React.FC = () => {
           .filter(c => belongsToCurrentTerminal(c.terminalId, (c as any).source_terminal_id))
         : collections.filter(c => belongsToCurrentTerminal(c.terminalId, (c as any).source_terminal_id) && !c.zReportId);
 
+      if ([...terminalTransactions, ...terminalCashMovements, ...terminalCollections].some(isRecoveredOperation)) {
+        alert('La jornada contiene movimientos recuperados cuya cobertura todavía no ha sido confirmada por ERP. No se puede autorizar un cierre exacto.');
+        return;
+      }
+
       console.log(`🔒 Shift Segregation: Found ${terminalTransactions.length} txns and ${terminalCashMovements.length} cash movements for ${terminalId}`);
 
       // 3. Totals and Stats from the exact transaction set being archived.
@@ -10264,6 +10270,11 @@ const AppContent: React.FC = () => {
       // later reprint can safely apply options enabled after this closure.
       const reportDetails = buildCloseReportDetails(terminalTransactions, config, currentTerminal?.config, ALL_CLOSE_REPORT_SECTIONS);
       const newZReport: ZReport & Record<string, any> = {
+        ...(isSyncFeatureEnabled('pending_operations_recovery') ? { recoveryMemberIds: {
+          transactions: terminalTransactions.map(t => t.id),
+          cashMovements: terminalCashMovements.map(m => m.id),
+          collections: terminalCollections.map(c => c.id),
+        } } : {}),
         id: zReportId,
         terminalId,
         sequenceNumber,
