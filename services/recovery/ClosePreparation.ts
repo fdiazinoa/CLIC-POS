@@ -143,7 +143,7 @@ export class ClosePreparation {
           runtime.zReportId !== marker.provenCloseId
         )
           fail("CLOSE_EVIDENCE_MISMATCH");
-        if (!Object.hasOwn(originalRuntime, "zReportId"))
+        if (!Object.prototype.hasOwnProperty.call(originalRuntime, "zReportId"))
           delete runtime.zReportId;
       }
 

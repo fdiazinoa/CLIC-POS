@@ -475,7 +475,7 @@ export class PendingOperationsRecovery {
           );
           if (
             matches.length !== 1 ||
-            !Object.hasOwn(counts, matches[0].businessState) ||
+            !Object.prototype.hasOwnProperty.call(counts, matches[0].businessState) ||
             matches[0].rollbackProven !== false ||
             matches[0].authoritativeForClose !== false
           )
