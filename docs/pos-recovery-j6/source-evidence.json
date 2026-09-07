@@ -1,0 +1,98 @@
+{
+  "sourceCommit": "dfb2b13e7ffa206acf6d856204ec2d4a14849a33",
+  "files": [
+    {
+      "path": "App.tsx",
+      "sha256": "a61f4260fa1648624e9b315e62123f0ce27d04cda5e5f25f54eb8cf806bbefc2",
+      "excerpts": [
+        {
+          "start": 10047,
+          "end": 10075,
+          "text": "  const handleZReport = async (cashCounted: number, notes: string, reportData?: any) => {\n    // 1. Robust Terminal ID Discovery.\n    // The Z modal already knows the active terminal; prefer it over rediscovering by deviceId\n    // because stale bindings can otherwise route Caja 2 closures through T1.\n    const requestedTerminalId = typeof reportData?.terminalId === 'string' ? reportData.terminalId.trim() : '';\n    const findTerminalById = (id?: string) => {\n      const normalized = (id || '').trim();\n      if (!normalized) return undefined;\n      return (config.terminals || []).find((terminal) =>\n        terminal.id === normalized ||\n        terminal.config?.erpTerminalId === normalized ||\n        terminal.config?.erpBinding?.terminalId === normalized\n      );\n    };\n    const currentTerminal =\n      findTerminalById(requestedTerminalId)\n      || getCurrentTerminal()\n      || (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);\n    const terminalId = currentTerminal?.id || requestedTerminalId || 'T1';\n\n    try {\n      console.log(`📊 Z-Report: Starting closure for terminal ${terminalId} (Device: ${deviceId})`);\n\n      // 2. Identify pending operational data since the last Z of this terminal.\n      const terminalKey = normalizeTerminalId(terminalId);\n      const terminalAliases = getTerminalReferenceKeys(terminalId);\n      const isDefaultTerminal = terminalAliases.has('t1') || terminalKey === 't1';\n      const belongsToCurrentTerminal = (...values: Array<string | null | undefined>) =>\n        terminalReferenceMatches(terminalAliases, isDefaultTerminal, ...values);\n"
+        },
+        {
+          "start": 10125,
+          "end": 10174,
+          "text": "\n      // 3. Totals and Stats from the exact transaction set being archived.\n      const paymentMethodSummary = buildZReportPaymentMethodSummary(terminalTransactions, config);\n      const totalsByMethod = paymentMethodSummary.reduce((acc: Record<string, number>, line) => {\n        acc[line.methodType] = (acc[line.methodType] || 0) + Number(line.amount || 0);\n        return acc;\n      }, {});\n\n      const stats = calculateZReportStats(terminalTransactions, terminalCollections);\n      const serviceTypeReport = buildServiceTypeReport(terminalTransactions);\n      const transactionCount = terminalTransactions.length;\n      const declaredCashByCurrency = (reportData?.cashCountedByCurrency || {}) as Record<string, unknown>;\n      const expectedCashByCurrencySnapshot = (reportData?.expectedCashByCurrency || {}) as Record<string, unknown>;\n\n      const cashDeclaredTotal: number = Object.values(declaredCashByCurrency).reduce<number>((sum, value) => {\n        const parsed = Number(value);\n        return sum + (Number.isFinite(parsed) ? parsed : 0);\n      }, 0);\n      const expectedCashTotal: number = Object.values(expectedCashByCurrencySnapshot).reduce<number>((sum, value) => {\n        const parsed = Number(value);\n        return sum + (Number.isFinite(parsed) ? parsed : 0);\n      }, 0);\n      const declaredCardTotal: number = Number(reportData?.declaredCardTotal) || 0;\n      const declaredOtherTotal: number = Number(reportData?.declaredOtherTotal) || 0;\n      const expectedCardTotal: number = Number(reportData?.expectedCardTotal) || 0;\n      const expectedOtherTotal: number = Number(reportData?.expectedOtherTotal) || 0;\n      const orderedTicketRefs = terminalTransactions\n        .map((transaction) => transaction.displayId || transaction.id)\n        .filter(Boolean);\n      const cashMovementDetails = terminalCashMovements.map(movement => ({\n        id: movement.id,\n        type: movement.type,\n        amount: Number(movement.amount || 0),\n        reason: movement.reason || 'Movimiento General',\n        timestamp: movement.timestamp,\n        userName: movement.userName,\n        currencyCode: movement.currencyCode,\n      }));\n      const firstTicketId = orderedTicketRefs[0] || null;\n      const lastTicketId = orderedTicketRefs[orderedTicketRefs.length - 1] || null;\n      const openedAtCandidates = [\n        ...terminalTransactions.map(t => new Date(t.date).getTime()),\n        ...terminalCashMovements.map(m => new Date(m.timestamp).getTime())\n      ].filter((value) => Number.isFinite(value)) as number[];\n      const openedAt = openedAtCandidates.length > 0\n        ? new Date(Math.min(...openedAtCandidates)).toISOString()\n        : new Date().toISOString();\n\n      // 4. Create and Save Z-Report\n      let sequenceNumber = '';\n"
+        }
+      ]
+    },
+    {
+      "path": "services/sync/sourceIdentity.ts",
+      "sha256": "bba75c88e6565eedceea599e9f968d4edb06dfdb57b719a7931df206e914fd44",
+      "excerpts": [
+        {
+          "start": 19,
+          "end": 22,
+          "text": "};\n\nconst round4 = (value: number): number => Math.round((value + Number.EPSILON) * 10000) / 10000;\nconst round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;\n"
+        },
+        {
+          "start": 140,
+          "end": 160,
+          "text": "        ]);\n\n        // Sync only the minimal payment shape required by master/ERP.\n        // Integrated card metadata stays in the local sale, but should not block\n        // slave->master forwarding when processors attach verbose gateway fields.\n        const paymentForSync: PaymentEntry = {\n            id: normalizeString(payment?.id) || normalizeString(payment?.source_payment_id) || `${context.sourceTransactionId}-payment`,\n            method: (payment?.method || payment?.payment_method || 'OTHER') as PaymentEntry['method'],\n            methodId: normalizeString(payment?.methodId),\n            methodLabel: normalizeString(payment?.methodLabel),\n            methodIcon: normalizeString(payment?.methodIcon),\n            creditOverrideApproved: Boolean(payment?.creditOverrideApproved),\n            amount: Number(payment?.amount || 0),\n            timestamp: payment?.timestamp instanceof Date\n                ? payment.timestamp\n                : new Date(payment?.timestamp || new Date().toISOString()),\n            currencyCode,\n            amountOriginal: typeof payment?.amountOriginal === 'number' ? payment.amountOriginal : undefined,\n            exchangeRate,\n            appliedAmount,\n            changeAmount,\n"
+        }
+      ]
+    },
+    {
+      "path": "services/sync/erpOutboundPayloads.ts",
+      "sha256": "1cc038b7935f813b42c0003b85950992fdb5278e372a664681dc5b1ca0d8dbe2",
+      "excerpts": [
+        {
+          "start": 164,
+          "end": 210,
+          "text": "export function buildErpSalePayload(transaction: Transaction): Transaction & {\n    transaction_date: string;\n    currency_code: string;\n    exchange_rate?: number;\n    customer_ref?: string;\n    customer_code?: string;\n    customer?: ReturnType<typeof customerNumberIdentity>;\n    original_source_transaction_id?: string;\n    original_source_display_id?: string;\n} {\n    const base = sanitizeTransactionForErp(normalizeTransactionForSync(coerceTransactionItemsForErp(transaction)));\n    const isFiscalDisabled = base.fiscalMode === 'NONE';\n    const fiscalFields = isFiscalDisabled\n        ? {\n              ncf: undefined,\n              ncfType: undefined,\n              legacyNcf: undefined,\n              electronicNcf: undefined,\n              fiscalProvider: 'NONE' as const,\n          }\n        : {};\n    const isCreditNote = !isFiscalDisabled && (base.documentType === 'REFUND' || base.ncfType === 'B04' || base.ncfType === 'E34');\n    const customerIdentity = customerNumberIdentity(base.customerSnapshot);\n    return {\n        ...base,\n        ...fiscalFields,\n        transaction_date: base.date,\n        currency_code: pickTransactionCurrency(base),\n        exchange_rate: pickTransactionExchangeRate(base),\n        customer_ref: base.customerId || undefined,\n        ...(customerIdentity.customer_code ? {\n            customer_code: customerIdentity.customer_code,\n            customer: { ...(base as Transaction & { customer?: Record<string, unknown> }).customer, ...customerIdentity },\n        } : {}),\n        ...(isCreditNote\n            ? {\n                  original_source_transaction_id: base.original_transaction_id,\n                  original_source_display_id: base.original_display_id,\n              }\n            : {}),\n    };\n}\n\n/** Credit notes share the same payload shape as sales (NC id = source_credit_note_id on the transaction). */\nexport function buildErpCreditNotePayload(transaction: Transaction): ReturnType<typeof buildErpSalePayload> {\n    return buildErpSalePayload(transaction);\n}\n"
+        }
+      ]
+    },
+    {
+      "path": "services/AgendaService.ts",
+      "sha256": "267713bd441943acce77d9ae8cd43a8608dc282f04d2e96abb28136bd75f6e75",
+      "excerpts": [
+        {
+          "start": 491,
+          "end": 530,
+          "text": "    ): Promise<Collection> {\n        const activity = await db.getDocument('activities' as any, activityId) as Activity | null;\n        if (!activity) throw new Error('Booking no encontrado');\n        if (activity.nature !== 'BOOKING') throw new Error('Solo los bookings pueden registrar anticipos');\n        if (!activity.customerId || !activity.customerName) {\n            throw new Error('Debe asignar un cliente antes de registrar un anticipo');\n        }\n        if (!Number.isFinite(amount) || amount <= 0) {\n            throw new Error('El monto del anticipo debe ser mayor que cero');\n        }\n\n        const collectionId = uuidv4();\n        const collection: Collection = {\n            id: collectionId,\n            displayId: `ANT-${Date.now().toString().slice(-6)}`,\n            customerId: activity.customerId,\n            customerName: activity.customerName,\n            date: new Date().toISOString(),\n            totalAmount: amount,\n            method,\n            currencyCode: 'DOP',\n            exchangeRate: 1,\n            receivedAmountOriginal: amount,\n            receivedAmountBase: amount,\n            appliedAmountBase: 0,\n            unappliedAmountBase: amount,\n            reference: reference || activity.linkedDocumentDisplayId || activity.displayId,\n            userId: currentUser.id,\n            userName: currentUser.name,\n            terminalId,\n            bookingActivityId: activity.id,\n            opportunityId: activity.opportunityId,\n            allocations: [],\n            notes: `Anticipo de cliente para booking ${activity.displayId}${activity.linkedDocumentDisplayId ? ` / ${activity.linkedDocumentDisplayId}` : ''}`,\n            syncStatus: 'PENDING'\n        };\n\n        await db.saveDocument('collections' as any, collection);\n        const currentBalance = Number(activity.current_balance || 0) + amount;\n        const requiredDeposit = Number(activity.required_deposit || 0);\n"
+        }
+      ]
+    },
+    {
+      "path": "services/printer/templates/ZReportReceipt.ts",
+      "sha256": "18fa542ee0941999a8c4f4f34c6e87f1809195c22563581fecca0d9189323f56",
+      "excerpts": [
+        {
+          "start": 30,
+          "end": 46,
+          "text": "  const paymentMethodSummary = getZReportPaymentMethodSummary(report, config);\n  const paymentMethodsTotal = paymentMethodSummaryTotal(paymentMethodSummary);\n  const paymentMethodDeclarations = report.paymentMethodDeclarations || [];\n  const escapeLabel = (value: string) => value.replace(/[&<>\"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[character]!);\n\n  const formatCurrency = (amount: number) => {\n    const value = Number(amount || 0);\n    if (currencyCode) {\n      try {\n        return new Intl.NumberFormat('es-DO', { style: 'currency', currency: currencyCode }).format(value);\n      } catch {\n        // Some legacy Z reports stored symbols instead of ISO currency codes.\n      }\n    }\n    return `${currencyPrefix}${value.toFixed(2)}`;\n  };\n\n"
+        }
+      ]
+    },
+    {
+      "path": "utils/zReportPaymentSummary.ts",
+      "sha256": "299c770534ecbbef3dbc173a6f9abfbd7bc7d6353eb069171a8b370f25cc51ba",
+      "excerpts": [
+        {
+          "start": 1,
+          "end": 50,
+          "text": "import type { BusinessConfig, PaymentEntry, Transaction, ZReport, ZReportPaymentMethodLine } from '../types';\nimport { paymentEntryIsCxCCredit, resolvePaymentMethodTypeForRuntime } from './creditRules';\nimport { getPaymentAppliedBaseAmount } from './paymentSettlement';\n\nconst roundMoney = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;\n\nconst DEFAULT_METHOD_LABELS: Record<string, string> = {\n  CASH: 'Efectivo',\n  CARD: 'Tarjeta',\n  CREDIT: 'Pendiente',\n  PENDING: 'Pendiente',\n  PENDIENTE: 'Pendiente',\n  QR: 'Digital',\n  TRANSFER: 'Transferencia',\n  CHECK: 'Cheque',\n  WALLET: 'Wallet',\n  ADVANCE: 'Anticipo',\n  STORE_CREDIT: 'Nota de crédito',\n  OTHER: 'Otro',\n};\n\nconst normalize = (value: unknown): string => String(value || '').trim();\n\nconst resolveConfiguredMethod = (payment: Partial<PaymentEntry>, config?: BusinessConfig) => {\n  const methods = config?.paymentMethods || [];\n  const methodId = normalize(payment.methodId);\n  if (methodId) {\n    const byId = methods.find(method => normalize(method.id).toLowerCase() === methodId.toLowerCase());\n    if (byId) return byId;\n  }\n  const label = normalize(payment.methodLabel);\n  if (label) {\n    const byName = methods.find(method => normalize(method.name).toLowerCase() === label.toLowerCase());\n    if (byName) return byName;\n  }\n  const runtimeType = resolvePaymentMethodTypeForRuntime(payment.method, payment.methodLabel, payment.methodId);\n  const sameType = methods.filter(method => method.type === runtimeType && method.isEnabled !== false);\n  return sameType.length === 1 ? sameType[0] : undefined;\n};\n\nexport const resolveZReportPaymentMethodName = (\n  payment: Partial<PaymentEntry>,\n  config?: BusinessConfig,\n): string => {\n  const configured = resolveConfiguredMethod(payment, config);\n  if (configured?.name) return configured.name;\n  const explicitLabel = normalize(payment.methodLabel);\n  if (explicitLabel && explicitLabel.toUpperCase() !== normalize(payment.method).toUpperCase()) return explicitLabel;\n  const runtimeType = resolvePaymentMethodTypeForRuntime(payment.method, payment.methodLabel, payment.methodId);\n  return DEFAULT_METHOD_LABELS[runtimeType] || DEFAULT_METHOD_LABELS[normalize(payment.method).toUpperCase()] || explicitLabel || 'Otro';\n"
+        }
+      ]
+    },
+    {
+      "path": "utils/analytics.ts",
+      "sha256": "20e50aee8ef3bd181da9885454a08f662179ae863b136094e6aeb96284022ecd",
+      "excerpts": [
+        {
+          "start": 1,
+          "end": 35,
+          "text": "import { Transaction, ZReportStats, Collection } from '../types';\n\nexport const calculateZReportStats = (transactions: Transaction[], collections: Collection[] = []): ZReportStats => {\n    if ((!transactions || transactions.length === 0) && (!collections || collections.length === 0)) {\n        return {\n            averageTicket: 0,\n            itemsPerSale: 0,\n            peakHour: 'N/A',\n            topProduct: null,\n            returnsCount: 0,\n            returnsTotal: 0,\n            grossSales: 0,\n            netSales: 0,\n            discountsTotal: 0,\n            advancementsTotal: 0,\n            collectionsTotal: 0\n        };\n    }\n\n    // Filter valid sales (completed) vs refunds\n    // Requirement: totalDevoluciones should be specifically documentType === 'REFUND' or ncfType === 'B04'\n    const refunds = transactions.filter(t =>\n        t.documentType === 'REFUND' ||\n        t.ncfType === 'B04'\n    );\n\n    // Sales: Everything that is not a refund document and not explicitly voided.\n    // If a normal sale (B01) was marked 'REFUNDED', it still counts towards Gross Sales \n    // because the B04 document will subtract it in the Devoluciones section.\n    const sales = transactions.filter(t =>\n        t.documentType !== 'REFUND' &&\n        t.ncfType !== 'B04' &&\n        t.documentType !== 'VOID'\n    );\n\n"
+        }
+      ]
+    }
+  ],
+  "nativeTypesUnchangedSinceJ3": true,
+  "reachableDeclarations": 156,
+  "openDeclarations": 16,
+  "legacy": "UNKNOWN",
+  "exactZEligible": false,
+  "closeAuthorization": "NOT_GRANTED"
+}

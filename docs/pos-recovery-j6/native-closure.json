@@ -1,0 +1,969 @@
+{
+  "sourceFile": "types.ts",
+  "sourceSha256": "bc0f77f5ad904edd9a00d72184d9388b992bd39e023fea70f4858115f0072e0b",
+  "roots": [
+    "Transaction",
+    "CartItem",
+    "PaymentEntry",
+    "CashMovement",
+    "Collection",
+    "CollectionAllocation",
+    "WalletTransaction",
+    "Wallet",
+    "ZReport",
+    "CurrencyConfig",
+    "PaymentMethodDefinition",
+    "TaxDefinition",
+    "TerminalConfig",
+    "BusinessConfig"
+  ],
+  "valueDeclarations": {
+    "SubVertical": "export const SubVertical = {\n  SUPERMARKET: 'Supermercado',\n  CLOTHING: 'Tienda Ropa',\n  PHARMACY: 'Farmacia',\n  SERVICES: 'Servicios',\n  RESTAURANT: 'Restaurante',\n  FAST_FOOD: 'Fast Food',\n  BAR: 'Discoteca/Bar'\n} as const;"
+  },
+  "externalReferences": [
+    "Array",
+    "Date",
+    "Extract",
+    "Partial",
+    "Record"
+  ],
+  "notice": "Full reachable source declarations, not a runtime JSON validator. any/unknown/index signatures remain unresolved.",
+  "declarations": [
+    {
+      "name": "AppliedServiceTaxPolicySnapshot",
+      "line": 1147,
+      "text": "export interface AppliedServiceTaxPolicySnapshot extends ServiceTaxPolicy {\n  serviceType: OrderServiceType;\n  source: 'TERMINAL' | 'POS' | 'LEGACY';\n}",
+      "openShape": false
+    },
+    {
+      "name": "AuditLogEntry",
+      "line": 2665,
+      "text": "export interface AuditLogEntry {\n  id: string;\n  timestamp: string;\n  actionType: Permission;\n  actionDescription?: string;\n  cashierId: string;\n  supervisorId: string;\n  terminalId: string;\n  ticketId?: string;\n  itemId?: string;\n  originalValue?: number;\n  newValue?: number;\n  reason?: string;\n  details?: string;\n  hash: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "AuthLevel",
+      "line": 133,
+      "text": "export enum AuthLevel {\n  USER_REQUIRED = 'USER_REQUIRED',    // Level A: Requiere login de empleado\n  HEADLESS = 'HEADLESS'                // Level B: Autenticación automática vía API Token\n}",
+      "openShape": false
+    },
+    {
+      "name": "BusinessConfig",
+      "line": 1227,
+      "text": "export interface BusinessConfig {\n  vertical: VerticalType;\n  business_config?: {\n    vertical_negocio?: VerticalType;\n    businessVertical?: VerticalType;\n    usa_mesas?: boolean;\n    useTables?: boolean;\n    pantalla_inicio?: 'VENTA_DIRECTA' | 'MAPA_MESAS';\n    rooms?: Room[];\n    tables?: Table[];\n    [key: string]: unknown;\n  };\n  businessConfig?: BusinessConfig['business_config'];\n  subVertical: SubVertical;\n  currencySymbol: string;\n  taxRate: number;\n  taxes: TaxDefinition[];\n  serviceTaxPolicies?: ServiceTaxPolicyMap;\n  service_tax_policies?: ServiceTaxPolicyMap;\n  themeColor: 'blue' | 'orange' | 'gray';\n  features: {\n    stockTracking: boolean;\n  };\n  units?: UnitDefinition[]; // NEW: Centralized units list\n  loyalty?: LoyaltyConfig;\n  companyInfo: CompanyInfo;\n  currencies: CurrencyConfig[];\n  paymentMethods: PaymentMethodDefinition[];\n  paymentMethodsSource?: 'ERP';\n  integrations?: PaymentIntegrationDefinition[];\n  terminals: { id: string; config: TerminalConfig }[];\n  tariffs: Tariff[];\n  productGroups?: ProductGroup[];\n  seasons?: Season[];\n  receiptConfig?: ReceiptConfig;\n  labelTemplates?: LabelTemplate[];\n  tipsConfig?: TipConfiguration;\n  emailConfig?: EmailConfig;\n  fiscalCompliance?: FiscalComplianceConfig;\n\n  // Classifications\n  departments?: ClassificationItem[];\n  sections?: ClassificationItem[];\n  families?: ClassificationItem[];\n  subfamilies?: ClassificationItem[];\n  brands?: ClassificationItem[];\n  posCategories?: ClassificationItem[]; // Standardized POS Categories\n\n  availablePrinters?: PrinterDevice[];\n  scales?: ScaleDevice[];\n  scaleLabelConfig?: ScaleLabelConfig;\n  promotions?: Promotion[];\n  campaigns?: Campaign[];\n  coupons?: Coupon[];\n  roles?: RoleDefinition[];\n  auditLogs?: AuditLogEntry[];\n  n8nConfig?: N8nConfig;\n  inventoryScope?: {\n    defaultSalesWarehouseId: string;\n    visibleWarehouseIds: string[];\n  };\n  operational?: {\n    vertical_negocio: VerticalType;\n    usa_mesas: boolean;\n    pantalla_inicio: 'VENTA_DIRECTA' | 'MAPA_MESAS';\n    bloqueo_meseros: boolean;\n    pedir_comensales: boolean;\n    usa_modulos_cocina: boolean;\n    recibir_consignaciones?: boolean;\n    receiveConsignments?: boolean;\n    receive_consignments?: boolean;\n    descargar_consignaciones?: boolean;\n    reservationPolicy?: {\n      validityDays: number;\n      printCopies: number;\n      requireAdvance: boolean;\n      minimumAdvancePercent: number;\n    };\n  };\n  ux: {\n    theme: 'LIGHT' | 'DARK';\n    gridDensity: 'COMFORTABLE' | 'COMPACT';\n    showProductImages: boolean;\n    quickKeysLayout: 'A' | 'B';\n    viewMode: 'VISUAL' | 'RETAIL';\n  };\n  terminalSnapshots?: Record<string, TerminalConfigSnapshot>;\n  metadata?: Record<string, any>;\n}",
+      "openShape": true
+    },
+    {
+      "name": "Campaign",
+      "line": 2554,
+      "text": "export interface Campaign {\n  id: string;\n  name: string;\n  description?: string;\n  benefitType: 'PERCENT' | 'FIXED_AMOUNT' | 'FREE_ITEM';\n  benefitValue: number;\n  minPurchaseAmount?: number;\n  maxDiscountAmount?: number;\n  activeDays?: string[]; // ['L', 'M', 'X', 'J', 'V', 'S', 'D']\n  activeHours?: { start: string; end: string };\n  startDate: string;\n  endDate: string;\n  totalGenerated: number;\n  createdAt: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "CartItem",
+      "line": 1704,
+      "text": "export interface CartItem extends Product {\n  quantity: number;\n  cartId: string;\n  isReturnLine?: boolean;\n  createdAt?: string;\n  modifiers?: string[];\n  restaurantConfig?: {\n    modifierGroups?: Record<string, string[]>;\n    comboGroups?: Record<string, string[]>;\n    fractions?: Array<{ id: string; name: string; price: number; ratio: number }>;\n    selected_modifiers?: any[];\n    selected_fraction_parts?: any[];\n    selected_combo_items?: any[];\n    product_type?: string;\n    production_area_id?: string;\n    note?: string;\n  };\n  selected_modifiers?: any[];\n  selected_fraction_parts?: any[];\n  selected_combo_items?: any[];\n  note?: string;\n  originalPrice?: number; // Optional: track original product price for auditing\n  discountAmount?: number;\n  discountRate?: number;\n  netAmount?: number;\n  taxAmount?: number;\n  totalAmount?: number;\n  taxRate?: number;\n  adjustmentSource?: 'PROMOTION' | 'MANUAL_DISCOUNT' | 'MANUAL_PRICE_OVERRIDE' | 'TARIFF';\n  appliedPromotionCode?: string;\n  appliedPromotionName?: string;\n  promotionTrace?: PromotionApplicationTrace;\n  salespersonId?: string;\n  ncf?: string; // NCF asignado a esta línea o al ticket\n  appliedPromotionId?: string;\n  trackingId?: string; // NEW: Assigned lot/serial ID\n  trackingCode?: string; // NEW: Assigned lot/serial code\n  trackingData?: any[]; // NEW: Detailed tracking records selected\n  variantInfo?: string; // NEW: Human readable variant detail\n  variantSku?: string; // NEW: Variant SKU for inventory/receipts\n  variantId?: string;\n  variantBarcodes?: string[];\n  dispatched?: boolean; // NEW: Track if item was sent to kitchen\n  restaurantCommittedAt?: string; // Línea guardada al salir de la mesa; cualquier reducción requiere autorización\n  orderNumber?: string;\n  tableDisplayLabel?: string;\n  tableRoomLabel?: string;\n  kdsStatus?: 'ENVIADO' | 'DEVUELTO' | 'RETURN_PENDING' | string;\n  kdsOrderId?: string;\n  kdsAreaId?: string;\n  kdsItemIds?: string[];\n  kdsReturnedAt?: string;\n  kdsOriginalPrice?: number;\n  voidedByKdsReturn?: boolean;\n  consignmentId?: string;\n  consignmentDocumentNo?: string;\n  consignmentLineId?: string;\n}",
+      "openShape": true
+    },
+    {
+      "name": "CashMovement",
+      "line": 2163,
+      "text": "export interface CashMovement {\n  id: string;\n  type: 'IN' | 'OUT';\n  amount: number;\n  reason: string;\n  timestamp: string;\n  userId: string;\n  userName: string;\n  currencyCode?: string; // For multi-currency support, defaults to base currency\n  terminalId?: string; // ID of the terminal where the movement was recorded\n  syncStatus?: SyncStatus;\n  syncError?: string;\n  source_channel?: 'POS';\n  source_cash_movement_id?: string;\n  source_terminal_id?: string;\n  device_id?: string;\n  created_at?: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "ClassificationItem",
+      "line": 1216,
+      "text": "export interface ClassificationItem {\n  id: string;\n  name: string;\n  code?: string;\n  parentId?: string; // For hierarchy (e.g. Section -> Department)\n  /** Presentación y disponibilidad de la clasificación en el catálogo POS. */\n  color?: string;\n  sortOrder?: number;\n  isActive?: boolean;\n}",
+      "openShape": false
+    },
+    {
+      "name": "CloseReportDetails",
+      "line": 2886,
+      "text": "export interface CloseReportDetails {\n  sellerSummary?: CloseReportSellerSummaryLine[];\n  itemSummary?: CloseReportItemSummaryLine[];\n  taxSummary?: CloseReportTaxSummaryLine[];\n  hourlySales?: CloseReportHourlySalesLine[];\n}",
+      "openShape": false
+    },
+    {
+      "name": "CloseReportHourlySalesLine",
+      "line": 2879,
+      "text": "export interface CloseReportHourlySalesLine {\n  hour: number;\n  label: string;\n  transactionCount: number;\n  netSales: number;\n}",
+      "openShape": false
+    },
+    {
+      "name": "CloseReportItemSummaryLine",
+      "line": 2864,
+      "text": "export interface CloseReportItemSummaryLine {\n  productId: string;\n  productName: string;\n  quantity: number;\n  netSales: number;\n}",
+      "openShape": false
+    },
+    {
+      "name": "CloseReportSection",
+      "line": 2850,
+      "text": "export type CloseReportSection =\n  | 'SELLER_SUMMARY'\n  | 'ITEM_SUMMARY'\n  | 'TAX_SUMMARY'\n  | 'CURRENCY_BREAKDOWN'\n  | 'HOURLY_SALES';",
+      "openShape": false
+    },
+    {
+      "name": "CloseReportSellerSummaryLine",
+      "line": 2857,
+      "text": "export interface CloseReportSellerSummaryLine {\n  userId: string;\n  userName: string;\n  transactionCount: number;\n  netSales: number;\n}",
+      "openShape": false
+    },
+    {
+      "name": "CloseReportTaxSummaryLine",
+      "line": 2871,
+      "text": "export interface CloseReportTaxSummaryLine {\n  taxId: string;\n  taxName: string;\n  rate: number;\n  taxableBase: number;\n  taxAmount: number;\n}",
+      "openShape": false
+    },
+    {
+      "name": "CloudSyncStatus",
+      "line": 112,
+      "text": "export type CloudSyncStatus = 'PENDING' | 'SYNCED' | 'ERROR';",
+      "openShape": false
+    },
+    {
+      "name": "Collection",
+      "line": 3031,
+      "text": "export interface Collection {\n  id: string;\n  displayId: string; // RC-000001\n  seriesId?: string;\n  seriesNumber?: number;\n  customerId: string;\n  customerName: string;\n  date: string;\n  totalAmount: number;\n  method: CollectionMethod;\n  currencyCode?: string;\n  exchangeRate?: number;\n  receivedAmountOriginal?: number;\n  receivedAmountBase?: number;\n  appliedAmountBase?: number;\n  unappliedAmountBase?: number;\n  reference?: string;\n  userId: string;\n  userName: string;\n  terminalId: string;\n  bookingActivityId?: string;\n  opportunityId?: string;\n  allocations: CollectionAllocation[];\n  notes?: string;\n  syncStatus?: SyncStatus;\n  zReportId?: string;\n  zReportSequence?: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "CollectionAllocation",
+      "line": 3023,
+      "text": "export interface CollectionAllocation {\n  id: string;\n  collectionId: string;\n  transactionId: string;\n  amount: number;\n  timestamp: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "CollectionMethod",
+      "line": 3021,
+      "text": "export type CollectionMethod = 'CASH' | 'CARD' | 'TRANSFER' | 'CHECK' | 'WALLET';",
+      "openShape": false
+    },
+    {
+      "name": "ComboGroup",
+      "line": 1085,
+      "text": "export interface ComboGroup {\n  id: string;\n  name: string;\n  required?: boolean;\n  min_select?: number;\n  max_select?: number | null;\n  sort_order?: number;\n  items: ComboGroupItem[];\n}",
+      "openShape": false
+    },
+    {
+      "name": "ComboGroupItem",
+      "line": 1076,
+      "text": "export interface ComboGroupItem {\n  id?: string;\n  product_id?: string;\n  name?: string;\n  price_delta?: number;\n  active?: boolean;\n  sort_order?: number;\n}",
+      "openShape": false
+    },
+    {
+      "name": "CompanyInfo",
+      "line": 463,
+      "text": "export interface CompanyInfo {\n  name: string;\n  rnc: string;\n  phone: string;\n  address: string;\n  email?: string;\n  website?: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "ConnectionType",
+      "line": 182,
+      "text": "export type ConnectionType = 'BLUETOOTH' | 'NETWORK' | 'USB' | 'SERIAL' | 'VIRTUAL';",
+      "openShape": false
+    },
+    {
+      "name": "Coupon",
+      "line": 2570,
+      "text": "export interface Coupon {\n  id: string;\n  campaignId: string;\n  code: string;\n  status: 'GENERATED' | 'ASSIGNED' | 'REDEEMED' | 'EXPIRED';\n  assignedTo?: string;\n  redeemedAt?: string;\n  ticketRef?: string;\n  terminalId?: string;\n  createdAt: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "CurrencyConfig",
+      "line": 871,
+      "text": "export interface CurrencyConfig {\n  code: string;\n  name: string;\n  symbol: string;\n\n  // --- TASAS DUALES ---\n  rate: number;                    // Valor unificado (retrocompatibilidad)\n  buyRate?: number;                // Tasa de Recepción/Compra (cuando cliente paga en POS)\n  sellRate?: number;               // Tasa de Valoración/Venta (para reportes/contabilidad)\n  useDualRates?: boolean;          // Flag para activar modo dual\n\n  isEnabled: boolean;\n  isBase?: boolean;\n\n  // --- AUTOMATIZACIÓN ---\n  autoSync?: {\n    enabled: boolean;              // Activar actualización automática\n    spread: number;                // Margen de ajuste (ej: +0.50 DOP)\n    scheduleTime?: string;         // Hora programada \"HH:MM\" (ej: \"08:00\")\n    lastSync?: string;             // Timestamp última sincronización\n    source?: string;               // API de origen (ej: \"exchangerate-api.com\")\n  };\n\n  // --- POLÍTICAS DE CAJA ---\n  changePolicy?: {\n    forceBaseChange: boolean;      // Forzar vuelto en moneda base (DOP)\n    roundingRule: 'NONE' | 'NEAREST' | 'TO_99';  // Regla de redondeo\n  };\n\n  // --- VISIBILIDAD ---\n  showExchangeRateOnTicket?: boolean;  // Mostrar tasa en ticket impreso\n\n  // --- AUDITORÍA ---\n  lastModified?: string;           // Timestamp última modificación\n  lastModifiedBy?: string;         // Usuario que modificó\n}",
+      "openShape": false
+    },
+    {
+      "name": "Customer",
+      "line": 1366,
+      "text": "export interface Customer {\n  id: string;\n  customer_code?: string;\n  customerCode?: string;\n  external_code?: string;\n  externalCode?: string;\n  source_customer_id?: string;\n  sourceCustomerId?: string;\n  created_source?: 'POS' | string;\n  source_terminal_id?: string;\n  master_number_range_id?: string;\n  master_number_value?: number;\n  name: string;\n  phone?: string;\n  email?: string;\n  taxId?: string;\n  image?: string;\n  imageUrl?: string;\n  imageVersion?: string;\n  imageLocalPath?: string | null;\n  photo?: string;\n  photoUrl?: string;\n  photoVersion?: string;\n  photoLocalPath?: string | null;\n  avatar?: string;\n  avatarUrl?: string;\n  avatarVersion?: string;\n  avatarLocalPath?: string | null;\n  address?: string;\n  notes?: string;\n  loyaltyPoints?: number;\n  creditLimit?: number;\n  currentDebt?: number;\n  tier?: string;\n  createdAt?: string;\n  updatedAt?: string;\n  totalSpent?: number;\n  lastVisit?: string;\n  tags?: string[];\n  requiresFiscalInvoice?: boolean;\n  prefersEmail?: boolean;\n  isTaxExempt?: boolean;\n  applyChainedTax?: boolean;\n  addresses?: CustomerAddress[];\n  creditDays?: number;\n  defaultNcfType?: FiscalDocumentCode;\n  wallet?: Wallet;\n  cards?: LoyaltyCard[];\n  loyalty?: LoyaltyCard; // Deprecated, kept for backward compatibility during migration\n\n  // DGII Fiscal Validation (Dominican Republic)\n  fiscalStatus?: 'ACTIVO' | 'INACTIVO' | 'NO_REGISTRADO';\n  verifiedAt?: string; // ISO timestamp of last DGII validation\n  dgiiData?: {\n    commercialName?: string;\n    economicActivity?: string;\n    regimeType?: string;\n  };\n  isTemporary?: boolean; // Flag for ephemeral customers from DGII search\n}",
+      "openShape": false
+    },
+    {
+      "name": "CustomerAddress",
+      "line": 1350,
+      "text": "export interface CustomerAddress {\n  id: string;\n  type: 'BILLING' | 'SHIPPING';\n  isDefault: boolean;\n  country: string;\n  state: string;\n  city: string;\n  street: string;\n  number: string;\n  zipCode: string;\n  latitude?: number;\n  longitude?: number;\n  receptionHours?: string;\n  contactPhone?: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "CustomerDisplayAd",
+      "line": 2517,
+      "text": "export interface CustomerDisplayAd extends MediaAsset {\n  active: boolean;\n}",
+      "openShape": false
+    },
+    {
+      "name": "CustomerDisplayConfig",
+      "line": 2521,
+      "text": "export interface CustomerDisplayConfig {\n  isEnabled: boolean;\n  welcomeMessage: string;\n  showItemImages: boolean;\n  showQrPayment: boolean;\n  layout: 'SPLIT' | 'FULL_TOTAL' | 'MARKETING_ONLY';\n  connectionType: 'NETWORK' | 'USB' | 'VIRTUAL' | 'HDMI' | 'ANDROID_SECONDARY';\n  ipAddress?: string;\n  ads: CustomerDisplayAd[];\n}",
+      "openShape": false
+    },
+    {
+      "name": "DeviceFormFactor",
+      "line": 138,
+      "text": "export enum DeviceFormFactor {\n  DESKTOP_POS = 'DESKTOP_POS',\n  TABLET = 'TABLET',\n  HANDHELD = 'HANDHELD',\n  KIOSK = 'KIOSK'\n}",
+      "openShape": false
+    },
+    {
+      "name": "DeviceOrientation",
+      "line": 145,
+      "text": "export enum DeviceOrientation {\n  AUTO = 'AUTO',\n  PORTRAIT = 'PORTRAIT',\n  LANDSCAPE = 'LANDSCAPE'\n}",
+      "openShape": false
+    },
+    {
+      "name": "DeviceProfile",
+      "line": 151,
+      "text": "export interface DeviceProfile {\n  formFactor: DeviceFormFactor;\n  orientation: DeviceOrientation;\n  touchOptimized: boolean;\n}",
+      "openShape": false
+    },
+    {
+      "name": "DeviceRole",
+      "line": 124,
+      "text": "export enum DeviceRole {\n  STANDARD_POS = 'STANDARD_POS',\n  ORDER_TAKER = 'ORDER_TAKER',\n  SELF_CHECKOUT = 'SELF_CHECKOUT',\n  PRICE_CHECKER = 'PRICE_CHECKER',\n  HANDHELD_INVENTORY = 'HANDHELD_INVENTORY',\n  KITCHEN_DISPLAY = 'KITCHEN_DISPLAY'\n}",
+      "openShape": false
+    },
+    {
+      "name": "DeviceRoleConfig",
+      "line": 157,
+      "text": "export interface DeviceRoleConfig {\n  role: DeviceRole;\n  authLevel: AuthLevel;\n  apiToken?: string;              // Para autenticación headless\n  defaultRoute?: string;          // Ruta inicial después de auth\n  allowedModules: string[];       // Módulos permitidos\n  uiSettings: {\n    fullscreenForced?: boolean;\n    touchTargetSize?: number;    // En px (>60px recomendado para kiosco)\n    navigationLocked?: boolean;   // Prevenir navegación hacia atrás\n    escapeHatch?: {\n      enabled: boolean;\n      gesture: string;            // ej: \"logo-press-5s\"\n      requirePin: boolean;\n      adminPin?: string;\n    };\n  };\n  hardwareConfig?: {\n    disablePrinter?: boolean;\n    disableCashDrawer?: boolean;\n    disableScanner?: boolean;\n  };\n}",
+      "openShape": false
+    },
+    {
+      "name": "DocumentSeries",
+      "line": 524,
+      "text": "export interface DocumentSeries {\n  id: string;\n  code?: string;\n  documentType: DocumentType;  // Functional type\n  name: string;\n  description: string;\n  prefix: string;\n  nextNumber: number;\n  padding: number;\n  enabled?: boolean;\n  source?: string;\n  icon: string;\n  color: string;\n  businessUnit?: string;  // Optional: \"Tienda Norte\", \"Caja Express\"\n}",
+      "openShape": false
+    },
+    {
+      "name": "DocumentType",
+      "line": 494,
+      "text": "export type DocumentType =\n  // Sales\n  | 'TICKET'           // Regular sale\n  | 'REFUND'           // Refund/Return\n  | 'VOID'             // Voided transaction\n  | 'COMPLIMENTARY'    // Invitation/courtesy with inventory impact and no fiscal emission\n\n  // Inventory\n  | 'TRANSFER'         // Transfer between warehouses\n  | 'ADJUSTMENT_IN'    // Positive inventory adjustment\n  | 'ADJUSTMENT_OUT'   // Negative inventory adjustment\n  | 'PURCHASE'         // Purchase from supplier\n  | 'PRODUCTION'       // Production/Assembly\n\n  // Cash\n  | 'CASH_IN'          // Cash in\n  | 'CASH_OUT'         // Cash out\n  | 'CASH_DEPOSIT'     // Bank deposit\n  | 'CASH_WITHDRAWAL'  // Cash withdrawal\n\n  // Closures\n  | 'Z_REPORT'         // Cash register closure\n  | 'X_REPORT'         // Partial report\n\n  // Accounts\n  | 'RECEIVABLE'       // Accounts receivable\n  | 'PAYABLE'          // Accounts payable\n  | 'PAYMENT_IN'       // Payment received\n  | 'PAYMENT_OUT';",
+      "openShape": false
+    },
+    {
+      "name": "ElectronicNCFType",
+      "line": 225,
+      "text": "export type ElectronicNCFType = 'E31' | 'E32' | 'E34' | 'E44' | 'E45';",
+      "openShape": false
+    },
+    {
+      "name": "EmailConfig",
+      "line": 1160,
+      "text": "export interface EmailConfig {\n  provider: 'resend';\n  apiKey: string;\n  from: string;\n  defaultRecipient?: string; // Fallback recipient for system emails\n  subjectTemplate?: string;\n  accentColor?: string;\n  bannerImage?: string;\n  customFooter?: string;\n  showSocialLinks?: boolean;\n}",
+      "openShape": false
+    },
+    {
+      "name": "FingerprintDriver",
+      "line": 194,
+      "text": "export type FingerprintDriver =\n  | 'AUTO'\n  | 'WEBAUTHN'\n  | 'DIGITAL_PERSONA'\n  | 'SECUGEN'\n  | 'ZKTECO'\n  | 'SUPREMA'\n  | 'FUTRONIC'\n  | 'NITGEN';",
+      "openShape": false
+    },
+    {
+      "name": "FingerprintReaderConfig",
+      "line": 204,
+      "text": "export interface FingerprintReaderConfig {\n  isEnabled: boolean;\n  connectionType: Extract<ConnectionType, 'USB' | 'SERIAL' | 'NETWORK'>;\n  port: string;\n  driver: FingerprintDriver;\n  notes?: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "FiscalAllocation",
+      "line": 277,
+      "text": "export interface FiscalAllocation {\n  id: string;\n  terminalId: string;\n  fiscalRangeId: string;\n  ncfType: FiscalDocumentCode;\n  reservedStart: number;\n  reservedEnd: number;\n  nextNumber: number;\n  status: 'ACTIVE' | 'PAUSED' | 'EXHAUSTED' | 'RELEASED' | 'CONFLICTED' | 'LEGACY';\n  releasedAt: string | null;\n  prefix?: string;\n  metadata?: Record<string, any>;\n}",
+      "openShape": true
+    },
+    {
+      "name": "FiscalComplianceConfig",
+      "line": 258,
+      "text": "export interface FiscalComplianceConfig {\n  mode: FiscalMode;\n  defaultProvider: FiscalProviderId;\n  allowLegacyFallback: boolean;\n  providers: FiscalProviderConfig[];\n  reserveAlert?: FiscalReserveAlertConfig;\n}",
+      "openShape": false
+    },
+    {
+      "name": "FiscalCorrectionAuditEntry",
+      "line": 1935,
+      "text": "export interface FiscalCorrectionAuditEntry {\n  id: string;\n  correctedAt: string;\n  correctedById?: string;\n  correctedByName?: string;\n  reason: string;\n  old: FiscalDocumentCorrectionSnapshot;\n  next: FiscalDocumentCorrectionSnapshot;\n}",
+      "openShape": false
+    },
+    {
+      "name": "FiscalDocumentCode",
+      "line": 226,
+      "text": "export type FiscalDocumentCode = NCFType | ElectronicNCFType;",
+      "openShape": false
+    },
+    {
+      "name": "FiscalDocumentCorrectionSnapshot",
+      "line": 1922,
+      "text": "export interface FiscalDocumentCorrectionSnapshot {\n  fiscalCode?: FiscalDocumentCode | null;\n  ncf?: string;\n  customerId?: string;\n  customerName?: string;\n  customerTaxId?: string;\n  netAmount?: number;\n  taxAmount?: number;\n  total?: number;\n  fiscalSyncStatus?: CloudSyncStatus;\n  fiscalSyncError?: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "FiscalMode",
+      "line": 227,
+      "text": "export type FiscalMode = 'NONE' | 'LEGACY_B' | 'ECF';",
+      "openShape": false
+    },
+    {
+      "name": "FiscalProviderConfig",
+      "line": 232,
+      "text": "export interface FiscalProviderConfig {\n  id: FiscalProviderId;\n  enabled: boolean;\n  environment?: FiscalProviderEnvironment;\n  displayName?: string;\n  deliveryMode?: FiscalProviderDeliveryMode;\n  apiBaseUrl?: string;\n  testUrl?: string;\n  issueUrl?: string;\n  statusUrl?: string;\n  credentialKey?: string;\n  establishmentCode?: string;\n  branchCode?: string;\n  branchName?: string;\n  cashierCode?: string;\n  tipoIngreso?: number;\n  modificationCode?: number;\n  unitCodeGoods?: number;\n  unitCodeServices?: number;\n}",
+      "openShape": false
+    },
+    {
+      "name": "FiscalProviderDeliveryMode",
+      "line": 230,
+      "text": "export type FiscalProviderDeliveryMode = 'LOCAL_DIRECT' | 'DELEGATED_ERP';",
+      "openShape": false
+    },
+    {
+      "name": "FiscalProviderEnvironment",
+      "line": 229,
+      "text": "export type FiscalProviderEnvironment = 0 | 1 | 2 | 3;",
+      "openShape": false
+    },
+    {
+      "name": "FiscalProviderId",
+      "line": 228,
+      "text": "export type FiscalProviderId = 'NONE' | 'POLARIS' | 'DIGIFACT';",
+      "openShape": false
+    },
+    {
+      "name": "FiscalRangeDGII",
+      "line": 266,
+      "text": "export interface FiscalRangeDGII {\n  id: string;\n  type: FiscalDocumentCode;\n  prefix: string;\n  startNumber: number;\n  endNumber: number;\n  currentGlobal: number; // Último entregado a cualquier terminal\n  expiryDate: string;\n  isActive: boolean;\n}",
+      "openShape": false
+    },
+    {
+      "name": "FiscalReserveAlertConfig",
+      "line": 253,
+      "text": "export interface FiscalReserveAlertConfig {\n  quantity?: number;\n  percent?: number;\n}",
+      "openShape": false
+    },
+    {
+      "name": "KitInventoryMode",
+      "line": 1468,
+      "text": "export type KitInventoryMode = 'FINISHED_GOOD' | 'COMPONENT_CONSUMPTION';",
+      "openShape": false
+    },
+    {
+      "name": "LabelDataSource",
+      "line": 2449,
+      "text": "export type LabelDataSource = 'CUSTOM_TEXT' | 'PRODUCT_NAME' | 'PRODUCT_PRICE' | 'PRODUCT_SKU';",
+      "openShape": false
+    },
+    {
+      "name": "LabelElement",
+      "line": 2452,
+      "text": "export interface LabelElement {\n  id: string;\n  type: LabelElementType;\n  x: number;\n  y: number;\n  width: number;\n  height: number;\n  content: string;\n  dataSource: LabelDataSource;\n  fontSize?: number;\n  isBold?: boolean;\n}",
+      "openShape": false
+    },
+    {
+      "name": "LabelElementType",
+      "line": 2448,
+      "text": "export type LabelElementType = 'TEXT' | 'BARCODE' | 'QR';",
+      "openShape": false
+    },
+    {
+      "name": "LabelTemplate",
+      "line": 2465,
+      "text": "export interface LabelTemplate {\n  id: string;\n  name: string;\n  category: LabelTemplateCategory;\n  widthMm: number;\n  heightMm: number;\n  elements: LabelElement[];\n}",
+      "openShape": false
+    },
+    {
+      "name": "LabelTemplateCategory",
+      "line": 2450,
+      "text": "export type LabelTemplateCategory = 'ARTICLE' | 'GONDOLA';",
+      "openShape": false
+    },
+    {
+      "name": "LoyaltyCard",
+      "line": 2803,
+      "text": "export interface LoyaltyCard {\n  id: string;\n  customerId: string;\n  type: 'LOYALTY' | 'GIFT';\n  cardNumber: string; // Barcode/QR\n  pointsBalance: number;\n  status: 'ACTIVE' | 'LOST';\n  issuedAt: string;\n  history: LoyaltyTransaction[];\n}",
+      "openShape": false
+    },
+    {
+      "name": "LoyaltyConfig",
+      "line": 1198,
+      "text": "export interface LoyaltyConfig {\n  isEnabled: boolean;\n  earnRate: number; // Points per 1 unit of currency (e.g., 0.1 for 1 point per $10)\n  redeemRate: number; // Value of 1 point (e.g., 0.10)\n  minRedemptionPoints: number;\n  expirationMonths: number;\n  excludedCategories: string[];\n  tiers?: LoyaltyTier[];\n}",
+      "openShape": false
+    },
+    {
+      "name": "LoyaltyTier",
+      "line": 1190,
+      "text": "export interface LoyaltyTier {\n  id: string;\n  name: string;\n  minPoints: number;\n  color: string;\n  icon?: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "LoyaltyTransaction",
+      "line": 2794,
+      "text": "export interface LoyaltyTransaction {\n  id: string;\n  cardId: string;\n  type: LoyaltyTransactionType;\n  points: number;\n  referenceId?: string;\n  timestamp: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "LoyaltyTransactionType",
+      "line": 2792,
+      "text": "export type LoyaltyTransactionType = 'EARN' | 'REDEEM' | 'ADJUSTMENT';",
+      "openShape": false
+    },
+    {
+      "name": "MediaAsset",
+      "line": 2505,
+      "text": "export interface MediaAsset {\n  id: string;\n  type?: MediaType;\n  url: string;\n  posterUrl?: string;\n  mimeType?: string;\n  storagePath?: string;\n  version?: string;\n  sortOrder?: number;\n  active?: boolean;\n}",
+      "openShape": false
+    },
+    {
+      "name": "MediaType",
+      "line": 2503,
+      "text": "export type MediaType = 'IMAGE' | 'VIDEO';",
+      "openShape": false
+    },
+    {
+      "name": "Modifier",
+      "line": 1033,
+      "text": "export interface Modifier {\n  id: string;\n  product_id?: string;\n  name: string;\n  price: number;\n  price_delta?: number;\n  modifier_type?: 'ADD' | 'REMOVE' | 'NOTE_PRESET' | string;\n  affects_price?: boolean;\n  sort_order?: number;\n  active?: boolean;\n}",
+      "openShape": false
+    },
+    {
+      "name": "ModifierGroup",
+      "line": 1045,
+      "text": "export interface ModifierGroup {\n  id: string;\n  name: string;\n  selection_type?: 'SINGLE' | 'MULTIPLE' | string;\n  required?: boolean;\n  min_select?: number;\n  max_select?: number | null;\n  free_quantity?: number;\n  sort_order?: number;\n  modifiers: Modifier[];\n}",
+      "openShape": false
+    },
+    {
+      "name": "N8nConfig",
+      "line": 1152,
+      "text": "export interface N8nConfig {\n  webhookUrl: string;\n  events: {\n    onSale: boolean;\n    onZReport: boolean;\n  };\n}",
+      "openShape": false
+    },
+    {
+      "name": "NCFConfig",
+      "line": 627,
+      "text": "export interface NCFConfig {\n  batchSize: number;\n  lowBatchThreshold: number;\n  lowBatchThresholdPct?: number; // Umbral de alerta por porcentaje\n}",
+      "openShape": false
+    },
+    {
+      "name": "NCFType",
+      "line": 224,
+      "text": "export type NCFType = 'B01' | 'B02' | 'B04' | 'B14' | 'B15';",
+      "openShape": false
+    },
+    {
+      "name": "OrderServiceType",
+      "line": 1129,
+      "text": "export type OrderServiceType = 'DINE_IN' | 'TAKEOUT' | 'DELIVERY';",
+      "openShape": false
+    },
+    {
+      "name": "PaymentEntry",
+      "line": 2358,
+      "text": "export interface PaymentEntry {\n  id: string;\n  method: PaymentMethod;\n  methodId?: string;\n  methodLabel?: string;\n  methodIcon?: string;\n  creditOverrideApproved?: boolean;\n  amount: number;\n  timestamp: Date;\n  currencyCode?: string;\n  amountOriginal?: number;\n  exchangeRate?: number;\n  appliedAmount?: number;\n  changeAmount?: number;\n  changeCurrencyCode?: string;\n  amountApplied?: number;\n  payment_method?: PaymentMethod | string;\n  currency_code?: string;\n  exchange_rate?: number;\n  applied_amount?: number;\n  change_amount?: number;\n  change_currency_code?: string;\n  source_channel?: 'POS';\n  source_payment_id?: string;\n  source_transaction_id?: string;\n  source_display_id?: string;\n  source_terminal_id?: string;\n  device_id?: string;\n  gatewayProvider?: PaymentIntegrationProvider;\n  gatewayIntegrationId?: string;\n  paymentIntentId?: string;\n  gatewayIdempotencyKey?: string;\n  gatewayTransactionType?: 'SALE' | 'VOID' | 'REFUND' | 'GET_LAST_TRX';\n  gatewayStatus?: string;\n  gatewayResponseCode?: string;\n  gatewayResponseMessage?: string;\n  gatewayAuthorizationCode?: string;\n  gatewayReference?: string;\n  gatewaySequenceNumber?: string;\n  gatewayInvoiceNumber?: string;\n  gatewayBatchNumber?: string;\n  gatewayMerchantId?: string;\n  gatewayTerminalId?: string;\n  gatewayOrderNumber?: string;\n  gatewayProcessedAmount?: number;\n  gatewayProcessedTaxAmount?: number;\n  gatewayMaskedPan?: string;\n  gatewayCardBrand?: string;\n  gatewayEntryMode?: string;\n  gatewayReceiptMerchant?: string;\n  gatewayReceiptClient?: string;\n  gatewaySignatureData?: string;\n  gatewayRequireSignature?: boolean;\n  gatewayRawResponse?: Record<string, any>;\n}",
+      "openShape": true
+    },
+    {
+      "name": "PaymentIntegrationAuditAction",
+      "line": 947,
+      "text": "export type PaymentIntegrationAuditAction =\n  | 'SALE'\n  | 'SALE_CANCELLATION'\n  | 'REFUND'\n  | 'GET_LAST_TRX'\n  | 'PINPAD_INIT'\n  | 'PINPAD_TRANSACTION_TOTALS'\n  | 'PINPAD_SETTLE';",
+      "openShape": false
+    },
+    {
+      "name": "PaymentIntegrationAuditEvent",
+      "line": 957,
+      "text": "export interface PaymentIntegrationAuditEvent {\n  id: string;\n  timestamp: string;\n  integrationId: string;\n  integrationName: string;\n  provider: PaymentIntegrationProvider;\n  environment: PaymentIntegrationEnvironment;\n  action: PaymentIntegrationAuditAction;\n  status: PaymentIntegrationAuditStatus;\n  message: string;\n  requestDetails?: Record<string, string>;\n  responseDetails?: Record<string, string>;\n  responseCode?: string;\n  responseMessage?: string;\n  authorizationCode?: string;\n  referenceNumber?: string;\n  invoiceNumber?: string;\n  sequenceNumber?: string;\n  maskedPan?: string;\n  entryMode?: string;\n  merchantId?: string;\n  terminalId?: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "PaymentIntegrationAuditStatus",
+      "line": 955,
+      "text": "export type PaymentIntegrationAuditStatus = 'SUCCESS' | 'FAILED';",
+      "openShape": false
+    },
+    {
+      "name": "PaymentIntegrationCapabilities",
+      "line": 981,
+      "text": "export interface PaymentIntegrationCapabilities {\n  sale?: boolean;\n  void?: boolean;\n  refund?: boolean;\n  getLastTrx?: boolean;\n  pinpadInit?: boolean;\n  transactionTotals?: boolean;\n  settle?: boolean;\n}",
+      "openShape": false
+    },
+    {
+      "name": "PaymentIntegrationDefinition",
+      "line": 991,
+      "text": "export interface PaymentIntegrationDefinition {\n  id: string;\n  name: string;\n  provider: PaymentIntegrationProvider;\n  isEnabled: boolean;\n  environment: PaymentIntegrationEnvironment;\n  baseUrl: string;\n  secondaryBaseUrl?: string;\n  merchantId?: string;\n  terminalId?: string;\n  auth1?: string;\n  auth2?: string;\n  timeoutMs?: number;\n  capabilities?: PaymentIntegrationCapabilities;\n  metadata?: Record<string, string>;\n  auditEvents?: PaymentIntegrationAuditEvent[];\n}",
+      "openShape": false
+    },
+    {
+      "name": "PaymentIntegrationEnvironment",
+      "line": 945,
+      "text": "export type PaymentIntegrationEnvironment = 'TEST' | 'PRODUCTION';",
+      "openShape": false
+    },
+    {
+      "name": "PaymentIntegrationMode",
+      "line": 946,
+      "text": "export type PaymentIntegrationMode = 'MANUAL' | 'INTEGRATED';",
+      "openShape": false
+    },
+    {
+      "name": "PaymentIntegrationProvider",
+      "line": 938,
+      "text": "export type PaymentIntegrationProvider =\n  | 'AZUL'\n  | 'INGENICO_AZUL_WEBAPI'\n  | 'CARDNET'\n  | 'CARNET'\n  | 'VISANET'\n  | 'STRIPE';",
+      "openShape": false
+    },
+    {
+      "name": "PaymentMethod",
+      "line": 937,
+      "text": "export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'WALLET' | 'ADVANCE' | 'OTHER' | 'CREDIT' | 'STORE_CREDIT' | 'UBER_EATS';",
+      "openShape": false
+    },
+    {
+      "name": "PaymentMethodDefinition",
+      "line": 1011,
+      "text": "export interface PaymentMethodDefinition {\n  id: string;\n  name: string;\n  type: PaymentMethod;\n  isEnabled: boolean;\n  icon: string;\n  color: string;\n  opensDrawer: boolean;\n  requiresSignature: boolean;\n  integration: 'NONE' | PaymentIntegrationProvider;\n  integrationMode?: PaymentIntegrationMode;\n  integrationId?: string;\n  integrationConfig?: Record<string, string>;\n  paymentTermDays?: number; // Solo aplica para tipo CREDIT\n  foreignCurrencyRounding?: PaymentMethodRoundingRule;\n}",
+      "openShape": false
+    },
+    {
+      "name": "PaymentMethodRoundingRule",
+      "line": 1009,
+      "text": "export type PaymentMethodRoundingRule = 'NONE' | 'UP' | 'DOWN' | 'ZERO_DECIMALS';",
+      "openShape": false
+    },
+    {
+      "name": "Permission",
+      "line": 2593,
+      "text": "export type Permission =\n  | 'ALL'\n  | 'CAN_REFUND'\n  | 'POS_CREDIT_OVERRIDE'\n  | 'POS_PAY_CREDIT'\n  | 'POS_ALLOW_ZERO_PRICE'\n  | 'POS_ALLOW_SALES_WITH_OPEN_Z'\n  // --- POS CORE ---\n  | 'SALE'\n  | 'POS_VOID_ITEM'\n  | 'POS_VOID_TICKET'\n  | 'POS_EDIT_SUBTOTALIZED_TICKET'\n  | 'POS_VOID_SUBTOTALIZED_TICKET'\n  | 'POS_VOID_PAID_TICKET'\n  | 'POS_DISCOUNT'\n  | 'POS_PRICE_OVERRIDE'\n  | 'POS_OPEN_DRAWER'\n  | 'POS_RETURNS'\n  | 'POS_REPRINT_RECEIPT'\n  | 'POS_NEW_SALE'\n  | 'POS_CHECKOUT'\n  | 'POS_CHANGE_TARIFF'\n  | 'POS_RESEND_INVOICE_EMAIL'\n  | 'POS_ADJUST_INVOICE_TIP'\n  | 'POS_CHANGE_INVOICE_CUSTOMER'\n  | 'POS_FLAG_INVOICE_REVIEW'\n  | 'POS_VIEW_INVOICE_AUDIT'\n  | 'POS_COMPLIMENTARY_SALE'\n  | 'POS_OVERRIDE_INVOICE_LIMIT'\n  | 'POS_VIEW_X_REPORT'\n  | 'POS_CLOSE_X'\n  | 'POS_CLOSE_Z'\n  | 'POS_REPEAT_Z_REPORT'\n  | 'POS_VIEW_ACTIVE_CASH'\n  | 'POS_MANAGE_PARKED'\n  | 'TABLE_CONTROL_CENTER'\n\n  // --- CATALOG ---\n  | 'CATALOG_VIEW'\n  | 'CATALOG_MANAGE'\n  | 'CATALOG_VIEW_COST'\n  | 'TARIFF_MANAGE'\n\n  // --- INVENTORY ---\n  | 'INVENTORY_VIEW'\n  | 'INVENTORY_ADJUST'\n  | 'INVENTORY_TRANSFER'\n  | 'SUPPLY_CHAIN_ORDER'\n  | 'SUPPLY_CHAIN_RECEIVE'\n\n  // --- CUSTOMERS ---\n  | 'CUSTOMER_VIEW'\n  | 'CUSTOMER_MANAGE'\n  | 'CUSTOMER_CREDIT_LIMIT'\n  | 'CUSTOMER_VIEW_DEBT'\n  | 'CUSTOMER_ALERT_VIEW'\n  | 'CUSTOMER_ALERT_MANAGE'\n\n  // --- FINANCE & REPORTS ---\n  | 'REPORTS_VIEW_SALES'\n  | 'REPORTS_VIEW_FINANCIAL'\n  | 'EXPENSE_MANAGE'\n\n  // --- ADMIN & SETTINGS ---\n  | 'SETTINGS_ACCESS'\n  | 'SETTINGS_HARDWARE'\n  | 'SETTINGS_USERS'\n  | 'SETTINGS_TAXES'\n  | 'AUDIT_LOG_VIEW';",
+      "openShape": false
+    },
+    {
+      "name": "PricingStrategyType",
+      "line": 1030,
+      "text": "export type PricingStrategyType = 'MANUAL' | 'COST_PLUS' | 'DERIVED';",
+      "openShape": false
+    },
+    {
+      "name": "PrinterDevice",
+      "line": 184,
+      "text": "export interface PrinterDevice {\n  id: string;\n  name: string;\n  connection: ConnectionType;\n  address?: string; // IP o MAC\n  status: 'CONNECTED' | 'DISCONNECTED';\n  type: 'TICKET' | 'LABEL' | 'KITCHEN' | 'LOGISTICS';\n  productionAreaId?: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "Product",
+      "line": 1484,
+      "text": "export interface Product {\n  id: string;\n  sku?: string;\n  external_code?: string;\n  externalCode?: string;\n  created_source?: 'POS' | string;\n  source_terminal_id?: string;\n  master_number_range_id?: string;\n  master_number_value?: number;\n  name: string;\n  price: number;\n  category: string;\n  /** Orden visual del artículo dentro de su categoría en el POS. */\n  posSortOrder?: number;\n  stock?: number;\n  qty_committed?: number; // Committed for events/bookings\n  image?: string;\n  imageUrl?: string;\n  imageVersion?: string;\n  imageLocalPath?: string | null;\n  barcode?: string;\n  cost?: number;\n  is_sellable?: boolean;\n  theoreticalCost?: number; // New calculated cost\n  type?: ProductType;\n  isInventoriable?: boolean;\n  kitInventoryMode?: KitInventoryMode;\n  recipeDetails?: RecipeDetail[]; // The BOM\n  images: string[];\n  media?: MediaAsset[];\n  attributes: ProductAttribute[];\n  variants: ProductVariant[];\n  tariffs: TariffPrice[];\n  stockBalances?: Record<string, number>;\n  activeInWarehouses?: string[];\n  appliedTaxIds: string[];\n  minStock?: number;\n  warehouseSettings?: Record<string, { min: number, max: number }>;\n  availableModifiers?: Modifier[];\n  modifier_groups?: ModifierGroup[];\n  modifierGroups?: ModifierGroup[];\n  fraction_rule?: ProductFractionRule;\n  fractionRule?: ProductFractionRule;\n  combo_groups?: ComboGroup[];\n  comboGroups?: ComboGroup[];\n  note_presets?: string[];\n  notePresets?: string[];\n  product_type?: 'SIMPLE' | 'COMBO' | 'FRACTIONABLE' | 'SERVICE' | string;\n  restaurant?: {\n    product_type?: 'SIMPLE' | 'COMBO' | 'FRACTIONABLE' | 'SERVICE' | string;\n    production_area_id?: string;\n    productType?: string;\n    productionAreaId?: string;\n    modifier_groups?: ModifierGroup[];\n    modifierGroups?: ModifierGroup[];\n    fraction_rule?: ProductFractionRule;\n    fractionRule?: ProductFractionRule;\n    combo_groups?: ComboGroup[];\n    comboGroups?: ComboGroup[];\n    note_presets?: string[];\n    notePresets?: string[];\n    [key: string]: any;\n  };\n  description?: string;\n  departmentId?: string;\n  sectionId?: string;\n  familyId?: string;\n  subfamilyId?: string;\n  brandId?: string;\n  operationalFlags?: ProductOperationalFlags;\n  requires_verification?: boolean;\n  updatedAt?: string;\n  hasActivePromotion?: boolean; // UI Flag for badges\n  returnReason?: string; // For items with qty < 0\n  subtotalizedAt?: string;\n  subtotalizedBy?: string;\n  primarySupplierId?: string; // NEW: Preferred supplier for lead time calculation\n  production_area_id?: string; // NEW: For command routing\n\n  // UOM & Yield\n  measurementUnit?: string; // e.g. 'gr', 'ml', 'oz'\n  purchaseUnit?: string;    // e.g. 'Saco', 'Caja', 'Botella'\n  conversionFactor?: number; // e.g. 1 Saco = 50,000 gr. Default: 1\n  batchYield?: number;      // e.g. Recipe produces 50 units. Default: 1\n}",
+      "openShape": true
+    },
+    {
+      "name": "ProductAttribute",
+      "line": 1427,
+      "text": "export interface ProductAttribute {\n  id: string;\n  name: string;\n  options: string[];\n  optionCodes: string[];\n}",
+      "openShape": false
+    },
+    {
+      "name": "ProductFractionOption",
+      "line": 1057,
+      "text": "export interface ProductFractionOption {\n  id?: string;\n  option_product_id?: string;\n  product_id?: string;\n  name?: string;\n  price?: number;\n  price_override?: number | null;\n  active?: boolean;\n}",
+      "openShape": false
+    },
+    {
+      "name": "ProductFractionRule",
+      "line": 1067,
+      "text": "export interface ProductFractionRule {\n  id?: string;\n  fraction_mode?: 'HALF' | 'QUARTER' | 'CUSTOM' | string;\n  pricing_rule?: 'HIGHEST_PRICE' | 'AVERAGE_PRICE' | 'SUM_PARTS' | 'BASE_PLUS_DIFF' | string;\n  max_parts?: number;\n  require_equal_parts?: boolean;\n  options?: ProductFractionOption[];\n}",
+      "openShape": false
+    },
+    {
+      "name": "ProductGroup",
+      "line": 1095,
+      "text": "export interface ProductGroup {\n  id: string;\n  name: string;\n  code: string;\n  color?: string;\n  description?: string;\n  productIds: string[];\n}",
+      "openShape": false
+    },
+    {
+      "name": "ProductOperationalFlags",
+      "line": 1453,
+      "text": "export interface ProductOperationalFlags {\n  isWeighted: boolean;\n  trackInventory: boolean;\n  autoPrintLabel: boolean;\n  promptPrice: boolean;\n  integersOnly: boolean;\n  ageRestricted: boolean;\n  allowNegativeStock: boolean;\n  excludeFromPromotions: boolean;\n  excludeFromLoyalty: boolean;\n  usesLots: boolean;\n  usesSerial: boolean;\n}",
+      "openShape": false
+    },
+    {
+      "name": "ProductType",
+      "line": 1467,
+      "text": "export type ProductType = 'MATERIA_PRIMA' | 'PRODUCTO_TERMINADO' | 'RECETA' | 'KIT' | 'PRODUCT' | 'SERVICE' | 'SIMPLE' | 'COMBO' | 'FRACTIONABLE';",
+      "openShape": false
+    },
+    {
+      "name": "ProductVariant",
+      "line": 1434,
+      "text": "export interface ProductVariant {\n  id?: string;\n  variantId?: string;\n  sku: string;\n  barcode: string[];\n  attributeValues: Record<string, string>;\n  price: number;\n  initialStock?: number;\n}",
+      "openShape": false
+    },
+    {
+      "name": "Promotion",
+      "line": 2102,
+      "text": "export interface Promotion {\n  id: string;\n  name: string;\n  type: PromotionType;\n  priority: number;\n  media?: MediaAsset[];\n  trigger_config?: Record<string, any>;\n  triggerConfig?: Record<string, any>;\n\n  // Trigger\n  trigger?: {\n    type: 'TOTAL_SPEND' | 'ITEM_QTY' | 'MIN_TICKET_AMOUNT';\n    value: number;\n    excludeCategories?: string[];\n    isRecursive?: boolean;\n  };\n\n  // Conditions (New)\n  conditions?: PromotionCondition[];\n\n  // Target\n  targetType: PromotionTargetType;\n  targetValue?: string; // ID of Product (parent for VARIANT), Category, Group, Season\n  targetLabel?: string;\n  targetRefs?: string[];\n  targetStrategy?: {\n    mode: 'CHEAPEST_ITEM' | 'MOST_EXPENSIVE_ITEM' | 'SLOW_MOVER' | 'CATEGORY_CHEAPEST';\n    filterValue?: string | number; // Category ID or Days threshold\n    tieBreaker?: 'FIRST_ADDED' | 'LAST_ADDED';\n    allowSelfTrigger?: boolean;\n  };\n\n  // Benefit\n  benefitType?: PromotionBenefitType; // Optional for backward compatibility, defaults to DISCOUNT implied by type\n  benefitValue: number; // % or Fixed Amount or Multiplier\n\n  // Schedule & Scope\n  schedule: {\n    days: string[]; // L, M, X, J, V, S, D\n    startTime: string;\n    endTime: string;\n    startDate?: string;\n    endDate?: string;\n    isActive: boolean;\n  };\n  terminalIds?: string[];\n\n  stats?: {\n    usageCount: number;\n    revenueGenerated: number;\n    conversionRate: number;\n  };\n}",
+      "openShape": true
+    },
+    {
+      "name": "PromotionApplicationTrace",
+      "line": 2088,
+      "text": "export interface PromotionApplicationTrace {\n  promotionId: string;\n  targetType: PromotionTargetType;\n  targetValue?: string;\n  matchedVariantRef?: string;\n  matchedTargetRef?: string;\n  matchedVariantRefType?: 'SKU' | 'VARIANT_ID' | 'BARCODE';\n}",
+      "openShape": false
+    },
+    {
+      "name": "PromotionBenefitType",
+      "line": 2086,
+      "text": "export type PromotionBenefitType = 'DISCOUNT_PERCENT' | 'FIXED_PRICE' | 'CASHBACK' | 'POINTS_MULTIPLIER';",
+      "openShape": false
+    },
+    {
+      "name": "PromotionCondition",
+      "line": 2097,
+      "text": "export interface PromotionCondition {\n  type: 'HAS_WALLET' | 'CUSTOMER_TIER' | 'HAS_POINTS_MIN';\n  value: string; // \"GOLD\", \"100\", \"TRUE\"\n}",
+      "openShape": false
+    },
+    {
+      "name": "PromotionTargetType",
+      "line": 2085,
+      "text": "export type PromotionTargetType = 'ALL' | 'PRODUCT' | 'VARIANT' | 'CATEGORY' | 'GROUP' | 'SEASON';",
+      "openShape": false
+    },
+    {
+      "name": "PromotionType",
+      "line": 2073,
+      "text": "export type PromotionType =\n  | 'DISCOUNT'\n  | 'BOGO'\n  | 'HAPPY_HOUR'\n  | 'CONDITIONAL_TARGET'\n  | 'BUNDLE'\n  | 'TIERED_QUANTITY'\n  | 'MIX_AND_MATCH'\n  | 'GIFT_WITH_PURCHASE'\n  | 'PAYMENT_METHOD_DISCOUNT'\n  | 'PREPAID_PACKAGE'\n  | 'NEXT_PURCHASE_COUPON';",
+      "openShape": false
+    },
+    {
+      "name": "PurchaseOrder",
+      "line": 2231,
+      "text": "export interface PurchaseOrder {\n  id: string;\n  code?: string;\n  supplierId: string;\n  supplierName?: string; // Denormalized for reports\n  warehouseId?: string;\n  date: string;\n  expectedDate: string; // NEW: Promised delivery date\n  dueDate?: string; // Derived from supplier.paymentTermDays\n  status: 'ORDERED' | 'PARTIAL' | 'COMPLETED';\n  items: PurchaseOrderItem[];\n  totalCost: number;\n  sentAt?: string; // For email tracking\n  syncSource?: 'LOCAL' | 'ERP_SNAPSHOT';\n}",
+      "openShape": false
+    },
+    {
+      "name": "PurchaseOrderItem",
+      "line": 2220,
+      "text": "export interface PurchaseOrderItem {\n  productId: string;\n  productName: string;\n  quantityOrdered: number;\n  quantityReceived: number;\n  cost: number;\n  variantSku?: string;\n  variantInfo?: string; // e.g. \"Rojo / 42\"\n  trackingData?: { trackingCode: string; expirationDate?: string; id?: string }[];\n}",
+      "openShape": false
+    },
+    {
+      "name": "ReceiptConfig",
+      "line": 472,
+      "text": "export interface ReceiptConfig {\n  logo?: string;\n  footerMessage?: string;\n  showCustomerInfo?: boolean;\n  showSavings?: boolean;\n  showQr?: boolean;\n  showForeignCurrencyTotals?: boolean;\n  showSerialNumbers?: boolean; // NEW: Toggle printing serial numbers\n  showLotNumbers?: boolean; // NEW: Toggle printing lot numbers\n  showOrderNumber?: boolean;\n  showVariantLabels?: boolean; // Default: print only variant values\n  documentCopies?: {\n    invoice?: number;\n    creditNote?: number;\n    kitchenOrder?: number;\n    xReport?: number;\n    zReport?: number;\n    other?: number;\n  };\n}",
+      "openShape": false
+    },
+    {
+      "name": "RecipeDetail",
+      "line": 1470,
+      "text": "export interface RecipeDetail {\n  id: string;\n  parentItemId: string;\n  childItemId: string;\n  childItemName?: string; // For UI display\n  quantity: number;\n  unit: string; // The unit used in the recipe (e.g., 'gr')\n  originalUnit?: string; // The purchasing unit of the ingredient (e.g., 'lb')\n  conversionFactor?: number; // Cost multiplier or conversion ratio\n  wasteFactor: number; // 0.1 = 10%\n  isOptional: boolean;\n  cost?: number; // Calculated dynamic cost\n}",
+      "openShape": false
+    },
+    {
+      "name": "RedeemedCouponRef",
+      "line": 2582,
+      "text": "export interface RedeemedCouponRef {\n  id: string;\n  code: string;\n  campaignId?: string;\n  assignedTo?: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "RoleDefinition",
+      "line": 1317,
+      "text": "export interface RoleDefinition {\n  id: string;\n  name: string;\n  permissions: Permission[];\n  maxDiscountPercent?: number;\n  isSystem?: boolean;\n  isActive?: boolean;\n  version?: number;\n  syncSource?: 'LOCAL' | 'LOCAL_SEED' | 'ERP_SNAPSHOT';\n  zReportConfig?: {\n    hiddenModules: ZReportModule[];\n  };\n}",
+      "openShape": false
+    },
+    {
+      "name": "Room",
+      "line": 1619,
+      "text": "export interface Room {\n  id: string;\n  nombre: string;\n  name?: string;\n  consumo_minimo?: number; // Legacy, but keeping for compatibility\n  capacidad_personas?: number; // Legacy\n  capacity?: number; // Standardized capacity\n  capacidad_pax?: number; // New standard for Spaces\n  base_price?: number; // For quotes\n  color?: string; // For calendar\n  warehouse_id?: string; // For inventory mapping\n  cargo_servicio_pct?: number;\n  orden?: number;\n  data?: {\n    width?: number;\n    height?: number;\n    gridConfig?: any;\n    backgroundImage?: string;\n    backgroundStyle?: 'DARK' | 'WHITE';\n  };\n}",
+      "openShape": true
+    },
+    {
+      "name": "RoundingRule",
+      "line": 1031,
+      "text": "export type RoundingRule = 'NONE' | 'ENDING_99' | 'CEILING' | 'ROUND_HALF_UP' | 'ROUND_FLOOR';",
+      "openShape": false
+    },
+    {
+      "name": "ScaleDevice",
+      "line": 2532,
+      "text": "export interface ScaleDevice {\n  id: string;\n  name: string;\n  isEnabled: boolean;\n  technology: ScaleTech;\n  directConfig?: {\n    port: string;\n    baudRate: number;\n    dataBits: number;\n    protocol: string;\n  };\n  labelConfig?: {\n    mode: 'WEIGHT' | 'PRICE';\n    prefixes: string[];\n    decimals: number;\n    itemDigits: number;\n    valueDigits: number;\n  };\n}",
+      "openShape": false
+    },
+    {
+      "name": "ScaleLabelConfig",
+      "line": 1172,
+      "text": "export interface ScaleLabelConfig {\n  isEnabled: boolean;\n  prefixes: string[];\n  structure: {\n    totalLength: number;\n    prefixLength: number;\n    pluStart: number;\n    pluLength: number;\n    valueStart: number;\n    valueLength: number;\n    checksumLength: number;\n  };\n  valueType: 'WEIGHT' | 'PRICE';\n  decimals: number;\n}",
+      "openShape": false
+    },
+    {
+      "name": "ScaleTech",
+      "line": 453,
+      "text": "export type ScaleTech = 'DIRECT' | 'LABEL';",
+      "openShape": false
+    },
+    {
+      "name": "Season",
+      "line": 1104,
+      "text": "export interface Season {\n  id: string;\n  name: string;\n  code: string;\n  startDate: string;\n  endDate: string;\n  isActive: boolean;\n  productIds: string[];\n  multiplier: number; // Demand factor (e.g., 1.5)\n  affectedCategories: string[]; // Categories affected by this season\n}",
+      "openShape": false
+    },
+    {
+      "name": "ServiceTaxPolicy",
+      "line": 1132,
+      "text": "export interface ServiceTaxPolicy {\n  /**\n   * Allow-list over taxes already assigned to each product. Undefined keeps\n   * the product configuration; an empty array explicitly applies no taxes.\n   */\n  taxIds?: string[];\n  legalTip?: {\n    enabled: boolean;\n    percentage?: number;\n  };\n  updatedAt?: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "ServiceTaxPolicyMap",
+      "line": 1145,
+      "text": "export type ServiceTaxPolicyMap = Partial<Record<OrderServiceType, ServiceTaxPolicy>>;",
+      "openShape": false
+    },
+    {
+      "name": "ServiceTypeSummaryLine",
+      "line": 2832,
+      "text": "export interface ServiceTypeSummaryLine {\n  serviceType: OrderServiceType;\n  transactionCount: number;\n  total: number;\n  taxAmount: number;\n  serviceChargeAmount: number;\n}",
+      "openShape": false
+    },
+    {
+      "name": "ServiceTypeTransactionLine",
+      "line": 2840,
+      "text": "export interface ServiceTypeTransactionLine {\n  transactionId: string;\n  displayId: string;\n  date: string;\n  serviceType: Extract<OrderServiceType, 'TAKEOUT' | 'DELIVERY'>;\n  total: number;\n}",
+      "openShape": false
+    },
+    {
+      "name": "StockTransfer",
+      "line": 2052,
+      "text": "export interface StockTransfer {\n  id: string;\n  seriesId?: string;\n  seriesNumber?: number;\n  displayId?: string;\n  sourceWarehouseId: string;\n  destinationWarehouseId: string;\n  items: StockTransferItem[];\n  status: 'IN_TRANSIT' | 'PARTIALLY_RECEIVED' | 'COMPLETED';\n  createdAt: string;\n  sentAt?: string;\n  receivedAt?: string;\n  createdBy?: string;\n  terminalId?: string;\n  syncStatus?: SyncStatus;\n  syncError?: string;\n  updatedAt?: string;\n  discrepancyReason?: string;\n  syncSource?: 'LOCAL' | 'ERP_SNAPSHOT';\n}",
+      "openShape": false
+    },
+    {
+      "name": "StockTransferItem",
+      "line": 2044,
+      "text": "export interface StockTransferItem {\n  transferItemId?: string;\n  productId: string;\n  productName: string;\n  quantity: number;\n  receivedQuantity?: number; // Actual units received\n}",
+      "openShape": false
+    },
+    {
+      "name": "SubVertical",
+      "line": 15,
+      "text": "export type SubVertical = typeof SubVertical[keyof typeof SubVertical];",
+      "openShape": false
+    },
+    {
+      "name": "Supplier",
+      "line": 2182,
+      "text": "export interface Supplier {\n  id: string;\n  supplier_code?: string;\n  supplierCode?: string;\n  external_code?: string;\n  externalCode?: string;\n  created_source?: 'POS' | string;\n  source_terminal_id?: string;\n  master_number_range_id?: string;\n  master_number_value?: number;\n  name: string;\n  taxId: string; // RNC o Cédula\n  email: string;\n  phone: string;\n  image?: string;\n  imageUrl?: string;\n  imageVersion?: string;\n  imageLocalPath?: string | null;\n  logo?: string;\n  logoUrl?: string;\n  logoVersion?: string;\n  logoLocalPath?: string | null;\n  contactPerson: string;\n  paymentMethod: 'CASH' | 'TRANSFER' | 'CARD' | 'CREDIT';\n  paymentTermDays: number; // Días de crédito\n  creditLimit: number;\n  balance: number; // Deuda actual\n  leadTimeDays: number; // NEW: Average delivery time in days\n  isActive: boolean;\n}",
+      "openShape": false
+    },
+    {
+      "name": "SyncConfig",
+      "line": 114,
+      "text": "export interface SyncConfig {\n  mode: SyncMode;\n  masterUrl?: string; // Required for SLAVE terminals (e.g., \"https://192.168.1.100:3001\")\n  authToken?: string;\n  autoSyncIntervalMs: number;\n  isEnabled: boolean;\n}",
+      "openShape": false
+    },
+    {
+      "name": "SyncMode",
+      "line": 99,
+      "text": "export type SyncMode = 'MASTER' | 'SLAVE';",
+      "openShape": false
+    },
+    {
+      "name": "SyncStatus",
+      "line": 100,
+      "text": "export type SyncStatus =\n  | 'PENDING'\n  | 'SYNCING'\n  | 'COMPLETED'\n  | 'ERROR'\n  | 'SYNCED_CLOUD'\n  | 'SYNCED_ACTIVE'\n  | 'SYNCED_MASTER'\n  | 'APPLIED_ERP'\n  | 'RETRY_WAIT'\n  | 'BLOCKED_FUNCTIONAL'\n  | 'FAILED_FINAL';",
+      "openShape": false
+    },
+    {
+      "name": "Table",
+      "line": 1641,
+      "text": "export interface Table {\n  id: string;\n  code?: string;\n  label?: string;\n  room_id?: string;\n  sort_order?: number;\n  active?: boolean;\n  roomId: string;\n  nombre: string;\n  name?: string;\n  posX: number;\n  posY: number;\n  width: number;\n  height: number;\n  shape: TableShape;\n  rotation: number;\n  capacity?: number;\n  consumo_minimo_mesa?: number;\n  comensales_minimos?: number;\n  // Runtime State\n  status?: 'FREE' | 'OCCUPIED' | 'RESERVED';\n  currentOrderId?: string;\n  currentOrderTotal?: number;\n  waiterName?: string;\n  waiterId?: string;\n  timeSeated?: string;\n  guests?: number;\n  barTabId?: string;\n  barTabName?: string;\n  /** Cuenta compartida: la mesa principal conserva el ticket y las secundarias la referencian. */\n  joinedTableId?: string;\n  joinedTableName?: string;\n  joinedSourceTableId?: string;\n  joinedSourceTableName?: string;\n  editingLock?: {\n    ownerId: string;\n    terminalId?: string;\n    userId?: string;\n    userName?: string;\n    acquiredAt: number;\n    expiresAt: number;\n  };\n}",
+      "openShape": false
+    },
+    {
+      "name": "TableShape",
+      "line": 1617,
+      "text": "export type TableShape = 'SQUARE' | 'CIRCLE' | 'OBSTACLE' | 'BAR' | 'BOOTH' | 'CHAISE_LONGUE';",
+      "openShape": false
+    },
+    {
+      "name": "Tariff",
+      "line": 2001,
+      "text": "export interface Tariff {\n  id: string;\n  code?: string;\n  name: string;\n  active: boolean;\n  currency: string;\n  taxIncluded: boolean;\n  strategy: {\n    type: PricingStrategyType;\n    rounding: RoundingRule;\n    factor?: number;\n    baseTariffId?: string;\n  };\n  scope: {\n    storeIds: string[];\n    priority: number;\n  };\n  schedule: {\n    daysOfWeek: number[];\n    timeStart: string;\n    timeEnd: string;\n  };\n  items: Record<string, TariffPriceOverride>;\n}",
+      "openShape": false
+    },
+    {
+      "name": "TariffPrice",
+      "line": 1444,
+      "text": "export interface TariffPrice {\n  tariffId: string;\n  name?: string;\n  price: number;\n  costBase?: number;\n  margin?: number;\n  tax?: number;\n}",
+      "openShape": false
+    },
+    {
+      "name": "TariffPriceOverride",
+      "line": 1995,
+      "text": "export interface TariffPriceOverride {\n  productId: string;\n  price: number;\n  lockPrice: boolean;\n}",
+      "openShape": false
+    },
+    {
+      "name": "TaxDefinition",
+      "line": 455,
+      "text": "export interface TaxDefinition {\n  id: string;\n  code?: string;\n  name: string;\n  rate: number;\n  type: 'VAT' | 'SERVICE_CHARGE' | 'EXEMPT' | 'OTHER';\n}",
+      "openShape": false
+    },
+    {
+      "name": "TerminalConfig",
+      "line": 633,
+      "text": "export interface TerminalConfig {\n  currentDeviceId?: string;\n  lastPairingDate?: string;\n  isBlocked?: boolean;\n  deviceBindingToken: string;\n  erpTerminalId?: string;\n  terminalName?: string;\n  stationNumber?: string | null;\n  currencyCode?: string;\n  primaryCurrencyCode?: string;\n  currency?: string;\n  allowedCurrencyCodes?: string[];\n  allowed_currency_codes?: string[];\n  currencyCodes?: string[];\n  currency_codes?: string[];\n  currencies?: {\n    default?: string;\n    base?: string;\n    list: Array<CurrencyConfig & {\n      exchange_rate: number;\n      is_base: boolean;\n      enabled: boolean;\n    }>;\n  };\n  isPrimaryNode?: boolean; // Rol jerárquico de la terminal\n  governedByMaster?: boolean; // NEW: If true, this terminal follows the configuration defined by the Master\n  startWithAgenda?: boolean; // NEW: Boot directly into Agenda view\n  deviceRole?: DeviceRoleConfig; // NEW: Configuración de rol de dispositivo\n  deviceProfile?: DeviceProfile; // Formato físico y comportamiento visual, independiente del rol\n  device_profile?: Partial<DeviceProfile> & Record<string, unknown>; // Contrato ERP snake_case\n  terminalType?: 'STANDARD_POS' | 'ORDER_TAKER' | string;\n  terminal_type?: 'STANDARD_POS' | 'ORDER_TAKER' | string;\n  masterTerminalId?: string;\n  master_terminal_id?: string;\n  capabilities?: string[];\n  restrictions?: string[];\n  productionCenterId?: string;\n  production_center_id?: string;\n\n  fiscal: {\n    enabled?: boolean;\n    mode?: FiscalMode;\n    fiscalMode?: FiscalMode;\n    fiscal_mode?: FiscalMode;\n    providerId?: FiscalProviderId;\n    environment?: FiscalProviderEnvironment;\n    deliveryMode?: FiscalProviderDeliveryMode;\n    apiBaseUrl?: string;\n    testUrl?: string;\n    issueUrl?: string;\n    statusUrl?: string;\n    credentialKey?: string;\n    establishmentCode?: string;\n    branchCode?: string;\n    branchName?: string;\n    cashierCode?: string;\n    tipoIngreso?: number;\n    modificationCode?: number;\n    unitCodeGoods?: number;\n    unitCodeServices?: number;\n    batchSize: number; // Deprecated but kept for compatibility\n    lowBatchThreshold: number;\n    // New: Configuration per NCF Type\n    typeConfigs?: Partial<Record<FiscalDocumentCode, NCFConfig>>;\n    defaultFiscalRangeId?: string;\n    fiscalRanges?: FiscalRangeDGII[];\n    fiscalAllocations?: FiscalAllocation[];\n  };\n\n  tables?: {\n    behavior: 'SIEMPRE_MOSTRAR' | 'A_DEMANDA' | 'NO_MOSTRAR';\n    defaultRoomId?: string;\n    autoRedirectToMap?: boolean; // NEW: Redirect to map after order save\n  };\n\n  security: {\n    deviceBindingToken: string;\n    requirePinForVoid: boolean;\n    requirePinForDiscount: boolean;\n    requireManagerForRefunds: boolean;\n    autoLogoutMinutes: number;\n    reduceSyncAfterMinutes?: number;\n    allowBiometrics?: boolean; // NEW: Biometric Auth Toggle\n  };\n  pricing: {\n    allowedTariffIds: string[];\n    defaultTariffId: string;\n    tariffs?: Tariff[];\n  };\n  workflow: {\n    inventory: {\n      realTimeValidation: boolean;\n      allowNegativeStock: boolean;\n      reserveStockOnCart: boolean;\n      showStockOnTiles: boolean;\n      showProductImagesInReceipt: boolean;\n    };\n    session: {\n      blindClose: boolean;\n      allowSalesWithOpenZ: boolean;\n      maxCashInDrawer: number;\n      askGuestsOnTicketOpen: boolean;\n      autoPrintZReport: boolean;\n      /** Imprime un comprobante al registrar una entrada o salida de efectivo. */\n      autoPrintCashMovementReceipt?: boolean;\n      zReportEmails?: string;\n      // New fields for Z Report Expansion\n      checkOpenOrders: boolean;\n      forceDenominationCount: boolean;\n      cashVarianceThreshold: number;\n      emailZReport: boolean;\n      requireCashFundOnZ?: boolean;\n      fixedCashFundAmount?: number;\n      // New fields for Force Z on Day Change\n      forceZChange: boolean;\n      businessStartHour: number;\n      /**\n       * Si es false: sin monitor X en Finanzas, sin asignación de serie X (`documentAssignments.X_REPORT` se quita al aplicar snapshot ERP),\n       * y las operaciones que validen `X_REPORT` fallan (ver `validateTerminalSeries`).\n       */\n      allowPartialXReport?: boolean;\n      /** Secciones opcionales que se incluyen en cada cierre, configuradas por usuario y tipo de reporte. */\n      closeReportOptionsByUser?: Record<string, {\n        X?: CloseReportSection[];\n        Z?: CloseReportSection[];\n      }>;\n      /** Formas no efectivas que deben ser declaradas manualmente durante el cierre Z. */\n      zReportDeclaredPaymentMethodIds?: string[];\n    };\n    offline: {\n      mode: 'OPTIMISTIC' | 'STRICT' | 'READ_ONLY';\n      maxOfflineTransactionLimit: number;\n    };\n  };\n  financial: {\n    roundingMethod: 'ROUND_HALF_UP' | 'ROUND_FLOOR' | 'NONE';\n    taxInclusivePrices: boolean;\n    printTaxBreakdown: boolean;\n    returnChangeInBaseCurrency: boolean;\n    acceptedCurrencies: string[];\n    /** Terminal-specific overrides over the POS-wide service policies. */\n    serviceTaxPolicies?: ServiceTaxPolicyMap;\n    service_tax_policies?: ServiceTaxPolicyMap;\n  };\n  documentSeries: DocumentSeries[];\n  documentAssignments?: Record<string, string>; // Mapeo de Rol -> ID de DocumentSeries maestra\n  hardware: {\n    cashDrawerTrigger: 'PRINTER' | 'DIRECT';\n    receiptPrinterId?: string;\n    printerAssignments?: Record<string, string>; // Roles: TICKET, LABEL, KITCHEN, LOGISTICS\n    customerDisplay?: CustomerDisplayConfig;\n    scales?: ScaleDevice[];\n    fingerprintReader?: FingerprintReaderConfig;\n  };\n  operational: {\n    vertical_negocio: VerticalType;\n    usa_mesas: boolean;\n    pantalla_inicio: 'VENTA_DIRECTA' | 'MAPA_MESAS';\n    bloqueo_meseros: boolean;\n    pedir_comensales: boolean;\n    usa_modulos_cocina: boolean;\n    recibir_consignaciones?: boolean;\n    receiveConsignments?: boolean;\n    receive_consignments?: boolean;\n    descargar_consignaciones?: boolean;\n    defaultTaxIds?: string[];\n    reservationPolicy?: {\n      validityDays: number;\n      printCopies: number;\n      requireAdvance: boolean;\n      minimumAdvancePercent: number;\n    };\n    deliveryAlerts?: {\n      isDeliveryTerminal?: boolean;\n      showUberEatsToast?: boolean;\n      autoOpenUberEatsModal?: boolean;\n    };\n    fiscalThreshold?: number;\n    expandTicket?: boolean;\n    showGlobalSales?: boolean;\n    orderNumbers?: {\n      enabled?: boolean;\n      nextNumber?: number;\n      prefix?: string;\n      padding?: number;\n    };\n  };\n  ux: {\n    theme: 'LIGHT' | 'DARK';\n    gridDensity: 'COMFORTABLE' | 'COMPACT';\n    showProductImages: boolean;\n    quickKeysLayout: 'A' | 'B';\n    viewMode: 'VISUAL' | 'RETAIL';\n  };\n  catalog?: {\n    allowedCategories: string[];\n    fullPullOnPairing?: boolean;\n  };\n  inventoryScope?: {\n    defaultSalesWarehouseId: string;\n    visibleWarehouseIds: string[];\n    transferWarehouseId?: string;\n    defaultWarehouse?: Warehouse;\n    warehouses?: Warehouse[];\n  };\n  erpBinding?: {\n    terminalId?: string;\n    tenantId?: string;\n    companyId?: string;\n    storeId?: string;\n    deviceId?: string;\n    terminalName?: string;\n    stationNumber?: string;\n    role?: string;\n  };\n  erpSnapshot?: TerminalConfigSnapshot;\n  metadata?: Record<string, any>;\n  lan?: Record<string, any>;\n  wallet?: WalletConfig;\n  syncConfig?: SyncConfig;\n}",
+      "openShape": true
+    },
+    {
+      "name": "TerminalConfigResolvedCatalogSnapshot",
+      "line": 562,
+      "text": "export interface TerminalConfigResolvedCatalogSnapshot {\n  allowed_categories?: string[] | any[];\n  full_pull_on_pairing?: boolean;\n}",
+      "openShape": true
+    },
+    {
+      "name": "TerminalConfigResolvedDocumentsSnapshot",
+      "line": 554,
+      "text": "export interface TerminalConfigResolvedDocumentsSnapshot {\n  assignments?: Record<string, any> | any[];\n  default_fiscal_range_id?: string;\n  document_series?: any[];\n  fiscal_ranges?: any[];\n  fiscal_allocations?: any[];\n}",
+      "openShape": true
+    },
+    {
+      "name": "TerminalConfigResolvedInventorySnapshot",
+      "line": 546,
+      "text": "export interface TerminalConfigResolvedInventorySnapshot {\n  default_warehouse_id?: string;\n  transfer_warehouse_id?: string;\n  allowed_warehouse_ids?: string[];\n  default_warehouse?: any;\n  warehouses?: any[];\n}",
+      "openShape": true
+    },
+    {
+      "name": "TerminalConfigResolvedLoyaltySnapshot",
+      "line": 567,
+      "text": "export interface TerminalConfigResolvedLoyaltySnapshot {\n  config?: any;\n  campaigns?: any[];\n  coupons?: any[];\n}",
+      "openShape": true
+    },
+    {
+      "name": "TerminalConfigResolvedPricingSnapshot",
+      "line": 540,
+      "text": "export interface TerminalConfigResolvedPricingSnapshot {\n  default_tariff_id?: string;\n  allowed_tariff_ids?: string[];\n  tariffs?: any[];\n}",
+      "openShape": true
+    },
+    {
+      "name": "TerminalConfigResolvedSnapshot",
+      "line": 573,
+      "text": "export interface TerminalConfigResolvedSnapshot {\n  company?: Record<string, any>;\n  company_info?: Record<string, any>;\n  companyInfo?: Record<string, any>;\n  identity?: Record<string, any>;\n  terminal?: Record<string, any>;\n  deviceRole?: Record<string, any> | string;\n  device_role?: Record<string, any> | string;\n  role?: string;\n  role_code?: string;\n  device_role_code?: string;\n  pricing?: TerminalConfigResolvedPricingSnapshot;\n  inventory?: TerminalConfigResolvedInventorySnapshot;\n  documents?: TerminalConfigResolvedDocumentsSnapshot;\n  catalog?: TerminalConfigResolvedCatalogSnapshot;\n  taxes?: TaxDefinition[];\n  financial?: Record<string, any>;\n  serviceTaxPolicies?: ServiceTaxPolicyMap;\n  service_tax_policies?: ServiceTaxPolicyMap;\n  /** Promociones ERP → POS (forma camelCase, ver `posPromotionsSnapshot.js`). */\n  promotions?: any[];\n  loyalty?: TerminalConfigResolvedLoyaltySnapshot;\n}",
+      "openShape": true
+    },
+    {
+      "name": "TerminalConfigSnapshot",
+      "line": 597,
+      "text": "export interface TerminalConfigSnapshot {\n  terminal_id?: string;\n  tenant_id?: string;\n  company_id?: string;\n  store_id?: string;\n  device_id?: string;\n  terminal_name?: string;\n  station_number?: string | number;\n  role?: string;\n  company?: Record<string, any>;\n  company_info?: Record<string, any>;\n  companyInfo?: Record<string, any>;\n  masters?: {\n    items?: Record<string, any>[];\n    customers?: Customer[];\n    suppliers?: Supplier[];\n    sellers?: Array<Record<string, any>>;\n    users?: Array<Record<string, any>>;\n    pos_users?: Array<Record<string, any>>;\n    roles?: Array<Record<string, any>>;\n    pos_roles?: Array<Record<string, any>>;\n    purchaseOrders?: PurchaseOrder[];\n    transfers?: StockTransfer[];\n    [key: string]: any;\n  };\n  resolved?: TerminalConfigResolvedSnapshot;\n  config?: Record<string, any>;\n  resolution_error?: any;\n}",
+      "openShape": true
+    },
+    {
+      "name": "TipConfiguration",
+      "line": 1116,
+      "text": "export interface TipConfiguration {\n  enabled: boolean;\n  defaultOptions: [number, number, number];\n  fixedAmountOptions?: number[];\n  allowCustomTip: boolean;\n  serviceCharge: {\n    enabled: boolean;\n    percentage: number;\n    applyIfTotalOver: number;\n    applyIfGuestsOver: number;\n  };\n}",
+      "openShape": false
+    },
+    {
+      "name": "Transaction",
+      "line": 1763,
+      "text": "export interface Transaction {\n  // Identifiers\n  id: string;\n  globalSequence?: number;          // Global unique sequence number\n  displayId?: string;               // User-visible ID (e.g., \"TCK01-000123\")\n  source_channel?: 'POS';\n  source_transaction_id?: string;\n  source_display_id?: string;\n  source_terminal_id?: string;\n  device_id?: string;\n  source_credit_note_id?: string;\n  original_transaction_id?: string;\n  original_display_id?: string;\n\n  // Document Classification\n  documentType?: DocumentType;      // Type of transaction\n  seriesId?: string;                // Reference to DocumentSeries\n  seriesNumber?: number;            // Number within the series\n\n  // Transaction Data\n  date: string;\n  updatedAt?: string;\n  items: CartItem[];\n  total: number;\n  payments: any[];\n\n  // User & Terminal\n  userId: string;\n  userName: string;\n  terminalId?: string;\n  terminalName?: string;\n\n  // Status\n  status: 'PENDING' | 'COMPLETED' | 'REFUNDED' | 'PARTIAL_REFUND';\n\n  // Audit (RBAC)\n  authorizedById?: string;\n  authorizedByName?: string;\n\n  // Customer\n  customerId?: string;\n  customerName?: string;\n  customerSnapshot?: {\n    name: string;\n    customer_code?: string;\n    master_number_range_id?: string;\n    master_number_value?: number;\n    source_terminal_id?: string;\n    created_source?: string;\n    taxId?: string;\n    address?: string;\n    phone?: string;\n    email?: string;\n    isTaxExempt?: boolean;\n  };\n\n  // Accounting\n  taxAmount?: number;               // Total tax amount\n  netAmount?: number;               // Net amount (before tax)\n  taxBreakdown?: any[];             // Fiscal tax lines persisted for provider retries\n  discountAmount?: number;\n  discountType?: 'PERCENT' | 'FIXED';\n  discountValue?: number;\n  isTaxIncluded?: boolean;\n  couponCode?: string;\n  coupons?: RedeemedCouponRef[];\n\n  // Fiscal\n  ncf?: string;                     // NCF final del documento\n  ncfType?: FiscalDocumentCode;\n  legacyNcf?: string;\n  electronicNcf?: string;\n  fiscalMode?: FiscalMode;\n  fiscalProvider?: FiscalProviderId;\n  fiscalSyncStatus?: CloudSyncStatus;\n  fiscalSyncError?: string;\n  fiscalSyncedAt?: string;\n  fiscalReferenceId?: string;\n  fiscalResponseMessage?: string;\n  fiscalCorrectionAudit?: FiscalCorrectionAuditEntry[];\n  affectedNCF?: string;             // NCF de la factura afectada (para Notas de Crédito B04)\n  affectedInvoiceNumber?: string;   // No. de factura afectada (displayId para búsquedas)\n  affectedInvoiceDate?: string;\n  observations?: string;\n  cloudSyncStatus?: CloudSyncStatus;\n  cloudSyncError?: string;\n  cloudSyncedAt?: string;\n  reservationId?: string;\n  reservationCode?: string;\n  priorAdvancePaid?: number;\n  balanceDueAtSale?: number;\n\n  // Accounts Receivable (CxC)\n  dueDate?: string;         // ISO Date\n  pendingBalance?: number;  // Amount still owed on this transaction\n\n  // Settlement Summary\n  settlementCurrencyCode?: string;\n  settlementExchangeRate?: number;\n  settlementReceivedOriginal?: number;\n  settlementReceivedBase?: number;\n  settlementAppliedBase?: number;\n  settlementChangeBase?: number;\n  settlementChangeCurrencyCode?: string;\n  settlement_currency_code?: string;\n  settlement_exchange_rate?: number;\n  settlement_received_original?: number;\n  settlement_received_base?: number;\n  settlement_applied_base?: number;\n  settlement_change_base?: number;\n  settlement_change_currency_code?: string;\n\n  // Relationships\n  relatedTransactions?: string[];   // Related transaction IDs\n  originalTransactionId?: string;   // For refunds/voids\n  refundReason?: string;\n  syncStatus?: SyncStatus;\n  syncError?: string;\n  syncResponse?: any;\n  syncedAt?: string;\n  erpSyncStatus?: 'APPLIED' | 'SKIPPED_ALREADY_APPLIED' | 'ERROR';\n  erpSyncResponse?: any;\n  erpSyncedAt?: string;\n  zReportId?: string; // ID of the Z-Report that closed this transaction\n  zReportSequence?: string; // Human readable sequence number of the Z-Report (e.g. \"Z-000123\")\n\n  // Wallet Interaction\n  walletDepositAmount?: number;     // Amount sent to customer wallet (advance/refund)\n  walletPaymentAmount?: number;     // Amount paid using customer wallet balance\n\n  // Restaurant fields\n  serviceType?: OrderServiceType;\n  service_type?: OrderServiceType;\n  serviceTaxPolicySnapshot?: AppliedServiceTaxPolicySnapshot;\n  service_tax_policy_snapshot?: AppliedServiceTaxPolicySnapshot;\n  serviceChargeAmount?: number;     // Propina Legal (10%)\n  voluntaryTipAmount?: number;      // Propina Voluntaria\n  orderNumber?: string;\n  tableDisplayLabel?: string;\n  tableRoomLabel?: string;\n  marketplaceSourceChannel?: 'UBER_EATS';\n  marketplaceSourceOrderId?: string;\n  marketplaceSourceStoreId?: string;\n  marketplaceTenantId?: string;\n  marketplaceCompanyId?: string;\n  marketplaceStoreId?: string;\n  skipErpSaleSync?: boolean;\n  erpConfirmationStatus?: 'PENDING' | 'SYNCED' | 'ERROR';\n  erpConfirmationError?: string;\n  erpConfirmedAt?: string;\n  consignmentId?: string;\n  consignmentDocumentNo?: string;\n  consignmentLineId?: string;\n  consignmentSyncStatus?: 'PENDING' | 'SYNCED' | 'ERROR';\n  consignmentSyncError?: string;\n  consignmentSyncedAt?: string;\n  consignmentSyncResponse?: any;\n}",
+      "openShape": true
+    },
+    {
+      "name": "UnitDefinition",
+      "line": 1210,
+      "text": "export interface UnitDefinition {\n  code: string;\n  name: string;\n  type?: 'MASS' | 'VOLUME' | 'UNIT';\n}",
+      "openShape": false
+    },
+    {
+      "name": "VerticalType",
+      "line": 3,
+      "text": "export type VerticalType = 'RETAIL' | 'RESTAURANT';",
+      "openShape": false
+    },
+    {
+      "name": "Wallet",
+      "line": 2781,
+      "text": "export interface Wallet {\n  id: string;\n  customerId: string;\n  balance: number;\n  currency: string;\n  status: 'ACTIVE' | 'BLOCKED';\n  lastActivity: string;\n  transactions: WalletTransaction[];\n  pushToken?: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "WalletConfig",
+      "line": 855,
+      "text": "export interface WalletConfig {\n\n  apple: {\n    teamId: string;\n    passTypeIdentifier: string;\n    p12Cert: string; // Base64 (Encrypted in storage)\n    p12Password: string; // (Encrypted in storage)\n    isConfigured: boolean;\n  };\n  google: {\n    issuerId: string;\n    serviceAccountJson: string; // JSON String (Encrypted in storage)\n    isConfigured: boolean;\n  };\n}",
+      "openShape": false
+    },
+    {
+      "name": "WalletTransaction",
+      "line": 2772,
+      "text": "export interface WalletTransaction {\n  id: string;\n  walletId: string;\n  type: WalletTransactionType;\n  amount: number;\n  referenceId?: string; // Ticket ID or External Ref\n  timestamp: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "WalletTransactionType",
+      "line": 2770,
+      "text": "export type WalletTransactionType = 'DEPOSIT' | 'PAYMENT' | 'REFUND' | 'CASHBACK';",
+      "openShape": false
+    },
+    {
+      "name": "Warehouse",
+      "line": 2026,
+      "text": "export interface Warehouse {\n  id: string;\n  code: string;\n  name: string;\n  type: string;\n  address: string;\n  allowPosSale: boolean;\n  allowNegativeStock: boolean;\n  isMain?: boolean;\n  storeId?: string;\n  warehouseId?: string;\n  inventoryLocalId?: string;\n  erpWarehouseId: string;\n  sourceWarehouseId?: string;\n  uid?: string;\n  label?: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "ZReport",
+      "line": 2947,
+      "text": "export interface ZReport {\n  id: string;\n  terminalId: string;\n  sequenceNumber: string; // e.g., Z-0001\n  seriesId?: string;\n  seriesNumber?: number;\n  source_channel?: 'POS';\n  source_z_report_id?: string;\n  source_terminal_id?: string;\n  device_id?: string;\n  openedAt: string; // Timestamp of first transaction/movement since last Z\n  closedAt: string;\n  closedByUserId: string;\n  closedByUserName: string;\n\n  // Financials\n  baseCurrency: string;\n  totalsByMethod: Record<string, number>; // CASH, CARD, etc.\n  /** Desglose con el nombre configurado y el monto aplicado a los tickets. */\n  paymentMethodSummary?: ZReportPaymentMethodLine[];\n  /** Medios que el usuario declaró manualmente en este cierre. */\n  paymentMethodDeclarations?: ZReportPaymentMethodDeclaration[];\n\n  // Cash Details (Multi-currency)\n  cashExpected: Record<string, number>;\n  cashCounted: Record<string, number>;\n  cashDiscrepancy: Record<string, number>;\n  denominationBreakdown?: ZReportDenominationBreakdown;\n  denomination_breakdown?: ZReportDenominationBreakdown;\n\n  // Movements\n  cashSales: number;\n  cashIn: number;\n  cashOut: number;\n  cashMovementDetails?: ZReportCashMovementLine[];\n  requireCashFundOnZ?: boolean;\n  fixedCashFundAmount?: number;\n  cashToLeaveInDrawer?: number;\n  cashToWithdraw?: number;\n\n  // Metadata\n  transactionCount: number;\n  notes: string;\n  declared_totals?: ZReportDeclaredTotals;\n  system_totals?: ZReportSystemTotals;\n  sync_audit?: ZReportSyncAudit;\n\n  // Analytics\n  stats?: ZReportStats;\n  serviceTypeSummary?: ServiceTypeSummaryLine[];\n  serviceTypeTransactions?: ServiceTypeTransactionLine[];\n  // Immutable print summary of recorded amounts, independent of current tax settings.\n  closeTaxSummary?: Array<{ name: string; rate?: number; amount: number }>;\n  enabledSections?: CloseReportSection[];\n  reportDetails?: CloseReportDetails;\n  syncStatus?: SyncStatus;\n  syncError?: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "ZReportCashMovementLine",
+      "line": 2937,
+      "text": "export interface ZReportCashMovementLine {\n  id: string;\n  type: 'IN' | 'OUT';\n  amount: number;\n  reason: string;\n  timestamp: string;\n  userName?: string;\n  currencyCode?: string;\n}",
+      "openShape": false
+    },
+    {
+      "name": "ZReportDeclaredTotals",
+      "line": 2893,
+      "text": "export interface ZReportDeclaredTotals {\n  cash: number;\n  card: number;\n  other: number;\n  total_declared: number;\n}",
+      "openShape": false
+    },
+    {
+      "name": "ZReportDenominationBreakdown",
+      "line": 2935,
+      "text": "export type ZReportDenominationBreakdown = Record<string, ZReportDenominationLine[]>;",
+      "openShape": false
+    },
+    {
+      "name": "ZReportDenominationLine",
+      "line": 2915,
+      "text": "export interface ZReportDenominationLine {\n  denomination: number;\n  quantity: number;\n  total: number;\n}",
+      "openShape": false
+    },
+    {
+      "name": "ZReportModule",
+      "line": 2848,
+      "text": "export type ZReportModule = 'FINANCIAL' | 'PAYMENTS' | 'CASH_DETAILS' | 'KPIS' | 'AUDIT';",
+      "openShape": false
+    },
+    {
+      "name": "ZReportPaymentMethodDeclaration",
+      "line": 2929,
+      "text": "export interface ZReportPaymentMethodDeclaration extends ZReportPaymentMethodLine {\n  expected: number;\n  declared: number;\n  difference: number;\n}",
+      "openShape": false
+    },
+    {
+      "name": "ZReportPaymentMethodLine",
+      "line": 2921,
+      "text": "export interface ZReportPaymentMethodLine {\n  methodId?: string;\n  methodType: PaymentMethod | string;\n  name: string;\n  amount: number;\n  isPending?: boolean;\n}",
+      "openShape": false
+    },
+    {
+      "name": "ZReportStats",
+      "line": 2814,
+      "text": "export interface ZReportStats {\n  averageTicket: number;\n  itemsPerSale: number;\n  peakHour: string; // e.g., \"14:00 - 15:00\"\n  topProduct: {\n    name: string;\n    quantity: number;\n    total: number;\n  } | null;\n  returnsCount: number;\n  returnsTotal: number;\n  grossSales: number; // New: Ventas Brutas\n  netSales: number; // New: Ventas Netas\n  discountsTotal: number; // New: Total discounts given\n  advancementsTotal: number; // New: Total gift card / wallet deposits (Liabilities)\n  collectionsTotal: number; // New: Total CXC Collections (Abonos)\n}",
+      "openShape": false
+    },
+    {
+      "name": "ZReportSyncAudit",
+      "line": 2909,
+      "text": "export interface ZReportSyncAudit {\n  total_tickets_issued: number;\n  first_ticket_id: string | null;\n  last_ticket_id: string | null;\n}",
+      "openShape": false
+    },
+    {
+      "name": "ZReportSystemTotals",
+      "line": 2900,
+      "text": "export interface ZReportSystemTotals {\n  expected_cash: number;\n  expected_card: number;\n  expected_other: number;\n  total_expected: number;\n  cash_difference: number;\n  total_difference: number;\n}",
+      "openShape": false
+    }
+  ]
+}
