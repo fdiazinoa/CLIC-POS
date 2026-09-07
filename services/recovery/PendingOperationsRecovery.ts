@@ -164,6 +164,10 @@ export class PendingOperationsRecovery {
   constructor(
     private readonly db: DatabaseAdapter,
     private readonly transport: RecoveryTransport,
+    private readonly prepareRetained?: (context: {
+      key: string;
+      terminalIds: string[];
+    }) => Promise<unknown>,
   ) {}
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
     if (this.running) return Promise.reject(new Error("RECOVERY_BUSY"));
@@ -183,6 +187,7 @@ export class PendingOperationsRecovery {
     return this.exclusive(async () => {
       const ctx = await this.transport.context();
       if (!ctx.enabled) return 0;
+      await this.prepareRetained?.(ctx);
       const pending = (await this.db.getCollection<any>(RECOVERY_OUTBOX))
         .filter((x) => x.status === "PENDING")
         .sort((a, b) => (BigInt(a.sequence) < BigInt(b.sequence) ? -1 : 1));

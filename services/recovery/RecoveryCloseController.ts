@@ -1,3 +1,4 @@
+import { recoveryUuid } from './RecoveryUuid';
 import type { DatabaseAdapter } from "../db/DatabaseAdapter";
 import { ClosePreparation } from "./ClosePreparation";
 import { ReceivedCloseFlow } from "./ReceivedCloseFlow";
@@ -150,7 +151,7 @@ export class RecoveryCloseController {
           expectedDocument: encodeOriginal(w),
         });
       }
-      const preparationId = crypto.randomUUID();
+      const preparationId = recoveryUuid();
       const prepared = await this.prepare.prepare({
         preparationId,
         scopeKey,
