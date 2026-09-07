@@ -257,7 +257,10 @@ test(
         nativeReport: frozen.nativeReport,
         receiptBindings: bindings,
         preparation: { body: prepared.body, bodySha256: prepared.bodySha256 },
-        configuration: await image(config),
+        configuration: {
+          body: frozen.nativeConfiguration.body,
+          bodySha256: frozen.nativeConfiguration.bodySha256,
+        },
         declaration: await image(request.declaration),
       };
       const calls: string[] = [];
@@ -307,6 +310,22 @@ test(
       assert.equal(result.closeAuthorization, "NOT_GRANTED");
       assert.equal(result.exactZEligible, false);
       assert.equal(result.packetHash, await hash(result.packetJson));
+      assert.equal(
+        result.trace.configurationProfile,
+        "pos.native-z.configuration.v1",
+      );
+      assert.equal(
+        result.trace.configurationHash,
+        frozen.nativeConfiguration.bodySha256,
+      );
+      assert.equal(
+        result.trace.configurationSourceHash,
+        request.nativeZ!.configurationSha256,
+      );
+      assert.notEqual(
+        result.trace.configurationHash,
+        result.trace.configurationSourceHash,
+      );
       const packet = JSON.parse(result.packetJson);
       assert.deepEqual(
         packet.report,
@@ -324,15 +343,37 @@ test(
         request.preparationId,
       );
       assert.equal(resumed.body, prepared.body);
+      const reopened = decodeOriginal(resumed.body) as any;
+      const reopenedRequest = decodeOriginal(reopened.requestBody) as any;
       assert.equal(
         (
           await producer.produce({
             ...input,
             preparation: { body: resumed.body, bodySha256: resumed.bodySha256 },
+            nativeReport: reopened.nativeReport,
+            closeControl: reopened.closeControl,
+            configuration: {
+              body: reopened.nativeConfiguration.body,
+              bodySha256: reopened.nativeConfiguration.bodySha256,
+            },
+            declaration: await image(reopenedRequest.declaration),
           })
         ).packetJson,
         result.packetJson,
       );
+      // A newly serialized full config cannot silently replace the frozen projection.
+      await assert.rejects(
+        producer.produce({ ...input, configuration: await image(config) }),
+        /CONFIGURATION_MISMATCH/,
+      );
+      await assert.rejects(
+        producer.produce({
+          ...input,
+          configuration: await image({ paymentMethods: [] }),
+        }),
+        /CONFIGURATION_MISMATCH/,
+      );
+      assert.deepEqual(await state(), before);
       await assert.rejects(
         producer.produce({
           ...input,
