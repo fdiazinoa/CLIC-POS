@@ -19,3 +19,8 @@ Además se usó una copia privada de la descarga real de demo (tres tickets) en 
 Este documento describe código probado, no un cierre real ya emitido. Requiere integrar la contraparte ERP, su migración/capability y el APK actualizado antes de la confirmación del usuario en la pantalla habitual de Z. El emulador sigue con sus ventas abiertas mientras se valida la entrega.
 
 Cobertura RECEIVED_ONLY: no demuestra movimientos que nunca llegaron al ERP. exactZEligible=false se conserva; el único permiso tras commit válido es GRANTED_RECEIVED_SCOPE. Los estados comerciales observados se mantienen separados de la verificación financiera agregada (PENDING/NOT_EVALUATED), sin reenviar ventas o cobros para resolver esa incertidumbre. No se cambia pairing/takeover ni el cálculo Z.
+
+
+## Release demo 1.1.306
+
+APK1306 generado desde develop e13c6c5, con #580/#582/#583/#584. Instalación -r verificada en127.0.0.1:6555: tres tickets e históricos íntegros, cuatro usuarios, cero Z. Series internas y fiscales sin cambios; documentSeries de tickets se sincronizó de32 a33, coherente con ticket32 ya emitido, sin retroceso. Firma/LAN y43assets empacados verificados. Prueba ampliada ERP de siguiente jornada: pending1/closed3/context1, segundoZ con número único y reintentoestable; cero appliers comerciales. Confirmación real de usuario aún pendiente.
