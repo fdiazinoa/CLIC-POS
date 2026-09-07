@@ -79,6 +79,21 @@ export default function PendingOperationsRecoveryPanel() {
         >
           Restaurar movimientos recibidos
         </button>
+        <button
+          disabled={busy || !downloaded}
+          className="px-4 py-2 border rounded disabled:opacity-50"
+          onClick={() =>
+            perform(async () => {
+              const { counts } =
+                await pendingOperationsRecovery.checkCommercialStates();
+              setMessage(
+                `Estado ERP de las revisiones descargadas: ${counts.APPLIED} aplicadas, ${counts.PENDING} pendientes, ${counts.PROCESSING} en proceso, ${counts.FAILED} fallidas y ${counts.UNKNOWN} sin evidencia suficiente. Esto no autoriza el cierre ni confirma que la jornada esté completa.`,
+              );
+            })
+          }
+        >
+          Consultar estado ERP
+        </button>
         {restored && (
           <button
             className="px-4 py-2 border rounded"

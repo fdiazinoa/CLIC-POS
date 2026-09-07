@@ -9,6 +9,21 @@ import {
   RECOVERY_OUTBOX,
   RECOVERY_STATE,
 } from "./OriginalCapture";
+import { decodeOriginal, encodeOriginal } from "./OriginalCodec";
+
+const transportCapture = new WeakMap<
+  DatabaseAdapter,
+  (document: any, item: unknown, scope: string) => Promise<string | null>
+>();
+/** Preserve the actual outbound image without replacing the native original. No network. */
+export const captureOriginalTransport = (
+  db: DatabaseAdapter,
+  document: any,
+  item: unknown,
+  scope: string,
+): Promise<string | null> =>
+  transportCapture.get(db)?.(document, item, scope) ?? Promise.resolve(null);
+
 /** A single local write queue covers document + original capture, without network in checkout. */
 export function recoveryDatabase(
   base: DatabaseAdapter,
@@ -80,7 +95,12 @@ export function recoveryDatabase(
       });
       extra.push({
         collectionName: RECOVERY_STATE,
-        document: { id: headId, body: capture!.body, sequence: state.sequence },
+        document: {
+          id: headId,
+          body: capture!.body,
+          sequence: state.sequence,
+          captureId: capture!.id,
+        },
       });
     }
     return [
@@ -89,7 +109,7 @@ export function recoveryDatabase(
       { collectionName: RECOVERY_STATE, document: state },
     ];
   };
-  return new Proxy(base, {
+  const proxy = new Proxy(base, {
     get(target, key) {
       if (
         key === "saveDocument" ||
@@ -137,4 +157,77 @@ export function recoveryDatabase(
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
+  transportCapture.set(proxy, (document, item, scope) =>
+    exclusive(async () => {
+      if (
+        !enabled() ||
+        document?._posRecovery?.snapshotId ||
+        !document?.id ||
+        scope !== provenance().key
+      )
+        return null;
+      const headId = JSON.stringify(["TRANSACTION", document.id]);
+      const head = await base.getDocument<any>(RECOVERY_STATE, headId);
+      if (!head?.captureId) return null; // Legacy images have no ingress reference.
+      const previous = await base.getDocument<any>(
+        RECOVERY_OUTBOX,
+        head.captureId,
+      );
+      if (
+        !previous ||
+        previous.originKey !== scope ||
+        previous.kind !== "TRANSACTION"
+      )
+        return null;
+      const envelope = decodeOriginal(previous.body) as any;
+      // SQLite's JSON projection is used only to verify the current runtime image.
+      // The typed source images themselves remain unchanged, including omitted/Date values.
+      if (
+        JSON.stringify(decodeOriginal(envelope.document)) !==
+        JSON.stringify(document)
+      )
+        return null;
+      const transport = {
+        version: 1,
+        route: "/api/sync/transactions",
+        item: encodeOriginal(item),
+      };
+      if (JSON.stringify(envelope.transport) === JSON.stringify(transport))
+        return previous.id;
+      const state = await base.getDocument<any>(RECOVERY_STATE, "capture");
+      if (
+        !state ||
+        state.storageEpoch !== previous.storageEpoch ||
+        scope !== provenance().key
+      )
+        return null;
+      state.sequence = (BigInt(state.sequence) + 1n).toString();
+      const body = encodeOriginal({ ...envelope, transport });
+      const record = {
+        ...previous,
+        id: crypto.randomUUID(),
+        body,
+        sequence: state.sequence,
+        revision: state.sequence,
+        capturedAt: new Date().toISOString(),
+        status: "PENDING",
+      };
+      delete record.receipt;
+      await base.saveDocumentsAtomically!([
+        { collectionName: RECOVERY_OUTBOX, document: record },
+        {
+          collectionName: RECOVERY_STATE,
+          document: {
+            id: headId,
+            body,
+            sequence: state.sequence,
+            captureId: record.id,
+          },
+        },
+        { collectionName: RECOVERY_STATE, document: state },
+      ]);
+      return record.id;
+    }),
+  );
+  return proxy;
 }

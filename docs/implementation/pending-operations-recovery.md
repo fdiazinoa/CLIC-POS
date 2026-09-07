@@ -45,9 +45,23 @@ CLIC_EMBEDDED_POSTGRES_MODULE=/tmp/clic-original-pg-tests/node_modules/embedded-
 npx tsx --test tests/recoveryDurableRoundTrip.test.ts
 ```
 
-Resultado: PASS. Conservó 104 originales/revisiones y restauró ocho documentos. El ACK se perdió después del commit y el reintento no duplicó filas. PostgreSQL fue detenido/reiniciado; SQLite de destino fue cerrado/reabierto con la primera página persistida. Se completaron tres solicitudes de página, sin publicar una descarga incompleta. Se mantuvieron historia cerrada, orden de efectivo, abono de agenda y su asignación, sin escribir series ni crear cola comercial. La operación nunca enviada estuvo ausente: los conteos recibidos **no** prueban cobertura completa.
+Resultado: PASS. Conservó 104 originales/revisiones iniciales y restauró ocho documentos. El ACK se perdió después del commit y el reintento no duplicó filas. PostgreSQL fue detenido/reiniciado; SQLite de destino fue cerrado/reabierto con la primera página persistida. La descarga inicial necesitó tres solicitudes de página, sin publicar una descarga incompleta. Se mantuvieron historia cerrada, orden de efectivo, abono de agenda y su asignación, sin escribir series ni crear cola comercial. La operación nunca enviada estuvo ausente: los conteos recibidos **no** prueban cobertura completa.
 
 Los helpers nativos actuales de resumen de pagos, estadísticas Z y anexos dieron la misma salida antes/después para el caso DOP entre medianoches ensayado. No se ejecutó el cierre operacional ni se asignó número fiscal. Esta prueba añade almacenamiento real a la anterior; la frontera de autenticación y el bridge Android siguen siendo adaptadores de prueba. No acredita revinculación real en una tablet, todos los canales, declaración completa, ni autorización del Z.
+
+## Vínculo comercial exacto y consulta de estados
+
+ERP asociado a esta ampliación: `ce737362` (PR CLIC-ERP #2013 hacia `clean-erp`). POS exige `commercialBindingVersion:1`; con una instalación anterior conserva el envío comercial existente sin atribuir un estado aplicado por inferencia.
+
+En futuros envíos legítimos de TICKET/REFUND, después de `buildErpSalePayload` y `buildOperationalPostBody`, POS captura `transport:{version:1,route:'/api/sync/transactions',item:<árbol tipado JSON>}` como una revisión adicional. La cola local conserva las imágenes `original`, `document`, `producerInput` y configuración anteriores. Solo captura si la proyección JSON del documento nativo coincide con la imagen local guardada; nunca para documentos recuperados. Un ACK exacto permite adjuntar `originalRefs:[{itemIndex,...reference}]` al envío existente. Si el respaldo no está disponible, el canal comercial continúa como antes y la ausencia de vínculo queda UNKNOWN. Esto no introduce red en el guardado del cobro.
+
+La referencia contiene receiptId, recordHash, storageEpoch, kind, originalId, revision y bodySha256. El vínculo prueba la imagen de transporte recibida; no convierte el payload comercial en original nativo ni acredita equivalencia semántica universal. Un cambio técnico posterior que genera otra revisión sigue sin vínculo propio: no se hereda APPLIED por compartir ID.
+
+La pantalla permite **Consultar estado ERP** de las revisiones seleccionadas en la descarga. Usa `/api/sync/originals/commercial-status`; verifica la referencia de cada respuesta, muestra APPLIED/PENDING/PROCESSING/FAILED/UNKNOWN y guarda la observación separada de los documentos operacionales. No altera syncStatus, inventario, cobros ni autorización de cierre. FAILED no acredita rollback. La consulta observa inbox en un instante posterior al snapshot; no se presenta como parte del corte inmutable.
+
+La prueba duradera añade dos revisiones para verificar este vínculo y la revisión técnica posterior, consulta estados reales de PostgreSQL mediante HTTP y compara el rechazo de un payload distinto. Las filas del inbox y la derivación de eventos comerciales de ese caso son fixtures: **no se ejecutó el applier comercial**. Suite actual: 67 pruebas PASS y build PASS. También se añadió un rechazo de staging corrupto que sustituye un recibo por un duplicado manteniendo el mismo conteo.
+
+El registro ERP `/close-memberships` **no está conectado al POS**: `RECORDED_NOT_AUTHORIZED` no es aceptación de un Z. Su propuesta usa `originalContentHash` sobre la proyección runtime y no debe confundirse con el original tipado. No se fabrican configuración, declaración, sesión, sello ni reservas para generar artifacts v2 mínimos y hacerlos pasar. El cierre recuperado permanece bloqueado hasta una aceptación operacional verificable.
 
 ## Qué falta antes de usarlo para continuar una jornada
 

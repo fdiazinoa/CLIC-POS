@@ -1,3 +1,4 @@
+import { buildErpSalePayload } from "../services/sync/erpOutboundPayloads";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -9,7 +10,10 @@ import { once } from "node:events";
 import { DatabaseSync } from "node:sqlite";
 import express from "express";
 import { CapacitorSQLiteAdapter } from "../services/db/adapters/CapacitorSQLiteAdapter";
-import { recoveryDatabase } from "../services/recovery/RecoveryDatabase";
+import {
+  recoveryDatabase,
+  captureOriginalTransport,
+} from "../services/recovery/RecoveryDatabase";
 import {
   PendingOperationsRecovery,
   type RecoveryTransport,
@@ -135,6 +139,18 @@ test(
           "utf8",
         ),
       );
+      await admin.query(
+        "CREATE TABLE public.erp_sync_inbox(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),event_id uuid UNIQUE,tenant_id uuid,store_id uuid,terminal_id uuid,event_type text,payload jsonb,status text,last_error text,processed_at timestamptz); GRANT SELECT ON public.erp_sync_inbox TO service_role;",
+      );
+      await admin.query(
+        await readFile(
+          join(
+            erpPath!,
+            "supabase/migrations/20260907142154_pos_original_commercial_links.sql",
+          ),
+          "utf8",
+        ),
+      );
       await admin.end();
       await connect();
       const version = (await admin.query("SHOW server_version")).rows[0]
@@ -143,6 +159,27 @@ test(
         // Actual RPC functions/permissions; explicit allowlist, no arbitrary SQL names.
         const keys: Record<string, string[]> = {
           erp_pos_original_capabilities: [],
+          erp_pos_original_lookup: [
+            "p_tenant_id",
+            "p_company_id",
+            "p_store_id",
+            "p_terminal_id",
+            "p_references",
+          ],
+          erp_pos_original_link_events: [
+            "p_tenant_id",
+            "p_company_id",
+            "p_store_id",
+            "p_terminal_id",
+            "p_links",
+          ],
+          erp_pos_original_commercial_status: [
+            "p_tenant_id",
+            "p_company_id",
+            "p_store_id",
+            "p_terminal_id",
+            "p_references",
+          ],
           erp_pos_original_receive: [
             "p_tenant_id",
             "p_company_id",
@@ -170,7 +207,9 @@ test(
           const result = await rpcConnection.query(
             `SELECT public.${name}(${keys[name].map((_, i) => "$" + (i + 1)).join(",")}) result`,
             keys[name].map((k) =>
-              k === "p_records" ? JSON.stringify(args[k]) : args[k],
+              ["p_records", "p_references", "p_links"].includes(k)
+                ? JSON.stringify(args[k])
+                : args[k],
             ),
           );
           return { data: result.rows[0].result };
@@ -221,7 +260,11 @@ test(
           key: "scope",
           terminalIds: [scope[3]],
           enabled: (await request("/capabilities")).enabled,
+          commercialBindingVersion: (await request("/capabilities"))
+            .commercialBindingVersion,
         }),
+        commercialStatus: (references) =>
+          request("/commercial-status", { references }),
         receive: async (records) => {
           const receipt = await request("/batch", { records });
           if (discardAck) {
@@ -503,6 +546,150 @@ test(
         await replacement.db.getDocument("internalSequences", "ANY"),
         null,
       );
+      // Exact ingress binding and fresh commercial observations, with synthetic inbox rows.
+      // No commercial applier runs; the real ERP classifier/RPC validate these controlled states.
+      const { createOriginalCommercialService } = await import(
+        pathToFileURL(
+          join(erpPath!, "server/services/posOriginalCommercialState.js"),
+        ).href
+      );
+      const commercial = createOriginalCommercialService({ rpc });
+      const commercialScope = {
+        p_tenant_id: scope[0],
+        p_company_id: scope[1],
+        p_store_id: scope[2],
+        p_terminal_id: scope[3],
+      };
+      const runtime = await source.db.getDocument<any>("transactions", "A");
+      const syntheticStorage = new Map<string, string>([
+        ["active_tenant_id", scope[0]],
+        ["clic_device_id", device],
+      ]);
+      Object.assign(globalThis, {
+        localStorage: {
+          getItem: (key: string) => syntheticStorage.get(key) ?? null,
+          setItem: (key: string, value: string) =>
+            syntheticStorage.set(key, value),
+          removeItem: (key: string) => syntheticStorage.delete(key),
+        },
+      });
+      const { apiSyncAdapter } = await import(
+        "../services/sync/ApiSyncAdapter"
+      );
+      const originalDeviceResolver = (apiSyncAdapter as any)
+        .resolveCurrentDeviceId;
+      (apiSyncAdapter as any).resolveCurrentDeviceId = () => device;
+      let wire: any;
+      try {
+        wire = (apiSyncAdapter as any).buildOperationalPostBody(
+          { terminalId: scope[3], useLocalTarget: false, kind: "ERP_ACTIVE" },
+          { items: [buildErpSalePayload(runtime)] },
+        ).items[0];
+      } finally {
+        (apiSyncAdapter as any).resolveCurrentDeviceId = originalDeviceResolver;
+      }
+      const captureId = await captureOriginalTransport(
+        db,
+        runtime,
+        wire,
+        "scope",
+      );
+      assert(captureId);
+      const reference = await sender.receiveCapturedOriginal(captureId);
+      assert(reference);
+      assert.equal(
+        (await request("/commercial-status", { references: [reference] }))
+          .results[0].businessState,
+        "UNKNOWN",
+      );
+      const eventId = "77777777-7777-4777-8777-777777777777";
+      const derive = (item: any) => [
+        {
+          eventId,
+          eventType: "SALE_POSTED",
+          payload: { transaction: item, summary: { transaction_id: "A" } },
+        },
+      ];
+      await assert.rejects(
+        commercial.prepareIngress(
+          commercialScope,
+          [JSON.parse(JSON.stringify({ ...wire, total: 999 }))],
+          [{ itemIndex: 0, ...reference }],
+          derive,
+          (_t: any, p: any) => p,
+        ),
+        /ORIGINAL_TRANSPORT_MISMATCH/,
+      );
+      const links = await commercial.prepareIngress(
+        commercialScope,
+        [JSON.parse(JSON.stringify(wire))],
+        [{ itemIndex: 0, ...reference }],
+        derive,
+        (_t: any, p: any) => p,
+      );
+      await admin.query(
+        "INSERT INTO public.erp_sync_inbox(event_id,tenant_id,store_id,terminal_id,event_type,payload,status) VALUES($1,$2,$3,$4,$5,$6,$7)",
+        [
+          eventId,
+          scope[0],
+          scope[2],
+          scope[3],
+          "SALE_POSTED",
+          JSON.stringify({
+            ...links[0].events[0].payload,
+            company_id: scope[1],
+          }),
+          "APPLIED",
+        ],
+      );
+      await commercial.registerIngress(commercialScope, links);
+      await recovery.download(true);
+      for (const [inbox, expected] of [
+        ["APPLIED", "APPLIED"],
+        ["RECEIVED", "PENDING"],
+        ["PROCESSING", "PROCESSING"],
+        ["FAILED", "FAILED"],
+      ]) {
+        await admin.query(
+          "UPDATE public.erp_sync_inbox SET status=$1 WHERE event_id=$2",
+          [inbox, eventId],
+        );
+        const observed = await recovery.checkCommercialStates();
+        assert.equal(observed.counts[expected], 1);
+        assert.equal(observed.counts.UNKNOWN, 7);
+        assert.equal(
+          (await replacement.db.getDocument<any>("transactions", "A"))!
+            ._posRecovery.businessApplication,
+          "UNKNOWN",
+        );
+        assert.equal(
+          (await replacement.db.getDocument<any>("transactions", "A"))!
+            ._posRecovery.closeAuthorization,
+          "NOT_GRANTED",
+        );
+      }
+      await admin.query(
+        "UPDATE public.erp_sync_inbox SET status='APPLIED' WHERE event_id=$1",
+        [eventId],
+      );
+      await db.saveDocument("transactions", {
+        ...runtime,
+        syncStatus: "APPLIED_ERP",
+      });
+      const head = await source.db.getDocument<any>(
+        RECOVERY_STATE,
+        JSON.stringify(["TRANSACTION", "A"]),
+      );
+      const technicalRef = await sender.receiveCapturedOriginal(head.captureId);
+      assert(technicalRef);
+      assert.notEqual(technicalRef.revision, reference.revision);
+      await recovery.download(true);
+      assert.equal((await recovery.checkCommercialStates()).counts.UNKNOWN, 8);
+      assert.equal(
+        (await request("/commercial-status", { references: [reference] }))
+          .results[0].businessState,
+        "APPLIED",
+      );
       const snap = await request("/snapshots", {});
       authScope = [...scope];
       authScope[3] = "55555555-5555-4555-8555-555555555555";
@@ -520,7 +707,7 @@ test(
       await assert.rejects(request("/capabilities"), /401/);
       token = "synthetic-token";
       t.diagnostic(
-        `PostgreSQL ${version}; ${originals} immutable originals; ${pageRequests} page requests; 8 runtime documents; ACK retry, PostgreSQL restart, SQLite reopen, unsent tail, scoped snapshot and native Z helper equivalence PASS. Authorization boundary and Android bridge remain synthetic.`,
+        `PostgreSQL ${version}; ${originals} immutable originals; ${pageRequests} page requests; 8 runtime documents; ACK retry, PostgreSQL restart, SQLite reopen, unsent tail, scoped snapshot, native Z helper equivalence and exact commercial binding/status transitions PASS. Authorization boundary and Android bridge remain synthetic.`,
       );
     } finally {
       for (const x of openSqlite) x.close();

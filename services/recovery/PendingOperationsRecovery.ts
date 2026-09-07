@@ -45,10 +45,13 @@ export interface RecoverySnapshot {
   closeAuthorization: string;
 }
 export interface RecoveryTransport {
-  context(): Promise<{ key: string; terminalIds: string[]; enabled: boolean }>;
-  receive(
-    records: OriginalRecord[],
-  ): Promise<{
+  context(): Promise<{
+    key: string;
+    terminalIds: string[];
+    enabled: boolean;
+    commercialBindingVersion?: number;
+  }>;
+  receive(records: OriginalRecord[]): Promise<{
     receipts: Array<{
       receiptId: string;
       originalId: string;
@@ -56,6 +59,16 @@ export interface RecoveryTransport {
       kind: string;
       bodySha256: string;
       receiptStatus: string;
+    }>;
+  }>;
+  commercialStatus?(references: OriginalReference[]): Promise<{
+    observedAt: string;
+    results: Array<{
+      reference: OriginalReference;
+      businessState: string;
+      reason: string;
+      rollbackProven: boolean;
+      authoritativeForClose: boolean;
     }>;
   }>;
   snapshot(): Promise<RecoverySnapshot>;
@@ -85,6 +98,33 @@ export const recordBytes = (r: OriginalRecord): Uint8Array =>
       byteLength: r.byteLength,
     }),
   );
+export interface OriginalReference {
+  receiptId: string;
+  recordHash: string;
+  storageEpoch: string;
+  kind: string;
+  originalId: string;
+  revision: string;
+  bodySha256: string;
+}
+const originalRecord = async (row: any): Promise<OriginalRecord> => {
+  const raw = bytes(row.body);
+  if (raw.length > 524288) fail("ORIGINAL_TOO_LARGE");
+  const record: OriginalRecord = {
+    version: 1,
+    storageEpoch: row.storageEpoch,
+    openSetId: row.openSetId,
+    sequence: row.sequence,
+    kind: row.kind,
+    originalId: row.originalId,
+    revision: row.revision,
+    encoding: ORIGINAL_ENCODING,
+    bodyBase64: encodeBase64(raw),
+    bodySha256: await originalDigest(raw),
+    byteLength: raw.length,
+  };
+  return record;
+};
 const decimal = (s: unknown) =>
   typeof s === "string" && /^(0|[1-9][0-9]*)$/.test(s);
 const fail = (code: string): never => {
@@ -148,21 +188,7 @@ export class PendingOperationsRecovery {
           !ctx.terminalIds.includes(row.localTerminalId)
         )
           fail("ORIGINAL_TERMINAL_UNBOUND");
-        const raw = bytes(row.body);
-        if (raw.length > 524288) fail("ORIGINAL_TOO_LARGE");
-        const record: OriginalRecord = {
-          version: 1,
-          storageEpoch: row.storageEpoch,
-          openSetId: row.openSetId,
-          sequence: row.sequence,
-          kind: row.kind,
-          originalId: row.originalId,
-          revision: row.revision,
-          encoding: ORIGINAL_ENCODING,
-          bodyBase64: encodeBase64(raw),
-          bodySha256: await originalDigest(raw),
-          byteLength: raw.length,
-        };
+        const record = await originalRecord(row);
         const nextSize = recordBytes(record).length;
         if (records.length === 100 || size + nextSize > 2 * 1024 * 1024) break;
         records.push(record);
@@ -193,6 +219,56 @@ export class PendingOperationsRecovery {
       // ACK changes only technical receipt state; commercial queue is untouched.
       await this.commit(mutations);
       return records.length;
+    });
+  }
+  async receiveCapturedOriginal(
+    captureId: string,
+  ): Promise<OriginalReference | null> {
+    if (this.running) return null;
+    return this.exclusive(async () => {
+      const ctx = await this.transport.context();
+      if (!ctx.enabled) return null;
+      let row = await this.db.getDocument<any>(RECOVERY_OUTBOX, captureId);
+      if (
+        !row ||
+        row.originKey !== ctx.key ||
+        !ctx.terminalIds.includes(row.localTerminalId)
+      )
+        return null;
+      const record = await originalRecord(row);
+      if (row.status !== "RECEIVED") {
+        if ((await this.transport.context()).key !== ctx.key)
+          fail("RECOVERY_SCOPE_CHANGED");
+        const ack = await this.transport.receive([record]);
+        const matches = ack.receipts?.filter(
+          (r) =>
+            r.kind === record.kind &&
+            r.originalId === record.originalId &&
+            r.revision === record.revision &&
+            r.bodySha256 === record.bodySha256 &&
+            r.receiptStatus === "RECEIVED",
+        );
+        if (matches?.length !== 1 || !matches[0].receiptId)
+          fail("ORIGINAL_ACK_MISMATCH");
+        row = { ...row, status: "RECEIVED", receipt: matches[0] };
+        await this.commit([{ collectionName: RECOVERY_OUTBOX, document: row }]);
+      }
+      if ((await this.transport.context()).key !== ctx.key)
+        fail("RECOVERY_SCOPE_CHANGED");
+      if (
+        !row.receipt?.receiptId ||
+        row.receipt.bodySha256 !== record.bodySha256
+      )
+        fail("ORIGINAL_ACK_MISMATCH");
+      return {
+        receiptId: row.receipt.receiptId,
+        recordHash: await originalDigest(recordBytes(record)),
+        storageEpoch: record.storageEpoch,
+        kind: record.kind,
+        originalId: record.originalId,
+        revision: record.revision,
+        bodySha256: record.bodySha256,
+      };
     });
   }
   async download(restart = false): Promise<RecoverySnapshot> {
@@ -303,6 +379,118 @@ export class PendingOperationsRecovery {
       return state.snapshot;
     });
   }
+  private async selectedOriginals(state: any): Promise<any[]> {
+    const all = (await this.db.getCollection<any>(RECOVERY_STAGE)).filter(
+      (x) => x.snapshotId === state.snapshot.snapshotId,
+    );
+    if (all.length !== state.loaded) fail("RECOVERY_STAGE_CHANGED");
+    const expected = new Map(
+      state.receipts.map((x: any) => [x.receiptId, x.recordHash]),
+    );
+    if (expected.size !== all.length) fail("RECOVERY_STAGE_CHANGED");
+    for (const row of all) {
+      if (
+        expected.get(row.receiptId) !== row.recordHash ||
+        (await originalDigest(recordBytes(row.record))) !== row.recordHash
+      )
+        fail("RECOVERY_STAGE_CHANGED");
+      expected.delete(row.receiptId);
+    }
+    if (expected.size) fail("RECOVERY_STAGE_CHANGED");
+    const heads = new Map<string, any>();
+    for (const row of all) {
+      const r = row.record,
+        key = JSON.stringify([r.kind, r.originalId]),
+        prior = heads.get(key);
+      if (prior && prior.record.storageEpoch !== r.storageEpoch)
+        fail("RECOVERY_EPOCH_AUTHORITY_REQUIRED");
+      if (!prior || BigInt(r.revision) > BigInt(prior.record.revision))
+        heads.set(key, row);
+    }
+    return [...heads.values()];
+  }
+  async checkCommercialStates(): Promise<{
+    observedAt: string;
+    counts: Record<string, number>;
+  }> {
+    return this.exclusive(async () => {
+      const ctx = await this.transport.context();
+      const state = await this.db.getDocument<any>(RECOVERY_STATE, "download");
+      if (
+        !ctx.enabled ||
+        ctx.commercialBindingVersion !== 1 ||
+        !this.transport.commercialStatus
+      )
+        fail("COMMERCIAL_STATUS_NOT_AVAILABLE");
+      if (!state || state.context !== ctx.key || state.status !== "VERIFIED")
+        fail("RECOVERY_NOT_VERIFIED");
+      const rows = await this.selectedOriginals(state);
+      const references: OriginalReference[] = rows.map((row) => ({
+        receiptId: row.receiptId,
+        recordHash: row.recordHash,
+        storageEpoch: row.record.storageEpoch,
+        kind: row.record.kind,
+        originalId: row.record.originalId,
+        revision: row.record.revision,
+        bodySha256: row.record.bodySha256,
+      }));
+      const counts: Record<string, number> = {
+        APPLIED: 0,
+        PENDING: 0,
+        PROCESSING: 0,
+        FAILED: 0,
+        UNKNOWN: 0,
+      };
+      const mutations: DurableDocumentMutation[] = [];
+      let observedAt = "";
+      for (let offset = 0; offset < references.length; offset += 100) {
+        const batch = references.slice(offset, offset + 100);
+        if ((await this.transport.context()).key !== ctx.key)
+          fail("RECOVERY_SCOPE_CHANGED");
+        const response = await this.transport.commercialStatus!(batch);
+        if (
+          !Number.isFinite(Date.parse(response.observedAt)) ||
+          !Array.isArray(response.results) ||
+          response.results.length !== batch.length
+        )
+          fail("COMMERCIAL_STATUS_MISMATCH");
+        for (const reference of batch) {
+          const matches = response.results.filter((row) =>
+            Object.keys(reference).every(
+              (k) => (row.reference as any)?.[k] === (reference as any)[k],
+            ),
+          );
+          if (
+            matches.length !== 1 ||
+            !Object.hasOwn(counts, matches[0].businessState) ||
+            matches[0].rollbackProven !== false ||
+            matches[0].authoritativeForClose !== false
+          )
+            fail("COMMERCIAL_STATUS_MISMATCH");
+          const result = matches[0];
+          counts[result.businessState]++;
+          mutations.push({
+            collectionName: RECOVERY_STATE,
+            document: {
+              id: "commercial:" + reference.receiptId,
+              context: ctx.key,
+              reference,
+              businessState: result.businessState,
+              reason: result.reason,
+              observedAt: response.observedAt,
+              authoritativeForClose: false,
+            },
+          });
+        }
+        observedAt = response.observedAt;
+      }
+      if ((await this.transport.context()).key !== ctx.key)
+        fail("RECOVERY_SCOPE_CHANGED");
+      // Separate observations: never overwrite runtime documents, sync status or close grants.
+      await this.commit(mutations);
+      return { observedAt, counts };
+    });
+  }
   async restore(): Promise<number> {
     return this.exclusive(async () => {
       const ctx = await this.transport.context(),
@@ -319,33 +507,10 @@ export class PendingOperationsRecovery {
       const markerId = "import:" + state.snapshot.snapshotId;
       const imported = await this.db.getDocument<any>(RECOVERY_STATE, markerId);
       if (imported) return imported.count;
-      const all = (await this.db.getCollection<any>(RECOVERY_STAGE)).filter(
-        (x) => x.snapshotId === state.snapshot.snapshotId,
-      );
-      if (all.length !== state.loaded) fail("RECOVERY_STAGE_CHANGED");
-      const expected = new Map(
-        state.receipts.map((x: any) => [x.receiptId, x.recordHash]),
-      );
-      for (const row of all) {
-        if (
-          expected.get(row.receiptId) !== row.recordHash ||
-          (await originalDigest(recordBytes(row.record))) !== row.recordHash
-        )
-          fail("RECOVERY_STAGE_CHANGED");
-      }
-      const heads = new Map<string, any>();
-      for (const row of all) {
-        const r = row.record,
-          key = JSON.stringify([r.kind, r.originalId]),
-          prior = heads.get(key);
-        if (prior && prior.record.storageEpoch !== r.storageEpoch)
-          fail("RECOVERY_EPOCH_AUTHORITY_REQUIRED");
-        if (!prior || BigInt(r.revision) > BigInt(prior.record.revision))
-          heads.set(key, row);
-      }
+      const heads = await this.selectedOriginals(state);
       const decoded: Array<{ row: any; collection: string; document: any }> =
         [];
-      for (const row of heads.values()) {
+      for (const row of heads) {
         const raw = decodeBase64(row.record.bodyBase64);
         if ((await originalDigest(raw)) !== row.record.bodySha256)
           fail("RECOVERY_STAGE_CHANGED");

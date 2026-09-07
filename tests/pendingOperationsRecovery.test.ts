@@ -14,7 +14,10 @@ import {
   RECOVERY_STATE,
   RECOVERY_STAGE,
 } from "../services/recovery/OriginalCapture";
-import { recoveryDatabase } from "../services/recovery/RecoveryDatabase";
+import {
+  recoveryDatabase,
+  captureOriginalTransport,
+} from "../services/recovery/RecoveryDatabase";
 import {
   PendingOperationsRecovery,
   recordBytes,
@@ -184,7 +187,11 @@ test("document and pre-normalization original commit together; storage failure p
     payments: [{ appliedAmount: 70, applied_amount: 60, extension: true }],
   };
   const producerInput = { ...raw, extensionBeforeConstruction: undefined };
-  const doc = withOriginal({ ...raw, payments: [{ appliedAmount: 60 }] }, raw, producerInput);
+  const doc = withOriginal(
+    { ...raw, payments: [{ appliedAmount: 60 }] },
+    raw,
+    producerInput,
+  );
   base.fail = true;
   await assert.rejects(db.saveDocument("transactions", doc));
   assert.equal(base.rows.size, 0);
@@ -370,4 +377,151 @@ test("a received closure cannot silently leave an already local active sale behi
   await assert.rejects(s.restore(), /LOCAL_CONFLICT/);
   assert.equal(await db.getDocument("transactionHistory", "A"), null);
   assert.equal(await db.getDocument("zReports", "Z"), null);
+});
+
+test("transport capture preserves native images and binds only its exact durable receipt", async () => {
+  const base = new Memory(),
+    db = recoveryDatabase(base, () => true, provenance);
+  const native = {
+    id: "A",
+    terminalId: "T1",
+    total: 50,
+    privateExtension: undefined,
+  };
+  await db.saveDocument(
+    "transactions",
+    withOriginal(native, { ...native, preNormalization: "preserved" }),
+  );
+  const initial = (await base.getCollection<any>(RECOVERY_OUTBOX))[0];
+  const item = {
+    source_transaction_id: "A",
+    total: 50,
+    terminal_id: "CANONICAL",
+  };
+  const id = await captureOriginalTransport(db, native, item, "scope");
+  assert(id);
+  assert.equal(await captureOriginalTransport(db, native, item, "scope"), id);
+  const next = await base.getDocument<any>(RECOVERY_OUTBOX, id);
+  const before: any = decodeOriginal(initial.body),
+    after: any = decodeOriginal(next.body);
+  assert.equal(after.original, before.original);
+  assert.equal(after.document, before.document);
+  assert.deepEqual(decodeOriginal(after.transport.item), item);
+  const t = await transport([]),
+    recovery = new PendingOperationsRecovery(db, t.api);
+  const ref = await recovery.receiveCapturedOriginal(id);
+  assert(ref);
+  assert.equal(ref.revision, next.revision);
+  assert.equal(ref.originalId, native.id);
+  assert.equal(
+    (await base.getDocument<any>(RECOVERY_OUTBOX, initial.id)).status,
+    "PENDING",
+  );
+  assert.deepEqual(await recovery.receiveCapturedOriginal(id), ref);
+  assert.equal(
+    await captureOriginalTransport(db, { ...native, total: 99 }, item, "scope"),
+    null,
+  );
+  assert.equal(
+    await captureOriginalTransport(db, native, item, "different-tenant"),
+    null,
+  );
+  assert.equal(
+    await captureOriginalTransport(
+      db,
+      { ...native, _posRecovery: { snapshotId: "S" } },
+      item,
+      "scope",
+    ),
+    null,
+  );
+  // A later technical revision is not silently treated as the already-bound revision.
+  await db.saveDocument("transactions", {
+    ...native,
+    syncStatus: "APPLIED_ERP",
+  });
+  const latest = (await base.getCollection<any>(RECOVERY_OUTBOX)).at(-1);
+  assert.notEqual(latest.revision, ref.revision);
+  assert.equal((decodeOriginal(latest.body) as any).transport, undefined);
+});
+
+test("commercial observations cannot grant a close, overwrite runtime or cross revisions", async () => {
+  const t = await transport([
+    await record({
+      id: "A",
+      terminalId: "T1",
+      total: 50,
+      syncStatus: "PENDING",
+    }),
+  ]);
+  t.api.context = async () => ({
+    key: "scope",
+    terminalIds: ["T1"],
+    enabled: true,
+    commercialBindingVersion: 1,
+  });
+  const db = new Memory(),
+    recovery = new PendingOperationsRecovery(db, t.api);
+  await recovery.download();
+  await recovery.restore();
+  t.api.commercialStatus = async (references) => ({
+    observedAt: "2026-09-07T12:00:00.000Z",
+    results: references.map((reference) => ({
+      reference: { ...reference, revision: "99" },
+      businessState: "APPLIED",
+      reason: "test",
+      rollbackProven: false,
+      authoritativeForClose: false,
+    })),
+  });
+  await assert.rejects(
+    recovery.checkCommercialStates(),
+    /COMMERCIAL_STATUS_MISMATCH/,
+  );
+  assert.equal(await db.getDocument(RECOVERY_STATE, "commercial:1"), null);
+  t.api.commercialStatus = async (references) => ({
+    observedAt: "2026-09-07T12:00:00.000Z",
+    results: references.map((reference) => ({
+      reference,
+      businessState: "FAILED",
+      reason: "ERP_EVENT_FAILED",
+      rollbackProven: false,
+      authoritativeForClose: false,
+    })),
+  });
+  const result = await recovery.checkCommercialStates();
+  assert.equal(result.counts.FAILED, 1);
+  const runtime = await db.getDocument<any>("transactions", "A");
+  assert.equal(runtime.syncStatus, "PENDING");
+  assert.equal(runtime._posRecovery.closeAuthorization, "NOT_GRANTED");
+  assert.equal(runtime._posRecovery.businessApplication, "UNKNOWN");
+  t.api.commercialStatus = async (references) => ({
+    observedAt: "2026-09-07T12:00:00.000Z",
+    results: references.map((reference) => ({
+      reference,
+      businessState: "APPLIED",
+      reason: "test",
+      rollbackProven: false,
+      authoritativeForClose: true,
+    })),
+  });
+  await assert.rejects(
+    recovery.checkCommercialStates(),
+    /COMMERCIAL_STATUS_MISMATCH/,
+  );
+});
+
+test("same stage count cannot hide a missing receipt replaced by a duplicate", async () => {
+  const t = await transport([
+    await record({ id: "A", terminalId: "T1" }),
+    await record({ id: "B", terminalId: "T1" }, "transactions", "2"),
+  ]);
+  const db = new Memory(),
+    recovery = new PendingOperationsRecovery(db, t.api);
+  await recovery.download();
+  const staged = await db.getCollection<any>(RECOVERY_STAGE);
+  await db.saveDocument(RECOVERY_STAGE, { ...staged[0], id: staged[1].id });
+  assert.equal((await db.getCollection(RECOVERY_STAGE)).length, 2);
+  await assert.rejects(recovery.restore(), /RECOVERY_STAGE_CHANGED/);
+  assert.equal((await db.getCollection("transactions")).length, 0);
 });
