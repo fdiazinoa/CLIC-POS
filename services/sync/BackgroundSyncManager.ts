@@ -429,6 +429,10 @@ class BackgroundSyncManager {
                 collectionErrors.push(`masterNumberRanges: ${error?.message || 'unknown error'}`);
             });
 
+            if (isSyncFeatureEnabled('pending_operations_recovery') && !isPosSaleActive()) {
+                await pendingOperationsRecovery.updateRetainedBackup().catch(error => collectionErrors.push(`backup: ${error.message}`));
+            }
+
             this.updateState({
                 isSyncing: false,
                 hasError: collectionErrors.length > 0,

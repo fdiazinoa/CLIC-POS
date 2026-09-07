@@ -510,6 +510,34 @@ export class PendingOperationsRecovery {
       return { observedAt, counts };
     });
   }
+  /** Background-only: bounded upload, then seal only a locally established epoch. */
+  async updateRetainedBackup(): Promise<void> {
+    if (this.running) return;
+    const ctx = await this.transport.context();
+    if (!ctx.enabled) return;
+    const capture = await this.db.getDocument<any>(RECOVERY_STATE, "capture");
+    const previous = await this.db.getDocument<any>(
+      RECOVERY_STATE,
+      "retainedSet",
+    );
+    // A new/lost database cannot publish an empty replacement for the remote set.
+    // First activation and epoch continuation require their explicit bootstrap validation.
+    if (
+      !capture ||
+      previous?.context !== ctx.key ||
+      previous.storageEpoch !== capture.storageEpoch
+    )
+      return;
+    await this.sendPending();
+    if (
+      (await this.db.getCollection<any>(RECOVERY_OUTBOX)).some(
+        (row) => row.status === "PENDING",
+      )
+    )
+      return;
+    const id = await captureRetainedSet(this.db, ctx);
+    await this.receiveCapturedOriginal(id);
+  }
   /** Explicit checkpoint after originals are acknowledged; sends only recovery data. */
   async checkpointRetainedSet(): Promise<OriginalReference> {
     while (await this.sendPending()) {
