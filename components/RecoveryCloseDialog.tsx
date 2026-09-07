@@ -17,15 +17,22 @@ export default function RecoveryCloseDialog({
     [error, setError] = useState(""),
     [completed, setCompleted] = useState(false),
     [financialState, setFinancialState] = useState<string | null>(null),
-    [available, setAvailable] = useState(false);
+    [available, setAvailable] = useState(false),
+    [availabilityMessage, setAvailabilityMessage] = useState("");
   const refresh = async () =>
     setJobs((await controller.list()).filter((j) => !j.published));
   const checkAvailability = async () => {
     try {
       await controller.availability();
       setAvailable(true);
-    } catch {
+      setAvailabilityMessage("");
+    } catch (error) {
       setAvailable(false);
+      setAvailabilityMessage(
+        error instanceof Error && /DISABLED|UNAVAILABLE/.test(error.message)
+          ? "ERP todavía no tiene habilitado el cierre de esta jornada. Tus movimientos siguen conservados."
+          : "No se pudo comprobar la disponibilidad del cierre en ERP. Revisa la conexión; tus movimientos siguen conservados.",
+      );
     }
   };
   useEffect(() => {
@@ -57,7 +64,7 @@ export default function RecoveryCloseDialog({
         className="bg-white rounded-2xl p-6 max-w-xl w-full max-h-[90vh] overflow-y-auto"
       >
         <h2 id="recovered-close-title" className="text-xl font-bold">
-          Cerrar movimientos recuperados
+          Cierre Z
         </h2>
         <p className="my-3">
           Se cerrarán los movimientos que ERP recibió. Los que nunca se enviaron
@@ -68,7 +75,7 @@ export default function RecoveryCloseDialog({
             ERP confirmó el cierre y quedó guardado en este POS.
             {financialState && (
               <span className="block mt-2">
-                La aplicación financiera en ERP sigue{" "}
+                La verificación financiera de esta jornada en ERP sigue{" "}
                 {financialState === "FAILED"
                   ? "con errores pendientes de resolver"
                   : "pendiente"}
@@ -130,7 +137,7 @@ export default function RecoveryCloseDialog({
                   )}
                   {packet?.financialState && (
                     <p className="text-sm my-2">
-                      La aplicación financiera en ERP sigue{" "}
+                      La verificación financiera de esta jornada en ERP sigue{" "}
                       {packet.financialState === "FAILED"
                         ? "con errores"
                         : "pendiente"}
@@ -196,10 +203,7 @@ export default function RecoveryCloseDialog({
         )}
         {!available && !completed && (
           <div className="bg-amber-50 p-3 mt-3">
-            <p>
-              ERP no tiene disponible este cierre o no hay conexión. Los
-              movimientos siguen conservados.
-            </p>
+            <p>{availabilityMessage}</p>
             <button
               disabled={busy}
               className="underline mt-2"

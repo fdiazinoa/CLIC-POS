@@ -584,8 +584,23 @@ test(
           db,
           recoveryTransport("new"),
         ).sendPending(),
+        3, // Closed history + Z backup postimages, never new commercial commands.
+      );
+      assert.equal(
+        await new PendingOperationsRecovery(
+          db,
+          recoveryTransport("new"),
+        ).sendPending(),
         0,
       );
+      const postimages = (
+        await db.getCollection<any>("recoveryOriginals")
+      ).filter(
+        (row) =>
+          (decodeOriginal(row.body) as any).closeCommitId === ack.commitId,
+      );
+      assert.equal(postimages.length, 3);
+      assert(postimages.every((row) => row.status === "RECEIVED"));
       ({ db, prepare } = target.restart());
       flow = new ReceivedCloseFlow(db, transport);
       assert.deepEqual(

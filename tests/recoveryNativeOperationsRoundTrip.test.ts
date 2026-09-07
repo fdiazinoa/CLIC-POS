@@ -259,6 +259,10 @@ test(
             await receiver.download(true);
           },
         );
+      // Retained recovery keeps an identical open-history mirror for each active ticket.
+      // Closing must update that mirror, not reject it as an unrelated document.
+      for (const transaction of await db.getCollection<any>("transactions"))
+        await db.saveDocument("transactionHistory", transaction);
       const job = await controller.review({
         terminalId: "T1",
         user: { id: "operator", name: "Operador" },

@@ -1,4 +1,4 @@
-import { recoveryUuid } from './RecoveryUuid';
+import { recoveryUuid } from "./RecoveryUuid";
 import type { DatabaseAdapter } from "../db/DatabaseAdapter";
 import { ClosePreparation } from "./ClosePreparation";
 import { ReceivedCloseFlow } from "./ReceivedCloseFlow";
@@ -28,7 +28,7 @@ export class RecoveryCloseController {
     private db: DatabaseAdapter,
     private flow: ReceivedCloseFlow,
     private provenance: () => { key: string; terminalIds: string[] },
-    private refreshSnapshot?: () => Promise<void>,
+    private refreshSnapshot?: () => Promise<any>,
   ) {
     this.prepare = new ClosePreparation(db);
   }
@@ -68,7 +68,9 @@ export class RecoveryCloseController {
       const provenance = this.provenance(),
         scopeKey = provenance.key;
       if (!provenance.terminalIds.includes(value.terminalId)) fail("TERMINAL");
-      if (this.refreshSnapshot) await this.refreshSnapshot();
+      const retainedDescriptor = this.refreshSnapshot
+        ? await this.refreshSnapshot()
+        : undefined;
       if (this.provenance().key !== scopeKey) fail("SCOPE_CHANGED");
       const snapshot = await this.db.getDocument<any>(
         "recoveryState",
@@ -167,6 +169,15 @@ export class RecoveryCloseController {
         ),
         ...(dependencies.length ? { dependencies } : {}),
         declaration: value.declaration,
+        ...(retainedDescriptor
+          ? {
+              retainedSet: {
+                manifestReference: retainedDescriptor.manifestReference,
+                descriptorHash: retainedDescriptor.descriptorHash,
+                configurationBasis: "CURRENT_AT_PREPARATION" as const,
+              },
+            }
+          : {}),
         nativeZ: {
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           user: value.user,

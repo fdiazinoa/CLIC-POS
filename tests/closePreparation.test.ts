@@ -437,3 +437,38 @@ test("native report is frozen with preparation IDs and complete annexes, without
     f.close();
   }
 });
+
+test("retained v2 preparation binds the manifest and current configuration basis without translating v1", async () => {
+  const f = fixture();
+  try {
+    let { db, prepare } = f.open();
+    const { input } = await seed(db);
+    const legacy = await prepare.prepare(input);
+    assert.equal(
+      (decodeOriginal(legacy.body) as any).receivedContext.version,
+      1,
+    );
+    const retainedSet = {
+      manifestReference: { receiptId: "25", storageEpoch: "epoch" },
+      descriptorHash: "a".repeat(64),
+      configurationBasis: "CURRENT_AT_PREPARATION" as const,
+    };
+    const v2Input = { ...input, preparationId: "retained-v2", retainedSet };
+    const prepared = await prepare.prepare(v2Input);
+    const body = decodeOriginal(prepared.body) as any;
+    assert.equal(body.receivedContext.version, 2);
+    assert.deepEqual(body.receivedContext.retainedSet, retainedSet);
+    ({ db, prepare } = f.restart());
+    assert.deepEqual(await prepare.prepare(v2Input), prepared);
+    await assert.rejects(
+      prepare.prepare({
+        ...v2Input,
+        retainedSet: { ...retainedSet, descriptorHash: "b".repeat(64) },
+      }),
+      /REQUEST_CONFLICT/,
+    );
+    assert.equal((await db.getCollection("zReports")).length, 0);
+  } finally {
+    f.close();
+  }
+});

@@ -113,6 +113,8 @@ export const receivedCloseFlow = new ReceivedCloseFlow(dbAdapter, {
     if (
       capability?.enabled !== true ||
       capability.version !== 1 ||
+      (capability.profile === "erp.received-native-operations.v1" &&
+        capability.retainedSelectionVersion !== 1) ||
       ![
         "erp.received-ticket-dop-cash.v1",
         "erp.received-native-operations.v1",
@@ -146,6 +148,8 @@ export const recoveryCloseController = new RecoveryCloseController(
     while (await pendingOperationsRecovery.sendPending()) {
       /* Drain originals outside checkout. */
     }
+    await pendingOperationsRecovery.updateRetainedBackup();
     await pendingOperationsRecovery.download(true);
+    return pendingOperationsRecovery.preflightRetainedSet();
   },
 );
