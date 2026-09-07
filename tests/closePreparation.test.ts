@@ -400,3 +400,85 @@ test("recovered source retains original revision and receipt; altered stage bloc
     f.close();
   }
 });
+
+test("native report is frozen with preparation IDs and complete annexes, without assigning a number", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { originalDigest } = await import("../services/recovery/OriginalCodec");
+  const corpus = JSON.parse(
+    readFileSync(
+      new URL("./fixtures/nativeZReport-parent.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const native = decodeOriginal(corpus.fixtures[1].input) as any;
+  const f = fixture();
+  try {
+    let { db, prepare } = f.open();
+    await db.saveDocument("config", native.config);
+    const members: ClosePreparationInput["members"] = [];
+    for (const [collection, documents] of [
+      ["transactions", native.terminalTransactions],
+      ["cashMovements", native.terminalCashMovements],
+      ["collections", native.terminalCollections],
+    ] as const) {
+      for (const doc of documents) {
+        await db.saveDocument(collection, doc);
+        members.push({
+          collection,
+          id: doc.id,
+          expectedDocument: encodeOriginal(
+            await db.getDocument(collection, doc.id),
+          ),
+        });
+      }
+    }
+    const input: ClosePreparationInput = {
+      preparationId: "native",
+      scopeKey: "company:terminal",
+      terminalId: "T1",
+      members,
+      declaration: native.reportData,
+      nativeZ: {
+        configurationSha256: await originalDigest(
+          new TextEncoder().encode(encodeOriginal(native.config)),
+        ),
+        user: native.currentUser,
+        notes: native.notes,
+      },
+    };
+    await assert.rejects(
+      prepare.prepare({
+        ...input,
+        nativeZ: { ...input.nativeZ!, configurationSha256: "wrong" },
+      }),
+      /CONFIGURATION_CHANGED/,
+    );
+    const prepared = await prepare.prepare(input);
+    const body = decodeOriginal(prepared.body) as any;
+    const { id, closedAt, recoveryMemberIds, ...content } = body.nativeReport;
+    assert.equal(encodeOriginal(content), corpus.fixtures[1].expected);
+    assert.equal(id, body.closeControl.closeId);
+    assert.equal(closedAt, body.preparedAt);
+    assert.deepEqual(recoveryMemberIds, {
+      transactions: ["A", "R"],
+      cashMovements: ["M2", "M1"],
+      collections: ["C"],
+    });
+    for (const field of [
+      "seriesId",
+      "seriesNumber",
+      "sequenceNumber",
+      "syncStatus",
+    ])
+      assert.equal(field in body.nativeReport, false);
+    ({ db, prepare } = f.restart());
+    assert.deepEqual(
+      await prepare.resume(input.scopeKey, input.preparationId),
+      prepared,
+    );
+    assert.deepEqual(await db.getCollection("zReports"), []);
+    assert.deepEqual(await db.getCollection("internalSequences"), []);
+  } finally {
+    f.close();
+  }
+});
