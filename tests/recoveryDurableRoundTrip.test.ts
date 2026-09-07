@@ -573,9 +573,8 @@ test(
           removeItem: (key: string) => syntheticStorage.delete(key),
         },
       });
-      const { apiSyncAdapter } = await import(
-        "../services/sync/ApiSyncAdapter"
-      );
+      const { apiSyncAdapter } =
+        await import("../services/sync/ApiSyncAdapter");
       const originalDeviceResolver = (apiSyncAdapter as any)
         .resolveCurrentDeviceId;
       (apiSyncAdapter as any).resolveCurrentDeviceId = () => device;
@@ -656,7 +655,7 @@ test(
         );
         const observed = await recovery.checkCommercialStates();
         assert.equal(observed.counts[expected], 1);
-        assert.equal(observed.counts.UNKNOWN, 7);
+        assert.equal(observed.counts.UNKNOWN, 8); // Ordered drain also preserves the earlier queued original.
         assert.equal(
           (await replacement.db.getDocument<any>("transactions", "A"))!
             ._posRecovery.businessApplication,
@@ -684,7 +683,7 @@ test(
       assert(technicalRef);
       assert.notEqual(technicalRef.revision, reference.revision);
       await recovery.download(true);
-      assert.equal((await recovery.checkCommercialStates()).counts.UNKNOWN, 8);
+      assert.equal((await recovery.checkCommercialStates()).counts.UNKNOWN, 9);
       assert.equal(
         (await request("/commercial-status", { references: [reference] }))
           .results[0].businessState,

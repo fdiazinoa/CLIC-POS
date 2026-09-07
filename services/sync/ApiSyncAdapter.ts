@@ -3249,6 +3249,25 @@ class ApiSyncAdapter {
         return this.postOperationalPayload('/originals/snapshots', {}, { reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key });
     }
 
+    async retainedEpochRequest(requestId: string, body?: unknown): Promise<any> {
+        if (!/^[a-f0-9-]{36}$/i.test(requestId)) throw new Error('RETAINED_EPOCH_REQUEST_ID');
+        const scope = originalProvenance().key;
+        const target = await this.authenticateOperationalTarget(false, 'background', 'PUSH_OPERATIONS');
+        if (target.useLocalTarget || originalProvenance().key !== scope) throw new Error('RECOVERY_SCOPE_CHANGED');
+        const path = '/originals/retained-epochs' + (body === undefined ? '/' + encodeURIComponent(requestId) : '');
+        const response = await this.fetchWithRetry(`${target.baseUrl}${path}`, {
+            method: body === undefined ? 'GET' : 'POST',
+            headers: {...this.buildOperationalHeaders(target, target.token, body !== undefined), ...this.getLocalDeviceHeaders()},
+            ...(body === undefined ? {} : {body:JSON.stringify(body)}),
+        }, 0, 500, 'background', 'PUSH_OPERATIONS');
+        if (originalProvenance().key !== scope) throw new Error('RECOVERY_SCOPE_CHANGED');
+        await this.handleDeviceSupersededResponse(response, target.terminalId);
+        const payload = await response.json();
+        if (response.status === 404 && body === undefined && payload.code === 'RESUME_REQUEST_NOT_FOUND') return null;
+        if (!response.ok) throw Object.assign(new Error(payload.code || 'RETAINED_EPOCH_HTTP_ERROR'), {httpStatus:response.status});
+        return payload;
+    }
+
     async getRecoveryRetainedSet(snapshotId: string, manifestReceiptId: string): Promise<any> {
         return this.getOperationalPayload(`/originals/snapshots/${encodeURIComponent(snapshotId)}/retained-set?manifestReceiptId=${encodeURIComponent(manifestReceiptId)}`);
     }

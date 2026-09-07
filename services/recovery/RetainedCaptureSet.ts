@@ -4,9 +4,11 @@ import {
   CAPTURE_COLLECTIONS,
   RECOVERY_OUTBOX,
   RECOVERY_STATE,
+  RECOVERY_STAGE,
 } from "./OriginalCapture";
 import {
   decodeOriginal,
+  decodeBase64,
   encodeOriginal,
   originalDigest,
 } from "./OriginalCodec";
@@ -56,8 +58,36 @@ export function captureRetainedSet(
     const placements: any[] = [];
     for (const [collection, kind] of Object.entries(CAPTURE_COLLECTIONS)) {
       for (const document of await base.getCollection<any>(collection)) {
-        if (document?._posRecovery)
-          throw Error("RETAINED_RECOVERED_DEPENDENCY_UNSUPPORTED");
+        if (document?._posRecovery) {
+          const marker = document._posRecovery;
+          const staged = await base.getDocument<any>(
+            RECOVERY_STAGE,
+            marker.snapshotId + ":" + marker.receiptId,
+          );
+          if (
+            !staged ||
+            staged.snapshotId !== marker.snapshotId ||
+            staged.receiptId !== marker.receiptId ||
+            staged.record.kind !== kind ||
+            staged.record.originalId !== document.id ||
+            staged.record.bodySha256 !== marker.bodySha256 ||
+            (await originalDigest(recordBytes(staged.record))) !==
+              staged.recordHash
+          )
+            throw Error("RETAINED_RECOVERED_REFERENCE_INVALID");
+          const raw = decodeBase64(staged.record.bodyBase64);
+          if ((await originalDigest(raw)) !== marker.bodySha256)
+            throw Error("RETAINED_RECOVERED_REFERENCE_INVALID");
+          const envelope = decodeOriginal(new TextDecoder().decode(raw)) as any;
+          const { _posRecovery, ...runtime } = document;
+          if (!samePersistedImage(decodeOriginal(envelope.document), runtime))
+            throw Error("RETAINED_IMAGE_CHANGED");
+          for (const id of [document.terminalId, document.source_terminal_id])
+            if (id !== undefined && !ctx.terminalIds.includes(id))
+              throw Error("RETAINED_SCOPE_MISMATCH");
+          placements.push({ collection, original: retainedReference(staged) });
+          continue;
+        }
         if (!document?.id) throw Error("RETAINED_ID_REQUIRED");
         for (const id of [document.terminalId, document.source_terminal_id])
           if (id !== undefined && !ctx.terminalIds.includes(id))
@@ -95,7 +125,8 @@ export function captureRetainedSet(
     if (placements.length > 2000) throw Error("RETAINED_LIMIT");
     const previous = await base.getDocument<any>(RECOVERY_STATE, "retainedSet");
     if (
-      previous?.context === ctx.key &&
+      previous?.captureId &&
+      previous.context === ctx.key &&
       same(previous.placements, placements) &&
       previous.storageEpoch === state.storageEpoch &&
       previous.sequence === state.sequence

@@ -1,3 +1,4 @@
+import { validateRetainedLineage } from "./RetainedEpoch";
 import type {
   DatabaseAdapter,
   DurableDocumentMutation,
@@ -10,7 +11,11 @@ import {
 import { decodeBase64, decodeOriginal, originalDigest } from "./OriginalCodec";
 import { recoveryCanonicalJson } from "./RecoveryJson";
 import { recordBytes } from "./PendingOperationsRecovery";
-import { retainedReference, type RetainedContext } from "./RetainedCaptureSet";
+import {
+  retainedReference,
+  samePersistedImage,
+  type RetainedContext,
+} from "./RetainedCaptureSet";
 import { withRecoveryPreparation } from "./RecoveryDatabase";
 const require = (ok: unknown, code = "RETAINED_DESCRIPTOR_INVALID") => {
   if (!ok) throw Error(code);
@@ -79,7 +84,16 @@ export async function validateRetainedRestore(
       same(retainedReference(row), ref), "RETAINED_REFERENCE_MISMATCH");
     return row;
   };
+  validateRetainedLineage(
+    d,
+    rows
+      .filter((row) => row.record.kind === "MEMBERSHIP")
+      .map((row) => row.record.storageEpoch),
+  );
   const manifest = resolve(d.manifestReference);
+  require(rows.every(
+    (row) => BigInt(row.receiptId) <= BigInt(manifest.receiptId),
+  ), "RESTORE_UNCHECKPOINTED_RECEIPTS");
   require(manifest.record.kind === "MEMBERSHIP");
   const m: any = decodeOriginal(
     new TextDecoder().decode(decodeBase64(manifest.record.bodyBase64)),
@@ -169,8 +183,26 @@ export function restoreRetainedSet(
     const markerId = "retainedImport:" + descriptor.manifestReference.receiptId;
     const marker = await base.getDocument<any>(RECOVERY_STATE, markerId);
     if (marker) {
-      require(marker.descriptorHash ===
-        descriptor.descriptorHash, "RETAINED_IMPORT_CONFLICT");
+      require(same(
+        marker.descriptor?.manifestReference,
+        descriptor.manifestReference,
+      ) &&
+        same(marker.descriptor?.scope, descriptor.scope) &&
+        same(
+          marker.descriptor?.placements,
+          descriptor.placements,
+        ), "RETAINED_IMPORT_CONFLICT");
+      for (const { collection, document, row } of decoded) {
+        const current = await base.getDocument<any>(collection, document.id);
+        require(current?._posRecovery?.receiptId === row.receiptId &&
+          current?._posRecovery?.bodySha256 ===
+            row.record.bodySha256, "RETAINED_IMPORT_CHANGED");
+        const { _posRecovery, ...runtime } = current;
+        require(samePersistedImage(
+          runtime,
+          document,
+        ), "RETAINED_IMPORT_CHANGED");
+      }
       return marker.count;
     }
     const mutations: DurableDocumentMutation[] = [];

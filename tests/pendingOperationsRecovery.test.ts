@@ -409,13 +409,20 @@ test("transport capture preserves native images and binds only its exact durable
   assert.deepEqual(decodeOriginal(after.transport.item), item);
   const t = await transport([]),
     recovery = new PendingOperationsRecovery(db, t.api);
+  const receivedSequences: string[] = [];
+  const receive = t.api.receive;
+  t.api.receive = async (records) => {
+    receivedSequences.push(...records.map((r) => r.sequence));
+    return receive(records);
+  };
   const ref = await recovery.receiveCapturedOriginal(id);
+  assert.deepEqual(receivedSequences, [initial.sequence, next.sequence]);
   assert(ref);
   assert.equal(ref.revision, next.revision);
   assert.equal(ref.originalId, native.id);
   assert.equal(
     (await base.getDocument<any>(RECOVERY_OUTBOX, initial.id)).status,
-    "PENDING",
+    "RECEIVED", // Earlier original must precede the transport revision under the ERP sequence fence.
   );
   assert.deepEqual(await recovery.receiveCapturedOriginal(id), ref);
   assert.equal(

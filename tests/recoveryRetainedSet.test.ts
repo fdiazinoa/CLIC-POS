@@ -7,6 +7,7 @@ import {
   validateRetainedRestore,
 } from "../services/recovery/RetainedRestore";
 import {
+  PendingOperationsRecovery,
   originalRecord,
   recordBytes,
 } from "../services/recovery/PendingOperationsRecovery";
@@ -183,6 +184,97 @@ test("rehashed descriptor cannot omit, duplicate, change a reference, promote sc
       validateRetainedRestore(ctx, state, changed, descriptor),
       /STAGE_CHANGED/,
     );
+  } finally {
+    f.close();
+  }
+});
+
+test("background checkpoint preserves recovered references, uploads new originals first and reuses ACK on retry", async () => {
+  const { f, db, state, descriptor } = await prepared();
+  try {
+    await db.saveCollection("transactions", []);
+    await db.saveCollection("transactionHistory", []);
+    await restoreRetainedSet(db, ctx, state, descriptor);
+    const sentKinds: string[] = [];
+    const recovery = new PendingOperationsRecovery(db, {
+      context: async () => ({ ...ctx, enabled: true }),
+      receive: async (records) => ({
+        receipts: records.map((r) => {
+          sentKinds.push(r.kind);
+          return {
+            receiptId: r.sequence,
+            originalId: r.originalId,
+            revision: r.revision,
+            kind: r.kind,
+            bodySha256: r.bodySha256,
+            receiptStatus: "RECEIVED",
+          };
+        }),
+      }),
+      snapshot: async () => {
+        throw Error("unexpected snapshot");
+      },
+      page: async () => {
+        throw Error("unexpected page");
+      },
+    });
+    await db.saveDocument("transactions", {
+      id: "new-sale",
+      terminalId: "T1",
+      total: 550,
+      payments: [{ method: "CASH", amount: 550 }],
+    });
+    await recovery.updateRetainedBackup();
+    assert.deepEqual(sentKinds, ["TRANSACTION", "MEMBERSHIP"]);
+    await recovery.updateRetainedBackup();
+    assert.deepEqual(sentKinds, ["TRANSACTION", "MEMBERSHIP"]);
+    const originalRows = await db.getCollection<any>("recoveryOriginals");
+    assert.equal(
+      originalRows.filter(
+        (r) => r.kind === "TRANSACTION" && r.originalId === "sale",
+      ).length,
+      1,
+    );
+    const recovered: any = await db.getDocument("transactions", "sale");
+    await db.saveDocument("transactions", { ...recovered, total: 999 });
+    await assert.rejects(
+      recovery.updateRetainedBackup(),
+      /RETAINED_IMAGE_CHANGED/,
+    );
+    assert.deepEqual(sentKinds, ["TRANSACTION", "MEMBERSHIP"]);
+  } finally {
+    f.close();
+  }
+});
+
+test("empty or newly initialized database cannot publish an empty remote replacement", async () => {
+  const f = fixture(),
+    { db } = f.open();
+  try {
+    let sends = 0;
+    const r = new PendingOperationsRecovery(db, {
+      context: async () => ({ ...ctx, enabled: true }),
+      receive: async () => {
+        sends++;
+        throw Error("unexpected upload");
+      },
+      snapshot: async () => {
+        throw Error("unexpected snapshot");
+      },
+      page: async () => {
+        throw Error("unexpected page");
+      },
+    });
+    await r.updateRetainedBackup();
+    await db.saveDocument("recoveryState", {
+      id: "capture",
+      storageEpoch: scope.tenantId,
+      openSetId: scope.companyId,
+      sequence: "0",
+    });
+    await r.updateRetainedBackup();
+    assert.equal(sends, 0);
+    assert.deepEqual(await db.getCollection("recoveryOriginals"), []);
   } finally {
     f.close();
   }

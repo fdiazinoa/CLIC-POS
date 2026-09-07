@@ -1,4 +1,4 @@
-import { pendingOperationsRecovery } from '../recovery/recoveryService';
+import { pendingOperationsRecovery, discoverPendingOperationsRecovery } from '../recovery/recoveryService';
 import { isRecoveredOperation } from '../recovery/PendingOperationsRecovery';
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
@@ -325,6 +325,7 @@ class BackgroundSyncManager {
         let pausedForSaleActivity = false;
 
         try {
+            await discoverPendingOperationsRecovery().catch(error => collectionErrors.push(`recoveryAvailability: ${error.message}`));
             if (isSyncFeatureEnabled('pending_operations_recovery')) {
                 await pendingOperationsRecovery.sendPending().catch(error => collectionErrors.push(`originals: ${error.message}`));
             }
@@ -428,6 +429,10 @@ class BackgroundSyncManager {
             await reportPendingMasterNumberRangeProgress().catch((error: any) => {
                 collectionErrors.push(`masterNumberRanges: ${error?.message || 'unknown error'}`);
             });
+
+            if (isSyncFeatureEnabled('pending_operations_recovery') && !isPosSaleActive()) {
+                await pendingOperationsRecovery.updateRetainedBackup().catch(error => collectionErrors.push(`backup: ${error.message}`));
+            }
 
             this.updateState({
                 isSyncing: false,
