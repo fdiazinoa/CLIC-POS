@@ -35,7 +35,7 @@ No se monta ReceivedCloseFlow en App ni se habilita la aceptación en el router 
 
 ## Reproducción
 
-Base POS: origin/develop c0be505. Incluye la actualización de prueba de configuración congelada de f5229df (PR #572) para consolidarla en este hito, sin necesitar otro merge separado. Dependencia ERP: rama feature/sync-recovery-laboratory-roundtrip basada en clean-erp; fijar commit entregado en el PR conjunto.
+Base POS: origin/develop c0be505. Incluye la actualización de prueba de configuración congelada de f5229df (PR #572) para consolidarla en este hito, sin necesitar otro merge separado. Dependencia ERP verificada: be94c42aca9a575f1e31870a5bcf54bd15b95a87, rama feature/sync-recovery-laboratory-roundtrip basada en clean-erp. Implementación POS: 302762c (este documento se actualiza después para fijar la evidencia cruzada).
 
 Node 24.11.1; PostgreSQL embebido 18.4. Los directorios siguientes son del laboratorio de desarrollo, no de producción:
 
@@ -44,6 +44,8 @@ CLIC_ERP_REVIEW_PATH=/Users/felixdiaz/.gemini/antigravity/playground/tensor-plan
 npm run build
 npm run lint
 ```
+
+Resultado registrado: 24 pruebas PASS, 0 fallos, 0 SKIP; build PASS. El circuito confirma 150 DOP, 2 documentos históricos, 1 Z/commit/asiento y una sola solicitud POST de aceptación pese a ACK perdido y fallo SQLite.
 
 El test integrado omite su ejecución si faltan las dos variables; un SKIP no cuenta como evidencia. La ejecución registrada debe tener cero skips. El bridge Android se adapta a node:sqlite: prueba la transacción del adaptador, no hardware Android.
 
