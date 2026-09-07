@@ -1,3 +1,5 @@
+import { originalProvenance } from '../recovery/RecoveryRuntime';
+import { isRecoveredOperation } from '../recovery/PendingOperationsRecovery';
 import { readErpPaymentMethodsSnapshot } from '../../utils/erpPaymentMethods';
 import { Product } from '../../types';
 import {
@@ -3074,9 +3076,13 @@ class ApiSyncAdapter {
             acceptCompressedResponse?: boolean;
             includeHttpStatus?: boolean;
             reauthenticateOn401?: boolean;
+            expectedRecoveryScope?: string;
         } = {},
     ): Promise<any> {
         const target = await this.authenticateOperationalTarget(false, 'sales', 'PUSH_OPERATIONS');
+        if (options.expectedRecoveryScope && originalProvenance().key !== options.expectedRecoveryScope) {
+            throw new Error('RECOVERY_SCOPE_CHANGED');
+        }
         const requestBody = this.buildOperationalPostBody(target, body);
         const serializedBody = JSON.stringify(requestBody);
         if (options.maxRequestBytes && new TextEncoder().encode(serializedBody).byteLength > options.maxRequestBytes) {
@@ -3197,6 +3203,24 @@ class ApiSyncAdapter {
     async pullPaymentMethodsSnapshot(): Promise<unknown[]> {
         const payload = await this.getOperationalPayload('/collections/paymentMethods/data', 'PULL_MASTERS');
         return readErpPaymentMethodsSnapshot(payload);
+    }
+
+    async recoveryCapabilities(): Promise<any> {
+        const target = this.resolveOperationalTarget();
+        if (!target || target.useLocalTarget) return { enabled: false, contractVersion: 1 };
+        return this.getOperationalPayload('/originals/capabilities');
+    }
+
+    async receiveRecoveryOriginals(records: unknown[]): Promise<any> {
+        return this.postOperationalPayload('/originals/batch', { records }, { maxRequestBytes: 2 * 1024 * 1024, reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key });
+    }
+
+    async createRecoverySnapshot(): Promise<any> {
+        return this.postOperationalPayload('/originals/snapshots', {}, { reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key });
+    }
+
+    async getRecoveryPage(snapshotId: string, cursor: string): Promise<any> {
+        return this.getOperationalPayload(`/originals/snapshots/${encodeURIComponent(snapshotId)}/pages?cursor=${encodeURIComponent(cursor)}`);
     }
 
     private async getOperationalPayload<T = any>(
@@ -5034,6 +5058,7 @@ class ApiSyncAdapter {
     }
 
     async pushTransaction(transaction: any): Promise<void> {
+        if (isRecoveredOperation(transaction)) throw new Error('RECOVERED_OPERATION_NO_REPLAY');
         try {
             const normalizedTransaction = buildErpSalePayload(transaction);
             const operationalTarget = this.resolveOperationalTarget();
@@ -5380,6 +5405,7 @@ class ApiSyncAdapter {
      * Push a single cash movement to Master
      */
     async pushCashMovement(movement: any): Promise<void> {
+        if (isRecoveredOperation(movement)) throw new Error('RECOVERED_OPERATION_NO_REPLAY');
         try {
             const normalizedMovement = buildErpCashMovementPayload(movement);
             await this.postOperationalPayload('/cash/movements', { items: [normalizedMovement] });
@@ -5395,6 +5421,7 @@ class ApiSyncAdapter {
      * Push a single Z-Report to Master
      */
     async pushZReport(report: any): Promise<void> {
+        if (isRecoveredOperation(report)) throw new Error('RECOVERED_OPERATION_NO_REPLAY');
         try {
             const normalizedReport = buildErpZReportPayload(report);
             await this.postOperationalPayload('/z-reports', { items: [normalizedReport] });
@@ -5410,6 +5437,7 @@ class ApiSyncAdapter {
      * Push wallet / loyalty operational events (normalized, idempotent by source_event_id on Master).
      */
     async pushOperationalEvents(items: Record<string, unknown>[]): Promise<void> {
+        if (items.some(isRecoveredOperation)) throw new Error('RECOVERED_OPERATION_NO_REPLAY');
         if (!items.length) return;
         try {
             const normalized = items.map((row) => {

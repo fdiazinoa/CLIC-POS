@@ -1,3 +1,6 @@
+import { originalProvenance } from '../recovery/RecoveryRuntime';
+import { recoveryDatabase } from '../recovery/RecoveryDatabase';
+import { isSyncFeatureEnabled } from '../sync/SyncFeatureFlags';
 import { Capacitor } from '@capacitor/core';
 import { DatabaseAdapter } from './DatabaseAdapter';
 import { CapacitorSQLiteAdapter } from './adapters/CapacitorSQLiteAdapter';
@@ -17,7 +20,7 @@ const getAdapter = (): DatabaseAdapter => {
     return new IndexedDBAdapter();
 };
 
-export const dbAdapter = getAdapter();
+export const dbAdapter = recoveryDatabase(getAdapter(), () => isSyncFeatureEnabled('pending_operations_recovery'), originalProvenance);
 
 export const initDatabase = async () => {
     await dbAdapter.connect();

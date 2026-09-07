@@ -1,3 +1,4 @@
+import { withOriginal } from './recovery/OriginalCapture';
 import { recordCheckoutDiagnostic } from './CheckoutDiagnostics';
 import { Customer, Transaction, DocumentType, DocumentSeries } from '../types';
 import { db } from '../utils/db';
@@ -495,6 +496,7 @@ class TransactionService {
         };
 
         const normalizedTransaction = normalizeTransactionForSync(transaction);
+        if (isSyncFeatureEnabled('pending_operations_recovery')) withOriginal(normalizedTransaction, transaction, data);
         recordCheckoutDiagnostic('TRANSACTION_CREATED', { items: normalizedTransaction.items, total: normalizedTransaction.total, transactionId: normalizedTransaction.id, displayId: normalizedTransaction.displayId, payments: normalizedTransaction.payments, terminalId: normalizedTransaction.terminalId });
 
         const deferToFinancialCommit = options.deferDurablePersistence === true

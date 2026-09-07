@@ -1,3 +1,4 @@
+import PendingOperationsRecoveryPanel from './PendingOperationsRecoveryPanel';
 import React, { useState, useEffect } from 'react';
 import { RefreshCw, CheckCircle2, AlertCircle, Clock, UploadCloud, DownloadCloud, Database, Server, ArrowRight, ShieldCheck, X, Wifi, WifiOff, Globe, Monitor, Laptop, Search, Filter, RotateCcw, Code, Copy, Check } from 'lucide-react';
 import { syncManager } from '../services/sync/SyncManager';
@@ -781,6 +782,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                 modules={syncModules}
             />
 
+            <PendingOperationsRecoveryPanel />
             {/* Header */}
             <div className="bg-white px-8 py-6 border-b border-gray-200 flex justify-between items-center shrink-0">
                 <div className="flex-1">
