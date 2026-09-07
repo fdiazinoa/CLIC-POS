@@ -15,6 +15,21 @@ const transportCapture = new WeakMap<
   DatabaseAdapter,
   (document: any, item: unknown, scope: string) => Promise<string | null>
 >();
+const preparationQueue = new WeakMap<
+  DatabaseAdapter,
+  <T>(scope: string, work: (base: DatabaseAdapter) => Promise<T>) => Promise<T>
+>();
+/** Internal local-only boundary. Callbacks must use base, not the queued proxy. */
+export function withRecoveryPreparation<T>(
+  db: DatabaseAdapter,
+  scope: string,
+  work: (base: DatabaseAdapter) => Promise<T>,
+): Promise<T> {
+  const run = preparationQueue.get(db);
+  if (!run)
+    return Promise.reject(new Error("RECOVERY_PREPARATION_UNAVAILABLE"));
+  return run(scope, work);
+}
 /** Preserve the actual outbound image without replacing the native original. No network. */
 export const captureOriginalTransport = (
   db: DatabaseAdapter,
@@ -227,6 +242,17 @@ export function recoveryDatabase(
         { collectionName: RECOVERY_STATE, document: state },
       ]);
       return record.id;
+    }),
+  );
+  preparationQueue.set(proxy, (scope, work) =>
+    exclusive(async () => {
+      if (!enabled()) throw new Error("RECOVERY_DISABLED");
+      if (!scope || scope !== provenance().key)
+        throw new Error("RECOVERY_SCOPE_CHANGED");
+      const result = await work(base);
+      if (!enabled() || scope !== provenance().key)
+        throw new Error("RECOVERY_SCOPE_CHANGED");
+      return result;
     }),
   );
   return proxy;

@@ -4,6 +4,9 @@ import { isSyncFeatureEnabled } from "../sync/SyncFeatureFlags";
 import { PendingOperationsRecovery } from "./PendingOperationsRecovery";
 import { captureOriginalTransport } from "./RecoveryDatabase";
 import { originalProvenance } from "./RecoveryRuntime";
+import { ClosePreparation } from "./ClosePreparation";
+/** Internal preparation API; it does not send or authorize a recovered close. */
+export const closePreparation = new ClosePreparation(dbAdapter);
 export const pendingOperationsRecovery = new PendingOperationsRecovery(
   dbAdapter,
   {
