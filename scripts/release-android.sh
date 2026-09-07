@@ -288,6 +288,33 @@ info "Ejecutando npm run build"
 info "Ejecutando npx cap sync android"
 (cd "${TEMP_WORKTREE}" && npx cap sync android)
 
+info "Verificando assets web antes de Gradle"
+node --input-type=module - "${TEMP_WORKTREE}" <<'NODE'
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+const root = process.argv[2];
+const dist = path.join(root, 'dist');
+const packed = path.join(root, 'android/app/src/main/assets/public');
+const hashes = {};
+function verify(directory, prefix = '') {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const relative = path.join(prefix, entry.name);
+    if (entry.isDirectory()) { verify(path.join(directory, entry.name), relative); continue; }
+    const bytes = fs.readFileSync(path.join(dist, relative));
+    const target = path.join(packed, relative);
+    if (!fs.existsSync(target) || !bytes.equals(fs.readFileSync(target))) {
+      throw new Error(`Android web asset mismatch: ${relative}`);
+    }
+    hashes[relative] = crypto.createHash('sha256').update(bytes).digest('hex');
+  }
+}
+verify(dist);
+if (!hashes['index.html']) throw new Error('Missing dist/index.html');
+fs.writeFileSync(path.join(root, 'release-web-assets.json'), JSON.stringify(hashes));
+console.log(`Verified ${Object.keys(hashes).length} web assets before signing`);
+NODE
+
 info "Ejecutando ./gradlew clean assembleRelease"
 (cd "${TEMP_WORKTREE}/android" && ./gradlew clean assembleRelease \
   "-PclicPosAllowReleaseCleartext=${LAN_HTTP_ENABLED}")
@@ -328,6 +355,10 @@ artifact=${APK_DEST}
 metadata=${METADATA_DEST}
 builtAt=$(date '+%Y-%m-%d %H:%M:%S %Z')
 EOF
+
+printf '\nwebAssetsVerifiedBeforeGradle=true\nwebAssets=' >> "${REPORT_DEST}"
+cat "${TEMP_WORKTREE}/release-web-assets.json" >> "${REPORT_DEST}"
+printf '\n' >> "${REPORT_DEST}"
 
 info "APK listo"
 echo "APK=${APK_DEST}"
