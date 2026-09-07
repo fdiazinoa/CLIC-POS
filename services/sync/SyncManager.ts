@@ -1108,11 +1108,14 @@ class SyncManager {
             return { config: baseConfig, users: Array.isArray(localUsers) ? localUsers as User[] : [] };
         }
 
+        const localUsers = await db.get('users');
+        const needsFullRoster = !Array.isArray(localUsers) || localUsers.length === 0;
+
         const config = await this.refreshTerminalResolvedConfig(undefined, {
             baseConfig,
             dispatchEvent: false,
             forceRemoteFetch: true,
-            forceFullCatalog: false,
+            forceFullCatalog: needsFullRoster,
             requestTimeoutMs: 8_000,
             masterScopes: ['pos_users', 'users', 'pos_roles', 'roles'],
             resolvedScopes: ['identity', 'role'],

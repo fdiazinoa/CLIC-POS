@@ -6691,7 +6691,7 @@ const AppContent: React.FC = () => {
                 try {
                   // A background sync may have updated/revoked users since the early snapshot.
                   // Reuse the completed refresh, but read the current persisted roster.
-                  const refreshedUsers = startupErpUsers !== null
+                  const refreshedUsers = startupErpUsers !== null && usableUsers.length > 0
                     ? (Array.isArray(localUsers) ? localUsers : [])
                     : await syncManager.refreshErpPosUserRoster(finalConfig);
                   usableUsers = visiblePosUsersForRuntime(refreshedUsers);
@@ -6802,6 +6802,10 @@ const AppContent: React.FC = () => {
                     if (security.config) setConfig(security.config);
                     const refreshedUsers = visiblePosUsersForRuntime(await db.get('users') as User[]);
                     setUsers(refreshedUsers);
+                    if (refreshedUsers.length > 0) {
+                      setBootstrapError(null);
+                      setIsSecurityLoaded(true);
+                    }
                   })
                   .catch((error) => {
                     console.warn('[SYNC_USERS] Background ERP security refresh failed; keeping offline roster.', error);
