@@ -13,6 +13,7 @@ import {
   RECOVERY_STATE,
 } from "./OriginalCapture";
 import { withRecoveryPreparation } from "./RecoveryDatabase";
+import { buildNativeZReportContent } from "./NativeZReport";
 
 const MEMBER_COLLECTIONS = [
   "transactions",
@@ -47,6 +48,12 @@ export interface ClosePreparationInput {
   }>;
   /** Native confirmed input, preserved as given, without inventing defaults. */
   declaration: unknown;
+  /** Optional native producer; declaration is the existing reportData input. */
+  nativeZ?: {
+    configurationSha256: string;
+    user?: { id: string; name: string };
+    notes: string;
+  };
 }
 export interface PreparedClose {
   id: string;
@@ -202,17 +209,66 @@ export class ClosePreparation {
         members.push({ ...member, source });
       }
       const observation = await this.observe(base);
+      const closeControl = {
+        closeId: crypto.randomUUID(),
+        closeEventId: crypto.randomUUID(),
+        nextOpenSetId: crypto.randomUUID(),
+      };
+      const preparedAt = new Date().toISOString();
+      let nativeReport;
+      if (request.nativeZ) {
+        const config = await base.getDocument<any>("config", "current");
+        if (
+          !config ||
+          (await digest(encodeOriginal(config))) !==
+            request.nativeZ.configurationSha256
+        )
+          fail("CONFIGURATION_CHANGED");
+        const terminals = (config.terminals || []).filter(
+          (t: any) => t.id === request.terminalId,
+        );
+        if (
+          terminals.length !== 1 ||
+          typeof request.nativeZ.notes !== "string" ||
+          !request.declaration ||
+          typeof request.declaration !== "object" ||
+          Array.isArray(request.declaration)
+        )
+          fail("NATIVE_INPUT_INVALID");
+        const documents = (collection: string): any[] =>
+          members
+            .filter((m) => m.collection === collection)
+            .map((m) => decodeOriginal(m.expectedDocument));
+        nativeReport = {
+          ...buildNativeZReportContent({
+            terminalTransactions: documents("transactions"),
+            terminalCashMovements: documents("cashMovements"),
+            terminalCollections: documents("collections"),
+            config,
+            terminalId: request.terminalId,
+            currentTerminal: terminals[0],
+            currentUser: request.nativeZ.user,
+            notes: request.nativeZ.notes,
+            reportData: request.declaration,
+            fallbackOpenedAt: preparedAt,
+          }),
+          id: closeControl.closeId,
+          closedAt: preparedAt,
+          recoveryMemberIds: {
+            transactions: documents("transactions").map((d) => d.id),
+            cashMovements: documents("cashMovements").map((d) => d.id),
+            collections: documents("collections").map((d) => d.id),
+          },
+        };
+      }
       const body = encodeOriginal({
         domain: "pos.close.preparation.local.v1",
         version: 1,
         requestBody,
         commandId: crypto.randomUUID(),
-        closeControl: {
-          closeId: crypto.randomUUID(),
-          closeEventId: crypto.randomUUID(),
-          nextOpenSetId: crypto.randomUUID(),
-        },
-        preparedAt: new Date().toISOString(),
+        closeControl,
+        preparedAt,
+        ...(nativeReport ? { nativeReport } : {}),
         members,
         observation,
         coverage: "UNKNOWN",

@@ -90,6 +90,7 @@ import {
 import { currencyScheduleExecutor } from './services/currency/CurrencyService';
 import { productImageCacheService } from './services/sync/ProductImageCacheService';
 import { posCloudStagingService } from './services/sync/PosCloudStagingService';
+import { buildNativeZReportContent } from './services/recovery/NativeZReport';
 import { calculateZReportStats } from './utils/analytics';
 import { buildServiceTypeReport } from './utils/orderServiceType';
 import { ALL_CLOSE_REPORT_SECTIONS, buildCloseReportDetails, resolveCloseReportSections } from './utils/closeReportOptions';
@@ -10129,52 +10130,12 @@ const AppContent: React.FC = () => {
 
       console.log(`🔒 Shift Segregation: Found ${terminalTransactions.length} txns and ${terminalCashMovements.length} cash movements for ${terminalId}`);
 
-      // 3. Totals and Stats from the exact transaction set being archived.
-      const paymentMethodSummary = buildZReportPaymentMethodSummary(terminalTransactions, config);
-      const totalsByMethod = paymentMethodSummary.reduce((acc: Record<string, number>, line) => {
-        acc[line.methodType] = (acc[line.methodType] || 0) + Number(line.amount || 0);
-        return acc;
-      }, {});
-
-      const stats = calculateZReportStats(terminalTransactions, terminalCollections);
-      const serviceTypeReport = buildServiceTypeReport(terminalTransactions);
-      const transactionCount = terminalTransactions.length;
-      const declaredCashByCurrency = (reportData?.cashCountedByCurrency || {}) as Record<string, unknown>;
-      const expectedCashByCurrencySnapshot = (reportData?.expectedCashByCurrency || {}) as Record<string, unknown>;
-
-      const cashDeclaredTotal: number = Object.values(declaredCashByCurrency).reduce<number>((sum, value) => {
-        const parsed = Number(value);
-        return sum + (Number.isFinite(parsed) ? parsed : 0);
-      }, 0);
-      const expectedCashTotal: number = Object.values(expectedCashByCurrencySnapshot).reduce<number>((sum, value) => {
-        const parsed = Number(value);
-        return sum + (Number.isFinite(parsed) ? parsed : 0);
-      }, 0);
-      const declaredCardTotal: number = Number(reportData?.declaredCardTotal) || 0;
-      const declaredOtherTotal: number = Number(reportData?.declaredOtherTotal) || 0;
-      const expectedCardTotal: number = Number(reportData?.expectedCardTotal) || 0;
-      const expectedOtherTotal: number = Number(reportData?.expectedOtherTotal) || 0;
-      const orderedTicketRefs = terminalTransactions
-        .map((transaction) => transaction.displayId || transaction.id)
-        .filter(Boolean);
-      const cashMovementDetails = terminalCashMovements.map(movement => ({
-        id: movement.id,
-        type: movement.type,
-        amount: Number(movement.amount || 0),
-        reason: movement.reason || 'Movimiento General',
-        timestamp: movement.timestamp,
-        userName: movement.userName,
-        currencyCode: movement.currencyCode,
-      }));
-      const firstTicketId = orderedTicketRefs[0] || null;
-      const lastTicketId = orderedTicketRefs[orderedTicketRefs.length - 1] || null;
-      const openedAtCandidates = [
-        ...terminalTransactions.map(t => new Date(t.date).getTime()),
-        ...terminalCashMovements.map(m => new Date(m.timestamp).getTime())
-      ].filter((value) => Number.isFinite(value)) as number[];
-      const openedAt = openedAtCandidates.length > 0
-        ? new Date(Math.min(...openedAtCandidates)).toISOString()
-        : new Date().toISOString();
+      // Build native content before any sequence/persistence effect.
+      const nativeZContent = buildNativeZReportContent({
+        terminalTransactions, terminalCashMovements, terminalCollections,
+        terminalId, config, currentTerminal, currentUser, reportData, notes,
+        fallbackOpenedAt: new Date().toISOString(),
+      });
 
       // 4. Create and Save Z-Report
       let sequenceNumber = '';
@@ -10265,72 +10226,18 @@ const AppContent: React.FC = () => {
         sequenceNumber = `Z-${nextSeqNum}`;
       }
 
-      const enabledSections = resolveCloseReportSections(config, terminalId, currentUser?.id, 'Z');
-      // Store every annex once. Printing still honors enabledSections, while a
-      // later reprint can safely apply options enabled after this closure.
-      const reportDetails = buildCloseReportDetails(terminalTransactions, config, currentTerminal?.config, ALL_CLOSE_REPORT_SECTIONS);
       const newZReport: ZReport & Record<string, any> = {
+        ...nativeZContent,
         ...(isSyncFeatureEnabled('pending_operations_recovery') ? { recoveryMemberIds: {
           transactions: terminalTransactions.map(t => t.id),
           cashMovements: terminalCashMovements.map(m => m.id),
           collections: terminalCollections.map(c => c.id),
         } } : {}),
         id: zReportId,
-        terminalId,
         sequenceNumber,
         seriesId: zReportSeriesId,
         seriesNumber: zReportSeriesNumber,
-        source_terminal_id: terminalId,
-        openedAt,
         closedAt: new Date().toISOString(),
-        closedByUserId: currentUser?.id || 'sys',
-        closedByUserName: currentUser?.name || 'System',
-        baseCurrency: ((config.currencies || []).find(c => c.isBase)?.code || (config.currencies || [])[0]?.code || 'DOP'),
-        totalsByMethod,
-        paymentMethodSummary,
-        paymentMethodDeclarations: reportData?.paymentMethodDeclarations || [],
-        cashExpected: reportData?.expectedCashByCurrency || {},
-        cashCounted: reportData?.cashCountedByCurrency || {},
-        cashDiscrepancy: reportData?.cashDiscrepancyByCurrency || {},
-        denominationBreakdown: reportData?.denominationBreakdown,
-        denomination_breakdown: reportData?.denominationBreakdown,
-        cashSales: reportData?.cashSalesTotal || 0,
-        cashIn: reportData?.cashIn || 0,
-        cashOut: reportData?.cashOut || 0,
-        cashMovementDetails,
-        requireCashFundOnZ: Boolean(reportData?.requireCashFundOnZ),
-        fixedCashFundAmount: Number(reportData?.fixedCashFundAmount || 0),
-        cashToLeaveInDrawer: Number(reportData?.cashToLeaveInDrawer || 0),
-        cashToWithdraw: Number(reportData?.cashToWithdraw || 0),
-        transactionCount,
-        notes,
-        declared_totals: {
-          cash: cashDeclaredTotal,
-          card: declaredCardTotal,
-          other: declaredOtherTotal,
-          total_declared: cashDeclaredTotal + declaredCardTotal + declaredOtherTotal,
-        },
-        system_totals: {
-          expected_cash: expectedCashTotal,
-          expected_card: expectedCardTotal,
-          expected_other: expectedOtherTotal,
-          total_expected: expectedCashTotal + expectedCardTotal + expectedOtherTotal,
-          cash_difference: cashDeclaredTotal - expectedCashTotal,
-          total_difference:
-            (cashDeclaredTotal + declaredCardTotal + declaredOtherTotal)
-            - (expectedCashTotal + expectedCardTotal + expectedOtherTotal),
-        },
-        sync_audit: {
-          total_tickets_issued: transactionCount,
-          first_ticket_id: firstTicketId,
-          last_ticket_id: lastTicketId,
-        },
-        stats,
-        serviceTypeSummary: serviceTypeReport.summary,
-        closeTaxSummary: buildCloseTaxSummary(terminalTransactions),
-        serviceTypeTransactions: serviceTypeReport.transactions,
-        enabledSections,
-        reportDetails,
         syncStatus: 'PENDING' as const,
         ...(replacementReportId ? {
           repeatedAt: new Date().toISOString(),
