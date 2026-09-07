@@ -1,0 +1,1681 @@
+{
+  "sourceCommit": "b53d11a37263f606d03360ddee76332705a318de",
+  "legacy": "UNKNOWN",
+  "exactZEligible": false,
+  "closeAuthorization": "NOT_GRANTED",
+  "pairs": [
+    {
+      "id": "aliases-disagree",
+      "local": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "TICKET",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100,
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": {
+              "color": "blue"
+            },
+            "tariffId": "not-a-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "id": "PAY-1",
+            "method": "CASH",
+            "amount": 100,
+            "currencyCode": "DOP",
+            "timestamp": "2026-09-05T23:59:00.000Z",
+            "privateExtra": {
+              "synthetic": true
+            },
+            "appliedAmount": 70,
+            "applied_amount": 60,
+            "amountApplied": 50,
+            "changeAmount": 30,
+            "change_amount": 40
+          }
+        ]
+      },
+      "normalized": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "TICKET",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100,
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": {
+              "color": "blue"
+            },
+            "tariffId": "not-a-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "id": "PAY-1",
+            "method": "CASH",
+            "creditOverrideApproved": false,
+            "amount": 100,
+            "timestamp": "2026-09-05T23:59:00.000Z",
+            "currencyCode": "DOP",
+            "appliedAmount": 60,
+            "changeAmount": 40,
+            "amountApplied": 60,
+            "source_channel": "POS",
+            "source_payment_id": "PAY-1",
+            "source_transaction_id": "SALE-1",
+            "source_terminal_id": "T1",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CASH",
+            "currency_code": "DOP",
+            "applied_amount": 60,
+            "change_amount": 40
+          }
+        ],
+        "source_channel": "POS",
+        "source_transaction_id": "SALE-1",
+        "source_terminal_id": "T1"
+      },
+      "salePayload": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "TICKET",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100
+          }
+        ],
+        "payments": [
+          {
+            "id": "PAY-1",
+            "method": "CASH",
+            "creditOverrideApproved": false,
+            "amount": 100,
+            "timestamp": "2026-09-05T23:59:00.000Z",
+            "currencyCode": "DOP",
+            "appliedAmount": 60,
+            "changeAmount": 40,
+            "amountApplied": 60,
+            "source_channel": "POS",
+            "source_payment_id": "PAY-1",
+            "source_transaction_id": "SALE-1",
+            "source_terminal_id": "T1",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CASH",
+            "currency_code": "DOP",
+            "applied_amount": 60,
+            "change_amount": 40
+          }
+        ],
+        "source_channel": "POS",
+        "source_transaction_id": "SALE-1",
+        "source_terminal_id": "T1",
+        "transaction_date": "2026-09-05T23:59:00.000Z",
+        "currency_code": "DOP"
+      },
+      "changes": [
+        {
+          "path": "$.items.0.images",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": [
+            "synthetic-image"
+          ]
+        },
+        {
+          "path": "$.items.0.attributes",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": {
+            "color": "blue"
+          }
+        },
+        {
+          "path": "$.items.0.tariffId",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": "not-a-uuid"
+        },
+        {
+          "path": "$.payments.0.privateExtra",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": {
+            "synthetic": true
+          }
+        },
+        {
+          "path": "$.payments.0.appliedAmount",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": 70,
+          "after": 60
+        },
+        {
+          "path": "$.payments.0.amountApplied",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": 50,
+          "after": 60
+        },
+        {
+          "path": "$.payments.0.changeAmount",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": 30,
+          "after": 40
+        },
+        {
+          "path": "$.payments.0.creditOverrideApproved",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": false
+        },
+        {
+          "path": "$.payments.0.source_channel",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "POS"
+        },
+        {
+          "path": "$.payments.0.source_payment_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "PAY-1"
+        },
+        {
+          "path": "$.payments.0.source_transaction_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "SALE-1"
+        },
+        {
+          "path": "$.payments.0.source_terminal_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "T1"
+        },
+        {
+          "path": "$.payments.0.device_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DEVICE-SYNTHETIC"
+        },
+        {
+          "path": "$.payments.0.payment_method",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "CASH"
+        },
+        {
+          "path": "$.payments.0.currency_code",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DOP"
+        },
+        {
+          "path": "$.source_channel",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "POS"
+        },
+        {
+          "path": "$.source_transaction_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "SALE-1"
+        },
+        {
+          "path": "$.source_terminal_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "T1"
+        },
+        {
+          "path": "$.transaction_date",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "2026-09-05T23:59:00.000Z"
+        },
+        {
+          "path": "$.currency_code",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DOP"
+        }
+      ],
+      "appliedLocal": 70,
+      "appliedAfterNormalization": 60
+    },
+    {
+      "id": "aliases-null",
+      "local": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "TICKET",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100,
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": {
+              "color": "blue"
+            },
+            "tariffId": "not-a-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "id": "PAY-1",
+            "method": "CASH",
+            "amount": 100,
+            "currencyCode": "DOP",
+            "timestamp": "2026-09-05T23:59:00.000Z",
+            "privateExtra": {
+              "synthetic": true
+            },
+            "appliedAmount": null,
+            "applied_amount": null,
+            "amountApplied": 0
+          }
+        ]
+      },
+      "normalized": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "TICKET",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100,
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": {
+              "color": "blue"
+            },
+            "tariffId": "not-a-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "id": "PAY-1",
+            "method": "CASH",
+            "creditOverrideApproved": false,
+            "amount": 100,
+            "timestamp": "2026-09-05T23:59:00.000Z",
+            "currencyCode": "DOP",
+            "appliedAmount": 0,
+            "amountApplied": 0,
+            "source_channel": "POS",
+            "source_payment_id": "PAY-1",
+            "source_transaction_id": "SALE-1",
+            "source_terminal_id": "T1",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CASH",
+            "currency_code": "DOP",
+            "applied_amount": 0
+          }
+        ],
+        "source_channel": "POS",
+        "source_transaction_id": "SALE-1",
+        "source_terminal_id": "T1"
+      },
+      "salePayload": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "TICKET",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100
+          }
+        ],
+        "payments": [
+          {
+            "id": "PAY-1",
+            "method": "CASH",
+            "creditOverrideApproved": false,
+            "amount": 100,
+            "timestamp": "2026-09-05T23:59:00.000Z",
+            "currencyCode": "DOP",
+            "appliedAmount": 0,
+            "amountApplied": 0,
+            "source_channel": "POS",
+            "source_payment_id": "PAY-1",
+            "source_transaction_id": "SALE-1",
+            "source_terminal_id": "T1",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CASH",
+            "currency_code": "DOP",
+            "applied_amount": 0
+          }
+        ],
+        "source_channel": "POS",
+        "source_transaction_id": "SALE-1",
+        "source_terminal_id": "T1",
+        "transaction_date": "2026-09-05T23:59:00.000Z",
+        "currency_code": "DOP"
+      },
+      "changes": [
+        {
+          "path": "$.items.0.images",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": [
+            "synthetic-image"
+          ]
+        },
+        {
+          "path": "$.items.0.attributes",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": {
+            "color": "blue"
+          }
+        },
+        {
+          "path": "$.items.0.tariffId",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": "not-a-uuid"
+        },
+        {
+          "path": "$.payments.0.privateExtra",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": {
+            "synthetic": true
+          }
+        },
+        {
+          "path": "$.payments.0.appliedAmount",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": null,
+          "after": 0
+        },
+        {
+          "path": "$.payments.0.applied_amount",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": null,
+          "after": 0
+        },
+        {
+          "path": "$.payments.0.creditOverrideApproved",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": false
+        },
+        {
+          "path": "$.payments.0.source_channel",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "POS"
+        },
+        {
+          "path": "$.payments.0.source_payment_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "PAY-1"
+        },
+        {
+          "path": "$.payments.0.source_transaction_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "SALE-1"
+        },
+        {
+          "path": "$.payments.0.source_terminal_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "T1"
+        },
+        {
+          "path": "$.payments.0.device_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DEVICE-SYNTHETIC"
+        },
+        {
+          "path": "$.payments.0.payment_method",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "CASH"
+        },
+        {
+          "path": "$.payments.0.currency_code",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DOP"
+        },
+        {
+          "path": "$.source_channel",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "POS"
+        },
+        {
+          "path": "$.source_transaction_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "SALE-1"
+        },
+        {
+          "path": "$.source_terminal_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "T1"
+        },
+        {
+          "path": "$.transaction_date",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "2026-09-05T23:59:00.000Z"
+        },
+        {
+          "path": "$.currency_code",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DOP"
+        }
+      ],
+      "appliedLocal": 0,
+      "appliedAfterNormalization": 0
+    },
+    {
+      "id": "aliases-invalid",
+      "local": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "TICKET",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100,
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": {
+              "color": "blue"
+            },
+            "tariffId": "not-a-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "id": "PAY-1",
+            "method": "CASH",
+            "amount": 100,
+            "currencyCode": "DOP",
+            "timestamp": "2026-09-05T23:59:00.000Z",
+            "privateExtra": {
+              "synthetic": true
+            },
+            "appliedAmount": "bad",
+            "applied_amount": "bad"
+          }
+        ]
+      },
+      "normalized": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "TICKET",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100,
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": {
+              "color": "blue"
+            },
+            "tariffId": "not-a-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "id": "PAY-1",
+            "method": "CASH",
+            "creditOverrideApproved": false,
+            "amount": 100,
+            "timestamp": "2026-09-05T23:59:00.000Z",
+            "currencyCode": "DOP",
+            "source_channel": "POS",
+            "source_payment_id": "PAY-1",
+            "source_transaction_id": "SALE-1",
+            "source_terminal_id": "T1",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CASH",
+            "currency_code": "DOP"
+          }
+        ],
+        "source_channel": "POS",
+        "source_transaction_id": "SALE-1",
+        "source_terminal_id": "T1"
+      },
+      "salePayload": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "TICKET",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100
+          }
+        ],
+        "payments": [
+          {
+            "id": "PAY-1",
+            "method": "CASH",
+            "creditOverrideApproved": false,
+            "amount": 100,
+            "timestamp": "2026-09-05T23:59:00.000Z",
+            "currencyCode": "DOP",
+            "source_channel": "POS",
+            "source_payment_id": "PAY-1",
+            "source_transaction_id": "SALE-1",
+            "source_terminal_id": "T1",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CASH",
+            "currency_code": "DOP"
+          }
+        ],
+        "source_channel": "POS",
+        "source_transaction_id": "SALE-1",
+        "source_terminal_id": "T1",
+        "transaction_date": "2026-09-05T23:59:00.000Z",
+        "currency_code": "DOP"
+      },
+      "changes": [
+        {
+          "path": "$.items.0.images",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": [
+            "synthetic-image"
+          ]
+        },
+        {
+          "path": "$.items.0.attributes",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": {
+            "color": "blue"
+          }
+        },
+        {
+          "path": "$.items.0.tariffId",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": "not-a-uuid"
+        },
+        {
+          "path": "$.payments.0.privateExtra",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": {
+            "synthetic": true
+          }
+        },
+        {
+          "path": "$.payments.0.appliedAmount",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": "bad"
+        },
+        {
+          "path": "$.payments.0.applied_amount",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": "bad"
+        },
+        {
+          "path": "$.payments.0.creditOverrideApproved",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": false
+        },
+        {
+          "path": "$.payments.0.source_channel",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "POS"
+        },
+        {
+          "path": "$.payments.0.source_payment_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "PAY-1"
+        },
+        {
+          "path": "$.payments.0.source_transaction_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "SALE-1"
+        },
+        {
+          "path": "$.payments.0.source_terminal_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "T1"
+        },
+        {
+          "path": "$.payments.0.device_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DEVICE-SYNTHETIC"
+        },
+        {
+          "path": "$.payments.0.payment_method",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "CASH"
+        },
+        {
+          "path": "$.payments.0.currency_code",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DOP"
+        },
+        {
+          "path": "$.source_channel",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "POS"
+        },
+        {
+          "path": "$.source_transaction_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "SALE-1"
+        },
+        {
+          "path": "$.source_terminal_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "T1"
+        },
+        {
+          "path": "$.transaction_date",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "2026-09-05T23:59:00.000Z"
+        },
+        {
+          "path": "$.currency_code",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DOP"
+        }
+      ],
+      "appliedLocal": 0,
+      "appliedAfterNormalization": 100
+    },
+    {
+      "id": "missing-id-time",
+      "local": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "TICKET",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100,
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": {
+              "color": "blue"
+            },
+            "tariffId": "not-a-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "method": "CASH",
+            "amount": 100,
+            "currencyCode": "DOP",
+            "privateExtra": {
+              "synthetic": true
+            }
+          }
+        ]
+      },
+      "normalized": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "TICKET",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100,
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": {
+              "color": "blue"
+            },
+            "tariffId": "not-a-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "id": "SALE-1-payment",
+            "method": "CASH",
+            "creditOverrideApproved": false,
+            "amount": 100,
+            "timestamp": "2026-09-06T12:00:00.000Z",
+            "currencyCode": "DOP",
+            "source_channel": "POS",
+            "source_transaction_id": "SALE-1",
+            "source_terminal_id": "T1",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CASH",
+            "currency_code": "DOP"
+          }
+        ],
+        "source_channel": "POS",
+        "source_transaction_id": "SALE-1",
+        "source_terminal_id": "T1"
+      },
+      "salePayload": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "TICKET",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100
+          }
+        ],
+        "payments": [
+          {
+            "id": "SALE-1-payment",
+            "method": "CASH",
+            "creditOverrideApproved": false,
+            "amount": 100,
+            "timestamp": "2026-09-06T12:00:00.000Z",
+            "currencyCode": "DOP",
+            "source_channel": "POS",
+            "source_transaction_id": "SALE-1",
+            "source_terminal_id": "T1",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CASH",
+            "currency_code": "DOP"
+          }
+        ],
+        "source_channel": "POS",
+        "source_transaction_id": "SALE-1",
+        "source_terminal_id": "T1",
+        "transaction_date": "2026-09-05T23:59:00.000Z",
+        "currency_code": "DOP"
+      },
+      "changes": [
+        {
+          "path": "$.items.0.images",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": [
+            "synthetic-image"
+          ]
+        },
+        {
+          "path": "$.items.0.attributes",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": {
+            "color": "blue"
+          }
+        },
+        {
+          "path": "$.items.0.tariffId",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": "not-a-uuid"
+        },
+        {
+          "path": "$.payments.0.privateExtra",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": {
+            "synthetic": true
+          }
+        },
+        {
+          "path": "$.payments.0.id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "SALE-1-payment"
+        },
+        {
+          "path": "$.payments.0.creditOverrideApproved",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": false
+        },
+        {
+          "path": "$.payments.0.timestamp",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "2026-09-06T12:00:00.000Z"
+        },
+        {
+          "path": "$.payments.0.source_channel",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "POS"
+        },
+        {
+          "path": "$.payments.0.source_transaction_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "SALE-1"
+        },
+        {
+          "path": "$.payments.0.source_terminal_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "T1"
+        },
+        {
+          "path": "$.payments.0.device_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DEVICE-SYNTHETIC"
+        },
+        {
+          "path": "$.payments.0.payment_method",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "CASH"
+        },
+        {
+          "path": "$.payments.0.currency_code",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DOP"
+        },
+        {
+          "path": "$.source_channel",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "POS"
+        },
+        {
+          "path": "$.source_transaction_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "SALE-1"
+        },
+        {
+          "path": "$.source_terminal_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "T1"
+        },
+        {
+          "path": "$.transaction_date",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "2026-09-05T23:59:00.000Z"
+        },
+        {
+          "path": "$.currency_code",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DOP"
+        }
+      ],
+      "appliedLocal": 100,
+      "appliedAfterNormalization": 100
+    },
+    {
+      "id": "gateway",
+      "local": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "TICKET",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100,
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": {
+              "color": "blue"
+            },
+            "tariffId": "not-a-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "id": "PAY-1",
+            "method": "CASH",
+            "amount": 100,
+            "currencyCode": "DOP",
+            "timestamp": "2026-09-05T23:59:00.000Z",
+            "privateExtra": {
+              "synthetic": true
+            },
+            "gatewayStatus": " OK ",
+            "gatewayAuthorizationCode": 42,
+            "gatewayRaw": {
+              "synthetic": true
+            }
+          }
+        ]
+      },
+      "normalized": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "TICKET",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100,
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": {
+              "color": "blue"
+            },
+            "tariffId": "not-a-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "id": "PAY-1",
+            "method": "CASH",
+            "creditOverrideApproved": false,
+            "amount": 100,
+            "timestamp": "2026-09-05T23:59:00.000Z",
+            "currencyCode": "DOP",
+            "gatewayStatus": "OK",
+            "gatewayAuthorizationCode": "42",
+            "source_channel": "POS",
+            "source_payment_id": "PAY-1",
+            "source_transaction_id": "SALE-1",
+            "source_terminal_id": "T1",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CASH",
+            "currency_code": "DOP"
+          }
+        ],
+        "source_channel": "POS",
+        "source_transaction_id": "SALE-1",
+        "source_terminal_id": "T1"
+      },
+      "salePayload": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "TICKET",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100
+          }
+        ],
+        "payments": [
+          {
+            "id": "PAY-1",
+            "method": "CASH",
+            "creditOverrideApproved": false,
+            "amount": 100,
+            "timestamp": "2026-09-05T23:59:00.000Z",
+            "currencyCode": "DOP",
+            "gatewayStatus": "OK",
+            "gatewayAuthorizationCode": "42",
+            "source_channel": "POS",
+            "source_payment_id": "PAY-1",
+            "source_transaction_id": "SALE-1",
+            "source_terminal_id": "T1",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CASH",
+            "currency_code": "DOP"
+          }
+        ],
+        "source_channel": "POS",
+        "source_transaction_id": "SALE-1",
+        "source_terminal_id": "T1",
+        "transaction_date": "2026-09-05T23:59:00.000Z",
+        "currency_code": "DOP"
+      },
+      "changes": [
+        {
+          "path": "$.items.0.images",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": [
+            "synthetic-image"
+          ]
+        },
+        {
+          "path": "$.items.0.attributes",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": {
+            "color": "blue"
+          }
+        },
+        {
+          "path": "$.items.0.tariffId",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": "not-a-uuid"
+        },
+        {
+          "path": "$.payments.0.privateExtra",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": {
+            "synthetic": true
+          }
+        },
+        {
+          "path": "$.payments.0.gatewayStatus",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": " OK ",
+          "after": "OK"
+        },
+        {
+          "path": "$.payments.0.gatewayAuthorizationCode",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": 42,
+          "after": "42"
+        },
+        {
+          "path": "$.payments.0.gatewayRaw",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": {
+            "synthetic": true
+          }
+        },
+        {
+          "path": "$.payments.0.creditOverrideApproved",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": false
+        },
+        {
+          "path": "$.payments.0.source_channel",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "POS"
+        },
+        {
+          "path": "$.payments.0.source_payment_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "PAY-1"
+        },
+        {
+          "path": "$.payments.0.source_transaction_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "SALE-1"
+        },
+        {
+          "path": "$.payments.0.source_terminal_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "T1"
+        },
+        {
+          "path": "$.payments.0.device_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DEVICE-SYNTHETIC"
+        },
+        {
+          "path": "$.payments.0.payment_method",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "CASH"
+        },
+        {
+          "path": "$.payments.0.currency_code",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DOP"
+        },
+        {
+          "path": "$.source_channel",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "POS"
+        },
+        {
+          "path": "$.source_transaction_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "SALE-1"
+        },
+        {
+          "path": "$.source_terminal_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "T1"
+        },
+        {
+          "path": "$.transaction_date",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "2026-09-05T23:59:00.000Z"
+        },
+        {
+          "path": "$.currency_code",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DOP"
+        }
+      ],
+      "appliedLocal": 100,
+      "appliedAfterNormalization": 100
+    },
+    {
+      "id": "refund-fiscal-none",
+      "local": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "REFUND",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100,
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": {
+              "color": "blue"
+            },
+            "tariffId": "not-a-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "id": "PAY-1",
+            "method": "CASH",
+            "amount": 100,
+            "currencyCode": "DOP",
+            "timestamp": "2026-09-05T23:59:00.000Z",
+            "privateExtra": {
+              "synthetic": true
+            }
+          }
+        ],
+        "originalTransactionId": "OLD-1",
+        "ncfType": "B04",
+        "ncf": "SYNTHETIC",
+        "fiscalMode": "NONE"
+      },
+      "creditPayload": {
+        "id": "SALE-1",
+        "terminalId": "T1",
+        "device_id": "DEVICE-SYNTHETIC",
+        "date": "2026-09-05T23:59:00.000Z",
+        "status": "COMPLETED",
+        "documentType": "REFUND",
+        "total": 100,
+        "items": [
+          {
+            "id": "PRODUCT-1",
+            "cartId": "LINE-1",
+            "quantity": 1,
+            "price": 100
+          }
+        ],
+        "payments": [
+          {
+            "id": "PAY-1",
+            "method": "CASH",
+            "creditOverrideApproved": false,
+            "amount": 100,
+            "timestamp": "2026-09-05T23:59:00.000Z",
+            "currencyCode": "DOP",
+            "source_channel": "POS",
+            "source_payment_id": "PAY-1",
+            "source_transaction_id": "SALE-1",
+            "source_terminal_id": "T1",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CASH",
+            "currency_code": "DOP"
+          }
+        ],
+        "originalTransactionId": "OLD-1",
+        "fiscalMode": "NONE",
+        "source_channel": "POS",
+        "source_transaction_id": "SALE-1",
+        "source_terminal_id": "T1",
+        "source_credit_note_id": "SALE-1",
+        "original_transaction_id": "OLD-1",
+        "fiscalProvider": "NONE",
+        "transaction_date": "2026-09-05T23:59:00.000Z",
+        "currency_code": "DOP"
+      },
+      "changes": [
+        {
+          "path": "$.items.0.images",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": [
+            "synthetic-image"
+          ]
+        },
+        {
+          "path": "$.items.0.attributes",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": {
+            "color": "blue"
+          }
+        },
+        {
+          "path": "$.items.0.tariffId",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": "not-a-uuid"
+        },
+        {
+          "path": "$.payments.0.privateExtra",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": {
+            "synthetic": true
+          }
+        },
+        {
+          "path": "$.payments.0.creditOverrideApproved",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": false
+        },
+        {
+          "path": "$.payments.0.source_channel",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "POS"
+        },
+        {
+          "path": "$.payments.0.source_payment_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "PAY-1"
+        },
+        {
+          "path": "$.payments.0.source_transaction_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "SALE-1"
+        },
+        {
+          "path": "$.payments.0.source_terminal_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "T1"
+        },
+        {
+          "path": "$.payments.0.device_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DEVICE-SYNTHETIC"
+        },
+        {
+          "path": "$.payments.0.payment_method",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "CASH"
+        },
+        {
+          "path": "$.payments.0.currency_code",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DOP"
+        },
+        {
+          "path": "$.ncfType",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": "B04"
+        },
+        {
+          "path": "$.ncf",
+          "beforePresent": true,
+          "afterPresent": false,
+          "before": "SYNTHETIC"
+        },
+        {
+          "path": "$.source_channel",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "POS"
+        },
+        {
+          "path": "$.source_transaction_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "SALE-1"
+        },
+        {
+          "path": "$.source_terminal_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "T1"
+        },
+        {
+          "path": "$.source_credit_note_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "SALE-1"
+        },
+        {
+          "path": "$.original_transaction_id",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "OLD-1"
+        },
+        {
+          "path": "$.fiscalProvider",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "NONE"
+        },
+        {
+          "path": "$.transaction_date",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "2026-09-05T23:59:00.000Z"
+        },
+        {
+          "path": "$.currency_code",
+          "beforePresent": false,
+          "afterPresent": true,
+          "after": "DOP"
+        }
+      ]
+    }
+  ],
+  "precision": {
+    "boundaries": [
+      {
+        "value": 0,
+        "applied": 0
+      },
+      {
+        "value": 0.004,
+        "applied": 0
+      },
+      {
+        "value": 0.005,
+        "applied": 0.01
+      },
+      {
+        "value": 1.005,
+        "applied": 1.01
+      },
+      {
+        "value": -0.005,
+        "applied": 0
+      },
+      {
+        "value": -1.005,
+        "applied": -1
+      },
+      {
+        "value": "bad",
+        "applied": 0
+      },
+      {
+        "value": null,
+        "applied": 99
+      }
+    ],
+    "negativeZeroBoundary": true,
+    "accumulation": {
+      "step": [],
+      "once": [
+        {
+          "methodType": "CASH",
+          "name": "Efectivo",
+          "amount": 0.01,
+          "isPending": false
+        }
+      ]
+    },
+    "refundSummary": [
+      {
+        "methodType": "CASH",
+        "name": "Efectivo",
+        "amount": -100,
+        "isPending": false
+      }
+    ],
+    "voidSummary": []
+  },
+  "resolver": {
+    "configs": [
+      {
+        "paymentMethods": [
+          {
+            "id": "x",
+            "name": "FIRST",
+            "type": "CARD"
+          },
+          {
+            "id": "X",
+            "name": "SECOND",
+            "type": "CARD"
+          }
+        ]
+      },
+      {
+        "paymentMethods": [
+          {
+            "id": "X",
+            "name": "SECOND",
+            "type": "CARD"
+          },
+          {
+            "id": "x",
+            "name": "FIRST",
+            "type": "CARD"
+          }
+        ]
+      }
+    ],
+    "names": [
+      "FIRST",
+      "SECOND"
+    ]
+  },
+  "selection": {
+    "requested": [
+      "A",
+      "B",
+      "MISSING"
+    ],
+    "found": {
+      "terminalTransactions": [
+        {
+          "id": "B",
+          "terminalId": "T1",
+          "date": "2026-09-05T23:59:00.000Z",
+          "revision": "2"
+        },
+        {
+          "id": "A",
+          "terminalId": "T1",
+          "date": "2026-09-05T23:59:00.000Z",
+          "revision": "1"
+        }
+      ],
+      "terminalCashMovements": [
+        {
+          "id": "M2",
+          "terminalId": "T1"
+        },
+        {
+          "id": "M1",
+          "terminalId": "T1"
+        }
+      ],
+      "terminalCollections": [
+        {
+          "id": "C2",
+          "terminalId": "T1"
+        },
+        {
+          "id": "C1",
+          "terminalId": "T1"
+        }
+      ]
+    },
+    "missing": [
+      "MISSING"
+    ],
+    "duplicateRevisions": {
+      "terminalTransactions": [
+        {
+          "id": "A",
+          "terminalId": "T1",
+          "date": "2026-09-05T23:59:00.000Z",
+          "revision": "1"
+        },
+        {
+          "id": "A",
+          "terminalId": "T1",
+          "date": "2026-09-05T23:59:00.000Z",
+          "revision": "2"
+        }
+      ],
+      "terminalCashMovements": [],
+      "terminalCollections": []
+    },
+    "pendingBoundary": [
+      {
+        "id": "B",
+        "terminalId": "T1",
+        "date": "2026-09-06T00:05:00.001Z",
+        "revision": "2"
+      }
+    ]
+  },
+  "limitations": [
+    "Pure captured modules only, synthetic data; not HTTP payload bytes at final transport or ERP persistence.",
+    "Selection uses an explicit T1 predicate for the IDs branch, not an authentication/isolation test.",
+    "Complete Z construction/persistence and renderer not executed; no recovery authorization."
+  ]
+}
