@@ -1,3 +1,5 @@
+import { captureRetainedSet } from "./RetainedCaptureSet";
+import { restoreRetainedSet, validateRetainedRestore } from "./RetainedRestore";
 import { recoveryCanonicalJson } from "./RecoveryJson";
 import type {
   DatabaseAdapter,
@@ -80,6 +82,7 @@ export interface RecoveryTransport {
   }>;
   snapshot(): Promise<RecoverySnapshot>;
   pending?(snapshotId: string): Promise<any>;
+  retainedSet?(snapshotId: string, manifestReceiptId: string): Promise<any>;
   page(
     id: string,
     cursor: string,
@@ -115,7 +118,7 @@ export interface OriginalReference {
   revision: string;
   bodySha256: string;
 }
-const originalRecord = async (row: any): Promise<OriginalRecord> => {
+export const originalRecord = async (row: any): Promise<OriginalRecord> => {
   const raw = bytes(row.body);
   if (raw.length > 524288) fail("ORIGINAL_TOO_LARGE");
   const record: OriginalRecord = {
@@ -475,7 +478,10 @@ export class PendingOperationsRecovery {
           );
           if (
             matches.length !== 1 ||
-            !Object.prototype.hasOwnProperty.call(counts, matches[0].businessState) ||
+            !Object.prototype.hasOwnProperty.call(
+              counts,
+              matches[0].businessState,
+            ) ||
             matches[0].rollbackProven !== false ||
             matches[0].authoritativeForClose !== false
           )
@@ -504,7 +510,79 @@ export class PendingOperationsRecovery {
       return { observedAt, counts };
     });
   }
+  /** Explicit checkpoint after originals are acknowledged; sends only recovery data. */
+  async checkpointRetainedSet(): Promise<OriginalReference> {
+    while (await this.sendPending()) {
+      /* drain bounded batches */
+    }
+    const ctx = await this.transport.context();
+    if (!ctx.enabled) fail("RECOVERY_DISABLED");
+    const id = await captureRetainedSet(this.db, ctx);
+    return this.receiveCapturedOriginal(id);
+  }
+  async preflightRetainedSet(manifestReceiptId?: string): Promise<any> {
+    const ctx = await this.transport.context();
+    const state = await this.db.getDocument<any>(RECOVERY_STATE, "download");
+    if (!ctx.enabled || !state || !this.transport.retainedSet)
+      fail("RETAINED_RESTORE_UNAVAILABLE");
+    const rows = (await this.db.getCollection<any>(RECOVERY_STAGE)).filter(
+      (r) => r.snapshotId === state.snapshot.snapshotId,
+    );
+    const manifests = rows.filter(
+      (r) =>
+        r.record.kind === "MEMBERSHIP" &&
+        (
+          decodeOriginal(
+            new TextDecoder().decode(decodeBase64(r.record.bodyBase64)),
+          ) as any
+        )?.domain === "pos.retained-capture-set.v1",
+    );
+    if (!manifests.length) fail("RETAINED_MANIFEST_REQUIRED");
+    if (new Set(manifests.map((r) => r.record.storageEpoch)).size !== 1)
+      fail("RETAINED_EPOCH_AMBIGUOUS");
+    const latest = manifests.sort((a, b) =>
+      BigInt(a.record.sequence) < BigInt(b.record.sequence) ? 1 : -1,
+    )[0];
+    if (manifestReceiptId && manifestReceiptId !== latest.receiptId)
+      fail("RETAINED_MANIFEST_STALE");
+    const descriptor = await this.transport.retainedSet(
+      state.snapshot.snapshotId,
+      latest.receiptId,
+    );
+    await validateRetainedRestore(ctx, state, rows, descriptor);
+    if ((await this.transport.context()).key !== ctx.key)
+      fail("RECOVERY_SCOPE_CHANGED");
+    return descriptor;
+  }
+  async restoreRetained(): Promise<number> {
+    return this.exclusive(async () => {
+      const descriptor = await this.preflightRetainedSet();
+      const ctx = await this.transport.context();
+      const state = await this.db.getDocument<any>(RECOVERY_STATE, "download");
+      return restoreRetainedSet(this.db, ctx, state, descriptor);
+    });
+  }
   async restore(): Promise<number> {
+    // The explicit manifest selects the restoration path; a failed retained descriptor never falls back.
+    if (this.transport.retainedSet) {
+      const state = await this.db.getDocument<any>(RECOVERY_STATE, "download");
+      if (state) {
+        const rows = await this.db.getCollection<any>(RECOVERY_STAGE);
+        if (
+          rows.some(
+            (row) =>
+              row.snapshotId === state.snapshot.snapshotId &&
+              row.record?.kind === "MEMBERSHIP" &&
+              (
+                decodeOriginal(
+                  new TextDecoder().decode(decodeBase64(row.record.bodyBase64)),
+                ) as any
+              )?.domain === "pos.retained-capture-set.v1",
+          )
+        )
+          return this.restoreRetained();
+      }
+    }
     return this.exclusive(async () => {
       const ctx = await this.transport.context(),
         state = await this.db.getDocument<any>(RECOVERY_STATE, "download");

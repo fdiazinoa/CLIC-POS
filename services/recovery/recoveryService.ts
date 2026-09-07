@@ -32,6 +32,8 @@ export const pendingOperationsRecovery = new PendingOperationsRecovery(
     commercialStatus: (references) =>
       apiSyncAdapter.getOriginalCommercialStatus(references),
     snapshot: () => apiSyncAdapter.createRecoverySnapshot(),
+    retainedSet: (id, receiptId) =>
+      apiSyncAdapter.getRecoveryRetainedSet(id, receiptId),
     pending: (id) => apiSyncAdapter.getRecoveryPendingSelection(id),
     page: (id, cursor) => apiSyncAdapter.getRecoveryPage(id, cursor),
   },
