@@ -383,6 +383,19 @@ export class ClosePreparation {
     scopeKey: string,
     preparationId: string,
   ): Promise<PreparedClose> {
+    return this.withCurrent(
+      scopeKey,
+      preparationId,
+      async (_base, prepared) => prepared,
+    );
+  }
+
+  /** Local-only integration boundary; use base inside work, never the queued proxy/network. */
+  async withCurrent<T>(
+    scopeKey: string,
+    preparationId: string,
+    work: (base: DatabaseAdapter, prepared: PreparedClose) => Promise<T>,
+  ): Promise<T> {
     return withRecoveryPreparation(this.db, scopeKey, async (base) => {
       const id = key(scopeKey, preparationId);
       const prepared = await base.getDocument<PreparedClose>(
@@ -392,7 +405,7 @@ export class ClosePreparation {
       if (!prepared) fail("NOT_FOUND");
       await this.verify(prepared!, scopeKey, id);
       await this.checkCurrent(base, prepared!);
-      return prepared!;
+      return work(base, prepared!);
     });
   }
 }

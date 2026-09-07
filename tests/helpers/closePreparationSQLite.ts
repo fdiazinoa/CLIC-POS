@@ -9,6 +9,7 @@ export function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "pos-close-preparation-"));
   let sql: DatabaseSync;
   let failWrite = false;
+  let failCollection: string | null = null;
   let scope = "company:terminal";
   let enabled = true;
   function open() {
@@ -28,7 +29,11 @@ export function fixture() {
           try {
             for (const row of rows) {
               sql.prepare(row.statement).run(...row.values);
-              if (failWrite) throw Error("disk failed");
+              if (
+                failWrite ||
+                (failCollection && row.values?.[0] === failCollection)
+              )
+                throw Error("disk failed");
             }
             sql.exec("COMMIT");
           } catch (e) {
@@ -57,6 +62,9 @@ export function fixture() {
     },
     fail(v: boolean) {
       failWrite = v;
+    },
+    failOnCollection(v: string | null) {
+      failCollection = v;
     },
     scope(v: string) {
       scope = v;
