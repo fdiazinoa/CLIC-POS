@@ -16,7 +16,7 @@ export function recoveryCanonicalJson(value: unknown, depth = 0): string {
     if (
       Object.keys(value).length !== value.length ||
       Array.from({ length: value.length }, (_, i) => i).some(
-        (i) => !Object.hasOwn(value, i),
+        (i) => !Object.prototype.hasOwnProperty.call(value, i),
       )
     )
       throw Error("RECOVERY_JSON_ARRAY");

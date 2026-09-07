@@ -24,7 +24,7 @@ const object =
     if (typeof value !== "object" || Array.isArray(value)) return invalid();
     const out: Record<string, unknown> = {};
     for (const [key, project] of Object.entries(fields))
-      if (Object.hasOwn(value, key)) put(out, key, project(value[key]));
+      if (Object.prototype.hasOwnProperty.call(value, key)) put(out, key, project(value[key]));
     return out;
   };
 const array =
