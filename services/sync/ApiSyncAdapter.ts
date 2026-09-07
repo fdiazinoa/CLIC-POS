@@ -1,3 +1,4 @@
+import { isSyncFeatureEnabled } from './SyncFeatureFlags';
 import { originalProvenance } from '../recovery/RecoveryRuntime';
 import { isRecoveredOperation } from '../recovery/PendingOperationsRecovery';
 import { readErpPaymentMethodsSnapshot } from '../../utils/erpPaymentMethods';
@@ -3215,6 +3216,10 @@ class ApiSyncAdapter {
         return this.postOperationalPayload('/originals/batch', { records }, { maxRequestBytes: 2 * 1024 * 1024, reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key });
     }
 
+    async getOriginalCommercialStatus(references: unknown[]): Promise<any> {
+        return this.postOperationalPayload('/originals/commercial-status', { references }, { reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key });
+    }
+
     async createRecoverySnapshot(): Promise<any> {
         return this.postOperationalPayload('/originals/snapshots', {}, { reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key });
     }
@@ -4960,7 +4965,8 @@ class ApiSyncAdapter {
 
     private async postErpSalesTransactionWithSmartAuth(
         normalizedTransaction: any,
-        txId: string
+        txId: string,
+        nativeDocument?: any
     ): Promise<{
         target: { baseUrl: string; terminalId: string; token: string; useLocalTarget: boolean; kind: ResolvedSyncTarget['kind'] };
         response: Response;
@@ -4972,6 +4978,11 @@ class ApiSyncAdapter {
 
         for (let retryCount = 0; retryCount <= 1; retryCount += 1) {
             const requestBody = this.buildOperationalPostBody(target, { items: [normalizedTransaction] });
+            if (nativeDocument && isSyncFeatureEnabled('pending_operations_recovery')) {
+                const { prepareCommercialOriginalReference } = await import('../recovery/recoveryService');
+                const reference = await prepareCommercialOriginalReference(nativeDocument, (requestBody.items as unknown[])[0]);
+                if (reference) requestBody.originalRefs = [{ itemIndex: 0, ...reference }];
+            }
             this.logCriticalSalesRequest({
                 authUrl,
                 postUrl,
@@ -5078,7 +5089,7 @@ class ApiSyncAdapter {
                 console.log(
                     `[SYNC_TX_PUSH] ERP direct start base=${operationalTarget.baseUrl} terminal=${operationalTarget.terminalId} tx=${txId} items=${itemsCount}`
                 );
-                const { target, response, text } = await this.postErpSalesTransactionWithSmartAuth(normalizedTransaction, txId);
+                const { target, response, text } = await this.postErpSalesTransactionWithSmartAuth(normalizedTransaction, txId, transaction);
                 const syncBody = this.safeParseSyncJson(text);
                 const responseAudit = syncBody || { raw: text };
                 const isCloudStaging = target.kind === 'POS_CLOUD_STAGING';
