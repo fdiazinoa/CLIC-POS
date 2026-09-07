@@ -31,3 +31,16 @@ El 7-sep-2026 se ejecutó además sobre una copia privada de los dos tickets rea
 - Integración automática del checkpoint fuera del camino de cobro y continuidad tras pérdida de la base requieren trabajo adicional; esta API explícita no las demuestra.
 
 Legacy UNKNOWN; exactZEligible=false; closeAuthorization=NOT_GRANTED. No se certifica recuperabilidad universal.
+
+## Ejecución real en emulador — 7-sep-2026
+
+APK 1.1.302 (1302), fuente bcdb7e6, PR POS #579. ERP confirmó despliegue Production 823b66b1 con corrección b32d6864 y aplicó exclusivamente la función de lectura (`20260907203145` es el timestamp del historial remoto). Allowlist demo conservada y cierre nativo deshabilitado.
+
+- MEMBERSHIP real recibido como receipt 21. Preflight HTTP validó snapshot `381081ae-a907-40b6-a24e-204a3472d3d2`, cuatro placements y 18 referencias no seleccionadas.
+- Con APK detenido y backup SQLite íntegro, se borraron SOLO transactions y transactionHistory en el emulador autorizado; conteo combinado cero.
+- Tras reiniciar, el APK descargó un snapshot nuevo desde ERP y ejecutó su método restore. Resultado: dos ventas y dos entradas de historial; todos los campos persistidos de ambos tickets coinciden, descontando únicamente el marcador `_posRecovery` añadido.
+- Repetición del restore: cuatro ubicaciones reconocidas, conteos permanecen dos/dos; sin nueva captura. Series internas/documentales, originales técnicos, Z, cash, collections y wallet permanecieron idénticos.
+- Productor nativo Z/anexos puro antes y después: igualdad completa para esas entradas; efectivo esperado DOP 1650, CASH 1650 y CARD 1500. SHA256 del contenido tipado: `7829481ee9a1ef35706cafba3f79143e171f867addd06ade403185b372307edc`. No se confirmó declaración física ni se emitió cierre.
+- Aplicación estable en pantalla de login, POS-001 y usuarios conservados. Visualización del historial tras login por el usuario queda pendiente.
+
+Esta ejecución sustituye los pendientes de despliegue, APK, preflight y borrado/restauración controlada indicados arriba. NO fue un borrado integral de la base ni una revinculación: identidad, configuración y tablas técnicas se conservaron. El checkpoint fue explícito. Continúan pendientes su programación automática y la prueba integral de pérdida de base/revinculación. No se declara culminada esa parte del producto.
