@@ -1,0 +1,66 @@
+{
+  "version": "pos.rules-observed.j9.v1",
+  "scope": "OBSERVED_RULES_NOT_UNIVERSAL_POLICY",
+  "rules": [
+    {
+      "field": "payment.applied local",
+      "rule": "appliedAmount ?? applied_amount ?? amountApplied → Number finite else0 → round2; fallback amount",
+      "source": "utils/paymentSettlement.ts",
+      "evidence": "Composed original vs normalized"
+    },
+    {
+      "field": "payment.applied normalized",
+      "rule": "applied_amount ?? appliedAmount ?? amountApplied → Number finite else undefined; writes aliases",
+      "source": "services/sync/sourceIdentity.ts",
+      "evidence": "Composed original vs normalized"
+    },
+    {
+      "field": "payment bucket",
+      "rule": "round2 after each accumulation; discard abs<=0.0001",
+      "source": "utils/zReportPaymentSummary.ts",
+      "evidence": "J8 retained, J9 composed totals"
+    },
+    {
+      "field": "totalsByMethod",
+      "rule": "sum already rounded method amounts, no new rounding in App",
+      "source": "App.tsx",
+      "evidence": "integrated output"
+    },
+    {
+      "field": "declared/system cash",
+      "rule": "Number per currency; invalid→0; sum values without currency conversion",
+      "source": "App.tsx",
+      "evidence": "DOP-only integrated output; multi currency not certified"
+    },
+    {
+      "field": "seller/item/hour annex",
+      "rule": "independent aggregation/round2 and ordering from closeReportOptions, not payment bucket",
+      "source": "utils/closeReportOptions.ts",
+      "evidence": "nonempty annexes compared to monetary input sums"
+    },
+    {
+      "field": "tax annex",
+      "rule": "fiscalBreakdown + taxIdentity; rounding/threshold policy in complete captured sources",
+      "source": "utils/fiscalBreakdown.ts",
+      "evidence": "tax-free branch exercised, other branches pending"
+    },
+    {
+      "field": "UI cash",
+      "rule": "parseFloat||0 simple; denominations sum finite quantity*denomination",
+      "source": "components/ZReportDashboard.tsx",
+      "evidence": "gate callback constraints; DOM reachability pending"
+    },
+    {
+      "field": "UI payment declaration",
+      "rule": "unselected→expected; selected→Number(input||0); gate finite/nonempty",
+      "source": "components/ZReportDashboard.tsx",
+      "evidence": "source and callback guard; operator persistence pending"
+    },
+    {
+      "field": "presentation",
+      "rule": "renderer not executed; no visual precision policy asserted",
+      "source": "services/printer/templates/ZReportReceipt.ts",
+      "evidence": "PENDING user scope"
+    }
+  ]
+}
