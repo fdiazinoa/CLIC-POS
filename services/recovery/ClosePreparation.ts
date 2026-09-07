@@ -1,3 +1,4 @@
+import { recoveryUuid } from './RecoveryUuid';
 import { recoveryCanonicalJson } from "./RecoveryJson";
 import type { DatabaseAdapter } from "../db/DatabaseAdapter";
 import {
@@ -283,8 +284,8 @@ export class ClosePreparation {
       );
       const commandCapture = currentCapture || {
         id: "capture",
-        storageEpoch: crypto.randomUUID(),
-        openSetId: crypto.randomUUID(),
+        storageEpoch: recoveryUuid(),
+        openSetId: recoveryUuid(),
         sequence: "0",
       };
       const receivedContext = {
@@ -296,9 +297,9 @@ export class ClosePreparation {
       const observation = await this.observe(base);
       if (!currentCapture) observation.capture = encodeOriginal(commandCapture);
       const closeControl = {
-        closeId: crypto.randomUUID(),
-        closeEventId: crypto.randomUUID(),
-        nextOpenSetId: crypto.randomUUID(),
+        closeId: recoveryUuid(),
+        closeEventId: recoveryUuid(),
+        nextOpenSetId: recoveryUuid(),
       };
       const preparedAt = new Date().toISOString();
       let nativeReport;
@@ -373,7 +374,7 @@ export class ClosePreparation {
         domain: "pos.close.preparation.local.v1",
         version: 1,
         requestBody,
-        commandId: crypto.randomUUID(),
+        commandId: recoveryUuid(),
         closeControl,
         preparedAt,
         ...(nativeReport ? { nativeReport, nativeConfiguration } : {}),

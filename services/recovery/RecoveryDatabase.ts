@@ -1,3 +1,4 @@
+import { recoveryUuid } from './RecoveryUuid';
 import { projectNativeZConfiguration } from "./NativeZConfiguration";
 import type {
   DatabaseAdapter,
@@ -81,8 +82,8 @@ export function recoveryDatabase(
     const previous = await base.getDocument<any>(RECOVERY_STATE, "capture");
     const state = previous || {
       id: "capture",
-      storageEpoch: crypto.randomUUID(),
-      openSetId: crypto.randomUUID(),
+      storageEpoch: recoveryUuid(),
+      openSetId: recoveryUuid(),
       sequence: "0",
     };
     const extra: DurableDocumentMutation[] = [];
@@ -218,7 +219,7 @@ export function recoveryDatabase(
       const body = encodeOriginal({ ...envelope, transport });
       const record = {
         ...previous,
-        id: crypto.randomUUID(),
+        id: recoveryUuid(),
         body,
         sequence: state.sequence,
         revision: state.sequence,

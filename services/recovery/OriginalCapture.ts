@@ -1,3 +1,4 @@
+import { recoveryUuid } from './RecoveryUuid';
 import { encodeOriginal } from "./OriginalCodec";
 export const RECOVERY_OUTBOX = "recoveryOriginals";
 export const RECOVERY_STATE = "recoveryState";
@@ -71,7 +72,7 @@ export function captureDocument(
     configuration: encodeOriginal(configuration),
   });
   return {
-    id: crypto.randomUUID(),
+    id: recoveryUuid(),
     kind,
     originalId: document.id,
     localTerminalId:

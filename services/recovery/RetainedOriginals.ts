@@ -1,3 +1,4 @@
+import { recoveryUuid } from './RecoveryUuid';
 import type {
   DatabaseAdapter,
   DurableDocumentMutation,
@@ -42,8 +43,8 @@ export function captureRetainedOriginals(
     }
     const state = (await base.getDocument<any>(RECOVERY_STATE, "capture")) || {
       id: "capture",
-      storageEpoch: crypto.randomUUID(),
-      openSetId: crypto.randomUUID(),
+      storageEpoch: recoveryUuid(),
+      openSetId: recoveryUuid(),
       sequence: "0",
     };
     const mutations: DurableDocumentMutation[] = [];

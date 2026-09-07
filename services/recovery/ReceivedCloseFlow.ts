@@ -1,3 +1,4 @@
+import { recoveryUuid } from './RecoveryUuid';
 import type {
   DatabaseAdapter,
   DurableDocumentMutation,
@@ -516,7 +517,7 @@ export class ReceivedCloseFlow {
           document: {
             ...(capture || {
               id: "capture",
-              storageEpoch: crypto.randomUUID(),
+              storageEpoch: recoveryUuid(),
               sequence: "0",
             }),
             openSetId: ack.nextOpenSetId,
