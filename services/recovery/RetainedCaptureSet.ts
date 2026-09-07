@@ -125,7 +125,8 @@ export function captureRetainedSet(
     if (placements.length > 2000) throw Error("RETAINED_LIMIT");
     const previous = await base.getDocument<any>(RECOVERY_STATE, "retainedSet");
     if (
-      previous?.context === ctx.key &&
+      previous?.captureId &&
+      previous.context === ctx.key &&
       same(previous.placements, placements) &&
       previous.storageEpoch === state.storageEpoch &&
       previous.sequence === state.sequence

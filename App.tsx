@@ -1,3 +1,4 @@
+import { discoverPendingOperationsRecovery } from "./services/recovery/recoveryService";
 import RecoveryCloseDialog from './components/RecoveryCloseDialog';
 import type { RecoveryCloseInput } from './services/recovery/RecoveryCloseController';
 import { originalProvenance } from './services/recovery/RecoveryRuntime';
@@ -1957,6 +1958,18 @@ const AppContent: React.FC = () => {
   const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [licenseError, setLicenseError] = useState<string | null>(null);
+  const [, refreshRecoveryAvailability] = useState(0);
+  useEffect(() => {
+    if (!isDataLoaded || !isSecurityLoaded) return;
+    let active = true;
+    const discover = () => { void discoverPendingOperationsRecovery().then(() => {
+      if (active) refreshRecoveryAvailability(value => value + 1);
+    }).catch(() => { /* Keep validated offline availability; retry on reconnection. */ }); };
+    discover();
+    window.addEventListener('online', discover);
+    return () => { active = false; window.removeEventListener('online', discover); };
+  }, [isDataLoaded, isSecurityLoaded]);
+
   const [terminalAuthorizationBlock, setTerminalAuthorizationBlock] = useState<TerminalAuthorizationBlock | null>(
     () => readPersistedTerminalAuthorizationBlock(),
   );

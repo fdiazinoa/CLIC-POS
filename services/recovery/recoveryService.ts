@@ -1,3 +1,7 @@
+import {
+  configureRecoveryAvailability,
+  discoverRecoveryAvailability,
+} from "./RecoveryAvailability";
 import { captureRetainedOriginals } from "./RetainedOriginals";
 import { ReceivedCloseFlow } from "./ReceivedCloseFlow";
 import { RecoveryCloseController } from "./RecoveryCloseController";
@@ -8,6 +12,14 @@ import { PendingOperationsRecovery } from "./PendingOperationsRecovery";
 import { captureOriginalTransport } from "./RecoveryDatabase";
 import { originalProvenance } from "./RecoveryRuntime";
 import { ClosePreparation } from "./ClosePreparation";
+configureRecoveryAvailability(() => originalProvenance().key);
+export const discoverPendingOperationsRecovery = async () => {
+  const enabled = await discoverRecoveryAvailability(originalProvenance, () =>
+    apiSyncAdapter.recoveryCapabilities(),
+  );
+  if (enabled) await pendingOperationsRecovery.ensureRetainedContinuity();
+  return enabled;
+};
 /** Internal preparation API; it does not send or authorize a recovered close. */
 export const closePreparation = new ClosePreparation(dbAdapter);
 export const pendingOperationsRecovery = new PendingOperationsRecovery(
@@ -23,6 +35,7 @@ export const pendingOperationsRecovery = new PendingOperationsRecovery(
       return {
         ...after,
         commercialBindingVersion: capabilities.commercialBindingVersion,
+        retainedEpochVersion: capabilities.retainedEpochVersion,
         recoveryScope: capabilities.receivedClose?.scope,
         enabled:
           capabilities.enabled === true && capabilities.contractVersion === 1,
@@ -31,6 +44,9 @@ export const pendingOperationsRecovery = new PendingOperationsRecovery(
     receive: (records) => apiSyncAdapter.receiveRecoveryOriginals(records),
     commercialStatus: (references) =>
       apiSyncAdapter.getOriginalCommercialStatus(references),
+    resumeEpoch: (request) =>
+      apiSyncAdapter.retainedEpochRequest(request.requestId, request),
+    getRetainedEpoch: (id) => apiSyncAdapter.retainedEpochRequest(id),
     snapshot: () => apiSyncAdapter.createRecoverySnapshot(),
     retainedSet: (id, receiptId) =>
       apiSyncAdapter.getRecoveryRetainedSet(id, receiptId),

@@ -1,4 +1,4 @@
-import { recoveryUuid } from './RecoveryUuid';
+import { recoveryUuid } from "./RecoveryUuid";
 import { projectNativeZConfiguration } from "./NativeZConfiguration";
 import type {
   DatabaseAdapter,
@@ -64,6 +64,18 @@ export function recoveryDatabase(
     return result;
   };
   const addCaptures = async (documents: DurableDocumentMutation[]) => {
+    const transition = await base.getDocument<any>(
+      RECOVERY_STATE,
+      "retainedEpochTransition",
+    );
+    if (
+      transition?.status === "PREPARED" &&
+      documents.some(
+        (d) =>
+          CAPTURE_COLLECTIONS[d.collectionName] && !d.document?._posRecovery,
+      )
+    )
+      throw Error("RECOVERY_CONTINUITY_PENDING");
     const config = await base.getDocument<any>("config", "current");
     const configuration = config ? projectNativeZConfiguration(config) : null;
     const captures = documents

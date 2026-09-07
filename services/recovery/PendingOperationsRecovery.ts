@@ -1,3 +1,4 @@
+import { prepareRetainedEpoch, applyRetainedEpoch } from "./RetainedEpoch";
 import { captureRetainedSet } from "./RetainedCaptureSet";
 import { restoreRetainedSet, validateRetainedRestore } from "./RetainedRestore";
 import { recoveryCanonicalJson } from "./RecoveryJson";
@@ -53,6 +54,7 @@ export interface RecoveryTransport {
     terminalIds: string[];
     enabled: boolean;
     commercialBindingVersion?: number;
+    retainedEpochVersion?: number;
     recoveryScope?: {
       tenantId: string;
       companyId: string;
@@ -80,6 +82,8 @@ export interface RecoveryTransport {
       authoritativeForClose: boolean;
     }>;
   }>;
+  resumeEpoch?(request: any): Promise<any>;
+  getRetainedEpoch?(requestId: string): Promise<any | null>;
   snapshot(): Promise<RecoverySnapshot>;
   pending?(snapshotId: string): Promise<any>;
   retainedSet?(snapshotId: string, manifestReceiptId: string): Promise<any>;
@@ -253,21 +257,62 @@ export class PendingOperationsRecovery {
         return null;
       const record = await originalRecord(row);
       if (row.status !== "RECEIVED") {
-        if ((await this.transport.context()).key !== ctx.key)
-          fail("RECOVERY_SCOPE_CHANGED");
-        const ack = await this.transport.receive([record]);
-        const matches = ack.receipts?.filter(
-          (r) =>
-            r.kind === record.kind &&
-            r.originalId === record.originalId &&
-            r.revision === record.revision &&
-            r.bodySha256 === record.bodySha256 &&
-            r.receiptStatus === "RECEIVED",
-        );
-        if (matches?.length !== 1 || !matches[0].receiptId)
-          fail("ORIGINAL_ACK_MISMATCH");
-        row = { ...row, status: "RECEIVED", receipt: matches[0] };
-        await this.commit([{ collectionName: RECOVERY_OUTBOX, document: row }]);
+        // Commercial binding may request a later transport revision. Drain earlier
+        // originals first so the ERP epoch fence never strands a valid earlier capture.
+        const pending = (await this.db.getCollection<any>(RECOVERY_OUTBOX))
+          .filter(
+            (r) =>
+              r.status === "PENDING" &&
+              r.storageEpoch === row.storageEpoch &&
+              BigInt(r.sequence) <= BigInt(row.sequence),
+          )
+          .sort((a, b) => (BigInt(a.sequence) < BigInt(b.sequence) ? -1 : 1));
+        while (pending.length) {
+          const selected: any[] = [],
+            records: OriginalRecord[] = [];
+          let size = 4096;
+          while (pending.length && records.length < 100) {
+            const candidate = pending[0];
+            if (
+              candidate.originKey !== ctx.key ||
+              !ctx.terminalIds.includes(candidate.localTerminalId)
+            )
+              fail("ORIGINAL_TERMINAL_UNBOUND");
+            const next = await originalRecord(candidate),
+              n = recordBytes(next).length;
+            if (size + n > 2 * 1024 * 1024) break;
+            pending.shift();
+            selected.push(candidate);
+            records.push(next);
+            size += n + 1;
+          }
+          if (!records.length) fail("ORIGINAL_TOO_LARGE");
+          if ((await this.transport.context()).key !== ctx.key)
+            fail("RECOVERY_SCOPE_CHANGED");
+          const ack = await this.transport.receive(records);
+          const mutations: DurableDocumentMutation[] = records.map((r, i) => {
+            const matches = ack.receipts?.filter(
+              (a) =>
+                a.kind === r.kind &&
+                a.originalId === r.originalId &&
+                a.revision === r.revision &&
+                a.bodySha256 === r.bodySha256 &&
+                a.receiptStatus === "RECEIVED",
+            );
+            if (matches?.length !== 1 || !matches[0].receiptId)
+              fail("ORIGINAL_ACK_MISMATCH");
+            return {
+              collectionName: RECOVERY_OUTBOX,
+              document: {
+                ...selected[i],
+                status: "RECEIVED",
+                receipt: matches[0],
+              },
+            };
+          });
+          await this.commit(mutations);
+        }
+        row = await this.db.getDocument<any>(RECOVERY_OUTBOX, captureId);
       }
       if ((await this.transport.context()).key !== ctx.key)
         fail("RECOVERY_SCOPE_CHANGED");
@@ -510,9 +555,66 @@ export class PendingOperationsRecovery {
       return { observedAt, counts };
     });
   }
+  private continuityRun: Promise<void> | null = null;
+  async ensureRetainedContinuity(): Promise<void> {
+    if (this.continuityRun) return this.continuityRun;
+    const run = this.resumeRetainedContinuity();
+    this.continuityRun = run;
+    return run.finally(() => {
+      if (this.continuityRun === run) this.continuityRun = null;
+    });
+  }
+  private async resumeRetainedContinuity(): Promise<void> {
+    if (this.running) return;
+    const ctx = await this.transport.context();
+    if (
+      !ctx.enabled ||
+      !this.transport.resumeEpoch ||
+      !this.transport.getRetainedEpoch
+    )
+      return;
+    const capture = await this.db.getDocument<any>(RECOVERY_STATE, "capture");
+    const set = await this.db.getDocument<any>(RECOVERY_STATE, "retainedSet");
+    const transition = await this.db.getDocument<any>(
+      RECOVERY_STATE,
+      "retainedEpochTransition",
+    );
+    if (
+      capture &&
+      set?.context === ctx.key &&
+      set.storageEpoch === capture.storageEpoch &&
+      transition?.status !== "PREPARED"
+    )
+      return;
+    if (
+      !(await this.db.getCollection<any>(RECOVERY_STATE)).some((s) =>
+        s.id.startsWith("retainedImport:"),
+      )
+    )
+      return;
+    if (ctx.retainedEpochVersion !== 1) fail("RETAINED_CONTINUITY_UNAVAILABLE");
+    let state = transition;
+    if (!state) {
+      await this.download(true);
+      const descriptor = await this.preflightRetainedSet();
+      state = await prepareRetainedEpoch(this.db, ctx, descriptor);
+    }
+    if (state.context !== ctx.key) fail("RECOVERY_SCOPE_CHANGED");
+    const ack =
+      state.ack ||
+      (await this.transport.getRetainedEpoch(state.request.requestId)) ||
+      (await this.transport.resumeEpoch(state.request));
+    if ((await this.transport.context()).key !== ctx.key)
+      fail("RECOVERY_SCOPE_CHANGED");
+    // Validate the live lineage even after a durable ACK: another revinculation may have superseded it.
+    await this.download(true);
+    const descriptor = await this.preflightRetainedSet();
+    await applyRetainedEpoch(this.db, ctx, state, ack, descriptor);
+  }
   /** Background-only: bounded upload, then seal only a locally established epoch. */
   async updateRetainedBackup(): Promise<void> {
     if (this.running) return;
+    await this.ensureRetainedContinuity();
     const ctx = await this.transport.context();
     if (!ctx.enabled) return;
     const capture = await this.db.getDocument<any>(RECOVERY_STATE, "capture");
@@ -566,10 +668,8 @@ export class PendingOperationsRecovery {
         )?.domain === "pos.retained-capture-set.v1",
     );
     if (!manifests.length) fail("RETAINED_MANIFEST_REQUIRED");
-    if (new Set(manifests.map((r) => r.record.storageEpoch)).size !== 1)
-      fail("RETAINED_EPOCH_AMBIGUOUS");
     const latest = manifests.sort((a, b) =>
-      BigInt(a.record.sequence) < BigInt(b.record.sequence) ? 1 : -1,
+      BigInt(a.receiptId) < BigInt(b.receiptId) ? 1 : -1,
     )[0];
     if (manifestReceiptId && manifestReceiptId !== latest.receiptId)
       fail("RETAINED_MANIFEST_STALE");
@@ -588,6 +688,9 @@ export class PendingOperationsRecovery {
       const ctx = await this.transport.context();
       const state = await this.db.getDocument<any>(RECOVERY_STATE, "download");
       return restoreRetainedSet(this.db, ctx, state, descriptor);
+    }).then(async (count) => {
+      await this.ensureRetainedContinuity();
+      return count;
     });
   }
   async restore(): Promise<number> {

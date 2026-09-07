@@ -1,3 +1,4 @@
+import { hasDiscoveredRecoveryAvailability } from "../recovery/RecoveryAvailability";
 export type SyncFeatureFlagName =
     | 'adaptive_polling'
     | 'sync_hint_v2'
@@ -68,7 +69,7 @@ export const isSyncFeatureEnabled = (name: SyncFeatureFlagName): boolean => {
         localValue: typeof localStorage !== 'undefined'
             ? localStorage.getItem(`${LOCAL_PREFIX}${name}`)
             : null,
-        envValue: env[ENV_KEYS[name]],
+        envValue: name === 'pending_operations_recovery' && hasDiscoveredRecoveryAvailability() ? 'true' : env[ENV_KEYS[name]],
         legacyPrivateEnvValue: env.VITE_SYNC_PRIVATE_REALTIME_ENABLED,
     });
 };
