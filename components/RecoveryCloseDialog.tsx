@@ -15,12 +15,15 @@ export default function RecoveryCloseDialog({
   const [jobs, setJobs] = useState<any[]>([]),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
+    [notice, setNotice] = useState(""),
     [completed, setCompleted] = useState(false),
     [financialState, setFinancialState] = useState<string | null>(null),
     [available, setAvailable] = useState(false),
     [availabilityMessage, setAvailabilityMessage] = useState("");
   const refresh = async () =>
-    setJobs((await controller.list()).filter((j) => !j.published));
+    setJobs(
+      (await controller.list()).filter((j) => !j.published && !j.cancelled),
+    );
   const checkAvailability = async () => {
     try {
       await controller.availability();
@@ -44,6 +47,7 @@ export default function RecoveryCloseDialog({
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
     setError("");
+    setNotice("");
     try {
       await work();
     } catch (e) {
@@ -156,6 +160,28 @@ export default function RecoveryCloseDialog({
                       )}
                     </ul>
                   )}
+                  {!job.ack && error.includes("CLOSE_COMMIT_NUMBER_USED") && (
+                    <button
+                      className="border rounded px-4 py-2 my-2"
+                      disabled={busy || !available}
+                      onClick={() =>
+                        run(async () => {
+                          const result = await controller.resolveNumberConflict(
+                            job.preparationId,
+                          );
+                          if (result.status === "COMMITTED") {
+                            setFinancialState(result.financialState || null);
+                            setCompleted(true);
+                          } else
+                            setNotice(
+                              "ERP corrigió la numeración y anuló este intento sin crear un cierre. Pulsa Revisar jornada con ERP para continuar con tus mismas ventas.",
+                            );
+                        })
+                      }
+                    >
+                      Corregir número ocupado
+                    </button>
+                  )}
                   <button
                     disabled={busy || !available}
                     className="bg-blue-700 text-white rounded px-4 py-2 mt-2 disabled:opacity-50"
@@ -212,6 +238,11 @@ export default function RecoveryCloseDialog({
               Comprobar conexión y disponibilidad
             </button>
           </div>
+        )}
+        {notice && (
+          <p role="status" className="my-3">
+            {notice}
+          </p>
         )}
         {busy && (
           <p role="status" className="mt-3">

@@ -135,6 +135,11 @@ export const receivedCloseFlow = new ReceivedCloseFlow(dbAdapter, {
     ),
   submit: (body) =>
     apiSyncAdapter.receivedCloseRequest("/close-preparations", body),
+  cancelNumberConflict: (commandId, exactBody) =>
+    apiSyncAdapter.receivedCloseRequest(
+      `/close-preparations/${encodeURIComponent(commandId)}/cancel-number-conflict`,
+      JSON.stringify({ request: JSON.parse(exactBody) }),
+    ),
   result: (id) =>
     apiSyncAdapter.receivedCloseRequest(
       `/close-preparations/${encodeURIComponent(id)}/result`,
