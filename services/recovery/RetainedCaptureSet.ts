@@ -58,7 +58,7 @@ export function captureRetainedSet(
     const placements: any[] = [];
     for (const [collection, kind] of Object.entries(CAPTURE_COLLECTIONS)) {
       for (const document of await base.getCollection<any>(collection)) {
-        if (document?._posRecovery) {
+        if (document?._posRecovery && !document._posRecovery.closedImage) {
           const marker = document._posRecovery;
           const staged = await base.getDocument<any>(
             RECOVERY_STAGE,
@@ -107,7 +107,15 @@ export function captureRetainedSet(
         )
           throw Error("RETAINED_ORIGINAL_NOT_RECEIVED");
         const envelope = decodeOriginal(row.body) as any;
-        if (!samePersistedImage(decodeOriginal(envelope.document), document))
+        const { _posRecovery, ...unmarked } = document;
+        const image = _posRecovery?.closedImage ? unmarked : document;
+        if (
+          _posRecovery?.closedImage &&
+          ((!document.zReportId && kind !== "Z_REPORT") ||
+            envelope.closeCommitId !== _posRecovery.commitId)
+        )
+          throw Error("RETAINED_CLOSE_BINDING");
+        if (!samePersistedImage(decodeOriginal(envelope.document), image))
           throw Error("RETAINED_IMAGE_CHANGED");
         const record = await originalRecord(row);
         if (row.receipt.bodySha256 !== record.bodySha256)

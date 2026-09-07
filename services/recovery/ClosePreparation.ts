@@ -1,4 +1,4 @@
-import { recoveryUuid } from './RecoveryUuid';
+import { recoveryUuid } from "./RecoveryUuid";
 import { recoveryCanonicalJson } from "./RecoveryJson";
 import type { DatabaseAdapter } from "../db/DatabaseAdapter";
 import {
@@ -56,6 +56,11 @@ export interface ClosePreparationInput {
   }>;
   /** Native confirmed input, preserved as given, without inventing defaults. */
   declaration: unknown;
+  retainedSet?: {
+    manifestReference: any;
+    descriptorHash: string;
+    configurationBasis: "CURRENT_AT_PREPARATION";
+  };
   /** Optional native producer; declaration is the existing reportData input. */
   nativeZ?: {
     configurationSha256: string;
@@ -99,7 +104,10 @@ export class ClosePreparation {
     document: any,
   ) {
     const kind = CAPTURE_COLLECTIONS[collection];
-    if (document._posRecovery?.snapshotId) {
+    if (
+      document._posRecovery?.snapshotId &&
+      !document._posRecovery.closedImage
+    ) {
       const marker = document._posRecovery;
       const rows = (await base.getCollection<any>(RECOVERY_STAGE)).filter(
         (row) =>
@@ -166,9 +174,15 @@ export class ClosePreparation {
     )
       fail("MISSING_ORIGINAL");
     const envelope = decodeOriginal(original.body) as any;
+    const { _posRecovery, ...unmarked } = document;
+    if (
+      _posRecovery?.closedImage &&
+      envelope.closeCommitId !== _posRecovery.commitId
+    )
+      fail("CLOSE_EVIDENCE_MISMATCH");
     if (
       JSON.stringify(decodeOriginal(envelope.document)) !==
-      JSON.stringify(document)
+      JSON.stringify(_posRecovery?.closedImage ? unmarked : document)
     )
       fail("ORIGINAL_MISMATCH");
     // Technical receipt/status changes do not change the frozen native revision.
@@ -289,10 +303,11 @@ export class ClosePreparation {
         sequence: "0",
       };
       const receivedContext = {
-        version: 1,
+        version: request.retainedSet ? 2 : 1,
         storageEpoch: commandCapture.storageEpoch,
         openSetId: commandCapture.openSetId,
         coverage: "RECEIVED_ONLY",
+        ...(request.retainedSet ? { retainedSet: request.retainedSet } : {}),
       };
       const observation = await this.observe(base);
       if (!currentCapture) observation.capture = encodeOriginal(commandCapture);

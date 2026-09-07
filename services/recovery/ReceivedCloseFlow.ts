@@ -1,4 +1,6 @@
-import { recoveryUuid } from './RecoveryUuid';
+import { committedCloseCaptures } from "./CommittedCloseCapture";
+import { samePersistedImage } from "./RetainedCaptureSet";
+import { recoveryUuid } from "./RecoveryUuid";
 import type {
   DatabaseAdapter,
   DurableDocumentMutation,
@@ -436,13 +438,21 @@ export class ReceivedCloseFlow {
             m.collection === "transactions"
               ? "transactionHistory"
               : m.collection;
-          if (
-            destination === "transactionHistory" &&
-            (await base.getDocument(destination, m.id))
-          )
-            fail("LOCAL_COLLISION");
           const doc = await base.getDocument<any>(m.collection, m.id);
           if (!doc || doc.zReportId) fail("LOCAL_MEMBER_CHANGED");
+          if (destination === "transactionHistory") {
+            const history = await base.getDocument<any>(destination, m.id);
+            if (history) {
+              const { _posRecovery: historicalMarker, ...historicalImage } =
+                history;
+              const { _posRecovery: activeMarker, ...activeImage } = doc;
+              if (
+                history.zReportId ||
+                !samePersistedImage(historicalImage, activeImage)
+              )
+                fail("LOCAL_COLLISION");
+            }
+          }
           changes.push({
             collectionName: destination,
             document: {
@@ -553,7 +563,11 @@ export class ReceivedCloseFlow {
           }),
         });
         if (!base.saveDocumentsAtomically) fail("ATOMIC_UNAVAILABLE");
-        await base.saveDocumentsAtomically(changes, false, ["transactions"]);
+        await base.saveDocumentsAtomically(
+          await committedCloseCaptures(base, changes, scopeKey, ack),
+          false,
+          ["transactions"],
+        );
       },
     );
   }
