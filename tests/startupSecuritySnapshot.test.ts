@@ -67,7 +67,7 @@ test('ERP startup uses the local roster; local startup keeps general config', as
   assert.deepEqual(local.calls, ['general']); assert.equal(local.result.users, null);
 });
 
-test('ERP refresh is deferred until after the login loading gate opens', async () => {
+test('empty local roster fetches security instead of reusing the startup cache', async () => {
   const failed = await runBoot(true, true);
   assert.deepEqual(failed.result.users, []); assert.equal(failed.result.config, failed.initial);
   const expression = app.match(/const refreshedUsers = (startupErpUsers !== null[\s\S]*?refreshErpPosUserRoster\(finalConfig\));/)?.[1];
@@ -76,12 +76,12 @@ test('ERP refresh is deferred until after the login loading gate opens', async (
     let retries = 0;
     const latestPersistedUsers: unknown[] = [];
     const evaluate = runInNewContext(`(async () => ${expression})`, {
-      startupErpUsers: users, localUsers: latestPersistedUsers, finalConfig: {}, syncManager: { refreshErpPosUserRoster: async () => { retries++; return []; } },
+      startupErpUsers: users, usableUsers: [], localUsers: latestPersistedUsers, finalConfig: {}, syncManager: { refreshErpPosUserRoster: async () => { retries++; return []; } },
     });
     const result = await evaluate();
-    assert.equal(retries, users === null ? 1 : 0);
+    assert.equal(retries, 1);
     assert.equal(result.length, 0, 'a newer empty roster must not resurrect a revoked user');
-    if (users !== null) assert.equal(result, latestPersistedUsers);
+
   }
   assert.match(app, /if \(usableUsers.length === 0\) \{\s*throw new Error/);
   assert.ok(app.indexOf('const license = await checkLicenseStatus') < app.indexOf('let startupErpUsers:'));
@@ -96,4 +96,41 @@ test('ERP security refresh is scheduled only after the login loading gate opens'
   assert.match(app.slice(gate, scheduledRefresh), /window\.setTimeout\(\(\) => \{/);
   assert.match(app.slice(scheduledRefresh, scheduledRefresh + 200), /deferDuringSale: true/);
   assert.match(app.slice(scheduledRefresh, scheduledRefresh + 900), /setUsers\(refreshedUsers\)/);
+});
+
+
+test('missing local roster requests a full security snapshot despite saved cursors', async () => {
+  const instance = subject('ERP_ACTIVE', [], async (_: unknown, options: any) => {
+    assert.equal(options.forceFullCatalog, true);
+    return { terminals: [] };
+  });
+  await instance.refreshErpStartupSecurity({ terminals: [] });
+});
+
+test('background users unlock a failed bootstrap; empty users never unlock it', async () => {
+  const start = app.indexOf('.then(async (security) => {', app.indexOf("markBootStage('READY')"));
+  const body = app.slice(start + '.then(async (security) => {'.length, app.indexOf('                  })', start));
+  for (const users of [[], [{ id: 'authorized', syncSource: 'ERP_SNAPSHOT' }]]) {
+    let loaded = false; let error: string | null = 'No authorized users';
+    const execute = runInNewContext(ts.transpile(`(async () => {${body}})`, { target: ts.ScriptTarget.ES2022 }), {
+      security: {}, db: { get: async () => users }, visiblePosUsersForRuntime: (value: unknown) => value,
+      setUsers() {}, setConfig() {}, setBootstrapError(value: string | null) { error = value; },
+      setIsSecurityLoaded(value: boolean) { loaded = value; },
+    });
+    await execute();
+    assert.equal(loaded, users.length > 0);
+    assert.equal(error, users.length > 0 ? null : 'No authorized users');
+  }
+});
+
+
+test('existing local users keep immediate offline login without another blocking request', async () => {
+  const expression = app.match(/const refreshedUsers = (startupErpUsers !== null[\s\S]*?refreshErpPosUserRoster\(finalConfig\));/)?.[1];
+  assert.ok(expression);
+  const users = [{ id: 'offline-user' }];
+  const execute = runInNewContext(`(async () => ${expression})`, {
+    startupErpUsers: users, usableUsers: users, localUsers: users, finalConfig: {},
+    syncManager: { refreshErpPosUserRoster: async () => { throw new Error('must not request network'); } },
+  });
+  assert.equal(await execute(), users);
 });
