@@ -1,3 +1,4 @@
+import { captureRetainedOriginals } from "./RetainedOriginals";
 import { ReceivedCloseFlow } from "./ReceivedCloseFlow";
 import { RecoveryCloseController } from "./RecoveryCloseController";
 import { dbAdapter } from "../db";
@@ -34,6 +35,7 @@ export const pendingOperationsRecovery = new PendingOperationsRecovery(
     pending: (id) => apiSyncAdapter.getRecoveryPendingSelection(id),
     page: (id, cursor) => apiSyncAdapter.getRecoveryPage(id, cursor),
   },
+  (context) => captureRetainedOriginals(dbAdapter, context),
 );
 
 /** Called only by the background commercial sender, never by checkout persistence. */
