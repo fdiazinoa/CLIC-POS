@@ -41,3 +41,19 @@ Una preparación puede incluir `nativeZ:{configurationSha256,user,notes}`. En es
 `tests/fixtures/nativeZReport-parent.json` conserva entradas y salidas tipadas obtenidas del código de App.tsx en develop 9a363b8 antes de la extracción. Se ejecutaron sus bloques originales sin efectos, con reloj fijo y se retiraron solo id/numeración/closedAt/syncStatus. Cuatro casos contrastan la salida completa: defaults, medianoche con devolución/caja/abono, aliases y métodos mixtos, monedas y precisión. Incluyen características que ERP aún puede bloquear: son caracterización de POS, no perfiles aprobados. No se modificaron vectores históricos de auditoría. La zona horaria del corpus se fija para contrastar los anexos por hora que ya dependían del entorno.
 
 Esta ampliación pasó 82 pruebas y build; lint sigue bloqueado por la configuración base ausente. El recorrido de preparación con reporte nativo se prueba en SQLite de archivo, incluyendo reapertura, mismos IDs y anexos, falta de número y rechazo de configuración discrepante. El productor no calcula journal ERP, no inventa sello ni crea evidencia privada. La UI de recuperación y la aceptación operacional aún no están conectadas.
+
+## Contraste integrado con productor ERP
+
+`tests/recoveryNativePacket.test.ts` ejecuta ClosePreparation y el productor nativo POS reales sobre SQLite en archivo, recibe los originales en PostgreSQL 18.4 y llama al productor ERP real de `52f533bb` mediante su RPC readonly `erp_pos_recovered_close_material` bajo service_role. Aplica las seis migraciones únicamente en un cluster temporal nuevo en loopback; no lee DATABASE_URL ni contacta una base existente.
+
+```sh
+CLIC_ERP_REVIEW_PATH=/ruta/al/checkout/CLIC-ERP \
+CLIC_EMBEDDED_POSTGRES_MODULE=/tmp/clic-original-pg-tests/node_modules/embedded-postgres/dist/index.js \
+npx tsx --test tests/recoveryNativePacket.test.ts
+```
+
+Resultado: PASS para dos TICKET DOP que cruzan medianoche. El reporte preparado completo produce la proyección JSON esperada y journal por 150; después de cerrar/reabrir SQLite, conserva preparación y packetJson. Declaración cambiada, referencias omitidas y evento FAILED rechazan; el contenido de inbox, series, journals, commits, asignaciones y evidencia permanece intacto durante producción y rechazo. En POS no aparecen Z ni avances de series. El RPC permitido por el adaptador de prueba es exclusivamente el lector de material.
+
+Los originales y la preparación provienen de los productores POS, pero los eventos comerciales APPLIED/deferred y sus links contables se instalan como fixtures sintéticos: no se ejecuta un applier comercial ni se prueba autenticación/takeover real. Las tablas ERP son el esquema mínimo del harness, no una certificación de compatibilidad con producción. Esta prueba no demuestra aceptación, corte autenticado, semántica de todos los canales ni coordinación operacional. No añade endpoint ni conecta UI. El kernel de mantenimiento aislado no se usa.
+
+Validación conjunta: 83 pruebas POS/integración PASS sin skips, build PASS; 59 pruebas ERP y 44 escenarios PostgreSQL ERP reproducidos independientemente. Lint permanece bloqueado por la configuración base ausente. El fixture SQLite compartido se extrajo de las pruebas existentes sin cambiar su comportamiento. Sin escrituras remotas, dispositivos ni operaciones reales.
