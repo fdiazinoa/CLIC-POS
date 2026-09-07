@@ -31,3 +31,19 @@ Sin ambas variables la prueba conjunta se omite; un resultado omitido no demuest
 Código y pruebas aisladas completados. Esta entrega todavía no está instalada: emulador sigue en APK 1.1.304 (1304), que incluye PR #580. ERP #2026 requiere integración y migración antes de probar continuidad real. El siguiente APK debe conservar #580 y estas modificaciones; validar descubrimiento sin bandera manual y un nuevo respaldo tras recuperar en la misma terminal demo.
 
 No se cambió pairing/takeover ni cálculo de cierre. La evidencia previa de borrado real y restauración de dos tickets corresponde al APK 1.1.304, con habilitación manual; no demuestra esta automatización nueva. Las pruebas aisladas no demuestran despliegue, disponibilidad remota ni recuperación de operaciones que nunca salieron del dispositivo. Legacy UNKNOWN, exactZEligible=false, closeAuthorization=NOT_GRANTED.
+
+## Validación real del APK 1.1.305
+
+Fuente develop 05ce221, APK1305 instalado mediante actualización en 127.0.0.1:6555. ERP #2026 efectivo y migración autorizada 20260907215647. Se retiraron únicamente la bandera local de prueba y caché de descubrimiento antes de instalar. Al arrancar: descubrimiento automático exitoso, cuatro usuarios conservados, CAS automático ACKNOWLEDGED (requestId 11a31892-9334-44f0-996b-4627ec257adc, generation1).
+
+El método real updateRetainedBackup del APK publicó MEMBERSHIP recibo22 en época4676bc51-f84d-45b1-89da-5fe99c4ec08d, secuencia1, conservando referencias18/20 de los dos tickets recuperados. Repetir respaldo y descarga conservó recibo22. Se compararon ambos tickets e historial íntegros, series internas, series documentales, asignaciones y rangos fiscales con la BD previa: iguales. ERP confirmó petición durable, 22 originales, cero eventos comerciales posteriores a la migración y cero cierres recuperados.
+
+Se intentó restaurar el manifiesto nuevo sobre las mismas filas ya existentes: rechazado con RECOVERY_LOCAL_CONFLICT, sin modificación. Esto prueba protección contra sobrescritura, no una restauración repetida exitosa de ese manifiesto. No se borró nuevamente la BD en esta ejecución. Venta nueva posterior a recuperación y nueva restauración vacía en APK305 todavía pendientes de prueba demo. La prueba conjunta aislada sí cubre ese recorrido; ambas evidencias se mantienen separadas.
+
+### Venta posterior y restauración de la descarga real
+
+Usuario creó TCKS001000032, DOP2200 CARD, después de la recuperación. Respaldo automático observado antes de invocar verificaciones: originales RECEIVED y manifiesto secuencia4. Descarga real con 25 recibos, manifiesto25, seis ubicaciones (tres transactions y tres transactionHistory), manteniendo referencias de épocas anterior y nueva.
+
+En SQLite aislada inicialmente vacía, restoreRetainedSet del commit05ce221 importó las seis ubicaciones. Repetición devolvió seis y mantuvo tres tickets/tres históricos. Comparación de cada objeto completo y orden contra SQLite del emulador: PASS. Productor nativo Z y todos sus anexos: igualdad exacta con misma configuración/entradas; CASH1650, CARD3700, SHA256 f40b10d3a0105ae29773067e669ef12a4f86638c16cab5e940f502eeb9776c7c. Sin declaración física, cierre ni cola de originales creada. Esta validación utiliza descarga real y adaptador SQLite, sin segundo borrado del emulador.
+
+ERP verificó por SELECT: recibos23/24 son dos revisiones del original, no dos ventas; un único SALE y un único PAYMENT nuevos, ambos APPLIED. Los dos tickets antiguos conservaron sus eventos sin reenvíos posteriores. Cero CASH_CLOSE y cero recovered_close_commits nuevos. Queda validado el recorrido de respaldo posterior a recuperación y restauración aislada de las tres ventas reales. Esto no habilita el cierre recuperado: exactZEligible=false, closeAuthorization=NOT_GRANTED.
