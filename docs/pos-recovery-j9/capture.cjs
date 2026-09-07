@@ -1,0 +1,20 @@
+const fs=require('fs'),ts=require('typescript'),cp=require('child_process'),crypto=require('crypto');
+const sha=s=>crypto.createHash('sha256').update(s).digest('hex');
+const compile=s=>ts.transpileModule(s,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+const previous=JSON.parse(fs.readFileSync('docs/pos-recovery-j8/source-bundle.json'));
+const paths=[...Object.keys(previous.modules),'utils/closeReportOptions.ts','utils/closeReceiptSummary.ts','utils/fiscalBreakdown.ts','utils/taxIdentity.ts'];
+const modules=Object.fromEntries(paths.map(p=>{const source=fs.readFileSync(p,'utf8');return[p,{source,sha256:sha(source),compiled:compile(source)}]}));
+const app=fs.readFileSync('App.tsx','utf8'),dash=fs.readFileSync('components/ZReportDashboard.tsx','utf8');
+function slice(s,a,b,offset=0){let i=s.indexOf(a,offset),j=s.indexOf(b,i);if(i<0||j<=i)throw Error(a);return s.slice(i,j);}
+const close=app.indexOf('  const handleZReport =');
+const prepare=slice(app,'      // 3. Totals','      // 4. Create and Save Z-Report',close);
+const annex=slice(app,'      const enabledSections =','      console.log("💾 Saving',close);
+const integrated=prepare+annex+'\nresult=newZReport;';
+const api=fs.readFileSync('services/sync/ApiSyncAdapter.ts','utf8');const ast=ts.createSourceFile('a.ts',api,ts.ScriptTarget.Latest,true);const wanted=new Set(['buildOperationalPostBody','postErpSalesTransactionWithSmartAuth','postLocalSalesTransactionWithSmartAuth']);let methodSources=[];function walk(n){if(ts.isMethodDeclaration(n)&&wanted.has(n.name?.getText(ast)))methodSources.push(n.getText(ast));ts.forEachChild(n,walk);}walk(ast);if(methodSources.length!==3)throw Error('methods');
+const methods='class TransportCapture {'+methodSources.join('\n')+'}\nresult=TransportCapture;';
+const selection=slice(app,'      const terminalTransactions =','      console.log(`🔒',close)+'\nresult={terminalTransactions,terminalCashMovements,terminalCollections};';
+const inputUi=slice(dash,'   const getDeclaredCashForCurrency','   // FILTER:');
+const uiGate=slice(dash,'      const hasCashToCount','      setIsProcessing(true);');
+const uiDom=slice(dash,'const DENOMINATIONS_BY_CURRENCY','const ZReportDashboard');
+const output={uiGate:{source:uiGate,compiled:compile('function gate(){'+uiGate+' return true;} result=gate();')},uiDom,version:'pos.evidence.j9.v1',sourceCommit:cp.execSync('git rev-parse HEAD').toString().trim(),typescript:ts.version,modules,fragments:{integrated:{source:integrated,compiled:compile(integrated)},selection:{source:selection,compiled:compile(selection)},transport:{source:methods,compiled:compile(methods)},inputUi:{source:inputUi,compiled:compile(inputUi+'\nresult={getDeclaredCashForCurrency,hasDeclaredCashForCurrency,buildDenominationBreakdown};')}},sourceFiles:Object.fromEntries(['App.tsx','components/ZReportDashboard.tsx','services/sync/ApiSyncAdapter.ts'].map(p=>{const source=fs.readFileSync(p,'utf8');return[p,{sha256:sha(source)}]}))};
+console.log(JSON.stringify(output,null,2));
