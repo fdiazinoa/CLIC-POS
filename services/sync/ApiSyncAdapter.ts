@@ -3249,6 +3249,10 @@ class ApiSyncAdapter {
         return this.postOperationalPayload('/originals/snapshots', {}, { reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key });
     }
 
+    async getRecoveryRetainedSet(snapshotId: string, manifestReceiptId: string): Promise<any> {
+        return this.getOperationalPayload(`/originals/snapshots/${encodeURIComponent(snapshotId)}/retained-set?manifestReceiptId=${encodeURIComponent(manifestReceiptId)}`);
+    }
+
     async getRecoveryPendingSelection(snapshotId: string): Promise<any> {
         return this.getOperationalPayload(`/originals/snapshots/${encodeURIComponent(snapshotId)}/pending`);
     }
