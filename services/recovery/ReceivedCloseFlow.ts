@@ -95,6 +95,36 @@ export class ReceivedCloseFlow {
     return row ? unpack(row) : null;
   }
 
+  async availability(scopeKey: string) {
+    await this.context(scopeKey);
+  }
+
+  async discardUnobserved(
+    scopeKey: string,
+    preparationId: string,
+    work: (base: DatabaseAdapter) => Promise<void>,
+  ) {
+    return this.exclusive(async () => {
+      const k = keys(scopeKey, preparationId);
+      if (
+        (await this.load(k.candidate)) ||
+        (await this.load(k.ack)) ||
+        (await this.load(k.published))
+      )
+        fail("CANNOT_DISCARD_OBSERVED");
+      await withRecoveryPreparation(this.db, scopeKey, work);
+    });
+  }
+
+  /** Read persisted progress without requesting authorization or modifying operations. */
+  async progress(scopeKey: string, preparationId: string) {
+    const k = keys(scopeKey, preparationId);
+    const candidate = await this.load(k.candidate);
+    const ack = await this.load(k.ack);
+    const published = await this.load(k.published);
+    return { candidate, ack, published };
+  }
+
   async observe(input: ReceivedCloseStart): Promise<any> {
     const frozen = decodeOriginal(encodeOriginal(input)) as ReceivedCloseStart;
     return this.exclusive(async () => {

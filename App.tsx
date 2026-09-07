@@ -1,3 +1,6 @@
+import RecoveryCloseDialog from './components/RecoveryCloseDialog';
+import type { RecoveryCloseInput } from './services/recovery/RecoveryCloseController';
+import { originalProvenance } from './services/recovery/RecoveryRuntime';
 import { isRecoveredOperation } from './services/recovery/PendingOperationsRecovery';
 import { recordCheckoutDiagnostic } from './services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from './utils/erpPaymentMethods';
@@ -1941,6 +1944,13 @@ const AppContent: React.FC = () => {
   const settingsPreloadStartedRef = useRef(false);
   const [recoverySequencePrompt, setRecoverySequencePrompt] = useState<RecoverySequencePromptState | null>(null);
   const [recoverySequenceInput, setRecoverySequenceInput] = useState('');
+  const [recoveryCloseScreen, setRecoveryCloseScreen] = useState<{input?: RecoveryCloseInput} | null>(null);
+  useEffect(() => {
+    const open = () => { if (isSyncFeatureEnabled('pending_operations_recovery')) setRecoveryCloseScreen({}); };
+    window.addEventListener('pos:resume-recovered-close', open);
+    return () => window.removeEventListener('pos:resume-recovered-close', open);
+  }, []);
+
   const [users, setUsers] = useState<User[]>([]);
 
   // --- SECURITY BOOTSTRAP STATE ---
@@ -10066,6 +10076,21 @@ const AppContent: React.FC = () => {
       || (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
     const terminalId = currentTerminal?.id || requestedTerminalId || 'T1';
 
+    // Route the whole recovered jornada before the legacy closure's effects/finally block.
+    const recoveryAliases = originalProvenance().terminalIds;
+    const hasRecovered = [...transactions, ...cashMovements, ...collections].some(operation =>
+      !(operation as any).zReportId && isRecoveredOperation(operation) &&
+      (operation.terminalId === terminalId || recoveryAliases.includes(operation.terminalId || ''))
+    );
+    if (hasRecovered) {
+      if (!isSyncFeatureEnabled('pending_operations_recovery') || !currentUser || reportData?.replaceReportId) {
+        alert('El cierre de movimientos recuperados no está disponible para esta operación.');
+        return;
+      }
+      setRecoveryCloseScreen({input: {terminalId, user:{id:currentUser.id,name:currentUser.name}, notes, declaration:reportData || {cashCounted}}});
+      return;
+    }
+
     try {
       console.log(`📊 Z-Report: Starting closure for terminal ${terminalId} (Device: ${deviceId})`);
 
@@ -12696,6 +12721,7 @@ const AppContent: React.FC = () => {
   return (
     <ErrorBoundary componentName="App Root">
       <>
+        {recoveryCloseScreen && currentUser && isSyncFeatureEnabled('pending_operations_recovery') && <RecoveryCloseDialog input={recoveryCloseScreen.input} onClose={() => setRecoveryCloseScreen(null)} onPublished={() => window.location.reload()} />}
         {recoverySequencePrompt && (
           <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/70 p-6">
             <div className="w-full max-w-xl rounded-3xl bg-white p-7 shadow-2xl">

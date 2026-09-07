@@ -1,11 +1,33 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { pendingOperationsRecovery } from "../services/recovery/recoveryService";
+import { dbAdapter } from "../services/db";
+import { originalProvenance } from "../services/recovery/RecoveryRuntime";
 import { isSyncFeatureEnabled } from "../services/sync/SyncFeatureFlags";
 export default function PendingOperationsRecoveryPanel() {
   const [busy, setBusy] = useState(false),
     [downloaded, setDownloaded] = useState(false),
     [restored, setRestored] = useState(false);
   const [message, setMessage] = useState("");
+  useEffect(() => {
+    void (async () => {
+      const scope = originalProvenance().key;
+      const state = await dbAdapter.getDocument<any>(
+        "recoveryState",
+        "download",
+      );
+      if (state?.context !== scope || originalProvenance().key !== scope)
+        return;
+      setDownloaded(state.status === "VERIFIED");
+      setRestored(
+        Boolean(
+          await dbAdapter.getDocument(
+            "recoveryState",
+            "import:" + state.snapshot.snapshotId,
+          ),
+        ),
+      );
+    })().catch(() => setMessage("No se pudo leer el progreso guardado."));
+  }, []);
   if (!isSyncFeatureEnabled("pending_operations_recovery")) return null;
   const perform = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -29,10 +51,19 @@ export default function PendingOperationsRecoveryPanel() {
       <h2 className="font-bold">Recuperar movimientos de esta terminal</h2>
       <p className="text-sm my-2">
         Descarga lo que ERP recibió antes de perder la base local. Los
-        movimientos nuevos de este equipo se conservan. ERP todavía no confirma
-        que la jornada esté completa; el cierre exacto queda pendiente.
+        movimientos nuevos de este equipo se conservan. Los movimientos que
+        nunca se enviaron no pueden recuperarse.
       </p>
       <div className="flex flex-wrap gap-3">
+        <button
+          disabled={busy}
+          className="px-4 py-2 border rounded disabled:opacity-50"
+          onClick={() =>
+            window.dispatchEvent(new Event("pos:resume-recovered-close"))
+          }
+        >
+          Consultar cierre pendiente
+        </button>
         <button
           disabled={busy || restored}
           className="px-4 py-2 border rounded disabled:opacity-50"

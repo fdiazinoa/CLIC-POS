@@ -3216,6 +3216,25 @@ class ApiSyncAdapter {
         return this.postOperationalPayload('/originals/batch', { records }, { maxRequestBytes: 2 * 1024 * 1024, reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key });
     }
 
+    /** Frozen close bodies bypass commercial payload enrichment and automatic reauthentication. */
+    async receivedCloseRequest(path: string, exactBody?: string): Promise<any> {
+        if (!/^\/close-preparations(?:\/observe|\/[a-f0-9-]+\/result)?$/i.test(path)) throw new Error('RECEIVED_CLOSE_PATH');
+        const scopeKey = originalProvenance().key;
+        const target = await this.authenticateOperationalTarget(false, 'sales', 'PUSH_OPERATIONS');
+        if (target.useLocalTarget || originalProvenance().key !== scopeKey) throw new Error('RECOVERY_SCOPE_CHANGED');
+        const response = await this.fetchWithRetry(`${target.baseUrl}/originals${path}`, {
+            method: exactBody === undefined ? 'GET' : 'POST',
+            headers: { ...this.buildOperationalHeaders(target, target.token, exactBody !== undefined), ...this.getLocalDeviceHeaders() },
+            ...(exactBody === undefined ? {} : { body: exactBody }),
+        }, 0, 500, 'sales', 'PUSH_OPERATIONS');
+        if (originalProvenance().key !== scopeKey) throw new Error('RECOVERY_SCOPE_CHANGED');
+        await this.handleDeviceSupersededResponse(response, target.terminalId);
+        const payload = await response.json();
+        if (response.status === 404 && path.endsWith('/result') && payload.code === 'CLOSE_RESULT_NOT_FOUND') return null;
+        if (!response.ok) throw Object.assign(new Error(payload.code || 'RECEIVED_CLOSE_HTTP_ERROR'), { httpStatus: response.status });
+        return payload;
+    }
+
     async getOriginalCommercialStatus(references: unknown[]): Promise<any> {
         return this.postOperationalPayload('/originals/commercial-status', { references }, { reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key });
     }

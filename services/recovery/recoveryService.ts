@@ -1,3 +1,5 @@
+import { ReceivedCloseFlow } from "./ReceivedCloseFlow";
+import { RecoveryCloseController } from "./RecoveryCloseController";
 import { dbAdapter } from "../db";
 import { apiSyncAdapter } from "../sync/ApiSyncAdapter";
 import { isSyncFeatureEnabled } from "../sync/SyncFeatureFlags";
@@ -68,3 +70,44 @@ export async function prepareCommercialOriginalReference(
     return null;
   }
 }
+
+// Availability is advertised by authenticated ERP; never infer company/store from local defaults.
+export const receivedCloseFlow = new ReceivedCloseFlow(dbAdapter, {
+  context: async () => {
+    const before = originalProvenance();
+    if (!isSyncFeatureEnabled("pending_operations_recovery"))
+      throw Error("RECOVERY_CLOSE_DISABLED");
+    const capability = (await apiSyncAdapter.recoveryCapabilities())
+      .receivedClose;
+    const after = originalProvenance();
+    if (before.key !== after.key) throw Error("RECOVERY_SCOPE_CHANGED");
+    if (
+      capability?.enabled !== true ||
+      capability.version !== 1 ||
+      capability.profile !== "erp.received-ticket-dop-cash.v1" ||
+      capability.coverage !== "RECEIVED_ONLY" ||
+      capability.exactZEligible !== false ||
+      capability.closeAuthorization !== "NOT_GRANTED"
+    )
+      throw Error("RECOVERY_CLOSE_UNAVAILABLE");
+    if (!after.terminalIds.includes(capability.scope?.terminalId))
+      throw Error("RECOVERY_SCOPE_CHANGED");
+    return { key: after.key, scope: capability.scope, enabled: true };
+  },
+  observe: (body) =>
+    apiSyncAdapter.receivedCloseRequest(
+      "/close-preparations/observe",
+      JSON.stringify(body),
+    ),
+  submit: (body) =>
+    apiSyncAdapter.receivedCloseRequest("/close-preparations", body),
+  result: (id) =>
+    apiSyncAdapter.receivedCloseRequest(
+      `/close-preparations/${encodeURIComponent(id)}/result`,
+    ),
+});
+export const recoveryCloseController = new RecoveryCloseController(
+  dbAdapter,
+  receivedCloseFlow,
+  originalProvenance,
+);
