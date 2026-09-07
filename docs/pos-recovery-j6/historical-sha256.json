@@ -1,0 +1,21 @@
+{
+  "docs/pos-recovery-journal/r4-compatibility-candidate.json": "c30f53d196777ffbd19ecebc251709bfb1c76c423cd9632770d1c1cd4177c692",
+  "docs/pos-recovery-journal/vectors.json": "184917321828f65ddf1b56419d29f34843d0671bb1247275cf7dfdf003df9439",
+  "docs/pos-recovery-journal/validation.json": "074589e2267311bbdc61951d07419d6ac52475ac07d3b59cf7b1e5a4324461ca",
+  "docs/pos-recovery-journal/lineage-vectors.json": "225cf92e7ff12d0003b294cd94790f3c82a1fa0a23271ed89e5e3e5e51f2f5f8",
+  "docs/pos-recovery-journal/source-evidence.json": "78fd4a3b7e61d812e91458764387f4096e6c72819768fb9cbcda5d031cde4994",
+  "docs/pos-recovery-journal/erp-own-vectors.json": "6884e7e3689dde43a76371b3309f8aae2eed3faf160e6d7c0d3d7581af158392",
+  "docs/pos-recovery-j3/contract-vectors.json": "a30a98d42a69b088603e5e6465e1617542463ca8cdda725449f4b0f77e555a33",
+  "docs/pos-recovery-j3/native-closure.json": "755c87f0586b1aa46674ee5c60e9adb9f1cb2afd231cfafd0c719675b73e73df",
+  "docs/pos-recovery-j3/intent-contract.json": "8659d874a7761b2e572ef05c73c691bc0edf4eaad07875752aa778001bf42c4c",
+  "docs/pos-recovery-j3/validation.json": "f236a9da5fe154dbf392189a91ca440d6bef973c05dbffa4093ac72732f5ae4f",
+  "docs/pos-recovery-j3/capture-profiles.json": "7e498c9a6355b9c2455a858e112c9e8fe7da07fd6ece9c906c9cb3a407ab9099",
+  "docs/pos-recovery-j4/semantic-rules.json": "764e0bed676c2adc5e9bc1b39d0d7ae7fac345c16ecdc1eeeedd0e594eb59adc",
+  "docs/pos-recovery-j4/published-vectors.sha256.json": "d3f86a4d89efd122f68d9662de023aa08ac07db39cb4a69a999cd8754d4f8c39",
+  "docs/pos-recovery-j4/validation.json": "caa7d399b414f05023e6589b6c550b62fef35a533ccd37da9f29956706f346b3",
+  "docs/pos-recovery-j4/intent-contract-v2.json": "5d0239c7c5a2c60d54e37e023b1744eeff34c5ac05a741b28bde1cc70a31f3d1",
+  "docs/pos-recovery-j4/semantic-vectors.json": "ebfb135ccf3ca904c1dbd43d91db199ec3a2ea6ca11366add08c11cebbeb010e",
+  "docs/pos-recovery-j5/semantic-rules.json": "8fe66754e220f499fe0e2f88596ecc7ec881e8a592536079ac76e588508db5ec",
+  "docs/pos-recovery-j5/results.json": "48e750759321ae28dca8f26c61a7ce58af14bbe8914b9d18a5bd380c78618a1d",
+  "docs/pos-recovery-j5/historical-sha256.json": "cb59f04b69abbf222ac61d02911c2c289d7aeda2f2f9e4daf505c8ffd6be0b89"
+}
