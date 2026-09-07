@@ -387,6 +387,20 @@ test("native report is frozen with preparation IDs and complete annexes, without
     const prepared = await prepare.prepare(input);
     const body = decodeOriginal(prepared.body) as any;
     const { id, closedAt, recoveryMemberIds, ...content } = body.nativeReport;
+    assert.equal(
+      body.nativeConfiguration.profile,
+      "pos.native-z.configuration.v1",
+    );
+    assert.equal(
+      body.nativeConfiguration.sourceConfigurationSha256,
+      input.nativeZ!.configurationSha256,
+    );
+    assert.equal(
+      await originalDigest(
+        new TextEncoder().encode(body.nativeConfiguration.body),
+      ),
+      body.nativeConfiguration.bodySha256,
+    );
     assert.equal(encodeOriginal(content), corpus.fixtures[1].expected);
     assert.equal(id, body.closeControl.closeId);
     assert.equal(closedAt, body.preparedAt);
@@ -409,6 +423,16 @@ test("native report is frozen with preparation IDs and complete annexes, without
     );
     assert.deepEqual(await db.getCollection("zReports"), []);
     assert.deepEqual(await db.getCollection("internalSequences"), []);
+    await db.saveDocument("config", { ...native.config, paymentMethods: [] });
+    await assert.rejects(
+      prepare.resume(input.scopeKey, input.preparationId),
+      /STALE/,
+    );
+    const saved = await db.getDocument<any>("recoveryState", prepared.id);
+    assert.equal(
+      (decodeOriginal(saved.body) as any).nativeConfiguration.body,
+      body.nativeConfiguration.body,
+    );
   } finally {
     f.close();
   }

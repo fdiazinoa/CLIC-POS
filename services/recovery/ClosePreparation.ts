@@ -14,6 +14,7 @@ import {
 } from "./OriginalCapture";
 import { withRecoveryPreparation } from "./RecoveryDatabase";
 import { buildNativeZReportContent } from "./NativeZReport";
+import { projectNativeZConfiguration } from "./NativeZConfiguration";
 
 const MEMBER_COLLECTIONS = [
   "transactions",
@@ -216,6 +217,7 @@ export class ClosePreparation {
       };
       const preparedAt = new Date().toISOString();
       let nativeReport;
+      let nativeConfiguration;
       if (request.nativeZ) {
         const config = await base.getDocument<any>("config", "current");
         if (
@@ -239,19 +241,40 @@ export class ClosePreparation {
           members
             .filter((m) => m.collection === collection)
             .map((m) => decodeOriginal(m.expectedDocument));
+        const nativeInput = {
+          terminalTransactions: documents("transactions"),
+          terminalCashMovements: documents("cashMovements"),
+          terminalCollections: documents("collections"),
+          config,
+          terminalId: request.terminalId,
+          currentTerminal: terminals[0],
+          currentUser: request.nativeZ.user,
+          notes: request.nativeZ.notes,
+          reportData: request.declaration,
+          fallbackOpenedAt: preparedAt,
+        };
+        const content = buildNativeZReportContent(nativeInput);
+        const projected = projectNativeZConfiguration(config);
+        const projectedTerminal = projected.terminals?.find(
+          (t) => t.id === request.terminalId,
+        );
+        const reproduced = buildNativeZReportContent({
+          ...nativeInput,
+          config: projected,
+          currentTerminal: projectedTerminal,
+        });
+        if (encodeOriginal(content) !== encodeOriginal(reproduced))
+          fail("CONFIGURATION_INCOMPLETE");
+        const configurationBody = encodeOriginal(projected);
+        nativeConfiguration = {
+          version: 1,
+          profile: "pos.native-z.configuration.v1",
+          body: configurationBody,
+          bodySha256: await digest(configurationBody),
+          sourceConfigurationSha256: request.nativeZ.configurationSha256,
+        };
         nativeReport = {
-          ...buildNativeZReportContent({
-            terminalTransactions: documents("transactions"),
-            terminalCashMovements: documents("cashMovements"),
-            terminalCollections: documents("collections"),
-            config,
-            terminalId: request.terminalId,
-            currentTerminal: terminals[0],
-            currentUser: request.nativeZ.user,
-            notes: request.nativeZ.notes,
-            reportData: request.declaration,
-            fallbackOpenedAt: preparedAt,
-          }),
+          ...content,
           id: closeControl.closeId,
           closedAt: preparedAt,
           recoveryMemberIds: {
@@ -268,7 +291,7 @@ export class ClosePreparation {
         commandId: crypto.randomUUID(),
         closeControl,
         preparedAt,
-        ...(nativeReport ? { nativeReport } : {}),
+        ...(nativeReport ? { nativeReport, nativeConfiguration } : {}),
         members,
         observation,
         coverage: "UNKNOWN",
