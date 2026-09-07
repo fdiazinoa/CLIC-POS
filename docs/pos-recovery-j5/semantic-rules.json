@@ -1,0 +1,98 @@
+{
+  "version": "pos.semantic-rules.j5",
+  "agreementStatus": "UNAGREED",
+  "exactZEligible": false,
+  "closeAuthorization": "NOT_GRANTED",
+  "rules": [
+    {
+      "id": "BINDING",
+      "requirement": "Calendario real, reserva no vacía, envelope exacto, campos de commit excluidos de drafts; antecedentes intactos",
+      "evidenceState": "EXECUTABLE"
+    },
+    {
+      "id": "CONTROL_IDS",
+      "requirement": "Tres IDs congelados y ligados a intención v2; siguiente conjunto solo se activa al commit",
+      "evidenceState": "EXECUTABLE_SHAPE_COMMIT_UNPROVEN"
+    },
+    {
+      "id": "NUMBERING",
+      "requirement": "Presencia por comando, modo null/reservado, ámbito/revisión/límites/avance declarados",
+      "evidenceState": "EXECUTABLE_RELATIONS_AUTHORITY_UNPROVEN"
+    },
+    {
+      "id": "HEADS",
+      "requirement": "Identidad/revisión/posición/snapshot y originalContentHash R4; kind por rol",
+      "evidenceState": "EXECUTABLE_RELATIONS_AUTHORITY_UNPROVEN"
+    },
+    {
+      "id": "SALE_SIMPLE",
+      "requirement": "Líneas/pagos únicos, simple DOP tasa1 sin impuesto/descuento, aplicación/cambio/sumas; cambio positivo requiere changeCurrencyCode=DOP explícito",
+      "evidenceState": "EXECUTABLE_FIXTURE_SUBPROFILE"
+    },
+    {
+      "id": "SALE_COMPLEX",
+      "requirement": "Impuestos/descuentos/FX/modifiers/crédito/recetas con oráculo POS versionado y configuración histórica",
+      "evidenceState": "BLOCK_UNTIL_NATIVE_EVIDENCE"
+    },
+    {
+      "id": "REFUND",
+      "requirement": "Vínculo NC/original/línea, límite restante, CARD/STORE_CREDIT y disposición; no CASH/multimoneda/VOID comercial; límite agregado por producto/línea original, cantidades del mismo subperfil sin conversión UOM",
+      "evidenceState": "EXECUTABLE_RELATIONS_PROVIDER_UNPROVEN"
+    },
+    {
+      "id": "COLLECTION",
+      "requirement": "Heads/cobertura/cliente/allocations/deuda y aritmética simple recibido-aplicado-no aplicado",
+      "evidenceState": "EXECUTABLE_FIXTURE_SUBPROFILE"
+    },
+    {
+      "id": "ADVANCE",
+      "requirement": "BOOKING/cliente/ID coherentes y allocations vacías",
+      "evidenceState": "EXECUTABLE_FIXTURE_SUBPROFILE"
+    },
+    {
+      "id": "WALLET",
+      "requirement": "Head/link/cliente/moneda/saldo/signo; creación/ausencia vínculo/cashback bloqueados",
+      "evidenceState": "EXECUTABLE_FIXTURE_SUBPROFILE"
+    },
+    {
+      "id": "CASH",
+      "requirement": "IN/OUT positivo y metadata; evidencia de apertura/efectivo disponible por moneda",
+      "evidenceState": "EXECUTABLE_SHAPE_BALANCE_UNPROVEN"
+    },
+    {
+      "id": "FISCAL",
+      "requirement": "Mismo proveedor/ID y whitelist patch; resultado auténtico y tipos de canal",
+      "evidenceState": "EXECUTABLE_FIELDS_CHANNEL_UNPROVEN"
+    },
+    {
+      "id": "CONFIG",
+      "requirement": "14 bloques y estados presencia, orden tipado; valores nativos/readCoverage resolvers",
+      "evidenceState": "EXECUTABLE_STRUCTURE_NATIVE_COVERAGE_UNPROVEN"
+    },
+    {
+      "id": "DECLARATION",
+      "requirement": "Operador/valores/denominaciones; política nativa de fondo/retiro y todas monedas/métodos",
+      "evidenceState": "EXECUTABLE_SUBSET_NATIVE_POLICY_UNPROVEN"
+    },
+    {
+      "id": "REPORT_PRINT",
+      "requirement": "Z/anexos/renderer/activos/locale completos, equivalencia con salida vigente",
+      "evidenceState": "BLOCK_UNTIL_NATIVE_EVIDENCE"
+    },
+    {
+      "id": "ROOT_ARCHIVE",
+      "requirement": "Registro independiente autenticado, revision estable, archivo completo verificado",
+      "evidenceState": "BLOCK_UNTIL_ERP_EVIDENCE"
+    },
+    {
+      "id": "ATOMICITY",
+      "requirement": "Commit local por backend, CAS escritores y aceptación/retención durable",
+      "evidenceState": "BLOCK_UNTIL_RUNTIME_AND_ERP_EVIDENCE"
+    },
+    {
+      "id": "INVENTORY_TRACKED",
+      "requirement": "TRACKED bloqueado incluso con delta aparentemente correcto hasta perfil completo de cobertura, dirección, cantidades, unidades, recetas, expansión y unicidad; NONE solo declara ausencia, no demuestra política nativa",
+      "evidenceState": "BLOCK_UNTIL_NATIVE_EVIDENCE"
+    }
+  ]
+}
