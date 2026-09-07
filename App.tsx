@@ -4740,6 +4740,7 @@ const AppContent: React.FC = () => {
       const belongsToTerminal = terminalReferenceMatches(terminalAliases, isDefaultTerminal, t.terminalId, t.source_terminal_id);
       if (!belongsToTerminal) return false;
       if (t.zReportId) return false;
+      if (isRecoveredOperation(t)) return true;
 
       // Relaxed timestamp check: only filter out if it's significantly before the last close
       // to account for clock drift between terminals.
@@ -4760,6 +4761,8 @@ const AppContent: React.FC = () => {
     return cashMovements.filter(m => {
       const belongsToTerminal = terminalReferenceMatches(terminalAliases, isDefaultTerminal, m.terminalId, (m as any).source_terminal_id);
       if (!belongsToTerminal) return false;
+      if ((m as any).zReportId) return false;
+      if (isRecoveredOperation(m)) return true;
 
       const moveTime = new Date(m.timestamp).getTime();
       const DRIFT_TOLERANCE_MS = 1000 * 60 * 5; // 5 minutes tolerance

@@ -1,3 +1,4 @@
+import { recoveryCanonicalJson } from "./RecoveryJson";
 import type { DatabaseAdapter } from "../db/DatabaseAdapter";
 import {
   encodeOriginal,
@@ -47,11 +48,17 @@ export interface ClosePreparationInput {
     id: string;
     expectedDocument: string;
   }>;
+  dependencies?: Array<{
+    collection: "transactionHistory" | "wallet_transactions";
+    id: string;
+    expectedDocument: string;
+  }>;
   /** Native confirmed input, preserved as given, without inventing defaults. */
   declaration: unknown;
   /** Optional native producer; declaration is the existing reportData input. */
   nativeZ?: {
     configurationSha256: string;
+    timeZone?: string;
     user?: { id: string; name: string };
     notes: string;
   };
@@ -87,7 +94,7 @@ export class ClosePreparation {
 
   private async source(
     base: DatabaseAdapter,
-    collection: MemberCollection,
+    collection: MemberCollection | "transactionHistory" | "wallet_transactions",
     document: any,
   ) {
     const kind = CAPTURE_COLLECTIONS[collection];
@@ -115,10 +122,31 @@ export class ClosePreparation {
         fail("ORIGINAL_MISMATCH");
       const envelope = decodeOriginal(new TextDecoder().decode(bytes)) as any;
       const { _posRecovery, ...runtime } = document;
-      if (
-        JSON.stringify(decodeOriginal(envelope.document)) !==
-        JSON.stringify(runtime)
-      )
+      const originalRuntime = decodeOriginal(envelope.document) as any;
+      if (marker.provenCloseId) {
+        const saved = await base.getDocument<any>(
+          RECOVERY_STATE,
+          "pendingSelection:" + marker.snapshotId,
+        );
+        const selection = saved?.body;
+        if (!selection) fail("CLOSE_EVIDENCE_MISSING");
+        const { selectionHash, ...descriptor } = selection;
+        if (
+          (await digest(recoveryCanonicalJson(descriptor))) !== selectionHash ||
+          !selection.closed?.some(
+            (c: any) =>
+              c.reference.receiptId === row.receiptId &&
+              c.reference.recordHash === row.recordHash &&
+              c.closeId === marker.provenCloseId,
+          ) ||
+          runtime.zReportId !== marker.provenCloseId
+        )
+          fail("CLOSE_EVIDENCE_MISMATCH");
+        if (!Object.hasOwn(originalRuntime, "zReportId"))
+          delete runtime.zReportId;
+      }
+
+      if (JSON.stringify(originalRuntime) !== JSON.stringify(runtime))
         fail("ORIGINAL_MISMATCH");
       return { stage: "RECOVERED", receipt: row };
     }
@@ -181,6 +209,25 @@ export class ClosePreparation {
       if (seen.has(identity)) fail("DUPLICATE_MEMBER");
       seen.add(identity);
     }
+    if (
+      request.dependencies !== undefined &&
+      !Array.isArray(request.dependencies)
+    )
+      fail("INVALID_DEPENDENCY");
+    for (const d of request.dependencies || []) {
+      if (
+        !["transactionHistory", "wallet_transactions"].includes(d.collection) ||
+        !nonempty(d.id) ||
+        !nonempty(d.expectedDocument)
+      )
+        fail("INVALID_DEPENDENCY");
+      const identity = JSON.stringify([
+        d.collection === "transactionHistory" ? "transactions" : d.collection,
+        d.id,
+      ]);
+      if (seen.has(identity)) fail("DUPLICATE_MEMBER");
+      seen.add(identity);
+    }
     return withRecoveryPreparation(this.db, request.scopeKey, async (base) => {
       const id = key(request.scopeKey, request.preparationId);
       const existing = await base.getDocument<PreparedClose>(
@@ -209,7 +256,45 @@ export class ClosePreparation {
           fail("ORIGINAL_SCOPE");
         members.push({ ...member, source });
       }
+      const dependencies = [];
+      for (const dependency of request.dependencies || []) {
+        const document = await base.getDocument<any>(
+          dependency.collection,
+          dependency.id,
+        );
+        if (
+          !document ||
+          encodeOriginal(document) !== dependency.expectedDocument
+        )
+          fail("STALE_DEPENDENCY");
+        if (
+          dependency.collection === "transactionHistory" &&
+          !document.zReportId
+        )
+          fail("DEPENDENCY_NOT_CLOSED");
+        const source = await this.source(base, dependency.collection, document);
+        if (source.stage === "LOCAL" && source.originKey !== request.scopeKey)
+          fail("ORIGINAL_SCOPE");
+        dependencies.push({ ...dependency, source });
+      }
+      const currentCapture = await base.getDocument<any>(
+        RECOVERY_STATE,
+        "capture",
+      );
+      const commandCapture = currentCapture || {
+        id: "capture",
+        storageEpoch: crypto.randomUUID(),
+        openSetId: crypto.randomUUID(),
+        sequence: "0",
+      };
+      const receivedContext = {
+        version: 1,
+        storageEpoch: commandCapture.storageEpoch,
+        openSetId: commandCapture.openSetId,
+        coverage: "RECEIVED_ONLY",
+      };
       const observation = await this.observe(base);
+      if (!currentCapture) observation.capture = encodeOriginal(commandCapture);
       const closeControl = {
         closeId: crypto.randomUUID(),
         closeEventId: crypto.randomUUID(),
@@ -292,7 +377,9 @@ export class ClosePreparation {
         closeControl,
         preparedAt,
         ...(nativeReport ? { nativeReport, nativeConfiguration } : {}),
+        receivedContext,
         members,
+        ...(dependencies.length ? { dependencies } : {}),
         observation,
         coverage: "UNKNOWN",
         configurationCoverage: "INCOMPLETE",
@@ -310,7 +397,12 @@ export class ClosePreparation {
       };
       if (!base.saveDocumentsAtomically) fail("ATOMIC_STORAGE_UNAVAILABLE");
       await base.saveDocumentsAtomically!(
-        [{ collectionName: RECOVERY_STATE, document: prepared }],
+        [
+          ...(currentCapture
+            ? []
+            : [{ collectionName: RECOVERY_STATE, document: commandCapture }]),
+          { collectionName: RECOVERY_STATE, document: prepared },
+        ],
         true,
       );
       return prepared;
@@ -344,7 +436,7 @@ export class ClosePreparation {
       encodeOriginal(body.observation)
     )
       fail("STALE");
-    for (const member of body.members) {
+    for (const member of [...body.members, ...(body.dependencies || [])]) {
       const document = await base.getDocument<any>(
         member.collection,
         member.id,

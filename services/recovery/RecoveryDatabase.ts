@@ -1,3 +1,4 @@
+import { projectNativeZConfiguration } from "./NativeZConfiguration";
 import type {
   DatabaseAdapter,
   DurableDocumentMutation,
@@ -13,7 +14,12 @@ import { decodeOriginal, encodeOriginal } from "./OriginalCodec";
 
 const transportCapture = new WeakMap<
   DatabaseAdapter,
-  (document: any, item: unknown, scope: string) => Promise<string | null>
+  (
+    document: any,
+    item: unknown,
+    scope: string,
+    collection: string,
+  ) => Promise<string | null>
 >();
 const preparationQueue = new WeakMap<
   DatabaseAdapter,
@@ -36,8 +42,10 @@ export const captureOriginalTransport = (
   document: any,
   item: unknown,
   scope: string,
+  collection = "transactions",
 ): Promise<string | null> =>
-  transportCapture.get(db)?.(document, item, scope) ?? Promise.resolve(null);
+  transportCapture.get(db)?.(document, item, scope, collection) ??
+  Promise.resolve(null);
 
 /** A single local write queue covers document + original capture, without network in checkout. */
 export function recoveryDatabase(
@@ -56,21 +64,7 @@ export function recoveryDatabase(
   };
   const addCaptures = async (documents: DurableDocumentMutation[]) => {
     const config = await base.getDocument<any>("config", "current");
-    const configuration = config
-      ? {
-          currencies: config.currencies,
-          taxes: config.taxes,
-          paymentMethods: (config.paymentMethods || []).map(
-            ({ integrationConfig, ...method }: any) => method,
-          ),
-          terminals: (config.terminals || []).map((terminal: any) => ({
-            id: terminal.id,
-            operational: terminal.config?.operational,
-            workflow: terminal.config?.workflow,
-          })),
-          coverage: "DECLARED_NOT_PROVEN",
-        }
-      : null;
+    const configuration = config ? projectNativeZConfiguration(config) : null;
     const captures = documents
       .map((d) =>
         captureDocument(
@@ -172,7 +166,7 @@ export function recoveryDatabase(
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
-  transportCapture.set(proxy, (document, item, scope) =>
+  transportCapture.set(proxy, (document, item, scope, collection) =>
     exclusive(async () => {
       if (
         !enabled() ||
@@ -181,18 +175,22 @@ export function recoveryDatabase(
         scope !== provenance().key
       )
         return null;
-      const headId = JSON.stringify(["TRANSACTION", document.id]);
+      const route = (
+        {
+          transactions: "/api/sync/transactions",
+          cashMovements: "/api/sync/cash/movements",
+        } as Record<string, string>
+      )[collection];
+      const kind = CAPTURE_COLLECTIONS[collection];
+      if (!route || !kind) return null;
+      const headId = JSON.stringify([kind, document.id]);
       const head = await base.getDocument<any>(RECOVERY_STATE, headId);
       if (!head?.captureId) return null; // Legacy images have no ingress reference.
       const previous = await base.getDocument<any>(
         RECOVERY_OUTBOX,
         head.captureId,
       );
-      if (
-        !previous ||
-        previous.originKey !== scope ||
-        previous.kind !== "TRANSACTION"
-      )
+      if (!previous || previous.originKey !== scope || previous.kind !== kind)
         return null;
       const envelope = decodeOriginal(previous.body) as any;
       // SQLite's JSON projection is used only to verify the current runtime image.
@@ -204,7 +202,7 @@ export function recoveryDatabase(
         return null;
       const transport = {
         version: 1,
-        route: "/api/sync/transactions",
+        route,
         item: encodeOriginal(item),
       };
       if (JSON.stringify(envelope.transport) === JSON.stringify(transport))

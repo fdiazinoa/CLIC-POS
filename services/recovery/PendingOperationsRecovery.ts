@@ -1,3 +1,4 @@
+import { recoveryCanonicalJson } from "./RecoveryJson";
 import type {
   DatabaseAdapter,
   DurableDocumentMutation,
@@ -50,6 +51,12 @@ export interface RecoveryTransport {
     terminalIds: string[];
     enabled: boolean;
     commercialBindingVersion?: number;
+    recoveryScope?: {
+      tenantId: string;
+      companyId: string;
+      storeId: string;
+      terminalId: string;
+    };
   }>;
   receive(records: OriginalRecord[]): Promise<{
     receipts: Array<{
@@ -72,6 +79,7 @@ export interface RecoveryTransport {
     }>;
   }>;
   snapshot(): Promise<RecoverySnapshot>;
+  pending?(snapshotId: string): Promise<any>;
   page(
     id: string,
     cursor: string,
@@ -508,9 +516,82 @@ export class PendingOperationsRecovery {
       const imported = await this.db.getDocument<any>(RECOVERY_STATE, markerId);
       if (imported) return imported.count;
       const heads = await this.selectedOriginals(state);
+      let selection: any = null;
+      if (this.transport.pending) {
+        selection = await this.transport.pending(state.snapshot.snapshotId);
+        const { selectionHash, ...body } = selection;
+        if (
+          selection.version !== 1 ||
+          selection.profile !== "erp.received-native-operations.v1" ||
+          selection.snapshot?.snapshotId !== state.snapshot.snapshotId ||
+          selection.snapshot?.snapshotDigest !==
+            state.snapshot.snapshotDigest ||
+          selection.snapshot?.totalRecords !== state.snapshot.totalRecords ||
+          selection.coverage !== "RECEIVED_ONLY" ||
+          selection.exactZEligible !== false ||
+          selection.closeAuthorization !== "NOT_GRANTED" ||
+          !ctx.terminalIds.includes(selection.sourceTerminalId) ||
+          !ctx.terminalIds.includes(selection.scope?.terminalId) ||
+          (ctx.recoveryScope &&
+            recoveryCanonicalJson(ctx.recoveryScope) !==
+              recoveryCanonicalJson(selection.scope)) ||
+          (await originalDigest(bytes(recoveryCanonicalJson(body)))) !==
+            selectionHash
+        )
+          fail("RECOVERY_SELECTION_INVALID");
+        if ((await this.transport.context()).key !== ctx.key)
+          fail("RECOVERY_SCOPE_CHANGED");
+        for (const k of ["pending", "dependencies", "closed", "context"])
+          if (!Array.isArray(selection[k])) fail("RECOVERY_SELECTION_INVALID");
+        const identities = new Map(heads.map((row) => [row.receiptId, row]));
+        const groups = new Map<string, Set<string>>();
+        for (const k of ["pending", "dependencies", "closed", "context"]) {
+          const seen = new Set<string>();
+          groups.set(k, seen);
+          for (const entry of selection[k]) {
+            const ref = k === "closed" ? entry.reference : entry,
+              row = identities.get(ref?.receiptId);
+            if (
+              !row ||
+              seen.has(ref.receiptId) ||
+              ref.recordHash !== row.recordHash ||
+              [
+                "kind",
+                "originalId",
+                "revision",
+                "storageEpoch",
+                "bodySha256",
+              ].some((field) => ref[field] !== row.record[field]) ||
+              (k === "closed" && typeof entry.closeId !== "string")
+            )
+              fail("RECOVERY_SELECTION_REFERENCE");
+            seen.add(ref.receiptId);
+          }
+        }
+        if (
+          [...groups.get("pending")!].some(
+            (id) =>
+              groups.get("closed")!.has(id) ||
+              groups.get("dependencies")!.has(id) ||
+              groups.get("context")!.has(id),
+          ) ||
+          new Set([...groups.values()].flatMap((g) => [...g])).size !==
+            heads.length
+        )
+          fail("RECOVERY_SELECTION_COVERAGE");
+      }
       const decoded: Array<{ row: any; collection: string; document: any }> =
         [];
       for (const row of heads) {
+        if (
+          selection &&
+          ![
+            ...selection.pending,
+            ...selection.dependencies,
+            ...selection.context,
+          ].some((ref) => ref.receiptId === row.receiptId)
+        )
+          continue;
         const raw = decodeBase64(row.record.bodyBase64);
         if ((await originalDigest(raw)) !== row.record.bodySha256)
           fail("RECOVERY_STAGE_CHANGED");
@@ -552,7 +633,30 @@ export class PendingOperationsRecovery {
           }
         }
       }
+      if (selection)
+        for (const item of selection.closed) {
+          const row = heads.find(
+            (r) => r.receiptId === item.reference.receiptId,
+          )!;
+          const collection = Object.keys(CAPTURE_COLLECTIONS).find(
+            (k) =>
+              k !== "transactionHistory" &&
+              CAPTURE_COLLECTIONS[k] === row.record.kind,
+          )!;
+          const identity = JSON.stringify([collection, row.record.originalId]);
+          if (closed.has(identity) && closed.get(identity) !== item.closeId)
+            fail("RECOVERY_MULTIPLE_CLOSES");
+          closed.set(identity, item.closeId);
+        }
       const mutations: DurableDocumentMutation[] = [];
+      if (selection)
+        mutations.push({
+          collectionName: RECOVERY_STATE,
+          document: {
+            id: "pendingSelection:" + state.snapshot.snapshotId,
+            body: selection,
+          },
+        });
       for (const { row, collection, document } of decoded) {
         const closeId =
           closed.get(JSON.stringify([collection, document.id])) ||
@@ -569,6 +673,7 @@ export class PendingOperationsRecovery {
             receiptId: row.receiptId,
             bodySha256: row.record.bodySha256,
             businessApplication: "UNKNOWN",
+            ...(selection && closeId ? { provenCloseId: closeId } : {}),
             exactZEligible: false,
             closeAuthorization: "NOT_GRANTED",
           },
@@ -596,7 +701,8 @@ export class PendingOperationsRecovery {
         collectionName: RECOVERY_STATE,
         document: {
           id: markerId,
-          count: mutations.length,
+          count: mutations.filter((m) => m.collectionName !== RECOVERY_STATE)
+            .length,
           snapshotId: state.snapshot.snapshotId,
           exactZEligible: false,
           closeAuthorization: "NOT_GRANTED",
@@ -605,7 +711,8 @@ export class PendingOperationsRecovery {
       if ((await this.transport.context()).key !== ctx.key)
         fail("RECOVERY_SCOPE_CHANGED");
       await this.commit(mutations, true);
-      return mutations.length - 1;
+      return mutations.filter((m) => m.collectionName !== RECOVERY_STATE)
+        .length;
     });
   }
 }
