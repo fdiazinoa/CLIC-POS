@@ -1,5 +1,6 @@
 import type {
     DatabaseAdapter,
+    DurableDocumentMutation,
     MasterNumberRangeRecord,
     NumberedMasterCommitInput,
     NumberedMasterCommitResult,
@@ -11,7 +12,7 @@ import {
 } from '../../sync/masterNumberRangeContract';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 21; // v21 adds the independent offline master-number range store
+const DB_VERSION = 22; // v22 adds original capture and isolated recovery staging stores
 const OLD_DB_KEY = 'clic_pos_db_v1';
 const OPEN_TIMEOUT_MS = 15000;
 const CURSOR_IDLE_TIMEOUT_MS = 3000;
@@ -33,7 +34,8 @@ const STORES = [
     'crmOpportunities', 'erp_sales_documents', 'customerMutations',
     'currencyAuditLogs', 'currencyRateSchedules',
     'invoiceReviewFlags', 'invoiceAuditEvents', 'invoiceAdjustments',
-    'masterNumberRanges', 'masterNumberSyncReceipts'
+    'masterNumberRanges', 'masterNumberSyncReceipts',
+    'recoveryOriginals', 'recoveryState', 'recoveryStage', 'wallet_transactions'
 ];
 
 export class IndexedDBAdapter implements DatabaseAdapter {
@@ -454,6 +456,48 @@ export class IndexedDBAdapter implements DatabaseAdapter {
                 } catch (e) {
                     reject(error || e);
                 }
+            }
+        });
+    }
+
+    async saveDocumentsAtomically(documents: DurableDocumentMutation[], requireAbsent = false, replaceCollections: string[] = []): Promise<void> {
+        if (!documents.length && !replaceCollections.length) return;
+        const names = [...new Set([...replaceCollections, ...documents.map(d => d.collectionName)])];
+        if (!this.db || names.some(n => !this.hasStore(n))) throw new Error('RECOVERY_ATOMIC_STORAGE_UNAVAILABLE');
+        await new Promise<void>((resolve, reject) => {
+            const tx = this.db!.transaction(names, 'readwrite');
+            let failure: Error | null = null;
+            tx.oncomplete = () => resolve();
+            tx.onabort = () => reject(failure || tx.error || new Error('RECOVERY_COMMIT_ABORTED'));
+            tx.onerror = () => { /* onabort owns failure; do not write a fallback copy. */ };
+            const put = (store: IDBObjectStore, document: unknown) => {
+                try { store.put(document); }
+                catch (error) {
+                    failure = error instanceof Error ? error : new Error(String(error));
+                    tx.abort();
+                }
+            };
+            try {
+                const seen = new Set<string>();
+                for (const name of replaceCollections) tx.objectStore(name).clear();
+                for (const mutation of documents) {
+                    const identity = JSON.stringify([mutation.collectionName, mutation.document.id]);
+                    if (requireAbsent && seen.has(identity)) throw new Error('RECOVERY_LOCAL_CONFLICT:' + identity);
+                    seen.add(identity);
+                    const store = tx.objectStore(mutation.collectionName);
+                    if (!requireAbsent) { put(store, mutation.document); if (failure) break; continue; }
+                    const request = store.get(mutation.document.id);
+                    request.onsuccess = () => {
+                        if (failure) return;
+                        if (request.result !== undefined) {
+                            failure = new Error('RECOVERY_LOCAL_CONFLICT:' + identity);
+                            tx.abort();
+                        } else put(store, mutation.document);
+                    };
+                }
+            } catch (error) {
+                failure = error instanceof Error ? error : new Error(String(error));
+                tx.abort();
             }
         });
     }

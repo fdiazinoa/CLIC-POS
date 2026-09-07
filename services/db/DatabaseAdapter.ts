@@ -93,6 +93,9 @@ export interface DatabaseAdapter {
     markMasterNumberRangeProgressReported?(rangeId: string, lastIssuedNumber: number): Promise<void>;
     blockMasterNumberRange?(rangeId: string, reason: string): Promise<void>;
 
+    /** Strict all-or-nothing local publication; never falls back to a second storage backend. */
+    saveDocumentsAtomically?(documents: DurableDocumentMutation[], requireAbsent?: boolean, replaceCollections?: string[]): Promise<void>;
+
     // Stats
     getStats?(): Promise<{ type: string; size: number; tables: number }>;
 }

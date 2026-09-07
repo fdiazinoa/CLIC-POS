@@ -1,6 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import type {
     DatabaseAdapter,
+    DurableDocumentMutation,
     FinancialCommitInput,
     MasterNumberRangeRecord,
     NumberedMasterCommitInput,
@@ -99,6 +100,24 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     async saveDocument<T extends { id: string }>(collectionName: string, doc: T): Promise<void> {
         await this.upsertStoredDocuments(collectionName, [doc]);
+    }
+
+    async saveDocumentsAtomically(documents: DurableDocumentMutation[], requireAbsent = false, replaceCollections: string[] = []): Promise<void> {
+        if (!documents.length && !replaceCollections.length) return;
+        await this.withWriteLock(async () => {
+            const db = this.ensureDb();
+            const now = new Date().toISOString();
+            if (requireAbsent) {
+                for (const { collectionName, document } of documents) {
+                    const rows = await db.query('SELECT doc_id FROM documents WHERE collection_name = ? AND doc_id = ?', [collectionName, document.id]);
+                    if (rows.values?.length) throw new Error('RECOVERY_LOCAL_CONFLICT:' + collectionName + ':' + document.id);
+                }
+            }
+            await this.executeUnlocked([...replaceCollections.map(name => ({statement: 'DELETE FROM documents WHERE collection_name = ?', values: [name]})), ...documents.map(({ collectionName, document }) => ({
+                statement: DOCUMENT_UPSERT_SQL,
+                values: [collectionName, document.id, JSON.stringify(document), collectionName, document.id, collectionName, now],
+            }))]);
+        });
     }
 
     async bulkUpsert<T extends { id: string }>(collectionName: string, docs: T[]): Promise<void> {
@@ -626,7 +645,10 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     private async executeSetOrRun(statements: Array<{ statement: string; values: any[] }>): Promise<void> {
         if (!statements.length) return;
-        await this.withWriteLock(async () => {
+        await this.withWriteLock(() => this.executeUnlocked(statements));
+    }
+
+    private async executeUnlocked(statements: Array<{ statement: string; values: any[] }>): Promise<void> {
         const db = this.ensureDb();
         const executable = statements.map((entry) => ({
             statement: entry.statement.trim(),
@@ -648,7 +670,6 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             await db.execute('ROLLBACK;', false).catch(() => undefined);
             throw error;
         }
-        });
     }
 
     private withWriteLock<T>(operation: () => Promise<T>): Promise<T> {
