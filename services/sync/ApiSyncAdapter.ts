@@ -3078,6 +3078,7 @@ class ApiSyncAdapter {
             includeHttpStatus?: boolean;
             reauthenticateOn401?: boolean;
             expectedRecoveryScope?: string;
+            recoveryOriginal?: { document: any; collection: string };
         } = {},
     ): Promise<any> {
         const target = await this.authenticateOperationalTarget(false, 'sales', 'PUSH_OPERATIONS');
@@ -3085,6 +3086,11 @@ class ApiSyncAdapter {
             throw new Error('RECOVERY_SCOPE_CHANGED');
         }
         const requestBody = this.buildOperationalPostBody(target, body);
+        if (options.recoveryOriginal && isSyncFeatureEnabled('pending_operations_recovery')) {
+            const { prepareCommercialOriginalReference } = await import('../recovery/recoveryService');
+            const reference = await prepareCommercialOriginalReference(options.recoveryOriginal.document, (requestBody.items as unknown[])[0], options.recoveryOriginal.collection);
+            if (reference) requestBody.originalRefs = [{ itemIndex: 0, ...reference }];
+        }
         const serializedBody = JSON.stringify(requestBody);
         if (options.maxRequestBytes && new TextEncoder().encode(serializedBody).byteLength > options.maxRequestBytes) {
             throw new Error(`BATCH_PAYLOAD_TOO_LARGE: request exceeds ${options.maxRequestBytes} bytes`);
@@ -3241,6 +3247,10 @@ class ApiSyncAdapter {
 
     async createRecoverySnapshot(): Promise<any> {
         return this.postOperationalPayload('/originals/snapshots', {}, { reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key });
+    }
+
+    async getRecoveryPendingSelection(snapshotId: string): Promise<any> {
+        return this.getOperationalPayload(`/originals/snapshots/${encodeURIComponent(snapshotId)}/pending`);
     }
 
     async getRecoveryPage(snapshotId: string, cursor: string): Promise<any> {
@@ -5438,7 +5448,7 @@ class ApiSyncAdapter {
         if (isRecoveredOperation(movement)) throw new Error('RECOVERED_OPERATION_NO_REPLAY');
         try {
             const normalizedMovement = buildErpCashMovementPayload(movement);
-            await this.postOperationalPayload('/cash/movements', { items: [normalizedMovement] });
+            await this.postOperationalPayload('/cash/movements', { items: [normalizedMovement] }, isSyncFeatureEnabled('pending_operations_recovery') ? { reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key, recoveryOriginal: {document:movement,collection:'cashMovements'} } : {});
             console.log(`📤 ApiSyncAdapter: Pushed cash movement ${normalizedMovement.source_cash_movement_id || normalizedMovement.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing cash movement:', error);

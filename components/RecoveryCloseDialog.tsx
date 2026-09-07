@@ -16,6 +16,7 @@ export default function RecoveryCloseDialog({
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [completed, setCompleted] = useState(false),
+    [financialState, setFinancialState] = useState<string | null>(null),
     [available, setAvailable] = useState(false);
   const refresh = async () =>
     setJobs((await controller.list()).filter((j) => !j.published));
@@ -65,6 +66,15 @@ export default function RecoveryCloseDialog({
         {completed ? (
           <p role="status" className="my-3">
             ERP confirmó el cierre y quedó guardado en este POS.
+            {financialState && (
+              <span className="block mt-2">
+                La aplicación financiera en ERP sigue{" "}
+                {financialState === "FAILED"
+                  ? "con errores pendientes de resolver"
+                  : "pendiente"}
+                . Recuperar no vuelve a aplicar estos movimientos.
+              </span>
+            )}
           </p>
         ) : (
           <>
@@ -108,9 +118,36 @@ export default function RecoveryCloseDialog({
                   )}
                   {packet && (
                     <p className="font-semibold my-2">
-                      {job.receiptBindings.length} movimientos · Ventas:{" "}
-                      {Number(packet.summary.total_sales).toFixed(2)} DOP
+                      {
+                        job.receiptBindings.filter(
+                          (b: any) => b.group === "members",
+                        ).length
+                      }{" "}
+                      movimientos · Ventas:{" "}
+                      {Number(packet.summary.total_sales).toFixed(2)}{" "}
+                      {packet.report.baseCurrency}
                     </p>
+                  )}
+                  {packet?.financialState && (
+                    <p className="text-sm my-2">
+                      La aplicación financiera en ERP sigue{" "}
+                      {packet.financialState === "FAILED"
+                        ? "con errores"
+                        : "pendiente"}
+                      . Confirmar este Z no vuelve a aplicar los movimientos.
+                    </p>
+                  )}
+                  {packet?.report.cashExpected && (
+                    <ul className="text-sm my-2">
+                      {Object.entries(packet.report.cashExpected).map(
+                        ([currency, amount]) => (
+                          <li key={currency}>
+                            Efectivo esperado {currency}:{" "}
+                            {Number(amount).toFixed(2)}
+                          </li>
+                        ),
+                      )}
+                    </ul>
                   )}
                   <button
                     disabled={busy || !available}
@@ -121,7 +158,8 @@ export default function RecoveryCloseDialog({
                           await controller.resumeReview(job.preparationId);
                           return;
                         }
-                        await controller.confirm(job.preparationId);
+                        const ack = await controller.confirm(job.preparationId);
+                        setFinancialState(ack?.financialState || null);
                         setCompleted(true);
                       })
                     }

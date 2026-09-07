@@ -345,10 +345,25 @@ export class ReceivedCloseFlow {
         (await digest(recoveryCanonicalJson(JSON.parse(c.submissionBody))))
     )
       fail("ACK_REQUEST");
+    const packet = JSON.parse(c.observed.packetJson);
+    const native = packet.nativeProfile === "erp.received-native-operations.v1";
+    if (
+      native &&
+      (ack.nativeProfile !== packet.nativeProfile ||
+        !["PENDING", "FAILED"].includes(ack.financialState) ||
+        ack.financialState !== packet.financialState ||
+        !same(ack.operationStates, packet.operationStates) ||
+        ack.journalId !== null ||
+        ack.journal !== null ||
+        packet.journal !== null)
+    )
+      fail("ACK_FINANCIAL_STATE");
+    if (!native && ack.nativeProfile === "erp.received-native-operations.v1")
+      fail("ACK_PROFILE");
     if (
       !uuid(ack.commitId) ||
       !uuid(ack.membershipId) ||
-      !uuid(ack.journalId) ||
+      (!native && !uuid(ack.journalId)) ||
       ack.seriesId !== c.input.seriesId ||
       typeof ack.number !== "string" ||
       !/^\d+$/.test(ack.number) ||
@@ -365,7 +380,6 @@ export class ReceivedCloseFlow {
       ack.code !== series.prefix + ack.number.padStart(series.padding, "0")
     )
       fail("ACK_NUMBER");
-    const packet = JSON.parse(c.observed.packetJson);
     if (
       !same(ack.report, { ...packet.report, sequenceNumber: ack.code }) ||
       !same(ack.summary, {
@@ -373,11 +387,12 @@ export class ReceivedCloseFlow {
         report_id: ack.closeId,
         sequence_number: ack.code,
       }) ||
-      !same(ack.journal, {
-        ...packet.journal,
-        id: ack.journalId,
-        reference: ack.code,
-      })
+      (!native &&
+        !same(ack.journal, {
+          ...packet.journal,
+          id: ack.journalId,
+          reference: ack.code,
+        }))
     )
       fail("ACK_OUTPUT_CHANGED");
   }
@@ -407,17 +422,28 @@ export class ReceivedCloseFlow {
         if (await base.getDocument("zReports", ack.closeId))
           fail("LOCAL_COLLISION");
         const changes: DurableDocumentMutation[] = [];
-        // Runtime support is explicitly limited to the same whole-set profile the ERP accepts.
-        if (p.members.some((m: any) => m.collection !== "transactions"))
+        const supported = ["transactions", "cashMovements", "collections"];
+        if (p.members.some((m: any) => !supported.includes(m.collection)))
           fail("UNSUPPORTED_MEMBER");
-        const memberIds = new Set(p.members.map((m: any) => m.id));
+        const memberIds = new Set(
+          p.members
+            .filter((m: any) => m.collection === "transactions")
+            .map((m: any) => m.id),
+        );
         for (const m of p.members) {
-          if (await base.getDocument("transactionHistory", m.id))
+          const destination =
+            m.collection === "transactions"
+              ? "transactionHistory"
+              : m.collection;
+          if (
+            destination === "transactionHistory" &&
+            (await base.getDocument(destination, m.id))
+          )
             fail("LOCAL_COLLISION");
-          const doc = await base.getDocument<any>("transactions", m.id);
+          const doc = await base.getDocument<any>(m.collection, m.id);
           if (!doc || doc.zReportId) fail("LOCAL_MEMBER_CHANGED");
           changes.push({
-            collectionName: "transactionHistory",
+            collectionName: destination,
             document: {
               ...doc,
               zReportId: ack.closeId,
@@ -503,6 +529,12 @@ export class ReceivedCloseFlow {
             seriesId: ack.seriesId,
             seriesNumber: Number(ack.number),
             syncStatus: "SYNCED",
+            ...(ack.nativeProfile === "erp.received-native-operations.v1"
+              ? {
+                  financialState: ack.financialState,
+                  operationStates: ack.operationStates,
+                }
+              : {}),
             _posRecovery: {
               snapshotId: candidate.input.snapshotId,
               commitId: ack.commitId,

@@ -5,6 +5,7 @@ import {
   decodeOriginal,
   encodeOriginal,
   originalDigest,
+  decodeBase64,
 } from "./OriginalCodec";
 import { withRecoveryPreparation } from "./RecoveryDatabase";
 import { resolveDocumentAssignmentId } from "../../utils/documentSeriesIdentity";
@@ -26,6 +27,7 @@ export class RecoveryCloseController {
     private db: DatabaseAdapter,
     private flow: ReceivedCloseFlow,
     private provenance: () => { key: string; terminalIds: string[] },
+    private refreshSnapshot?: () => Promise<void>,
   ) {
     this.prepare = new ClosePreparation(db);
   }
@@ -65,6 +67,8 @@ export class RecoveryCloseController {
       const provenance = this.provenance(),
         scopeKey = provenance.key;
       if (!provenance.terminalIds.includes(value.terminalId)) fail("TERMINAL");
+      if (this.refreshSnapshot) await this.refreshSnapshot();
+      if (this.provenance().key !== scopeKey) fail("SCOPE_CHANGED");
       const snapshot = await this.db.getDocument<any>(
         "recoveryState",
         "download",
@@ -85,35 +89,25 @@ export class RecoveryCloseController {
       if (!seriesId) fail("SERIES_REQUIRED");
       const belongs = (d: any) =>
         provenance.terminalIds.includes(d.terminalId) || !d.terminalId;
-      const tx = (await this.db.getCollection<any>("transactions")).filter(
-        (d) => belongs(d) && !d.zReportId,
-      );
-      for (const collection of [
-        "cashMovements",
-        "collections",
-        "wallet_transactions",
-      ]) {
-        if (
-          (await this.db.getCollection<any>(collection)).some(
-            (d) => belongs(d) && !d.zReportId,
-          )
-        )
-          fail("UNSUPPORTED_OPERATIONS");
-      }
-      if (
-        !tx.length ||
-        tx.some(
-          (d) =>
-            d.terminalId !== value.terminalId ||
-            d._posRecovery?.snapshotId !== snapshot.snapshot.snapshotId,
-        )
-      )
+      const selected = {
+        transactions: (await this.db.getCollection<any>("transactions")).filter(
+          (d) => belongs(d) && !d.zReportId,
+        ),
+        cashMovements: (
+          await this.db.getCollection<any>("cashMovements")
+        ).filter((d) => belongs(d) && !d.zReportId),
+        collections: (await this.db.getCollection<any>("collections")).filter(
+          (d) => belongs(d) && !d.zReportId,
+        ),
+      };
+      const all = Object.values(selected).flat();
+      if (!all.length || all.some((d) => d.terminalId !== value.terminalId))
         fail("LOCAL_OR_MIXED_OPERATIONS");
       // Keep full active selection. A modal subset cannot remove operations from this close.
       for (const [name, ids] of [
-        ["transactionIds", tx.map((d) => d.id)],
-        ["cashMovementIds", []],
-        ["collectionIds", []],
+        ["transactionIds", selected.transactions.map((d) => d.id)],
+        ["cashMovementIds", selected.cashMovements.map((d) => d.id)],
+        ["collectionIds", selected.collections.map((d) => d.id)],
       ] as const) {
         const selected = value.declaration?.[name];
         if (
@@ -125,30 +119,87 @@ export class RecoveryCloseController {
         )
           fail("SELECTION_CHANGED");
       }
+      const dependencies: Array<{
+        collection: "transactionHistory" | "wallet_transactions";
+        id: string;
+        expectedDocument: string;
+      }> = [];
+      const needed = new Set<string>();
+      for (const t of selected.transactions)
+        for (const id of [t.originalTransactionId, t.original_transaction_id])
+          if (id) needed.add(id);
+      for (const c of selected.collections)
+        for (const a of c.allocations || [])
+          if (a.transactionId) needed.add(a.transactionId);
+      for (const id of needed) {
+        if (selected.transactions.some((t) => t.id === id)) continue;
+        const doc = await this.db.getDocument<any>("transactionHistory", id);
+        if (!doc?.zReportId) fail("DEPENDENCY_REQUIRED");
+        dependencies.push({
+          collection: "transactionHistory",
+          id,
+          expectedDocument: encodeOriginal(doc),
+        });
+      }
+      for (const w of await this.db.getCollection<any>("wallet_transactions")) {
+        if (!belongs(w) || w.zReportId) continue;
+
+        dependencies.push({
+          collection: "wallet_transactions",
+          id: w.id,
+          expectedDocument: encodeOriginal(w),
+        });
+      }
       const preparationId = crypto.randomUUID();
       const prepared = await this.prepare.prepare({
         preparationId,
         scopeKey,
         terminalId: value.terminalId,
-        members: tx.map((d) => ({
-          collection: "transactions",
-          id: d.id,
-          expectedDocument: encodeOriginal(d),
-        })),
+        members: (
+          Object.keys(selected) as Array<keyof typeof selected>
+        ).flatMap((collection) =>
+          selected[collection].map((d) => ({
+            collection,
+            id: d.id,
+            expectedDocument: encodeOriginal(d),
+          })),
+        ),
+        ...(dependencies.length ? { dependencies } : {}),
         declaration: value.declaration,
         nativeZ: {
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           user: value.user,
           notes: value.notes,
           configurationSha256: await hash(encodeOriginal(config)),
         },
       });
       const body = decodeOriginal(prepared.body) as any;
-      const receiptBindings = body.members.map((m: any) => {
-        const receipt = m.source.receipt,
+      const stage = await this.db.getCollection<any>("recoveryStage");
+      const receiptBindings = [
+        ...body.members.map((m: any) => ({ ...m, group: "members" })),
+        ...(body.dependencies || []).map((m: any) => ({
+          ...m,
+          group: "dependencies",
+        })),
+      ].map((m: any) => {
+        const receipt =
+            m.source.stage === "RECOVERED"
+              ? m.source.receipt
+              : stage.find(
+                  (row) =>
+                    row.snapshotId === snapshot.snapshot.snapshotId &&
+                    row.record.kind === m.source.kind &&
+                    row.record.originalId === m.source.originalId &&
+                    row.record.revision === m.source.revision &&
+                    row.record.storageEpoch === m.source.storageEpoch &&
+                    new TextDecoder().decode(
+                      decodeBase64(row.record.bodyBase64),
+                    ) === m.source.body,
+                ),
           r = receipt?.record;
         if (!r) fail("ORIGINAL_REQUIRED");
         return {
-          group: "members",
+          group: m.group,
           kind: r.kind,
           originalId: r.originalId,
           revision: r.revision,

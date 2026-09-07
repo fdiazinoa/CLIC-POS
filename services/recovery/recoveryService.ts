@@ -22,6 +22,7 @@ export const pendingOperationsRecovery = new PendingOperationsRecovery(
       return {
         ...after,
         commercialBindingVersion: capabilities.commercialBindingVersion,
+        recoveryScope: capabilities.receivedClose?.scope,
         enabled:
           capabilities.enabled === true && capabilities.contractVersion === 1,
       };
@@ -30,6 +31,7 @@ export const pendingOperationsRecovery = new PendingOperationsRecovery(
     commercialStatus: (references) =>
       apiSyncAdapter.getOriginalCommercialStatus(references),
     snapshot: () => apiSyncAdapter.createRecoverySnapshot(),
+    pending: (id) => apiSyncAdapter.getRecoveryPendingSelection(id),
     page: (id, cursor) => apiSyncAdapter.getRecoveryPage(id, cursor),
   },
 );
@@ -38,11 +40,12 @@ export const pendingOperationsRecovery = new PendingOperationsRecovery(
 export async function prepareCommercialOriginalReference(
   document: any,
   item: unknown,
+  collection = "transactions",
 ) {
   if (
     !isSyncFeatureEnabled("pending_operations_recovery") ||
     document?._posRecovery?.snapshotId ||
-    !["TICKET", "REFUND"].includes(document?.documentType)
+    !["transactions", "cashMovements"].includes(collection)
   )
     return null;
   const scope = originalProvenance().key;
@@ -52,7 +55,13 @@ export async function prepareCommercialOriginalReference(
       throw new Error("RECOVERY_SCOPE_CHANGED");
     if (!capability.enabled || capability.commercialBindingVersion !== 1)
       return null;
-    const id = await captureOriginalTransport(dbAdapter, document, item, scope);
+    const id = await captureOriginalTransport(
+      dbAdapter,
+      document,
+      item,
+      scope,
+      collection,
+    );
     if (!id) return null;
     const reference =
       await pendingOperationsRecovery.receiveCapturedOriginal(id);
@@ -84,7 +93,10 @@ export const receivedCloseFlow = new ReceivedCloseFlow(dbAdapter, {
     if (
       capability?.enabled !== true ||
       capability.version !== 1 ||
-      capability.profile !== "erp.received-ticket-dop-cash.v1" ||
+      ![
+        "erp.received-ticket-dop-cash.v1",
+        "erp.received-native-operations.v1",
+      ].includes(capability.profile) ||
       capability.coverage !== "RECEIVED_ONLY" ||
       capability.exactZEligible !== false ||
       capability.closeAuthorization !== "NOT_GRANTED"
@@ -110,4 +122,10 @@ export const recoveryCloseController = new RecoveryCloseController(
   dbAdapter,
   receivedCloseFlow,
   originalProvenance,
+  async () => {
+    while (await pendingOperationsRecovery.sendPending()) {
+      /* Drain originals outside checkout. */
+    }
+    await pendingOperationsRecovery.download(true);
+  },
 );

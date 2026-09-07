@@ -2162,6 +2162,8 @@ export interface PromotionRecommendation {
 
 export interface CashMovement {
   id: string;
+  zReportId?: string;
+  zReportSequence?: string;
   type: 'IN' | 'OUT';
   amount: number;
   reason: string;
