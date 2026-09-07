@@ -30,6 +30,7 @@ export interface ReceivedCloseTransport {
   observe(body: unknown): Promise<any>;
   submit(exactBody: string): Promise<any>;
   result(commandId: string): Promise<any | null>;
+  cancelNumberConflict?(commandId: string, exactBody: string): Promise<any>;
 }
 export interface ReceivedCloseStart {
   scopeKey: string;
@@ -52,6 +53,7 @@ const keys = (scope: string, prep: string) => ({
   candidate: JSON.stringify(["receivedCloseCandidate", scope, prep]),
   ack: JSON.stringify(["receivedCloseAck", scope, prep]),
   published: JSON.stringify(["receivedClosePublished", scope, prep]),
+  cancelled: JSON.stringify(["receivedCloseCancelled", scope, prep]),
 });
 async function wrapped(id: string, value: unknown) {
   const body = encodeOriginal(value);
@@ -125,7 +127,8 @@ export class ReceivedCloseFlow {
     const candidate = await this.load(k.candidate);
     const ack = await this.load(k.ack);
     const published = await this.load(k.published);
-    return { candidate, ack, published };
+    const cancelled = await this.load(k.cancelled);
+    return { candidate, ack, published, cancelled };
   }
 
   async observe(input: ReceivedCloseStart): Promise<any> {
@@ -133,6 +136,7 @@ export class ReceivedCloseFlow {
     return this.exclusive(async () => {
       const context = await this.context(frozen.scopeKey),
         k = keys(frozen.scopeKey, frozen.preparationId);
+      if (await this.load(k.cancelled)) fail("COMMAND_CANCELLED");
       const existing = await this.load(k.candidate);
       if (existing) {
         if (
@@ -282,6 +286,7 @@ export class ReceivedCloseFlow {
     return this.exclusive(async () => {
       const context = await this.context(scopeKey),
         k = keys(scopeKey, preparationId);
+      if (await this.load(k.cancelled)) fail("COMMAND_CANCELLED");
       const candidate = await this.load(k.candidate);
       if (!candidate || !same(candidate.scope, context.scope))
         fail("NOT_OBSERVED");
@@ -318,6 +323,147 @@ export class ReceivedCloseFlow {
       return ack;
     });
   }
+  /** A server-locked cancellation is required before replacing an observed attempt. */
+  async resolveNumberConflict(
+    scopeKey: string,
+    preparationId: string,
+  ): Promise<any> {
+    const result = await this.exclusive(async () => {
+      const context = await this.context(scopeKey),
+        k = keys(scopeKey, preparationId);
+      const candidate = await this.load(k.candidate);
+      if (!candidate || !same(candidate.scope, context.scope))
+        fail("NOT_OBSERVED");
+      const stored = await this.load(k.cancelled);
+      if (stored) return stored;
+      if (!this.transport.cancelNumberConflict)
+        fail("NUMBER_RESOLUTION_UNAVAILABLE");
+      const commandId = candidate.observed.membership.intent.commandId;
+      const proof = await this.transport.cancelNumberConflict(
+        commandId,
+        candidate.submissionBody,
+      );
+      if (!same((await this.context(scopeKey)).scope, context.scope))
+        fail("SCOPE");
+      if (proof?.status === "COMMITTED") {
+        await this.validateAck(candidate, proof);
+        return proof;
+      }
+      const series = proof?.series,
+        expected = candidate.observed.trace.resources.series;
+      const integer = (v: unknown) =>
+        typeof v === "string" &&
+        /^(0|[1-9][0-9]*)$/.test(v) &&
+        Number.isSafeInteger(Number(v));
+      if (
+        proof?.version !== 1 ||
+        proof.status !== "CANCELLED" ||
+        proof.reason !== "NUMBER_CONFLICT" ||
+        !uuid(proof.proofId) ||
+        proof.commandId !== commandId ||
+        !same(proof.scope, context.scope) ||
+        proof.requestHash !==
+          (await digest(
+            recoveryCanonicalJson(JSON.parse(candidate.submissionBody)),
+          )) ||
+        proof.exactZEligible !== false ||
+        proof.closeAuthorization !== "NOT_GRANTED" ||
+        typeof proof.cancelledAt !== "string" ||
+        !Number.isFinite(Date.parse(proof.cancelledAt)) ||
+        series?.seriesId !== candidate.input.seriesId ||
+        series.previousCode !==
+          expected.prefix +
+            expected.nextNumber.padStart(expected.padding, "0") ||
+        series.prefix !== expected.prefix ||
+        series.padding !== expected.padding ||
+        ![
+          series.previousNext,
+          series.nextNumber,
+          series.previousRevision,
+          series.revision,
+        ].every(integer) ||
+        Number(series.previousNext) < 1 ||
+        Number(series.nextNumber) < Number(series.previousNext) ||
+        Number(series.nextNumber) <= Number(expected.nextNumber) ||
+        Number(series.previousRevision) < Number(expected.revision) ||
+        Number(series.revision) < Number(series.previousRevision)
+      )
+        fail("CANCELLATION_INVALID");
+      const row = await wrapped(k.cancelled, proof);
+      await withRecoveryPreparation(this.db, scopeKey, async (base) => {
+        if (!base.saveDocumentsAtomically) fail("ATOMIC_UNAVAILABLE");
+        if (
+          (await base.getDocument(RECOVERY_STATE, k.ack)) ||
+          (await base.getDocument(RECOVERY_STATE, k.published))
+        )
+          fail("CANCELLATION_CONFLICT");
+        const mutations: DurableDocumentMutation[] = [
+          { collectionName: RECOVERY_STATE, document: row },
+        ];
+        for (const collectionName of ["internalSequences", "documentSeries"]) {
+          const local = await base.getDocument<any>(
+            collectionName,
+            series.seriesId,
+          );
+          if (!local) continue;
+          if (
+            !Number.isSafeInteger(Number(local.nextNumber)) ||
+            Number(local.nextNumber) < 1
+          )
+            fail("LOCAL_SERIES_UNAVAILABLE");
+          mutations.push({
+            collectionName,
+            document: {
+              ...local,
+              nextNumber: Math.max(
+                Number(local.nextNumber),
+                Number(series.nextNumber),
+              ),
+            },
+          });
+        }
+        const config = await base.getDocument<any>("config", "current");
+        if (config)
+          mutations.push({
+            collectionName: "config",
+            document: {
+              ...config,
+              terminals: (config.terminals || []).map((t: any) => {
+                if (!Array.isArray(t.config?.documentSeries)) return t;
+                return {
+                  ...t,
+                  config: {
+                    ...t.config,
+                    documentSeries: t.config.documentSeries.map((s: any) => {
+                      if (s.id !== series.seriesId) return s;
+                      if (
+                        !Number.isSafeInteger(Number(s.nextNumber)) ||
+                        Number(s.nextNumber) < 1
+                      )
+                        fail("LOCAL_SERIES_UNAVAILABLE");
+                      return {
+                        ...s,
+                        nextNumber: Math.max(
+                          Number(s.nextNumber),
+                          Number(series.nextNumber),
+                        ),
+                      };
+                    }),
+                  },
+                };
+              }),
+            },
+          });
+        await base.saveDocumentsAtomically(mutations, false);
+      });
+      return proof;
+    });
+    // Reuse ordinary ACK publication if ERP says the command already committed.
+    return result.status === "COMMITTED"
+      ? this.commit(scopeKey, preparationId)
+      : result;
+  }
+
   private async validateAck(c: any, ack: any) {
     const intent = c.observed.membership.intent,
       ref = intent.artifacts.find((a: any) => a.role === "closeControl"),

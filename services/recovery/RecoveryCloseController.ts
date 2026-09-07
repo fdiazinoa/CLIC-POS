@@ -63,7 +63,7 @@ export class RecoveryCloseController {
     const value = decodeOriginal(encodeOriginal(input)) as RecoveryCloseInput;
     try {
       await this.availability();
-      if ((await this.list()).some((j) => !j.published))
+      if ((await this.list()).some((j) => !j.published && !j.cancelled))
         fail("RESUME_REQUIRED");
       const provenance = this.provenance(),
         scopeKey = provenance.key;
@@ -286,6 +286,11 @@ export class RecoveryCloseController {
         JSON.stringify(["recoveryCloseUI", job.scopeKey, id]),
       );
     });
+  }
+  async resolveNumberConflict(id: string) {
+    const job = (await this.list()).find((j) => j.preparationId === id);
+    if (!job) fail("NOT_FOUND");
+    return this.flow.resolveNumberConflict(job.scopeKey, id);
   }
   async confirm(id: string) {
     const job = (await this.list()).find((j) => j.preparationId === id);

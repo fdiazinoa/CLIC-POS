@@ -607,6 +607,22 @@ test(
         await flow.commit(input.scopeKey, input.preparationId),
         ack,
       );
+      const resolvedCommitted = new ReceivedCloseFlow(db, {
+        ...transport,
+        cancelNumberConflict: async () => ack,
+      });
+      assert.deepEqual(
+        await resolvedCommitted.resolveNumberConflict(
+          input.scopeKey,
+          input.preparationId,
+        ),
+        ack,
+      );
+      assert.equal(
+        (await resolvedCommitted.progress(input.scopeKey, input.preparationId))
+          .cancelled,
+        null,
+      );
       assert.equal(submits, 1);
       assert.equal(lookups, 2);
       assert.equal((await db.getCollection("transactionHistory")).length, 2);
