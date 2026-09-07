@@ -3224,7 +3224,7 @@ class ApiSyncAdapter {
 
     /** Frozen close bodies bypass commercial payload enrichment and automatic reauthentication. */
     async receivedCloseRequest(path: string, exactBody?: string): Promise<any> {
-        if (!/^\/close-preparations(?:\/observe|\/[a-f0-9-]+\/result)?$/i.test(path)) throw new Error('RECEIVED_CLOSE_PATH');
+        if (!/^\/close-preparations(?:\/observe|\/[a-f0-9-]+\/(?:result|cancel-number-conflict))?$/i.test(path)) throw new Error('RECEIVED_CLOSE_PATH');
         const scopeKey = originalProvenance().key;
         const target = await this.authenticateOperationalTarget(false, 'sales', 'PUSH_OPERATIONS');
         if (target.useLocalTarget || originalProvenance().key !== scopeKey) throw new Error('RECOVERY_SCOPE_CHANGED');

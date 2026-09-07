@@ -80,7 +80,10 @@ test(
       admin = pg.getPgClient("postgres", "127.0.0.1");
       await admin.connect();
       await admin.query(fixtureSchema);
-      for (const name of recoveryMigrations)
+      for (const name of [
+        ...recoveryMigrations,
+        "20260907232412_pos_close_number_conflict_cancellation.sql",
+      ])
         await admin.query(
           await readFile(join(erp!, "supabase/migrations", name), "utf8"),
         );
@@ -609,7 +612,11 @@ test(
       );
       const resolvedCommitted = new ReceivedCloseFlow(db, {
         ...transport,
-        cancelNumberConflict: async () => ack,
+        cancelNumberConflict: (id, body) =>
+          apiSyncAdapter.receivedCloseRequest(
+            `/close-preparations/${id}/cancel-number-conflict`,
+            JSON.stringify({ request: JSON.parse(body) }),
+          ),
       });
       assert.deepEqual(
         await resolvedCommitted.resolveNumberConflict(
