@@ -33,9 +33,25 @@ CLIC_ERP_REVIEW_PATH=/ruta/al/checkout/ERP npx tsx --test tests/recoveryErpTrans
 
 Build: PASS, con aviso de chunks grandes. `npm run lint` no puede ejecutarse porque la base carece de eslint.config para ESLint 9; no se modificó su configuración global.
 
+## Prueba de persistencia de extremo a extremo entre servicios
+
+`tests/recoveryDurableRoundTrip.test.ts` conecta el adaptador POS a SQLite en archivo, las rutas HTTP ERP reales y sus RPC reales a PostgreSQL 18.4 bajo `service_role`. Crea un cluster nuevo en loopback; nunca lee `DATABASE_URL` ni utiliza una base existente. Borra exclusivamente su directorio temporal al terminar.
+
+```sh
+# Dependencia del laboratorio, fuera del repositorio:
+npm install --prefix /tmp/clic-original-pg-tests embedded-postgres@18.4.0-beta.17
+CLIC_ERP_REVIEW_PATH=/ruta/al/checkout/ERP \
+CLIC_EMBEDDED_POSTGRES_MODULE=/tmp/clic-original-pg-tests/node_modules/embedded-postgres/dist/index.js \
+npx tsx --test tests/recoveryDurableRoundTrip.test.ts
+```
+
+Resultado: PASS. Conservó 104 originales/revisiones y restauró ocho documentos. El ACK se perdió después del commit y el reintento no duplicó filas. PostgreSQL fue detenido/reiniciado; SQLite de destino fue cerrado/reabierto con la primera página persistida. Se completaron tres solicitudes de página, sin publicar una descarga incompleta. Se mantuvieron historia cerrada, orden de efectivo, abono de agenda y su asignación, sin escribir series ni crear cola comercial. La operación nunca enviada estuvo ausente: los conteos recibidos **no** prueban cobertura completa.
+
+Los helpers nativos actuales de resumen de pagos, estadísticas Z y anexos dieron la misma salida antes/después para el caso DOP entre medianoches ensayado. No se ejecutó el cierre operacional ni se asignó número fiscal. Esta prueba añade almacenamiento real a la anterior; la frontera de autenticación y el bridge Android siguen siendo adaptadores de prueba. No acredita revinculación real en una tablet, todos los canales, declaración completa, ni autorización del Z.
+
 ## Qué falta antes de usarlo para continuar una jornada
 
-1. Prueba completa en POS de laboratorio ↔ ERP con almacenamiento real: pérdida de ACK, reinicio/revinculación, interrupción, takeover, lectura íntegra y ausencia de efectos duplicados. El test de transporte actual no la reemplaza.
+1. Completar el recorrido en POS de laboratorio con autenticación/takeover reales y bridge Android. El recorrido entre servicios con SQLite/PostgreSQL y reinicios ya pasó; sus fronteras simuladas no reemplazan esta validación del dispositivo.
 2. Completar cobertura de productores, dependencias/configuración histórica y demostrar equivalencia nativa de Z. El snapshot conserva únicamente lo recibido: legacy sigue UNKNOWN y no prueba que la cola perdida hubiera salido del equipo.
 3. Resolver pertenencia y continuidad durable de época/apertura, conciliación del estado comercial ERP, aceptación concurrente del Z y autoridad de series/reservas. Los IDs locales storageEpoch/openSetId actuales son contexto de captura; no acreditan una apertura ni un checkpoint sellado. No hay rollover de jornada autorizado ni restauración de series.
 4. Mantener pendiente custodia, disponibilidad y retención. No hay borrado por ACK, purga automática ni recuperación de operaciones nunca enviadas. La cola conserva revisiones y necesita una política de capacidad antes del despliegue.
