@@ -1,3 +1,4 @@
+import { RecoveryCloseController } from "../services/recovery/RecoveryCloseController";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile, mkdtemp, rm } from "node:fs/promises";
@@ -314,6 +315,7 @@ test(
       await db.saveDocument("config", config);
       await db.saveDocument("internalSequences", {
         id: seriesId,
+        documentType: "Z_REPORT",
         prefix: "Z-",
         padding: 6,
         nextNumber: 1,
@@ -356,27 +358,46 @@ test(
           user: { id: "u1", name: "QA" },
         },
       };
-      const prepared = await prepare.prepare(input),
-        frozen = decodeOriginal(prepared.body) as any;
-      const bindings = frozen.members.map((m: any) => {
-        const s = m.source.receipt,
-          r = s.record;
-        return {
-          group: "members",
-          kind: r.kind,
-          originalId: r.originalId,
-          revision: r.revision,
-          reference: {
-            receiptId: s.receiptId,
-            recordHash: s.recordHash,
-            storageEpoch: r.storageEpoch,
-            kind: r.kind,
-            originalId: r.originalId,
-            revision: r.revision,
-            bodySha256: r.bodySha256,
-          },
-        };
+      const storage = new Map<string, string>();
+      Object.assign(globalThis, {
+        localStorage: {
+          getItem: (k: string) => storage.get(k) ?? null,
+          setItem: (k: string, v: string) => storage.set(k, v),
+          removeItem: (k: string) => storage.delete(k),
+        },
       });
+      const { apiSyncAdapter } =
+        await import("../services/sync/ApiSyncAdapter");
+      const adapter = apiSyncAdapter as any;
+      const operationalTarget = {
+        baseUrl: base.replace(/\/originals$/, ""),
+        terminalId: scope.terminalId,
+        useLocalTarget: false,
+        token: "laboratory-only",
+      };
+      // Credential acquisition is a lab fixture; actual adapter method and ERP authorization execute.
+      adapter.authenticateOperationalTarget = async () => operationalTarget;
+      adapter.resolveOperationalTarget = () => operationalTarget;
+      adapter.buildOperationalHeaders = () => ({
+        "Content-Type": "application/json",
+        "x-terminal-id": scope.terminalId,
+        "x-sync-token": "laboratory-only",
+      });
+      adapter.getLocalDeviceHeaders = () => ({ "x-device-id": "new" });
+      adapter.fetchWithRetry = async (
+        url: string,
+        options: any,
+        retries: number,
+      ) => {
+        if (url.includes("/close-preparations")) assert.equal(retries, 0);
+        return fetch(url, options);
+      };
+      const capability = (await apiSyncAdapter.recoveryCapabilities())
+        .receivedClose;
+      assert.equal(capability.enabled, true);
+      assert.equal(capability.profile, "erp.received-ticket-dop-cash.v1");
+      assert.deepEqual(capability.scope, scope);
+      assert.equal(capability.closeAuthorization, "NOT_GRANTED");
       let submits = 0,
         lookups = 0;
       const transport: ReceivedCloseTransport = {
@@ -385,16 +406,25 @@ test(
           scope,
           enabled: true,
         }),
-        observe: (body) => request("new", "/close-preparations/observe", body),
+        observe: (body) =>
+          apiSyncAdapter.receivedCloseRequest(
+            "/close-preparations/observe",
+            JSON.stringify(body),
+          ),
         submit: async (body) => {
           submits++;
-          await request("new", "/close-preparations", body, true);
+          await apiSyncAdapter.receivedCloseRequest(
+            "/close-preparations",
+            body,
+          );
           throw Error("ACK_LOST");
         },
         result: async (id) => {
           lookups++;
           try {
-            return await request("new", `/close-preparations/${id}/result`);
+            return await apiSyncAdapter.receivedCloseRequest(
+              `/close-preparations/${id}/result`,
+            );
           } catch (e: any) {
             if (e.status === 404) return null;
             throw e;
@@ -402,13 +432,58 @@ test(
         },
       };
       let flow = new ReceivedCloseFlow(db, transport);
-      const observed = await flow.observe({
-        scopeKey: input.scopeKey,
-        preparationId: input.preparationId,
-        snapshotId: snapshot.snapshotId,
-        seriesId,
-        receiptBindings: bindings,
-      });
+      const disabledController = new RecoveryCloseController(
+        db,
+        new ReceivedCloseFlow(db, {
+          ...transport,
+          context: async () => ({ key: input.scopeKey, scope, enabled: false }),
+        }),
+        () => ({ key: input.scopeKey, terminalIds: ["T1"] }),
+      );
+      await assert.rejects(
+        disabledController.review({
+          terminalId: "T1",
+          user: input.nativeZ.user,
+          notes: "",
+          declaration: input.declaration,
+        }),
+        /RECEIVED_CLOSE_DISABLED/,
+      );
+      assert.deepEqual(await disabledController.list(), []);
+      const controller = new RecoveryCloseController(db, flow, () => ({
+        key: input.scopeKey,
+        terminalIds: ["T1", scope.terminalId],
+      }));
+      const uiInput = {
+        terminalId: input.terminalId,
+        user: input.nativeZ.user,
+        notes: input.nativeZ.notes,
+        declaration: input.declaration,
+      };
+      await assert.rejects(
+        controller.review({
+          ...uiInput,
+          declaration: { ...input.declaration, transactionIds: [] },
+        }),
+        /RECOVERY_CLOSE_SELECTION_CHANGED/,
+      );
+      const job = await controller.review(uiInput);
+      input.preparationId = job.preparationId;
+      await assert.rejects(
+        controller.discardUnsentReview(job.preparationId),
+        /RECEIVED_CLOSE_CANNOT_DISCARD_OBSERVED/,
+      );
+      assert.equal((await controller.list()).length, 1);
+      await assert.rejects(
+        controller.review(uiInput),
+        /RECOVERY_CLOSE_RESUME_REQUIRED/,
+      );
+      const prepared = await prepare.resume(
+          input.scopeKey,
+          input.preparationId,
+        ),
+        frozen = decodeOriginal(prepared.body) as any;
+      const observed = job.candidate.observed;
       assert.equal(observed.closeAuthorization, "NOT_GRANTED");
       ({ db, prepare } = target.restart());
       flow = new ReceivedCloseFlow(db, transport);
