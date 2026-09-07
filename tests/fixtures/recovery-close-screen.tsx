@@ -12,10 +12,17 @@ const controller: any = {
     jobs = [
       {
         preparationId: "fixture",
-        receiptBindings: [{}, {}],
+        receiptBindings: [{ group: "members" }, { group: "members" }],
         candidate: {
           observed: {
-            packetJson: JSON.stringify({ summary: { total_sales: 150 } }),
+            packetJson: JSON.stringify({
+              summary: { total_sales: 150 },
+              report: {
+                baseCurrency: "DOP",
+                cashExpected: { DOP: 100, USD: 1 },
+              },
+              financialState: "PENDING",
+            }),
           },
         },
       },

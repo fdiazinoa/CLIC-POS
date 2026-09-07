@@ -122,6 +122,7 @@ test(
       app.use(
         "/api/sync/originals",
         createOriginalRecoveryRouter({
+          receivedCloseProfile: "erp.received-ticket-dop-cash.v1",
           client,
           nativeZProducer: buildNativeZReportContent,
           authorize: async (req: any) => {
