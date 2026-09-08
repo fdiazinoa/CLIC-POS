@@ -216,6 +216,9 @@ import {
   collectClosedTransactionIds,
   partitionTransactionsByClosedMembership,
   persistInboundTransactionsIfOpen,
+  isTransactionReservedForClose,
+  releaseClosingTransactionIds,
+  reserveClosingTransactionIds,
 } from './services/sync/ClosedTransactionMembership';
 import { inventorySyncService } from './services/sync/InventorySyncService';
 import { processInventoryDeduction } from './utils/inventoryEngine';
@@ -1622,6 +1625,7 @@ const resolveReachableMasterBinding = async (host: string): Promise<{ host: stri
   for (const baseUrl of buildMasterUrlCandidates(normalizedHost)) {
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 3500);
+
     try {
       const [response, configResponse] = await Promise.all([
         fetch(`${baseUrl}/api/sync/ping`, { signal: controller.signal }),
@@ -6807,9 +6811,11 @@ const AppContent: React.FC = () => {
                 setTransactions(prev => {
                   const merged = new Map<string, Transaction>();
                   (prev || []).forEach(t => {
-                    if (!receipt.closedIds.has(t.id)) merged.set(t.id, t);
+                    if (!receipt.closedIds.has(t.id) && !isTransactionReservedForClose(t.id)) merged.set(t.id, t);
                   });
-                  receipt.accepted.forEach(t => merged.set(t.id, t));
+                  receipt.accepted.forEach(t => {
+                    if (!isTransactionReservedForClose(t.id)) merged.set(t.id, t);
+                  });
                   return Array.from(merged.values())
                     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
                 });
@@ -10146,6 +10152,9 @@ const AppContent: React.FC = () => {
       return;
     }
 
+    let reservedCloseTransactionIds: string[] = [];
+    let closeMembershipPersisted = false;
+
     try {
       console.log(`📊 Z-Report: Starting closure for terminal ${terminalId} (Device: ${deviceId})`);
 
@@ -10207,31 +10216,38 @@ const AppContent: React.FC = () => {
       // re-delivering a transaction. Never silently remove rows from a close
       // that the cashier already reviewed; block it, clean the UI projection,
       // and require a fresh review with the legitimate pending members only.
-      const [persistedHistory, persistedReports] = await Promise.all([
-        db.get('transactionHistory') as Promise<Transaction[]>,
-        db.get('zReports') as Promise<ZReport[]>,
-      ]);
-      const closedMembership = collectClosedTransactionIds(
-        Array.isArray(persistedHistory) ? persistedHistory : [],
-        Array.isArray(persistedReports) ? persistedReports : [],
-      );
-      const membershipCheck = partitionTransactionsByClosedMembership(
-        terminalTransactions,
-        closedMembership,
-      );
-      if (membershipCheck.closed.length > 0) {
-        setTransactions(prev => (prev || []).filter(transaction => !closedMembership.has(transaction.id)));
-        console.error(`Z_MEMBERSHIP_CLOSE_BLOCKED count=${membershipCheck.closed.length}`);
-        alert(
-          'El cierre fue actualizado porque contenía ventas que ya pertenecen a un Z anterior. '
-          + 'No se generó ningún cierre. Abra Cierre Z nuevamente para revisar solo los movimientos pendientes.'
+      if (!replacementReportId) {
+        const [persistedHistory, persistedReports] = await Promise.all([
+          db.get('transactionHistory') as Promise<Transaction[]>,
+          db.get('zReports') as Promise<ZReport[]>,
+        ]);
+        const closedMembership = collectClosedTransactionIds(
+          Array.isArray(persistedHistory) ? persistedHistory : [],
+          Array.isArray(persistedReports) ? persistedReports : [],
         );
-        return;
+        const membershipCheck = partitionTransactionsByClosedMembership(
+          terminalTransactions,
+          closedMembership,
+        );
+        if (membershipCheck.closed.length > 0) {
+          setTransactions(prev => (prev || []).filter(transaction => !closedMembership.has(transaction.id)));
+          console.error(`Z_MEMBERSHIP_CLOSE_BLOCKED count=${membershipCheck.closed.length}`);
+          alert(
+            'El cierre fue actualizado porque contenía ventas que ya pertenecen a un Z anterior. '
+            + 'No se generó ningún cierre. Abra Cierre Z nuevamente para revisar solo los movimientos pendientes.'
+          );
+          return;
+        }
       }
 
       if ([...terminalTransactions, ...terminalCashMovements, ...terminalCollections].some(isRecoveredOperation)) {
         alert('La jornada contiene movimientos recuperados cuya cobertura todavía no ha sido confirmada por ERP. No se puede autorizar un cierre exacto.');
         return;
+      }
+
+      if (!replacementReportId) {
+        reservedCloseTransactionIds = terminalTransactions.map(transaction => transaction.id);
+        reserveClosingTransactionIds(reservedCloseTransactionIds);
       }
 
       console.log(`🔒 Shift Segregation: Found ${terminalTransactions.length} txns and ${terminalCashMovements.length} cash movements for ${terminalId}`);
@@ -10354,6 +10370,7 @@ const AppContent: React.FC = () => {
 
       console.log("💾 Saving Z-Report:", newZReport);
       await db.saveDocument('zReports', newZReport);
+      closeMembershipPersisted = true;
       setZReports(prev => {
         const withoutReplaced = prev.filter(report => report.id !== newZReport.id);
         return [...withoutReplaced, newZReport].sort((a, b) => new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime());
@@ -10452,6 +10469,9 @@ const AppContent: React.FC = () => {
         new Promise(resolve => setTimeout(resolve, 8000))
       ]);
     } catch (error) {
+      if (!closeMembershipPersisted && reservedCloseTransactionIds.length > 0) {
+        releaseClosingTransactionIds(reservedCloseTransactionIds);
+      }
       console.error('❌ Z-Report closure failed:', error);
       alert('El cierre terminó con incidencias de sincronización. Se volverá al POS y el reporte quedará en cola para sincronizar.');
     } finally {

@@ -5,6 +5,9 @@ import {
   collectClosedTransactionIds,
   partitionTransactionsByClosedMembership,
   persistInboundTransactionsIfOpen,
+  isTransactionReservedForClose,
+  releaseClosingTransactionIds,
+  reserveClosingTransactionIds,
 } from '../services/sync/ClosedTransactionMembership';
 
 const transaction = (id: string, total = 100): Transaction => ({
@@ -61,6 +64,24 @@ test('the Z member manifest blocks a replay before transactionHistory archiving 
 
   assert.equal(result.open.length, 0);
   assert.deepEqual(result.closed.map(item => item.id), [replay.id]);
+});
+
+test('an in-flight close blocks a concurrent replay before the Z write completes', () => {
+  const replay = transaction('TCKS001001280');
+  reserveClosingTransactionIds([replay.id]);
+  try {
+    assert.equal(isTransactionReservedForClose(replay.id), true);
+    const result = partitionTransactionsByClosedMembership(
+      [replay],
+      collectClosedTransactionIds([], []),
+    );
+    assert.deepEqual(result.closed.map(item => item.id), [replay.id]);
+  } finally {
+    releaseClosingTransactionIds([replay.id]);
+  }
+
+  assert.equal(collectClosedTransactionIds([], []).has(replay.id), false);
+  assert.equal(isTransactionReservedForClose(replay.id), false);
 });
 
 test('a close racing an inbound write removes only the replay and keeps legitimate pending sales', async () => {

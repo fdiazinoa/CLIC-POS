@@ -7,12 +7,29 @@ type ReportWithMembers = Pick<ZReport, 'id'> & {
 };
 
 const normalizeId = (value: unknown): string => String(value || '').trim();
+const closingTransactionIds = new Set<string>();
+
+export const reserveClosingTransactionIds = (ids: string[]): void => {
+  ids.forEach((value) => {
+    const id = normalizeId(value);
+    if (id) closingTransactionIds.add(id);
+  });
+};
+
+export const releaseClosingTransactionIds = (ids: string[]): void => {
+  ids.forEach((value) => closingTransactionIds.delete(normalizeId(value)));
+};
+
+export const isTransactionReservedForClose = (id: string): boolean =>
+  closingTransactionIds.has(normalizeId(id));
 
 export const collectClosedTransactionIds = (
   history: Array<Pick<Transaction, 'id' | 'zReportId'>> = [],
   reports: ReportWithMembers[] = [],
 ): Set<string> => {
   const closed = new Set<string>();
+
+  closingTransactionIds.forEach((id) => closed.add(id));
 
   history.forEach((transaction) => {
     const id = normalizeId(transaction?.id);
