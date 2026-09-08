@@ -423,6 +423,14 @@ test("native report is frozen with preparation IDs and complete annexes, without
     );
     assert.deepEqual(await db.getCollection("zReports"), []);
     assert.deepEqual(await db.getCollection("internalSequences"), []);
+    await db.saveDocument("config", {
+      ...native.config,
+      backgroundCatalogRefresh: { completedAt: "2026-09-08T00:00:00Z" },
+    });
+    assert.deepEqual(
+      await prepare.resume(input.scopeKey, input.preparationId),
+      prepared,
+    );
     await db.saveDocument("config", { ...native.config, paymentMethods: [] });
     await assert.rejects(
       prepare.resume(input.scopeKey, input.preparationId),

@@ -447,9 +447,21 @@ export class ClosePreparation {
 
   private async checkCurrent(base: DatabaseAdapter, prepared: PreparedClose) {
     const body = decodeOriginal(prepared.body) as any;
+    const observation = await this.observe(base);
+    if (body.nativeConfiguration) {
+      const config = await base.getDocument<any>("config", "current");
+      if (
+        !config ||
+        encodeOriginal(projectNativeZConfiguration(config)) !==
+          body.nativeConfiguration.body
+      )
+        fail("STALE");
+      // Background master refreshes can change catalog metadata and heartbeat fields.
+      // The frozen native projection above is the configuration actually read by Z.
+      observation.collections.config = body.observation.collections.config;
+    }
     if (
-      encodeOriginal(await this.observe(base)) !==
-      encodeOriginal(body.observation)
+      encodeOriginal(observation) !== encodeOriginal(body.observation)
     )
       fail("STALE");
     for (const member of [...body.members, ...(body.dependencies || [])]) {
