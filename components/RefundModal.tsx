@@ -137,6 +137,9 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                         <div>
                             <h2 className="text-lg font-black text-gray-900">{isGatewayRefundMode ? 'Procesar Refund AZUL' : 'Procesar Devolución'}</h2>
                             <p className="text-xs text-gray-500 font-medium">Ticket #{transaction.displayId || transaction.id}</p>
+                            {transaction.erpRefundSource && (
+                                <p className="mt-1 text-[10px] font-black uppercase tracking-wider text-blue-600">Factura consultada en ERP</p>
+                            )}
                         </div>
                     </div>
                     <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full text-gray-400 hover:text-gray-600 transition-colors">

@@ -9,6 +9,7 @@ interface PersistRefundOptions {
   terminalId?: string;
   originalTransaction?: Transaction | null;
   conditions?: Map<string, RefundCondition>;
+  persistOriginal?: boolean;
 }
 
 const emitCollectionUpdate = (collection: 'transactions' | 'products' | 'productStocks') => {
@@ -91,7 +92,7 @@ export async function persistStandaloneRefundTransaction(
   }
 
   let updatedOriginal: Transaction | undefined;
-  if (originalTransaction) {
+  if (originalTransaction && options.persistOriginal !== false) {
     const persistedTransactions = await db.get('transactions') as Transaction[];
     const remaining = getRemainingRefundQuantities(
       originalTransaction,
