@@ -1,5 +1,6 @@
 import { discoverPendingOperationsRecovery } from "./services/recovery/recoveryService";
 import RecoveryCloseDialog from './components/RecoveryCloseDialog';
+import AutomaticRecoveryDialog from './components/AutomaticRecoveryDialog';
 import type { RecoveryCloseInput } from './services/recovery/RecoveryCloseController';
 import { originalProvenance } from './services/recovery/RecoveryRuntime';
 import { isRecoveredOperation } from './services/recovery/PendingOperationsRecovery';
@@ -12741,6 +12742,7 @@ const AppContent: React.FC = () => {
   return (
     <ErrorBoundary componentName="App Root">
       <>
+        <AutomaticRecoveryDialog />
         {recoveryCloseScreen && currentUser && isSyncFeatureEnabled('pending_operations_recovery') && <RecoveryCloseDialog input={recoveryCloseScreen.input} onClose={() => setRecoveryCloseScreen(null)} onPublished={() => window.location.reload()} />}
         {recoverySequencePrompt && (
           <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/70 p-6">

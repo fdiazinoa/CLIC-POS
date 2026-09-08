@@ -12,12 +12,16 @@ import { PendingOperationsRecovery } from "./PendingOperationsRecovery";
 import { captureOriginalTransport } from "./RecoveryDatabase";
 import { originalProvenance } from "./RecoveryRuntime";
 import { ClosePreparation } from "./ClosePreparation";
+import { AutomaticRecovery } from './AutomaticRecovery';
 configureRecoveryAvailability(() => originalProvenance().key);
 export const discoverPendingOperationsRecovery = async () => {
   const enabled = await discoverRecoveryAvailability(originalProvenance, () =>
     apiSyncAdapter.recoveryCapabilities(),
   );
-  if (enabled) await pendingOperationsRecovery.ensureRetainedContinuity();
+  if (enabled) {
+    await automaticRecovery.start();
+    await pendingOperationsRecovery.ensureRetainedContinuity();
+  }
   return enabled;
 };
 /** Internal preparation API; it does not send or authorize a recovered close. */
@@ -55,6 +59,13 @@ export const pendingOperationsRecovery = new PendingOperationsRecovery(
   },
   (context) => captureRetainedOriginals(dbAdapter, context),
 );
+
+export const automaticRecovery = new AutomaticRecovery(dbAdapter, {
+  context: () => originalProvenance().key,
+  download: () => pendingOperationsRecovery.download(),
+  restore: () => pendingOperationsRecovery.restoreRetained(),
+  published: () => window.location.reload(),
+});
 
 /** Called only by the background commercial sender, never by checkout persistence. */
 export async function prepareCommercialOriginalReference(
