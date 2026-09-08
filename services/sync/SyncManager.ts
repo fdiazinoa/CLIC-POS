@@ -24,7 +24,11 @@ import {
     resolvePosUserId,
     type SyncedPosUser,
 } from '../../utils/posUserReconciliation';
-import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig, PurchaseOrder, StockTransfer, ProductStock, ProductPrice, TariffPrice, Warehouse, User, RoleDefinition, Permission } from '../../types';
+import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig, PurchaseOrder, StockTransfer, ProductStock, ProductPrice, TariffPrice, Warehouse, User, RoleDefinition, Permission, Transaction, ZReport } from '../../types';
+import {
+    collectClosedTransactionIds,
+    partitionTransactionsByClosedMembership,
+} from './ClosedTransactionMembership';
 import {
     buildAuthoritativeErpSecuritySnapshot,
     normalizeErpPermissions,
@@ -5557,11 +5561,39 @@ class SyncManager {
             }
         }
 
-        return Array.from(mergedById.values()).sort((a, b) => {
+        const merged = Array.from(mergedById.values()).sort((a, b) => {
             const aTs = toTimestamp(a?.date);
             const bTs = toTimestamp(b?.date);
             return bTs - aTs;
         });
+        const partitioned = await this.partitionTransactionsAgainstClosedMembership(merged);
+        await this.preserveClosedTransactionCopies(partitioned.closed);
+        return partitioned.open;
+    }
+
+    private async partitionTransactionsAgainstClosedMembership(items: any[]) {
+        const [history, reports] = await Promise.all([
+            db.get('transactionHistory') as Promise<Transaction[]>,
+            db.get('zReports') as Promise<ZReport[]>,
+        ]);
+        return partitionTransactionsByClosedMembership(
+            Array.isArray(items) ? items as Transaction[] : [],
+            collectClosedTransactionIds(
+                Array.isArray(history) ? history : [],
+                Array.isArray(reports) ? reports : [],
+            ),
+        );
+    }
+
+    private async preserveClosedTransactionCopies(items: Transaction[]): Promise<void> {
+        for (const transaction of items) {
+            if (transaction.zReportId) {
+                await db.saveDocument('transactionHistory', transaction);
+            }
+        }
+        if (items.length > 0) {
+            console.warn(`Z_MEMBERSHIP_CATALOG_REPLAY_IGNORED count=${items.length}`);
+        }
     }
 
     private async mirrorDocumentSeriesToInternalSequences(items: any[]): Promise<void> {
@@ -5965,6 +5997,12 @@ class SyncManager {
                 console.log(`💾 SyncManager: Performing INCREMENTAL update for ${collection}...`);
                 const updatedProductsForImageSync: Product[] = [];
                 const updatedMasterDataForImageSync: any[] = [];
+                const closedTransactionIds = collection === 'transactions'
+                    ? collectClosedTransactionIds(
+                        ((await db.get('transactionHistory')) as Transaction[]) || [],
+                        ((await db.get('zReports')) as ZReport[]) || [],
+                    )
+                    : new Set<string>();
                 for (const item of items) {
                     const op = item._op;
                     const { _op, ...cleanItem } = item;
@@ -5985,6 +6023,18 @@ class SyncManager {
                         // Master as Proxy logic: Default cloudSyncStatus to PENDING for audited documents if missing
                         if (['transactions', 'reservations', 'inventoryLedger', 'zReports'].includes(collection)) {
                             if (!finalItem.cloudSyncStatus) finalItem.cloudSyncStatus = 'PENDING';
+                        }
+
+                        if (
+                            collection === 'transactions'
+                            && (closedTransactionIds.has(String(finalItem.id || '').trim()) || finalItem.zReportId)
+                        ) {
+                            if (finalItem.zReportId) {
+                                await db.saveDocument('transactionHistory', finalItem);
+                            }
+                            await db.deleteDocument('transactions', finalItem.id);
+                            console.warn('Z_MEMBERSHIP_INCREMENTAL_REPLAY_IGNORED');
+                            continue;
                         }
 
                         await db.saveDocument(collection as any, finalItem);
@@ -7102,7 +7152,14 @@ class SyncManager {
             // 1. Restore Transactions
             if (history.transactions?.length > 0) {
                 console.log(`📥 SyncManager: Restoring ${history.transactions.length} transactions...`);
-                await db.save('transactions', history.transactions);
+                const localHistory = ((await db.get('transactionHistory')) as Transaction[]) || [];
+                const restoredReports = Array.isArray(history.zReports) ? history.zReports as ZReport[] : [];
+                const partitioned = partitionTransactionsByClosedMembership(
+                    history.transactions as Transaction[],
+                    collectClosedTransactionIds(localHistory, restoredReports),
+                );
+                await this.preserveClosedTransactionCopies(partitioned.closed);
+                await db.save('transactions', partitioned.open);
             }
 
             // 2. Restore Inventory Movements

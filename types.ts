@@ -3041,6 +3041,12 @@ export interface ZReport {
   reportDetails?: CloseReportDetails;
   syncStatus?: SyncStatus;
   syncError?: string;
+  /** Exact local members sealed when the close is first persisted. */
+  recoveryMemberIds?: {
+    transactions: string[];
+    cashMovements: string[];
+    collections: string[];
+  };
 }
 
 export interface XReport extends ZReport {

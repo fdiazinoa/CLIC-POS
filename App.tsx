@@ -212,6 +212,11 @@ import { transactionService } from './services/transactionService';
 import './styles/high-contrast.css';
 import { ThemeProvider } from './components/ThemeContext';
 import { transactionSyncService } from './services/sync/TransactionSyncService';
+import {
+  collectClosedTransactionIds,
+  partitionTransactionsByClosedMembership,
+  persistInboundTransactionsIfOpen,
+} from './services/sync/ClosedTransactionMembership';
 import { inventorySyncService } from './services/sync/InventorySyncService';
 import { processInventoryDeduction } from './utils/inventoryEngine';
 import { useOfflineInventoryCountSync } from './hooks/useOfflineInventoryCountSync';
@@ -6344,7 +6349,11 @@ const AppContent: React.FC = () => {
             try {
               console.log('📦 Loading active transactions for session...');
               console.log('📦 Loading active transactions for session...');
-              let activeTxns = await db.get('transactions') as Transaction[];
+              const [activeTxns, txHistory, persistedZReports] = await Promise.all([
+                db.get('transactions') as Promise<Transaction[]>,
+                db.get('transactionHistory') as Promise<Transaction[]>,
+                db.get('zReports') as Promise<ZReport[]>,
+              ]);
 
               // --- SELF-HEAL: Commented out to prevent regression ---
               /*
@@ -6354,13 +6363,25 @@ const AppContent: React.FC = () => {
               */
               // ------------------------------------------------
 
-              if (Array.isArray(activeTxns) && activeTxns.length > 0) {
-                setTransactions(activeTxns.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+              const closedTransactionIds = collectClosedTransactionIds(
+                Array.isArray(txHistory) ? txHistory : [],
+                Array.isArray(persistedZReports) ? persistedZReports : [],
+              );
+              const hydrated = partitionTransactionsByClosedMembership(
+                Array.isArray(activeTxns) ? activeTxns : [],
+                closedTransactionIds,
+              );
+
+              if (hydrated.closed.length > 0) {
+                console.warn(`Z_MEMBERSHIP_ACTIVE_DUPLICATES_IGNORED count=${hydrated.closed.length}`);
+              }
+
+              if (hydrated.open.length > 0) {
+                setTransactions(hydrated.open.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
               } else {
                 setTransactions([]);
               }
 
-              const txHistory = await db.get('transactionHistory') as Transaction[];
               if (Array.isArray(txHistory) && txHistory.length > 0) {
                 console.log(`📦 Deferred load: transactionHistory=${txHistory.length}`);
               }
@@ -6767,16 +6788,28 @@ const AppContent: React.FC = () => {
             if (permissionService.isMasterTerminal()) {
               transactionSyncService.startTransactionPolling(15000, async (txns) => {
                 if (txns.length === 0) return;
-                for (const txn of txns) {
-                  await transactionSyncService.processReceivedTransaction(txn, async (t) => {
-                    await db.saveDocument('transactions', t);
-                  });
-                }
+                const receipt = await persistInboundTransactionsIfOpen(txns, {
+                  loadHistory: async () => ((await db.get('transactionHistory')) as Transaction[]) || [],
+                  loadReports: async () => ((await db.get('zReports')) as ZReport[]) || [],
+                  saveActive: async (transaction) => {
+                    await transactionSyncService.processReceivedTransaction(transaction, async (received) => {
+                      await db.saveDocument('transactions', received);
+                    });
+                  },
+                  deleteActive: async (transactionId) => {
+                    await db.deleteDocument('transactions', transactionId);
+                  },
+                });
                 await apiSyncAdapter.ackPendingTransactions(txns.map(t => t.id));
+                if (receipt.skippedClosed.length > 0) {
+                  console.warn(`Z_MEMBERSHIP_SYNC_REPLAY_IGNORED count=${receipt.skippedClosed.length}`);
+                }
                 setTransactions(prev => {
                   const merged = new Map<string, Transaction>();
-                  (prev || []).forEach(t => merged.set(t.id, t));
-                  txns.forEach(t => merged.set(t.id, t));
+                  (prev || []).forEach(t => {
+                    if (!receipt.closedIds.has(t.id)) merged.set(t.id, t);
+                  });
+                  receipt.accepted.forEach(t => merged.set(t.id, t));
                   return Array.from(merged.values())
                     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
                 });
@@ -10170,6 +10203,32 @@ const AppContent: React.FC = () => {
           .filter(c => belongsToCurrentTerminal(c.terminalId, (c as any).source_terminal_id))
         : collections.filter(c => belongsToCurrentTerminal(c.terminalId, (c as any).source_terminal_id) && !c.zReportId);
 
+      // Final fail-safe: the modal may have opened while a delayed sync was
+      // re-delivering a transaction. Never silently remove rows from a close
+      // that the cashier already reviewed; block it, clean the UI projection,
+      // and require a fresh review with the legitimate pending members only.
+      const [persistedHistory, persistedReports] = await Promise.all([
+        db.get('transactionHistory') as Promise<Transaction[]>,
+        db.get('zReports') as Promise<ZReport[]>,
+      ]);
+      const closedMembership = collectClosedTransactionIds(
+        Array.isArray(persistedHistory) ? persistedHistory : [],
+        Array.isArray(persistedReports) ? persistedReports : [],
+      );
+      const membershipCheck = partitionTransactionsByClosedMembership(
+        terminalTransactions,
+        closedMembership,
+      );
+      if (membershipCheck.closed.length > 0) {
+        setTransactions(prev => (prev || []).filter(transaction => !closedMembership.has(transaction.id)));
+        console.error(`Z_MEMBERSHIP_CLOSE_BLOCKED count=${membershipCheck.closed.length}`);
+        alert(
+          'El cierre fue actualizado porque contenía ventas que ya pertenecen a un Z anterior. '
+          + 'No se generó ningún cierre. Abra Cierre Z nuevamente para revisar solo los movimientos pendientes.'
+        );
+        return;
+      }
+
       if ([...terminalTransactions, ...terminalCashMovements, ...terminalCollections].some(isRecoveredOperation)) {
         alert('La jornada contiene movimientos recuperados cuya cobertura todavía no ha sido confirmada por ERP. No se puede autorizar un cierre exacto.');
         return;
@@ -10275,11 +10334,11 @@ const AppContent: React.FC = () => {
 
       const newZReport: ZReport & Record<string, any> = {
         ...nativeZContent,
-        ...(isSyncFeatureEnabled('pending_operations_recovery') ? { recoveryMemberIds: {
+        recoveryMemberIds: {
           transactions: terminalTransactions.map(t => t.id),
           cashMovements: terminalCashMovements.map(m => m.id),
           collections: terminalCollections.map(c => c.id),
-        } } : {}),
+        },
         id: zReportId,
         sequenceNumber,
         seriesId: zReportSeriesId,
