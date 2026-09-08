@@ -2425,6 +2425,7 @@ export interface RefundProcessingOptions {
   skipWalletDeposit?: boolean;
   autoPrintIntegratedArtifacts?: boolean;
   erpRefundPreparation?: ErpRefundPreparation;
+  erpRefundAuthority?: ErpRefundAuthority;
 }
 
 export interface ErpRefundPreparation {
@@ -2433,6 +2434,19 @@ export interface ErpRefundPreparation {
   sourceId: string;
   sourceRevision: string;
   expiresAt?: string;
+}
+
+export interface ErpRefundAuthority {
+  documentAuthority: {
+    seriesId: string;
+    seriesNumber: number;
+    displayId: string;
+  };
+  fiscalAuthority: null | {
+    ncfType: 'B04';
+    ncf: string;
+    reservationId: string;
+  };
 }
 
 export interface ErpRefundSourceBinding {

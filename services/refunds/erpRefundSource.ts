@@ -1,4 +1,4 @@
-import type { CartItem, ErpRefundSourceBinding, Transaction } from '../../types';
+import type { CartItem, ErpRefundAuthority, ErpRefundPreparation, ErpRefundSourceBinding, Transaction } from '../../types';
 import { getRefundItemKey } from '../../utils/refundAvailability';
 
 type JsonRecord = Record<string, any>;
@@ -203,4 +203,51 @@ export const validateErpRefundItems = (
     }
   }
   return { valid: true, remaining };
+};
+
+export const normalizeErpRefundPreparation = (
+  payload: unknown,
+  expected: { commandId: string; sourceId: string; sourceRevision: string },
+): { preparation: ErpRefundPreparation; authority: ErpRefundAuthority } => {
+  const root = record(payload);
+  const prepared = record(first(root, 'preparation') || root);
+  const commandId = text(first(prepared, 'commandId', 'command_id'));
+  const reservationId = text(first(prepared, 'reservationId', 'reservation_id'));
+  const sourceId = text(first(prepared, 'sourceId', 'source_id'));
+  const sourceRevision = text(first(prepared, 'sourceRevision', 'source_revision'));
+  if (commandId !== expected.commandId || sourceId !== expected.sourceId || sourceRevision !== expected.sourceRevision || !reservationId) {
+    throw new Error('REFUND_PREPARATION_IDENTITY_MISMATCH');
+  }
+  const document = record(first(root, 'documentAuthority', 'document_authority') || first(prepared, 'documentAuthority', 'document_authority'));
+  const seriesId = text(first(document, 'seriesId', 'series_id'));
+  const seriesNumber = Number(first(document, 'seriesNumber', 'series_number'));
+  const displayId = text(first(document, 'displayId', 'display_id'));
+  if (!seriesId || !Number.isSafeInteger(seriesNumber) || seriesNumber < 1 || !displayId) {
+    throw new Error('REFUND_DOCUMENT_AUTHORITY_INVALID');
+  }
+  const rawFiscal = first(root, 'fiscalAuthority', 'fiscal_authority') ?? first(prepared, 'fiscalAuthority', 'fiscal_authority');
+  let fiscalAuthority: ErpRefundAuthority['fiscalAuthority'] = null;
+  if (rawFiscal !== null && rawFiscal !== undefined) {
+    const fiscal = record(rawFiscal);
+    const ncfType = text(first(fiscal, 'ncfType', 'ncf_type'));
+    const ncf = text(first(fiscal, 'ncf'));
+    const fiscalReservationId = text(first(fiscal, 'reservationId', 'reservation_id'));
+    if (ncfType !== 'B04' || !/^B04\d{8}$/.test(ncf) || fiscalReservationId !== reservationId) {
+      throw new Error('REFUND_FISCAL_AUTHORITY_INVALID');
+    }
+    fiscalAuthority = { ncfType: 'B04', ncf, reservationId: fiscalReservationId };
+  }
+  return {
+    preparation: {
+      commandId,
+      reservationId,
+      sourceId,
+      sourceRevision,
+      expiresAt: text(first(prepared, 'expiresAt', 'expires_at')) || undefined,
+    },
+    authority: {
+      documentAuthority: { seriesId, seriesNumber, displayId },
+      fiscalAuthority,
+    },
+  };
 };

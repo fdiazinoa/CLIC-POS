@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   getErpRemainingQuantities,
   normalizeErpRefundSearchResponse,
+  normalizeErpRefundPreparation,
   normalizeErpRefundSourceTransaction,
   validateErpRefundItems,
 } from '../services/refunds/erpRefundSource';
@@ -106,4 +107,24 @@ test('keeps the ERP reservation and original line identity in the outbound NC', 
   assert.equal(payload.seriesId, 'refund-series-current');
   assert.equal(payload.seriesNumber, 41);
   assert.equal(payload.erpRefundPreparation?.reservationId, 'reservation-1');
+});
+
+test('accepts only the exact document and B04 authority sealed by ERP', () => {
+  const expected = { commandId: 'command-1', sourceId: 'source-1', sourceRevision: 'rev-7' };
+  const result = normalizeErpRefundPreparation({
+    ...expected,
+    reservationId: 'reservation-1',
+    expiresAt: '2026-09-08T12:20:00Z',
+    documentAuthority: { seriesId: 'refund-series', seriesNumber: 7, displayId: 'NC000007' },
+    fiscalAuthority: { ncfType: 'B04', ncf: 'B0400000007', reservationId: 'reservation-1' },
+  }, expected);
+  assert.equal(result.preparation.reservationId, 'reservation-1');
+  assert.equal(result.authority.documentAuthority.seriesNumber, 7);
+  assert.equal(result.authority.fiscalAuthority?.ncf, 'B0400000007');
+  assert.throws(() => normalizeErpRefundPreparation({
+    ...expected,
+    reservationId: 'reservation-1',
+    documentAuthority: { seriesId: 'refund-series', seriesNumber: 7, displayId: 'NC000007' },
+    fiscalAuthority: { ncfType: 'B04', ncf: 'B0400000007', reservationId: 'different' },
+  }, expected), /REFUND_FISCAL_AUTHORITY_INVALID/);
 });

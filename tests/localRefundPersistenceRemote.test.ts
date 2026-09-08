@@ -4,6 +4,7 @@ import type { CartItem, Transaction } from '../types';
 import { db } from '../utils/db';
 import { backgroundSyncManager } from '../services/sync/BackgroundSyncManager';
 import { persistStandaloneRefundTransaction } from '../services/localRefundPersistence';
+import { reconcilePreparedFiscalCollections } from '../utils/fiscalPreparedAuthority';
 
 const item: CartItem = {
   id: 'product-1',
@@ -69,4 +70,21 @@ test('persists only the NC when its source was consulted in ERP', async () => {
     backgroundSyncManager.triggerSync = originalTriggerSync;
     Object.assign(globalThis, { window: originalWindow });
   }
+});
+
+test('advances local fiscal state to the B04 reserved by ERP without moving backward', async () => {
+  const allocations: any[] = [{
+      id: 'allocation', terminalId: 'terminal-current', fiscalRangeId: 'range', ncfType: 'B04',
+      reservedStart: 1, reservedEnd: 100, nextNumber: 1, status: 'ACTIVE', releasedAt: null,
+    }];
+  const buffers: any[] = [{
+      id: 'buffer', type: 'B04', prefix: 'B04', startNumber: 1, currentNumber: 1,
+      endNumber: 100, expiryDate: '2099-12-31', terminalId: 'terminal-current', allocationId: 'allocation',
+    }];
+  const first = reconcilePreparedFiscalCollections(allocations, buffers, 'B04', 'terminal-current', 'B0400000007');
+  assert.equal(first.allocations[0].nextNumber, 8);
+  assert.equal(first.buffers[0].currentNumber, 8);
+  const second = reconcilePreparedFiscalCollections(first.allocations, first.buffers, 'B04', 'terminal-current', 'B0400000004');
+  assert.equal(second.allocations[0].nextNumber, 8);
+  assert.equal(second.buffers[0].currentNumber, 8);
 });

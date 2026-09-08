@@ -61,6 +61,7 @@ import {
    ErpRefundSourceMatch,
    getErpRemainingQuantities,
    normalizeErpRefundSearchResponse,
+   normalizeErpRefundPreparation,
    normalizeErpRefundSourceTransaction,
    validateErpRefundItems,
 } from '../services/refunds/erpRefundSource';
@@ -2528,19 +2529,15 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                   })),
                },
             );
-            const preparation = preparationPayload?.preparation || preparationPayload;
-            const reservationId = String(preparation?.reservationId || preparation?.reservation_id || '').trim();
-            const sourceRevision = String(preparation?.sourceRevision || preparation?.source_revision || originalTx.erpRefundSource.sourceRevision).trim();
-            if (!reservationId) throw new Error('ERP no confirmó la reserva de esta devolución.');
+            const prepared = normalizeErpRefundPreparation(preparationPayload, {
+               commandId,
+               sourceId: originalTx.erpRefundSource.sourceId,
+               sourceRevision: originalTx.erpRefundSource.sourceRevision,
+            });
             refundOptions = {
                ...refundOptions,
-               erpRefundPreparation: {
-                  commandId,
-                  reservationId,
-                  sourceId: originalTx.erpRefundSource.sourceId,
-                  sourceRevision,
-                  expiresAt: preparation?.expiresAt || preparation?.expires_at,
-               },
+               erpRefundPreparation: prepared.preparation,
+               erpRefundAuthority: prepared.authority,
             };
          } catch (error) {
             console.error('ERP rechazó la preparación de la devolución:', error);

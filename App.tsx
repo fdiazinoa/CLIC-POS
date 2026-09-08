@@ -10593,9 +10593,17 @@ const AppContent: React.FC = () => {
     const currentTerminal = getCurrentTerminal();
     const currentTerminalId = currentTerminal?.id || config.terminals?.[0]?.id || 't1';
     const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, currentTerminal?.config);
-    const creditNoteFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
+    const preparedAuthority = options.erpRefundAuthority;
+    const preparedFiscalAuthority = preparedAuthority?.fiscalAuthority || null;
+    const creditNoteFiscalMode = originalTx.erpRefundSource
+      ? (preparedFiscalAuthority ? 'LEGACY_B' : 'NONE')
+      : fiscalCompliance.mode;
+    const creditNoteFiscalType = preparedFiscalAuthority?.ncfType || resolveCreditNoteFiscalCode(creditNoteFiscalMode);
     let creditNoteNcf: string | undefined;
-    if (fiscalCompliance.mode !== 'NONE') {
+    if (preparedFiscalAuthority) {
+      creditNoteNcf = preparedFiscalAuthority.ncf;
+      await db.reconcilePreparedNCF(preparedFiscalAuthority.ncfType, currentTerminalId, preparedFiscalAuthority.ncf);
+    } else if (!originalTx.erpRefundSource && creditNoteFiscalMode !== 'NONE') {
       try {
         creditNoteNcf = await db.getNextNCF(creditNoteFiscalType, currentTerminalId) || undefined;
       } catch (e) {
@@ -10612,11 +10620,24 @@ const AppContent: React.FC = () => {
       ? sequences.find(s => s.id === resolvedRefundSeriesId)
       : undefined;
     let displayId = `NC-${Date.now().toString().slice(-6)}`;
+    let refundSeriesId: string | undefined;
     let refundSeriesNumber: number | undefined;
-    if (refundSeries) {
+    if (preparedAuthority) {
+      refundSeriesId = preparedAuthority.documentAuthority.seriesId;
+      refundSeriesNumber = preparedAuthority.documentAuthority.seriesNumber;
+      displayId = preparedAuthority.documentAuthority.displayId;
+      const updatedSequences = sequences.map(s => s.id === refundSeriesId
+        ? { ...s, nextNumber: Math.max(Number(s.nextNumber) || 1, refundSeriesNumber! + 1) }
+        : s);
+      if (updatedSequences.some((series, index) => series.nextNumber !== sequences[index]?.nextNumber)) {
+        await db.save('internalSequences', updatedSequences);
+        setInternalSequences(updatedSequences);
+      }
+    } else if (refundSeries) {
+      refundSeriesId = refundSeries.id;
       refundSeriesNumber = refundSeries.nextNumber;
       displayId = `${refundSeries.prefix}${refundSeriesNumber.toString().padStart(refundSeries.padding, '0')}`;
-      const updatedSequences = sequences.map(s => s.id === 'REFUND' ? { ...s, nextNumber: s.nextNumber + 1 } : s);
+      const updatedSequences = sequences.map(s => s.id === refundSeries.id ? { ...s, nextNumber: s.nextNumber + 1 } : s);
       await db.save('internalSequences', updatedSequences);
       setInternalSequences(updatedSequences);
     }
@@ -10636,7 +10657,7 @@ const AppContent: React.FC = () => {
       id: createRuntimeId('NC'),
       displayId: displayId,
       documentType: 'REFUND',
-      seriesId: refundSeries?.id,
+      seriesId: refundSeriesId,
       seriesNumber: refundSeriesNumber,
       date: new Date().toISOString(),
       items: normalizedRefundItems,
@@ -10652,7 +10673,7 @@ const AppContent: React.FC = () => {
       ncfType: creditNoteNcf ? creditNoteFiscalType : undefined,
       legacyNcf: creditNoteNcf && !creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
       electronicNcf: creditNoteNcf && creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
-      fiscalMode: fiscalCompliance.mode,
+      fiscalMode: creditNoteFiscalMode,
       fiscalProvider: creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config, currentTerminal?.config) : 'NONE',
       taxAmount: refundSummary.taxAmount,
       netAmount: refundSummary.netAmount,
