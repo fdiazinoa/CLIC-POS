@@ -3212,6 +3212,34 @@ class ApiSyncAdapter {
         return readErpPaymentMethodsSnapshot(payload);
     }
 
+    async searchRefundSources(reference: string): Promise<any> {
+        const normalized = String(reference || '').trim();
+        if (normalized.length < 3) throw new Error('REFUND_SOURCE_REFERENCE_TOO_SHORT');
+        return this.getOperationalPayload(`/refund-sources?reference=${encodeURIComponent(normalized)}`);
+    }
+
+    async getRefundSource(sourceId: string): Promise<any> {
+        const normalized = String(sourceId || '').trim();
+        if (!normalized) throw new Error('REFUND_SOURCE_ID_MISSING');
+        return this.getOperationalPayload(`/refund-sources/${encodeURIComponent(normalized)}`);
+    }
+
+    async prepareRefundSource(
+        sourceId: string,
+        payload: {
+            commandId: string;
+            sourceRevision: string;
+            terminalId: string;
+            lines: Array<{ cartId: string; quantity: number }>;
+        },
+    ): Promise<any> {
+        const normalized = String(sourceId || '').trim();
+        if (!normalized) throw new Error('REFUND_SOURCE_ID_MISSING');
+        return this.postOperationalPayload(`/refund-sources/${encodeURIComponent(normalized)}/prepare`, payload, {
+            reauthenticateOn401: false,
+        });
+    }
+
     async recoveryCapabilities(): Promise<any> {
         const target = this.resolveOperationalTarget();
         if (!target || target.useLocalTarget) return { enabled: false, contractVersion: 1 };

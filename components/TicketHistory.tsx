@@ -56,6 +56,15 @@ import {
    resolveHistoryDiscountTotal,
    resolveHistoryTerminalName,
 } from '../utils/transactionHistoryPresentation';
+import { apiSyncAdapter } from '../services/sync/ApiSyncAdapter';
+import {
+   ErpRefundSourceMatch,
+   getErpRemainingQuantities,
+   normalizeErpRefundSearchResponse,
+   normalizeErpRefundPreparation,
+   normalizeErpRefundSourceTransaction,
+   validateErpRefundItems,
+} from '../services/refunds/erpRefundSource';
 import { sendReceiptEmailViaErp, type ReceiptEmailResult } from '../services/email/receiptEmailService';
 import { buildReceiptEmailPayload } from '../services/email/receiptEmailPayload';
 import {
@@ -71,6 +80,7 @@ interface TicketHistoryProps {
    users: User[];
    roles: RoleDefinition[];
    onClose: () => void;
+   activeTerminalId: string;
    initialSelectedId?: string | null; // NEW: For Smart Scan
    onRetryFiscalDocument?: (transaction: Transaction) => Promise<string>;
    customers?: Customer[];
@@ -1438,7 +1448,7 @@ const TicketDetailDrawer: React.FC<{
    );
 };
 
-const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, onRefundTransaction, initialSelectedId, onRetryFiscalDocument, customers = [], onCorrectFiscalDocument }) => {
+const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, activeTerminalId, onRefundTransaction, initialSelectedId, onRetryFiscalDocument, customers = [], onCorrectFiscalDocument }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [expandedId, setExpandedId] = useState<string | null>(null);
    const [showFilters, setShowFilters] = useState(false);
@@ -1485,12 +1495,19 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    const [refundTx, setRefundTx] = useState<Transaction | null>(null);
    const [refundRequestMode, setRefundRequestMode] = useState<RefundRequestMode>('STANDARD');
    const [gatewayProgress, setGatewayProgress] = useState<GatewayProgressOverlayState | null>(null);
+   const [erpSearchLoading, setErpSearchLoading] = useState(false);
+   const [erpSearchError, setErpSearchError] = useState<string | null>(null);
+   const [erpMatches, setErpMatches] = useState<ErpRefundSourceMatch[]>([]);
    const allKnownTransactions = useMemo(
       () => Array.from(new Map([...historyTransactions, ...transactions].map(transaction => [transaction.id, transaction])).values()),
       [historyTransactions, transactions]
    );
    const refundRemainingQuantities = useMemo(
-      () => refundTx ? getRemainingRefundQuantities(refundTx, allKnownTransactions) : new Map<string, number>(),
+      () => refundTx
+         ? (refundTx.erpRefundSource
+            ? getErpRemainingQuantities(refundTx)
+            : getRemainingRefundQuantities(refundTx, allKnownTransactions))
+         : new Map<string, number>(),
       [allKnownTransactions, refundTx]
    );
 
@@ -2158,6 +2175,69 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       setSelectedItemsQty(newMap);
    };
 
+   const openErpRefundSource = async (match: ErpRefundSourceMatch) => {
+      setErpSearchLoading(true);
+      setErpSearchError(null);
+      try {
+         if (!match.sourceId) {
+            setErpSearchError(match.eligibilityMessage || 'ERP encontró el documento comercial, pero no conserva el original POS necesario para devolverlo.');
+            return;
+         }
+         const transaction = match.transaction || normalizeErpRefundSourceTransaction(
+            await apiSyncAdapter.getRefundSource(match.sourceId)
+         );
+         if (!transaction.erpRefundSource?.refundable) {
+            setErpSearchError(
+               transaction.erpRefundSource?.eligibilityMessage
+               || 'ERP indicó que esta factura no está disponible para devolución.'
+            );
+            return;
+         }
+         const remaining = getErpRemainingQuantities(transaction);
+         if (!hasRefundableItems(remaining)) {
+            setErpSearchError('Esta factura ya fue abonada completamente.');
+            return;
+         }
+         setErpMatches([]);
+         setRefundRequestMode('STANDARD');
+         setRefundTx(transaction);
+         setIsRefundModalOpen(true);
+      } catch (error) {
+         console.error('No se pudo cargar la factura desde ERP:', error);
+         setErpSearchError('ERP no devolvió el original completo necesario para preparar la nota de crédito.');
+      } finally {
+         setErpSearchLoading(false);
+      }
+   };
+
+   const searchInvoiceInErp = async () => {
+      const reference = searchTerm.trim();
+      if (reference.length < 3) {
+         setErpSearchError('Escribe al menos 3 caracteres del número de factura, ticket o NCF.');
+         return;
+      }
+      setErpSearchLoading(true);
+      setErpSearchError(null);
+      setErpMatches([]);
+      try {
+         const matches = normalizeErpRefundSearchResponse(await apiSyncAdapter.searchRefundSources(reference));
+         if (matches.length === 0) {
+            setErpSearchError('ERP no encontró una factura con esa referencia.');
+            return;
+         }
+         if (matches.length === 1) {
+            await openErpRefundSource(matches[0]);
+            return;
+         }
+         setErpMatches(matches);
+      } catch (error) {
+         console.error('No se pudo buscar la factura en ERP:', error);
+         setErpSearchError('No se pudo consultar ERP. Comprueba la conexión e inténtalo otra vez.');
+      } finally {
+         setErpSearchLoading(false);
+      }
+   };
+
    const executeRefundFlow = async (
       originalTx: Transaction,
       refundItems: CartItem[],
@@ -2167,7 +2247,12 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    ) => {
       let refundOptions: RefundProcessingOptions | undefined;
 
-      if (requestMode === 'AZUL_GATEWAY_REFUND') {
+      if (originalTx.erpRefundSource && requestMode === 'AZUL_GATEWAY_REFUND') {
+         alert('Las devoluciones de tarjeta integradas todavía no están disponibles para facturas consultadas en ERP.');
+         return;
+      }
+
+      if (!originalTx.erpRefundSource && requestMode === 'AZUL_GATEWAY_REFUND') {
          const azulRefundResolution = resolveAzulRefundResolution(originalTx, refundItems, config);
 
          if (azulRefundResolution.mode === 'BLOCK') {
@@ -2296,7 +2381,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             alert(error instanceof Error ? error.message : 'No se pudo completar el refund AZUL.');
             return;
          }
-      } else {
+      } else if (!originalTx.erpRefundSource) {
          const azulResolution = resolveAzulVoidResolution(originalTx, refundItems, config);
 
          if (azulResolution.mode === 'BLOCK') {
@@ -2427,6 +2512,40 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
          }
       }
 
+      if (originalTx.erpRefundSource) {
+         try {
+            const commandId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+               ? crypto.randomUUID()
+               : `refund-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            const preparationPayload = await apiSyncAdapter.prepareRefundSource(
+               originalTx.erpRefundSource.sourceId,
+               {
+                  commandId,
+                  sourceRevision: originalTx.erpRefundSource.sourceRevision,
+                  terminalId: activeTerminalId,
+                  lines: refundItems.map(item => ({
+                     cartId: item.cartId,
+                     quantity: Math.abs(Number(item.quantity || 0)),
+                  })),
+               },
+            );
+            const prepared = normalizeErpRefundPreparation(preparationPayload, {
+               commandId,
+               sourceId: originalTx.erpRefundSource.sourceId,
+               sourceRevision: originalTx.erpRefundSource.sourceRevision,
+            });
+            refundOptions = {
+               ...refundOptions,
+               erpRefundPreparation: prepared.preparation,
+               erpRefundAuthority: prepared.authority,
+            };
+         } catch (error) {
+            console.error('ERP rechazó la preparación de la devolución:', error);
+            alert('ERP no pudo reservar esta devolución. Actualiza la factura y vuelve a intentarlo; no se creó ninguna nota de crédito.');
+            return;
+         }
+      }
+
       try {
          await onRefundTransaction(originalTx, refundItems, conditions, reason || 'Devolución', refundOptions);
          setIsRefundModalOpen(false);
@@ -2449,8 +2568,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       if (selectedItemsQty.size === 0) return;
 
       // Validation: Check if terminal has REFUND document series assigned
-      const terminalId = transaction.terminalId || config.terminals?.[0]?.id || 'T1';
-      const validation = validateTerminalDocument(config, terminalId, 'REFUND');
+      const validation = validateTerminalDocument(config, activeTerminalId, 'REFUND');
       if (!validation.isValid) {
          alert(validation.error);
          return;
@@ -2504,21 +2622,22 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       reason: string
    ) => {
       if (!originalTx || refundItems.length === 0) return;
-      const availability = validateRefundItems(originalTx, refundItems, allKnownTransactions);
+      const availability = originalTx.erpRefundSource
+         ? validateErpRefundItems(originalTx, refundItems)
+         : validateRefundItems(originalTx, refundItems, allKnownTransactions);
       if ('message' in availability) {
          alert(availability.message);
          return;
       }
 
-      const terminalId = originalTx.terminalId || config.terminals?.[0]?.id || 'T1';
-      const validation = validateTerminalDocument(config, terminalId, 'REFUND');
+      const validation = validateTerminalDocument(config, activeTerminalId, 'REFUND');
       if (!validation.isValid) {
          alert(validation.error);
          return;
       }
 
       const refundSubtotal = refundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-      const refundTerminalConfig = config.terminals?.find(t => t.id === originalTx.terminalId)?.config;
+      const refundTerminalConfig = config.terminals?.find(t => t.id === activeTerminalId)?.config;
       const refundSummary = calculateTransactionFiscalSummary({
          items: refundItems,
          total: 0,
@@ -2611,7 +2730,11 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                         placeholder="Buscar ticket, cliente..."
                         className={`w-full pl-9 pr-3 py-1.5 bg-gray-50 border border-gray-100 rounded-lg focus:bg-white focus:ring-1 ${themeRing} outline-none transition-all text-sm text-gray-700 placeholder:text-gray-400`}
                         value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
+                        onChange={(e) => {
+                           setSearchTerm(e.target.value);
+                           setErpSearchError(null);
+                           setErpMatches([]);
+                        }}
                      />
                   </div>
 
@@ -2706,9 +2829,70 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-gray-200 mt-4">
                   <Box size={32} className="mx-auto mb-2 text-gray-300" />
                   <p className="text-gray-400 font-bold text-xs uppercase tracking-widest">Sin resultados</p>
+                  {searchTerm.trim() && (
+                     <div className="mx-auto mt-5 max-w-md px-5">
+                        <p className="text-sm font-semibold text-slate-500">
+                           Si la factura se emitió en otro POS o ya no está en este equipo, puedes consultarla en ERP.
+                        </p>
+                        <button
+                           type="button"
+                           onClick={() => void searchInvoiceInErp()}
+                           disabled={erpSearchLoading || searchTerm.trim().length < 3}
+                           className="mt-4 inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-black text-white shadow-lg shadow-blue-600/20 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                           {erpSearchLoading ? (
+                              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                           ) : <Search size={16} />}
+                           {erpSearchLoading ? 'Consultando ERP...' : 'Buscar factura en ERP'}
+                        </button>
+                        {erpSearchError && (
+                           <p role="alert" className="mt-3 rounded-xl bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">
+                              {erpSearchError}
+                           </p>
+                        )}
+                     </div>
+                  )}
                </div>
             )}
          </main>
+
+         {erpMatches.length > 1 && (
+            <div className="fixed inset-0 z-[145] flex items-center justify-center bg-slate-950/65 p-4 backdrop-blur-sm">
+               <section className="w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="erp-invoice-results-title">
+                  <header className="flex items-center justify-between border-b border-slate-100 px-6 py-5">
+                     <div>
+                        <h2 id="erp-invoice-results-title" className="text-lg font-black text-slate-900">Selecciona la factura</h2>
+                        <p className="mt-1 text-sm font-semibold text-slate-500">ERP encontró más de una coincidencia.</p>
+                     </div>
+                     <button type="button" onClick={() => setErpMatches([])} className="rounded-full p-2 text-slate-400 hover:bg-slate-100"><X size={20} /></button>
+                  </header>
+                  <div className="max-h-[60vh] space-y-3 overflow-y-auto p-5">
+                     {erpMatches.map(match => (
+                        <button
+                           type="button"
+                           key={`${match.sourceId}:${match.sourceRevision}`}
+                           onClick={() => void openErpRefundSource(match)}
+                           disabled={erpSearchLoading}
+                           className="w-full rounded-xl border border-slate-200 p-4 text-left transition hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50"
+                        >
+                           <div className="flex items-start justify-between gap-4">
+                              <div>
+                                 <p className="font-black text-slate-900">{match.displayId || match.reference}</p>
+                                 <p className="mt-1 text-xs font-semibold text-slate-500">
+                                    {[match.ncf, match.terminalName, match.date ? new Date(match.date).toLocaleString() : ''].filter(Boolean).join(' · ')}
+                                 </p>
+                                 {!match.refundable && (
+                                    <p className="mt-2 text-xs font-bold text-amber-700">{match.eligibilityMessage || 'No disponible para devolución'}</p>
+                                 )}
+                              </div>
+                              <span className="font-black text-slate-900">{config.currencySymbol}{match.total.toFixed(2)}</span>
+                           </div>
+                        </button>
+                     ))}
+                  </div>
+               </section>
+            </div>
+         )}
 
          {/* Detail Drawer */}
          <TicketDetailDrawer

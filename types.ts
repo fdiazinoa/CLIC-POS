@@ -1773,6 +1773,10 @@ export interface Transaction {
   source_credit_note_id?: string;
   original_transaction_id?: string;
   original_display_id?: string;
+  /** Read-only ERP source used to compose an NC without importing the sale locally. */
+  erpRefundSource?: ErpRefundSourceBinding;
+  /** Reservation consumed by ERP when the resulting NC is received. */
+  erpRefundPreparation?: ErpRefundPreparation;
 
   // Document Classification
   documentType?: DocumentType;      // Type of transaction
@@ -2420,6 +2424,40 @@ export interface RefundProcessingOptions {
   settlementMode?: RefundSettlementMode;
   skipWalletDeposit?: boolean;
   autoPrintIntegratedArtifacts?: boolean;
+  erpRefundPreparation?: ErpRefundPreparation;
+  erpRefundAuthority?: ErpRefundAuthority;
+}
+
+export interface ErpRefundPreparation {
+  commandId: string;
+  reservationId: string;
+  sourceId: string;
+  sourceRevision: string;
+  expiresAt?: string;
+}
+
+export interface ErpRefundAuthority {
+  documentAuthority: {
+    seriesId: string;
+    seriesNumber: number;
+    displayId: string;
+  };
+  fiscalAuthority: null | {
+    ncfType: 'B04';
+    ncf: string;
+    reservationId: string;
+  };
+}
+
+export interface ErpRefundSourceBinding {
+  sourceId: string;
+  sourceRevision: string;
+  reference: string;
+  originalTerminalId?: string;
+  remainingQuantities: Record<string, number>;
+  refundable: boolean;
+  eligibilityCode?: string;
+  eligibilityMessage?: string;
 }
 
 export interface CustomerTransaction {

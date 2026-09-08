@@ -15,6 +15,7 @@ import { dbAdapter } from '../services/db';
 import { Capacitor } from '@capacitor/core';
 import { permissionService } from '../services/sync/PermissionService';
 import { mergeDocumentSeriesCollection } from './documentSeriesIdentity';
+import { reconcilePreparedFiscalCollections } from './fiscalPreparedAuthority';
 
 const DB_KEY = 'clic_pos_db_v1';
 let initPromise: Promise<any> | null = null;
@@ -1562,6 +1563,14 @@ export const db = {
     buffer.currentNumber += 1;
     await dbAdapter.saveCollection('localFiscalBuffer', buffers);
     return ncf;
+  },
+
+  reconcilePreparedNCF: async (type: FiscalDocumentCode, terminalId: string, ncf: string): Promise<void> => {
+    const allocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
+    const buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
+    const reconciled = reconcilePreparedFiscalCollections(allocations, buffers, type, terminalId, ncf);
+    if (reconciled.allocations !== allocations) await dbAdapter.saveCollection('fiscalAllocations', reconciled.allocations);
+    await dbAdapter.saveCollection('localFiscalBuffer', reconciled.buffers);
   },
 
   rehydrateOperationalDocumentState: async (

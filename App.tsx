@@ -112,6 +112,7 @@ import { resolveDeviceRoleValue } from './utils/deviceRoleHelpers';
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from './utils/posSaleActivity';
 import { canEnterReducedSyncMode, resolveReducedSyncAfterMinutes } from './utils/syncInactivityPolicy';
 import { validateRefundItems } from './utils/refundAvailability';
+import { validateErpRefundItems } from './services/refunds/erpRefundSource';
 import { buildPosMasterCatalogSnapshot } from './utils/posMasterCatalogContract';
 import { applyProductionAreaAssignments } from './utils/productionRoutingAssignment';
 import {
@@ -10549,13 +10550,15 @@ const AppContent: React.FC = () => {
     }
 
     const persistedTransactionsForValidation = await db.get('transactions') as Transaction[];
-    const refundAvailability = validateRefundItems(
-      originalTx,
-      normalizedRefundItems,
-      Array.isArray(persistedTransactionsForValidation)
-        ? [...transactions, ...persistedTransactionsForValidation]
-        : transactions
-    );
+    const refundAvailability = originalTx.erpRefundSource
+      ? validateErpRefundItems(originalTx, normalizedRefundItems)
+      : validateRefundItems(
+        originalTx,
+        normalizedRefundItems,
+        Array.isArray(persistedTransactionsForValidation)
+          ? [...transactions, ...persistedTransactionsForValidation]
+          : transactions
+      );
     if ('message' in refundAvailability) {
       alert(refundAvailability.message);
       return null;
@@ -10590,9 +10593,17 @@ const AppContent: React.FC = () => {
     const currentTerminal = getCurrentTerminal();
     const currentTerminalId = currentTerminal?.id || config.terminals?.[0]?.id || 't1';
     const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, currentTerminal?.config);
-    const creditNoteFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
+    const preparedAuthority = options.erpRefundAuthority;
+    const preparedFiscalAuthority = preparedAuthority?.fiscalAuthority || null;
+    const creditNoteFiscalMode = originalTx.erpRefundSource
+      ? (preparedFiscalAuthority ? 'LEGACY_B' : 'NONE')
+      : fiscalCompliance.mode;
+    const creditNoteFiscalType = preparedFiscalAuthority?.ncfType || resolveCreditNoteFiscalCode(creditNoteFiscalMode);
     let creditNoteNcf: string | undefined;
-    if (fiscalCompliance.mode !== 'NONE') {
+    if (preparedFiscalAuthority) {
+      creditNoteNcf = preparedFiscalAuthority.ncf;
+      await db.reconcilePreparedNCF(preparedFiscalAuthority.ncfType, currentTerminalId, preparedFiscalAuthority.ncf);
+    } else if (!originalTx.erpRefundSource && creditNoteFiscalMode !== 'NONE') {
       try {
         creditNoteNcf = await db.getNextNCF(creditNoteFiscalType, currentTerminalId) || undefined;
       } catch (e) {
@@ -10602,11 +10613,31 @@ const AppContent: React.FC = () => {
 
     // 3. Document Sequence (Internal Refund Series)
     const sequences = await db.get('internalSequences') as DocumentSeries[];
-    const refundSeries = sequences.find(s => s.id === 'REFUND');
+    const assignedRefundSeriesId = currentTerminal?.config?.documentAssignments?.['REFUND'];
+    const resolvedRefundSeriesId = resolveDocumentAssignmentId('REFUND', sequences, assignedRefundSeriesId)
+      || resolveDocumentAssignmentId('REFUND', sequences, 'REFUND');
+    const refundSeries = resolvedRefundSeriesId
+      ? sequences.find(s => s.id === resolvedRefundSeriesId)
+      : undefined;
     let displayId = `NC-${Date.now().toString().slice(-6)}`;
-    if (refundSeries) {
-      displayId = `${refundSeries.prefix}${refundSeries.nextNumber.toString().padStart(refundSeries.padding, '0')}`;
-      const updatedSequences = sequences.map(s => s.id === 'REFUND' ? { ...s, nextNumber: s.nextNumber + 1 } : s);
+    let refundSeriesId: string | undefined;
+    let refundSeriesNumber: number | undefined;
+    if (preparedAuthority) {
+      refundSeriesId = preparedAuthority.documentAuthority.seriesId;
+      refundSeriesNumber = preparedAuthority.documentAuthority.seriesNumber;
+      displayId = preparedAuthority.documentAuthority.displayId;
+      const updatedSequences = sequences.map(s => s.id === refundSeriesId
+        ? { ...s, nextNumber: Math.max(Number(s.nextNumber) || 1, refundSeriesNumber! + 1) }
+        : s);
+      if (updatedSequences.some((series, index) => series.nextNumber !== sequences[index]?.nextNumber)) {
+        await db.save('internalSequences', updatedSequences);
+        setInternalSequences(updatedSequences);
+      }
+    } else if (refundSeries) {
+      refundSeriesId = refundSeries.id;
+      refundSeriesNumber = refundSeries.nextNumber;
+      displayId = `${refundSeries.prefix}${refundSeriesNumber.toString().padStart(refundSeries.padding, '0')}`;
+      const updatedSequences = sequences.map(s => s.id === refundSeries.id ? { ...s, nextNumber: s.nextNumber + 1 } : s);
       await db.save('internalSequences', updatedSequences);
       setInternalSequences(updatedSequences);
     }
@@ -10626,6 +10657,8 @@ const AppContent: React.FC = () => {
       id: createRuntimeId('NC'),
       displayId: displayId,
       documentType: 'REFUND',
+      seriesId: refundSeriesId,
+      seriesNumber: refundSeriesNumber,
       date: new Date().toISOString(),
       items: normalizedRefundItems,
       total: refundTotal,
@@ -10640,13 +10673,18 @@ const AppContent: React.FC = () => {
       ncfType: creditNoteNcf ? creditNoteFiscalType : undefined,
       legacyNcf: creditNoteNcf && !creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
       electronicNcf: creditNoteNcf && creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
-      fiscalMode: fiscalCompliance.mode,
+      fiscalMode: creditNoteFiscalMode,
       fiscalProvider: creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config, currentTerminal?.config) : 'NONE',
       taxAmount: refundSummary.taxAmount,
       netAmount: refundSummary.netAmount,
       affectedNCF: originalTx.ncf,
       affectedInvoiceNumber: originalTx.displayId || originalTx.id,
+      affectedInvoiceDate: originalTx.date,
       originalTransactionId: originalTx.id,
+      original_transaction_id: originalTx.source_transaction_id || originalTx.id,
+      original_display_id: originalTx.displayId || originalTx.id,
+      erpRefundSource: originalTx.erpRefundSource,
+      erpRefundPreparation: options.erpRefundPreparation,
       refundReason: reason,
       isTaxIncluded: originalTx.isTaxIncluded,
       syncStatus: 'PENDING'
@@ -10670,6 +10708,7 @@ const AppContent: React.FC = () => {
           customerName: resolvedCustomerName,
           status: newStatus as any
         },
+        persistOriginal: !originalTx.erpRefundSource,
         conditions
       }
     );
@@ -10728,7 +10767,7 @@ const AppContent: React.FC = () => {
           )
         );
       } else {
-        const updatedOriginalTx = refundPersistenceResult.updatedOriginal || {
+        const updatedOriginalTx = refundPersistenceResult.updatedOriginal || (originalTx.erpRefundSource ? null : {
           ...originalTx,
           customerId: resolvedCustomerId,
           customerName: resolvedCustomerName,
@@ -10736,11 +10775,11 @@ const AppContent: React.FC = () => {
           relatedTransactions: [...(originalTx.relatedTransactions || []), creditNote.id],
           updatedAt: new Date().toISOString(),
           syncStatus: 'PENDING' as const
-        };
+        });
         const persistedCreditNote = refundPersistenceResult.refund || creditNote;
         setTransactions(prev => {
-          const filtered = prev.filter(t => t.id !== updatedOriginalTx.id && t.id !== persistedCreditNote.id);
-          return [updatedOriginalTx, ...filtered, persistedCreditNote].sort((a, b) =>
+          const filtered = prev.filter(t => t.id !== updatedOriginalTx?.id && t.id !== persistedCreditNote.id);
+          return [...(updatedOriginalTx ? [updatedOriginalTx] : []), ...filtered, persistedCreditNote].sort((a, b) =>
             new Date(b.date).getTime() - new Date(a.date).getTime()
           );
         });
@@ -11704,6 +11743,7 @@ const AppContent: React.FC = () => {
             roles={roles}
             customers={customers}
             initialSelectedId={scanTargetTicketId}
+            activeTerminalId={getCurrentTerminal()?.id || 'T1'}
             onUpdateConfig={handleConfigUpdate}
             onClose={() => {
               setScanTargetTicketId(null); // Clear selection on close
