@@ -49,17 +49,14 @@ test('an acknowledged retry completes without allocating a replacement report', 
   }
 });
 
-test('recent Z replay runs again after ERP configuration becomes available', () => {
+test('background sync never requeues historical Z reports automatically', () => {
   const source = readFileSync(
     new URL('../services/sync/BackgroundSyncManager.ts', import.meta.url),
     'utf8',
   );
 
-  assert.match(source, /sync_replay_recent_z_reports_v2_/);
-  assert.match(
-    source,
-    /async sync\(\)[\s\S]*?const operationalTarget = syncPolicy\.resolve\(\)[\s\S]*?try \{[\s\S]*?await this\.recoverRecentZReportsForReplay\(\)/,
-  );
+  assert.doesNotMatch(source, /recoverRecentZReportsForReplay/);
+  assert.doesNotMatch(source, /sync_replay_recent_z_reports_v2_/);
 });
 
 test('Z history keeps an idempotent resend action for reports previously marked applied', () => {
