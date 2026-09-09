@@ -96,6 +96,6 @@ export async function installDiagnostics(){
  for(const type of ['longtask','long-animation-frame'])if(PerformanceObserver.supportedEntryTypes.includes(type))new PerformanceObserver(list=>{for(const e of list.getEntries())if(active())emit(type.toUpperCase(),{duration:e.duration},undefined,e.startTime);}).observe({type,buffered:false});
  const flush=()=>{if(!queue.length)return;const t=clock(),batch=queue;queue=[];for(const [operation,stats] of shortSync)batch.push({name:'SHORT_SYNC_SUMMARY',operation,...stats,session,ts:clock(),thresholdMs:1});shortSync.clear();if(lastCost)batch.push(lastCost);const payload=JSON.stringify(batch);void sink.send({payload}).catch(()=>{drops+=batch.length;});lastCost={name:'DIAGNOSTIC_COST',ts:clock(),session,flushMs:clock()-t,emitMs:overhead,drops};overhead=0;performance.clearMarks();};
  Zone.root.run(()=>setInterval(flush,1000));
- (globalThis as any).__POS_DIAGNOSTICS__={status:()=>({session,drops,pending:queue.length,active:active()}),flush,arm:(seconds=5)=>{deadline=clock()+Math.min(seconds,45)*1000;},disable:()=>{deadline=0;flush();}};
+ (globalThis as any).__POS_DIAGNOSTICS__={status:()=>({session,drops,pending:queue.length,active:active()}),run:diagRun,processing:diagSync,flush,arm:(seconds=5)=>{deadline=clock()+Math.min(seconds,45)*1000;},disable:()=>{deadline=0;flush();}};
  emit('CAPABILITY',{mode:'selective',reactFiberTraversal:false,nativeSections:false,windowMs:5000,microtasks:'selected Zone continuations only; unknown callers require V8 sampling'});
 }
