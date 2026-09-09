@@ -119,3 +119,12 @@ test('focus instrumentation retains optional call, receiver, return and exceptio
  const err=new Error('same');assert.throws(()=>run({querySelector:()=>{throw err;}}),e=>e===err);
  assert.ok(calls.some(s=>s==='scanner:input?.focus'));
 });
+
+test('reference control permits DevTools without starting native observers or enabling JS diagnostics',()=>{
+ const source=readFileSync('android/app/src/main/java/com/clicpos/app/PosNativeDiagnostics.java','utf8');
+ assert.match(source,/active=BuildConfig.POS_DIAGNOSTICS && activity.getIntent\(\).getBooleanExtra\("pos_diagnostics",false\)/);
+ assert.match(source,/boolean controlOnly=BuildConfig.POS_DIAGNOSTICS\s*&& activity.getIntent\(\).getBooleanExtra\("pos_diagnostic_control",false\)/);
+ const gate=source.indexOf('if(!active)return;');assert.ok(source.indexOf('if(active || controlOnly)')<gate);
+ assert.ok(source.indexOf('new HandlerThread')>gate);assert.ok(source.indexOf('addOnFrameMetricsAvailableListener')>gate);
+ assert.match(source,/boolean enabled\(\)\{return active;\}/);
+});

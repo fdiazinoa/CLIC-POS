@@ -20,8 +20,12 @@ public final class PosNativeDiagnostics {
     private final java.util.concurrent.atomic.AtomicInteger pendingBytes = new java.util.concurrent.atomic.AtomicInteger();
     public PosNativeDiagnostics(Activity activity) {
         active=BuildConfig.POS_DIAGNOSTICS && activity.getIntent().getBooleanExtra("pos_diagnostics",false);
+        // Read-only calibration access is independent of observer activation.
+        // Both switches are unavailable in ordinary production builds.
+        boolean controlOnly=BuildConfig.POS_DIAGNOSTICS
+                && activity.getIntent().getBooleanExtra("pos_diagnostic_control",false);
+        if(active || controlOnly) android.webkit.WebView.setWebContentsDebuggingEnabled(true);
         if(!active)return;
-        android.webkit.WebView.setWebContentsDebuggingEnabled(true);
         current=this;
         HandlerThread eventThread=new HandlerThread("PosDiagnosticLogWriter");eventThread.start();eventWriter=new Handler(eventThread.getLooper());
         if(Build.VERSION.SDK_INT>=24){

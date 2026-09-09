@@ -53,3 +53,13 @@ La invocación de una microtask conserva su contexto con una pila síncrona sepa
 Las microtasks de hasta 16 ms emiten un solo MICROTASK_EXECUTION con startTs/endTs/duration/source, traceId, spanId y parentSpan. Las mayores de 16 ms mantienen PROMISE_RESUME y JS_PROCESSING_START/END, escritos al terminar con sus timestamps originales. Ordenar por timestamps al analizar, no por orden de llegada de los logs. El cambio reduce volumen, no elimina la identificación temporal de continuaciones cortas.
 
 `node scripts/diagnostics/benchmark-observer.mjs RUNTIME.ts OUTPUT.json` compara volumen y coste en el host con 400 callbacks y dos rondas fijas de calentamiento. No es prueba del límite de overhead en Android. Los resultados de la primera revisión fueron 1208 → 406 eventos y 1,45 → 0,79 ms de mediana, sin drops; el orden fijo y el entorno del host impiden extrapolar ese porcentaje al POS.
+
+## Referencia de arranque sin observadores
+
+`pos_diagnostic_control=true` habilita únicamente DevTools en un APK compilado con POS_DIAGNOSTICS. Es independiente de `pos_diagnostics`: con este último false, enabled() devuelve false, no se crean observadores nativos y el bootstrap no carga Zone ni el API JS. En un build ordinario ninguno de los switches habilita DevTools. Esta separación requiere un APK que incluya el cambio; 1.1.335 no lo contiene.
+
+Para cada bloque, reiniciar el proceso entre modos, con el mismo APK, datos y pantalla, fuera de una operación pendiente. Referencia: `pos_diagnostic_control=true`, `pos_diagnostics=false`. Diagnóstico: ambos true. Comprobar cada arranque mediante `check-reference.mjs ENDPOINT reference|diagnostic OUTPUT.json`; abortar si el modo no coincide. disable() en una página que ya cargó Zone nunca sustituye la referencia.
+
+Esta referencia elimina observadores activos y Zone, pero conserva las transformaciones de compilación del APK diagnóstico. No equivale a un release compilado sin instrumentación. Si se requiere overhead respecto a ese release, hace falta comparación adicional con esa compilación; no ocultar esa diferencia ni extrapolar una carga sintética al coste de las acciones reales.
+
+El analizador `analyze-calibration-variance.py CAPTURE --processor TRACE_PROCESSOR_PY` cruza ventanas CAL con unión de spans GC y estados de scheduling de system.ctrace. Requiere ambos marcadores para cada muestra y un reloj común validado. GC y scheduling se solapan: no sumar sus duraciones. El trazado y muestreo de una sesión de localización de variación están activos en todos los bloques, por lo que esa sesión no mide su propio overhead.
