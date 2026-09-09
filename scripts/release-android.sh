@@ -285,8 +285,9 @@ fs.writeFileSync(report, JSON.stringify({ sourceCommit, assetsVerified: true, ha
 console.log(`Assets verificados: ${Object.keys(hashes).length}`);
 NODE
 
-info "Ejecutando ./gradlew clean assembleRelease"
-(cd "${BUILD_WORKTREE}/android" && ./gradlew clean assembleRelease \
+# Keep versioned APKs and reports from earlier releases in the canonical output directory.
+info "Ejecutando ./gradlew assembleRelease"
+(cd "${BUILD_WORKTREE}/android" && ./gradlew assembleRelease \
   "-PclicPosAllowReleaseCleartext=${LAN_HTTP_ENABLED}")
 
 APK_SRC="${BUILD_WORKTREE}/android/app/build/outputs/apk/release/Clic-Pos-${VERSION_NAME}-release.apk"
