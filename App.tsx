@@ -106,6 +106,7 @@ import { calculateTransactionTaxSummary } from './utils/taxSummary';
 import { calculateTransactionFiscalSummary } from './utils/fiscalBreakdown';
 import { extractTerminalOperationalDocumentState } from './utils/terminalConfigSnapshot';
 import { mergeDocumentSeriesCollection, resolveDocumentAssignmentId } from './utils/documentSeriesIdentity';
+import { requireErpZSequenceAuthority, resolveZSequenceContinuity } from './services/zreports/ZReportSequenceContinuity';
 import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
 import { ThermalPrinterService } from './services/printer/ThermalPrinterService';
 import { resolveDeviceRoleValue } from './utils/deviceRoleHelpers';
@@ -10265,6 +10266,7 @@ const AppContent: React.FC = () => {
 
       let zReportSeriesId: string | undefined;
       let zReportSeriesNumber: number | undefined;
+      let zSequenceContinuity: ReturnType<typeof resolveZSequenceContinuity> | undefined;
 
       // DOCUMENT SERIES LOGIC
       // internalSequences is the persistent source of truth. Terminal config keeps a mirror
@@ -10286,7 +10288,14 @@ const AppContent: React.FC = () => {
       } else if (zReportSeries) {
         // Use the Series
         const prefix = zReportSeries.prefix || '';
-        const num = Math.max(1, Number(zReportSeries.nextNumber) || 1);
+        const persistedReports = ((await db.get('zReports')) as ZReport[]) || [];
+        zSequenceContinuity = resolveZSequenceContinuity({
+          series: zReportSeries,
+          reports: persistedReports,
+          terminalIds: Array.from(terminalAliases),
+        });
+        requireErpZSequenceAuthority(zReportSeries as DocumentSeries & Record<string, unknown>, zSequenceContinuity);
+        const num = zSequenceContinuity.selectedNumber;
         const padding = zReportSeries.padding || 8;
         sequenceNumber = `${prefix}${num.toString().padStart(padding, '0')}`;
         zReportSeriesId = zReportSeries.id;
@@ -10333,7 +10342,9 @@ const AppContent: React.FC = () => {
         // Persist to DB
         await db.save('config', updatedConfig);
 
-        if (permissionService.isMasterTerminal()) {
+        // ERP advances its durable Z authority when it accepts the Z document.
+        // A catalog push must never act as a competing counter writer.
+        if (permissionService.isMasterTerminal() && String((zReportSeries as any).source || '').toUpperCase() !== 'ERP_TERMINAL_CONFIG') {
           try {
             await syncManager.pushCatalog('internalSequences');
           } catch (sequenceSyncError) {
@@ -10359,6 +10370,7 @@ const AppContent: React.FC = () => {
         sequenceNumber,
         seriesId: zReportSeriesId,
         seriesNumber: zReportSeriesNumber,
+        sequenceContinuity: zSequenceContinuity,
         closedAt: new Date().toISOString(),
         syncStatus: 'PENDING' as const,
         ...(replacementReportId ? {
@@ -10473,7 +10485,12 @@ const AppContent: React.FC = () => {
         releaseClosingTransactionIds(reservedCloseTransactionIds);
       }
       console.error('❌ Z-Report closure failed:', error);
-      alert('El cierre terminó con incidencias de sincronización. Se volverá al POS y el reporte quedará en cola para sincronizar.');
+      const errorCode = error instanceof Error ? error.message : '';
+      if (errorCode === 'Z_SEQUENCE_AUTHORITY_REQUIRED' || errorCode === 'Z_SEQUENCE_AUTHORITY_STALE') {
+        alert('No se realizó el cierre Z porque ERP no confirmó la continuidad de la numeración. Las operaciones siguen pendientes y no se consumió ningún número. Sincroniza la terminal y vuelve a intentarlo.');
+      } else {
+        alert('El cierre terminó con incidencias de sincronización. Se volverá al POS y el reporte quedará en cola para sincronizar.');
+      }
     } finally {
       setCurrentView('POS');
       backgroundSyncManager.triggerSync().catch(console.error);

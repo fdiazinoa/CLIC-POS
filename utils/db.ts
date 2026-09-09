@@ -14,7 +14,7 @@ import {
 import { dbAdapter } from '../services/db';
 import { Capacitor } from '@capacitor/core';
 import { permissionService } from '../services/sync/PermissionService';
-import { mergeDocumentSeriesCollection } from './documentSeriesIdentity';
+import { mergeDocumentSeriesCollection, mergeIncomingDocumentSeriesWithoutRewind } from './documentSeriesIdentity';
 import { reconcilePreparedFiscalCollections } from './fiscalPreparedAuthority';
 
 const DB_KEY = 'clic_pos_db_v1';
@@ -325,7 +325,7 @@ const mergeDocumentSeriesState = (
       purgedDefaults: existing.filter(isDemoOrDefaultDocumentSeries).length,
     });
 
-    return mergeDocumentSeriesCollection(authoritativeSeries);
+    return mergeIncomingDocumentSeriesWithoutRewind(existing, authoritativeSeries);
   }
 
   return mergeDocumentSeriesCollection([...(existingSeries || []), ...normalizedIncoming]);

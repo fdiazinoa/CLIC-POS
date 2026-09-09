@@ -57,6 +57,13 @@ const normalizeSeriesPadding = (value: unknown): number => {
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 6;
 };
 
+const monotonicInteger = (...values: unknown[]): number | null => {
+  const numbers = values
+    .map(Number)
+    .filter((value) => Number.isSafeInteger(value) && value >= 0);
+  return numbers.length ? Math.max(...numbers) : null;
+};
+
 const FISCAL_SERIES_PREFIXES = [
   'B01',
   'B02',
@@ -187,16 +194,47 @@ export const mergeDocumentSeriesCollection = (rows: DocumentSeries[] = []): Docu
     }
 
     const canonicalId = getCanonicalSystemSeriesId(normalized.documentType, normalized.prefix);
+    const sequenceRevision = monotonicInteger(
+      (existing as any).sequenceRevision,
+      (existing as any).sequence_revision,
+      (normalized as any).sequenceRevision,
+      (normalized as any).sequence_revision,
+    );
+    const lastCommittedNumber = monotonicInteger(
+      (existing as any).lastCommittedNumber,
+      (existing as any).last_committed_number,
+      (normalized as any).lastCommittedNumber,
+      (normalized as any).last_committed_number,
+    );
     merged.set(mapKey, {
       ...existing,
       ...normalized,
       id: canonicalId || existing.id || normalized.id,
       nextNumber: Math.max(Number(existing.nextNumber) || 1, Number(normalized.nextNumber) || 1),
       padding: normalizeSeriesPadding(normalized.padding ?? existing.padding),
+      ...(sequenceRevision === null ? {} : { sequenceRevision }),
+      ...(lastCommittedNumber === null ? {} : { lastCommittedNumber }),
     });
   }
 
   return Array.from(merged.values());
+};
+
+/** Keeps only the incoming authoritative set while preserving every local monotonic floor. */
+export const mergeIncomingDocumentSeriesWithoutRewind = (
+  existingRows: DocumentSeries[] = [],
+  incomingRows: DocumentSeries[] = [],
+): DocumentSeries[] => {
+  const existing = mergeDocumentSeriesCollection(existingRows);
+  const incoming = mergeDocumentSeriesCollection(incomingRows);
+  return mergeDocumentSeriesCollection(incoming.map((row) => {
+    const semanticKey = getDocumentSeriesSemanticKey(row);
+    const local = existing.find((candidate) =>
+      candidate.id === row.id ||
+      (semanticKey && getDocumentSeriesSemanticKey(candidate) === semanticKey)
+    );
+    return local ? mergeDocumentSeriesCollection([local, row])[0] : row;
+  }));
 };
 
 /**
