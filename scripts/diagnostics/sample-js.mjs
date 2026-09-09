@@ -17,7 +17,7 @@ let started=false;
 try{
  await call('Profiler.enable');await call('Profiler.setSamplingInterval',{interval:2000});
  const before=await call('Runtime.evaluate',{expression:'JSON.stringify({js:performance.now(),origin:performance.timeOrigin,diagnostic:globalThis.__POS_DIAGNOSTICS__?.status()})',returnByValue:true});
- fs.writeFileSync(path.join(out,'v8-clock.json'),before.result.value);
+ await call('Performance.enable');const metrics=await call('Performance.getMetrics');const after=await call('Runtime.evaluate',{expression:'performance.now()',returnByValue:true});fs.writeFileSync(path.join(out,'v8-clock.json'),JSON.stringify({jsBefore:JSON.parse(before.result.value),metrics:metrics.metrics,jsAfter:after.result.value,uncertaintyMs:after.result.value-JSON.parse(before.result.value).js},null,2));
  await call('Profiler.start');started=true;console.log('V8_SAMPLER_ACTIVE interval=2000us seconds='+seconds);
  const stop=Date.now()+seconds*1000;
  while(Date.now()<stop&&!fs.existsSync(path.join(out,'stop.request')))await new Promise(r=>setTimeout(r,250));
