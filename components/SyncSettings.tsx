@@ -7,6 +7,7 @@ import { backgroundSyncManager } from '../services/sync/BackgroundSyncManager';
 import { BusinessConfig } from '../types';
 import SyncProgressModal from './SyncProgressModal';
 import { db } from '../utils/db';
+import { dbAdapter } from '../services/db';
 import { loadSyncProfile, resolveSyncTarget, SyncProfile, ResolvedSyncTarget } from '../services/sync/SyncProfile';
 import { posCloudStagingService } from '../services/sync/PosCloudStagingService';
 import { resetDeviceIdentityBySupport } from '../utils/deviceRevocation';
@@ -62,7 +63,15 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         message: string;
     } | null>(null);
 
-    const localBlockedCount = auditData.filter((item) => item.status === 'ERROR').length;
+    const nativePagination = typeof dbAdapter.getSyncMonitorPage === 'function';
+    const [auditTotals, setAuditTotals] = useState({ total: 0, blocked: 0 });
+    const auditReloadRequested = React.useRef(false);
+    const activeAuditQuery = React.useRef<string | null>(null);
+    const loadAuditRef = React.useRef<() => Promise<void>>(async () => {});
+    const auditQueryKey = JSON.stringify([currentPage, rowsPerPage, searchTerm, statusFilter, terminalFilter]);
+    const latestAuditQuery = React.useRef(auditQueryKey);
+    latestAuditQuery.current = auditQueryKey;
+    const localBlockedCount = nativePagination ? auditTotals.blocked : auditData.filter((item) => item.status === 'ERROR').length;
 
     const resolveDocumentStatus = (raw: any): 'SYNCED' | 'PENDING' | 'ERROR' => {
         const status = String(raw?.syncStatus || raw?.cloudSyncStatus || '').toUpperCase();
@@ -138,13 +147,28 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     };
 
     const loadAuditData = async () => {
-        if (activeTab !== 'MONITOR' || auditLoadInFlight.current) return;
+        if (activeTab !== 'MONITOR') return;
+        if (auditLoadInFlight.current) {
+            if (activeAuditQuery.current !== auditQueryKey) auditReloadRequested.current = true;
+            return;
+        }
         auditLoadInFlight.current = true;
+        activeAuditQuery.current = auditQueryKey;
         setIsLoadingAudit(true);
         setAuditLoadError(null);
         try {
             // Load Audit Data for Data Monitor
             if (activeTab === 'MONITOR') {
+                const page = nativePagination ? await dbAdapter.getSyncMonitorPage!({
+                    page: currentPage, pageSize: rowsPerPage, search: searchTerm, status: statusFilter, terminal: terminalFilter,
+                }) : null;
+                if (auditQueryKey !== latestAuditQuery.current) return;
+                if (page) {
+                    setAuditTotals({ total: page.total, blocked: page.blocked });
+                    const lastPage = Math.max(1, Math.ceil(page.total / rowsPerPage));
+                    if (currentPage > lastPage) { setCurrentPage(lastPage); return; }
+                }
+                const readCollection = (name: string) => page ? Promise.resolve(page.collections[name] || []) : db.get(name as any);
                 const [
                     txns,
                     reservations,
@@ -156,15 +180,15 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     walletTransactions,
                     loyaltyEvents,
                 ] = await Promise.all([
-                    db.get('transactions'),
-                    db.get('reservations'),
-                    db.get('inventoryLedger'),
-                    db.get('zReports'),
-                    db.get('cashMovements'),
-                    db.get('customerMutations' as any),
-                    db.get('posUserMutations'),
-                    db.get('wallet_transactions'),
-                    db.get('loyalty_events'),
+                    readCollection('transactions'),
+                    readCollection('reservations'),
+                    readCollection('inventoryLedger'),
+                    readCollection('zReports'),
+                    readCollection('cashMovements'),
+                    readCollection('customerMutations'),
+                    readCollection('posUserMutations'),
+                    readCollection('wallet_transactions'),
+                    readCollection('loyalty_events'),
                 ]);
 
                 const transactionRefs = new Set<string>();
@@ -311,9 +335,16 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
             setAuditLoadError('No se pudieron cargar los documentos locales. Pulsa Refrescar lista para reintentar.');
         } finally {
             auditLoadInFlight.current = false;
+            activeAuditQuery.current = null;
             setIsLoadingAudit(false);
+            if (auditReloadRequested.current) {
+                auditReloadRequested.current = false;
+                void loadAuditRef.current();
+            }
         }
     };
+
+    loadAuditRef.current = loadAuditData;
 
     const loadStatus = async () => {
         // Local documents must remain available when remote diagnostics fail or stall.
@@ -435,6 +466,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
 
     // Memoized Filtered Content
     const filteredAuditData = React.useMemo(() => {
+        if (nativePagination) return auditData;
         return auditData.filter(item => {
             const itemId = String(item.id || '').toLowerCase();
             const matchesSearch = itemId.includes(searchTerm.toLowerCase()) ||
@@ -497,19 +529,16 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const resolveRetryResult = async (item: any): Promise<{ status: 'SYNCED' | 'PENDING' | 'ERROR'; error?: string }> => {
         if (!item?.collection) return { status: 'PENDING' };
 
-        const data = await db.get(item.collection as any);
-        if (!Array.isArray(data)) return { status: 'PENDING' };
-
         if (item.collection === 'inventoryLedger' && Array.isArray(item.raw?.movements)) {
             const movementIds = new Set(item.raw.movements.map((movement: any) => movement.id).filter(Boolean));
-            const movements = data.filter((movement: any) => movementIds.has(movement.id));
+            const movements = (await Promise.all(Array.from(movementIds).map(id => db.getDocument('inventoryLedger', String(id))))).filter(Boolean);
             return {
                 status: aggregateDocumentStatus(movements),
                 error: movements.map(resolveDocumentError).find(Boolean)
             };
         }
 
-        const document = data.find((entry: any) => entry.id === item.raw?.id) || null;
+        const document = await db.getDocument(item.collection as any, item.raw?.id);
         if (!document) return { status: 'PENDING' };
 
         return {
@@ -519,14 +548,15 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     };
 
     // Pagination Logic
-    const totalPages = Math.ceil(filteredAuditData.length / rowsPerPage);
-    const paginatedData = filteredAuditData.slice(
+    const auditTotal = nativePagination ? auditTotals.total : filteredAuditData.length;
+    const totalPages = Math.ceil(auditTotal / rowsPerPage);
+    const paginatedData = nativePagination ? filteredAuditData : filteredAuditData.slice(
         (currentPage - 1) * rowsPerPage,
         currentPage * rowsPerPage
     );
 
     const startIndex = (currentPage - 1) * rowsPerPage;
-    const endIndex = Math.min(startIndex + rowsPerPage, filteredAuditData.length);
+    const endIndex = Math.min(startIndex + rowsPerPage, auditTotal);
 
     // Periodic polling
     useEffect(() => {
@@ -534,7 +564,15 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
             if (!retryInFlight.current) void loadAuditData();
         }, 30000);
         return () => clearInterval(interval);
-    }, []);
+    }, [activeTab, currentPage, rowsPerPage, searchTerm, statusFilter, terminalFilter]);
+
+    const firstAuditQuery = React.useRef(true);
+    useEffect(() => {
+        if (firstAuditQuery.current) { firstAuditQuery.current = false; return; }
+        if (!nativePagination || activeTab !== 'MONITOR') return;
+        const timer = window.setTimeout(() => void loadAuditRef.current(), 200);
+        return () => window.clearTimeout(timer);
+    }, [activeTab, currentPage, rowsPerPage, searchTerm, statusFilter, terminalFilter]);
 
 
 
@@ -1395,7 +1433,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                     <div className="flex flex-col md:flex-row items-center justify-between gap-4 py-2 px-2 animate-in fade-in slide-in-from-bottom-2 duration-500">
                                         {/* Records Summary */}
                                         <div className="text-sm font-medium text-gray-400">
-                                            Mostrando <span className="text-gray-700 font-bold">{filteredAuditData.length > 0 ? startIndex + 1 : 0}</span> - <span className="text-gray-700 font-bold">{endIndex}</span> de <span className="text-gray-700 font-bold">{filteredAuditData.length}</span> documentos
+                                            Mostrando <span className="text-gray-700 font-bold">{filteredAuditData.length > 0 ? startIndex + 1 : 0}</span> - <span className="text-gray-700 font-bold">{endIndex}</span> de <span className="text-gray-700 font-bold">{auditTotal}</span> documentos
                                         </div>
 
                                         {/* Navigation and Density */}

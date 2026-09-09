@@ -4527,6 +4527,8 @@ const AppContent: React.FC = () => {
       'KIOSK_WELCOME',
       'KIOSK_BROWSER',
       'KIOSK_PAYMENT',
+      'SETTINGS',
+      'SETTINGS_SYNC',
     ]);
     if (!inputSensitiveViews.has(currentView)) return;
 
