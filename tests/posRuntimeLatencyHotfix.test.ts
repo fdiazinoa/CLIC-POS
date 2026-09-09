@@ -5,6 +5,7 @@ import test from 'node:test';
 const posSource = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 const syncSource = readFileSync(new URL('../services/sync/SyncManager.ts', import.meta.url), 'utf8');
+const apiSyncSource = readFileSync(new URL('../services/sync/ApiSyncAdapter.ts', import.meta.url), 'utf8');
 
 test('the input paints immediately and catalog filtering is debounced independently', () => {
   assert.doesNotMatch(posSource, /useDeferredValue\(searchTerm\)/);
@@ -87,6 +88,23 @@ test('critical POS interactions expose structured timing markers', () => {
   assert.match(perfSource, /inputLatencyP95Ms/);
   assert.match(perfSource, /inputLatencyP99Ms/);
   assert.match(perfSource, /__CLIC_POS_PERFORMANCE__/);
+});
+
+test('background fetch diagnostics do not rescan terminal credentials', () => {
+  const fetchStart = apiSyncSource.indexOf('private async fetchWithRetry(');
+  const fetchEnd = apiSyncSource.indexOf('private async fetchWithoutCircuitBreaker(', fetchStart);
+  const fetchBody = apiSyncSource.slice(fetchStart, fetchEnd);
+  const tokenDiagnosticStart = apiSyncSource.indexOf('private resolveStoredErpSyncTokenDiagnostic()');
+  const tokenDiagnosticEnd = apiSyncSource.indexOf('private persistErpSyncToken(', tokenDiagnosticStart);
+  const tokenDiagnosticBody = apiSyncSource.slice(tokenDiagnosticStart, tokenDiagnosticEnd);
+
+  assert.ok(fetchStart >= 0 && fetchEnd > fetchStart);
+  assert.doesNotMatch(fetchBody, /resolveStoredErpSyncTokenDiagnostic\(\)/);
+  assert.match(fetchBody, /length: headersSummary\.tokenLength \|\| 0/);
+  assert.match(fetchBody, /REQUEST_X_SYNC_TOKEN/);
+  assert.match(fetchBody, /REQUEST_AUTHORIZATION/);
+  assert.match(tokenDiagnosticBody, /storedCredentials\.syncToken/);
+  assert.doesNotMatch(tokenDiagnosticBody, /resolvePersistedTerminalSyncToken\(\)/);
 });
 
 test('interaction telemetry stays outside the critical UI path and preserves first response', () => {
