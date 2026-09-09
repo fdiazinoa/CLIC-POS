@@ -63,3 +63,12 @@ Para cada bloque, reiniciar el proceso entre modos, con el mismo APK, datos y pa
 Esta referencia elimina observadores activos y Zone, pero conserva las transformaciones de compilación del APK diagnóstico. No equivale a un release compilado sin instrumentación. Si se requiere overhead respecto a ese release, hace falta comparación adicional con esa compilación; no ocultar esa diferencia ni extrapolar una carga sintética al coste de las acciones reales.
 
 El analizador `analyze-calibration-variance.py CAPTURE --processor TRACE_PROCESSOR_PY` cruza ventanas CAL con unión de spans GC y estados de scheduling de system.ctrace. Requiere ambos marcadores para cada muestra y un reloj común validado. GC y scheduling se solapan: no sumar sus duraciones. El trazado y muestreo de una sesión de localización de variación están activos en todos los bloques, por lo que esa sesión no mide su propio overhead.
+
+
+## Captura reducida desde el host
+
+`capture.py start --serial 10.0.0.94:5555 --out DIR --system-atrace --profile light` conserva la configuración completa como opción predeterminada. El perfil light mantiene toplevel, blink.user_timing, devtools.timeline, v8, v8.execute y blink: en esta WebView, WebFrameWidgetImpl::BeginMainFrame pertenece a blink. Retira las categorías Chromium detalladas de scheduler, cc, GPU/viz e input; no permite descartar problemas internos de GPU o compositor por ausencia de eventos. El atrace Android conserva scheduling, RenderThread, Binder y GC. Con --system-atrace, scheduling vive en system.ctrace, no en session.pftrace.
+
+`node scripts/diagnostics/sample-js.mjs http://127.0.0.1:PORT DIR 30 5000` solicita muestreo V8 cada 5 ms. El intervalo opcional acepta 1000–10000 microsegundos y se guarda en v8-clock.json; omitirlo conserva 2000. El muestreo identifica stacks, no proporciona duración exacta por función ni garantiza observar callbacks breves.
+
+Este cambio solo afecta herramientas de captura; no requiere compilar ni instalar otro APK. Antes de atribuir lentitud, verificar coste por bloques de arranque independientes, ausencia de drops, marcas UserTiming, RunMicrotasks, BeginMainFrame, stacks V8 y scheduling. Un benchmark sintético no certifica overhead de acciones reales; el calentamiento puede consumir el presupuesto de 64 spans detallados que cada interacción real vuelve a abrir.
