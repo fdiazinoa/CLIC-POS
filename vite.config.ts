@@ -62,6 +62,10 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         output: {
           manualChunks(id) {
+            // Keep diagnostics bootstrap independent of React so the profiling hook
+            // exists before the renderer module initializes.
+            if (diagnostic && id.includes('/diagnostics/runtime.ts')) return 'pos-diagnostics';
+            if (diagnostic && id.includes('/zone.js/')) return 'pos-diagnostics-zone';
             if (id.includes('node_modules')) {
               if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/scheduler/')) {
                 return 'vendor-react';

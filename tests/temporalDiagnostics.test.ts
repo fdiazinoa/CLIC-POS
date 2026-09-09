@@ -65,3 +65,9 @@ test('native SQL query and transaction instrumentation is repeatable and fails c
  assert.match(native,/SQLITE_TRANSACTION_END/);assert.match(native,/Looper.myLooper\(\)==Looper.getMainLooper\(\)/);
  assert.doesNotMatch(native,/getData\(\).*toString/);
 });
+
+test('diagnostic bootstrap chunks cannot eagerly import the React renderer',()=>{
+ const config=readFileSync('vite.config.ts','utf8');
+ assert.ok(config.indexOf("id.includes('/diagnostics/runtime.ts')") < config.indexOf("id.includes('node_modules')"));
+ assert.match(config,/pos-diagnostics-zone/);
+});
