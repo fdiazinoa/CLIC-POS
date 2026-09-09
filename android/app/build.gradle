@@ -24,8 +24,8 @@ android {
         buildConfigField "boolean", "POS_DIAGNOSTICS", System.getenv("CLIC_POS_DIAGNOSTICS") == "true" ? "true" : "false"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1329
-        versionName "1.1.329"
+        versionCode 1330
+        versionName "1.1.330"
         manifestPlaceholders = [
                 usesCleartextTraffic: "true",
                 diagnosticProfileable: System.getenv("CLIC_POS_DIAGNOSTICS") == "true" ? "true" : "false",
