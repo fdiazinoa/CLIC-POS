@@ -39,9 +39,12 @@ test('diagnostic build preserves async context across overlapping operations, re
  await background;
  flush();await delay(1);assert.equal(batches.filter(e=>e.name==='ACTION_START'&&e.kind==='action').length,3);assert.equal(batches.filter(e=>e.name==='REACT_RENDER').length,0);
  const visible=batches.find(e=>e.traceId==='POS-000005'&&e.name==='FIRST_RENDER');const done=batches.find(e=>e.traceId==='POS-000005'&&e.name==='ACTION_END');assert.ok(visible.ts<done.ts-30);
- assert.deepEqual(batches.filter(e=>e.name==='CAPACITOR_RETURN').map(e=>e.traceId),['POS-000002','POS-000001']);assert.ok(batches.some(e=>e.name==='PROMISE_RESUME'&&e.parentSpan));
+ assert.deepEqual(batches.filter(e=>e.name==='CAPACITOR_RETURN').map(e=>e.traceId),['POS-000002','POS-000001']);assert.ok(batches.some(e=>(e.name==='PROMISE_RESUME'||e.name==='MICROTASK_EXECUTION')&&e.parentSpan));
  assert.equal(batches.filter(e=>e.name==='FUNCTION_START'&&e.operation==='POSInterface.tsx:getProductPrice:3087').length,1);assert.ok(!JSON.stringify(batches).includes('bindValues'));
  const d=globalThis.__POS_DIAGNOSTICS__;
+ await diagRun('render-microtask',()=>Promise.resolve().then(()=>{for(let i=0;i<10000;i++)diagRun('POSInterface.tsx:getProductPrice:3087',()=>i,'direct-helper');}));
+ flush();assert.equal(batches.filter(e=>e.name==='FUNCTION_START'&&e.operation==='POSInterface.tsx:getProductPrice:3087').length,1);
+ const compact=batches.filter(e=>e.name==='MICROTASK_EXECUTION');assert.ok(compact.length>0);assert.ok(compact.every(e=>e.endTs>=e.startTs&&e.duration>=0));
  assert.equal(d.target('return',()=>42,()=>{throw Error('metadata');}),42);
  assert.throws(()=>d.target('throw',()=>{throw error;}),e=>e===error);
  d.disable();inputs.click({timeStamp:performance.now(),type:'click'});
