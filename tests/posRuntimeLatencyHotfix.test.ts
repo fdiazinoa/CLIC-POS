@@ -114,3 +114,10 @@ test('table state is applied before deferred persistence and reconciliation', ()
       < posSource.indexOf("handleDispatchCommand('table_exit', { backgroundTableExit: true })"),
   );
 });
+
+test('settings interaction uses the same background-work pause as sales screens', () => {
+  const guard = appSource.slice(appSource.indexOf('const inputSensitiveViews'), appSource.indexOf('const markInteraction', appSource.indexOf('const inputSensitiveViews')));
+  assert.match(guard, /'SETTINGS'/);
+  assert.match(guard, /'SETTINGS_SYNC'/);
+  assert.match(guard, /'POS'/);
+});
