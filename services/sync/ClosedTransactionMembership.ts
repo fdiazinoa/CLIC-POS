@@ -76,6 +76,44 @@ type PersistInboundDependencies = {
   deleteActive: (transactionId: string) => Promise<void>;
 };
 
+type ReconcilePreviewDependencies = {
+  loadHistory: () => Promise<Transaction[]>;
+  loadReports: () => Promise<ZReport[]>;
+  deleteActive: (transactionId: string) => Promise<void>;
+};
+
+export type ReconcilePreviewResult = {
+  transactions: Transaction[];
+  removedClosed: Transaction[];
+  closedIds: Set<string>;
+};
+
+/**
+ * Removes closed copies from the active projection before the cashier reviews
+ * a Z. Historical rows and Z manifests remain the immutable membership proof.
+ */
+export const reconcileTransactionsForZPreview = async (
+  active: Transaction[],
+  dependencies: ReconcilePreviewDependencies,
+): Promise<ReconcilePreviewResult> => {
+  const [history, reports] = await Promise.all([
+    dependencies.loadHistory(),
+    dependencies.loadReports(),
+  ]);
+  const closedIds = collectClosedTransactionIds(history, reports);
+  const partition = partitionTransactionsByClosedMembership(active, closedIds);
+
+  for (const transaction of partition.closed) {
+    await dependencies.deleteActive(transaction.id);
+  }
+
+  return {
+    transactions: partition.open,
+    removedClosed: partition.closed,
+    closedIds,
+  };
+};
+
 export type PersistInboundResult = {
   accepted: Transaction[];
   skippedClosed: Transaction[];
