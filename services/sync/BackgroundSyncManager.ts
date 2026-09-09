@@ -329,6 +329,10 @@ class BackgroundSyncManager {
         let pausedForSaleActivity = false;
 
         try {
+            // initialize() may run before the ERP target/config is available. Retry
+            // the one-time Z recovery here, after the operational target is known,
+            // so closes falsely marked APPLIED_ERP by older builds are re-submitted.
+            await this.recoverRecentZReportsForReplay();
             await discoverPendingOperationsRecovery().catch(error => collectionErrors.push(`recoveryAvailability: ${error.message}`));
             if (isSyncFeatureEnabled('pending_operations_recovery')) {
                 await pendingOperationsRecovery.sendPending().catch(error => collectionErrors.push(`originals: ${error.message}`));
@@ -832,7 +836,7 @@ class BackgroundSyncManager {
         const terminalId = permissionService.getTerminalId();
         if (!terminalId || !this.isErpOperationalPushConfigured()) return;
 
-        const flagKey = `sync_replay_recent_z_reports_v1_${terminalId}`;
+        const flagKey = `sync_replay_recent_z_reports_v2_${terminalId}`;
         if (localStorage.getItem(flagKey) === '1') return;
 
         try {
