@@ -7,10 +7,10 @@ let enabled=false,seq=0,sseq=0,deadline=0,session='',drops=0,overhead=0;
 let queue:any[]=[];const dirty=new Set<Trace>();
 const clock=()=>performance.now();
 const active=()=>enabled&&clock()<deadline;
-let syncSpan:Span|undefined;
+let syncSpan:Span|undefined,invocationSpan:Span|undefined;
 const targeted=new TargetCounters();let commitEpoch=0,targetEvents=0;
 function flushTargets(){for(const row of targeted.drain())emit('TARGET_SUMMARY',{...row,commitEpoch,traceId:'UNATTRIBUTED',spanId:null,parentSpan:null,attribution:'aggregate across calls; not a single trace or proof of committed render'},undefined);}
-const context=():Span|undefined=>syncSpan || (typeof Zone==='undefined'?undefined:Zone.current.get('posSpan'));
+const context=():Span|undefined=>syncSpan || invocationSpan || (typeof Zone==='undefined'?undefined:Zone.current.get('posSpan'));
 const shortSync=new Map<string,{count:number;total:number;max:number}>();
 const native=()=> (globalThis as any).POSDiagnostics;
 let input:{at:number;type:string}|undefined;
@@ -35,11 +35,18 @@ const zoneSpec={name:'pos-selective',onScheduleTask(delegate:any,current:any,tar
  const meta=taskMeta.get(task),parent=meta?.parent||context();
  const span:Span={id:meta?.id||++sseq,parent:parent?.id??null,name:meta?.origin||task.source,t:parent?.t,start:clock()};
  if(!chain){chain={id:span.id,start:span.start,end:span.start,count:0,sum:0,max:0,states:0,scheduled:0};}
- chain.count++;emit('PROMISE_RESUME',{source:task.source,chainId:chain.id},span);emit('JS_PROCESSING_START',{chainId:chain.id},span);
- try{return Zone.current.fork({name:'continuation',properties:{posSpan:span}}).run(()=>delegate.invokeTask(target,task,self,args));}
- finally{const d=clock()-span.start;emit('JS_PROCESSING_END',{duration:d,over16:d>16,over50:d>50,over100:d>100,chainId:chain?.id},span);if(chain){chain.end=clock();chain.sum+=d;chain.max=Math.max(chain.max,d);}if(!drainPending){drainPending=true;Zone.root.run(()=>drain.postMessage(0));}}
+ chain.count++;
+ // The invocation is synchronous. Scheduling captures this span in taskMeta;
+ // no extra Zone allocation/run is needed for each Promise continuation.
+ const prior=invocationSpan;invocationSpan=span;
+ try{return delegate.invokeTask(target,task,self,args);}
+ finally{invocationSpan=prior;const end=clock(),d=end-span.start;
+  const timing={startTs:span.start,endTs:end,duration:d,source:task.source,chainId:chain?.id};
+  if(d>16){emit('PROMISE_RESUME',{source:task.source,chainId:chain?.id},span,span.start);emit('JS_PROCESSING_START',{chainId:chain?.id},span,span.start);emit('JS_PROCESSING_END',{...timing,over16:true,over50:d>50,over100:d>100},span,end);}
+  else emit('MICROTASK_EXECUTION',timing,span,end);
+  if(chain){chain.end=end;chain.sum+=d;chain.max=Math.max(chain.max,d);}if(!drainPending){drainPending=true;Zone.root.run(()=>drain.postMessage(0));}}
 }};
-function scoped<T>(span:Span,work:()=>T):T{return Zone.current.fork({...(Zone.current.get('posObserved')?{name:'pos-span'}:zoneSpec),properties:{posSpan:span,posObserved:true}}).run(work);}
+function scoped<T>(span:Span,work:()=>T):T{const prior=invocationSpan;invocationSpan=undefined;try{return Zone.current.fork({...(Zone.current.get('posObserved')?{name:'pos-span'}:zoneSpec),properties:{posSpan:span,posObserved:true}}).run(work);}finally{invocationSpan=prior;}}
 export const diagEnabled=()=>enabled;
 export function diagRun<T>(name:string,work:()=>T,kind='background'):T{
  if(!enabled || (kind==='direct-helper'&&!syncSpan))return work();
