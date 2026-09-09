@@ -70,6 +70,8 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
                   };
 
                   var asyncRequestSequence = 0;
+                  var asyncInFlight = window.__CLIC_NATIVE_ASYNC_IN_FLIGHT__ || new Map();
+                  window.__CLIC_NATIVE_ASYNC_IN_FLIGHT__ = asyncInFlight;
                   var asyncMethods = {
                     startMasterServer: true,
                     updateMasterServerConfig: true,
@@ -80,13 +82,23 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
                     acquireMasterTableLock: true,
                     releaseMasterTableLock: true
                   };
+                  var coalescedAsyncMethods = {
+                    startMasterServer: true,
+                    updateMasterServerConfig: true,
+                    stopMasterServer: true,
+                    getMasterServerStatus: true,
+                    getMasterRestaurantState: true,
+                    getMasterRestaurantRevision: true
+                  };
                   var call = function (method, payload) {
                     if (!window.AndroidPrinter || typeof window.AndroidPrinter[method] !== 'function') {
                       return Promise.resolve({ status: 'error', success: false, printed: false, message: 'Missing native method: ' + method });
                     }
                     if (asyncMethods[method] && typeof window.AndroidPrinter.callAsync === 'function') {
+                      var existing = coalescedAsyncMethods[method] ? asyncInFlight.get(method) : null;
+                      if (existing) return existing;
                       var requestID = 'native-' + Date.now() + '-' + (++asyncRequestSequence);
-                      return new Promise(function (resolve) {
+                      var pending = new Promise(function (resolve) {
                         var eventName = 'clic:native-async-result';
                         var timeoutID;
                         var onResult = function (event) {
@@ -103,6 +115,13 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
                         }, 30000);
                         window.AndroidPrinter.callAsync(requestID, method, JSON.stringify(payload || {}));
                       });
+                      if (coalescedAsyncMethods[method]) {
+                        asyncInFlight.set(method, pending);
+                        pending.finally(function () {
+                          if (asyncInFlight.get(method) === pending) asyncInFlight.delete(method);
+                        });
+                      }
+                      return pending;
                     }
                     var raw = window.AndroidPrinter[method](JSON.stringify(payload || {}));
                     return Promise.resolve(parseResult(raw));

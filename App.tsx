@@ -2096,14 +2096,27 @@ const AppContent: React.FC = () => {
         'acquireMasterTableLock',
         'releaseMasterTableLock',
       ]);
+      const coalescedAsyncMethods = new Set([
+        'startMasterServer',
+        'updateMasterServerConfig',
+        'stopMasterServer',
+        'getMasterServerStatus',
+        'getMasterRestaurantState',
+        'getMasterRestaurantRevision',
+      ]);
+      const asyncInFlight: Map<string, Promise<unknown>> = runtimeWindow.__CLIC_NATIVE_ASYNC_IN_FLIGHT__
+        || new Map<string, Promise<unknown>>();
+      runtimeWindow.__CLIC_NATIVE_ASYNC_IN_FLIGHT__ = asyncInFlight;
       const call = (method: string, payload?: unknown) => {
         if (!runtimeWindow.AndroidPrinter || typeof runtimeWindow.AndroidPrinter[method] !== 'function') {
           return Promise.resolve({ status: 'error', success: false, printed: false, message: `Missing native method: ${method}` });
         }
 
         if (asyncMethods.has(method) && typeof runtimeWindow.AndroidPrinter.callAsync === 'function') {
+          const existing = coalescedAsyncMethods.has(method) ? asyncInFlight.get(method) : undefined;
+          if (existing) return existing;
           const requestID = `native-${Date.now()}-${++asyncRequestSequence}`;
-          return new Promise((resolve) => {
+          const pending = new Promise((resolve) => {
             const eventName = 'clic:native-async-result';
             let timeoutID: number | undefined;
             const onResult = (event: Event) => {
@@ -2120,6 +2133,13 @@ const AppContent: React.FC = () => {
             }, 30000);
             runtimeWindow.AndroidPrinter.callAsync(requestID, method, JSON.stringify(payload || {}));
           });
+          if (coalescedAsyncMethods.has(method)) {
+            asyncInFlight.set(method, pending);
+            void pending.finally(() => {
+              if (asyncInFlight.get(method) === pending) asyncInFlight.delete(method);
+            });
+          }
+          return pending;
         }
 
         const raw = runtimeWindow.AndroidPrinter[method](JSON.stringify(payload || {}));
