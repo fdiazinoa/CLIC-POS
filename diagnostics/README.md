@@ -47,3 +47,7 @@ Referencias: https://perfetto.dev/docs/reference/trace-config-proto y https://de
 - En la prueba de arranque, el flush síncrono del recolector llegó a 71 ms; en reposo se observaron muestras menores, pero el coste no es cero. Es un factor de confusión medido. No atribuir al producto frames explicados por el recolector; conservar categoría «instrumentación» y declarar desconocido el efecto no separable. No usar porcentajes causales del producto hasta descartar este efecto.
 
 Para una captura supervisada y acotada usar `record.py --serial SERIAL --out DIRECTORIO --seconds 300` en una sesión exec persistente. Termina por deadline o por `DIRECTORIO/stop.request`, y rechaza una sesión cuyo stream logcat termine. No dejar únicamente `capture.py start` sin un propietario que ejecute stop.
+
+## Recolector 1.1.330
+
+El sink de logs se envía mediante Capacitor de forma asíncrona y se escribe en un hilo dedicado; se excluye de la instrumentación del bridge para evitar autorregistro. En el smoke de arranque se midió flush p95 1.1 ms y máximo 2.6 ms, sin drops reportados. Esto mide solo el flush; no demuestra coste cero del profiler ni es una comparación de rendimiento del producto.
