@@ -126,7 +126,7 @@ test('synchronization monitor loads every collection counted as blocked', () => 
     'wallet_transactions',
     'loyalty_events',
   ]) {
-    assert.match(source, new RegExp(`db\\.get\\('${collection}'\\)`));
+    assert.match(source, new RegExp(`db\\.get\\('${collection}'(?: as any)?\\)`));
   }
 
   assert.match(source, /formattedOperational/);

@@ -827,19 +827,18 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     };
 
     return (
-        <div className="flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300 relative">
+        <div className="flex flex-col h-full min-h-0 min-w-0 bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300 relative">
             <SyncProgressModal
                 isOpen={showProgressModal}
                 onClose={() => window.location.reload()}
                 modules={syncModules}
             />
 
-            <PendingOperationsRecoveryPanel />
             {/* Header */}
-            <div className="bg-white px-8 py-6 border-b border-gray-200 flex justify-between items-center shrink-0">
+            <div className="bg-white px-4 py-4 sm:px-8 sm:py-6 border-b border-gray-200 flex justify-between items-center shrink-0">
                 <div className="flex-1">
-                    <div className="flex items-center gap-3">
-                        <h1 className="text-2xl font-black text-gray-800 flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-3">
+                        <h1 className="text-lg sm:text-2xl font-black text-gray-800 flex items-center gap-2">
                             <RefreshCw className={`text-blue-600 ${isSyncing ? 'animate-spin' : ''}`} /> Centro de Sincronización
                         </h1>
                         {/* Connection Status Badge */}
@@ -861,12 +860,13 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                 <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 transition-colors"><X size={24} /></button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-8">
+            <div className="flex-1 min-h-0 min-w-0 overflow-y-auto p-3 sm:p-8">
                 <div className="max-w-5xl mx-auto space-y-8">
+                    <PendingOperationsRecoveryPanel />
 
                     {/* Status Card */}
-                    <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100">
-                        <div className="flex items-center justify-between mb-8">
+                    <div className="bg-white rounded-3xl p-3 sm:p-8 shadow-sm border border-gray-100">
+                        <div className="flex flex-col items-stretch gap-4 mb-8">
                             <div className="flex items-center gap-4">
                                 <div className={`p-4 rounded-2xl ${isMaster ? 'bg-purple-100 text-purple-600' : 'bg-blue-100 text-blue-600'}`}>
                                     {isMaster ? <Server size={32} /> : <Database size={32} />}
@@ -886,7 +886,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                             <button
                                 onClick={handleSync}
                                 disabled={isSyncing}
-                                className={`px-8 py-4 rounded-2xl font-black text-white shadow-lg flex items-center gap-3 transition-all active:scale-95 ${isMaster
+                                className={`shrink-0 justify-center px-8 py-4 rounded-2xl font-black text-white shadow-lg flex items-center gap-3 transition-all active:scale-95 ${isMaster
                                     ? 'bg-purple-600 hover:bg-purple-700 shadow-purple-200'
                                     : 'bg-blue-600 hover:bg-blue-700 shadow-blue-200'
                                     }`}
@@ -916,7 +916,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                         </div>
 
                         {/* Tab Navigation */}
-                        <div className="flex gap-2 p-1 bg-gray-100 rounded-2xl mb-8">
+                        <div className="flex flex-wrap gap-2 p-1 bg-gray-100 rounded-2xl mb-8">
                             {[
                                 { id: 'MONITOR', label: 'Monitor de Datos', icon: Database },
                                 { id: 'TERMINALS', label: 'Terminales', icon: Monitor, hidden: !isMaster },
@@ -1156,6 +1156,21 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                     </div>
                                 )}
 
+                                {localBlockedCount > 0 && (
+                                    <button
+                                        onClick={() => {
+                                            setSearchTerm('');
+                                            setTerminalFilter('ALL');
+                                            setStatusFilter('ERROR');
+                                            setCurrentPage(1);
+                                            document.querySelector('.audit-table-container')?.scrollTo({ top: 0 });
+                                        }}
+                                        className="w-full rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-left text-sm font-bold text-red-700 hover:bg-red-100"
+                                    >
+                                        Ver {localBlockedCount} documento(s) con error o bloqueo
+                                    </button>
+                                )}
+
                                 {/* Filter Bar */}
                                 <div className="flex flex-wrap items-center gap-4 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
                                     <div className="flex-1 min-w-[200px] relative">
@@ -1203,7 +1218,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                 </div>
 
                                 {/* Audit Table */}
-                                <div className="audit-table-container overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm overflow-y-auto max-h-[600px]">
+                                <div className="audit-table-container overflow-auto rounded-2xl border border-gray-100 bg-white shadow-sm max-h-[600px]">
                                     <table className="w-full border-collapse">
                                         <thead className="bg-gray-50 border-b border-gray-100">
                                             <tr>
@@ -1212,7 +1227,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                 <th className="text-center py-4 px-6 text-xs font-bold text-gray-400 uppercase">Tipo</th>
                                                 <th className="text-center py-4 px-6 text-xs font-bold text-gray-400 uppercase">Fecha Local</th>
                                                 <th className="text-center py-4 px-6 text-xs font-bold text-gray-400 uppercase">Estado Nube</th>
-                                                <th className="text-right py-4 px-6 text-xs font-bold text-gray-400 uppercase">Acciones</th>
+                                                <th className="sticky right-0 z-10 bg-gray-50 text-right py-4 px-3 text-xs font-bold text-gray-400 uppercase">Acciones</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-50">
@@ -1284,8 +1299,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                             )}
                                                         </div>
                                                     </td>
-                                                    <td className="py-4 px-6 text-right">
-                                                        <div className="flex items-center justify-end gap-2">
+                                                    <td className="sticky right-0 bg-white py-4 px-3 text-right border-l border-gray-100">
+                                                        <div className="flex flex-col sm:flex-row items-stretch justify-end gap-2">
                                                             <button
                                                                 onClick={() => setSelectedJson(item.raw)}
                                                                 className="inline-flex items-center gap-1.5 rounded-lg border border-blue-700 bg-blue-600 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white shadow-sm transition-all hover:bg-blue-700"
