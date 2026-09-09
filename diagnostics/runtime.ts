@@ -24,7 +24,7 @@ function closeChain(){if(chain){emit('MICROTASK_CHAIN',{...chain,duration:chain.
 const taskMeta=new WeakMap<object,{parent?:Span;origin:string;id:number}>();
 const zoneSpec={name:'pos-selective',onScheduleTask(delegate:any,current:any,target:any,task:any){
  if(active()&&task.type==='microTask'){
-  const parent=context();taskMeta.set(task,{parent,origin:parent?.name||task.source,id:++sseq});if(chain)chain.scheduled++;
+  const parent=context()||target.get('posSpan');taskMeta.set(task,{parent,origin:parent?.name||task.source,id:++sseq});if(chain)chain.scheduled++;
  }
  return delegate.scheduleTask(target,task);
 },onInvokeTask(delegate:any,current:any,target:any,task:any,self:any,args:any[]){
@@ -43,9 +43,9 @@ export function diagRun<T>(name:string,work:()=>T,kind='background'):T{
  const user=/ModernLoginScreen.*handleKeyPress|POSInterface.*handleProductCardClick|TableMap.*handleNodeSelect/.test(name)&&input&&clock()-input.at<150;
  if(user)deadline=clock()+5000;
  if(!active())return work();
- const parent=context();const t=user&&!parent?.t?{id:`POS-${String(++seq).padStart(6,'0')}`,name,start:clock()}:parent?.t;
+ const parent=context();const t:Trace=(!user&&parent?.t)||{id:`POS-${String(++seq).padStart(6,'0')}`,name,start:clock()};
  const span:Span={id:++sseq,parent:parent?.id??null,name,t,start:clock()};
- if(t&&t!==parent?.t){emit('ACTION_START',{inputTimestamp:input?.at,eventType:input?.type},span);mark('ACTION_START',span);}
+ if(t&&t!==parent?.t){emit('ACTION_START',{kind:user?'action':'background',...(user?{inputTimestamp:input?.at,eventType:input?.type}:{})},span);mark('ACTION_START',span);}
  emit('FUNCTION_START',{kind},span);
  return scoped(span,()=>{let async=false;
   const end=(outcome:string)=>{emit('FUNCTION_END',{duration:clock()-span.start,outcome,includesAwait:async},span);if(t&&t!==parent?.t)emit('ACTION_END',{},span);};

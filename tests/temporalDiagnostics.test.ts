@@ -36,8 +36,8 @@ test('diagnostic build preserves async context across overlapping operations, re
  inputs.click({timeStamp:performance.now(),type:'click'});const background=diagRun('ModernLoginScreen.tsx:handleKeyPress:10',async()=>{diagSet('setVisible',()=>{},true);globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__.onCommitFiberRoot(1,{current:{flags:1,type:function SmallComponent(){},memoizedProps:{},actualDuration:1}});await delay(60);});
  for(let i=0;i<2;i++)for(const fn of frames.splice(0))fn(performance.now());
  await background;
- flush();await delay(1);assert.equal(batches.filter(e=>e.name==='ACTION_START').length,3);assert.equal(batches.filter(e=>e.name==='REACT_RENDER').length,0);
- const visible=batches.find(e=>e.traceId==='POS-000003'&&e.name==='FIRST_RENDER');const done=batches.find(e=>e.traceId==='POS-000003'&&e.name==='ACTION_END');assert.ok(visible.ts<done.ts-30);
+ flush();await delay(1);assert.equal(batches.filter(e=>e.name==='ACTION_START'&&e.kind==='action').length,3);assert.equal(batches.filter(e=>e.name==='REACT_RENDER').length,0);
+ const visible=batches.find(e=>e.traceId==='POS-000005'&&e.name==='FIRST_RENDER');const done=batches.find(e=>e.traceId==='POS-000005'&&e.name==='ACTION_END');assert.ok(visible.ts<done.ts-30);
  assert.deepEqual(batches.filter(e=>e.name==='CAPACITOR_RETURN').map(e=>e.traceId),['POS-000002','POS-000001']);assert.ok(batches.some(e=>e.name==='PROMISE_RESUME'&&e.parentSpan));
  assert.ok(!JSON.stringify(batches).includes('bindValues'));
  console.log('context-result-exception-pass');process.exit(0);
