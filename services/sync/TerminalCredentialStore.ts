@@ -74,6 +74,11 @@ const readConfigSnapshot = (storage: Storage): BusinessConfig | null => {
     return Array.isArray(parsed?.terminals) && parsed.terminals.length > 0 ? parsed : null;
 };
 
+const withoutConfigSnapshot = (credentials: TerminalCredentials): TerminalCredentials => {
+    const { configSnapshot: _configSnapshot, ...identityCredentials } = credentials;
+    return identityCredentials;
+};
+
 const compactCredentials = (credentials: TerminalCredentials): TerminalCredentials => {
     const compacted: TerminalCredentials = {};
     Object.entries(credentials).forEach(([key, value]) => {
@@ -110,7 +115,6 @@ const buildFromLegacyKeys = (storage: Storage): TerminalCredentials => compactCr
     masterUrl: cleanString(storage.getItem('CLIC_POS_MASTER_URL')),
     setupMode: cleanString(storage.getItem('clic_pos_terminal_setup_mode')),
     syncMode: cleanString(storage.getItem('clic_sync_mode')),
-    configSnapshot: readConfigSnapshot(storage),
 });
 
 export const normalizeTerminalCredentialsIdentity = (
@@ -228,11 +232,19 @@ export const readTerminalCredentialsSync = (): TerminalCredentials => {
     const storage = getStorage();
     if (!storage) return {};
     const stored = readJson(storage.getItem(CREDENTIALS_KEY));
-    const merged = mergeCredentials(stored, buildFromLegacyKeys(storage));
+    const storedIdentity = withoutConfigSnapshot(stored);
+    const merged = mergeCredentials(storedIdentity, buildFromLegacyKeys(storage));
     const normalized = normalizeTerminalCredentialsIdentity(merged);
-    if (normalized.identityMigrationRequired || JSON.stringify(normalized) !== JSON.stringify(merged)) {
+    if (
+        stored.configSnapshot
+        || normalized.identityMigrationRequired
+        || JSON.stringify(normalized) !== JSON.stringify(merged)
+    ) {
         try {
-            storage.setItem(CREDENTIALS_KEY, JSON.stringify(normalized));
+            if (stored.configSnapshot && !storage.getItem('initial_terminal_config')) {
+                storage.setItem('initial_terminal_config', JSON.stringify(stored.configSnapshot));
+            }
+            storage.setItem(CREDENTIALS_KEY, JSON.stringify(withoutConfigSnapshot(normalized)));
             writeLegacyMirrors(normalized);
         } catch {
             // Identity migration is retried on the next boot without touching transactional stores.
@@ -254,24 +266,40 @@ export const buildTerminalSyncAuthHeaders = (): Record<string, string> => {
 };
 
 export const readTerminalCredentials = async (): Promise<TerminalCredentials> => {
+    const storage = getStorage();
     const local = readTerminalCredentialsSync();
+    const localConfigSnapshot = storage ? readConfigSnapshot(storage) : null;
     try {
         const result = await Preferences.get({ key: CREDENTIALS_KEY });
         const fromPreferences = readJson(result?.value || null);
-        return normalizeTerminalCredentialsIdentity(mergeCredentials(fromPreferences, local));
+        return normalizeTerminalCredentialsIdentity(mergeCredentials(
+            localConfigSnapshot ? { configSnapshot: localConfigSnapshot } : {},
+            fromPreferences,
+            local,
+        ));
     } catch {
-        return local;
+        return normalizeTerminalCredentialsIdentity(mergeCredentials(
+            localConfigSnapshot ? { configSnapshot: localConfigSnapshot } : {},
+            local,
+        ));
     }
 };
 
 export const saveTerminalCredentials = async (patch: TerminalCredentials): Promise<TerminalCredentials> => {
     const storage = getStorage();
     const current = readTerminalCredentialsSync();
-    const next = normalizeTerminalCredentialsIdentity(mergeCredentials(current, patch));
+    let nativeCurrent: TerminalCredentials = {};
+    try {
+        const result = await Preferences.get({ key: CREDENTIALS_KEY });
+        nativeCurrent = readJson(result?.value || null);
+    } catch {
+        // Native Preferences is optional in some builds.
+    }
+    const next = normalizeTerminalCredentialsIdentity(mergeCredentials(nativeCurrent, current, patch));
     writeLegacyMirrors(next);
 
     try {
-        storage?.setItem(CREDENTIALS_KEY, JSON.stringify(next));
+        storage?.setItem(CREDENTIALS_KEY, JSON.stringify(withoutConfigSnapshot(next)));
     } catch {
         // A storage quota error must not erase the terminal binding.
     }
@@ -291,7 +319,7 @@ export const saveTerminalCredentialsSync = (patch: TerminalCredentials): Termina
     const next = normalizeTerminalCredentialsIdentity(mergeCredentials(current, patch));
     writeLegacyMirrors(next);
     try {
-        storage?.setItem(CREDENTIALS_KEY, JSON.stringify(next));
+        storage?.setItem(CREDENTIALS_KEY, JSON.stringify(withoutConfigSnapshot(next)));
     } catch {
         // A storage quota error must not erase the terminal binding.
     }
