@@ -4799,14 +4799,19 @@ const AppContent: React.FC = () => {
 
   const handleOpenZReport = async () => {
     try {
+      const terminal = getCurrentTerminal();
+      const terminalIds = Array.from(getTerminalReferenceKeys(terminal?.id || 'T1'));
       const reconciliation = await reconcileTransactionsForZPreview(transactions, {
         loadHistory: async () => ((await db.get('transactionHistory')) as Transaction[]) || [],
         loadReports: async () => ((await db.get('zReports')) as ZReport[]) || [],
         deleteActive: async (transactionId) => db.deleteDocument('transactions', transactionId),
-      });
+      }, { terminalIds });
 
       if (reconciliation.removedClosed.length > 0) {
-        console.warn(`Z_PREVIEW_MEMBERSHIP_RECONCILED count=${reconciliation.removedClosed.length}`);
+        console.warn(
+          `Z_PREVIEW_MEMBERSHIP_RECONCILED count=${reconciliation.removedClosed.length}`
+          + ` lastClosedDocument=${reconciliation.lastClosedDocumentId || 'unknown'}`
+        );
       }
       setTransactions(reconciliation.transactions);
       setViewData(undefined);

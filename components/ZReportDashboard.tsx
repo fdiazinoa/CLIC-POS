@@ -240,6 +240,12 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const filteredCollections = collections.filter(c =>
       matchesCurrentTerminal(c.terminalId) || (!c.terminalId && isDefaultTerminal)
    );
+   const consideredDocumentIds = filteredTransactions
+      .map(transaction => transaction.displayId || transaction.source_display_id || transaction.id)
+      .filter(Boolean);
+   const consideredDocumentRange = consideredDocumentIds.length > 0
+      ? `${consideredDocumentIds[0]} — ${consideredDocumentIds[consideredDocumentIds.length - 1]}`
+      : 'Sin documentos pendientes';
    const cashMovementDetails = filteredCashMovements.map(movement => ({
       id: movement.id,
       type: movement.type,
@@ -613,6 +619,10 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                            <div className="flex items-center justify-between gap-4"><span className="text-gray-600">Devoluciones</span><strong>{baseCurrency?.symbol}{stats.returnsTotal.toFixed(2)}</strong></div>
                            <div className="flex items-center justify-between gap-4 border-t border-gray-100 pt-3"><span className="font-black text-gray-800">Ventas netas</span><strong className="text-lg text-gray-900">{baseCurrency?.symbol}{stats.netSales.toFixed(2)}</strong></div>
                            <div className="flex items-center justify-between gap-4"><span className="text-gray-600">Transacciones</span><strong>{filteredTransactions.length}</strong></div>
+                           <div className="flex items-start justify-between gap-4">
+                              <span className="text-gray-600">Documentos</span>
+                              <strong className="text-right font-mono text-xs sm:text-sm">{consideredDocumentRange}</strong>
+                           </div>
                         </div>
                      </section>
 
