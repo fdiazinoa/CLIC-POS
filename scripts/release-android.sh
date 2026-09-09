@@ -187,6 +187,24 @@ verify_apk_network_policy() {
   fi
 }
 
+# Android packaging owns its output directory and may replace it without `clean`.
+# Keep versioned deliverables outside app/build and restore missing history afterward.
+sync_release_artifacts() {
+  node --input-type=module - "$1" "$2" <<'NODE'
+import fs from 'node:fs';
+import path from 'node:path';
+const [source, destination] = process.argv.slice(2);
+if (fs.existsSync(source)) {
+  fs.mkdirSync(destination, { recursive: true });
+  for (const item of fs.readdirSync(source, { withFileTypes: true })) {
+    if (!item.isFile() || !/\d+\.\d+\.\d+/.test(item.name)) continue;
+    const target = path.join(destination, item.name);
+    if (!fs.existsSync(target)) fs.copyFileSync(path.join(source, item.name), target);
+  }
+}
+NODE
+}
+
 git -C "${REPO_ROOT}" fetch origin --quiet
 
 SOURCE_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --verify "${SOURCE_REF}")" || fail "No pude resolver el ref fuente: ${SOURCE_REF}"
@@ -200,6 +218,11 @@ CANONICAL_STATUS="$(git -C "${CANONICAL_BUILD_WORKTREE}" status --porcelain)"
 if [[ -n "${CANONICAL_STATUS}" ]]; then
   fail "La worktree canónica no está limpia. Corrige eso antes de compilar."
 fi
+
+RELEASE_OUTPUT_DIR="${CANONICAL_BUILD_WORKTREE}/android/app/build/outputs/apk/release"
+RELEASE_HISTORY_DIR="${WORKSPACE_ROOT}/_releases/CLIC-POS"
+sync_release_artifacts "${RELEASE_OUTPUT_DIR}" "${RELEASE_HISTORY_DIR}"
+trap 'sync_release_artifacts "${RELEASE_HISTORY_DIR}" "${RELEASE_OUTPUT_DIR}"' EXIT
 
 KEY_PROPERTIES="${CANONICAL_BUILD_WORKTREE}/android/key.properties"
 KEYSTORE_FILE="${CANONICAL_BUILD_WORKTREE}/android/keys/clic-pos-release.keystore"
@@ -332,6 +355,7 @@ metadata=${METADATA_DEST}
 builtAt=$(date '+%Y-%m-%d %H:%M:%S %Z')
 EOF
 
+sync_release_artifacts "${DEST_DIR}" "${RELEASE_HISTORY_DIR}"
 info "APK listo"
 echo "APK=${APK_DEST}"
 echo "METADATA=${METADATA_DEST}"
