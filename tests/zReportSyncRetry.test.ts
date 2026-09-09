@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const storage = new Map<string, string>();
@@ -46,4 +47,17 @@ test('an acknowledged retry completes without allocating a replacement report', 
   } finally {
     apiSyncAdapter.pushZReport = originalPush;
   }
+});
+
+test('recent Z replay runs again after ERP configuration becomes available', () => {
+  const source = readFileSync(
+    new URL('../services/sync/BackgroundSyncManager.ts', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(source, /sync_replay_recent_z_reports_v2_/);
+  assert.match(
+    source,
+    /async sync\(\)[\s\S]*?const operationalTarget = syncPolicy\.resolve\(\)[\s\S]*?try \{[\s\S]*?await this\.recoverRecentZReportsForReplay\(\)/,
+  );
 });
