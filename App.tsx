@@ -2085,9 +2085,41 @@ const AppContent: React.FC = () => {
         return value;
       };
 
+      let asyncRequestSequence = 0;
+      const asyncMethods = new Set([
+        'startMasterServer',
+        'updateMasterServerConfig',
+        'stopMasterServer',
+        'getMasterServerStatus',
+        'getMasterRestaurantState',
+        'getMasterRestaurantRevision',
+        'acquireMasterTableLock',
+        'releaseMasterTableLock',
+      ]);
       const call = (method: string, payload?: unknown) => {
         if (!runtimeWindow.AndroidPrinter || typeof runtimeWindow.AndroidPrinter[method] !== 'function') {
           return Promise.resolve({ status: 'error', success: false, printed: false, message: `Missing native method: ${method}` });
+        }
+
+        if (asyncMethods.has(method) && typeof runtimeWindow.AndroidPrinter.callAsync === 'function') {
+          const requestID = `native-${Date.now()}-${++asyncRequestSequence}`;
+          return new Promise((resolve) => {
+            const eventName = 'clic:native-async-result';
+            let timeoutID: number | undefined;
+            const onResult = (event: Event) => {
+              const detail = (event as CustomEvent<{ requestID?: string; raw?: unknown }>).detail || {};
+              if (detail.requestID !== requestID) return;
+              window.removeEventListener(eventName, onResult);
+              if (timeoutID) window.clearTimeout(timeoutID);
+              resolve(parseResult(detail.raw));
+            };
+            window.addEventListener(eventName, onResult);
+            timeoutID = window.setTimeout(() => {
+              window.removeEventListener(eventName, onResult);
+              resolve({ status: 'error', success: false, message: `Native async call timeout: ${method}` });
+            }, 30000);
+            runtimeWindow.AndroidPrinter.callAsync(requestID, method, JSON.stringify(payload || {}));
+          });
         }
 
         const raw = runtimeWindow.AndroidPrinter[method](JSON.stringify(payload || {}));

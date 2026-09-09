@@ -142,6 +142,17 @@ test('el puente Android publica reconciliación, locks y sincronización seriali
   assert.match(appSource, /mergePendingClientTableTickets\(responseParkedTickets, pendingTableSync\)/);
 });
 
+test('las operaciones Master no bloquean CrRendererMain mediante JavascriptInterface síncrona', () => {
+  assert.match(bridgeSource, /private val asyncBridgeExecutor = Executors\.newSingleThreadExecutor\(\)/);
+  assert.match(bridgeSource, /fun callAsync\(requestID: String\?, method: String\?, payloadJson: String\?\)/);
+  assert.match(bridgeSource, /"startMasterServer" -> startMasterServer\(payloadJson\)/);
+  assert.match(bridgeSource, /"getMasterRestaurantState" -> getMasterRestaurantState\(payloadJson\)/);
+  assert.match(bridgeSource, /webViewRef\.get\(\)\?\.evaluateJavascript\(script, null\)/);
+  assert.match(appSource, /asyncMethods\.has\(method\) && typeof runtimeWindow\.AndroidPrinter\.callAsync === 'function'/);
+  assert.match(appSource, /window\.addEventListener\(eventName, onResult\)/);
+  assert.match(appSource, /runtimeWindow\.AndroidPrinter\.callAsync\(requestID, method, JSON\.stringify\(payload \|\| \{\}\)\)/);
+});
+
 test('la Master Android implementa autenticación y lectura de catálogos para clientes', () => {
   assert.match(serverSource, /method == "POST" && path == "\/api\/sync\/auth"/);
   assert.match(serverSource, /path\.startsWith\("\/api\/sync\/collections\/"\) && path\.endsWith\("\/data"\)/);
