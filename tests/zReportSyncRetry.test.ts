@@ -133,3 +133,65 @@ test('synchronization monitor loads every collection counted as blocked', () => 
   assert.match(source, /\{item\.collection\}/);
   assert.match(source, /\{item\.error\}/);
 });
+
+test('manual Z retry preserves an identity conflict without sending or rewriting it', async () => {
+  const { backgroundSyncManager } = await import('../services/sync/BackgroundSyncManager');
+  const { db } = await import('../utils/db');
+  const get = db.getDocument, save = db.saveDocument, push = apiSyncAdapter.pushZReport;
+  const report = { id: 'z-conflict', sequenceNumber: 'ZS001000010', syncStatus: 'BLOCKED_FUNCTIONAL', syncError: '409 Z_SEQUENCE_IDEMPOTENCY_CONFLICT' };
+  db.getDocument = (async () => report) as any;
+  db.saveDocument = async () => { assert.fail('must preserve the conflicting document'); };
+  apiSyncAdapter.pushZReport = async () => { assert.fail('must not resend a known conflict'); };
+  try {
+    await assert.rejects(backgroundSyncManager.retryZReport(report.id), /conciliarse/);
+  } finally {
+    db.getDocument = get; db.saveDocument = save; apiSyncAdapter.pushZReport = push;
+  }
+});
+
+test('manual retry sends only one Z and rejects concurrent sends while keeping its identity', async () => {
+  const { backgroundSyncManager } = await import('../services/sync/BackgroundSyncManager');
+  const { db } = await import('../utils/db');
+  const get = db.getDocument, all = db.get, save = db.saveDocument, push = apiSyncAdapter.pushZReport;
+  const report = { id: 'z-selected', sequenceNumber: 'ZS001000002', syncStatus: 'ERROR' };
+  let release!: () => void, started!: () => void;
+  const sent = new Promise<void>(resolve => { started = resolve; });
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  let saved: any;
+  db.getDocument = (async (_collection: string, id: string) => { assert.equal(id, report.id); return report; }) as any;
+  db.get = (async () => { assert.fail('must not scan unrelated collections'); }) as any;
+  db.saveDocument = async (collection: any, value: any) => { assert.equal(collection, 'zReports'); saved = value; };
+  apiSyncAdapter.pushZReport = async value => { assert.equal(value, report); started(); await pending; };
+  try {
+    const retry = backgroundSyncManager.retryZReport(report.id);
+    await sent;
+    await assert.rejects(backgroundSyncManager.retryZReport('another-z'), /envío en curso/);
+    release();
+    await retry;
+    assert.equal(saved.id, report.id);
+    assert.equal(saved.sequenceNumber, report.sequenceNumber);
+    assert.equal(saved.syncStatus, 'COMPLETED');
+  } finally {
+    release(); db.getDocument = get; db.get = all; db.saveDocument = save; apiSyncAdapter.pushZReport = push;
+  }
+});
+
+test('new 409 rejection stays blocked with the original Z identity', async () => {
+  const { backgroundSyncManager } = await import('../services/sync/BackgroundSyncManager');
+  const { db } = await import('../utils/db');
+  const get = db.getDocument, save = db.saveDocument, push = apiSyncAdapter.pushZReport;
+  const report = { id: 'z-rejected', sequenceNumber: 'ZS001000001', syncStatus: 'ERROR' };
+  let saved: any;
+  db.getDocument = (async () => report) as any;
+  db.saveDocument = async (_collection: any, value: any) => { saved = value; };
+  apiSyncAdapter.pushZReport = async () => { throw new Error('409 Z_SEQUENCE_IDEMPOTENCY_CONFLICT'); };
+  try {
+    await assert.rejects(backgroundSyncManager.retryZReport(report.id), /409/);
+    assert.equal(saved.syncStatus, 'BLOCKED_FUNCTIONAL');
+    assert.equal(saved.sequenceNumber, report.sequenceNumber);
+    assert.equal(saved.id, report.id);
+    assert.match(saved.syncError, /Z_SEQUENCE_IDEMPOTENCY_CONFLICT/);
+  } finally {
+    db.getDocument = get; db.saveDocument = save; apiSyncAdapter.pushZReport = push;
+  }
+});
