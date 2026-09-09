@@ -15,9 +15,12 @@ import org.json.JSONObject;
 /** Only available in an explicitly built diagnostic APK and explicitly enabled launch. */
 public final class PosNativeDiagnostics {
     private final boolean active;
+    private Handler eventWriter;
+    private final java.util.concurrent.atomic.AtomicInteger pendingBytes = new java.util.concurrent.atomic.AtomicInteger();
     public PosNativeDiagnostics(Activity activity) {
         active=BuildConfig.POS_DIAGNOSTICS && activity.getIntent().getBooleanExtra("pos_diagnostics",false);
         if(!active)return;
+        HandlerThread eventThread=new HandlerThread("PosDiagnosticLogWriter");eventThread.start();eventWriter=new Handler(eventThread.getLooper());
         try {Class.forName("com.getcapacitor.PosDiagnosticHooks").getField("enabled").setBoolean(null,true);}catch(Exception e){Log.e("POS_DIAG_NATIVE","nativeHooksUnavailable");}
         if(Build.VERSION.SDK_INT>=24){
             HandlerThread worker=new HandlerThread("PosDiagnosticFrames");worker.start();
@@ -36,6 +39,10 @@ public final class PosNativeDiagnostics {
     }
     @JavascriptInterface public void events(String json){
         if(!active||json.length()>2000000)return;
-        try{JSONArray batch=new JSONArray(json);for(int i=0;i<batch.length();i++)Log.i("POS_DIAG_JS",batch.getJSONObject(i).toString());}catch(Exception ignored){}
+        int bytes=json.length();
+        if(pendingBytes.addAndGet(bytes)>4000000){pendingBytes.addAndGet(-bytes);Log.w("POS_DIAG_NATIVE","{\"name\":\"DIAGNOSTIC_LOG_DROP\"}");return;}
+        eventWriter.post(()->{
+            try{JSONArray batch=new JSONArray(json);for(int i=0;i<batch.length();i++)Log.i("POS_DIAG_JS",batch.getJSONObject(i).toString());}catch(Exception ignored){}finally{pendingBytes.addAndGet(-bytes);}
+        });
     }
 }
