@@ -14,12 +14,14 @@ import org.json.JSONObject;
 
 /** Only available in an explicitly built diagnostic APK and explicitly enabled launch. */
 public final class PosNativeDiagnostics {
+    public static volatile PosNativeDiagnostics current;
     private final boolean active;
     private Handler eventWriter;
     private final java.util.concurrent.atomic.AtomicInteger pendingBytes = new java.util.concurrent.atomic.AtomicInteger();
     public PosNativeDiagnostics(Activity activity) {
         active=BuildConfig.POS_DIAGNOSTICS && activity.getIntent().getBooleanExtra("pos_diagnostics",false);
         if(!active)return;
+        current=this;
         HandlerThread eventThread=new HandlerThread("PosDiagnosticLogWriter");eventThread.start();eventWriter=new Handler(eventThread.getLooper());
         try {Class.forName("com.getcapacitor.PosDiagnosticHooks").getField("enabled").setBoolean(null,true);}catch(Exception e){Log.e("POS_DIAG_NATIVE","nativeHooksUnavailable");}
         if(Build.VERSION.SDK_INT>=24){

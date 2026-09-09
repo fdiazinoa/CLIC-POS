@@ -32,10 +32,10 @@ public final class PosDiagnosticHooks {
             Log.i("POS_DIAG_NATIVE",j.toString());
         }catch(Exception ignored){} finally { Trace.endSection(); }
     }
-    public static void enqueue(String plugin,String method,PluginCall call){if(!enabled)return;queued.put(call.getCallbackId(),SystemClock.elapsedRealtimeNanos());PluginCall prior=active.get();active.set(call);event(id(),"BRIDGE_ENQUEUE",plugin+"."+method,bridgeId(),0,-1,null);active.set(prior);}
-    public static void enter(String plugin,String method,PluginCall call){if(!enabled)return;active.set(call);Long q=queued.remove(call.getCallbackId());event(id(),"PLUGIN_START",plugin+"."+method,bridgeId(),q==null?0:q,-1,null);Trace.beginSection((id()+"|PLUGIN|"+plugin+"."+method).substring(0,Math.min(120,(id()+"|PLUGIN|"+plugin+"."+method).length())));}
-    public static void leave(String plugin,String method,PluginCall call){if(!enabled)return;event(id(),"PLUGIN_RETURN",plugin+"."+method,bridgeId(),0,-1,null);Trace.endSection();active.remove();}
-    public static void response(PluginCall call){if(!enabled)return;event(call.getString("_posTraceId","UNATTRIBUTED"),"PLUGIN_RESPONSE",call.getMethodName(),call.getString("_posSpanId",""),0,-1,null);}
+    public static void enqueue(String plugin,String method,PluginCall call){if(!enabled||plugin.equals("PosDiagnosticSink"))return;queued.put(call.getCallbackId(),SystemClock.elapsedRealtimeNanos());PluginCall prior=active.get();active.set(call);event(id(),"BRIDGE_ENQUEUE",plugin+"."+method,bridgeId(),0,-1,null);active.set(prior);}
+    public static void enter(String plugin,String method,PluginCall call){if(!enabled||plugin.equals("PosDiagnosticSink"))return;active.set(call);Long q=queued.remove(call.getCallbackId());event(id(),"PLUGIN_START",plugin+"."+method,bridgeId(),q==null?0:q,-1,null);Trace.beginSection((id()+"|PLUGIN|"+plugin+"."+method).substring(0,Math.min(120,(id()+"|PLUGIN|"+plugin+"."+method).length())));}
+    public static void leave(String plugin,String method,PluginCall call){if(!enabled||plugin.equals("PosDiagnosticSink"))return;event(id(),"PLUGIN_RETURN",plugin+"."+method,bridgeId(),0,-1,null);Trace.endSection();active.remove();}
+    public static void response(PluginCall call){if(!enabled||call.getPluginId().equals("PosDiagnosticSink"))return;event(call.getString("_posTraceId","UNATTRIBUTED"),"PLUGIN_RESPONSE",call.getMethodName(),call.getString("_posSpanId",""),0,-1,null);}
     public static String sqlName(String sql){
         if(sql==null)return "unknown";
         // SQL templates only: redact quoted literals, comments, and numbers. Never bindings.

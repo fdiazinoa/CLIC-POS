@@ -42,6 +42,7 @@ public class MainActivity extends BridgeActivity {
         Log.i(TAG, "Launch context activityRecreated=" + activityRecreated
                 + " savedState=" + (savedInstanceState != null)
                 + " launchedFromHistory=" + launchedFromHistory);
+        if (BuildConfig.POS_DIAGNOSTICS) registerPlugin(PosDiagnosticSink.class);
         super.onCreate(savedInstanceState);
         enforcePosWindowPolicy();
 

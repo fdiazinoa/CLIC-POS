@@ -23,7 +23,7 @@ test('diagnostic build preserves async context across overlapping operations, re
  globalThis.requestAnimationFrame=(fn)=>{frames.push(fn);return 0;};
  globalThis.setInterval=(fn)=>{flush=fn;return 0;};
  globalThis.POSDiagnostics={enabled:()=>true,clock:()=>String(performance.now()*1e6),section(){},events(s){batches.push(...JSON.parse(s));}};
- globalThis.Capacitor={nativePromise:(p,m,o)=>{bridge.push({p,m,o});return Promise.resolve({values:[1,2]});}};
+ globalThis.Capacitor={PluginHeaders:[{name:'PosDiagnosticSink',methods:[{name:'send',rtype:'promise'}]}],nativePromise:(p,m,o)=>{if(p==='PosDiagnosticSink'){batches.push(...JSON.parse(o.payload));return Promise.resolve({});}bridge.push({p,m,o});return Promise.resolve({values:[1,2]});},isNativePlatform:()=>true,getPlatform:()=> 'android'};
  await installDiagnostics();
  const delay=ms=>new Promise(r=>setTimeout(r,ms));
  const values=await Promise.all([
@@ -36,7 +36,7 @@ test('diagnostic build preserves async context across overlapping operations, re
  const background=diagRun('visible-before-network',async()=>{diagSet('setVisible',()=>{},true);globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__.onCommitFiberRoot(1,{current:{flags:1,type:function SmallComponent(){},memoizedProps:{},actualDuration:1}});await delay(60);});
  for(let i=0;i<2;i++)for(const fn of frames.splice(0))fn(performance.now());
  await background;
- flush();assert.equal(batches.filter(e=>e.name==='ACTION_START').length,5);assert.equal(batches.filter(e=>e.name==='ACTION_END').length,5);
+ flush();await delay(1);assert.equal(batches.filter(e=>e.name==='ACTION_START').length,5);assert.equal(batches.filter(e=>e.name==='ACTION_END').length,5);
  const visible=batches.find(e=>e.traceId==='POS-000005'&&e.name==='FIRST_RENDER');const done=batches.find(e=>e.traceId==='POS-000005'&&e.name==='ACTION_END');assert.ok(visible.ts<done.ts-30);
  const unlock=batches.find(e=>e.traceId==='POS-000005'&&e.name==='LOCAL_UNLOCK');assert.ok(unlock.ts<done.ts-30);
  assert.equal(batches.filter(e=>e.name==='CAPACITOR_CALL_END').length,2);

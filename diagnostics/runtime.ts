@@ -107,6 +107,7 @@ function installBridge() {
   const cap=(globalThis as any).Capacitor;if(!cap?.nativePromise){emit(undefined,'CAPABILITY',{bridge:false});return;}
   const promise=cap.nativePromise.bind(cap);
   cap.nativePromise=(plugin:string,method:string,options:any)=>{
+    if(plugin==='PosDiagnosticSink')return promise(plugin,method,options);
     const t=current();const sid=++spanSeq;
     emit(t,'CAPACITOR_CALL_START',{plugin,operation:method,spanId:sid});
     // Additional option keys are consumed by diagnostic hooks only, never SQL or HTTP data.
@@ -143,7 +144,10 @@ export async function installDiagnostics() {
   const jsBefore=now(),boot=native().clock(),jsAfter=now();
   emit(undefined,'CLOCK_SYNC',{bootNs:boot,jsBefore,jsAfter,uncertaintyMs:jsAfter-jsBefore});
   for(const type of ['click','input','change','keydown']) document.addEventListener(type,e=>{input={at:e.timeStamp,target:e.target as HTMLElement,type:e.type};},{capture:true,passive:true});
-  installReactHook();installBridge();installNetwork();
+  installReactHook();
+  const {registerPlugin}=await import('@capacitor/core');
+  const sink=registerPlugin<{send(options:{payload:string}):Promise<void>}>('PosDiagnosticSink');
+  installBridge();installNetwork();
   for(const type of ['longtask','event','long-animation-frame']) {
     if(!PerformanceObserver.supportedEntryTypes.includes(type)) {emit(undefined,'CAPABILITY',{type,supported:false});continue;}
     new PerformanceObserver(list=>{for(const e of list.getEntries())emit(undefined,type.toUpperCase(),{duration:e.duration,entryName:safeName(e.name),...('processingStart' in e?{processingStart:(e as any).processingStart,processingEnd:(e as any).processingEnd,interactionId:(e as any).interactionId}:{}),scripts:(e as any).scripts?.map((s:any)=>({duration:s.duration,sourceFunctionName:safeName(s.sourceFunctionName),sourceCharPosition:s.sourceCharPosition}))},e.startTime);}).observe({type,buffered:true,...(type==='event'?{durationThreshold:16}:{})});
@@ -152,7 +156,9 @@ export async function installDiagnostics() {
   setInterval(()=>{
     if(!pending.length)return;
     const batch=pending.splice(0,500),flushStart=now(),eventOverheadMs=observerMs;observerMs=0;
-    native().events(JSON.stringify(batch));performance.clearMarks();
+    const encoded=JSON.stringify(batch);
+    void sink.send({payload:encoded}).catch(()=>{dropped+=batch.length;});
+    performance.clearMarks();
     emit(undefined,'DIAGNOSTIC_FLUSH',{duration:now()-flushStart,eventOverheadMs,dropped});
   },200);
   (globalThis as any).__POS_DIAGNOSTICS__={status:()=>({session,operations:seq,dropped,pending:pending.length}),mark:(name:string)=>emit(current(),safeName(name))};
