@@ -37,7 +37,6 @@ import {
     buildTerminalSyncAuthHeaders,
     clearStoredSyncToken,
     readTerminalCredentialsSync,
-    resolvePersistedTerminalSyncToken,
     saveTerminalCredentialsSync,
 } from './TerminalCredentialStore';
 import { extractErpRegisterAuth } from './erpRegisterResponse';
@@ -704,7 +703,18 @@ class ApiSyncAdapter {
         const bodySize = this.getBodySize(options.body);
         const capacitorPlatform = this.resolveCapacitorPlatform();
         const syncProfile = loadSyncProfile();
-        const tokenDiagnostic = this.resolveStoredErpSyncTokenDiagnostic();
+        // The request already carries the effective token. Reading the complete
+        // terminal credential store here was diagnostic-only work and forced a
+        // synchronous localStorage scan for every background request.
+        const tokenDiagnostic = {
+            length: headersSummary.tokenLength || 0,
+            source: headersSummary.xSyncToken
+                ? 'REQUEST_X_SYNC_TOKEN'
+                : headersSummary.authorization
+                    ? 'REQUEST_AUTHORIZATION'
+                    : null,
+            updatedAt: null,
+        };
         const fetchContext = {
             method,
             url,
@@ -1225,7 +1235,7 @@ class ApiSyncAdapter {
 
     private resolveStoredErpSyncTokenDiagnostic(): { token: string | null; source: string | null; updatedAt: string | null; length: number } {
         const storedCredentials = readTerminalCredentialsSync();
-        const credentialToken = sanitizeSyncToken(resolvePersistedTerminalSyncToken());
+        const credentialToken = sanitizeSyncToken(storedCredentials.syncToken || null);
         if (credentialToken) {
             return {
                 token: credentialToken,
