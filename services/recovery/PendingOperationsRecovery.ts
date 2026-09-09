@@ -611,25 +611,63 @@ export class PendingOperationsRecovery {
     const descriptor = await this.preflightRetainedSet();
     await applyRetainedEpoch(this.db, ctx, state, ack, descriptor);
   }
+  private async canBootstrapRetainedSet(ctx: {
+    key: string;
+    terminalIds: string[];
+  }): Promise<boolean> {
+    const local = new Set<string>();
+    for (const [collection, kind] of Object.entries(CAPTURE_COLLECTIONS)) {
+      for (const document of await this.db.getCollection<any>(collection)) {
+        if (document?.id) local.add(JSON.stringify([kind, document.id]));
+      }
+    }
+    // A new or fully erased database must recover the remote checkpoint first.
+    if (!local.size) return false;
+
+    // Before publishing the first checkpoint, prove that every original already
+    // retained remotely still belongs to the complete local set. This prevents a
+    // partially rebuilt database from replacing an older retained manifest.
+    const snapshot = await this.download(true);
+    const staged = (await this.db.getCollection<any>(RECOVERY_STAGE)).filter(
+      (row) => row.snapshotId === snapshot.snapshotId,
+    );
+    if (staged.some((row) => row.record?.kind === "MEMBERSHIP")) return false;
+    return staged.every((row) =>
+      local.has(JSON.stringify([row.record?.kind, row.record?.originalId])),
+    );
+  }
   /** Background-only: bounded upload, then seal only a locally established epoch. */
   async updateRetainedBackup(): Promise<void> {
     if (this.running) return;
     await this.ensureRetainedContinuity();
     const ctx = await this.transport.context();
     if (!ctx.enabled) return;
-    const capture = await this.db.getDocument<any>(RECOVERY_STATE, "capture");
+    let capture = await this.db.getDocument<any>(RECOVERY_STATE, "capture");
     const previous = await this.db.getDocument<any>(
       RECOVERY_STATE,
       "retainedSet",
     );
-    // A new/lost database cannot publish an empty replacement for the remote set.
-    // First activation and epoch continuation require their explicit bootstrap validation.
     if (
-      !capture ||
-      previous?.context !== ctx.key ||
-      previous.storageEpoch !== capture.storageEpoch
+      previous &&
+      (!capture ||
+        previous.context !== ctx.key ||
+        previous.storageEpoch !== capture.storageEpoch)
     )
       return;
+
+    if (!previous) {
+      // Drain ordinary captures first. Their ACKs are the only references that
+      // may enter the initial manifest; commercial APPLIED state is not inferred.
+      await this.sendPending();
+      if (
+        (await this.db.getCollection<any>(RECOVERY_OUTBOX)).some(
+          (row) => row.status === "PENDING",
+        )
+      )
+        return;
+      capture = await this.db.getDocument<any>(RECOVERY_STATE, "capture");
+      if (!capture || !(await this.canBootstrapRetainedSet(ctx))) return;
+    }
     await this.sendPending();
     if (
       (await this.db.getCollection<any>(RECOVERY_OUTBOX)).some(
