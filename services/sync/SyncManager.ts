@@ -7061,7 +7061,9 @@ class SyncManager {
             console.log('📤 SyncManager: Pushed Z-Report to Server');
         } catch (error) {
             console.error('❌ SyncManager: Failed to push Z-Report:', error);
-            // We don't throw here to avoid blocking the UI, as it's already saved locally
+            // The report is already durable locally, but callers must know that the
+            // transport failed so they can preserve a retryable status and the error.
+            throw error;
         }
     }
 
