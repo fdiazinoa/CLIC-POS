@@ -30,12 +30,12 @@ else:
  s=json.loads(state.read_text());assert s['serial']==a.serial
  try:run('shell','kill','-TERM',s['pid'])
  except subprocess.CalledProcessError:pass # bounded Perfetto session may already have ended
- if s.get('systemAtrace'):
-  with (out/'system.ctrace').open('wb') as f:subprocess.run(base+['shell','atrace','--async_stop','-z','-b','65536','-a','com.clicpos.app','sched','gfx','view','webview','dalvik','database','binder_driver','input','am','wm'],stdout=f,check=True,timeout=30)
  try:
   command=subprocess.check_output(['ps','-p',str(s['logPid']),'-o','command='],text=True)
   if str(adb) in command and a.serial in command:os.kill(s['logPid'],signal.SIGTERM)
  except (subprocess.CalledProcessError,ProcessLookupError):pass
+ if s.get('systemAtrace'):
+  with (out/'system.ctrace').open('wb') as f:subprocess.run(base+['shell','atrace','--async_stop','-z','-b','65536','-a','com.clicpos.app','sched','gfx','view','webview','dalvik','database','binder_driver','input','am','wm'],stdout=f,check=True,timeout=30)
  time.sleep(2)
  run('pull',s['remoteTrace'],str(out/'session.pftrace'))
  print(out/'session.pftrace')
