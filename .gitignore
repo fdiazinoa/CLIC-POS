@@ -39,3 +39,8 @@ debug*.ts
 debug*.log
 debug*.txt
 debug*.cjs
+
+# Temporary native instrumentation evidence (copied into diagnostic release)
+diagnostic-native-patches.json
+
+scripts/diagnostics/__pycache__/
