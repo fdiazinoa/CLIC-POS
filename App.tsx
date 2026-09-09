@@ -1,4 +1,3 @@
-import { discoverPendingOperationsRecovery } from "./services/recovery/recoveryService";
 import RecoveryCloseDialog from './components/RecoveryCloseDialog';
 import AutomaticRecoveryDialog from './components/AutomaticRecoveryDialog';
 import type { RecoveryCloseInput } from './services/recovery/RecoveryCloseController';
@@ -107,7 +106,6 @@ import { calculateTransactionFiscalSummary } from './utils/fiscalBreakdown';
 import { extractTerminalOperationalDocumentState } from './utils/terminalConfigSnapshot';
 import { mergeDocumentSeriesCollection, resolveDocumentAssignmentId } from './utils/documentSeriesIdentity';
 import { requireErpZSequenceAuthority, resolveZSequenceContinuity } from './services/zreports/ZReportSequenceContinuity';
-import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
 import { ThermalPrinterService } from './services/printer/ThermalPrinterService';
 import { resolveDeviceRoleValue } from './utils/deviceRoleHelpers';
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from './utils/posSaleActivity';
@@ -1971,18 +1969,6 @@ const AppContent: React.FC = () => {
   const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [licenseError, setLicenseError] = useState<string | null>(null);
-  const [, refreshRecoveryAvailability] = useState(0);
-  useEffect(() => {
-    if (!isDataLoaded || !isSecurityLoaded) return;
-    let active = true;
-    const discover = () => { void discoverPendingOperationsRecovery().then(() => {
-      if (active) refreshRecoveryAvailability(value => value + 1);
-    }).catch(() => { /* Keep validated offline availability; retry on reconnection. */ }); };
-    discover();
-    window.addEventListener('online', discover);
-    return () => { active = false; window.removeEventListener('online', discover); };
-  }, [isDataLoaded, isSecurityLoaded]);
-
   const [terminalAuthorizationBlock, setTerminalAuthorizationBlock] = useState<TerminalAuthorizationBlock | null>(
     () => readPersistedTerminalAuthorizationBlock(),
   );
@@ -5967,11 +5953,6 @@ const AppContent: React.FC = () => {
             console.warn(`[POS-2A] Flagged ${recoveredPaymentIntents} interrupted payment intent(s) for reconciliation.`);
           }
         }
-
-        // RECOVERY: Run in background so startup never blocks on heavy history stores.
-        void ZReportRecoveryService
-          .recoverOrphanedReports({ notifyUser: false })
-          .catch((recoveryError) => console.warn('⚠️ Startup Z-report recovery skipped:', recoveryError));
 
         let currentConfig = data.config;
         const normalizedBootConfig = normalizeTerminalDocumentAssignments(currentConfig);
