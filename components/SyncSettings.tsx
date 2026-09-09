@@ -32,6 +32,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'ERROR'>('ALL');
     const [terminalFilter, setTerminalFilter] = useState('ALL');
     const [auditData, setAuditData] = useState<any[]>([]);
+    const [auditLoadError, setAuditLoadError] = useState<string | null>(null);
+    const [isLoadingAudit, setIsLoadingAudit] = useState(true);
     const [selectedJson, setSelectedJson] = useState<any>(null);
     const [isRefreshingAudit, setIsRefreshingAudit] = useState(false);
     const [erpForwardStatus, setErpForwardStatus] = useState<any>(null);
@@ -133,103 +135,11 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         ).trim();
     };
 
-    const loadStatus = async () => {
+    const loadAuditData = async () => {
+        if (activeTab !== 'MONITOR') return;
+        setIsLoadingAudit(true);
+        setAuditLoadError(null);
         try {
-            const statuses = await syncManager.getSyncStatus();
-            setStatus(statuses);
-            setIsMaster(permissionService.isMasterTerminal());
-            const profile = loadSyncProfile();
-            const target = resolveSyncTarget(profile);
-            setSyncProfile(profile);
-            setSyncTarget(target);
-            const persistedValue = await db.get('config');
-            const persistedConfig = persistedValue && !Array.isArray(persistedValue)
-                ? persistedValue as unknown as BusinessConfig
-                : null;
-            const effectiveConfig = persistedConfig || config;
-            const enabledCurrencies = (effectiveConfig.currencies || [])
-                .filter((currency) => currency.isEnabled)
-                .map((currency) => currency.code);
-            const baseCurrency = (effectiveConfig.currencies || [])
-                .find((currency) => currency.isBase)?.code
-                || enabledCurrencies[0]
-                || 'DOP';
-            const configPushState = getConfigPushV2Diagnostics();
-            setConfigPushDiagnostics({
-                baseCurrency,
-                enabledCurrencies,
-                versionHash: configPushState.versionHash,
-                configVersion: Number(configPushState.domainVersions.config || 0),
-                appliedAt: configPushState.appliedAt,
-            });
-
-            // Get connection status
-            const connStatus = syncManager.getSyncConnectionStatus();
-            setConnectionStatus(connStatus);
-
-            // Load connected terminals if Master
-            let opStatus: any = null;
-            if (permissionService.isMasterTerminal()) {
-                const terminals = await syncManager.getConnectedTerminals();
-                opStatus = await syncManager.getOperationalStatus();
-                setErpForwardStatus(opStatus?.erpForward || null);
-
-                const allTerminalIds = new Set([
-                    ...terminals.map(t => t.terminalId),
-                    ...(opStatus?.terminals?.map((t: any) => t.terminalId) || [])
-                ]);
-                const [
-                    products,
-                    customers,
-                    suppliers,
-                    users,
-                    warehouses,
-                    paymentMethods,
-                    internalSequences,
-                    productStocks
-                ] = await Promise.all([
-                    db.get('products'),
-                    db.get('customers'),
-                    db.get('suppliers'),
-                    db.get('users'),
-                    db.get('warehouses'),
-                    db.get('paymentMethods'),
-                    db.get('internalSequences'),
-                    db.get('productStocks')
-                ]);
-                setDiagnosticCounts({
-                    products: Array.isArray(products) ? products.length : 0,
-                    customers: Array.isArray(customers) ? customers.length : 0,
-                    suppliers: Array.isArray(suppliers) ? suppliers.length : 0,
-                    users: Array.isArray(users) ? users.length : 0,
-                    warehouses: Array.isArray(warehouses) ? warehouses.length : 0,
-                    paymentMethods: Array.isArray(paymentMethods) ? paymentMethods.length : 0,
-                    internalSequences: Array.isArray(internalSequences) ? internalSequences.length : 0,
-                    productStocks: Array.isArray(productStocks) ? productStocks.length : 0,
-                });
-
-                const mergedTerminals = Array.from(allTerminalIds)
-                    .filter(tid => /^t\d+$/i.test(tid)) // Only show "real" terminals (t1, t2, t3...)
-                    .map(tid => {
-                        const connectedInfo = terminals.find(t => t.terminalId === tid);
-                        const opInfo = opStatus?.terminals?.find((t: any) => t.terminalId === tid);
-                        const isLocal = tid === permissionService.getTerminalId();
-
-                        return {
-                            terminalId: tid,
-                            ip: isLocal ? 'Localhost' : (connectedInfo?.ip || '-'),
-                            lastSeen: isLocal ? new Date().toISOString() : (connectedInfo?.lastSeen || null),
-                            ...(connectedInfo || {}),
-                            ...(opInfo || {}),
-                            status: isLocal ? 'MASTER' : (connectedInfo?.status || 'OFFLINE')
-                        };
-                    });
-
-                setConnectedTerminals(mergedTerminals);
-            } else {
-                setErpForwardStatus(null);
-            }
-
             // Load Audit Data for Data Monitor
             if (activeTab === 'MONITOR') {
                 const [
@@ -393,6 +303,113 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
 
                 setAuditData(combined);
             }
+        } catch (error) {
+            console.error('Error loading local sync documents:', error);
+            setAuditLoadError('No se pudieron cargar los documentos locales. Pulsa Refrescar lista para reintentar.');
+        } finally {
+            setIsLoadingAudit(false);
+        }
+    };
+
+    const loadStatus = async () => {
+        // Local documents must remain available when remote diagnostics fail or stall.
+        await loadAuditData();
+        try {
+            const statuses = await syncManager.getSyncStatus();
+            setStatus(statuses);
+            setIsMaster(permissionService.isMasterTerminal());
+            const profile = loadSyncProfile();
+            const target = resolveSyncTarget(profile);
+            setSyncProfile(profile);
+            setSyncTarget(target);
+            const persistedValue = await db.get('config');
+            const persistedConfig = persistedValue && !Array.isArray(persistedValue)
+                ? persistedValue as unknown as BusinessConfig
+                : null;
+            const effectiveConfig = persistedConfig || config;
+            const enabledCurrencies = (effectiveConfig.currencies || [])
+                .filter((currency) => currency.isEnabled)
+                .map((currency) => currency.code);
+            const baseCurrency = (effectiveConfig.currencies || [])
+                .find((currency) => currency.isBase)?.code
+                || enabledCurrencies[0]
+                || 'DOP';
+            const configPushState = getConfigPushV2Diagnostics();
+            setConfigPushDiagnostics({
+                baseCurrency,
+                enabledCurrencies,
+                versionHash: configPushState.versionHash,
+                configVersion: Number(configPushState.domainVersions.config || 0),
+                appliedAt: configPushState.appliedAt,
+            });
+
+            // Get connection status
+            const connStatus = syncManager.getSyncConnectionStatus();
+            setConnectionStatus(connStatus);
+
+            // Load connected terminals if Master
+            let opStatus: any = null;
+            if (permissionService.isMasterTerminal()) {
+                const terminals = await syncManager.getConnectedTerminals();
+                opStatus = await syncManager.getOperationalStatus();
+                setErpForwardStatus(opStatus?.erpForward || null);
+
+                const allTerminalIds = new Set([
+                    ...terminals.map(t => t.terminalId),
+                    ...(opStatus?.terminals?.map((t: any) => t.terminalId) || [])
+                ]);
+                const [
+                    products,
+                    customers,
+                    suppliers,
+                    users,
+                    warehouses,
+                    paymentMethods,
+                    internalSequences,
+                    productStocks
+                ] = await Promise.all([
+                    db.get('products'),
+                    db.get('customers'),
+                    db.get('suppliers'),
+                    db.get('users'),
+                    db.get('warehouses'),
+                    db.get('paymentMethods'),
+                    db.get('internalSequences'),
+                    db.get('productStocks')
+                ]);
+                setDiagnosticCounts({
+                    products: Array.isArray(products) ? products.length : 0,
+                    customers: Array.isArray(customers) ? customers.length : 0,
+                    suppliers: Array.isArray(suppliers) ? suppliers.length : 0,
+                    users: Array.isArray(users) ? users.length : 0,
+                    warehouses: Array.isArray(warehouses) ? warehouses.length : 0,
+                    paymentMethods: Array.isArray(paymentMethods) ? paymentMethods.length : 0,
+                    internalSequences: Array.isArray(internalSequences) ? internalSequences.length : 0,
+                    productStocks: Array.isArray(productStocks) ? productStocks.length : 0,
+                });
+
+                const mergedTerminals = Array.from(allTerminalIds)
+                    .filter(tid => /^t\d+$/i.test(tid)) // Only show "real" terminals (t1, t2, t3...)
+                    .map(tid => {
+                        const connectedInfo = terminals.find(t => t.terminalId === tid);
+                        const opInfo = opStatus?.terminals?.find((t: any) => t.terminalId === tid);
+                        const isLocal = tid === permissionService.getTerminalId();
+
+                        return {
+                            terminalId: tid,
+                            ip: isLocal ? 'Localhost' : (connectedInfo?.ip || '-'),
+                            lastSeen: isLocal ? new Date().toISOString() : (connectedInfo?.lastSeen || null),
+                            ...(connectedInfo || {}),
+                            ...(opInfo || {}),
+                            status: isLocal ? 'MASTER' : (connectedInfo?.status || 'OFFLINE')
+                        };
+                    });
+
+                setConnectedTerminals(mergedTerminals);
+            } else {
+                setErpForwardStatus(null);
+            }
+
         } catch (error) {
             console.error('Error loading sync status:', error);
         }
@@ -656,7 +673,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const handleRefreshAudit = async () => {
         setIsRefreshingAudit(true);
         try {
-            await loadStatus();
+            await loadAuditData();
         } finally {
             setIsRefreshingAudit(false);
         }
@@ -1217,6 +1234,12 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                     </button>
                                 </div>
 
+                                {auditLoadError && (
+                                    <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700">
+                                        {auditLoadError}
+                                    </p>
+                                )}
+
                                 {/* Audit Table */}
                                 <div className="audit-table-container overflow-auto rounded-2xl border border-gray-100 bg-white shadow-sm max-h-[600px]">
                                     <table className="w-full border-collapse">
@@ -1346,7 +1369,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                             {filteredAuditData.length === 0 && (
                                                 <tr>
                                                     <td colSpan={6} className="py-12 text-center text-gray-400 italic">
-                                                        No se encontraron documentos procesados.
+                                                        {isLoadingAudit ? 'Cargando documentos locales...' : auditLoadError ? 'Lista de documentos no disponible.' : 'No se encontraron documentos procesados.'}
                                                     </td>
                                                 </tr>
                                             )}
