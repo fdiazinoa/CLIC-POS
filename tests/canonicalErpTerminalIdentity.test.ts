@@ -92,6 +92,28 @@ test('migración histórica POS-001 conserva datos y exige pairing sin fabricar 
   assert.equal(storage.getItem('documents'), JSON.stringify([{ id: 'doc-1' }]));
 });
 
+test('la lectura sincrónica de identidad separa el snapshot de configuración pesado', () => {
+  const storage = new MemoryStorage();
+  const configSnapshot = {
+    terminals: [{ id: ERP_UUID }],
+    products: Array.from({ length: 500 }, (_, index) => ({ id: `product-${index}` })),
+  };
+  storage.setItem('clic_terminal_credentials_v1', JSON.stringify({
+    erpTerminalId: ERP_UUID,
+    deviceId: 'DEV-R9CUIS87',
+    configSnapshot,
+  }));
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+
+  const credentials = readTerminalCredentialsSync();
+  const persistedIdentity = JSON.parse(storage.getItem('clic_terminal_credentials_v1') || '{}');
+
+  assert.equal(credentials.erpTerminalId, ERP_UUID);
+  assert.equal(credentials.configSnapshot, undefined);
+  assert.equal(persistedIdentity.configSnapshot, undefined);
+  assert.deepEqual(JSON.parse(storage.getItem('initial_terminal_config') || '{}'), configSnapshot);
+});
+
 test('reinicio conserva un UUID ERP persistido y no lo reconstruye desde estación', () => {
   const first = normalizeTerminalCredentialsIdentity({
     terminalId: ERP_UUID,
