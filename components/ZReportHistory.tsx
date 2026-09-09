@@ -7,7 +7,6 @@ import {
 import { ZReport, BusinessConfig, User, RoleDefinition, Transaction } from '../types';
 import { db } from '../utils/db';
 import { ThermalPrinterService } from '../services/printer/ThermalPrinterService';
-import { ZReportRecoveryService } from '../services/recovery/ZReportRecoveryService';
 import { sendZReportEmailViaErp } from '../services/email/zReportEmailService';
 import { syncManager } from '../services/sync/SyncManager';
 import { ALL_CLOSE_REPORT_SECTIONS, buildCloseReportDetails, resolveCloseReportSections } from '../utils/closeReportOptions';
@@ -66,25 +65,6 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
                     setReports(sortReportsByDate(data || []));
                 }
 
-                // Recovery runs in background so UI never stays blocked in spinner.
-                // It also restores missing single reports (not only empty-history scenarios).
-                void (async () => {
-                    try {
-                        const recoveredCount = await ZReportRecoveryService.recoverOrphanedReports({
-                            notifyUser: false,
-                            runOncePerSession: true,
-                            enrichHistory: false
-                        });
-                        if (recoveredCount > 0) {
-                            const recovered = await withTimeout(db.get('zReports') as Promise<ZReport[]>, 4000, 'RELOAD_Z_REPORTS');
-                            if (!cancelled) {
-                                setReports(sortReportsByDate(recovered || []));
-                            }
-                        }
-                    } catch (recoveryError) {
-                        console.warn('⚠️ ZReportHistory: recovery failed', recoveryError);
-                    }
-                })();
             } catch (error) {
                 console.error("Error loading Z-Reports:", error);
             } finally {

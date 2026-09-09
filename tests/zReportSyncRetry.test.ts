@@ -59,6 +59,25 @@ test('background sync never requeues historical Z reports automatically', () => 
   assert.doesNotMatch(source, /sync_replay_recent_z_reports_v2_/);
 });
 
+test('production startup does not run bulk transaction or retained recovery', () => {
+  const backgroundSource = readFileSync(
+    new URL('../services/sync/BackgroundSyncManager.ts', import.meta.url),
+    'utf8',
+  );
+  const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  const historySource = readFileSync(
+    new URL('../components/ZReportHistory.tsx', import.meta.url),
+    'utf8',
+  );
+
+  assert.doesNotMatch(backgroundSource, /recoverCompletedTransactionsForReplay/);
+  assert.doesNotMatch(backgroundSource, /discoverPendingOperationsRecovery/);
+  assert.doesNotMatch(backgroundSource, /pendingOperationsRecovery\.(sendPending|updateRetainedBackup)/);
+  assert.doesNotMatch(appSource, /discoverPendingOperationsRecovery/);
+  assert.doesNotMatch(appSource, /ZReportRecoveryService\.recoverOrphanedReports/);
+  assert.doesNotMatch(historySource, /ZReportRecoveryService\.recoverOrphanedReports/);
+});
+
 test('Z history keeps an idempotent resend action for reports previously marked applied', () => {
   const source = readFileSync(
     new URL('../components/ZReportHistory.tsx', import.meta.url),

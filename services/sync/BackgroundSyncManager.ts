@@ -1,4 +1,3 @@
-import { pendingOperationsRecovery, discoverPendingOperationsRecovery } from '../recovery/recoveryService';
 import { isRecoveredOperation } from '../recovery/PendingOperationsRecovery';
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
@@ -73,7 +72,6 @@ class BackgroundSyncManager {
 
         // Recover interrupted sync states from previous crashes/reloads.
         await this.recoverStuckSyncItems();
-        await this.recoverCompletedTransactionsForReplay();
         await transferReceiptService.recoverInterrupted();
 
         // Initial count of pending items
@@ -331,10 +329,6 @@ class BackgroundSyncManager {
         let pausedForSaleActivity = false;
 
         try {
-            await discoverPendingOperationsRecovery().catch(error => collectionErrors.push(`recoveryAvailability: ${error.message}`));
-            if (isSyncFeatureEnabled('pending_operations_recovery')) {
-                await pendingOperationsRecovery.sendPending().catch(error => collectionErrors.push(`originals: ${error.message}`));
-            }
             const receiptQueue = await transferReceiptService.processDue();
             const retryingReceipts = receiptQueue.filter(item => item.status === 'RETRY_WAIT');
             if (retryingReceipts.length > 0) {
@@ -435,10 +429,6 @@ class BackgroundSyncManager {
             await reportPendingMasterNumberRangeProgress().catch((error: any) => {
                 collectionErrors.push(`masterNumberRanges: ${error?.message || 'unknown error'}`);
             });
-
-            if (isSyncFeatureEnabled('pending_operations_recovery') && !isPosSaleActive()) {
-                await pendingOperationsRecovery.updateRetainedBackup().catch(error => collectionErrors.push(`backup: ${error.message}`));
-            }
 
             this.updateState({
                 isSyncing: false,
@@ -762,65 +752,6 @@ class BackgroundSyncManager {
             } catch (error) {
                 console.warn(`⚠️ Failed recovering stuck sync items in ${colName}:`, error);
             }
-        }
-    }
-
-    /**
-     * One-time safeguard for terminals affected by silent push drops.
-     * Re-queue recent COMPLETED transactions on slave nodes; duplicates are ignored on Master.
-     */
-    private async recoverCompletedTransactionsForReplay() {
-        const terminalId = permissionService.getTerminalId();
-        if (!terminalId) return;
-
-        const shouldReplayForSlave = !permissionService.isMasterTerminal();
-        const shouldReplayForErp = this.isErpOperationalPushConfigured();
-        if (!shouldReplayForSlave && !shouldReplayForErp) return;
-
-        const flagSuffix = shouldReplayForErp ? 'erp_v3' : 'v2';
-        const flagKey = `sync_replay_completed_transactions_${flagSuffix}_${terminalId}`;
-        if (localStorage.getItem(flagKey) === '1') return;
-
-        try {
-            const transactions = await db.get('transactions') as any[];
-            if (!Array.isArray(transactions) || transactions.length === 0) {
-                localStorage.setItem(flagKey, '1');
-                return;
-            }
-
-            const cutoffMs = Date.now() - (72 * 60 * 60 * 1000); // 72h lookback
-            let changed = 0;
-
-            for (const txn of transactions) {
-                const txnDate = this.resolveItemDate(txn);
-                if (!txnDate || txnDate.getTime() < cutoffMs) continue;
-
-                if (isRecoveredOperation(txn)) continue;
-                const hasLegacyMissingStatus = txn?.syncStatus === undefined || txn?.syncStatus === null || txn?.syncStatus === '';
-                const shouldReplayCompleted = txn?.syncStatus === 'COMPLETED';
-
-                // Requeue recent transactions once:
-                // - on slave nodes for legacy silent push bugs
-                // - on ERP-bound terminals after introducing the direct ERP operational channel
-                // - Missing status gets normalized to PENDING.
-                if (hasLegacyMissingStatus || shouldReplayCompleted) {
-                    txn.syncStatus = 'PENDING';
-                    txn._forceSyncReplay = true;
-                    if (!txn.syncError) {
-                        txn.syncError = 'Recovered by replay safeguard v2';
-                    }
-                    changed++;
-                }
-            }
-
-            if (changed > 0) {
-                await db.save('transactions', transactions);
-                console.warn(`♻️ BackgroundSyncManager: Re-queued ${changed} recent completed transactions for replay.`);
-            }
-        } catch (error) {
-            console.warn('⚠️ BackgroundSyncManager: Failed replay recovery for completed transactions:', error);
-        } finally {
-            localStorage.setItem(flagKey, '1');
         }
     }
 
