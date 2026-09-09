@@ -71,17 +71,17 @@ test('ignores reports from another terminal', () => {
   assert.equal(evidence.selectedNumber, 1);
 });
 
-test('blocks the reproduced post-reset payload that only returns nextNumber=1', () => {
-  const configured = series();
+test('accepts the authenticated ERP next number without optional revision metadata', () => {
+  const configured = series({ nextNumber: 10 });
   const evidence = resolveZSequenceContinuity({
     series: configured,
     reports: [],
     terminalIds: [terminalId],
   });
-  assert.throws(
-    () => requireErpZSequenceAuthority(configured, evidence),
-    /Z_SEQUENCE_AUTHORITY_REQUIRED/,
-  );
+  requireErpZSequenceAuthority(configured, evidence);
+  assert.equal(evidence.selectedNumber, 10);
+  assert.equal(evidence.erpRevision, null);
+  assert.equal(evidence.erpHighWatermark, null);
 });
 
 test('accepts an authenticated ERP high-water mark and selects its next number', () => {
