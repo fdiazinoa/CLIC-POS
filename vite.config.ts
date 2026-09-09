@@ -54,7 +54,7 @@ export default defineConfig(({ mode }) => {
         ...(diagnostic ? { 'react-dom/client': 'react-dom/profiling' } : {}),
       }
     },
-    esbuild: diagnostic ? { supported: { 'async-await': false } } : undefined,
+    esbuild: diagnostic ? { keepNames: true, supported: { 'async-await': false } } : undefined,
     build: {
       target: diagnostic ? 'es2020' : 'modules',
       sourcemap: diagnostic,

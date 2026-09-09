@@ -46,5 +46,15 @@ export function temporalDiagnosticsPlugin(enabled:boolean):Plugin {
     const result=ts.transform(source,[transform]);const output=ts.createPrinter().printFile(result.transformed[0]);result.dispose();
     if(!count)return;
     return {code:`import {diagRun as __posDiagRun,diagSet as __posDiagSet} from '/diagnostics/runtime';\n`+output,map:null};
+  }, generateBundle(_options,bundle){
+    if(!enabled)return;
+    const runtime=Object.values(bundle).find((c:any)=>c.type==='chunk'&&Object.keys(c.modules).some(k=>k.endsWith('/diagnostics/runtime.ts'))) as any;
+    if(!runtime)this.error('Diagnostic runtime chunk missing');
+    const seen=new Set<string>();
+    const inspect=(c:any)=>{if(!c||c.type!=='chunk'||seen.has(c.fileName))return;seen.add(c.fileName);
+      if(Object.keys(c.modules).some(k=>k.includes('/react-dom/')))this.error('React renderer loads before diagnostic hook');
+      for(const name of c.imports)inspect(bundle[name]);
+    };inspect(runtime);
   }};
 }
+
