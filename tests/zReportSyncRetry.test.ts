@@ -126,7 +126,7 @@ test('synchronization monitor loads every collection counted as blocked', () => 
     'wallet_transactions',
     'loyalty_events',
   ]) {
-    assert.match(source, new RegExp(`db\\.get\\('${collection}'(?: as any)?\\)`));
+    assert.match(source, new RegExp(`readCollection\\('${collection}'\\)`));
   }
 
   assert.match(source, /formattedOperational/);
@@ -192,6 +192,26 @@ test('new 409 rejection stays blocked with the original Z identity', async () =>
     assert.equal(saved.id, report.id);
     assert.match(saved.syncError, /Z_SEQUENCE_IDEMPOTENCY_CONFLICT/);
   } finally {
+    db.getDocument = get; db.saveDocument = save; apiSyncAdapter.pushZReport = push;
+  }
+});
+
+test('explicit Z retry remains available while interaction pauses background sync', async () => {
+  const { backgroundSyncManager } = await import('../services/sync/BackgroundSyncManager');
+  const { db } = await import('../utils/db');
+  const { setPosSaleActivity, isPosSaleActive } = await import('../utils/posSaleActivity');
+  const get = db.getDocument, save = db.saveDocument, push = apiSyncAdapter.pushZReport;
+  let sent = false;
+  db.getDocument = (async () => ({ id: 'manual-z', sequenceNumber: 'ZS003', syncStatus: 'ERROR' })) as any;
+  db.saveDocument = async () => {};
+  apiSyncAdapter.pushZReport = async () => { sent = true; };
+  try {
+    setPosSaleActivity({ active: true, cartCount: 1 });
+    assert.equal(isPosSaleActive(), true);
+    await backgroundSyncManager.retryZReport('manual-z');
+    assert.equal(sent, true);
+  } finally {
+    setPosSaleActivity({ active: false });
     db.getDocument = get; db.saveDocument = save; apiSyncAdapter.pushZReport = push;
   }
 });

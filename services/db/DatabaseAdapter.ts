@@ -1,3 +1,4 @@
+import type { SyncMonitorPage, SyncMonitorPageRequest } from './SyncMonitorPage';
 
 export type DurableOutboxStatus =
     | 'PENDING'
@@ -68,6 +69,8 @@ export interface DatabaseAdapter {
     connect(): Promise<void>;
     disconnect(): Promise<void>;
     readonly adapterType: 'local' | 'network';
+
+    getSyncMonitorPage?(request: SyncMonitorPageRequest): Promise<SyncMonitorPage>;
 
     // Generic CRUD
     getCollection<T>(collectionName: string, queryParams?: Record<string, string>): Promise<T[]>;

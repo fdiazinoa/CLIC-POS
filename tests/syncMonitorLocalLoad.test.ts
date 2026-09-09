@@ -10,9 +10,14 @@ const javascript = ts.transpileModule(loaders, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
 
-function setup(get: (collection: string) => Promise<any[]>, getSyncStatus: () => Promise<unknown>) {
-  const state = { rows: [] as any[], error: null as string | null, loading: false };
+function setup(get: (collection: string) => Promise<any[]>, getSyncStatus: () => Promise<unknown>, nativePage?: () => Promise<any>) {
+  const state = { rows: [] as any[], error: null as string | null, loading: false, totals: { total: 0, blocked: 0 } };
   const deps = {
+    nativePagination: Boolean(nativePage), dbAdapter: { getSyncMonitorPage: nativePage },
+    currentPage: 1, rowsPerPage: 10, searchTerm: '', statusFilter: 'ALL', terminalFilter: 'ALL',
+    auditQueryKey: 'query', latestAuditQuery: { current: 'query' },
+    activeAuditQuery: { current: null }, auditReloadRequested: { current: false }, loadAuditRef: { current: async () => {} },
+    setAuditTotals: (totals: any) => { state.totals = totals; },
     auditLoadInFlight: { current: false }, activeTab: 'MONITOR', config: { terminals: [] }, db: { get }, syncManager: { getSyncStatus },
     setAuditData: (rows: any[]) => { state.rows = rows; },
     setAuditLoadError: (error: string | null) => { state.error = error; },
@@ -77,4 +82,14 @@ test('overlapping refreshes share the in-flight guard and preserve displayed doc
   await first;
   assert.equal(state.rows.length, 3);
   assert.equal(state.loading, false);
+});
+
+test('native monitor uses the SQLite page and global counts without reading whole collections', async () => {
+  const { state, loadAuditData } = setup(async () => { assert.fail('no collection scan on Android'); }, async () => {}, async () => ({
+    collections: { zReports: [{ id: 'z-page', sequenceNumber: 'ZS002', closedAt: '2026-01-01', syncStatus: 'ERROR' }] }, total: 350, blocked: 12,
+  }));
+  await loadAuditData();
+  assert.equal(state.rows.length, 1);
+  assert.equal(state.rows[0].id, 'ZS002');
+  assert.deepEqual(state.totals, { total: 350, blocked: 12 });
 });
