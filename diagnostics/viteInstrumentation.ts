@@ -6,7 +6,8 @@ export function temporalDiagnosticsPlugin(enabled:boolean):Plugin {
     if(!enabled || id.includes('node_modules') || id.includes('/diagnostics/') || !/\.[tj]sx?$/.test(id))return;
     const ui=/\/(App\.tsx|components\/.*\.tsx)$/.test(id);
     const service=/\/services\/(sync|db)\//.test(id) || /\/(services|utils)\/.*(heartbeat|lifecycle)/i.test(id);
-    if(!ui && !service)return;
+    const nativeCalls=/\/(utils|services)\//.test(id);
+    if(!ui && !service && !nativeCalls)return;
     const source=ts.createSourceFile(id,code,ts.ScriptTarget.Latest,true,id.endsWith('x')?ts.ScriptKind.TSX:ts.ScriptKind.TS);
     const f=ts.factory, setters=new Set<string>();
     function scan(n:ts.Node){if(ts.isVariableDeclaration(n)&&ts.isArrayBindingPattern(n.name)&&n.initializer&&ts.isCallExpression(n.initializer)&&/useState$/.test(n.initializer.expression.getText(source))){const s=n.name.elements[1];if(s&&ts.isBindingElement(s)&&ts.isIdentifier(s.name))setters.add(s.name.text);}ts.forEachChild(n,scan);}scan(source);
@@ -15,6 +16,9 @@ export function temporalDiagnosticsPlugin(enabled:boolean):Plugin {
       const visit:ts.Visitor=node=>{
         const original=node;
         const updated=ts.visitEachChild(node,visit,context);
+        if(ts.isCallExpression(original)&&ts.isPropertyAccessExpression(original.expression)&&/^(printEscPos|printEscpos|printRaw|printHtml|discoverPrinters|verifyFingerprintAsync|launch)$/.test(original.expression.name.text)) {
+          count++; return f.createCallExpression(f.createIdentifier('__posDiagRun'),undefined,[f.createStringLiteral('native-interface:'+original.expression.name.text),f.createArrowFunction(undefined,undefined,[],undefined,f.createToken(ts.SyntaxKind.EqualsGreaterThanToken),updated as ts.CallExpression),f.createStringLiteral('native-interface')]);
+        }
         if(ts.isCallExpression(original)&&ts.isIdentifier(original.expression)&&setters.has(original.expression.text)){
           count++;const call=updated as ts.CallExpression;
           return f.createCallExpression(f.createIdentifier('__posDiagSet'),undefined,[f.createStringLiteral(id.split('/').pop()+':'+original.expression.text),call.expression,...call.arguments]);

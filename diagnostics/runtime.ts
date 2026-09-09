@@ -42,7 +42,8 @@ export function diagRun<T>(name: string, work: () => T, kind = 'action', meta: R
   const t = parent || start(name,kind,meta), root = !parent, sid = ++spanSeq;
   const zone = Zone.current.fork({ name:t.id, properties:{posTrace:t} });
   emit(t,'JS_OPERATION_START',{operation:name,spanId:sid,root});
-  const end = (outcome:string) => { emit(t,'JS_OPERATION_END',{operation:name,spanId:sid,outcome}); if(root) {t.handlerDone=true; milestone(t,'HANDLER_END'); finish(t);} };
+  if(kind==='native-interface')native()?.section(t.id,name+':'+sid,true);
+  const end = (outcome:string) => { if(kind==='native-interface')native()?.section(t.id,name+':'+sid,false); emit(t,'JS_OPERATION_END',{operation:name,spanId:sid,outcome}); if(root) {t.handlerDone=true; milestone(t,'HANDLER_END'); finish(t);} };
   return zone.run(() => {
     try {
       const value = work();

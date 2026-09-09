@@ -64,6 +64,7 @@ export default defineConfig(({ mode }) => {
           manualChunks(id) {
             // Keep diagnostics bootstrap independent of React so the profiling hook
             // exists before the renderer module initializes.
+            if (diagnostic && (id.includes('preload-helper') || id.includes('commonjsHelpers'))) return 'pos-diagnostics-support';
             if (diagnostic && id.includes('/diagnostics/runtime.ts')) return 'pos-diagnostics';
             if (diagnostic && id.includes('/zone.js/')) return 'pos-diagnostics-zone';
             if (id.includes('node_modules')) {
