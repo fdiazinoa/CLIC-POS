@@ -198,10 +198,7 @@ SOURCE_BRANCH="$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref "${SOURCE_REF}" 2>
 
 CANONICAL_STATUS="$(git -C "${CANONICAL_BUILD_WORKTREE}" status --porcelain)"
 if [[ -n "${CANONICAL_STATUS}" ]]; then
-  if [[ "${ALLOW_DIRTY_SIGNING_WORKTREE:-0}" != "1" ]]; then
-    fail "La worktree canónica no está limpia. Corrige eso antes de compilar."
-  fi
-  info "ADVERTENCIA: la worktree de firma tiene cambios; el build aislado usará únicamente key.properties, keystore y local.properties."
+  fail "La worktree canónica no está limpia. Corrige eso antes de compilar."
 fi
 
 KEY_PROPERTIES="${CANONICAL_BUILD_WORKTREE}/android/key.properties"
@@ -238,62 +235,63 @@ else
   VERSION_NAME="1.0.${NEXT_VERSION_CODE}"
 fi
 
-TEMP_WORKTREE="$(mktemp -d /private/tmp/clicpos-release-XXXXXX)"
-cleanup() {
-  git -C "${REPO_ROOT}" worktree remove --force "${TEMP_WORKTREE}" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
 info "Fuente del release: ${SOURCE_REF} (${SOURCE_COMMIT_SHORT})"
 info "VersionCode siguiente: ${NEXT_VERSION_CODE}"
 info "VersionName siguiente: ${VERSION_NAME}"
 info "HTTP LAN Master/Cliente: ${LAN_HTTP_ENABLED}"
-info "Worktree temporal: ${TEMP_WORKTREE}"
+info "Worktree de firma: ${CANONICAL_BUILD_WORKTREE}"
 
-git -C "${REPO_ROOT}" worktree add --detach "${TEMP_WORKTREE}" "${SOURCE_COMMIT}" >/dev/null
+# Build in the canonical checkout; signing material stays in its original location.
+git -C "${CANONICAL_BUILD_WORKTREE}" checkout --detach "${SOURCE_COMMIT}"
+BUILD_WORKTREE="${CANONICAL_BUILD_WORKTREE}"
+info "Instalando dependencias del commit fuente"
+(cd "${BUILD_WORKTREE}" && npm ci)
 
-if [[ -f "${REPO_ROOT}/.env.local" ]]; then
-  cp "${REPO_ROOT}/.env.local" "${TEMP_WORKTREE}/.env.local"
-elif [[ -f "${SOURCE_REPO_ROOT}/.env.local" ]]; then
-  cp "${SOURCE_REPO_ROOT}/.env.local" "${TEMP_WORKTREE}/.env.local"
-elif [[ -f "${REPO_ROOT}/.env" ]]; then
-  cp "${REPO_ROOT}/.env" "${TEMP_WORKTREE}/.env"
-elif [[ -f "${SOURCE_REPO_ROOT}/.env" ]]; then
-  cp "${SOURCE_REPO_ROOT}/.env" "${TEMP_WORKTREE}/.env"
-else
-  info "No encontré .env.local ni .env en el repo fuente; sigo sin copiar envs."
-fi
-
-cp "${KEY_PROPERTIES}" "${TEMP_WORKTREE}/android/key.properties"
-mkdir -p "${TEMP_WORKTREE}/android/keys"
-cp "${KEYSTORE_FILE}" "${TEMP_WORKTREE}/android/keys/clic-pos-release.keystore"
-cp "${LOCAL_PROPERTIES}" "${TEMP_WORKTREE}/android/local.properties"
-
-if [[ ! -e "${TEMP_WORKTREE}/node_modules" ]]; then
-  if [[ -d "${REPO_ROOT}/node_modules" ]]; then
-    ln -s "${REPO_ROOT}/node_modules" "${TEMP_WORKTREE}/node_modules"
-  elif [[ -d "${SOURCE_REPO_ROOT}/node_modules" ]]; then
-    ln -s "${SOURCE_REPO_ROOT}/node_modules" "${TEMP_WORKTREE}/node_modules"
-  else
-    fail "No encontré node_modules ni en ${REPO_ROOT} ni en ${SOURCE_REPO_ROOT}"
-  fi
-fi
-
-TEMP_GRADLE_FILE="${TEMP_WORKTREE}/android/app/build.gradle"
-update_gradle_version "${TEMP_GRADLE_FILE}" "${NEXT_VERSION_CODE}" "${VERSION_NAME}"
+BUILD_GRADLE_FILE="${BUILD_WORKTREE}/android/app/build.gradle"
+update_gradle_version "${BUILD_GRADLE_FILE}" "${NEXT_VERSION_CODE}" "${VERSION_NAME}"
 
 info "Ejecutando npm run build"
-(cd "${TEMP_WORKTREE}" && npm run build)
+(cd "${BUILD_WORKTREE}" && npm run build)
 
 info "Ejecutando npx cap sync android"
-(cd "${TEMP_WORKTREE}" && npx cap sync android)
+(cd "${BUILD_WORKTREE}" && npx cap sync android)
 
-info "Ejecutando ./gradlew clean assembleRelease"
-(cd "${TEMP_WORKTREE}/android" && ./gradlew clean assembleRelease \
+info "Verificando assets Capacitor antes de firmar"
+ASSET_REPORT="$(mktemp /private/tmp/clicpos-packaged-assets-XXXXXX)"
+node --input-type=module - "${BUILD_WORKTREE}" "${ASSET_REPORT}" "${SOURCE_COMMIT}" <<'NODE'
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+const [root, report, sourceCommit] = process.argv.slice(2);
+const dist = path.join(root, 'dist');
+const packaged = path.join(root, 'android/app/src/main/assets/public');
+const hashes = {};
+const walk = (dir, relative = '') => {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const name = path.join(relative, entry.name);
+    if (entry.isDirectory()) walk(path.join(dir, entry.name), name);
+    else {
+      const original = fs.readFileSync(path.join(dist, name));
+      const copy = fs.readFileSync(path.join(packaged, name));
+      if (!original.equals(copy)) throw new Error(`Asset distinto: ${name}`);
+      hashes[name] = crypto.createHash('sha256').update(copy).digest('hex');
+    }
+  }
+};
+walk(dist);
+if (!Object.keys(hashes).length) throw new Error('dist está vacío');
+fs.mkdirSync(path.dirname(report), { recursive: true });
+fs.writeFileSync(report, JSON.stringify({ sourceCommit, assetsVerified: true, hashes }, null, 2));
+console.log(`Assets verificados: ${Object.keys(hashes).length}`);
+NODE
+
+# Keep versioned APKs and reports from earlier releases in the canonical output directory.
+info "Ejecutando ./gradlew assembleRelease"
+(cd "${BUILD_WORKTREE}/android" && ./gradlew assembleRelease \
   "-PclicPosAllowReleaseCleartext=${LAN_HTTP_ENABLED}")
 
-APK_SRC="${TEMP_WORKTREE}/android/app/build/outputs/apk/release/Clic-Pos-${VERSION_NAME}-release.apk"
-METADATA_SRC="${TEMP_WORKTREE}/android/app/build/outputs/apk/release/output-metadata.json"
+APK_SRC="${BUILD_WORKTREE}/android/app/build/outputs/apk/release/Clic-Pos-${VERSION_NAME}-release.apk"
+METADATA_SRC="${BUILD_WORKTREE}/android/app/build/outputs/apk/release/output-metadata.json"
 
 require_file "${APK_SRC}"
 require_file "${METADATA_SRC}"
@@ -310,9 +308,12 @@ mkdir -p "${DEST_DIR}"
 APK_DEST="${DEST_DIR}/Clic-Pos-${VERSION_NAME}-release.apk"
 METADATA_DEST="${DEST_DIR}/output-metadata-${VERSION_NAME}.json"
 REPORT_DEST="${DEST_DIR}/release-report-${VERSION_NAME}.txt"
+ASSET_REPORT_DEST="${DEST_DIR}/packaged-assets-${VERSION_NAME}.json"
 
-cp "${APK_SRC}" "${APK_DEST}"
+[[ "${APK_SRC}" == "${APK_DEST}" ]] || cp "${APK_SRC}" "${APK_DEST}"
 cp "${METADATA_SRC}" "${METADATA_DEST}"
+cp "${ASSET_REPORT}" "${ASSET_REPORT_DEST}"
+rm "${ASSET_REPORT}"
 
 cat > "${REPORT_DEST}" <<EOF
 versionCode=${NEXT_VERSION_CODE}
@@ -323,6 +324,8 @@ sourceCommit=${SOURCE_COMMIT}
 sourceCommitShort=${SOURCE_COMMIT_SHORT}
 lanHttpEnabled=${LAN_HTTP_ENABLED}
 manifestNetworkPolicyVerified=true
+packagedAssetsVerified=true
+packagedAssetsReport=${ASSET_REPORT_DEST}
 canonicalBuildWorktree=${CANONICAL_BUILD_WORKTREE}
 artifact=${APK_DEST}
 metadata=${METADATA_DEST}
