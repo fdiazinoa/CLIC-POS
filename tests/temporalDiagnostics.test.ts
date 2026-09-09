@@ -41,6 +41,12 @@ test('diagnostic build preserves async context across overlapping operations, re
  const visible=batches.find(e=>e.traceId==='POS-000005'&&e.name==='FIRST_RENDER');const done=batches.find(e=>e.traceId==='POS-000005'&&e.name==='ACTION_END');assert.ok(visible.ts<done.ts-30);
  assert.deepEqual(batches.filter(e=>e.name==='CAPACITOR_RETURN').map(e=>e.traceId),['POS-000002','POS-000001']);assert.ok(batches.some(e=>e.name==='PROMISE_RESUME'&&e.parentSpan));
  assert.equal(batches.filter(e=>e.name==='FUNCTION_START'&&e.operation==='POSInterface.tsx:getProductPrice:3087').length,1);assert.ok(!JSON.stringify(batches).includes('bindValues'));
+ const d=globalThis.__POS_DIAGNOSTICS__;
+ assert.equal(d.target('return',()=>42,()=>{throw Error('metadata');}),42);
+ assert.throws(()=>d.target('throw',()=>{throw error;}),e=>e===error);
+ d.disable();inputs.click({timeStamp:performance.now(),type:'click'});
+ assert.equal(diagRun('ModernLoginScreen.tsx:handleKeyPress:99',()=>123),123);
+ assert.equal(d.status().active,false);d.enable();d.arm(1);assert.equal(d.status().active,true);d.disable();
  console.log('context-result-exception-pass');process.exit(0);
  }
  main().catch(e=>{console.error(e);process.exitCode=1;});
@@ -86,4 +92,27 @@ test('selective mode never traverses fibers, uses production React and does not 
  assert.equal(plugin('const handleSend=()=>send();','/src/components/PaymentModal.tsx'),undefined);
  const result=plugin('class Adapter { async getCollection(){ const docs=await read(); return docs.map(x=>x); }}','/src/services/db/adapters/CapacitorSQLiteAdapter.ts');
  assert.match(result.code,/__posDiagSync/);assert.match(result.code,/getCollection:1/);
+});
+
+test('target aggregates bound volume and store only changed reference names, not values',async()=>{
+ const {TargetCounters}=await import('../diagnostics/targeted');const counters=new TargetCounters();
+ const stable={};for(let i=0;i<10000;i++)counters.observe('card',0.01,{key:'private-product-id',refs:{product:stable,onClick:stable}});
+ counters.observe('card',20,{key:'private-product-id',refs:{product:stable,onClick:()=>{}}});
+ const rows=counters.drain();assert.equal(rows.length,1);assert.equal(rows[0].count,10001);assert.equal(rows[0].changed.onClick,1);assert.equal(rows[0].changed.product,undefined);
+ assert.equal(rows[0].over16,1);assert.equal(rows[0].baseline,1);assert.ok(!JSON.stringify(rows).includes('private-product-id'));
+ counters.reset();counters.observe('card',1,{key:'private-product-id',refs:{product:stable}});assert.equal(counters.drain()[0].baseline,1);
+});
+
+test('focus instrumentation retains optional call, receiver, return and exception',async()=>{
+ const transform=temporalDiagnosticsPlugin(true).transform as Function;
+ const result=transform(`export function focusSalesScannerInput(doc){ const input=doc.querySelector('x'); return input?.focus({preventScroll:true}); }`,'/src/utils/globalBarcodeCapture.ts');
+ assert.match(result.code,/__posDiagTarget/);assert.match(result.code,/input\?\.focus/);
+ const {transform:compile}=await import('esbuild');
+ const js=await compile(result.code.replace(/^import .*\n/,'').replace('export function','function'),{loader:'ts',format:'cjs'});
+ const calls:string[]=[];
+ const run=new Function('__posDiagTarget',js.code+';return focusSalesScannerInput;')((name:string,work:Function)=>{calls.push(name);return work();});
+ const target={focus(options:any){assert.equal(this,target);assert.deepEqual(options,{preventScroll:true});return 42;}};
+ assert.equal(run({querySelector:()=>target}),42);assert.equal(run({querySelector:()=>null}),undefined);
+ const err=new Error('same');assert.throws(()=>run({querySelector:()=>{throw err;}}),e=>e===err);
+ assert.ok(calls.some(s=>s==='scanner:input?.focus'));
 });

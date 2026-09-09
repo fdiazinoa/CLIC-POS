@@ -1,3 +1,4 @@
+import {TargetCounters, type TargetMeta} from './targeted';
 /* Opt-in, windowed diagnostics. Never collect arguments, PINs or document contents. */
 declare const Zone:any;
 type Trace={id:string;name:string;start:number;first?:boolean};
@@ -7,6 +8,8 @@ let queue:any[]=[];const dirty=new Set<Trace>();
 const clock=()=>performance.now();
 const active=()=>enabled&&clock()<deadline;
 let syncSpan:Span|undefined;
+const targeted=new TargetCounters();let commitEpoch=0,targetEvents=0;
+function flushTargets(){for(const row of targeted.drain())emit('TARGET_SUMMARY',{...row,commitEpoch,traceId:'UNATTRIBUTED',spanId:null,parentSpan:null,attribution:'aggregate across calls; not a single trace or proof of committed render'},undefined);}
 const context=():Span|undefined=>syncSpan || (typeof Zone==='undefined'?undefined:Zone.current.get('posSpan'));
 const shortSync=new Map<string,{count:number;total:number;max:number}>();
 const native=()=> (globalThis as any).POSDiagnostics;
@@ -41,7 +44,7 @@ export const diagEnabled=()=>enabled;
 export function diagRun<T>(name:string,work:()=>T,kind='background'):T{
  if(!enabled || (kind==='direct-helper'&&!syncSpan))return work();
  const user=/ModernLoginScreen.*handleKeyPress|POSInterface.*handleProductCardClick|TableMap.*handleNodeSelect/.test(name)&&input&&clock()-input.at<150;
- if(user)deadline=clock()+5000;
+ if(user){deadline=clock()+5000;targetEvents=0;}
  if(!active())return work();
  const parent=context();const t:Trace=(!user&&parent?.t)||{id:`POS-${String(++seq).padStart(6,'0')}`,name,start:clock()};
  const span:Span={id:++sseq,parent:parent?.id??null,name,t,start:clock()};
@@ -61,6 +64,26 @@ export function diagSync<T>(name:string,work:()=>T):T{
   else {const x=shortSync.get(name)||{count:0,total:0,max:0};x.count++;x.total+=duration;x.max=Math.max(x.max,duration);shortSync.set(name,x);}
  }
 }
+// Synchronous bodies only. No Zone fork or Promise continuation per render/loop helper.
+export function diagTarget<T>(name:string,work:()=>T,metadata?:()=>TargetMeta,detail=false):T{
+ if(!active())return work();
+ const parent=context(),start=clock();
+ const span:Span|undefined=detail?{id:++sseq,parent:parent?.id??null,name,t:parent?.t,start}:undefined;
+ const prior=syncSpan;if(span)syncSpan=span;
+ try{return work();}finally{
+  syncSpan=prior;
+  const duration=clock()-start;
+  try {
+  targeted.observe(name,duration,metadata?.());
+  if((detail||duration>16)&&targetEvents<64){
+   targetEvents++;const targetSpan:Span=span||{id:++sseq,parent:parent?.id??null,name,t:parent?.t,start};
+   emit('TARGET_START',{commitEpoch},targetSpan,start);emit('TARGET_END',{duration,commitEpoch,measurement:'synchronous inclusive wall time'},targetSpan,start+duration);
+   const label=`${targetSpan.t?.id||'UNATTRIBUTED'}|TARGET|${targetSpan.id}|${name}`;
+   performance.measure(label,{start,end:start+duration});performance.clearMeasures(label);
+  }
+  }catch{drops++;} // Diagnostics must not change a business return or exception.
+ }
+}
 export function diagState<T>(name:string,work:()=>T,_value?:unknown):T{
  if(!active())return work();const span=context();if(span?.t)dirty.add(span.t);if(chain)chain.states++;
  return diagSync(name,()=>{emit('STATE_UPDATE',{},span);return work();});
@@ -69,7 +92,7 @@ export function diagSet<T>(name:string,setter:(v:T)=>any,value:T){return diagSta
 export function diagLegacy(operation:string,stage:string,_meta?:Record<string,unknown>){if(active())emit('LEGACY_'+stage,{legacyOperation:operation});}
 function installCommitHook(){const g=globalThis as any;if(g.__REACT_DEVTOOLS_GLOBAL_HOOK__)return;
  g.__REACT_DEVTOOLS_GLOBAL_HOOK__={supportsFiber:true,renderers:new Map(),inject(r:any){this.renderers.set(1,r);return 1;},onCommitFiberUnmount(){},onPostCommitFiberRoot(){},onCommitFiberRoot(){
-  if(!active())return;const ts=clock(),traces=[...dirty];dirty.clear();emit('REACT_COMMIT',{traceIds:traces.map(t=>t.id)},undefined,ts);performance.mark('POS|REACT_COMMIT');
+  if(!active())return;flushTargets();commitEpoch++;const ts=clock(),traces=[...dirty];dirty.clear();emit('REACT_COMMIT',{traceIds:traces.map(t=>t.id),commitEpoch},undefined,ts);performance.mark('POS|REACT_COMMIT');
   for(const t of traces){if(t.first)continue;Zone.root.run(()=>requestAnimationFrame(()=>requestAnimationFrame(()=>{if(t.first)return;t.first=true;const span={id:++sseq,parent:null,name:t.name,t,start:ts};emit('FIRST_RENDER',{duration:clock()-t.start,commitTs:ts,ambiguous:traces.length>1,measurement:'post_paint_opportunity'},span);mark('FIRST_RENDER',span);})));}
  }};
 }
@@ -94,8 +117,8 @@ export async function installDiagnostics(){
  installCommitHook();installBridge();
  const {registerPlugin}=await import('@capacitor/core');const sink=registerPlugin<{send(o:{payload:string}):Promise<void>}>('PosDiagnosticSink');
  for(const type of ['longtask','long-animation-frame'])if(PerformanceObserver.supportedEntryTypes.includes(type))new PerformanceObserver(list=>{for(const e of list.getEntries())if(active())emit(type.toUpperCase(),{duration:e.duration},undefined,e.startTime);}).observe({type,buffered:false});
- const flush=()=>{if(!queue.length)return;const t=clock(),batch=queue;queue=[];for(const [operation,stats] of shortSync)batch.push({name:'SHORT_SYNC_SUMMARY',operation,...stats,session,ts:clock(),thresholdMs:1});shortSync.clear();if(lastCost)batch.push(lastCost);const payload=JSON.stringify(batch);void sink.send({payload}).catch(()=>{drops+=batch.length;});lastCost={name:'DIAGNOSTIC_COST',ts:clock(),session,flushMs:clock()-t,emitMs:overhead,drops};overhead=0;performance.clearMarks();};
+ const flush=()=>{flushTargets();if(!queue.length)return;const t=clock(),batch=queue;queue=[];for(const [operation,stats] of shortSync)batch.push({name:'SHORT_SYNC_SUMMARY',operation,...stats,session,ts:clock(),thresholdMs:1});shortSync.clear();if(lastCost)batch.push(lastCost);const payload=JSON.stringify(batch);void sink.send({payload}).catch(()=>{drops+=batch.length;});lastCost={name:'DIAGNOSTIC_COST',ts:clock(),session,flushMs:clock()-t,emitMs:overhead,drops};overhead=0;performance.clearMarks();};
  Zone.root.run(()=>setInterval(flush,1000));
- (globalThis as any).__POS_DIAGNOSTICS__={status:()=>({session,drops,pending:queue.length,active:active()}),run:diagRun,processing:diagSync,flush,arm:(seconds=5)=>{deadline=clock()+Math.min(seconds,45)*1000;},disable:()=>{deadline=0;flush();}};
+ (globalThis as any).__POS_DIAGNOSTICS__={status:()=>({session,drops,pending:queue.length,active:active()}),run:diagRun,processing:diagSync,flush,arm:(seconds=5)=>{deadline=clock()+Math.min(seconds,45)*1000;},disable:()=>{deadline=0;enabled=false;targeted.reset();flush();},enable:()=>{enabled=true;},target:diagTarget};
  emit('CAPABILITY',{mode:'selective',reactFiberTraversal:false,nativeSections:false,windowMs:5000,microtasks:'selected Zone continuations only; unknown callers require V8 sampling'});
 }
