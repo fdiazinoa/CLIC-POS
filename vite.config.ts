@@ -2,9 +2,11 @@ import path from 'path';
 import fs from 'fs';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import { temporalDiagnosticsPlugin } from './diagnostics/viteInstrumentation';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
+  const diagnostic = process.env.CLIC_POS_DIAGNOSTICS === 'true';
 
   // Read certificates if they exist
   // Read certificates if they exist and USE_HTTPS is true
@@ -40,17 +42,22 @@ export default defineConfig(({ mode }) => {
         }
       }
     },
-    plugins: [react()],
+    plugins: [temporalDiagnosticsPlugin(diagnostic), react()],
     define: {
+      __POS_DIAGNOSTIC_BUILD__: JSON.stringify(diagnostic),
       'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
     },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+        ...(diagnostic ? { 'react-dom/client': 'react-dom/profiling' } : {}),
       }
     },
+    esbuild: diagnostic ? { supported: { 'async-await': false } } : undefined,
     build: {
+      target: diagnostic ? 'es2020' : 'modules',
+      sourcemap: diagnostic,
       chunkSizeWarningLimit: 700,
       rollupOptions: {
         output: {

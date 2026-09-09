@@ -50,6 +50,7 @@ public class MainActivity extends BridgeActivity {
         }
 
         WebView webView = getBridge().getWebView();
+        if (BuildConfig.POS_DIAGNOSTICS) webView.addJavascriptInterface(new PosNativeDiagnostics(this), "POSDiagnostics");
         WebSettings settings = webView.getSettings();
 
         settings.setTextZoom(100);
