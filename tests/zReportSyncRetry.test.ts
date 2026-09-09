@@ -61,3 +61,13 @@ test('recent Z replay runs again after ERP configuration becomes available', () 
     /async sync\(\)[\s\S]*?const operationalTarget = syncPolicy\.resolve\(\)[\s\S]*?try \{[\s\S]*?await this\.recoverRecentZReportsForReplay\(\)/,
   );
 });
+
+test('Z history keeps an idempotent resend action for reports previously marked applied', () => {
+  const source = readFileSync(
+    new URL('../components/ZReportHistory.tsx', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(source, /title="Enviar este mismo cierre al ERP de forma idempotente"/);
+  assert.doesNotMatch(source, /r\.syncStatus !== 'APPLIED_ERP'.*handleSendZReport/s);
+});

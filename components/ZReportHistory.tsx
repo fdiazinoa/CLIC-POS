@@ -335,17 +335,15 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
                     </div>
 
                     <div className="flex gap-2">
-                        {r.syncStatus !== 'APPLIED_ERP' && r.syncStatus !== 'COMPLETED' && (
-                            <button
-                                onClick={() => handleSendZReport(r)}
-                                disabled={sendingReportId === r.id}
-                                className="px-4 py-2 bg-emerald-50 hover:bg-emerald-600 hover:text-white rounded-xl text-emerald-700 transition-all font-bold text-sm flex items-center gap-2 shadow-sm disabled:opacity-60 disabled:cursor-wait"
-                                title="Enviar este mismo cierre al ERP"
-                            >
-                                <UploadCloud size={18} className={sendingReportId === r.id ? 'animate-pulse' : ''} />
-                                <span className="hidden sm:inline">{sendingReportId === r.id ? 'Enviando...' : 'Enviar a ERP'}</span>
-                            </button>
-                        )}
+                        <button
+                            onClick={() => handleSendZReport(r)}
+                            disabled={sendingReportId === r.id}
+                            className="px-4 py-2 bg-emerald-50 hover:bg-emerald-600 hover:text-white rounded-xl text-emerald-700 transition-all font-bold text-sm flex items-center gap-2 shadow-sm disabled:opacity-60 disabled:cursor-wait"
+                            title="Enviar este mismo cierre al ERP de forma idempotente"
+                        >
+                            <UploadCloud size={18} className={sendingReportId === r.id ? 'animate-pulse' : ''} />
+                            <span className="hidden sm:inline">{sendingReportId === r.id ? 'Enviando...' : 'Enviar a ERP'}</span>
+                        </button>
                         {canRepeatZReport && (
                             <button
                                 onClick={() => handleRepeatZReport(r)}
