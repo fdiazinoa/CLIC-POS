@@ -151,6 +151,8 @@ test('las operaciones Master no bloquean CrRendererMain mediante JavascriptInter
   assert.match(appSource, /asyncMethods\.has\(method\) && typeof runtimeWindow\.AndroidPrinter\.callAsync === 'function'/);
   assert.match(appSource, /window\.addEventListener\(eventName, onResult\)/);
   assert.match(appSource, /runtimeWindow\.AndroidPrinter\.callAsync\(requestID, method, JSON\.stringify\(payload \|\| \{\}\)\)/);
+  assert.match(appSource, /const initialPublishTimer = window\.setTimeout/);
+  assert.match(appSource, /window\.clearTimeout\(initialPublishTimer\)/);
 });
 
 test('la Master Android implementa autenticación y lectura de catálogos para clientes', () => {

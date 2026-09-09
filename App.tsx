@@ -4329,8 +4329,19 @@ const AppContent: React.FC = () => {
 
     // Iniciar/actualizar configuración sin publicar rooms/tables/tickets. El
     // servidor nativo es la fuente operativa después de su bootstrap inicial.
-    void ensureMasterServer(false).then(() => reconcileNativeRestaurantState());
-    const publishMasterCatalog = () => void ensureMasterServer(false);
+    // Initial collection hydration updates several dependencies in a short burst.
+    // Coalesce those renders so only the final catalog snapshot crosses the native bridge.
+    const initialPublishTimer = window.setTimeout(() => {
+      void ensureMasterServer(false).then(() => reconcileNativeRestaurantState());
+    }, 250);
+    let catalogPublishTimer: number | undefined;
+    const publishMasterCatalog = () => {
+      if (catalogPublishTimer) window.clearTimeout(catalogPublishTimer);
+      catalogPublishTimer = window.setTimeout(() => {
+        catalogPublishTimer = undefined;
+        void ensureMasterServer(false);
+      }, 250);
+    };
     const watchdog = window.setInterval(() => void ensureMasterServerHealth(), 30000);
     const restaurantPoll = window.setInterval(() => void pollNativeRestaurantRevision(), 1000);
     window.addEventListener('online', ensureMasterServerHealth);
@@ -4347,6 +4358,8 @@ const AppContent: React.FC = () => {
 
     return () => {
       disposed = true;
+      window.clearTimeout(initialPublishTimer);
+      if (catalogPublishTimer) window.clearTimeout(catalogPublishTimer);
       window.clearInterval(watchdog);
       window.clearInterval(restaurantPoll);
       window.removeEventListener('online', ensureMasterServerHealth);
