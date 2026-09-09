@@ -39,6 +39,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const [erpForwardStatus, setErpForwardStatus] = useState<any>(null);
     const [isRetryingErpForward, setIsRetryingErpForward] = useState(false);
     const [jsonCopyStatus, setJsonCopyStatus] = useState<'COPIED' | 'ERROR' | null>(null);
+    const retryInFlight = React.useRef(false);
+    const auditLoadInFlight = React.useRef(false);
     const [retryingDocumentKey, setRetryingDocumentKey] = useState<string | null>(null);
     const [retryFeedback, setRetryFeedback] = useState<{ key: string; type: 'success' | 'error' | 'pending'; message: string } | null>(null);
     const [currentPage, setCurrentPage] = useState(1);
@@ -136,7 +138,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     };
 
     const loadAuditData = async () => {
-        if (activeTab !== 'MONITOR') return;
+        if (activeTab !== 'MONITOR' || auditLoadInFlight.current) return;
+        auditLoadInFlight.current = true;
         setIsLoadingAudit(true);
         setAuditLoadError(null);
         try {
@@ -307,6 +310,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
             console.error('Error loading local sync documents:', error);
             setAuditLoadError('No se pudieron cargar los documentos locales. Pulsa Refrescar lista para reintentar.');
         } finally {
+            auditLoadInFlight.current = false;
             setIsLoadingAudit(false);
         }
     };
@@ -526,7 +530,9 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
 
     // Periodic polling
     useEffect(() => {
-        const interval = setInterval(loadStatus, 5000);
+        const interval = setInterval(() => {
+            if (!retryInFlight.current) void loadAuditData();
+        }, 30000);
         return () => clearInterval(interval);
     }, []);
 
@@ -587,64 +593,70 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     };
 
     const handleRetryDocument = async (item: any) => {
+        if (retryInFlight.current) return;
+        retryInFlight.current = true;
         const feedbackKey = item?.key || `${item?.collection || 'document'}:${item?.id || item?.raw?.id || Date.now()}`;
         try {
             if (!item?.collection || !item?.raw?.id) return;
             setRetryingDocumentKey(feedbackKey);
             setRetryFeedback({ key: feedbackKey, type: 'pending', message: 'Reintentando envio...' });
 
-            if (item.collection === 'inventoryLedger' && Array.isArray(item.raw.movements)) {
-                await Promise.all(item.raw.movements.map((movement: any) =>
-                    db.saveDocument('inventoryLedger' as any, {
-                        ...movement,
+            if (item.collection === 'zReports') {
+                await backgroundSyncManager.retryZReport(item.raw.id);
+            } else {
+                if (item.collection === 'inventoryLedger' && Array.isArray(item.raw.movements)) {
+                    await Promise.all(item.raw.movements.map((movement: any) =>
+                        db.saveDocument('inventoryLedger' as any, {
+                            ...movement,
+                            syncStatus: 'PENDING',
+                            syncError: undefined,
+                            cloudSyncStatus: undefined,
+                            cloudSyncError: undefined,
+                            erpSyncStatus: undefined,
+                            erpSyncResponse: undefined,
+                            erpSyncedAt: undefined,
+                            syncRetryAfter: undefined,
+                            syncStartedAt: undefined,
+                            syncBlockedReason: undefined,
+                            syncBlockedAt: undefined
+                        })
+                    ));
+                } else {
+                    await db.saveDocument(item.collection as any, {
+                        ...item.raw,
                         syncStatus: 'PENDING',
                         syncError: undefined,
                         cloudSyncStatus: undefined,
                         cloudSyncError: undefined,
+                        syncResponse: undefined,
+                        syncedAt: undefined,
                         erpSyncStatus: undefined,
                         erpSyncResponse: undefined,
                         erpSyncedAt: undefined,
                         syncRetryAfter: undefined,
                         syncStartedAt: undefined,
                         syncBlockedReason: undefined,
-                        syncBlockedAt: undefined
-                    })
-                ));
-            } else {
-                await db.saveDocument(item.collection as any, {
-                    ...item.raw,
-                    syncStatus: 'PENDING',
-                    syncError: undefined,
-                    cloudSyncStatus: undefined,
-                    cloudSyncError: undefined,
-                    syncResponse: undefined,
-                    syncedAt: undefined,
-                    erpSyncStatus: undefined,
-                    erpSyncResponse: undefined,
-                    erpSyncedAt: undefined,
-                    syncRetryAfter: undefined,
-                    syncStartedAt: undefined,
-                    syncBlockedReason: undefined,
-                    syncBlockedAt: undefined,
-                    _forceSyncReplay: item.collection === 'transactions' ? true : item.raw?._forceSyncReplay
-                });
-            }
-
-            await backgroundSyncManager.triggerSyncAndWait();
-
-            if (
-                item.collection === 'transactions' &&
-                permissionService.isMasterTerminal() &&
-                !syncManager.isUsingErpOperationalTarget()
-            ) {
-                try {
-                    await syncManager.retryErpForwardQueue([resolveRetryId(item)].filter(Boolean) as string[]);
-                } catch (error) {
-                    console.warn('ERP forward queue retry failed after local requeue:', error);
+                        syncBlockedAt: undefined,
+                        _forceSyncReplay: item.collection === 'transactions' ? true : item.raw?._forceSyncReplay
+                    });
                 }
-            }
 
-            await loadStatus();
+                await backgroundSyncManager.triggerSyncAndWait();
+
+                if (
+                    item.collection === 'transactions' &&
+                    permissionService.isMasterTerminal() &&
+                    !syncManager.isUsingErpOperationalTarget()
+                ) {
+                    try {
+                        await syncManager.retryErpForwardQueue([resolveRetryId(item)].filter(Boolean) as string[]);
+                    } catch (error) {
+                        console.warn('ERP forward queue retry failed after local requeue:', error);
+                    }
+                }
+
+            }
+            await loadAuditData();
 
             const result = await resolveRetryResult(item);
             if (result.status === 'SYNCED') {
@@ -652,10 +664,10 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
             } else if (result.status === 'ERROR') {
                 const message = result.error || 'El reintento termino con error.';
                 setRetryFeedback({ key: feedbackKey, type: 'error', message });
-                alert('❌ Reintento falló: ' + message);
+
             } else {
                 setRetryFeedback({ key: feedbackKey, type: 'pending', message: 'Reintento solicitado. El documento sigue pendiente.' });
-                alert('⏳ Reintento solicitado. El documento sigue pendiente; revisa el estado en unos segundos.');
+
             }
         } catch (error) {
             console.error('Error retrying document sync:', error);
@@ -664,8 +676,9 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                 type: 'error',
                 message: error instanceof Error ? error.message : 'Error desconocido'
             });
-            alert('❌ No se pudo reintentar el documento: ' + (error instanceof Error ? error.message : 'Error desconocido'));
+            await loadAuditData();
         } finally {
+            retryInFlight.current = false;
             setRetryingDocumentKey(null);
         }
     };
@@ -1334,7 +1347,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                             {item.status !== 'SYNCED' && (
                                                                 <button
                                                                     onClick={() => handleRetryDocument(item)}
-                                                                    disabled={isRetryingThisDocument}
+                                                                    disabled={retryingDocumentKey !== null}
                                                                     className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[10px] font-black uppercase tracking-wider shadow-sm transition-all ${
                                                                         isRetryingThisDocument
                                                                             ? 'border-slate-300 bg-slate-200 text-slate-500'

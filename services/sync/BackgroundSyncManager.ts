@@ -680,6 +680,40 @@ class BackgroundSyncManager {
         this.scheduleSync(0);
     }
 
+    /** Send only the selected Z, without draining unrelated operational queues. */
+    async retryZReport(id: string): Promise<void> {
+        if (this.isProcessing) throw new Error('Hay un envío en curso. Espera a que termine antes de reintentar.');
+        this.isProcessing = true;
+        try {
+            const report = await db.getDocument('zReports', id) as any;
+            if (!report) throw new Error('No se encontró el cierre Z local.');
+            if (String(report.syncError || '').includes('Z_SEQUENCE_IDEMPOTENCY_CONFLICT')) {
+                throw new Error('Conflicto de identidad del cierre Z. Debe conciliarse con el servidor antes de reenviar; se conserva la secuencia original.');
+            }
+            try {
+                await apiSyncAdapter.pushZReport(report);
+            } catch (error: any) {
+                await db.saveDocument('zReports', {
+                    ...report,
+                    syncStatus: this.isFunctionalSyncError(error) ? 'BLOCKED_FUNCTIONAL' : 'ERROR',
+                    syncError: error?.message || String(error),
+                });
+                throw error;
+            }
+            await db.saveDocument('zReports', {
+                ...report,
+                syncStatus: 'COMPLETED',
+                syncError: undefined,
+                syncBlockedReason: undefined,
+                syncBlockedAt: undefined,
+                syncStartedAt: undefined,
+                syncRetryAfter: undefined,
+            });
+        } finally {
+            this.isProcessing = false;
+        }
+    }
+
     async triggerSyncAndWait() {
         await this.updatePendingCount();
         if (navigator.onLine) {

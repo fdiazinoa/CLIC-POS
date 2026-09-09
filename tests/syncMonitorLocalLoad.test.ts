@@ -13,7 +13,7 @@ const javascript = ts.transpileModule(loaders, {
 function setup(get: (collection: string) => Promise<any[]>, getSyncStatus: () => Promise<unknown>) {
   const state = { rows: [] as any[], error: null as string | null, loading: false };
   const deps = {
-    activeTab: 'MONITOR', config: { terminals: [] }, db: { get }, syncManager: { getSyncStatus },
+    auditLoadInFlight: { current: false }, activeTab: 'MONITOR', config: { terminals: [] }, db: { get }, syncManager: { getSyncStatus },
     setAuditData: (rows: any[]) => { state.rows = rows; },
     setAuditLoadError: (error: string | null) => { state.error = error; },
     setIsLoadingAudit: (loading: boolean) => { state.loading = loading; },
@@ -56,4 +56,25 @@ test('local read failure is visible and a local retry recovers without a network
   await loadAuditData();
   assert.equal(state.error, null);
   assert.equal(state.rows.length, 3);
+});
+
+test('overlapping refreshes share the in-flight guard and preserve displayed documents', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let reads = 0;
+  const { state, loadAuditData } = setup(async collection => {
+    reads++;
+    await gate;
+    return blocked(collection);
+  }, async () => { throw new Error('must not query remote diagnostics'); });
+  state.rows = [{ id: 'previously-visible' }];
+  const first = loadAuditData();
+  const firstReads = reads;
+  await loadAuditData();
+  assert.equal(reads, firstReads);
+  assert.equal(state.rows[0].id, 'previously-visible');
+  release();
+  await first;
+  assert.equal(state.rows.length, 3);
+  assert.equal(state.loading, false);
 });
