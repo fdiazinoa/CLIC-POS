@@ -15,12 +15,12 @@ test('diagnostic build preserves async context across overlapping operations, re
  import assert from 'node:assert/strict';
  import {installDiagnostics,diagRun,diagSet} from ${JSON.stringify(runtime)};
  async function main(){
- const batches=[];let flush;const bridge=[];
+ const batches=[];let flush;const bridge=[];const frames=[];
  globalThis.document={addEventListener(){}};
  globalThis.location={href:'https://localhost/'};
  globalThis.PerformanceObserver=class {static supportedEntryTypes=[];};
  globalThis.XMLHttpRequest=class extends EventTarget {send(){}};
- globalThis.requestAnimationFrame=()=>0;
+ globalThis.requestAnimationFrame=(fn)=>{frames.push(fn);return 0;};
  globalThis.setInterval=(fn)=>{flush=fn;return 0;};
  globalThis.POSDiagnostics={enabled:()=>true,clock:()=>String(performance.now()*1e6),section(){},events(s){batches.push(...JSON.parse(s));}};
  globalThis.Capacitor={nativePromise:(p,m,o)=>{bridge.push({p,m,o});return Promise.resolve({values:[1,2]});}};
@@ -33,7 +33,12 @@ test('diagnostic build preserves async context across overlapping operations, re
  assert.deepEqual(values,[17,29]);assert.equal(bridge[0].o._posTraceId,'POS-000002');assert.equal(bridge[1].o._posTraceId,'POS-000001');
  const error=new Error('same');await assert.rejects(diagRun('failure',async()=>{await delay(1);throw error;}),e=>e===error);
  let state=0;diagRun('quantity',()=>diagSet('setQuantity',v=>{state=typeof v==='function'?v(state):v;},v=>v+1));assert.equal(state,1);
- flush();assert.equal(batches.filter(e=>e.name==='ACTION_START').length,4);assert.equal(batches.filter(e=>e.name==='ACTION_END').length,4);
+ const background=diagRun('visible-before-network',async()=>{diagSet('setVisible',()=>{},true);globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__.onCommitFiberRoot(1,{current:{flags:1,type:function SmallComponent(){},memoizedProps:{},actualDuration:1}});await delay(60);});
+ for(let i=0;i<2;i++)for(const fn of frames.splice(0))fn(performance.now());
+ await background;
+ flush();assert.equal(batches.filter(e=>e.name==='ACTION_START').length,5);assert.equal(batches.filter(e=>e.name==='ACTION_END').length,5);
+ const visible=batches.find(e=>e.traceId==='POS-000005'&&e.name==='FIRST_RENDER');const done=batches.find(e=>e.traceId==='POS-000005'&&e.name==='ACTION_END');assert.ok(visible.ts<done.ts-30);
+ const unlock=batches.find(e=>e.traceId==='POS-000005'&&e.name==='LOCAL_UNLOCK');assert.ok(unlock.ts<done.ts-30);
  assert.equal(batches.filter(e=>e.name==='CAPACITOR_CALL_END').length,2);
  assert.ok(!JSON.stringify(batches).includes('bindValues'));
  console.log('context-result-exception-pass');

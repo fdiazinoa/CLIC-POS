@@ -37,3 +37,11 @@ Login; abrir/cambiar mesa; abrir/restaurar ticket; agregar artículo; buscar; es
 Un intervalo solapado es un candidato, no una causa. Para asignar SQLite/bridge/red, exigir el mismo trace+span y dependencia que retrasa commit/unlock. Para GC/render, exigir pause/slice en el hilo crítico con scheduling/frame afectado. Si falta ese enlace, clasificar sin explicar. Separar background posterior a respuesta visual. Ranking exclusivo de causas confirmadas y porcentajes con denominador explícito; no repartir tiempo anidado varias veces.
 
 Referencias: https://perfetto.dev/docs/reference/trace-config-proto y https://developer.android.com/topic/performance/tracing/custom-events.
+
+## Hallazgos de compatibilidad en 10.0.0.94 (Android x86)
+
+- `linux.ftrace` de Perfetto confirmó arranque pero entregó cero scheduling slices. Usar `capture.py ... --system-atrace`: preserva otra traza de sistema que Perfetto puede leer. La prueba produjo más de 400.000 slices de scheduling.
+- `android.os.Trace` no emitió las secciones personalizadas en este ROM, incluso con APK profileable y filtro de app. **No declararlas capturadas.** Las marcas UserTiming POS sí están en el archivo Perfetto original.
+- `analyze.py DIRECTORIO` exporta eventos y operaciones; no declara causas por solapamiento. `annotate.py DIRECTORIO` genera un overlay nativo con START/END medidos y scheduling original. Es una reconstrucción identificada como tal, no un trace section observado del SDK Android. Validar relojes contra UserTiming antes de combinar conclusiones.
+- Si la app ya está iniciada, preservar `CLOCK_SYNC` de la misma sesión/PID en `clock-sync.json`; no reutilizarlo tras reiniciar la app o el dispositivo. La sesión de arranque puede guardarse aparte para maestros iniciales.
+- En la prueba de arranque, el flush síncrono del recolector llegó a 71 ms; en reposo se observaron muestras menores, pero el coste no es cero. Es un factor de confusión medido. No atribuir al producto frames explicados por el recolector; conservar categoría «instrumentación» y declarar desconocido el efecto no separable. No usar porcentajes causales del producto hasta descartar este efecto.
