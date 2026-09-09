@@ -35,7 +35,7 @@ else:
   if str(adb) in command and a.serial in command:os.kill(s['logPid'],signal.SIGTERM)
  except (subprocess.CalledProcessError,ProcessLookupError):pass
  if s.get('systemAtrace'):
-  with (out/'system.ctrace').open('wb') as f:subprocess.run(base+['shell','atrace','--async_stop','-z','-b','65536','-a','com.clicpos.app','sched','gfx','view','webview','dalvik','database','binder_driver','input','am','wm'],stdout=f,check=True,timeout=30)
+  with (out/'system.ctrace').open('wb') as f:subprocess.run(base+['shell','atrace','--async_stop','-z','-b','65536','-a','com.clicpos.app','sched','gfx','view','webview','dalvik','database','binder_driver','input','am','wm'],stdout=f,check=True,timeout=60)
  time.sleep(2)
  run('pull',s['remoteTrace'],str(out/'session.pftrace'))
  print(out/'session.pftrace')
