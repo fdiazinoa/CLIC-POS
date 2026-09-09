@@ -232,11 +232,26 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
 
             // Load Audit Data for Data Monitor
             if (activeTab === 'MONITOR') {
-                const [txns, reservations, movements, zReports] = await Promise.all([
+                const [
+                    txns,
+                    reservations,
+                    movements,
+                    zReports,
+                    cashMovements,
+                    customerMutations,
+                    posUserMutations,
+                    walletTransactions,
+                    loyaltyEvents,
+                ] = await Promise.all([
                     db.get('transactions'),
                     db.get('reservations'),
                     db.get('inventoryLedger'),
-                    db.get('zReports')
+                    db.get('zReports'),
+                    db.get('cashMovements'),
+                    db.get('customerMutations' as any),
+                    db.get('posUserMutations'),
+                    db.get('wallet_transactions'),
+                    db.get('loyalty_events'),
                 ]);
 
                 const transactionRefs = new Set<string>();
@@ -338,7 +353,42 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     raw: z
                 }));
 
-                const combined = [...formattedTxns, ...formattedRes, ...formattedMovs, ...formattedZs]
+                const formatOperationalDocuments = (
+                    collection: string,
+                    type: string,
+                    documents: any,
+                ) => (Array.isArray(documents) ? documents : []).map((document: any) => ({
+                    key: `${collection}:${document.id}`,
+                    collection,
+                    id: document.sequenceNumber
+                        || document.displayId
+                        || document.code
+                        || document.documentRef
+                        || document.reference
+                        || document.id,
+                    terminalId: document.terminalId || document.source_terminal_id || '-',
+                    terminalLabel: resolveTerminalDisplayName(document.terminalId || document.source_terminal_id || '-'),
+                    type,
+                    date: document.syncBlockedAt
+                        || document.updatedAt
+                        || document.createdAt
+                        || document.timestamp
+                        || document.date
+                        || '1970-01-01T00:00:00.000Z',
+                    status: resolveDocumentStatus(document),
+                    error: resolveDocumentError(document),
+                    raw: document,
+                }));
+
+                const formattedOperational = [
+                    ...formatOperationalDocuments('cashMovements', 'EFECTIVO', cashMovements),
+                    ...formatOperationalDocuments('customerMutations', 'CLIENTE', customerMutations),
+                    ...formatOperationalDocuments('posUserMutations', 'USUARIO', posUserMutations),
+                    ...formatOperationalDocuments('wallet_transactions', 'WALLET', walletTransactions),
+                    ...formatOperationalDocuments('loyalty_events', 'LEALTAD', loyaltyEvents),
+                ];
+
+                const combined = [...formattedTxns, ...formattedRes, ...formattedMovs, ...formattedZs, ...formattedOperational]
                     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
                 setAuditData(combined);
@@ -1175,6 +1225,9 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                 <tr key={rowKey} className="hover:bg-gray-50/50 transition-colors">
                                                     <td className="py-4 px-6">
                                                         <div className="font-bold text-gray-700 font-mono text-sm">{item.id}</div>
+                                                        <div className="mt-0.5 text-[9px] font-black uppercase tracking-wider text-slate-400">
+                                                            {item.collection}
+                                                        </div>
                                                         {item.movementCount > 1 && (
                                                             <div className="text-[10px] text-slate-400 font-bold mt-0.5">
                                                                 {item.movementCount} movimientos agrupados
@@ -1182,6 +1235,11 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                         )}
                                                         {item.raw?.ncf && (
                                                             <div className="text-[10px] text-blue-600 font-bold mt-0.5">{item.raw.ncf}</div>
+                                                        )}
+                                                        {item.error && (
+                                                            <div className="mt-1 max-w-[360px] break-words text-[10px] font-semibold text-red-600">
+                                                                {item.error}
+                                                            </div>
                                                         )}
                                                     </td>
                                                     <td className="py-4 px-6 text-center">

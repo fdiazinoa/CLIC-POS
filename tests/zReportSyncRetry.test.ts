@@ -112,3 +112,24 @@ test('blocked Z reports remain visible in the synchronization indicators', () =>
   assert.match(posSource, /`Bloqueado · \$\{syncState\.blockedCount\}`/);
   assert.match(settingsSource, /documento\(s\) bloqueado\(s\)/);
 });
+
+test('synchronization monitor loads every collection counted as blocked', () => {
+  const source = readFileSync(new URL('../components/SyncSettings.tsx', import.meta.url), 'utf8');
+
+  for (const collection of [
+    'transactions',
+    'inventoryLedger',
+    'zReports',
+    'cashMovements',
+    'customerMutations',
+    'posUserMutations',
+    'wallet_transactions',
+    'loyalty_events',
+  ]) {
+    assert.match(source, new RegExp(`db\\.get\\('${collection}'\\)`));
+  }
+
+  assert.match(source, /formattedOperational/);
+  assert.match(source, /\{item\.collection\}/);
+  assert.match(source, /\{item\.error\}/);
+});
