@@ -82,10 +82,49 @@ type ReconcilePreviewDependencies = {
   deleteActive: (transactionId: string) => Promise<void>;
 };
 
+type ReconcilePreviewScope = {
+  terminalIds?: string[];
+};
+
 export type ReconcilePreviewResult = {
   transactions: Transaction[];
   removedClosed: Transaction[];
   closedIds: Set<string>;
+  lastClosedDocumentId?: string;
+};
+
+type DocumentSequence = {
+  prefix: string;
+  number: number;
+  reference: string;
+};
+
+const parseDocumentSequence = (value: unknown): DocumentSequence | null => {
+  const reference = normalizeId(value);
+  const match = reference.match(/^(.*?)(\d+)$/);
+  if (!match) return null;
+  const number = Number(match[2]);
+  if (!Number.isSafeInteger(number)) return null;
+  return { prefix: match[1].toUpperCase(), number, reference };
+};
+
+const reportLastTicketId = (report: ZReport): string => {
+  const raw = report as ZReport & Record<string, any>;
+  return normalizeId(
+    raw.sync_audit?.last_ticket_id
+    || raw.syncAudit?.last_ticket_id
+    || raw.syncAudit?.lastTicketId,
+  );
+};
+
+const transactionDisplayId = (transaction: Transaction): string =>
+  normalizeId(transaction.displayId || transaction.source_display_id || transaction.id);
+
+const belongsToTerminal = (record: Record<string, any>, terminalIds: Set<string>): boolean => {
+  if (terminalIds.size === 0) return true;
+  return [record.terminalId, record.source_terminal_id]
+    .map(value => normalizeId(value).toLowerCase())
+    .some(value => value && terminalIds.has(value));
 };
 
 /**
@@ -95,13 +134,41 @@ export type ReconcilePreviewResult = {
 export const reconcileTransactionsForZPreview = async (
   active: Transaction[],
   dependencies: ReconcilePreviewDependencies,
+  scope: ReconcilePreviewScope = {},
 ): Promise<ReconcilePreviewResult> => {
   const [history, reports] = await Promise.all([
     dependencies.loadHistory(),
     dependencies.loadReports(),
   ]);
   const closedIds = collectClosedTransactionIds(history, reports);
-  const partition = partitionTransactionsByClosedMembership(active, closedIds);
+  const terminalIds = new Set((scope.terminalIds || []).map(value => normalizeId(value).toLowerCase()).filter(Boolean));
+  const closedDocumentSequences = [
+    ...history
+      .filter(transaction => normalizeId(transaction.zReportId) && belongsToTerminal(transaction, terminalIds))
+      .map(transactionDisplayId),
+    ...reports
+      .filter(report => belongsToTerminal(report as ZReport & Record<string, any>, terminalIds))
+      .map(reportLastTicketId),
+  ]
+    .map(parseDocumentSequence)
+    .filter((value): value is DocumentSequence => Boolean(value));
+  const lastByPrefix = new Map<string, DocumentSequence>();
+  closedDocumentSequences.forEach(sequence => {
+    const previous = lastByPrefix.get(sequence.prefix);
+    if (!previous || sequence.number > previous.number) lastByPrefix.set(sequence.prefix, sequence);
+  });
+
+  const closedByDocumentCut = new Set<string>();
+  active.forEach(transaction => {
+    if (!belongsToTerminal(transaction, terminalIds)) return;
+    const sequence = parseDocumentSequence(transactionDisplayId(transaction));
+    const lastClosed = sequence ? lastByPrefix.get(sequence.prefix) : undefined;
+    if (lastClosed && sequence!.number <= lastClosed.number) {
+      closedByDocumentCut.add(transaction.id);
+    }
+  });
+  const effectiveClosedIds = new Set([...closedIds, ...closedByDocumentCut]);
+  const partition = partitionTransactionsByClosedMembership(active, effectiveClosedIds);
 
   for (const transaction of partition.closed) {
     await dependencies.deleteActive(transaction.id);
@@ -110,7 +177,9 @@ export const reconcileTransactionsForZPreview = async (
   return {
     transactions: partition.open,
     removedClosed: partition.closed,
-    closedIds,
+    closedIds: effectiveClosedIds,
+    lastClosedDocumentId: [...lastByPrefix.values()]
+      .sort((left, right) => right.number - left.number)[0]?.reference,
   };
 };
 
