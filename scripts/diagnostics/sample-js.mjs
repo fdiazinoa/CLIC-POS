@@ -19,8 +19,13 @@ try{
  const before=await call('Runtime.evaluate',{expression:'JSON.stringify({js:performance.now(),origin:performance.timeOrigin,diagnostic:globalThis.__POS_DIAGNOSTICS__?.status()})',returnByValue:true});
  await call('Performance.enable');const metrics=await call('Performance.getMetrics');const after=await call('Runtime.evaluate',{expression:'performance.now()',returnByValue:true});fs.writeFileSync(path.join(out,'v8-clock.json'),JSON.stringify({jsBefore:JSON.parse(before.result.value),metrics:metrics.metrics,jsAfter:after.result.value,uncertaintyMs:after.result.value-JSON.parse(before.result.value).js},null,2));
  await call('Profiler.start');started=true;console.log('V8_SAMPLER_ACTIVE interval=2000us seconds='+seconds);
- const stop=Date.now()+seconds*1000;
- while(Date.now()<stop&&!fs.existsSync(path.join(out,'stop.request')))await new Promise(r=>setTimeout(r,250));
+ const stop=Date.now()+seconds*1000;let nextCheck=0;const initialDrops=JSON.parse(before.result.value).diagnostic?.drops||0;
+ while(Date.now()<stop&&!fs.existsSync(path.join(out,'stop.request'))){
+  await new Promise(r=>setTimeout(r,250));
+  if(Date.now()>=nextCheck){nextCheck=Date.now()+2000;const r=await call('Runtime.evaluate',{expression:'globalThis.__POS_DIAGNOSTICS__?.status()',returnByValue:true});const status=r.result.value;
+   if(status&&(status.drops>initialDrops||status.pending>3000)){fs.writeFileSync(path.join(out,'quality-abort.json'),JSON.stringify({reason:'diagnostic_volume_or_drops',status}));fs.writeFileSync(path.join(out,'stop.request'),'');await call('Runtime.evaluate',{expression:'globalThis.__POS_DIAGNOSTICS__?.disable()'});console.log('QUALITY_ABORT: stop user reproduction; excessive diagnostic volume');break;}
+  }
+ }
 }finally{
  if(started){const result=await call('Profiler.stop');fs.writeFileSync(path.join(out,'javascript.cpuprofile'),JSON.stringify(result.profile));}
  await call('Profiler.disable');ws.close();console.log('V8_SAMPLER_STOPPED');
