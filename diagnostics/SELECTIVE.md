@@ -27,3 +27,11 @@ NO está validado <5%. Coste de emit y flush no incluye todo Zone, wrappers, mue
 ## Entrega
 
 Informar función, archivo/línea, duración síncrona vs espera, parent spans, TRACE_ID, muestras V8 y slices Perfetto concordantes. El peso de muestras de CPU no equivale a duración exacta de una función. Si solo se ve un callback envoltorio, causa aún pendiente. No descartar SQLite/red/GC/GPU/sync por falta de datos ni optimizar en esta fase.
+
+## Precauciones del análisis de pilas
+
+`resolve-stacks.mjs CAPTURE_DIR ASSETS_DIR` resuelve posiciones de bundle, no garantiza líneas originales: el transform AST devuelve `map:null` y los archivos instrumentados mapean a líneas del código impreso. Usar `npx tsx scripts/diagnostics/inspect-transformed.ts FILE LINE [LINE...]` y localizar luego la función en la fuente original exacta del APK antes de citar una línea. En archivos sin transformación el mapa sigue siendo directo.
+
+El analizador inicial alinea muestras con el punto medio del RPC y publica su incertidumbre. Para ventanas cortas contrastar `Performance.NavigationStart` contra los UserTiming ACTION_START de Perfetto antes de usar esa relación de relojes. Conservar ambas anclas y cualquier delta negativo de V8; los conteos de muestras no son milisegundos exactos.
+
+Un Paint puede ocurrir antes del FIRST_RENDER de doble rAF. No equiparar el marcador a duración percibida ni al primer frame presentado. El nombre de una actualización de estado en PROMISE_RESUME describe el origen de programación: una microtask React de 253 ms con origen setViewport no prueba que el cuerpo del setter dure 253 ms.
