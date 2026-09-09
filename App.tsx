@@ -220,6 +220,7 @@ import {
   isTransactionReservedForClose,
   releaseClosingTransactionIds,
   reserveClosingTransactionIds,
+  reconcileTransactionsForZPreview,
 } from './services/sync/ClosedTransactionMembership';
 import { inventorySyncService } from './services/sync/InventorySyncService';
 import { processInventoryDeduction } from './utils/inventoryEngine';
@@ -4794,6 +4795,26 @@ const AppContent: React.FC = () => {
       if (!Number.isFinite(moveTime)) return latestCloseTs <= 0;
       return latestCloseTs <= 0 || moveTime > (latestCloseTs - DRIFT_TOLERANCE_MS);
     });
+  };
+
+  const handleOpenZReport = async () => {
+    try {
+      const reconciliation = await reconcileTransactionsForZPreview(transactions, {
+        loadHistory: async () => ((await db.get('transactionHistory')) as Transaction[]) || [],
+        loadReports: async () => ((await db.get('zReports')) as ZReport[]) || [],
+        deleteActive: async (transactionId) => db.deleteDocument('transactions', transactionId),
+      });
+
+      if (reconciliation.removedClosed.length > 0) {
+        console.warn(`Z_PREVIEW_MEMBERSHIP_RECONCILED count=${reconciliation.removedClosed.length}`);
+      }
+      setTransactions(reconciliation.transactions);
+      setViewData(undefined);
+      setCurrentView('Z_REPORT');
+    } catch (error) {
+      console.error('Z_PREVIEW_MEMBERSHIP_FAILED', error);
+      alert('No se pudo comprobar la pertenencia de las ventas a cierres anteriores. No se abrió el cierre Z.');
+    }
   };
 
   const belongsToCurrentCashier = useCallback((record?: { userId?: string | null; userName?: string | null }) => {
@@ -11423,10 +11444,7 @@ const AppContent: React.FC = () => {
             onOpenHistory={() => setCurrentView('HISTORY')}
             onOpenFinance={(initialCashMovementType) => handleViewChange('FINANCE', { initialCashMovementType })}
             onRegisterCashMovement={handleRegisterMovement}
-            onOpenZReport={() => {
-              setViewData(undefined);
-              setCurrentView('Z_REPORT');
-            }}
+            onOpenZReport={() => { void handleOpenZReport(); }}
             onOpenInventoryTracking={(productId) => handleViewChange('TRACKING', { productId })}
             onOpenAudit={() => handleViewChange('INVENTORY_AUDIT')}
             onOpenTableMap={async () => {
@@ -11675,7 +11693,7 @@ const AppContent: React.FC = () => {
               setProductStocks(freshStocks);
             }}
             onOpenFinance={(initialCashMovementType) => handleViewChange('FINANCE', { initialCashMovementType })}
-            onOpenZReport={() => setCurrentView('Z_REPORT')}
+            onOpenZReport={() => { void handleOpenZReport(); }}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
             onOpenTableDesigner={() => {
@@ -11747,7 +11765,7 @@ const AppContent: React.FC = () => {
               setProductStocks(freshStocks);
             }}
             onOpenFinance={(initialCashMovementType) => handleViewChange('FINANCE', { initialCashMovementType })}
-            onOpenZReport={() => setCurrentView('Z_REPORT')}
+            onOpenZReport={() => { void handleOpenZReport(); }}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
             onOpenTableDesigner={() => {
@@ -11898,7 +11916,7 @@ const AppContent: React.FC = () => {
               onRegisterMovement={handleRegisterMovement}
               onCloseXReport={handleXReport}
               onPrintXReport={handlePrintXReport}
-              onOpenZReport={() => setCurrentView('Z_REPORT')}
+              onOpenZReport={() => { void handleOpenZReport(); }}
               onClose={() => setCurrentView(viewData?.returnView === 'TABLE_MAP' ? 'TABLE_MAP' : 'POS')}
             />
           );

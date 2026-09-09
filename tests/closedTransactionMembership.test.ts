@@ -8,6 +8,7 @@ import {
   isTransactionReservedForClose,
   releaseClosingTransactionIds,
   reserveClosingTransactionIds,
+  reconcileTransactionsForZPreview,
 } from '../services/sync/ClosedTransactionMembership';
 
 const transaction = (id: string, total = 100): Transaction => ({
@@ -146,4 +147,31 @@ test('PANCUVI overlap fixture excludes 66 closed sales and preserves the 79 late
   assert.equal(total(result.open), 18533.07);
   assert.equal(result.open[0].id, 'TCKS001001318');
   assert.equal(result.open.at(-1)?.id, 'TCKS001001396');
+});
+
+test('PANCUVI preview removes 1351-1396 before showing the 1397-1515 close', async () => {
+  const repeated = Array.from({ length: 46 }, (_, index) => {
+    const number = 1351 + index;
+    return transaction(`TCKS001${String(number).padStart(6, '0')}`, index === 45 ? 4336.88 : 200);
+  });
+  const legitimate = Array.from({ length: 119 }, (_, index) => {
+    const number = 1397 + index;
+    return transaction(`TCKS001${String(number).padStart(6, '0')}`, index === 118 ? 12481.32 : 200);
+  });
+  const deleted: string[] = [];
+
+  const result = await reconcileTransactionsForZPreview([...repeated, ...legitimate], {
+    loadHistory: async () => repeated.map(item => ({ ...item, zReportId: 'ZR-1788894575741' })),
+    loadReports: async () => [],
+    deleteActive: async (id) => { deleted.push(id); },
+  });
+  const total = (items: Transaction[]) => Number(items.reduce((sum, item) => sum + item.total, 0).toFixed(2));
+
+  assert.equal(result.removedClosed.length, 46);
+  assert.equal(total(result.removedClosed), 13336.88);
+  assert.equal(result.transactions.length, 119);
+  assert.equal(total(result.transactions), 36081.32);
+  assert.equal(result.transactions[0].displayId, 'TCKS001001397');
+  assert.equal(result.transactions.at(-1)?.displayId, 'TCKS001001515');
+  assert.deepEqual(deleted, repeated.map(item => item.id));
 });
