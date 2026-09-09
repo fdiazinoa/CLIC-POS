@@ -98,3 +98,17 @@ test('terminal or series rejections block the affected Z instead of retrying for
   assert.match(source, /'z_sequence_scope_forbidden'/);
   assert.match(source, /'z_sequence_event_invalid'/);
 });
+
+test('blocked Z reports remain visible in the synchronization indicators', () => {
+  const backgroundSource = readFileSync(
+    new URL('../services/sync/BackgroundSyncManager.ts', import.meta.url),
+    'utf8',
+  );
+  const posSource = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
+  const settingsSource = readFileSync(new URL('../components/SyncSettings.tsx', import.meta.url), 'utf8');
+
+  assert.match(backgroundSource, /blockedCount \+= data\.filter/);
+  assert.match(backgroundSource, /'BLOCKED_FUNCTIONAL', 'ERROR', 'FAILED_FINAL'/);
+  assert.match(posSource, /`Bloqueado · \$\{syncState\.blockedCount\}`/);
+  assert.match(settingsSource, /documento\(s\) bloqueado\(s\)/);
+});

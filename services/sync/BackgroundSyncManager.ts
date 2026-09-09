@@ -23,6 +23,7 @@ import {
 
 export interface SyncState {
     pendingCount: number;
+    blockedCount: number;
     isSyncing: boolean;
     hasError: boolean;
     lastSyncTime: string | null;
@@ -43,6 +44,7 @@ class BackgroundSyncManager {
     private nextRetryDelayMs: number | null = null;
     private state: SyncState = {
         pendingCount: 0,
+        blockedCount: 0,
         isSyncing: false,
         hasError: false,
         lastSyncTime: null
@@ -597,6 +599,7 @@ class BackgroundSyncManager {
     private async updatePendingCount(collectionOverride?: string[]) {
         const durableBatchActive = isSyncFeatureEnabled('sqlite_outbox_v2');
         let count = 0;
+        let blockedCount = 0;
         let oldestCreatedAt: number | null = null;
         if (durableBatchActive && durableOutboxRepository.isSupported()) {
             await durableOutboxRepository.refreshMetrics();
@@ -613,6 +616,10 @@ class BackgroundSyncManager {
         for (const col of collections) {
             const data = await db.get(col as any) || [];
             if (Array.isArray(data)) {
+                blockedCount += data.filter((item: any) =>
+                    this.shouldSyncItem(col, item) &&
+                    ['BLOCKED_FUNCTIONAL', 'ERROR', 'FAILED_FINAL'].includes(String(item?.syncStatus || '').toUpperCase())
+                ).length;
                 const pendingItems = data.filter((item: any) =>
                     this.shouldSyncItem(col, item) &&
                     this.isOperationalSyncPending(item, col)
@@ -642,7 +649,7 @@ class BackgroundSyncManager {
         count += pendingRanges.length;
 
         syncMetrics.setOutboxState(count, oldestCreatedAt);
-        this.updateState({ pendingCount: count });
+        this.updateState({ pendingCount: count, blockedCount });
     }
 
     private updateState(newState: Partial<SyncState>) {

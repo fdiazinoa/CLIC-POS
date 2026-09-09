@@ -58,6 +58,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         message: string;
     } | null>(null);
 
+    const localBlockedCount = auditData.filter((item) => item.status === 'ERROR').length;
+
     const resolveDocumentStatus = (raw: any): 'SYNCED' | 'PENDING' | 'ERROR' => {
         const status = String(raw?.syncStatus || raw?.cloudSyncStatus || '').toUpperCase();
         if (['COMPLETED', 'SYNCED', 'SYNCED_CLOUD', 'SYNCED_ACTIVE', 'SYNCED_MASTER', 'APPLIED_ERP'].includes(status)) return 'SYNCED';
@@ -1073,14 +1075,16 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                 </div>
 
                                 {isMaster && erpForwardStatus && (
-                                    <div className={`rounded-2xl border p-4 shadow-sm ${erpForwardStatus.pending > 0 ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
+                                    <div className={`rounded-2xl border p-4 shadow-sm ${erpForwardStatus.pending > 0 || localBlockedCount > 0 ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
                                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                                             <div>
-                                                <h3 className={`text-sm font-black uppercase tracking-widest ${erpForwardStatus.pending > 0 ? 'text-amber-800' : 'text-emerald-800'}`}>
+                                                <h3 className={`text-sm font-black uppercase tracking-widest ${erpForwardStatus.pending > 0 || localBlockedCount > 0 ? 'text-amber-800' : 'text-emerald-800'}`}>
                                                     Cola de envío ERP
                                                 </h3>
-                                                <p className={`mt-1 text-sm font-bold ${erpForwardStatus.pending > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
-                                                    {erpForwardStatus.pending > 0
+                                                <p className={`mt-1 text-sm font-bold ${erpForwardStatus.pending > 0 || localBlockedCount > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                                                    {localBlockedCount > 0
+                                                        ? `${localBlockedCount} documento(s) bloqueado(s); requieren revisión o reintento manual`
+                                                        : erpForwardStatus.pending > 0
                                                         ? `${erpForwardStatus.pending} documento(s) esperando envío al ERP`
                                                         : 'Sin documentos pendientes hacia ERP'}
                                                 </p>
