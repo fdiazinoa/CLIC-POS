@@ -1,3 +1,7 @@
+# Fase actual
+
+El profiler masivo descrito abajo quedó retirado. Usar [SELECTIVE.md](SELECTIVE.md) para la fase vigente. Las notas siguientes son históricas y NO autorizan volver a ejecutar el recorrido por fibras.
+
 # Diagnóstico temporal de CLIC-POS
 
 Sin optimizaciones funcionales. Rama basada en develop. Desactivado en builds normales.

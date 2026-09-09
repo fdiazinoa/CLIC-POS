@@ -21,9 +21,9 @@ public final class PosNativeDiagnostics {
     public PosNativeDiagnostics(Activity activity) {
         active=BuildConfig.POS_DIAGNOSTICS && activity.getIntent().getBooleanExtra("pos_diagnostics",false);
         if(!active)return;
+        android.webkit.WebView.setWebContentsDebuggingEnabled(true);
         current=this;
         HandlerThread eventThread=new HandlerThread("PosDiagnosticLogWriter");eventThread.start();eventWriter=new Handler(eventThread.getLooper());
-        try {Class.forName("com.getcapacitor.PosDiagnosticHooks").getField("enabled").setBoolean(null,true);}catch(Exception e){Log.e("POS_DIAG_NATIVE","nativeHooksUnavailable");}
         if(Build.VERSION.SDK_INT>=24){
             HandlerThread worker=new HandlerThread("PosDiagnosticFrames");worker.start();
             activity.getWindow().addOnFrameMetricsAvailableListener((window,metrics,dropped)->{

@@ -51,7 +51,7 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
-        ...(diagnostic ? { 'react-dom/client': 'react-dom/profiling' } : {}),
+        // Selective diagnostics use the normal React renderer; no profiling build.
       }
     },
     esbuild: diagnostic ? { keepNames: true, supported: { 'async-await': false } } : undefined,

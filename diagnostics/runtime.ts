@@ -1,168 +1,101 @@
-/* Temporary, opt-in diagnostics. Never log payloads, PINs, SQL bind values or URLs. */
-type Trace = { id: string; name: string; start: number; kind: string; busy: Set<string>; ended?: boolean; first?: boolean; unlocked?: boolean; handlerDone?: boolean };
-type Event = { traceId: string; name: string; ts: number; wall: number; [key: string]: unknown };
-declare const Zone: any;
-const native = () => (globalThis as any).POSDiagnostics;
-let observerMs=0;
-let enabled = false, seq = 0, spanSeq = 0, session = '', pending: Event[] = [], dropped = 0;
-const traces = new Map<string, Trace>(), dirty = new Set<string>();
-let input: { at: number; target: HTMLElement | null; type: string } | undefined;
-const now = () => performance.now();
-const current = (): Trace | undefined => typeof Zone !== 'undefined' ? Zone.current.get('posTrace') : undefined;
-export const diagEnabled = () => enabled;
-const safeName = (s: unknown) => String(s ?? '').replace(/[^a-zA-Z0-9_./:-]/g, '_').slice(0, 160);
-function emit(t: Trace | undefined, name: string, data: Record<string, unknown> = {}, timestamp = now()) {
-  if (!enabled) return;
-  const overheadStart=now();
-  const event = { traceId: t?.id || 'UNATTRIBUTED', name, ts: timestamp, wall: performance.timeOrigin + timestamp, session, jsThread: 'CrRendererMain', ...data };
-  if (pending.length < 12000) pending.push(event); else dropped++;
-  // UserTiming is recorded in Chromium's Perfetto producer on the actual renderer thread.
-  performance.mark(`${event.traceId}|${name}|${safeName(data.operation || '')}`, { startTime: timestamp });
-  observerMs+=now()-overheadStart;
+/* Opt-in, windowed diagnostics. Never collect arguments, PINs or document contents. */
+declare const Zone:any;
+type Trace={id:string;name:string;start:number;first?:boolean};
+type Span={id:number;parent:number|null;name:string;t?:Trace;start:number};
+let enabled=false,seq=0,sseq=0,deadline=0,session='',drops=0,overhead=0;
+let queue:any[]=[];const dirty=new Set<Trace>();
+const clock=()=>performance.now();
+const active=()=>enabled&&clock()<deadline;
+let syncSpan:Span|undefined;
+const context=():Span|undefined=>syncSpan || (typeof Zone==='undefined'?undefined:Zone.current.get('posSpan'));
+const shortSync=new Map<string,{count:number;total:number;max:number}>();
+const native=()=> (globalThis as any).POSDiagnostics;
+let input:{at:number;type:string}|undefined;
+let chain:{id:number;start:number;end:number;count:number;sum:number;max:number;states:number;scheduled:number}|undefined;
+let lastCost:any;
+let drainPending=false,drain:MessagePort;
+function emit(name:string,data:any={},span=context(),ts=clock()){
+ if(!enabled)return;const s=clock();
+ if(queue.length<6000)queue.push({name,traceId:span?.t?.id||'UNATTRIBUTED',spanId:span?.id,parentSpan:span?.parent,operation:span?.name,ts,session,thread:'CrRendererMain',...data});else drops++;
+ overhead+=clock()-s;
 }
-function start(name: string, kind: string, meta: Record<string, unknown> = {}): Trace {
-  const t: Trace = { id: `POS-${String(++seq).padStart(6,'0')}`, name, start: now(), kind, busy: new Set() };
-  traces.set(t.id,t);
-  emit(t,'ACTION_START',{operation:name,kind,...meta,...(kind==='action'&&input&&now()-input.at<100?{inputTimestamp:input.at,eventType:input.type}:{})});
-  native()?.section(t.id, name, true);
-  return t;
+function mark(name:string,span?:Span){performance.mark(`${span?.t?.id||'UNATTRIBUTED'}|${name}|${span?.name||''}`);}
+function closeChain(){if(chain){emit('MICROTASK_CHAIN',{...chain,duration:chain.end-chain.start,measurement:'instrumented_microtasks_until_message_task; excludes unknown microtasks; not proof of paint'});chain=undefined;}drainPending=false;}
+const taskMeta=new WeakMap<object,{parent?:Span;origin:string;id:number}>();
+const zoneSpec={name:'pos-selective',onScheduleTask(delegate:any,current:any,target:any,task:any){
+ if(active()&&task.type==='microTask'){
+  const parent=context();taskMeta.set(task,{parent,origin:parent?.name||task.source,id:++sseq});if(chain)chain.scheduled++;
+ }
+ return delegate.scheduleTask(target,task);
+},onInvokeTask(delegate:any,current:any,target:any,task:any,self:any,args:any[]){
+ if(!active()||task.type!=='microTask')return delegate.invokeTask(target,task,self,args);
+ const meta=taskMeta.get(task),parent=meta?.parent||context();
+ const span:Span={id:meta?.id||++sseq,parent:parent?.id??null,name:meta?.origin||task.source,t:parent?.t,start:clock()};
+ if(!chain){chain={id:span.id,start:span.start,end:span.start,count:0,sum:0,max:0,states:0,scheduled:0};}
+ chain.count++;emit('PROMISE_RESUME',{source:task.source,chainId:chain.id},span);emit('JS_PROCESSING_START',{chainId:chain.id},span);
+ try{return Zone.current.fork({name:'continuation',properties:{posSpan:span}}).run(()=>delegate.invokeTask(target,task,self,args));}
+ finally{const d=clock()-span.start;emit('JS_PROCESSING_END',{duration:d,over16:d>16,over50:d>50,over100:d>100,chainId:chain?.id},span);if(chain){chain.end=clock();chain.sum+=d;chain.max=Math.max(chain.max,d);}if(!drainPending){drainPending=true;Zone.root.run(()=>drain.postMessage(0));}}
+}};
+function scoped<T>(span:Span,work:()=>T):T{return Zone.current.fork({...(Zone.current.get('posObserved')?{name:'pos-span'}:zoneSpec),properties:{posSpan:span,posObserved:true}}).run(work);}
+export const diagEnabled=()=>enabled;
+export function diagRun<T>(name:string,work:()=>T,kind='background'):T{
+ if(!enabled)return work();
+ const user=/ModernLoginScreen.*handleKeyPress|POSInterface.*handleProductCardClick|TableMap.*handleNodeSelect/.test(name)&&input&&clock()-input.at<150;
+ if(user)deadline=clock()+5000;
+ if(!active())return work();
+ const parent=context();const t=user&&!parent?.t?{id:`POS-${String(++seq).padStart(6,'0')}`,name,start:clock()}:parent?.t;
+ const span:Span={id:++sseq,parent:parent?.id??null,name,t,start:clock()};
+ if(t&&t!==parent?.t){emit('ACTION_START',{inputTimestamp:input?.at,eventType:input?.type},span);mark('ACTION_START',span);}
+ emit('FUNCTION_START',{kind},span);
+ return scoped(span,()=>{let async=false;
+  const end=(outcome:string)=>{emit('FUNCTION_END',{duration:clock()-span.start,outcome,includesAwait:async},span);if(t&&t!==parent?.t)emit('ACTION_END',{},span);};
+  try{const v=work();if(v&&typeof (v as any).then==='function'){async=true;return (v as any).then((r:any)=>{end('ok');return r;},(e:any)=>{end('error');throw e;});}end('ok');return v;}catch(e){end('error');throw e;}
+ });
 }
-function milestone(t: Trace, name: string, data = {}) {
-  emit(t,name,{elapsedMs:now()-t.start,...data});
+export function diagSync<T>(name:string,work:()=>T):T{
+ if(!active())return work();const parent=context();const span:Span={id:++sseq,parent:parent?.id??null,name,t:parent?.t,start:clock()};
+ if(/onUpdateCart/.test(name)){if(parent?.t)dirty.add(parent.t);if(chain)chain.states++;}
+ const prior=syncSpan;syncSpan=span;
+ try{return work();}finally{syncSpan=prior;const duration=clock()-span.start;
+  if(duration>=1){emit('JS_PROCESSING_START',{},span,span.start);emit('JS_PROCESSING_END',{duration},span);}
+  else {const x=shortSync.get(name)||{count:0,total:0,max:0};x.count++;x.total+=duration;x.max=Math.max(x.max,duration);shortSync.set(name,x);}
+ }
 }
-function finish(t: Trace) {
-  if (t.ended) return;
-  t.ended = true;
-  milestone(t,'ACTION_END');
-  native()?.section(t.id,t.name,false);
+export function diagState<T>(name:string,work:()=>T,_value?:unknown):T{
+ if(!active())return work();const span=context();if(span?.t)dirty.add(span.t);if(chain)chain.states++;
+ return diagSync(name,()=>{emit('STATE_UPDATE',{},span);return work();});
 }
-export function diagRun<T>(name: string, work: () => T, kind = 'action', meta: Record<string, unknown> = {}): T {
-  if (!enabled) return work();
-  const parent = current();
-  const t = parent || start(name,kind,meta), root = !parent, sid = ++spanSeq;
-  const zone = Zone.current.fork({ name:t.id, properties:{posTrace:t} });
-  emit(t,'JS_OPERATION_START',{operation:name,spanId:sid,root});
-  if(kind==='native-interface')native()?.section(t.id,name+':'+sid,true);
-  const end = (outcome:string) => { if(kind==='native-interface')native()?.section(t.id,name+':'+sid,false); emit(t,'JS_OPERATION_END',{operation:name,spanId:sid,outcome}); if(root) {t.handlerDone=true; milestone(t,'HANDLER_END'); finish(t);} };
-  return zone.run(() => {
-    try {
-      const value = work();
-      if (value && typeof (value as any).then === 'function') return (value as any).then((result:any)=>{end('ok');return result;},(error:any)=>{end('error');throw error;});
-      end('ok'); return value;
-    } catch(error) {end('error');throw error;}
-  });
+export function diagSet<T>(name:string,setter:(v:T)=>any,value:T){return diagState(name,()=>setter(value));}
+export function diagLegacy(operation:string,stage:string,_meta?:Record<string,unknown>){if(active())emit('LEGACY_'+stage,{legacyOperation:operation});}
+function installCommitHook(){const g=globalThis as any;if(g.__REACT_DEVTOOLS_GLOBAL_HOOK__)return;
+ g.__REACT_DEVTOOLS_GLOBAL_HOOK__={supportsFiber:true,renderers:new Map(),inject(r:any){this.renderers.set(1,r);return 1;},onCommitFiberUnmount(){},onPostCommitFiberRoot(){},onCommitFiberRoot(){
+  if(!active())return;const ts=clock(),traces=[...dirty];dirty.clear();emit('REACT_COMMIT',{traceIds:traces.map(t=>t.id)},undefined,ts);performance.mark('POS|REACT_COMMIT');
+  for(const t of traces){if(t.first)continue;Zone.root.run(()=>requestAnimationFrame(()=>requestAnimationFrame(()=>{if(t.first)return;t.first=true;const span={id:++sseq,parent:null,name:t.name,t,start:ts};emit('FIRST_RENDER',{duration:clock()-t.start,commitTs:ts,ambiguous:traces.length>1,measurement:'post_paint_opportunity'},span);mark('FIRST_RENDER',span);})));}
+ }};
 }
-export function diagState<T>(name: string, work: () => T, value?: unknown): T {
-  if (!enabled) return work();
-  const t = current();
-  emit(t,'JS_STATE_UPDATE_START',{operation:name});
-  try {
-    if(t) {
-      dirty.add(t.id);
-      if (/(processing|loading|saving|submitting|busy|dispatching|finalizing)/i.test(name) && typeof value === 'boolean') {
-        if(value)t.busy.add(name);else t.busy.delete(name);
-        emit(t,'UI_BUSY_STATE',{operation:name,busy:value});
-      }
-    }
-    return work();
-  } finally {emit(t,'JS_STATE_UPDATE_END',{operation:name});}
+function installBridge(){const cap=(globalThis as any).Capacitor;if(!cap?.nativePromise)return;const original=cap.nativePromise.bind(cap);
+ cap.nativePromise=(plugin:string,method:string,options:any)=>{
+  if(!active()||plugin==='PosDiagnosticSink')return original(plugin,method,options);
+  const parent=context(),span:Span={id:++sseq,parent:parent?.id??null,name:`Capacitor:${plugin}.${method}`,t:parent?.t,start:clock()};
+  emit('SYNC_CALL_START',{meaning:'JS nativePromise invocation, not synchronous native execution'},span);
+  const p=original(plugin,method,options);emit('SYNC_CALL_NATIVE_RETURN',{meaning:'nativePromise returned a Promise; NOT native completion'},span);
+  return scoped(span,()=>p.then((r:any)=>{emit('CAPACITOR_RETURN',{meaning:'JS fulfillment callback; native completion may be earlier'},span);return r;},(e:any)=>{emit('CAPACITOR_RETURN',{error:true},span);throw e;}));
+ };
+ const cb=cap.nativeCallback?.bind(cap);if(cb)cap.nativeCallback=(p:string,m:string,o:any,fn:any)=>{
+  if(!active())return cb(p,m,o,fn);const parent=context();return cb(p,m,o,function(this:any,...args:any[]){return diagRun(`CapacitorCallback:${p}.${m}`,()=>scoped(parent||{id:++sseq,parent:null,name:`${p}.${m}`,start:clock()},()=>fn?.apply(this,args)));});
+ };
 }
-export function diagLegacy(operation:string,stage:string,meta?:Record<string,unknown>) {
-  const t=current(); if(!t)return;
-  emit(t,'LEGACY_'+stage,{operation,...(meta ? {tableId:meta.tableId,ticketId:meta.ticketId}: {})});
-  // Legacy unlock remains separate; it does not prove a presented/enabled frame.
+export async function installDiagnostics(){
+ if(!native()?.enabled())return;
+ await import('zone.js');enabled=true;session=Date.now().toString(36);
+ const channel=new MessageChannel();drain=channel.port2;channel.port1.onmessage=closeChain;
+ const before=clock(),bootNs=native().clock(),after=clock();emit('CLOCK_SYNC',{bootNs,jsBefore:before,jsAfter:after,uncertaintyMs:after-before});
+ for(const type of ['click','input','keydown'])document.addEventListener(type,e=>{input={at:e.timeStamp,type:e.type};},{capture:true,passive:true});
+ installCommitHook();installBridge();
+ const {registerPlugin}=await import('@capacitor/core');const sink=registerPlugin<{send(o:{payload:string}):Promise<void>}>('PosDiagnosticSink');
+ for(const type of ['longtask','long-animation-frame'])if(PerformanceObserver.supportedEntryTypes.includes(type))new PerformanceObserver(list=>{for(const e of list.getEntries())if(active())emit(type.toUpperCase(),{duration:e.duration},undefined,e.startTime);}).observe({type,buffered:false});
+ const flush=()=>{if(!queue.length)return;const t=clock(),batch=queue;queue=[];for(const [operation,stats] of shortSync)batch.push({name:'SHORT_SYNC_SUMMARY',operation,...stats,session,ts:clock(),thresholdMs:1});shortSync.clear();if(lastCost)batch.push(lastCost);const payload=JSON.stringify(batch);void sink.send({payload}).catch(()=>{drops+=batch.length;});lastCost={name:'DIAGNOSTIC_COST',ts:clock(),session,flushMs:clock()-t,emitMs:overhead,drops};overhead=0;performance.clearMarks();};
+ Zone.root.run(()=>setInterval(flush,1000));
+ (globalThis as any).__POS_DIAGNOSTICS__={status:()=>({session,drops,pending:queue.length,active:active()}),flush,arm:(seconds=5)=>{deadline=clock()+Math.min(seconds,45)*1000;},disable:()=>{deadline=0;flush();}};
+ emit('CAPABILITY',{mode:'selective',reactFiberTraversal:false,nativeSections:false,windowMs:5000,microtasks:'selected Zone continuations only; unknown callers require V8 sampling'});
 }
-function installReactHook() {
-  const g=globalThis as any;
-  if(g.__REACT_DEVTOOLS_GLOBAL_HOOK__) {emit(undefined,'CAPABILITY',{reactHook:'existing_not_replaced'});return;}
-  let renderer=0;
-  g.__REACT_DEVTOOLS_GLOBAL_HOOK__={supportsFiber:true,renderers:new Map(),inject(r:any){this.renderers.set(++renderer,r);return renderer;},onCommitFiberUnmount(){},onPostCommitFiberRoot(){},
-    onCommitFiberRoot(_id:number,root:any){
-      const hookStart=now();
-      const ids=[...dirty];dirty.clear();const commit=now();
-      // Include ambiguity explicitly: one batched commit may serve several actions.
-      let count=0; const walk=(f:any)=>{if(!f || count>2000)return;count++;
-        if((f.flags&1) && typeof f.type !== 'string') {
-          const name=f.type?.displayName || f.type?.name || f.elementType?.name || 'Anonymous';
-          const prev=f.alternate, props=f.memoizedProps||{}, before=prev?.memoizedProps||{};
-          const changed=Object.keys(props).filter(k=>props[k]!==before[k]).map(safeName).slice(0,20);
-          const data={component:safeName(name),actualDuration:f.actualDuration??null,baseDuration:f.treeBaseDuration??null,changedPropKeys:changed,stateReferenceChanged:prev?f.memoizedState!==prev.memoizedState:null,traceIds:ids,commitTs:commit};
-          for(const id of ids.length?ids:[''])emit(traces.get(id),'REACT_RENDER',data);
-        }
-        walk(f.child);walk(f.sibling);
-      };walk(root.current);
-      emit(undefined,'DIAGNOSTIC_REACT_HOOK',{duration:now()-hookStart});
-      for(const id of ids) {
-        const t=traces.get(id);if(!t)continue;
-        emit(t,'REACT_COMMIT',{traceIds:ids,ambiguous:ids.length>1});
-        // A double-rAF is a post-paint opportunity, NOT a measured compositor presentation.
-        requestAnimationFrame(()=>requestAnimationFrame(()=>{
-          if(!t.first){t.first=true;milestone(t,'FIRST_RENDER',{measurement:'post_paint_opportunity',ambiguous:ids.length>1});}
-          if(!t.unlocked && t.busy.size===0){t.unlocked=true;milestone(t,'LOCAL_UNLOCK',{measurement:'committed_no_instrumented_busy_state',ambiguous:ids.length>1});}
-        }));
-      }
-    }};
-}
-function installBridge() {
-  const cap=(globalThis as any).Capacitor;if(!cap?.nativePromise){emit(undefined,'CAPABILITY',{bridge:false});return;}
-  const promise=cap.nativePromise.bind(cap);
-  cap.nativePromise=(plugin:string,method:string,options:any)=>{
-    if(plugin==='PosDiagnosticSink')return promise(plugin,method,options);
-    const t=current();const sid=++spanSeq;
-    emit(t,'CAPACITOR_CALL_START',{plugin,operation:method,spanId:sid});
-    // Additional option keys are consumed by diagnostic hooks only, never SQL or HTTP data.
-    return promise(plugin,method,{...options,_posTraceId:t?.id||'UNATTRIBUTED',_posSpanId:String(sid)}).then((result:any)=>{
-      emit(t,'CAPACITOR_CALL_END',{plugin,operation:method,spanId:sid,rows:Array.isArray(result?.values)?result.values.length:null});return result;
-    },(error:any)=>{emit(t,'CAPACITOR_CALL_END',{plugin,operation:method,spanId:sid,errorClass:safeName(error?.name)});throw error;});
-  };
-  const callback=cap.nativeCallback?.bind(cap);
-  if(callback)cap.nativeCallback=(plugin:string,method:string,options:any,cb:any)=>{
-    const t=current(),sid=++spanSeq;emit(t,'CAPACITOR_CALLBACK_START',{plugin,operation:method,spanId:sid});
-    return callback(plugin,method,{...options,_posTraceId:t?.id||'UNATTRIBUTED',_posSpanId:String(sid)},(...args:any[])=>{emit(t,'CAPACITOR_CALLBACK',{plugin,operation:method,spanId:sid});return cb?.(...args);});
-  };
-}
-function installNetwork() {
-  const fetchOriginal=globalThis.fetch;
-  globalThis.fetch=function(...args:Parameters<typeof fetch>) {
-    const t=current(),sid=++spanSeq;
-    // URL paths may contain customer IDs/tokens. Log method and a session-local opaque endpoint ID only.
-    let endpoint='unknown';try{const u=new URL(typeof args[0]==='string'?args[0]:args[0] instanceof URL?args[0].href:args[0].url,location.href);endpoint=safeName(u.origin)+':'+hash(u.pathname);}catch{}
-    emit(t,'HTTP_START',{spanId:sid,endpoint,method:args[1]?.method||'GET'});
-    return fetchOriginal.apply(this,args).then(response=>{emit(t,'HTTP_HEADERS',{spanId:sid,status:response.status});return response;},error=>{emit(t,'HTTP_ERROR',{spanId:sid,errorClass:safeName(error?.name)});throw error;});
-  };
-  for(const method of ['json','text','arrayBuffer','blob','formData'] as const) {
-    const original=Response.prototype[method] as any;
-    (Response.prototype as any)[method]=function(...args:any[]){const t=current(),sid=++spanSeq;emit(t,'HTTP_BODY_START',{spanId:sid,operation:method});return original.apply(this,args).then((v:any)=>{emit(t,'HTTP_BODY_END',{spanId:sid});return v;},(e:any)=>{emit(t,'HTTP_BODY_END',{spanId:sid,error:true});throw e;});};
-  }
-  const send=XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.send=function(body?:Document|XMLHttpRequestBodyInit|null){const t=current(),sid=++spanSeq;emit(t,'XHR_START',{spanId:sid});this.addEventListener('loadend',()=>emit(t,'XHR_END',{spanId:sid,status:this.status}),{once:true});return send.call(this,body);};
-}
-function hash(s:string){let h=2166136261;for(const c of s)h=Math.imul(h^c.charCodeAt(0),16777619);return (h>>>0).toString(16);}
-export async function installDiagnostics() {
-  if(!native()?.enabled())return;
-  await import('zone.js');enabled=true;session=Date.now().toString(36);
-  const jsBefore=now(),boot=native().clock(),jsAfter=now();
-  emit(undefined,'CLOCK_SYNC',{bootNs:boot,jsBefore,jsAfter,uncertaintyMs:jsAfter-jsBefore});
-  for(const type of ['click','input','change','keydown']) document.addEventListener(type,e=>{input={at:e.timeStamp,target:e.target as HTMLElement,type:e.type};},{capture:true,passive:true});
-  installReactHook();
-  const {registerPlugin}=await import('@capacitor/core');
-  const sink=registerPlugin<{send(options:{payload:string}):Promise<void>}>('PosDiagnosticSink');
-  installBridge();installNetwork();
-  for(const type of ['longtask','event','long-animation-frame']) {
-    if(!PerformanceObserver.supportedEntryTypes.includes(type)) {emit(undefined,'CAPABILITY',{type,supported:false});continue;}
-    new PerformanceObserver(list=>{for(const e of list.getEntries())emit(undefined,type.toUpperCase(),{duration:e.duration,entryName:safeName(e.name),...('processingStart' in e?{processingStart:(e as any).processingStart,processingEnd:(e as any).processingEnd,interactionId:(e as any).interactionId}:{}),scripts:(e as any).scripts?.map((s:any)=>({duration:s.duration,sourceFunctionName:safeName(s.sourceFunctionName),sourceCharPosition:s.sourceCharPosition}))},e.startTime);}).observe({type,buffered:true,...(type==='event'?{durationThreshold:16}:{})});
-  }
-  let last=now();const frame=(ts:number)=>{const dt=ts-last;if(dt>16.7)emit(undefined,'RAF_GAP',{duration:dt,over32:dt>32,over50:dt>50,over100:dt>100,measurement:'raf_gap_not_frame_drop'},last);last=ts;requestAnimationFrame(frame);};requestAnimationFrame(frame);
-  setInterval(()=>{
-    if(!pending.length)return;
-    const batch=pending.splice(0,500),flushStart=now(),eventOverheadMs=observerMs;observerMs=0;
-    const encoded=JSON.stringify(batch);
-    void sink.send({payload:encoded}).catch(()=>{dropped+=batch.length;});
-    performance.clearMarks();
-    emit(undefined,'DIAGNOSTIC_FLUSH',{duration:now()-flushStart,eventOverheadMs,dropped});
-  },200);
-  (globalThis as any).__POS_DIAGNOSTICS__={status:()=>({session,operations:seq,dropped,pending:pending.length}),mark:(name:string)=>emit(current(),safeName(name))};
-  emit(undefined,'CAPABILITY',{enabled:true,session,asyncContext:'zone-es2016',firstRender:'post-paint opportunity; reconcile with FrameTimeline',localUnlock:'instrumented busy state + commit; unknown blockers not inferred'});
-}
-
-export function diagSet<T>(name:string,setter:(value:T)=>any,value:T){return diagState(name,()=>setter(value),value);}

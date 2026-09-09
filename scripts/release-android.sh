@@ -269,9 +269,7 @@ git -C "${CANONICAL_BUILD_WORKTREE}" checkout --detach "${SOURCE_COMMIT}"
 BUILD_WORKTREE="${CANONICAL_BUILD_WORKTREE}"
 info "Instalando dependencias del commit fuente"
 (cd "${BUILD_WORKTREE}" && npm ci)
-if [[ "${CLIC_POS_DIAGNOSTICS:-false}" == "true" ]]; then
-  (cd "${BUILD_WORKTREE}" && python3 scripts/diagnostics/patch-native.py)
-fi
+# Selective JS diagnostics deliberately do not patch Capacitor or SQLite sources.
 
 BUILD_GRADLE_FILE="${BUILD_WORKTREE}/android/app/build.gradle"
 update_gradle_version "${BUILD_GRADLE_FILE}" "${NEXT_VERSION_CODE}" "${VERSION_NAME}"

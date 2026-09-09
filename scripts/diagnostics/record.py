@@ -4,8 +4,8 @@ Run in a persistent exec session. Create OUT/stop.request to end early.
 """
 import argparse,subprocess,time,json,os
 from pathlib import Path
-p=argparse.ArgumentParser();p.add_argument('--serial',required=True);p.add_argument('--out',required=True);p.add_argument('--seconds',type=int,default=300);a=p.parse_args()
-if not 15<=a.seconds<=600:raise SystemExit('Duration must be 15..600 seconds')
+p=argparse.ArgumentParser();p.add_argument('--serial',required=True);p.add_argument('--out',required=True);p.add_argument('--seconds',type=int,default=40);a=p.parse_args()
+if not 15<=a.seconds<=45:raise SystemExit('Duration must be 15..45 seconds')
 out=Path(a.out);helper=Path(__file__).with_name('capture.py');args=['python3',str(helper)]
 subprocess.run(args+['start','--serial',a.serial,'--out',str(out),'--system-atrace'],check=True)
 state=json.loads((out/'capture-state.json').read_text());start=time.monotonic();health=[]
