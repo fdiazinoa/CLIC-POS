@@ -39,7 +39,7 @@ const zoneSpec={name:'pos-selective',onScheduleTask(delegate:any,current:any,tar
 function scoped<T>(span:Span,work:()=>T):T{return Zone.current.fork({...(Zone.current.get('posObserved')?{name:'pos-span'}:zoneSpec),properties:{posSpan:span,posObserved:true}}).run(work);}
 export const diagEnabled=()=>enabled;
 export function diagRun<T>(name:string,work:()=>T,kind='background'):T{
- if(!enabled)return work();
+ if(!enabled || (kind==='direct-helper'&&!syncSpan))return work();
  const user=/ModernLoginScreen.*handleKeyPress|POSInterface.*handleProductCardClick|TableMap.*handleNodeSelect/.test(name)&&input&&clock()-input.at<150;
  if(user)deadline=clock()+5000;
  if(!active())return work();

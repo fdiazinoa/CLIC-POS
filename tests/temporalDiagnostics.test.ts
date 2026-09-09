@@ -13,7 +13,7 @@ test('diagnostic build preserves async context across overlapping operations, re
  const runtime=path.resolve('diagnostics/runtime.ts');
  const fixture=`
  import assert from 'node:assert/strict';
- import {installDiagnostics,diagRun,diagSet} from ${JSON.stringify(runtime)};
+ import {installDiagnostics,diagRun,diagSet,diagSync} from ${JSON.stringify(runtime)};
  async function main(){
  const batches=[];let flush;const bridge=[];const frames=[];
  const inputs={};globalThis.document={addEventListener(type,fn){inputs[type]=fn;}};
@@ -26,8 +26,9 @@ test('diagnostic build preserves async context across overlapping operations, re
  globalThis.Capacitor={PluginHeaders:[{name:'PosDiagnosticSink',methods:[{name:'send',rtype:'promise'}]}],nativePromise:(p,m,o)=>{if(p==='PosDiagnosticSink'){batches.push(...JSON.parse(o.payload));return Promise.resolve({});}bridge.push({p,m,o});return Promise.resolve({values:[1,2]});},isNativePlatform:()=>true,getPlatform:()=> 'android'};
  await installDiagnostics();globalThis.__POS_DIAGNOSTICS__.arm(5);
  const delay=ms=>new Promise(r=>setTimeout(r,ms));
+ for(let i=0;i<10000;i++)assert.equal(diagRun('POSInterface.tsx:getProductPrice:3087',()=>i,'direct-helper'),i);
  inputs.click({timeStamp:performance.now(),type:'click'});const values=await Promise.all([
-  diagRun('ModernLoginScreen.tsx:handleKeyPress:1',async()=>{await delay(20);await Capacitor.nativePromise('SQLite','query',{});return 17;}),
+  diagRun('ModernLoginScreen.tsx:handleKeyPress:1',async()=>{await delay(20);await Capacitor.nativePromise('SQLite','query',{});return diagSync('addToCart:getProductPrice:3320',()=>diagRun('POSInterface.tsx:getProductPrice:3087',()=>17,'direct-helper'));}),
   diagRun('ModernLoginScreen.tsx:handleKeyPress:2',async()=>{await delay(1);await Capacitor.nativePromise('SQLite','query',{});return 29;})
  ]);
  assert.deepEqual(values,[17,29]);assert.equal(bridge.length,2);assert.deepEqual(bridge[0].o,{});
@@ -39,7 +40,7 @@ test('diagnostic build preserves async context across overlapping operations, re
  flush();await delay(1);assert.equal(batches.filter(e=>e.name==='ACTION_START'&&e.kind==='action').length,3);assert.equal(batches.filter(e=>e.name==='REACT_RENDER').length,0);
  const visible=batches.find(e=>e.traceId==='POS-000005'&&e.name==='FIRST_RENDER');const done=batches.find(e=>e.traceId==='POS-000005'&&e.name==='ACTION_END');assert.ok(visible.ts<done.ts-30);
  assert.deepEqual(batches.filter(e=>e.name==='CAPACITOR_RETURN').map(e=>e.traceId),['POS-000002','POS-000001']);assert.ok(batches.some(e=>e.name==='PROMISE_RESUME'&&e.parentSpan));
- assert.ok(!JSON.stringify(batches).includes('bindValues'));
+ assert.equal(batches.filter(e=>e.name==='FUNCTION_START'&&e.operation==='POSInterface.tsx:getProductPrice:3087').length,1);assert.ok(!JSON.stringify(batches).includes('bindValues'));
  console.log('context-result-exception-pass');process.exit(0);
  }
  main().catch(e=>{console.error(e);process.exitCode=1;});

@@ -42,7 +42,7 @@ export function temporalDiagnosticsPlugin(enabled:boolean):Plugin {
         if(continuation)label=p.expression.getText(source).slice(-80)+':callback';
         label+=':'+ (source.getLineAndCharacterOfPosition(original.getStart(source)).line+1);
         count++;const u=updated as any,async=original.modifiers?.some(m=>m.kind===ts.SyntaxKind.AsyncKeyword);
-        const body=f.createBlock([f.createReturnStatement(f.createCallExpression(f.createIdentifier('__posDiagRun'),undefined,[f.createStringLiteral(id.split('/').pop()+':'+label),f.createArrowFunction(async?[f.createModifier(ts.SyntaxKind.AsyncKeyword)]:undefined,undefined,[],undefined,f.createToken(ts.SyntaxKind.EqualsGreaterThanToken),u.body),f.createStringLiteral(handler?'action':'background')]))],true);
+        const body=f.createBlock([f.createReturnStatement(f.createCallExpression(f.createIdentifier('__posDiagRun'),undefined,[f.createStringLiteral(id.split('/').pop()+':'+label),f.createArrowFunction(async?[f.createModifier(ts.SyntaxKind.AsyncKeyword)]:undefined,undefined,[],undefined,f.createToken(ts.SyntaxKind.EqualsGreaterThanToken),u.body),f.createStringLiteral(label.startsWith('getProductPrice:')?'direct-helper':handler?'action':'background')]))],true);
         if(ts.isArrowFunction(u))return f.updateArrowFunction(u,u.modifiers,u.typeParameters,u.parameters,u.type,u.equalsGreaterThanToken,body);
         if(ts.isFunctionExpression(u))return f.updateFunctionExpression(u,u.modifiers,u.asteriskToken,u.name,u.typeParameters,u.parameters,u.type,body);
         if(ts.isFunctionDeclaration(u))return f.updateFunctionDeclaration(u,u.modifiers,u.asteriskToken,u.name,u.typeParameters,u.parameters,u.type,body);
