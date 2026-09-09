@@ -13,6 +13,7 @@ import {
 } from "../services/recovery/PendingOperationsRecovery";
 import { originalDigest } from "../services/recovery/OriginalCodec";
 import { recoveryCanonicalJson } from "../services/recovery/RecoveryJson";
+import { captureRetainedOriginals } from "../services/recovery/RetainedOriginals";
 import { pathToFileURL } from "node:url";
 const scope = {
   tenantId: "11111111-1111-4111-8111-111111111111",
@@ -275,6 +276,87 @@ test("empty or newly initialized database cannot publish an empty remote replace
     await r.updateRetainedBackup();
     assert.equal(sends, 0);
     assert.deepEqual(await db.getCollection("recoveryOriginals"), []);
+  } finally {
+    f.close();
+  }
+});
+
+test("first activation checkpoints a complete populated local set", async () => {
+  const f = fixture(),
+    { db } = f.open();
+  try {
+    await db.saveDocument("transactions", {
+      id: "new-sale",
+      terminalId: "T1",
+      source_terminal_id: scope.terminalId,
+      displayId: "TCK-DEMO-1",
+      total: 550,
+      payments: [{ method: "CASH", amount: 550 }],
+    });
+    const remote: any[] = [];
+    const snapshot = async () => ({
+      snapshotId: "55555555-5555-4555-8555-555555555555",
+      totalRecords: remote.length,
+      totalBytes: remote.reduce((sum, row) => sum + row.record.byteLength, 0),
+      snapshotDigest: await digest(
+        remote.map((row) => `${row.receiptId}:${row.recordHash}\n`).join(""),
+      ),
+      expiresAt: "2099-01-01T00:00:00Z",
+      nextCursor: remote.length ? "first" : null,
+      completeness: "RECEIVED_ORIGINALS_ONLY",
+      exactZEligible: false,
+      closeAuthorization: "NOT_GRANTED",
+    });
+    const sentKinds: string[] = [];
+    const recovery = new PendingOperationsRecovery(
+      db,
+      {
+        context: async () => ({ ...ctx, enabled: true }),
+        receive: async (records) => {
+          const receipts = [];
+          for (const record of records) {
+            const receiptId = String(remote.length + 1);
+            const recordHash = await originalDigest(recordBytes(record));
+            remote.push({
+              receiptId,
+              recordHash,
+              receivedAt: "2026-09-08T00:00:00Z",
+              record,
+            });
+            sentKinds.push(record.kind);
+            receipts.push({
+              receiptId,
+              originalId: record.originalId,
+              revision: record.revision,
+              kind: record.kind,
+              bodySha256: record.bodySha256,
+              receiptStatus: "RECEIVED",
+            });
+          }
+          return { receipts };
+        },
+        snapshot,
+        page: async () => ({
+          ...(await snapshot()),
+          pageStart: 0,
+          records: remote,
+          nextCursor: null,
+        }),
+      },
+      (context) => captureRetainedOriginals(db, context),
+    );
+
+    await recovery.updateRetainedBackup();
+
+    assert.deepEqual(sentKinds, ["TRANSACTION", "MEMBERSHIP"]);
+    const retained = await db.getDocument<any>("recoveryState", "retainedSet");
+    assert.equal(retained.placements.length, 1);
+    assert.equal(retained.placements[0].collection, "transactions");
+    assert.equal(
+      (await db.getDocument<any>("recoveryOriginals", retained.captureId))
+        .status,
+      "RECEIVED",
+    );
   } finally {
     f.close();
   }
