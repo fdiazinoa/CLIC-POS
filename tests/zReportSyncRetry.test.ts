@@ -71,3 +71,14 @@ test('Z history keeps an idempotent resend action for reports previously marked 
   assert.match(source, /title="Enviar este mismo cierre al ERP de forma idempotente"/);
   assert.doesNotMatch(source, /r\.syncStatus !== 'APPLIED_ERP'.*handleSendZReport/s);
 });
+
+test('terminal or series rejections block the affected Z instead of retrying forever', () => {
+  const source = readFileSync(
+    new URL('../services/sync/BackgroundSyncManager.ts', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(source, /'z_sequence_series_forbidden'/);
+  assert.match(source, /'z_sequence_scope_forbidden'/);
+  assert.match(source, /'z_sequence_event_invalid'/);
+});
