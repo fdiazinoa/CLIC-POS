@@ -74,6 +74,7 @@ class BackgroundSyncManager {
         // Recover interrupted sync states from previous crashes/reloads.
         await this.recoverStuckSyncItems();
         await this.recoverCompletedTransactionsForReplay();
+        await this.recoverRecentZReportsForReplay();
         await transferReceiptService.recoverInterrupted();
 
         // Initial count of pending items
@@ -81,6 +82,9 @@ class BackgroundSyncManager {
 
         // Start background worker
         this.startWorker();
+        if (navigator.onLine && this.state.pendingCount > 0) {
+            this.scheduleSync(0);
+        }
 
         this.onlineHandler = () => {
             console.log('🌐 Network is back online. Triggering immediate sync...');
@@ -816,6 +820,52 @@ class BackgroundSyncManager {
         } finally {
             localStorage.setItem(flagKey, '1');
         }
+    }
+
+    /**
+     * Re-submit recent closes once after an upgrade. ERP derives the event id
+     * from the immutable local report id, so an already received close is a
+     * duplicate ACK while a close affected by a silent transport failure is
+     * delivered without allocating another Z number.
+     */
+    private async recoverRecentZReportsForReplay() {
+        const terminalId = permissionService.getTerminalId();
+        if (!terminalId || !this.isErpOperationalPushConfigured()) return;
+
+        const flagKey = `sync_replay_recent_z_reports_v1_${terminalId}`;
+        if (localStorage.getItem(flagKey) === '1') return;
+
+        try {
+            const reports = await db.get('zReports') as any[];
+            if (!Array.isArray(reports) || reports.length === 0) return;
+
+            const cutoffMs = Date.now() - (7 * 24 * 60 * 60 * 1000);
+            let changed = 0;
+            for (const report of reports) {
+                if (isRecoveredOperation(report)) continue;
+                const reportDate = this.resolveItemDate(report)?.getTime();
+                if (!reportDate || reportDate < cutoffMs) continue;
+                if (!this.shouldSyncItem('zReports', report)) continue;
+
+                report.syncStatus = 'PENDING';
+                report.syncError = undefined;
+                delete report.syncRetryAfter;
+                delete report.syncStartedAt;
+                delete report.syncBlockedReason;
+                delete report.syncBlockedAt;
+                changed++;
+            }
+
+            if (changed > 0) {
+                await db.save('zReports', reports);
+                console.warn(`♻️ BackgroundSyncManager: Re-queued ${changed} recent Z report(s) for idempotent replay.`);
+            }
+        } catch (error) {
+            console.warn('⚠️ BackgroundSyncManager: Failed replay recovery for recent Z reports:', error);
+            return;
+        }
+
+        localStorage.setItem(flagKey, '1');
     }
 
     /**

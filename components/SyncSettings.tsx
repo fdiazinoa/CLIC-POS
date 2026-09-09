@@ -60,8 +60,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
 
     const resolveDocumentStatus = (raw: any): 'SYNCED' | 'PENDING' | 'ERROR' => {
         const status = String(raw?.syncStatus || raw?.cloudSyncStatus || '').toUpperCase();
-        if (status === 'COMPLETED' || status === 'SYNCED') return 'SYNCED';
-        if (status === 'ERROR') return 'ERROR';
+        if (['COMPLETED', 'SYNCED', 'SYNCED_CLOUD', 'SYNCED_ACTIVE', 'SYNCED_MASTER', 'APPLIED_ERP'].includes(status)) return 'SYNCED';
+        if (['ERROR', 'BLOCKED_FUNCTIONAL', 'FAILED_FINAL'].includes(status)) return 'ERROR';
         return 'PENDING';
     };
 

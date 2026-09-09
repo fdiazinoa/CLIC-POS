@@ -10459,7 +10459,17 @@ const AppContent: React.FC = () => {
       if (syncManager.isInitialized) {
         try {
           await syncManager.pushZReport(newZReport);
+          newZReport.syncStatus = syncManager.isUsingErpOperationalTarget()
+            ? 'APPLIED_ERP'
+            : 'COMPLETED';
+          newZReport.syncError = undefined;
+          await db.saveDocument('zReports', newZReport);
+          setZReports(prev => prev.map(report => report.id === newZReport.id ? { ...newZReport } : report));
         } catch (e) {
+          newZReport.syncStatus = 'RETRY_WAIT';
+          newZReport.syncError = e instanceof Error ? e.message : String(e || 'No se pudo enviar el cierre Z');
+          await db.saveDocument('zReports', newZReport);
+          setZReports(prev => prev.map(report => report.id === newZReport.id ? { ...newZReport } : report));
           console.warn('⚠️ [App.tsx] Z-Report push failed (queued):', e);
         }
       } else {
