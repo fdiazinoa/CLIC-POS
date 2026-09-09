@@ -43,6 +43,7 @@ import { buildMasterUrlFromHost } from '../../utils/cloudMasterRegistry';
 import {
     looksLikeUuidString,
     mergeDocumentSeriesCollection,
+    mergeIncomingDocumentSeriesWithoutRewind,
     resolveDocumentSeriesDisplayPrefix,
 } from '../../utils/documentSeriesIdentity';
 import {
@@ -5882,6 +5883,11 @@ class SyncManager {
                             ? await this.mergeTransactionsFullSnapshot(cleanItems)
                             : cleanItems;
 
+                        if (collection === 'internalSequences') {
+                            const existing = ((await db.get('internalSequences')) as DocumentSeries[]) || [];
+                            safeItems = mergeIncomingDocumentSeriesWithoutRewind(existing, safeItems as DocumentSeries[]);
+                        }
+
                         if (collection === 'users') {
                             safeItems = await this.reconcileFullDownloadPosUsers(safeItems, fullItems);
                         }
@@ -5970,6 +5976,11 @@ class SyncManager {
                     ? await this.mergeTransactionsFullSnapshot(cleanItems)
                     : cleanItems;
 
+                if (collection === 'internalSequences') {
+                    const existing = ((await db.get('internalSequences')) as DocumentSeries[]) || [];
+                    safeItems = mergeIncomingDocumentSeriesWithoutRewind(existing, safeItems as DocumentSeries[]);
+                }
+
                 if (collection === 'users') {
                     safeItems = await this.reconcileFullDownloadPosUsers(safeItems, items);
                 }
@@ -6012,6 +6023,10 @@ class SyncManager {
                     } else {
                         // Add repair logic for internalSequences
                         let finalItem = (collection === 'internalSequences' || collection === 'documentSeries') ? this.repairSequenceData(cleanItem) : cleanItem;
+                        if (collection === 'internalSequences') {
+                            const existing = ((await db.get('internalSequences')) as DocumentSeries[]) || [];
+                            finalItem = mergeIncomingDocumentSeriesWithoutRewind(existing, [finalItem])[0];
+                        }
 
                         if (collection === 'products') {
                             const enriched = await this.enrichPulledProducts([finalItem]);

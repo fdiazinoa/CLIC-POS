@@ -523,6 +523,10 @@ export type DocumentType =
 
 export interface DocumentSeries {
   id: string;
+  /** Monotonic ERP counter revision used to prove post-reset continuity. */
+  sequenceRevision?: string | number;
+  /** Highest Z number durably committed by ERP for this exact scope/series. */
+  lastCommittedNumber?: number;
   code?: string;
   documentType: DocumentType;  // Functional type
   name: string;
