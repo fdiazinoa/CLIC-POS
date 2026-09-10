@@ -64,3 +64,26 @@ test('tariff prices enqueue price, margin, activation, and removal per tariff', 
     const removals = changedCatalogFields(next, previous, 'tariff_prices');
     assert.deepEqual(removals.find(change => change.field === erp)?.after, null);
 });
+test('general item data normalizes optional text and groups barcodes atomically', () => {
+    const previous = [{
+        id, name: 'Café', description: '', sku: 'CAF-1', reference: 'REF-1',
+        barcode: '100', barcode_2: '200', cost: 5, type: 'PRODUCT',
+        measurementUnit: 'Unidad', purchaseUnit: 'Caja', is_active: true,
+    }];
+    assert.deepEqual(changedCatalogFields(previous, [{ ...previous[0], description: '   ' }], 'item_general'), []);
+    const next = [{
+        ...previous[0], name: 'Café premium', description: 'Tueste oscuro', reference: '',
+        barcode: '101', barcode_2: '', barcode_3: '300', cost: 6, type: 'PRODUCTO_TERMINADO',
+        measurementUnit: 'Libra', is_active: false,
+    }];
+    assert.deepEqual(changedCatalogFields(previous, next, 'item_general').map(change => [change.field, change.before, change.after]), [
+        ['barcodes', ['100', '200'], ['101', '300']],
+        ['nombre', 'Café', 'Café premium'],
+        ['description', null, 'Tueste oscuro'],
+        ['external_code', 'REF-1', null],
+        ['costo_unitario', 5, 6],
+        ['type', 'PRODUCT', 'PRODUCTO_TERMINADO'],
+        ['measurement_unit', 'Unidad', 'Libra'],
+        ['is_active', true, false],
+    ]);
+});

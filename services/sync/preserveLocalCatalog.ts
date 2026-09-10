@@ -73,6 +73,23 @@ export async function preserveLocalCatalog(collection: string, payload: unknown)
                 product.operational_flags = { ...(product.operational_flags || {}), [mutation.field]: mutation.after };
             }
         }
+        if (collection === 'products' && mutation.domain === 'item_general' && Array.isArray(result)) {
+            const product = result.find(row => row.id === mutation.recordId);
+            if (product) {
+                const localFields: Record<string, string[]> = {
+                    nombre: ['name'], description: ['description'], sku: ['sku'],
+                    external_code: ['reference', 'referenceCode', 'reference_code', 'external_code', 'externalCode'],
+                    costo_unitario: ['cost'], type: ['type'], measurement_unit: ['measurementUnit'],
+                    purchase_unit: ['purchaseUnit'], is_active: ['is_active'],
+                };
+                if (mutation.field === 'barcodes' && Array.isArray(mutation.after)) {
+                    const [first = '', second = '', third = ''] = mutation.after;
+                    Object.assign(product, { barcode: first, barcode_2: second, barcode2: second, barcode_3: third, barcode3: third });
+                } else {
+                    for (const field of localFields[mutation.field] || []) product[field] = mutation.after;
+                }
+            }
+        }
         if (mutation.domain === 'classifications') {
             const rows = collection === 'config'
                 ? classificationKeys.flatMap(key => Array.isArray(result?.[key]) ? result[key] : [])
