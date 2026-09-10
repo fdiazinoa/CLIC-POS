@@ -56,7 +56,10 @@ const normalizeClassificationItem = (entry: unknown, fallbackPrefix = 'POS-CAT')
     ).trim();
     if (!name) return null;
     const id = String(record.id || record.code || name).trim() || `${fallbackPrefix}-${name}`;
-    const code = String(record.code || id || name).trim();
+    const hasExplicitCode = Object.hasOwn(record, 'code') || Object.hasOwn(record, 'codigo');
+    const code = hasExplicitCode
+        ? String(record.code ?? record.codigo ?? '').trim()
+        : String(id || name).trim();
     return {
         id,
         name,

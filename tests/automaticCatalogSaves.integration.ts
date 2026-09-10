@@ -33,6 +33,8 @@ let failSave = false;
 };
 (catalogEditQueue as any).process = async () => { sends++; };
 const product = { id: '00000000-0000-4000-8000-000000000005', name: 'Café', price: 10 };
+const departmentA = '00000000-0000-4000-8000-000000000010';
+const departmentB = '00000000-0000-4000-8000-000000000011';
 test('saving the existing product writes local value and automatically schedules ERP; repeated edits chain', async () => {
     store.clear(); store.set('products', [product]); sends = 0;
     const arrayAt = Array.prototype.at;
@@ -58,6 +60,17 @@ test('saving the existing classification automatically captures name and code wi
     assert.equal(store.get('config').departments[0].name, 'Bebidas');
     assert.deepEqual(store.get('catalogEdits').map((e: any) => e.mutation.field), ['nombre', 'codigo']);
 });
+test('reclassifying an existing item queues only changed ERP assignment fields', async () => {
+    store.clear(); sends = 0;
+    store.set('products', [{ ...product, departmentId: departmentA, brandId: null }]);
+    await saveLocalProducts([{ ...product, departmentId: departmentB, brandId: departmentA } as any], 'operator');
+    const queue = store.get('catalogEdits');
+    assert.deepEqual(queue.map((entry: any) => [entry.mutation.domain, entry.mutation.field, entry.mutation.before, entry.mutation.after]), [
+        ['items', 'department_id', departmentA, departmentB],
+        ['items', 'brand_id', null, departmentA],
+    ]);
+    assert.equal(sends, 1);
+});
 test('failed atomic storage neither publishes nor loses the previous local price', async () => {
     store.clear(); store.set('products', [product]); sends = 0; failSave = true;
     try { await assert.rejects(() => saveLocalProducts([{ ...product, price: 99 } as any], 'operator'), /Disk full/); }
@@ -72,6 +85,15 @@ test('incoming ERP snapshot preserves pending local fields without creating an o
     const merged = await preserveLocalCatalog('products', incoming) as any[];
     assert.equal(merged[0].price, 19); assert.equal(incoming[0].price, 10);
     assert.equal(store.get('catalogEdits').length, 1);
+});
+test('incoming ERP snapshot preserves a pending item reclassification', async () => {
+    store.clear();
+    store.set('products', [{ ...product, departmentId: departmentA }]);
+    await saveLocalProducts([{ ...product, departmentId: departmentB } as any], 'operator');
+    const { preserveLocalCatalog } = await import('../services/sync/preserveLocalCatalog');
+    const merged = await preserveLocalCatalog('products', [{ ...product, departmentId: departmentA, department_id: departmentA }]) as any[];
+    assert.equal(merged[0].departmentId, departmentB);
+    assert.equal(merged[0].department_id, departmentB);
 });
 test('opening classification editor and saving identical values adds nothing to the queue', async () => {
     store.clear(); sends = 0;
