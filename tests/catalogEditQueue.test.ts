@@ -36,3 +36,17 @@ test('concurrent workers share one send', async () => {
     let sent = 0; const h = harness(async () => { sent++; return { id: 'mutation-1', status: 'APPLIED' }; });
     await Promise.all([h.queue.process(), h.queue.process()]); assert.equal(sent, 1);
 });
+test('successive offline changes send in order and only after predecessor acknowledgement', async () => {
+    let rows = [makeEdit(), { ...makeEdit(), id: 'second', mutation: { ...makeEdit().mutation, id: 'second', before: 15, after: 20 }, dependsOn: 'mutation-1', createdAt: '2026-09-11' }];
+    const sent: string[] = [];
+    const q = new CatalogEditQueue({ read: async () => structuredClone(rows), save: async next => { rows = rows.map(row => row.id === next.id ? next : row); },
+        matchesScope: () => true, now: () => 1000, send: async edit => { sent.push(edit.id); return { id: edit.id, status: 'APPLIED' }; } });
+    await q.process(); assert.deepEqual(sent, ['mutation-1', 'second']);
+});
+test('conflict on the first change blocks later offline values', async () => {
+    let rows = [makeEdit(), { ...makeEdit(), id: 'second', dependsOn: 'mutation-1', createdAt: '2026-09-11' }];
+    const sent: string[] = [];
+    const q = new CatalogEditQueue({ read: async () => structuredClone(rows), save: async next => { rows = rows.map(row => row.id === next.id ? next : row); },
+        matchesScope: () => true, now: () => 1000, send: async edit => { sent.push(edit.id); return { id: edit.id, status: 'CONFLICT' }; } });
+    await q.process(); assert.deepEqual(sent, ['mutation-1']); assert.equal(rows[1].status, 'CONFLICT');
+});

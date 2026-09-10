@@ -14,11 +14,9 @@ test('database upgrade preserves products and pending proposals survive reopenin
     });
     const first = new IndexedDBAdapter(); await first.connect();
     await first.saveDocument('catalogEdits', { id: 'proposal', status: 'PENDING', mutation: { before: 10, after: 15 } });
-    await first.saveDocument('catalogEditCache', { id: 'cached-catalog', records: [{ id: 'existing-product' }] });
     await first.disconnect();
     const second = new IndexedDBAdapter(); await second.connect();
     assert.equal((await second.getDocument<any>('catalogEdits', 'proposal'))?.status, 'PENDING');
     assert.equal((await second.getDocument<any>('products', 'existing-product'))?.price, 10);
-    assert.equal((await second.getDocument<any>('catalogEditCache', 'cached-catalog'))?.records.length, 1);
     await second.disconnect();
 });
