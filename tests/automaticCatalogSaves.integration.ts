@@ -107,6 +107,33 @@ test('incoming ERP snapshot preserves a pending item reclassification', async ()
     assert.equal(merged[0].departmentId, departmentB);
     assert.equal(merged[0].department_id, departmentB);
 });
+test('tax assignments and operations persist atomically and survive an older ERP snapshot', async () => {
+    store.clear(); sends = 0;
+    const previous = {
+        ...product,
+        appliedTaxIds: ['tax-a'],
+        operationalFlags: { trackInventory: true, promptPrice: false },
+    };
+    const edited = {
+        ...previous,
+        appliedTaxIds: ['tax-b'],
+        operationalFlags: { ...previous.operationalFlags, trackInventory: false, promptPrice: true },
+    };
+    store.set('products', [previous]);
+    await saveLocalProducts([edited] as any, 'operator', [previous] as any);
+    const queue = store.get('catalogEdits');
+    assert.deepEqual(queue.map((entry: any) => [entry.mutation.domain, entry.mutation.field]), [
+        ['item_taxes', 'tax_ids'],
+        ['item_operations', 'trackInventory'],
+        ['item_operations', 'promptPrice'],
+    ]);
+    const { preserveLocalCatalog } = await import('../services/sync/preserveLocalCatalog');
+    const merged = await preserveLocalCatalog('products', [previous]) as any[];
+    assert.deepEqual(merged[0].appliedTaxIds, ['tax-b']);
+    assert.equal(merged[0].operationalFlags.trackInventory, false);
+    assert.equal(merged[0].operationalFlags.promptPrice, true);
+    assert.equal(sends, 1);
+});
 test('opening classification editor and saving identical values adds nothing to the queue', async () => {
     store.clear(); sends = 0;
     const config = { departments: [{ id: product.id, name: 'Bebidas' }] };

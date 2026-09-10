@@ -103,29 +103,27 @@ type NormalizationContext = {
   warehouses: Warehouse[];
 };
 
-const resolveIncomingTaxIds = (item: IncomingProduct, localProduct?: Product): string[] => {
+export const resolveIncomingTaxIds = (item: IncomingProduct, localProduct?: Product): string[] => {
   const metadata = asObject(item.metadata);
-  const candidates: unknown[] = [
-    item.appliedTaxIds,
-    item.tax_ids,
-    item.taxIds,
-    item.tax_codes,
-    metadata.appliedTaxIds,
-    metadata.tax_ids,
-    metadata.taxIds,
-    metadata.tax_codes,
-    metadata.taxes,
-    localProduct?.appliedTaxIds,
+  const remoteCandidates: Array<[Record<string, unknown>, string]> = [
+    [item as Record<string, unknown>, 'appliedTaxIds'],
+    [item as Record<string, unknown>, 'tax_ids'],
+    [item as Record<string, unknown>, 'taxIds'],
+    [item as Record<string, unknown>, 'tax_codes'],
+    [metadata, 'appliedTaxIds'],
+    [metadata, 'tax_ids'],
+    [metadata, 'taxIds'],
+    [metadata, 'tax_codes'],
+    [metadata, 'taxes'],
   ];
 
-  for (const candidate of candidates) {
-    const normalized = normalizeTaxIdList(candidate);
-    if (normalized.length > 0) {
-      return normalized;
+  for (const [owner, key] of remoteCandidates) {
+    if (Object.prototype.hasOwnProperty.call(owner, key) && owner[key] !== undefined) {
+      return normalizeTaxIdList(owner[key]);
     }
   }
 
-  return [];
+  return normalizeTaxIdList(localProduct?.appliedTaxIds);
 };
 
 class ProductImageCacheService {

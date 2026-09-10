@@ -44,6 +44,8 @@ export function saveLocalProducts(next: Product[], actorId?: string, previousSna
         const changes = [
             ...changedCatalogFields(previous, next, 'prices'),
             ...changedCatalogFields(previous, next, 'items'),
+            ...changedCatalogFields(previous, next, 'item_taxes'),
+            ...changedCatalogFields(previous, next, 'item_operations'),
         ];
         await persist(next.map(document => ({ collectionName: 'products', document })), changes, actorId);
     });
