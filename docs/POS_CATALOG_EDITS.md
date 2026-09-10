@@ -10,13 +10,14 @@ El usuario edita y guarda en las pantallas actuales del POS. No existe una panta
 - Reclasificación de artículos existentes: departamento, sección, familia, subfamilia, marca y categoría POS.
 - Impuestos asignados a artículos existentes, incluyendo quitar todos los impuestos.
 - Operaciones del artículo: controlar inventario, precio abierto, venta solo en enteros, inventario negativo, producto pesado, etiquetas, edad, exclusión de promociones/puntos, lotes/vencimientos y números de serie.
+- Precios particulares por tarifa: precio, margen, activación y eliminación. Cada tarifa se sincroniza de forma independiente; editar la tarifa base no genera una segunda mutación de precio duplicada.
 - No incluye altas/bajas ni cambios de jerarquía entre clasificaciones. El mantenimiento global de definiciones de impuestos conserva su contrato separado; este alcance cubre la asignación de impuestos a cada artículo.
 
 ## Guardado y envío
 
 `saveLocalProducts` / `saveLocalClassifications` comparan valores anteriores con nuevos por ID y campo. Guardar sin cambios, modificar otros campos o representar un código ausente como vacío no genera mutaciones. Los guardados individuales persisten el maestro y la cola en la misma transacción local; un fallo aborta ambos.
 
-Los cambios reales se envían automáticamente tras guardar y mediante el proceso de sincronización en segundo plano. Impuestos y operaciones se comparan por campo: no se envía el artículo completo ni se crea una mutación al guardar sin cambios. Sin red sobreviven al reinicio. Se conservan identidad, tenant, compañía, dispositivo, terminal y URL; las ediciones sucesivas del mismo campo esperan confirmación de su predecesora. Un conflicto no provoca sobrescrituras ni envío de dependientes.
+Los cambios reales se envían automáticamente tras guardar y mediante el proceso de sincronización en segundo plano. Impuestos, operaciones y precios particulares se comparan por campo: no se envía el artículo completo ni se crea una mutación al guardar sin cambios. Sin red sobreviven al reinicio. Se conservan identidad, tenant, compañía, dispositivo, terminal y URL; las ediciones sucesivas del mismo campo esperan confirmación de su predecesora. Un conflicto no provoca sobrescrituras ni envío de dependientes.
 
 Los snapshots CONFIG_PUSH_V2 preservan campos locales con cambios pendientes y no generan mensajes de retorno. Los estados se muestran en el monitor de sincronización que ya existe. No hay otro paso requerido para un guardado normal.
 
