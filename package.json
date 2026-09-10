@@ -24,7 +24,7 @@
     "start:dev": "concurrently \"npm run server\" \"npm run dev\" \"npm run kds\"",
     "start:mobile": "USE_HTTPS=true npm run start:dev",
     "start": "npm run start:dev",
-    "test:catalog-sync": "tsx --test tests/catalogEditPersistence.test.ts tests/catalogEditQueue.test.ts tests/catalogLocalChanges.test.ts tests/configPushV2Contract.test.ts tests/configPushV2Outbox.test.ts && node tests/runAutomaticCatalogSaves.mjs"
+    "test:catalog-sync": "tsx --test tests/catalogEditPersistence.test.ts tests/catalogEditQueue.test.ts tests/catalogLocalChanges.test.ts tests/catalogReleaseFlag.test.ts tests/configPushV2Contract.test.ts tests/configPushV2Outbox.test.ts && node tests/runAutomaticCatalogSaves.mjs"
   },
   "dependencies": {
     "@capacitor-community/sqlite": "^8.0.0",
