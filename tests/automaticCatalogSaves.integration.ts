@@ -71,6 +71,18 @@ test('reclassifying an existing item queues only changed ERP assignment fields',
     ]);
     assert.equal(sends, 1);
 });
+test('single-product save uses the UI snapshot when storage already contains the edited alias', async () => {
+    store.clear(); sends = 0;
+    const previous = { ...product, departmentId: departmentA, department_id: departmentA };
+    const edited = { ...previous, departmentId: departmentB };
+    store.set('products', [edited]);
+    await saveLocalProducts([edited] as any, 'operator', [previous] as any);
+    const queue = store.get('catalogEdits');
+    assert.deepEqual(queue.map((entry: any) => [entry.mutation.domain, entry.mutation.field, entry.mutation.before, entry.mutation.after]), [
+        ['items', 'department_id', departmentA, departmentB],
+    ]);
+    assert.equal(sends, 1);
+});
 test('failed atomic storage neither publishes nor loses the previous local price', async () => {
     store.clear(); store.set('products', [product]); sends = 0; failSave = true;
     try { await assert.rejects(() => saveLocalProducts([{ ...product, price: 99 } as any], 'operator'), /Disk full/); }
