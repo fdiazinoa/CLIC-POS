@@ -35,7 +35,13 @@ let failSave = false;
 const product = { id: '00000000-0000-4000-8000-000000000005', name: 'Café', price: 10 };
 test('saving the existing product writes local value and automatically schedules ERP; repeated edits chain', async () => {
     store.clear(); store.set('products', [product]); sends = 0;
-    await saveLocalProducts([{ ...product, price: 12 } as any], 'operator');
+    const arrayAt = Array.prototype.at;
+    try {
+        Object.defineProperty(Array.prototype, 'at', { configurable: true, writable: true, value: undefined });
+        await saveLocalProducts([{ ...product, price: 12 } as any], 'operator');
+    } finally {
+        Object.defineProperty(Array.prototype, 'at', { configurable: true, writable: true, value: arrayAt });
+    }
     await saveLocalProducts([{ ...product, price: 15 } as any], 'operator');
     assert.equal(store.get('products')[0].price, 15);
     const queue = store.get('catalogEdits');

@@ -33,6 +33,7 @@ import java.net.URL
 import java.net.URLEncoder
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.lang.ref.WeakReference
@@ -68,9 +69,59 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
                     return value;
                   };
 
+                  var asyncRequestSequence = 0;
+                  var asyncInFlight = window.__CLIC_NATIVE_ASYNC_IN_FLIGHT__ || new Map();
+                  window.__CLIC_NATIVE_ASYNC_IN_FLIGHT__ = asyncInFlight;
+                  var asyncMethods = {
+                    startMasterServer: true,
+                    updateMasterServerConfig: true,
+                    stopMasterServer: true,
+                    getMasterServerStatus: true,
+                    getMasterRestaurantState: true,
+                    getMasterRestaurantRevision: true,
+                    acquireMasterTableLock: true,
+                    releaseMasterTableLock: true
+                  };
+                  var coalescedAsyncMethods = {
+                    startMasterServer: true,
+                    updateMasterServerConfig: true,
+                    stopMasterServer: true,
+                    getMasterServerStatus: true,
+                    getMasterRestaurantState: true,
+                    getMasterRestaurantRevision: true
+                  };
                   var call = function (method, payload) {
                     if (!window.AndroidPrinter || typeof window.AndroidPrinter[method] !== 'function') {
                       return Promise.resolve({ status: 'error', success: false, printed: false, message: 'Missing native method: ' + method });
+                    }
+                    if (asyncMethods[method] && typeof window.AndroidPrinter.callAsync === 'function') {
+                      var existing = coalescedAsyncMethods[method] ? asyncInFlight.get(method) : null;
+                      if (existing) return existing;
+                      var requestID = 'native-' + Date.now() + '-' + (++asyncRequestSequence);
+                      var pending = new Promise(function (resolve) {
+                        var eventName = 'clic:native-async-result';
+                        var timeoutID;
+                        var onResult = function (event) {
+                          var detail = event && event.detail ? event.detail : {};
+                          if (detail.requestID !== requestID) return;
+                          window.removeEventListener(eventName, onResult);
+                          if (timeoutID) window.clearTimeout(timeoutID);
+                          resolve(parseResult(detail.raw));
+                        };
+                        window.addEventListener(eventName, onResult);
+                        timeoutID = window.setTimeout(function () {
+                          window.removeEventListener(eventName, onResult);
+                          resolve({ status: 'error', success: false, message: 'Native async call timeout: ' + method });
+                        }, 30000);
+                        window.AndroidPrinter.callAsync(requestID, method, JSON.stringify(payload || {}));
+                      });
+                      if (coalescedAsyncMethods[method]) {
+                        asyncInFlight.set(method, pending);
+                        pending.finally(function () {
+                          if (asyncInFlight.get(method) === pending) asyncInFlight.delete(method);
+                        });
+                      }
+                      return pending;
                     }
                     var raw = window.AndroidPrinter[method](JSON.stringify(payload || {}));
                     return Promise.resolve(parseResult(raw));
@@ -160,6 +211,7 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
 
     private val appContext = context.applicationContext
     private val webViewRef = WeakReference(webView)
+    private val asyncBridgeExecutor = Executors.newSingleThreadExecutor()
     private val fingerprintVerificationInFlight = AtomicBoolean(false)
     private val clipboardManager = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
 
@@ -728,6 +780,36 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
             catalogs,
             restaurantRevision
         ).toString()
+    }
+
+    @JavascriptInterface
+    fun callAsync(requestID: String?, method: String?, payloadJson: String?) {
+        if (requestID.isNullOrBlank() || method.isNullOrBlank()) return
+        asyncBridgeExecutor.execute {
+            val raw = runCatching {
+                when (method) {
+                    "startMasterServer" -> startMasterServer(payloadJson)
+                    "updateMasterServerConfig" -> updateMasterServerConfig(payloadJson)
+                    "stopMasterServer" -> stopMasterServer(payloadJson)
+                    "getMasterServerStatus" -> getMasterServerStatus(payloadJson)
+                    "getMasterRestaurantState" -> getMasterRestaurantState(payloadJson)
+                    "getMasterRestaurantRevision" -> getMasterRestaurantRevision(payloadJson)
+                    "acquireMasterTableLock" -> acquireMasterTableLock(payloadJson)
+                    "releaseMasterTableLock" -> releaseMasterTableLock(payloadJson)
+                    else -> throw IllegalArgumentException("Unsupported async native method: $method")
+                }
+            }.getOrElse { exception ->
+                JSONObject()
+                    .put("status", "error")
+                    .put("success", false)
+                    .put("message", exception.message ?: exception.javaClass.simpleName)
+                    .toString()
+            }
+            val script = "window.dispatchEvent(new CustomEvent('clic:native-async-result',{detail:{requestID:${JSONObject.quote(requestID)},raw:${JSONObject.quote(raw)}}}));"
+            webViewRef.get()?.post {
+                webViewRef.get()?.evaluateJavascript(script, null)
+            }
+        }
     }
 
     @JavascriptInterface

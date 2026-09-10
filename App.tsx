@@ -2085,9 +2085,61 @@ const AppContent: React.FC = () => {
         return value;
       };
 
+      let asyncRequestSequence = 0;
+      const asyncMethods = new Set([
+        'startMasterServer',
+        'updateMasterServerConfig',
+        'stopMasterServer',
+        'getMasterServerStatus',
+        'getMasterRestaurantState',
+        'getMasterRestaurantRevision',
+        'acquireMasterTableLock',
+        'releaseMasterTableLock',
+      ]);
+      const coalescedAsyncMethods = new Set([
+        'startMasterServer',
+        'updateMasterServerConfig',
+        'stopMasterServer',
+        'getMasterServerStatus',
+        'getMasterRestaurantState',
+        'getMasterRestaurantRevision',
+      ]);
+      const asyncInFlight: Map<string, Promise<unknown>> = runtimeWindow.__CLIC_NATIVE_ASYNC_IN_FLIGHT__
+        || new Map<string, Promise<unknown>>();
+      runtimeWindow.__CLIC_NATIVE_ASYNC_IN_FLIGHT__ = asyncInFlight;
       const call = (method: string, payload?: unknown) => {
         if (!runtimeWindow.AndroidPrinter || typeof runtimeWindow.AndroidPrinter[method] !== 'function') {
           return Promise.resolve({ status: 'error', success: false, printed: false, message: `Missing native method: ${method}` });
+        }
+
+        if (asyncMethods.has(method) && typeof runtimeWindow.AndroidPrinter.callAsync === 'function') {
+          const existing = coalescedAsyncMethods.has(method) ? asyncInFlight.get(method) : undefined;
+          if (existing) return existing;
+          const requestID = `native-${Date.now()}-${++asyncRequestSequence}`;
+          const pending = new Promise((resolve) => {
+            const eventName = 'clic:native-async-result';
+            let timeoutID: number | undefined;
+            const onResult = (event: Event) => {
+              const detail = (event as CustomEvent<{ requestID?: string; raw?: unknown }>).detail || {};
+              if (detail.requestID !== requestID) return;
+              window.removeEventListener(eventName, onResult);
+              if (timeoutID) window.clearTimeout(timeoutID);
+              resolve(parseResult(detail.raw));
+            };
+            window.addEventListener(eventName, onResult);
+            timeoutID = window.setTimeout(() => {
+              window.removeEventListener(eventName, onResult);
+              resolve({ status: 'error', success: false, message: `Native async call timeout: ${method}` });
+            }, 30000);
+            runtimeWindow.AndroidPrinter.callAsync(requestID, method, JSON.stringify(payload || {}));
+          });
+          if (coalescedAsyncMethods.has(method)) {
+            asyncInFlight.set(method, pending);
+            void pending.finally(() => {
+              if (asyncInFlight.get(method) === pending) asyncInFlight.delete(method);
+            });
+          }
+          return pending;
         }
 
         const raw = runtimeWindow.AndroidPrinter[method](JSON.stringify(payload || {}));
@@ -4297,8 +4349,19 @@ const AppContent: React.FC = () => {
 
     // Iniciar/actualizar configuración sin publicar rooms/tables/tickets. El
     // servidor nativo es la fuente operativa después de su bootstrap inicial.
-    void ensureMasterServer(false).then(() => reconcileNativeRestaurantState());
-    const publishMasterCatalog = () => void ensureMasterServer(false);
+    // Initial collection hydration updates several dependencies in a short burst.
+    // Coalesce those renders so only the final catalog snapshot crosses the native bridge.
+    const initialPublishTimer = window.setTimeout(() => {
+      void ensureMasterServer(false).then(() => reconcileNativeRestaurantState());
+    }, 250);
+    let catalogPublishTimer: number | undefined;
+    const publishMasterCatalog = () => {
+      if (catalogPublishTimer) window.clearTimeout(catalogPublishTimer);
+      catalogPublishTimer = window.setTimeout(() => {
+        catalogPublishTimer = undefined;
+        void ensureMasterServer(false);
+      }, 250);
+    };
     const watchdog = window.setInterval(() => void ensureMasterServerHealth(), 30000);
     const restaurantPoll = window.setInterval(() => void pollNativeRestaurantRevision(), 1000);
     window.addEventListener('online', ensureMasterServerHealth);
@@ -4315,6 +4378,8 @@ const AppContent: React.FC = () => {
 
     return () => {
       disposed = true;
+      window.clearTimeout(initialPublishTimer);
+      if (catalogPublishTimer) window.clearTimeout(catalogPublishTimer);
       window.clearInterval(watchdog);
       window.clearInterval(restaurantPoll);
       window.removeEventListener('online', ensureMasterServerHealth);
