@@ -45,6 +45,7 @@ import {
   resolveOperationalProductId,
 } from '../utils/productReferences';
 import { normalizeRestaurantProductConfig, resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
+import { normalizeCategoryOption, preferCategoryOptionWithErpIdentity } from '../utils/categoryOptions';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -902,28 +903,6 @@ const VARIANT_TEMPLATES = [
   { name: 'Capacidad', attr: 'Memoria', opts: ['64GB', '128GB', '256GB'] }
 ];
 
-const normalizeCategoryOption = (entry: unknown): { id: string; name: string } | null => {
-  if (typeof entry === 'string') {
-    const name = entry.trim();
-    return name ? { id: name, name } : null;
-  }
-  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
-  const record = entry as Record<string, unknown>;
-  const name = String(
-    record.name ||
-    record.nombre ||
-    record.label ||
-    record.description ||
-    record.descripcion ||
-    record.code ||
-    record.id ||
-    ''
-  ).trim();
-  if (!name) return null;
-  const id = String(record.id || record.code || name).trim();
-  return { id: id || name, name };
-};
-
 const buildStockSyncMarker = (product?: Partial<Product> | null): string => {
   if (!product) return 'NO_STOCK';
 
@@ -1116,7 +1095,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       const option = normalizeCategoryOption(entry);
       if (!option) return;
       const key = option.name.trim().toLowerCase();
-      if (!byName.has(key)) byName.set(key, option);
+      byName.set(key, preferCategoryOptionWithErpIdentity(byName.get(key), option));
     };
 
     (config.posCategories || []).forEach(addOption);
