@@ -1506,7 +1506,15 @@ export interface Product {
   imageVersion?: string;
   imageLocalPath?: string | null;
   barcode?: string;
+  barcode_2?: string;
+  barcode2?: string;
+  barcode_3?: string;
+  barcode3?: string;
+  reference?: string;
+  referenceCode?: string;
+  reference_code?: string;
   cost?: number;
+  is_active?: boolean;
   is_sellable?: boolean;
   theoreticalCost?: number; // New calculated cost
   type?: ProductType;

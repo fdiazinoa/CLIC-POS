@@ -1068,6 +1068,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       appliedTaxIds: config.taxes?.[0] ? [config.taxes[0].id] : [],
       cost: 0,
       description: '',
+      is_active: true,
       operationalFlags: DEFAULT_OPERATIONAL_FLAGS,
       warehouseSettings: {}
     };
@@ -2873,10 +2874,32 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       <div>
                         <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Costo Unitario (CPP)</label>
                         <div className="relative">
-                          <input disabled type={canViewCost ? "number" : "password"} value={canViewCost ? (formData.cost || 0) : '******'} className="w-full p-3 bg-gray-100 border-2 border-transparent rounded-xl font-bold text-gray-500 cursor-not-allowed" />
+                          <input disabled={!canViewCost} min="0" step="0.01" type={canViewCost ? "number" : "password"} value={canViewCost ? (formData.cost ?? 0) : '******'} onChange={e => setFormData({ ...formData, cost: Math.max(0, Number(e.target.value) || 0) })} className={`w-full p-3 border-2 border-transparent rounded-xl font-bold ${canViewCost ? 'bg-gray-50 text-gray-800 focus:bg-white focus:border-blue-200' : 'bg-gray-100 text-gray-500 cursor-not-allowed'}`} />
                           {!canViewCost && <div className="absolute inset-0 flex items-center justify-center"><span className="text-xs text-gray-400 font-bold bg-gray-100 px-2 rounded">Oculto</span></div>}
                         </div>
                       </div>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Descripción</label>
+                      <textarea rows={3} maxLength={2000} value={formData.description || ''} onChange={e => setFormData({ ...formData, description: e.target.value })} onPaste={(e) => e.stopPropagation()} className="w-full p-3 bg-gray-50 border-2 border-transparent rounded-xl text-sm text-gray-700 focus:bg-white focus:border-blue-200 transition-all select-text resize-y" />
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-4">
+                    <h3 className="text-sm font-bold text-gray-800">Estado y tipo</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Tipo de artículo</label>
+                        <select value={formData.type || 'PRODUCT'} onChange={e => setFormData({ ...formData, type: e.target.value as Product['type'] })} className="w-full p-3 bg-gray-50 border-2 border-transparent rounded-xl text-sm font-bold focus:bg-white focus:border-blue-200">
+                          <option value="PRODUCT">Producto</option>
+                          <option value="SERVICE">Servicio</option>
+                          <option value="MATERIA_PRIMA">Materia prima</option>
+                          <option value="PRODUCTO_TERMINADO">Producto terminado</option>
+                          <option value="RECETA">Receta</option>
+                          <option value="KIT">Kit</option>
+                        </select>
+                      </div>
+                      <OperationalSwitch label="Artículo activo" description="Permite usar este artículo en los procesos del ERP y del POS." checked={formData.is_active !== false} onChange={(value: boolean) => setFormData({ ...formData, is_active: value })} icon={CheckCircle2} />
                     </div>
                   </div>
 

@@ -166,6 +166,27 @@ test('editing the default tariff does not enqueue a conflicting duplicate base-p
     await saveLocalProducts([edited] as any, 'operator', [previous] as any);
     assert.deepEqual(store.get('catalogEdits').map((entry: any) => entry.mutation.domain), ['tariff_prices']);
 });
+test('general item edits are durable and survive an older ERP snapshot', async () => {
+    store.clear(); sends = 0;
+    const previous = { ...product, sku: 'CAF-1', reference: 'REF-1', barcode: '100', cost: 5, type: 'PRODUCT', is_active: true };
+    const edited = { ...previous, name: 'Café premium', reference: '', barcode: '101', barcode_2: '202', cost: 6, is_active: false };
+    store.set('products', [previous]);
+    await saveLocalProducts([edited] as any, 'operator', [previous] as any);
+    const queue = store.get('catalogEdits');
+    assert.deepEqual(queue.map((entry: any) => [entry.mutation.domain, entry.mutation.field]), [
+        ['item_general', 'barcodes'], ['item_general', 'nombre'], ['item_general', 'external_code'],
+        ['item_general', 'costo_unitario'], ['item_general', 'is_active'],
+    ]);
+    const { preserveLocalCatalog } = await import('../services/sync/preserveLocalCatalog');
+    const merged = await preserveLocalCatalog('products', [previous]) as any[];
+    assert.equal(merged[0].name, 'Café premium');
+    assert.equal(merged[0].reference, null);
+    assert.equal(merged[0].barcode, '101');
+    assert.equal(merged[0].barcode_2, '202');
+    assert.equal(merged[0].cost, 6);
+    assert.equal(merged[0].is_active, false);
+    assert.equal(sends, 1);
+});
 test('opening classification editor and saving identical values adds nothing to the queue', async () => {
     store.clear(); sends = 0;
     const config = { departments: [{ id: product.id, name: 'Bebidas' }] };

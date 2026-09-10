@@ -3,7 +3,10 @@ import type { ProductOperationalFlags } from '../../types';
 export const classificationKeys = ['departments', 'sections', 'families', 'subfamilies', 'brands', 'posCategories'] as const;
 export type LocalCatalogChange = Omit<CatalogMutation, 'id' | 'actorId'> & { label: string };
 type Row = {
-    id: string; name?: string; price?: number; code?: string;
+    id: string; name?: string; price?: number; cost?: number; code?: string; description?: string;
+    sku?: string; external_code?: string; externalCode?: string; reference?: string; referenceCode?: string; reference_code?: string;
+    barcode?: string; barcode_2?: string; barcode2?: string; barcode_3?: string; barcode3?: string;
+    type?: string; measurementUnit?: string; purchaseUnit?: string; is_active?: boolean;
     appliedTaxIds?: unknown;
     tariffs?: unknown;
     operationalFlags?: Partial<ProductOperationalFlags>;
@@ -42,6 +45,27 @@ const normalizeTaxIds = (value: unknown): string[] => Array.from(new Set(
         .map(entry => String(entry || '').trim())
         .filter(Boolean),
 )).sort((left, right) => left.localeCompare(right));
+const normalizeOptionalText = (value: unknown): string | null => {
+    if (value === null || value === undefined) return null;
+    const normalized = String(value).trim();
+    return normalized || null;
+};
+const normalizeBarcodes = (row: Row): string[] => [
+    normalizeOptionalText(row.barcode),
+    normalizeOptionalText(row.barcode_2 ?? row.barcode2),
+    normalizeOptionalText(row.barcode_3 ?? row.barcode3),
+].filter((value): value is string => Boolean(value));
+const itemGeneralFields = [
+    { remote: 'nombre', local: ['name'] },
+    { remote: 'description', local: ['description'] },
+    { remote: 'sku', local: ['sku'] },
+    { remote: 'external_code', local: ['reference', 'referenceCode', 'reference_code', 'external_code', 'externalCode'] },
+    { remote: 'costo_unitario', local: ['cost'] },
+    { remote: 'type', local: ['type'] },
+    { remote: 'measurement_unit', local: ['measurementUnit'] },
+    { remote: 'purchase_unit', local: ['purchaseUnit'] },
+    { remote: 'is_active', local: ['is_active'] },
+] as const;
 const valuesEqual = (left: CatalogMutationValue, right: CatalogMutationValue) => (
     Array.isArray(left) && Array.isArray(right)
         ? left.length === right.length && left.every((value, index) => value === right[index])
@@ -92,6 +116,15 @@ export function changedCatalogFields(previous: Row[], next: Row[], domain: Catal
             }
             continue;
         }
+        if (domain === 'item_general') {
+            const barcodesBefore = normalizeBarcodes(old);
+            const barcodesAfter = normalizeBarcodes(row);
+            if (!valuesEqual(barcodesBefore, barcodesAfter)) {
+                if (!uuid.test(row.id)) throw new Error(`El registro ${row.name || row.id} no tiene una identidad ERP válida.`);
+                if (barcodesAfter.length > 3 || barcodesAfter.some(value => value.length > 160)) throw new Error('Códigos de barra inválidos.');
+                changes.push({ recordId: row.id, domain, field: 'barcodes', before: barcodesBefore, after: barcodesAfter, label: row.name || row.id });
+            }
+        }
         const fields: Array<{ local: readonly string[]; remote: string }> = domain === 'prices'
             ? [{ local: ['price'], remote: 'precio_venta' }]
             : domain === 'classifications'
@@ -100,7 +133,9 @@ export function changedCatalogFields(previous: Row[], next: Row[], domain: Catal
                     ? [...itemClassificationFields]
                     : domain === 'item_taxes'
                         ? [{ local: ['appliedTaxIds'], remote: 'tax_ids' }]
-                        : itemOperationalFields.map(field => ({ local: [field], remote: field }));
+                        : domain === 'item_operations'
+                            ? itemOperationalFields.map(field => ({ local: [field], remote: field }))
+                            : [...itemGeneralFields];
         for (const { local, remote } of fields) {
             let before: CatalogMutationValue;
             let after: CatalogMutationValue;
@@ -115,6 +150,22 @@ export function changedCatalogFields(previous: Row[], next: Row[], domain: Catal
                 after = typeof row.operationalFlags?.[field] === 'boolean'
                     ? row.operationalFlags[field] as boolean
                     : itemOperationalFlagDefaults[field];
+            } else if (domain === 'item_general') {
+                const rawBefore = firstValue(old, local);
+                const rawAfter = firstValue(row, local);
+                if (remote === 'costo_unitario') {
+                    before = rawBefore === null ? 0 : Number(rawBefore);
+                    after = rawAfter === null ? 0 : Number(rawAfter);
+                } else if (remote === 'is_active') {
+                    before = typeof rawBefore === 'boolean' ? rawBefore : true;
+                    after = typeof rawAfter === 'boolean' ? rawAfter : true;
+                } else if (remote === 'nombre' || remote === 'type') {
+                    before = normalizeOptionalText(rawBefore) || '';
+                    after = normalizeOptionalText(rawAfter) || '';
+                } else {
+                    before = normalizeOptionalText(rawBefore);
+                    after = normalizeOptionalText(rawAfter);
+                }
             } else {
                 const rawBefore = firstValue(old, local);
                 const rawAfter = firstValue(row, local);
@@ -131,6 +182,15 @@ export function changedCatalogFields(previous: Row[], next: Row[], domain: Catal
             if (domain === 'items' && (after !== null && (typeof after !== 'string' || !uuid.test(after)))) throw new Error('La clasificación asignada no tiene una identidad ERP válida.');
             if (domain === 'item_taxes' && (!Array.isArray(after) || after.length > 32 || after.some(value => !value || value.length > 160))) throw new Error('Asignación de impuestos inválida.');
             if (domain === 'item_operations' && typeof after !== 'boolean') throw new Error('Operación del artículo inválida.');
+            if (domain === 'item_general') {
+                if (remote === 'nombre' && (typeof after !== 'string' || !after || after.length > 240)) throw new Error('Nombre de artículo inválido.');
+                if (remote === 'description' && after !== null && (typeof after !== 'string' || after.length > 2000)) throw new Error('Descripción de artículo inválida.');
+                if (['sku', 'external_code'].includes(remote) && after !== null && (typeof after !== 'string' || after.length > 160)) throw new Error('Código de artículo inválido.');
+                if (remote === 'costo_unitario' && (typeof after !== 'number' || !Number.isFinite(after) || after < 0 || after > 1e12)) throw new Error('Costo de artículo inválido.');
+                if (remote === 'type' && (typeof after !== 'string' || !after || after.length > 80)) throw new Error('Tipo de artículo inválido.');
+                if (['measurement_unit', 'purchase_unit'].includes(remote) && after !== null && (typeof after !== 'string' || after.length > 80)) throw new Error('Unidad de medida inválida.');
+                if (remote === 'is_active' && typeof after !== 'boolean') throw new Error('Estado de artículo inválido.');
+            }
             changes.push({ recordId: row.id, domain, field: remote, before, after, label: row.name || row.id });
         }
     }
