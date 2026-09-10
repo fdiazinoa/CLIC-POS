@@ -48,3 +48,19 @@ test('item operations use stable defaults and enqueue each changed switch indepe
         ['promptPrice', false, true],
     ]);
 });
+test('tariff prices enqueue price, margin, activation, and removal per tariff', () => {
+    const wholesale = '00000000-0000-4000-8000-000000000020';
+    const erp = '00000000-0000-4000-8000-000000000021';
+    const previous = [{ id, name: 'Café', tariffs: [{ tariffId: wholesale, price: 100, margin: 25 }] }];
+    const next = [{ id, name: 'Café', tariffs: [
+        { tariffId: wholesale, price: 110, margin: 30 },
+        { tariffId: erp, price: 95, margin: null },
+    ] }];
+    assert.deepEqual(changedCatalogFields(previous, structuredClone(previous), 'tariff_prices'), []);
+    assert.deepEqual(changedCatalogFields(previous, next, 'tariff_prices').map(change => [change.field, change.before, change.after]), [
+        [wholesale, { price: 100, margin: 25 }, { price: 110, margin: 30 }],
+        [erp, null, { price: 95, margin: null }],
+    ]);
+    const removals = changedCatalogFields(next, previous, 'tariff_prices');
+    assert.deepEqual(removals.find(change => change.field === erp)?.after, null);
+});

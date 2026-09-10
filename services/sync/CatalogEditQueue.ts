@@ -1,6 +1,7 @@
-export type CatalogDomain = 'prices' | 'classifications' | 'items' | 'item_taxes' | 'item_operations';
+export type CatalogDomain = 'prices' | 'tariff_prices' | 'classifications' | 'items' | 'item_taxes' | 'item_operations';
 export type CatalogScope = { terminalId: string; tenantId: string; companyId: string; deviceId: string; baseUrl: string };
-export type CatalogMutationValue = string | number | boolean | string[] | null;
+export type CatalogTariffPriceValue = { price: number; margin: number | null };
+export type CatalogMutationValue = string | number | boolean | string[] | CatalogTariffPriceValue | null;
 export type CatalogMutation = {
     id: string; recordId: string; domain: CatalogDomain; field: string;
     before: CatalogMutationValue; after: CatalogMutationValue; actorId: string;

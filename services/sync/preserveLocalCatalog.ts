@@ -16,6 +16,38 @@ export async function preserveLocalCatalog(collection: string, payload: unknown)
             const product = result.find(row => row.id === mutation.recordId);
             if (product) product.price = mutation.after;
         }
+        if (collection === 'products' && mutation.domain === 'tariff_prices' && Array.isArray(result)) {
+            const product = result.find(row => row.id === mutation.recordId);
+            if (product) {
+                const tariffs = Array.isArray(product.tariffs) ? [...product.tariffs] : [];
+                const index = tariffs.findIndex(entry => String(entry?.tariffId || entry?.tariff_id || '').trim() === mutation.field);
+                if (mutation.after && typeof mutation.after === 'object' && !Array.isArray(mutation.after)) {
+                    const next = { ...(index >= 0 ? tariffs[index] : {}), tariffId: mutation.field, ...mutation.after };
+                    if (index >= 0) tariffs[index] = next;
+                    else tariffs.push(next);
+                } else if (index >= 0) {
+                    tariffs.splice(index, 1);
+                }
+                product.tariffs = tariffs;
+            }
+        }
+        if (collection === 'productPrices' && mutation.domain === 'tariff_prices' && Array.isArray(result)) {
+            const index = result.findIndex(row => row.productId === mutation.recordId && row.tariffId === mutation.field);
+            if (mutation.after && typeof mutation.after === 'object' && !Array.isArray(mutation.after)) {
+                const next = {
+                    ...(index >= 0 ? result[index] : {}),
+                    id: `${mutation.recordId}_${mutation.field}`,
+                    productId: mutation.recordId,
+                    tariffId: mutation.field,
+                    price: mutation.after.price,
+                    updatedAt: new Date().toISOString(),
+                };
+                if (index >= 0) result[index] = next;
+                else result.push(next);
+            } else if (index >= 0) {
+                result.splice(index, 1);
+            }
+        }
         if (collection === 'products' && mutation.domain === 'items' && Array.isArray(result)) {
             const product = result.find(row => row.id === mutation.recordId);
             if (product) {

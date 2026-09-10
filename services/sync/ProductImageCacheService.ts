@@ -126,6 +126,20 @@ export const resolveIncomingTaxIds = (item: IncomingProduct, localProduct?: Prod
   return normalizeTaxIdList(localProduct?.appliedTaxIds);
 };
 
+export const resolveIncomingTariffs = (
+  item: IncomingProduct,
+  localProduct?: Product,
+  tariffs: BusinessConfig['tariffs'] = []
+): TariffPrice[] => {
+  const metadata = asObject(item.metadata);
+  for (const [owner, key] of [[item as Record<string, unknown>, 'tariffs'], [metadata, 'tariffs']] as const) {
+    if (Object.prototype.hasOwnProperty.call(owner, key) && owner[key] !== undefined) {
+      return canonicalizeTariffEntries(normalizeTariffEntries(owner[key]), tariffs || []);
+    }
+  }
+  return canonicalizeTariffEntries(localProduct?.tariffs || [], tariffs || []);
+};
+
 class ProductImageCacheService {
   private readonly imageFolder = 'product-images';
   private readonly logger = console;
@@ -414,12 +428,7 @@ class ProductImageCacheService {
       ]),
       attributes: Array.isArray(item.attributes) ? item.attributes : localProduct?.attributes || [],
       variants: Array.isArray(item.variants) ? item.variants : localProduct?.variants || [],
-      tariffs: canonicalizeTariffEntries(
-        normalizeTariffEntries(item.tariffs).length > 0
-          ? normalizeTariffEntries(item.tariffs)
-          : (normalizeTariffEntries(metadata.tariffs).length > 0 ? normalizeTariffEntries(metadata.tariffs) : localProduct?.tariffs || []),
-        context.tariffs || []
-      ),
+      tariffs: resolveIncomingTariffs(item, localProduct, context.tariffs),
       recipeDetails: recipeDetails.length > 0 ? recipeDetails : localProduct?.recipeDetails || [],
       appliedTaxIds: resolveIncomingTaxIds(item, localProduct),
       stockBalances: normalizedStockBalances,

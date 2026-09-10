@@ -1,10 +1,11 @@
-import type { CatalogDomain, CatalogMutation, CatalogMutationValue } from './CatalogEditQueue';
+import type { CatalogDomain, CatalogMutation, CatalogMutationValue, CatalogTariffPriceValue } from './CatalogEditQueue';
 import type { ProductOperationalFlags } from '../../types';
 export const classificationKeys = ['departments', 'sections', 'families', 'subfamilies', 'brands', 'posCategories'] as const;
 export type LocalCatalogChange = Omit<CatalogMutation, 'id' | 'actorId'> & { label: string };
 type Row = {
     id: string; name?: string; price?: number; code?: string;
     appliedTaxIds?: unknown;
+    tariffs?: unknown;
     operationalFlags?: Partial<ProductOperationalFlags>;
     departmentId?: string; department_id?: string;
     sectionId?: string; section_id?: string;
@@ -44,8 +45,24 @@ const normalizeTaxIds = (value: unknown): string[] => Array.from(new Set(
 const valuesEqual = (left: CatalogMutationValue, right: CatalogMutationValue) => (
     Array.isArray(left) && Array.isArray(right)
         ? left.length === right.length && left.every((value, index) => value === right[index])
-        : left === right
+        : left && right && !Array.isArray(left) && !Array.isArray(right) && typeof left === 'object' && typeof right === 'object'
+            ? left.price === right.price && left.margin === right.margin
+            : left === right
 );
+const normalizeTariffPrices = (value: unknown): Map<string, CatalogTariffPriceValue> => {
+    const result = new Map<string, CatalogTariffPriceValue>();
+    for (const rawEntry of Array.isArray(value) ? value : []) {
+        if (!rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)) continue;
+        const entry = rawEntry as Record<string, unknown>;
+        const tariffId = String(entry.tariffId || entry.tariff_id || '').trim();
+        const price = Number(entry.price);
+        const rawMargin = entry.margin;
+        const margin = rawMargin === null || rawMargin === undefined || rawMargin === '' ? null : Number(rawMargin);
+        if (!tariffId || !Number.isFinite(price) || (margin !== null && !Number.isFinite(margin))) continue;
+        result.set(tariffId, { price, margin });
+    }
+    return result;
+};
 const firstValue = (row: Row, fields: readonly string[]) => {
     for (const field of fields) {
         const value = row[field as keyof Row];
@@ -59,6 +76,22 @@ export function changedCatalogFields(previous: Row[], next: Row[], domain: Catal
     for (const row of next) {
         const old = oldRows.get(row.id);
         if (!old) continue; // Creation is a separate contract.
+        if (domain === 'tariff_prices') {
+            const beforeTariffs = normalizeTariffPrices(old.tariffs);
+            const afterTariffs = normalizeTariffPrices(row.tariffs);
+            const tariffIds = Array.from(new Set([...beforeTariffs.keys(), ...afterTariffs.keys()])).sort();
+            for (const tariffId of tariffIds) {
+                const before = beforeTariffs.get(tariffId) || null;
+                const after = afterTariffs.get(tariffId) || null;
+                if (valuesEqual(before, after)) continue;
+                if (!uuid.test(row.id) || !uuid.test(tariffId)) throw new Error('El artículo o la tarifa no tiene una identidad ERP válida.');
+                if (after && (after.price < 0 || after.price > 1e12 || (after.margin !== null && (after.margin < -100 || after.margin > 1e6)))) {
+                    throw new Error('Precio o margen de tarifa inválido.');
+                }
+                changes.push({ recordId: row.id, domain, field: tariffId, before, after, label: row.name || row.id });
+            }
+            continue;
+        }
         const fields: Array<{ local: readonly string[]; remote: string }> = domain === 'prices'
             ? [{ local: ['price'], remote: 'precio_venta' }]
             : domain === 'classifications'
