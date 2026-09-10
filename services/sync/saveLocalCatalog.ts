@@ -21,8 +21,9 @@ async function persist(documents: DurableDocumentMutation[], changes: LocalCatal
         if (!actorId) throw new Error('Se requiere un usuario para guardar cambios de catálogo.');
         const previous = (await readCatalogEdits()).filter(edit => edit.scope.tenantId === scope.tenantId && edit.scope.terminalId === scope.terminalId);
         for (const { label, ...change } of changes) {
-            const predecessor = [...previous, ...mutations].filter(edit => edit.mutation.recordId === change.recordId && edit.mutation.field === change.field)
-                .sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1);
+            const predecessors = [...previous, ...mutations].filter(edit => edit.mutation.recordId === change.recordId && edit.mutation.field === change.field)
+                .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+            const predecessor = predecessors[predecessors.length - 1];
             const id = uuid();
             lastTimestamp = Math.max(Date.now(), lastTimestamp + 1, ...previous.map(edit => (Date.parse(edit.createdAt) || 0) + 1));
             mutations.push({ id, scope, label, mutation: { ...change, actorId, id },
