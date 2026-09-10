@@ -381,6 +381,11 @@ class BackgroundSyncManager {
                 collectionErrors.push(`customerMutations: ${error?.message || 'unknown error'}`);
             });
 
+            const { catalogEditQueue, catalogEditsEnabled } = await import('./catalogEdits');
+            if (catalogEditsEnabled()) await catalogEditQueue.process().catch((error: Error) => {
+                collectionErrors.push(`catalogEdits: ${error.message}`);
+            });
+
             // Local operator mutations never contain biometric templates.
             await this.processCollection<any>('posUserMutations', async (item) => {
                 await apiSyncAdapter.pushPosUserMutation(item);

@@ -215,6 +215,8 @@ const SEED_DATA = {
   wallet_transactions: [] as any[],
   loyalty_events: [] as any[],
   posUserMutations: [] as any[],
+  catalogEdits: [] as any[],
+  catalogEditCache: [] as any[],
   productionAreas: [] as any[]
 };
 
