@@ -27,6 +27,20 @@ export async function preserveLocalCatalog(collection: string, payload: unknown)
                 for (const field of localFields[mutation.field] || []) product[field] = mutation.after;
             }
         }
+        if (collection === 'products' && mutation.domain === 'item_taxes' && Array.isArray(result)) {
+            const product = result.find(row => row.id === mutation.recordId);
+            if (product && mutation.field === 'tax_ids' && Array.isArray(mutation.after)) {
+                product.appliedTaxIds = [...mutation.after];
+                product.tax_ids = [...mutation.after];
+            }
+        }
+        if (collection === 'products' && mutation.domain === 'item_operations' && Array.isArray(result)) {
+            const product = result.find(row => row.id === mutation.recordId);
+            if (product && typeof mutation.after === 'boolean') {
+                product.operationalFlags = { ...(product.operationalFlags || {}), [mutation.field]: mutation.after };
+                product.operational_flags = { ...(product.operational_flags || {}), [mutation.field]: mutation.after };
+            }
+        }
         if (mutation.domain === 'classifications') {
             const rows = collection === 'config'
                 ? classificationKeys.flatMap(key => Array.isArray(result?.[key]) ? result[key] : [])

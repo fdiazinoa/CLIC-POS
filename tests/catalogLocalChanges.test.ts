@@ -17,3 +17,34 @@ test('only modified fields are included and new local records are excluded', () 
     assert.equal(changes.length, 1); assert.equal(changes[0].field, 'nombre');
     assert.deepEqual(changedCatalogFields([], [{ id, price: 10 }], 'prices'), []);
 });
+test('item taxes compare as a canonical set and emit only a real assignment change', () => {
+    assert.deepEqual(changedCatalogFields(
+        [{ id, appliedTaxIds: ['tax-b', 'tax-a'] }],
+        [{ id, appliedTaxIds: ['tax-a', 'tax-b', 'tax-a'] }],
+        'item_taxes',
+    ), []);
+    const changes = changedCatalogFields(
+        [{ id, name: 'Café', appliedTaxIds: ['tax-a'] }],
+        [{ id, name: 'Café', appliedTaxIds: ['tax-b'] }],
+        'item_taxes',
+    );
+    assert.deepEqual(changes.map(change => [change.domain, change.field, change.before, change.after]), [
+        ['item_taxes', 'tax_ids', ['tax-a'], ['tax-b']],
+    ]);
+});
+test('item operations use stable defaults and enqueue each changed switch independently', () => {
+    assert.deepEqual(changedCatalogFields(
+        [{ id }],
+        [{ id, operationalFlags: { trackInventory: true, promptPrice: false } }],
+        'item_operations',
+    ), []);
+    const changes = changedCatalogFields(
+        [{ id, operationalFlags: { trackInventory: true, promptPrice: false } }],
+        [{ id, operationalFlags: { trackInventory: false, promptPrice: true } }],
+        'item_operations',
+    );
+    assert.deepEqual(changes.map(change => [change.field, change.before, change.after]), [
+        ['trackInventory', true, false],
+        ['promptPrice', false, true],
+    ]);
+});
