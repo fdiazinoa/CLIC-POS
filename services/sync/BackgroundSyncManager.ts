@@ -381,6 +381,11 @@ class BackgroundSyncManager {
                 collectionErrors.push(`customerMutations: ${error?.message || 'unknown error'}`);
             });
 
+            const { catalogEditQueue, catalogEditsEnabled } = await import('./catalogEdits');
+            if (catalogEditsEnabled()) await catalogEditQueue.process().catch((error: Error) => {
+                collectionErrors.push(`catalogEdits: ${error.message}`);
+            });
+
             // Local operator mutations never contain biometric templates.
             await this.processCollection<any>('posUserMutations', async (item) => {
                 await apiSyncAdapter.pushPosUserMutation(item);
@@ -609,7 +614,7 @@ class BackgroundSyncManager {
                 ? Date.now() - durableMetrics.outbox_oldest_age
                 : null;
         }
-        const collections = (collectionOverride || this.operationalCollections).filter(collection =>
+        const collections = (collectionOverride || [...this.operationalCollections, 'catalogEdits']).filter(collection =>
             !durableBatchActive || (collection !== 'transactions' && collection !== 'inventoryLedger')
         );
 

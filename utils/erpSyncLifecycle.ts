@@ -777,6 +777,10 @@ const applyConfigPushV2Domain = async (
         if (!rollbackJournal.has(write.collection)) {
             rollbackJournal.set(write.collection, await db.get(write.collection as any));
         }
+        if (['products', 'config', 'categories'].includes(write.collection) && (import.meta as any).env?.VITE_POS_CATALOG_EDITS_ENABLED === 'true') {
+            const { preserveLocalCatalog } = await import('../services/sync/preserveLocalCatalog');
+            write.value = await preserveLocalCatalog(write.collection, write.value);
+        }
         await db.save(write.collection as any, write.value);
         if (write.collection === 'config') {
             await assertConfigPushV2ConfigPersisted(write.value);

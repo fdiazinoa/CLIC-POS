@@ -177,6 +177,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     cashMovements,
                     customerMutations,
                     posUserMutations,
+                    catalogEdits,
                     walletTransactions,
                     loyaltyEvents,
                 ] = await Promise.all([
@@ -187,6 +188,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     readCollection('cashMovements'),
                     readCollection('customerMutations'),
                     readCollection('posUserMutations'),
+                    readCollection('catalogEdits'),
                     readCollection('wallet_transactions'),
                     readCollection('loyalty_events'),
                 ]);
@@ -321,6 +323,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     ...formatOperationalDocuments('cashMovements', 'EFECTIVO', cashMovements),
                     ...formatOperationalDocuments('customerMutations', 'CLIENTE', customerMutations),
                     ...formatOperationalDocuments('posUserMutations', 'USUARIO', posUserMutations),
+                    ...formatOperationalDocuments('catalogEdits', 'CATÁLOGO', catalogEdits),
                     ...formatOperationalDocuments('wallet_transactions', 'WALLET', walletTransactions),
                     ...formatOperationalDocuments('loyalty_events', 'LEALTAD', loyaltyEvents),
                 ];
