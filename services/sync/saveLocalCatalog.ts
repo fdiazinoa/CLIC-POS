@@ -41,8 +41,17 @@ export function saveLocalProducts(next: Product[], actorId?: string, previousSna
     return serial(async () => {
         if (!catalogEditsEnabled() || loadSyncProfile().cloudChannel !== 'ERP_ACTIVE') { await db.saveDocuments('products', next); return; }
         const previous = previousSnapshot || await db.get('products') as Product[];
+        const tariffPriceChanges = changedCatalogFields(previous, next, 'tariff_prices');
+        const basePriceChanges = changedCatalogFields(previous, next, 'prices').filter(priceChange => !tariffPriceChanges.some(tariffChange => {
+            const before = tariffChange.before && typeof tariffChange.before === 'object' && !Array.isArray(tariffChange.before)
+                ? tariffChange.before.price : null;
+            const after = tariffChange.after && typeof tariffChange.after === 'object' && !Array.isArray(tariffChange.after)
+                ? tariffChange.after.price : null;
+            return before === priceChange.before && after === priceChange.after;
+        }));
         const changes = [
-            ...changedCatalogFields(previous, next, 'prices'),
+            ...basePriceChanges,
+            ...tariffPriceChanges,
             ...changedCatalogFields(previous, next, 'items'),
             ...changedCatalogFields(previous, next, 'item_taxes'),
             ...changedCatalogFields(previous, next, 'item_operations'),

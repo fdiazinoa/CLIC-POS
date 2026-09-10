@@ -134,6 +134,38 @@ test('tax assignments and operations persist atomically and survive an older ERP
     assert.equal(merged[0].operationalFlags.promptPrice, true);
     assert.equal(sends, 1);
 });
+test('tariff overrides persist durably and pending activation or removal survives snapshots', async () => {
+    store.clear(); sends = 0;
+    const tariffA = '00000000-0000-4000-8000-000000000020';
+    const tariffB = '00000000-0000-4000-8000-000000000021';
+    const previous = { ...product, tariffs: [{ tariffId: tariffA, price: 10, margin: 20 }] };
+    const edited = { ...product, tariffs: [{ tariffId: tariffB, price: 8, margin: 15 }] };
+    store.set('products', [previous]);
+    await saveLocalProducts([edited] as any, 'operator', [previous] as any);
+    const queue = store.get('catalogEdits');
+    assert.deepEqual(queue.map((entry: any) => [entry.mutation.domain, entry.mutation.field, entry.mutation.after]), [
+        ['tariff_prices', tariffA, null],
+        ['tariff_prices', tariffB, { price: 8, margin: 15 }],
+    ]);
+    const { preserveLocalCatalog } = await import('../services/sync/preserveLocalCatalog');
+    const mergedProducts = await preserveLocalCatalog('products', [previous]) as any[];
+    assert.deepEqual(mergedProducts[0].tariffs, [{ tariffId: tariffB, price: 8, margin: 15 }]);
+    const mergedPrices = await preserveLocalCatalog('productPrices', [
+        { id: `${product.id}_${tariffA}`, productId: product.id, tariffId: tariffA, price: 10 },
+    ]) as any[];
+    assert.equal(mergedPrices.some(row => row.tariffId === tariffA), false);
+    assert.equal(mergedPrices.find(row => row.tariffId === tariffB)?.price, 8);
+    assert.equal(sends, 1);
+});
+test('editing the default tariff does not enqueue a conflicting duplicate base-price mutation', async () => {
+    store.clear(); sends = 0;
+    const tariffId = '00000000-0000-4000-8000-000000000020';
+    const previous = { ...product, price: 10, tariffs: [{ tariffId, price: 10, margin: 20 }] };
+    const edited = { ...product, price: 12, tariffs: [{ tariffId, price: 12, margin: 30 }] };
+    store.set('products', [previous]);
+    await saveLocalProducts([edited] as any, 'operator', [previous] as any);
+    assert.deepEqual(store.get('catalogEdits').map((entry: any) => entry.mutation.domain), ['tariff_prices']);
+});
 test('opening classification editor and saving identical values adds nothing to the queue', async () => {
     store.clear(); sends = 0;
     const config = { departments: [{ id: product.id, name: 'Bebidas' }] };
