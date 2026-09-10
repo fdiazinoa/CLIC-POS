@@ -1023,7 +1023,9 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          }
 
          // 1. Persist ONLY the modified product
-         if (exists) await saveLocalProducts([savedProduct], currentUser?.id);
+         if (exists && oldProduct) {
+            await saveLocalProducts([savedProduct], currentUser?.id, [structuredClone(oldProduct)]);
+         }
          const productPriceRows = buildProductPriceRowsForProduct(savedProduct, tariffs);
          const existingProductPrices = await db.get('productPrices' as any).catch(() => []) as ProductPrice[];
          const nextProductPrices = [
