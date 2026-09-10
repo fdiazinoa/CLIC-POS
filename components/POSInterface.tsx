@@ -74,6 +74,7 @@ import { printCashMovementReceipt, printComanda, printPrecuenta } from '../utils
 import { canStepCartQuantity, isValidCartQuantity, isValidCartQuantityTransition } from '../utils/cartQuantity';
 import ModifierModal from './ModifierModal';
 import { productHasRestaurantConfiguration, resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
+import { shouldBlockTableMapForDirectSale } from '../utils/restaurantNavigation';
 import { visorSync } from '../utils/visorSync';
 import { isCustomerDisplaySurface, maybeAutoLaunchCustomerDisplay } from '../utils/customerDisplay';
 import ProductQuickActions from './ProductQuickActions';
@@ -6677,6 +6678,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       expectInteractionRender(trace, 'APP_VIEW');
       if (blockRecoveredUberOrderMutation('volver al mapa de mesas')) return;
 
+      if (shouldBlockTableMapForDirectSale(cart.length, Boolean(activeTable))) {
+         setErrorToast('Debes cobrar o cancelar la venta directa antes de ir a Mesas.');
+         window.setTimeout(() => setErrorToast(null), 3500);
+         markInteractionStage(trace, 'HANDLER_END');
+         return;
+      }
+
       setShowParkedList(false);
       closeParkAliasModal();
 
@@ -6911,11 +6919,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             break;
          case 'TABLES':
             if (!showTableMapButton) break;
-            if ((config.vertical === 'RESTAURANT' || config.vertical === 'RETAIL') && cart.length > 0) {
-               handleSendAndExit();
-            } else {
-               if (onOpenTableMap) onOpenTableMap();
-            }
+            void handleBackToMap();
             break;
          case 'loyalty_card': setShowLoyaltyModal(true); break;
          case 'AGENDA': if (onOpenAgenda) onOpenAgenda(); break;
