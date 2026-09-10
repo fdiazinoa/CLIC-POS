@@ -1,8 +1,8 @@
-export type CatalogDomain = 'prices' | 'classifications';
+export type CatalogDomain = 'prices' | 'classifications' | 'items';
 export type CatalogScope = { terminalId: string; tenantId: string; companyId: string; deviceId: string; baseUrl: string };
 export type CatalogMutation = {
     id: string; recordId: string; domain: CatalogDomain; field: string;
-    before: string | number | null; after: string | number; actorId: string;
+    before: string | number | null; after: string | number | null; actorId: string;
 };
 export type CatalogEdit = {
     id: string; scope: CatalogScope; mutation: CatalogMutation; label: string;

@@ -311,6 +311,7 @@ class ProductImageCacheService {
     const imageUrl = this.resolveRemoteImageUrl(item);
     const imageVersion = this.resolveRemoteImageVersion(item, imageUrl);
     const metadata = asObject(item.metadata);
+    const classifications = asObject(item.classifications ?? metadata.classifications);
     const incomingOperationalFlags = asObject(item.operationalFlags ?? item.operational_flags);
     const localOperationalFlags = asObject(localProduct?.operationalFlags);
     const recipeDetails = asArray(item.recipeDetails ?? item.recipe_details);
@@ -399,6 +400,12 @@ class ProductImageCacheService {
       price: asNumber(item.price ?? item.precio_venta, localProduct?.price ?? 0),
       cost: asNumber(item.cost ?? item.costo_unitario, localProduct?.cost ?? 0),
       category: asString(item.category) || asString(item.categoria) || localProduct?.category || 'GENERAL',
+      departmentId: asString(item.departmentId ?? item.department_id ?? metadata.departmentId ?? metadata.department_id ?? classifications.department_id),
+      sectionId: asString(item.sectionId ?? item.section_id ?? metadata.sectionId ?? metadata.section_id ?? classifications.section_id),
+      familyId: asString(item.familyId ?? item.family_id ?? metadata.familyId ?? metadata.family_id ?? classifications.family_id),
+      subfamilyId: asString(item.subfamilyId ?? item.subfamily_id ?? metadata.subfamilyId ?? metadata.subfamily_id ?? classifications.subfamily_id),
+      brandId: asString(item.brandId ?? item.brand_id ?? metadata.brandId ?? metadata.brand_id ?? classifications.brand_id),
+      posCategoryId: asString(item.posCategoryId ?? item.pos_category_id ?? item.category_id ?? metadata.posCategoryId ?? metadata.pos_category_id ?? classifications.pos_category_id ?? classifications.category_id),
       image: localProduct?.image || undefined,
       imageUrl: localProduct?.imageUrl || undefined,
       imageVersion: localProduct?.imageVersion || undefined,

@@ -1005,7 +1005,10 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          config={config}
          products={products}
          onUpdateProducts={onUpdateProducts}
-         onUpdateConfig={onUpdateConfig}
+         onUpdateConfig={(nextConfig) => {
+            setCatalogConfig(nextConfig);
+            onUpdateConfig(nextConfig);
+         }}
          onClose={() => setViewMode('PRODUCTS')}
       />
    );

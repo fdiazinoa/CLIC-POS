@@ -41,7 +41,11 @@ export function saveLocalProducts(next: Product[], actorId?: string, previousSna
     return serial(async () => {
         if (!catalogEditsEnabled() || loadSyncProfile().cloudChannel !== 'ERP_ACTIVE') { await db.saveDocuments('products', next); return; }
         const previous = previousSnapshot || await db.get('products') as Product[];
-        await persist(next.map(document => ({ collectionName: 'products', document })), changedCatalogFields(previous, next, 'prices'), actorId);
+        const changes = [
+            ...changedCatalogFields(previous, next, 'prices'),
+            ...changedCatalogFields(previous, next, 'items'),
+        ];
+        await persist(next.map(document => ({ collectionName: 'products', document })), changes, actorId);
     });
 }
 export function saveLocalClassifications(next: BusinessConfig, actorId?: string): Promise<void> {

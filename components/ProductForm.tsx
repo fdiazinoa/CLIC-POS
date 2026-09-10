@@ -3654,7 +3654,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                           <div className="relative">
                             <select
                               value={formData.category}
-                              onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                              onChange={(e) => {
+                                const category = categoryOptions.find((candidate) => candidate.name === e.target.value);
+                                setFormData({ ...formData, category: e.target.value, posCategoryId: category?.id || '' });
+                              }}
                               disabled={categoryOptions.length === 0}
                               className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-medium outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60 disabled:cursor-not-allowed"
                             >

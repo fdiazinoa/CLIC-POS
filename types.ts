@@ -1554,6 +1554,7 @@ export interface Product {
   familyId?: string;
   subfamilyId?: string;
   brandId?: string;
+  posCategoryId?: string;
   operationalFlags?: ProductOperationalFlags;
   requires_verification?: boolean;
   updatedAt?: string;
