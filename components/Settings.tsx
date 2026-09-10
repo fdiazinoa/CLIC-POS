@@ -1,4 +1,3 @@
-import { catalogEditsEnabled } from '../services/sync/catalogEdits';
 import CheckoutTrackingSettings from './CheckoutTrackingSettings';
 
 import React, { useEffect, useState } from 'react';
@@ -45,7 +44,6 @@ import {
 const AgendaManager = React.lazy(() => import('./AgendaManager'));
 const SpacesManager = React.lazy(() => import('./SpacesManager'));
 const WarehouseManager = React.lazy(() => import('./WarehouseManager'));
-const CatalogErpEdits = React.lazy(() => import('./CatalogErpEdits'));
 const CatalogManager = React.lazy(() => import('./CatalogManager'));
 const TerminalSettings = React.lazy(() => import('./TerminalSettings'));
 const HardwareSettings = React.lazy(() => import('./HardwareSettings'));
@@ -140,7 +138,7 @@ interface SettingsProps {
   erpRoleAuthority?: boolean;
 }
 
-type SettingsView = 'CATALOG_ERP_EDITS' | 'CHECKOUT_TRACKING' | 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'MASTER_NUMBER_RANGES' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
+type SettingsView = 'CHECKOUT_TRACKING' | 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'MASTER_NUMBER_RANGES' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -317,10 +315,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
 
   const renderContent = () => {
     switch (currentView) {
-      case 'CATALOG_ERP_EDITS':
-        return catalogEditsEnabled() && hasPermission('CATALOG_MANAGE') && props.currentUser
-          ? <CatalogErpEdits actorId={props.currentUser.id} onClose={() => setCurrentView('HOME')} />
-          : <div className="p-6">No tienes acceso a cambios de catálogo ERP.</div>;
       case 'IMPORT_EXPORT':
         return (
           <ImportWizard
@@ -913,9 +907,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     onClick={() => setCurrentView('PRODUCTION_AREAS')}
                     locked={!hasPermission('SETTINGS_ACCESS')}
                   />
-                  {catalogEditsEnabled() && <SettingsCard icon={ArrowRightLeft} label="Cambios al ERP"
-                    description="Precios base y clasificaciones" color="bg-blue-700"
-                    onClick={() => setCurrentView('CATALOG_ERP_EDITS')} locked={!hasPermission('CATALOG_MANAGE')} />}
                   <SettingsCard
                     icon={Package}
                     label="Artículos y Tarifas"

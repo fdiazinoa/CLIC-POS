@@ -26,7 +26,7 @@ WITH base AS (
  WHEN 'zReports' THEN COALESCE(NULLIF(json_extract(data,'$.sequenceNumber'),''),doc_id)
  WHEN 'inventoryLedger' THEN COALESCE(NULLIF(json_extract(data,'$.documentRef'),''),NULLIF(json_extract(data,'$.reference'),''),NULLIF(json_extract(data,'$.source_display_id'),''),doc_id)
  ELSE COALESCE(NULLIF(json_extract(data,'$.sequenceNumber'),''),NULLIF(json_extract(data,'$.displayId'),''),NULLIF(json_extract(data,'$.code'),''),NULLIF(json_extract(data,'$.documentRef'),''),NULLIF(json_extract(data,'$.reference'),''),doc_id) END AS display_id,
- COALESCE(NULLIF(json_extract(data,'$.terminalId'),''),CASE WHEN collection_name IN ('cashMovements','customerMutations','posUserMutations','wallet_transactions','loyalty_events') THEN NULLIF(json_extract(data,'$.source_terminal_id'),'') END,'-') AS terminal,
+ COALESCE(NULLIF(json_extract(data,'$.terminalId'),''),CASE WHEN collection_name IN ('cashMovements','customerMutations','posUserMutations','catalogEdits','wallet_transactions','loyalty_events') THEN NULLIF(json_extract(data,'$.source_terminal_id'),'') END,'-') AS terminal,
  CASE upper(COALESCE(NULLIF(json_extract(data,'$.syncStatus'),''),json_extract(data,'$.cloudSyncStatus'),''))
  WHEN 'ERROR' THEN 2 WHEN 'BLOCKED_FUNCTIONAL' THEN 2 WHEN 'FAILED_FINAL' THEN 2
  WHEN 'COMPLETED' THEN 0 WHEN 'SYNCED' THEN 0 WHEN 'SYNCED_CLOUD' THEN 0
@@ -39,7 +39,7 @@ WITH base AS (
  ELSE ${date(['syncBlockedAt','updatedAt','createdAt','timestamp','date'])} END AS date,
  ${refs} AS refs,
  lower(trim(COALESCE(NULLIF(json_extract(data,'$.concept'),''),NULLIF(json_extract(data,'$.concepto'),''),json_extract(data,'$.type'),''))) AS concept
- FROM documents WHERE collection_name IN ('transactions','reservations','inventoryLedger','zReports','cashMovements','customerMutations','posUserMutations','wallet_transactions','loyalty_events')
+ FROM documents WHERE collection_name IN ('transactions','reservations','inventoryLedger','zReports','cashMovements','customerMutations','posUserMutations','catalogEdits','wallet_transactions','loyalty_events')
 ), transaction_refs AS (
  SELECT DISTINCT r.value AS ref FROM base t, json_each(t.refs) r
  WHERE t.collection_name='transactions' AND r.value <> ''

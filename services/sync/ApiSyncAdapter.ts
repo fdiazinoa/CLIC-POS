@@ -5407,11 +5407,6 @@ class ApiSyncAdapter {
         }
     }
 
-    async getCatalogEditRecords(domain: string, search: string): Promise<any> {
-        if (resolveSyncTarget().kind !== 'ERP_ACTIVE') throw new Error('Se requiere conexión con ERP.');
-        return this.getOperationalPayload(`/catalog-edits/records?domain=${encodeURIComponent(domain)}&search=${encodeURIComponent(search)}`, 'PULL_MASTERS');
-    }
-
     async sendCatalogEdit(edit: import('./CatalogEditQueue').CatalogEdit): Promise<import('./CatalogEditQueue').CatalogResult> {
         const { catalogScopeMatches } = await import('./catalogEdits');
         if (!catalogScopeMatches(edit.scope)) throw new Error('El cambio pertenece a otra vinculación.');

@@ -1,3 +1,4 @@
+import { saveLocalClassifications } from '../services/sync/saveLocalCatalog';
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
@@ -17,6 +18,7 @@ import {
 } from '../utils/posCatalogPresentation';
 
 interface ClassificationManagerProps {
+    actorId?: string;
     config: BusinessConfig;
     onUpdateConfig: (config: BusinessConfig) => void;
     products?: Product[];
@@ -72,6 +74,7 @@ const normalizeClassificationItem = (entry: unknown, fallbackPrefix = 'POS-CAT')
 
 const ClassificationManager: React.FC<ClassificationManagerProps> = ({
     config,
+    actorId,
     onUpdateConfig,
     products = [],
     onUpdateProducts,
@@ -187,11 +190,11 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
         activeType === 'FAMILIES' ? 'Sección' :
             activeType === 'SUBFAMILIES' ? 'Familia' : '';
 
-    const persistItems = (nextItems: ClassificationItem[]) => {
-        onUpdateConfig({
-            ...config,
-            [activeDef.prop]: nextItems,
-        });
+    const persistItems = async (nextItems: ClassificationItem[]) => {
+        const nextConfig = { ...config, [activeDef.prop]: nextItems };
+        try { await saveLocalClassifications(nextConfig, actorId); }
+        catch (error) { alert(error instanceof Error ? error.message : 'No se pudo guardar la clasificación.'); return false; }
+        onUpdateConfig(nextConfig);
 
         if (activeType === 'POS_CATEGORIES') {
             const previousById = new Map(items.map(item => [item.id, item]));
@@ -220,7 +223,7 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
         }
     };
 
-    const handleSave = () => {
+    const handleSave = async () => {
         if (!editingItem) return;
         if (!editingItem.name.trim()) return alert("El nombre es requerido");
 
@@ -239,7 +242,7 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
             if (idx >= 0) newItems[idx] = editingItem;
         }
 
-        persistItems(newItems);
+        if (await persistItems(newItems) === false) return;
 
         setEditingItem(null);
         setIsCreating(false);

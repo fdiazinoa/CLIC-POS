@@ -614,7 +614,7 @@ class BackgroundSyncManager {
                 ? Date.now() - durableMetrics.outbox_oldest_age
                 : null;
         }
-        const collections = (collectionOverride || this.operationalCollections).filter(collection =>
+        const collections = (collectionOverride || [...this.operationalCollections, 'catalogEdits']).filter(collection =>
             !durableBatchActive || (collection !== 'transactions' && collection !== 'inventoryLedger')
         );
 

@@ -1,3 +1,4 @@
+import { saveLocalProducts } from '../services/sync/saveLocalCatalog';
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
@@ -935,6 +936,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
          // Force refresh from database to ensure UI is in sync with server/IndexedDB
          const refreshedProducts = await db.get('products') as Product[];
+         await saveLocalProducts(refreshedProducts.filter(product => touchedIds.includes(product.id)), currentUser?.id, products);
          setCatalogProducts(refreshedProducts || products);
          onUpdateProducts(refreshedProducts);
 
@@ -994,11 +996,12 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
    if (viewMode === 'VARIANTS') return <VariantManager onClose={() => setViewMode('PRODUCTS')} />;
    if (editingProduct) return <ProductForm key={editingProduct === 'NEW' ? 'NEW' : editingProduct.id} initialData={editingProduct === 'NEW' ? null : editingProduct} config={config} warehouses={runtimeWarehouses} availableTariffs={tariffs} hasHistory={runtimeTransactions?.some(t => t.items?.some(item => item.id === (editingProduct as any).id)) ?? false} currentUser={currentUser} roles={roles} onSave={handleSaveProduct} onClose={() => setEditingProduct(null)} transfers={transfers} purchaseOrders={purchaseOrders} suppliers={suppliers} seasons={config.seasons || []} initialTab={initialTab} allProducts={products} />
-   if (editingTariff) return <TariffForm initialData={editingTariff === 'NEW' ? null : editingTariff} products={products} config={config} availableTariffs={tariffs} onSave={handleSaveTariff} onUpdateProducts={onUpdateProducts} onClose={() => setEditingTariff(null)} />;
+   if (editingTariff) return <TariffForm initialData={editingTariff === 'NEW' ? null : editingTariff} products={products} config={config} availableTariffs={tariffs} actorId={currentUser?.id} onSave={handleSaveTariff} onUpdateProducts={onUpdateProducts} onClose={() => setEditingTariff(null)} />;
    if (editingGroup) return <GroupForm initialData={editingGroup === 'NEW' ? null : editingGroup} products={products} onSave={handleSaveGroup} onClose={() => setEditingGroup(null)} />;
    if (editingSeason) return <SeasonForm initialData={editingSeason === 'NEW' ? null : editingSeason} products={products} onSave={handleSaveSeason} onClose={() => setEditingSeason(null)} />;
    if (viewMode === 'CLASSIFICATIONS') return (
       <ClassificationManager
+         actorId={currentUser?.id}
          config={config}
          products={products}
          onUpdateProducts={onUpdateProducts}
@@ -1017,7 +1020,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          }
 
          // 1. Persist ONLY the modified product
-         if (exists) await db.saveDocument('products', savedProduct);
+         if (exists) await saveLocalProducts([savedProduct], currentUser?.id);
          const productPriceRows = buildProductPriceRowsForProduct(savedProduct, tariffs);
          const existingProductPrices = await db.get('productPrices' as any).catch(() => []) as ProductPrice[];
          const nextProductPrices = [
