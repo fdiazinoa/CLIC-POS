@@ -7,7 +7,8 @@ El usuario edita y guarda en las pantallas actuales del POS. No existe una panta
 - Precio base de artículos existentes: editor de producto, precio rápido y cambios de precio base desde TariffForm. Los precios exclusivos de tarifas/overrides siguen fuera de este contrato.
 - Nombre y código de clasificaciones existentes desde ClassificationManager.
 - El guardado masivo conserva su API actual y captura las diferencias de precio resultantes; si falla el registro de la cola, informa el error en el flujo masivo.
-- No incluye altas/bajas, jerarquía, asignación producto-clasificación, impuestos ni operaciones.
+- Reclasificación de artículos existentes: departamento, sección, familia, subfamilia, marca y categoría POS.
+- No incluye altas/bajas, cambios de jerarquía entre clasificaciones, impuestos ni operaciones.
 
 ## Guardado y envío
 
@@ -17,11 +18,11 @@ Los cambios reales se envían automáticamente tras guardar y mediante el proces
 
 Los snapshots CONFIG_PUSH_V2 preservan campos locales con cambios pendientes y no generan mensajes de retorno. Los estados se muestran en el monitor de sincronización que ya existe. No hay otro paso requerido para un guardado normal.
 
-IndexedDB usa versión 23 y colección `catalogEdits`; SQLite utiliza documentos existentes. Configuración: `VITE_POS_CATALOG_EDITS_ENABLED=true`, desactivada por defecto; ERP exige habilitación global y por terminal. La vinculación debe estar completa antes de habilitar el piloto.
+IndexedDB usa versión 23 y colección `catalogEdits`; SQLite utiliza documentos existentes. Configuración: los builds de producción definen `VITE_POS_CATALOG_EDITS_ENABLED=true`; ERP mantiene la autorización por terminal mediante `posCatalogEdits.enabled`. La vinculación debe estar completa antes de aceptar cambios.
 
 ## Backend e integración pendientes
 
-Backend compañero: CLIC-ERP PR #2043. La mutación compara el valor anterior y persiste el resultado atómicamente. `APPLIED` confirma escritura ERP, no recepción en otros POS. Hay que aplicar la migración en pruebas y verificar/conectar la publicación CONFIG_PUSH_V2 del backend desplegado antes de uso operativo. No se ha desplegado ni generado APK.
+Backend compañero: CLIC-ERP PRs #2043, #2045 y #2046. La mutación compara el valor anterior y persiste el resultado atómicamente. `APPLIED` confirma escritura ERP, no recepción en otros POS. Las migraciones y endpoints están desplegados para la terminal piloto; CONFIG_PUSH_V2 continúa distribuyendo los cambios confirmados a los demás POS.
 
 Smoke: habilitar una terminal de prueba, guardar sin cambiar nada y comprobar cola vacía; modificar precio base y nombre/código, comprobar envío automático y recepción ERP; repetir sin red, tras reinicio, con ediciones sucesivas y con conflicto. Verificar publicación a dos POS.
 
