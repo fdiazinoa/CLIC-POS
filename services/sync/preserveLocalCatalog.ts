@@ -90,11 +90,18 @@ export async function preserveLocalCatalog(collection: string, payload: unknown)
                 }
             }
         }
-        if (mutation.domain === 'classifications') {
+        if (mutation.domain === 'classifications' || mutation.domain === 'classification_hierarchy') {
             const rows = collection === 'config'
                 ? classificationKeys.flatMap(key => Array.isArray(result?.[key]) ? result[key] : [])
                 : collection === 'categories' && Array.isArray(result) ? result : [];
-            for (const row of rows) if (row.id === mutation.recordId) row[mutation.field === 'nombre' ? 'name' : 'code'] = mutation.after;
+            for (const row of rows) if (row.id === mutation.recordId) {
+                if (mutation.domain === 'classification_hierarchy') {
+                    row.parentId = mutation.after;
+                    row.parent_id = mutation.after;
+                } else {
+                    row[mutation.field === 'nombre' ? 'name' : 'code'] = mutation.after;
+                }
+            }
         }
     }
     return result;

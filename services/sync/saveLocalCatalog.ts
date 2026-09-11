@@ -64,7 +64,10 @@ export function saveLocalClassifications(next: BusinessConfig, actorId?: string)
     return serial(async () => {
         if (!catalogEditsEnabled() || loadSyncProfile().cloudChannel !== 'ERP_ACTIVE') { await db.save('config', next); return; }
         const previous = await db.get('config') as unknown as BusinessConfig;
-        const changes = classificationKeys.flatMap(key => changedCatalogFields(previous[key] || [], next[key] || [], 'classifications'));
+        const changes = classificationKeys.flatMap(key => [
+            ...changedCatalogFields(previous[key] || [], next[key] || [], 'classifications'),
+            ...changedCatalogFields(previous[key] || [], next[key] || [], 'classification_hierarchy'),
+        ]);
         await persist([{ collectionName: 'config', document: { ...next, id: (next as { id?: string }).id || 'current' } }], changes, actorId, ['config']);
     });
 }

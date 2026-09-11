@@ -1,4 +1,4 @@
-export type CatalogDomain = 'prices' | 'tariff_prices' | 'classifications' | 'items' | 'item_taxes' | 'item_operations' | 'item_general';
+export type CatalogDomain = 'prices' | 'tariff_prices' | 'classifications' | 'classification_hierarchy' | 'items' | 'item_taxes' | 'item_operations' | 'item_general';
 export type CatalogScope = { terminalId: string; tenantId: string; companyId: string; deviceId: string; baseUrl: string };
 export type CatalogTariffPriceValue = { price: number; margin: number | null };
 export type CatalogMutationValue = string | number | boolean | string[] | CatalogTariffPriceValue | null;

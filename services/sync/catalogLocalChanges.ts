@@ -7,6 +7,7 @@ type Row = {
     sku?: string; external_code?: string; externalCode?: string; reference?: string; referenceCode?: string; reference_code?: string;
     barcode?: string; barcode_2?: string; barcode2?: string; barcode_3?: string; barcode3?: string;
     type?: string; measurementUnit?: string; purchaseUnit?: string; is_active?: boolean;
+    parentId?: string; parent_id?: string;
     appliedTaxIds?: unknown;
     tariffs?: unknown;
     operationalFlags?: Partial<ProductOperationalFlags>;
@@ -129,6 +130,8 @@ export function changedCatalogFields(previous: Row[], next: Row[], domain: Catal
             ? [{ local: ['price'], remote: 'precio_venta' }]
             : domain === 'classifications'
                 ? [{ local: ['name'], remote: 'nombre' }, { local: ['code'], remote: 'codigo' }]
+                : domain === 'classification_hierarchy'
+                    ? [{ local: ['parentId', 'parent_id'], remote: 'parent_id' }]
                 : domain === 'items'
                     ? [...itemClassificationFields]
                     : domain === 'item_taxes'
@@ -179,6 +182,7 @@ export function changedCatalogFields(previous: Row[], next: Row[], domain: Catal
             if (!uuid.test(row.id)) throw new Error(`El registro ${row.name || row.id} no tiene una identidad ERP válida.`);
             if (domain === 'prices' && (typeof after !== 'number' || !Number.isFinite(after) || after < 0 || after > 1e12)) throw new Error('Precio inválido.');
             if (domain === 'classifications' && ((after !== null && typeof after !== 'string') || (typeof after === 'string' && after.length > 120) || (local[0] === 'name' && (typeof after !== 'string' || !after.trim())))) throw new Error('Clasificación inválida.');
+            if (domain === 'classification_hierarchy' && (after !== null && (typeof after !== 'string' || !uuid.test(after)))) throw new Error('La clasificación padre no tiene una identidad ERP válida.');
             if (domain === 'items' && (after !== null && (typeof after !== 'string' || !uuid.test(after)))) throw new Error('La clasificación asignada no tiene una identidad ERP válida.');
             if (domain === 'item_taxes' && (!Array.isArray(after) || after.length > 32 || after.some(value => !value || value.length > 160))) throw new Error('Asignación de impuestos inválida.');
             if (domain === 'item_operations' && typeof after !== 'boolean') throw new Error('Operación del artículo inválida.');
