@@ -401,6 +401,8 @@ type PendingTableLockRelease = {
 type ParkedTicketSyncOptions = {
   deferRemote?: boolean;
   reason?: 'cart_changed' | 'debounced' | 'explicit' | 'customer_assigned';
+  /** Persist only the active ticket while the operator is typing. */
+  changedTicketId?: string;
 };
 
 type PendingClientTableSync = {
@@ -702,7 +704,7 @@ const writeCriticalCollectionsMirror = (parkedTickets: ParkedTicket[], cashMovem
 
 const persistPendingClientTableSync = async (pending: PendingClientTableSync): Promise<void> => {
   writePendingTableSyncMirror(pending);
-  await db.save('pendingClientTableSync' as any, pending);
+  await db.saveDocument('pendingClientTableSync' as any, pending);
 };
 
 const writePendingTableSyncMirror = (pending: PendingClientTableSync): void => {
@@ -728,7 +730,7 @@ const readPendingClientTableSync = async (): Promise<PendingClientTableSync | nu
   }
 
   try {
-    const persisted = await db.get('pendingClientTableSync' as any) as unknown as PendingClientTableSync | null;
+    const persisted = await db.getDocument('pendingClientTableSync' as any, 'current') as unknown as PendingClientTableSync | null;
     return persisted?.status === 'PENDING' && Array.isArray(persisted.parkedTickets)
       ? persisted
       : null;
@@ -749,7 +751,7 @@ const clearPendingClientTableSync = async (): Promise<void> => {
   } catch {
     // ignore
   }
-  await db.save('pendingClientTableSync' as any, cleared).catch(() => undefined);
+  await db.saveDocument('pendingClientTableSync' as any, cleared).catch(() => undefined);
 };
 
 const mergeById = <T extends { id?: string }>(primary: T[], fallback: T[]): T[] => {
@@ -771,6 +773,12 @@ const parkedTicketReferencesTable = (ticket: ParkedTicket, tableId: string): boo
   return joinedTableIds.some((joinedTableId: unknown) =>
     String(joinedTableId || '').trim() === normalizedTableId
   );
+};
+
+const scopeTicketsForTableSync = (tickets: ParkedTicket[], tableId?: string): ParkedTicket[] => {
+  const normalizedTableId = String(tableId || '').trim();
+  if (!normalizedTableId) return tickets;
+  return tickets.filter(ticket => parkedTicketReferencesTable(ticket, normalizedTableId));
 };
 
 const mergePendingClientTableTickets = (
@@ -8501,22 +8509,37 @@ const AppContent: React.FC = () => {
       const ticketId = String(ticket?.id || '').trim();
       return !ticketId || !closedRestaurantOrderIdsRef.current.has(ticketId);
     });
+    const changedTicketId = String(options.changedTicketId || '').trim();
+    const persistTicketsLocally = async () => {
+      if (!changedTicketId) {
+        await db.save('parkedTickets', validTickets);
+        return;
+      }
+
+      const changedTicket = validTickets.find(ticket => String(ticket.id) === changedTicketId);
+      if (changedTicket) {
+        await db.saveDocument('parkedTickets', changedTicket);
+      } else {
+        await db.deleteDocument('parkedTickets', changedTicketId);
+      }
+    };
     if (isClientTerminalMode()) {
       const editLock = activeTableEditLockRef.current;
+      const tableSyncTickets = scopeTicketsForTableSync(validTickets, editLock?.tableId);
       const pendingSync: PendingClientTableSync = {
         id: 'current',
         status: 'PENDING',
         tableId: editLock?.tableId,
         queuedAt: new Date().toISOString(),
         reason: options.reason || 'explicit',
-        parkedTickets: validTickets,
+        parkedTickets: tableSyncTickets,
       };
       pendingClientTableSyncRef.current = pendingSync;
       writePendingTableSyncMirror(pendingSync);
-      writeCriticalCollectionsMirror(validTickets, cashMovements);
+      if (!changedTicketId) writeCriticalCollectionsMirror(validTickets, cashMovements);
       setParkedTickets(validTickets);
       const persistLocal = () => Promise.allSettled([
-        db.save('parkedTickets', validTickets),
+        persistTicketsLocally(),
         persistPendingClientTableSync(pendingSync),
       ]);
 
@@ -8531,7 +8554,7 @@ const AppContent: React.FC = () => {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            parkedTickets: validTickets,
+            parkedTickets: tableSyncTickets,
             tableId: editLock?.tableId,
             ownerId: editLock?.ownerId,
             lockToken: editLock?.token,
@@ -8580,6 +8603,7 @@ const AppContent: React.FC = () => {
       isNativeAndroidRuntime() &&
       isNativeStandaloneTerminalRuntime(getCurrentTerminal());
     const masterEditLock = servesAsNativeMaster ? activeTableEditLockRef.current : null;
+    const masterTableSyncTickets = scopeTicketsForTableSync(validTickets, masterEditLock?.tableId);
     const masterPendingSync: PendingClientTableSync | null = masterEditLock?.tableId
       ? {
           id: 'current',
@@ -8587,7 +8611,7 @@ const AppContent: React.FC = () => {
           tableId: String(masterEditLock.tableId),
           queuedAt: new Date().toISOString(),
           reason: options.reason || 'explicit',
-          parkedTickets: validTickets,
+          parkedTickets: masterTableSyncTickets,
         }
       : null;
     // Debe registrarse antes de cualquier await de persistencia: el poll nativo
@@ -8596,13 +8620,10 @@ const AppContent: React.FC = () => {
       pendingMasterTableSyncRef.current = masterPendingSync;
       writePendingTableSyncMirror(masterPendingSync);
     }
-    writeCriticalCollectionsMirror(validTickets, cashMovements);
+    if (!changedTicketId) writeCriticalCollectionsMirror(validTickets, cashMovements);
     setParkedTickets(validTickets);
     const persistMasterTickets = async () => {
-      // En Android, saveCollection produce un solo executeSet transaccional:
-      // DELETE de la colección seguido por todos los UPSERT. La operación queda
-      // atómica y evita la cadena de transacciones por cada ticket.
-      await db.save('parkedTickets', validTickets);
+      await persistTicketsLocally();
     };
 
     // La caja maestra Android también debe confirmar el cambio en el servidor
@@ -8621,7 +8642,7 @@ const AppContent: React.FC = () => {
           // puede estar guardando otra al mismo tiempo y su estado no debe ser
           // reemplazado por el snapshot completo de la Master.
           body: JSON.stringify({
-            parkedTickets: validTickets,
+            parkedTickets: masterTableSyncTickets,
             ...(masterEditLock?.tableId ? {
               tableId: masterEditLock.tableId,
               ownerId: masterEditLock.ownerId,

@@ -53,6 +53,8 @@ class BackgroundSyncManager {
     private readonly FAST_RETRY_DELAY_MS = 5000;
     private readonly RECOVERABLE_TRANSACTION_RETRY_DELAY_MS = 15000;
     private readonly STUCK_SYNCING_TIMEOUT_MS = 120000;
+    private readonly PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+    private readonly PRUNE_STORAGE_KEY = 'clic_pos_last_sync_prune_at_v1';
 
     /**
      * Initialize the background sync manager
@@ -364,11 +366,6 @@ class BackgroundSyncManager {
 
             if (isPosSaleActive()) {
                 pausedForSaleActivity = true;
-                this.updateState({
-                    isSyncing: false,
-                    hasError: collectionErrors.length > 0,
-                    lastSyncTime: new Date().toISOString()
-                });
                 console.log('⏸️ BackgroundSyncManager: Heavy sync paused while sale cart is active.');
                 return;
             }
@@ -381,10 +378,20 @@ class BackgroundSyncManager {
                 collectionErrors.push(`customerMutations: ${error?.message || 'unknown error'}`);
             });
 
+            if (isPosSaleActive()) {
+                pausedForSaleActivity = true;
+                return;
+            }
+
             const { catalogEditQueue, catalogEditsEnabled } = await import('./catalogEdits');
             if (catalogEditsEnabled()) await catalogEditQueue.process().catch((error: Error) => {
                 collectionErrors.push(`catalogEdits: ${error.message}`);
             });
+
+            if (isPosSaleActive()) {
+                pausedForSaleActivity = true;
+                return;
+            }
 
             // Local operator mutations never contain biometric templates.
             await this.processCollection<any>('posUserMutations', async (item) => {
@@ -433,29 +440,41 @@ class BackgroundSyncManager {
 
             // Report range cursors only after the normal master/document queues.
             // The local row remains pending until the ERP acknowledges it.
-            await reportPendingMasterNumberRangeProgress().catch((error: any) => {
-                collectionErrors.push(`masterNumberRanges: ${error?.message || 'unknown error'}`);
-            });
+            if (!isPosSaleActive()) {
+                await reportPendingMasterNumberRangeProgress().catch((error: any) => {
+                    collectionErrors.push(`masterNumberRanges: ${error?.message || 'unknown error'}`);
+                });
+            } else {
+                pausedForSaleActivity = true;
+            }
 
-            this.updateState({
-                isSyncing: false,
-                hasError: collectionErrors.length > 0,
-                lastSyncTime: new Date().toISOString()
-            });
-
-            // 5. Prune old data to keep the database small
-            await this.pruneSyncedItems();
+            // Maintenance stays visible as synchronization and only runs while idle.
+            if (!isPosSaleActive()) await this.pruneSyncedItems();
             if (collectionErrors.length > 0) {
                 console.warn('⚠️ BackgroundSyncManager: Partial sync with errors:', collectionErrors);
                 shouldRetrySoon = true;
             }
         } catch (error) {
             console.error('❌ BackgroundSyncManager: Sync failed:', error);
-            this.updateState({ isSyncing: false, hasError: true });
+            collectionErrors.push(error instanceof Error ? error.message : String(error));
             shouldRetrySoon = true;
         } finally {
             this.isProcessing = false;
-            await this.updatePendingCount(pausedForSaleActivity ? ['transactions'] : undefined);
+            try {
+                if (!isPosSaleActive()) {
+                    await this.updatePendingCount(pausedForSaleActivity ? ['transactions'] : undefined);
+                } else {
+                    pausedForSaleActivity = true;
+                }
+            } catch (error) {
+                collectionErrors.push(error instanceof Error ? error.message : String(error));
+                console.warn('⚠️ BackgroundSyncManager: Pending count refresh failed:', error);
+            }
+            this.updateState({
+                isSyncing: false,
+                hasError: collectionErrors.length > 0,
+                lastSyncTime: new Date().toISOString()
+            });
             if (navigator.onLine && (shouldRetrySoon || this.state.pendingCount > 0)) {
                 if (pausedForSaleActivity && this.state.pendingCount === 0) return;
                 this.scheduleSync(this.nextRetryDelayMs ?? this.FAST_RETRY_DELAY_MS);
@@ -482,6 +501,7 @@ class BackgroundSyncManager {
         collectionName: string,
         pushFn: (item: T) => Promise<void>
     ) {
+        if (isPosSaleActive()) return;
         const data = await db.get(collectionName as any) as T[];
         if (!Array.isArray(data)) return;
 
@@ -805,6 +825,15 @@ class BackgroundSyncManager {
      * Prune old COMPLETED items to keep the local database healthy
      */
     private async pruneSyncedItems() {
+        if (isPosSaleActive()) return;
+        let previousPruneAt = 0;
+        try {
+            previousPruneAt = Number(window.localStorage.getItem(this.PRUNE_STORAGE_KEY) || 0);
+        } catch {
+            // Continue without persisted throttle when storage is unavailable.
+        }
+        if (Number.isFinite(previousPruneAt) && Date.now() - previousPruneAt < this.PRUNE_INTERVAL_MS) return;
+
         const RETENTION_DAYS = 30;
         const now = new Date();
         const cutoff = new Date(now.getTime() - (RETENTION_DAYS * 24 * 60 * 60 * 1000));
@@ -814,11 +843,11 @@ class BackgroundSyncManager {
         const collections = this.operationalCollections;
 
         for (const colName of collections) {
+            if (isPosSaleActive()) return;
             try {
                 const data = await db.get(colName as any) as any[];
                 if (!Array.isArray(data)) continue;
 
-                const toKeep: any[] = [];
                 const toPruneIds: string[] = [];
 
                 data.forEach(item => {
@@ -834,21 +863,28 @@ class BackgroundSyncManager {
 
                     if (isSynced && isOld) {
                         toPruneIds.push(item.id);
-                    } else {
-                        toKeep.push(item);
                     }
                 });
 
                 if (toPruneIds.length > 0) {
                     console.log(`🗑️ Pruning ${toPruneIds.length} items from ${colName}`);
-                    // Use saveCollection (expensive but correct for mass delete in legacy db.ts)
-                    // Or call deleteDocument for each. Since we just migrated to IDB, 
-                    // saveCollection with the new array will rewrite the store.
-                    await db.save(colName as any, toKeep);
+                    for (let index = 0; index < toPruneIds.length; index += 1) {
+                        if (isPosSaleActive()) return;
+                        await db.deleteDocument(colName as any, toPruneIds[index]);
+                        if (index > 0 && index % 25 === 0) {
+                            await new Promise<void>(resolve => window.setTimeout(resolve, 0));
+                        }
+                    }
                 }
+                await new Promise<void>(resolve => window.setTimeout(resolve, 0));
             } catch (error) {
                 console.error(`❌ Failed to prune ${colName}:`, error);
             }
+        }
+        try {
+            window.localStorage.setItem(this.PRUNE_STORAGE_KEY, String(Date.now()));
+        } catch {
+            // Best effort only; cleanup itself has already completed.
         }
     }
 }

@@ -52,14 +52,15 @@ test('un lock propio no bloquea localmente pero el lock de otra terminal sí', (
   assert.match(appSource, /localTableLockOwnerId=\{String\(deviceId/);
 });
 
-test('la persistencia Master de tickets usa un solo reemplazo transaccional', () => {
+test('la persistencia Master delega en el guardado incremental del ticket activo', () => {
   const persistStart = updateSource.indexOf('const persistMasterTickets');
   const persistEnd = updateSource.indexOf('// La caja maestra Android', persistStart);
   const persistSource = updateSource.slice(persistStart, persistEnd);
-  assert.match(persistSource, /await db\.save\('parkedTickets', validTickets\)/);
+  assert.match(persistSource, /await persistTicketsLocally\(\)/);
   assert.doesNotMatch(persistSource, /db\.saveDocument/);
   assert.doesNotMatch(persistSource, /db\.deleteDocument/);
   assert.doesNotMatch(persistSource, /db\.get\('parkedTickets'/);
+  assert.match(updateSource, /await db\.saveDocument\('parkedTickets', changedTicket\)/);
   assert.match(updateSource, /\.then\(waitForTableInteractionIdle\)/);
   assert.match(updateSource, /writePendingTableSyncMirror\(masterPendingSync\)/);
   assert.match(appSource, /TABLE_PERSISTENCE_IDLE_MS = 1_000/);
