@@ -40,6 +40,7 @@ WITH base AS (
  ${refs} AS refs,
  lower(trim(COALESCE(NULLIF(json_extract(data,'$.concept'),''),NULLIF(json_extract(data,'$.concepto'),''),json_extract(data,'$.type'),''))) AS concept
  FROM documents WHERE collection_name IN ('transactions','reservations','inventoryLedger','zReports','cashMovements','customerMutations','posUserMutations','catalogEdits','wallet_transactions','loyalty_events')
+ AND NOT (collection_name='catalogEdits' AND NULLIF(json_extract(data,'$.resolution'),'') IS NOT NULL)
 ), transaction_refs AS (
  SELECT DISTINCT r.value AS ref FROM base t, json_each(t.refs) r
  WHERE t.collection_name='transactions' AND r.value <> ''

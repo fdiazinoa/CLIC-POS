@@ -21,6 +21,16 @@ export function catalogScopeMatches(scope: CatalogScope) {
 }
 export const readCatalogEdits = async (): Promise<CatalogEdit[]> => ((await db.get('catalogEdits')) || []) as CatalogEdit[];
 
+export function shouldShowCatalogEditInSyncMonitor(
+    edit: Pick<CatalogEdit, 'status' | 'resolution'>,
+    canViewConflicts: boolean,
+): boolean {
+    // Resolved edits remain in durable storage as an audit trail, but they no
+    // longer belong to the operational queue shown in the sync monitor.
+    if (edit.resolution) return false;
+    return canViewConflicts || !['CONFLICT', 'REJECTED'].includes(String(edit.status || '').toUpperCase());
+}
+
 export const CATALOG_CONFLICT_PERMISSIONS = {
     view: 'POS_CATALOG_CONFLICT_VIEW',
     retry: 'POS_CATALOG_CONFLICT_RETRY',

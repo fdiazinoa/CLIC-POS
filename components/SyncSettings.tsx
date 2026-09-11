@@ -13,7 +13,7 @@ import { posCloudStagingService } from '../services/sync/PosCloudStagingService'
 import { resetDeviceIdentityBySupport } from '../utils/deviceRevocation';
 import { getConfigPushV2Diagnostics, triggerErpSyncOutbox } from '../utils/erpSyncLifecycle';
 import { syncTriggerCoordinator } from '../services/sync/SyncTriggerCoordinator';
-import { CATALOG_CONFLICT_PERMISSIONS, catalogEditQueue, hasCatalogConflictPermission, resolveCatalogConflict } from '../services/sync/catalogEdits';
+import { CATALOG_CONFLICT_PERMISSIONS, catalogEditQueue, hasCatalogConflictPermission, resolveCatalogConflict, shouldShowCatalogEditInSyncMonitor } from '../services/sync/catalogEdits';
 
 interface SyncSettingsProps {
     config: BusinessConfig;
@@ -334,7 +334,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
                     ...formatOperationalDocuments('customerMutations', 'CLIENTE', customerMutations),
                     ...formatOperationalDocuments('posUserMutations', 'USUARIO', posUserMutations),
                     ...formatOperationalDocuments('catalogEdits', 'CATÁLOGO', (catalogEdits as any[] || []).filter(edit =>
-                        canViewCatalogConflicts || !['CONFLICT', 'REJECTED'].includes(String(edit?.status || '').toUpperCase())
+                        shouldShowCatalogEditInSyncMonitor(edit, canViewCatalogConflicts)
                     )),
                     ...formatOperationalDocuments('wallet_transactions', 'WALLET', walletTransactions),
                     ...formatOperationalDocuments('loyalty_events', 'LEALTAD', loyaltyEvents),
