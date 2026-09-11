@@ -21,6 +21,7 @@ export type CatalogEdit = {
     resolution?: CatalogConflictResolution;
     resolvedBy?: string;
     resolvedAt?: string;
+    snapshotConfirmedAt?: string;
 };
 export type CatalogResult = { id: string; status: 'APPLIED' | 'CONFLICT' | 'REJECTED'; code?: string; current?: unknown };
 export interface CatalogQueueDependencies {

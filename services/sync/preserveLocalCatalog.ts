@@ -2,6 +2,7 @@ import { dbAdapter } from '../db';
 import { catalogScopeMatches } from './catalogEdits';
 import { classificationKeys } from './catalogLocalChanges';
 import type { CatalogEdit } from './CatalogEditQueue';
+import { catalogSnapshotConfirmsMutation } from './catalogSnapshotFence';
 
 export function cloneCatalogPayload<T>(payload: T): T {
     if (typeof globalThis.structuredClone === 'function') {
@@ -11,16 +12,27 @@ export function cloneCatalogPayload<T>(payload: T): T {
     return JSON.parse(JSON.stringify(payload)) as T;
 }
 
-// Snapshot writes must not undo edits waiting for ERP acknowledgement. These
-// writes never create outgoing mutations; capture exists only in user handlers.
+// Snapshot writes must not undo edits waiting for ERP acknowledgement or an
+// applied edit whose confirming snapshot has not arrived yet. These writes
+// never create outgoing mutations; capture exists only in user handlers.
 export async function preserveLocalCatalog(collection: string, payload: unknown): Promise<unknown> {
     const pending = (await dbAdapter.getCollection<CatalogEdit>('catalogEdits'))
-        .filter(edit => edit.status === 'PENDING' && catalogScopeMatches(edit.scope))
+        .filter(edit => (
+            edit.status === 'PENDING'
+            || (edit.status === 'APPLIED' && !edit.snapshotConfirmedAt)
+        ) && catalogScopeMatches(edit.scope))
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     if (!pending.length) return payload;
     const result = cloneCatalogPayload(payload) as any;
     for (const edit of pending) {
         const { mutation } = edit;
+        if (edit.status === 'APPLIED' && catalogSnapshotConfirmsMutation(collection, payload, mutation)) {
+            await dbAdapter.saveDocument('catalogEdits', {
+                ...edit,
+                snapshotConfirmedAt: new Date().toISOString(),
+            });
+            continue;
+        }
         if (collection === 'products' && mutation.domain === 'item_lifecycle' && Array.isArray(result)) {
             const index = result.findIndex(row => row.id === mutation.recordId);
             if (mutation.field === 'create' && mutation.after && typeof mutation.after === 'object' && !Array.isArray(mutation.after)) {
