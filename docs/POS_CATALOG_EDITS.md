@@ -6,13 +6,14 @@ El usuario edita y guarda en las pantallas actuales del POS. No existe una panta
 
 - Precio base de artículos existentes: editor de producto, precio rápido y cambios de precio base desde TariffForm.
 - Nombre y código de clasificaciones existentes desde ClassificationManager.
+- Relaciones padre/hijo de secciones, familias y subfamilias desde el selector existente del ClassificationManager.
 - El guardado masivo conserva su API actual y captura las diferencias de precio resultantes; si falla el registro de la cola, informa el error en el flujo masivo.
 - Reclasificación de artículos existentes: departamento, sección, familia, subfamilia, marca y categoría POS.
 - Impuestos asignados a artículos existentes, incluyendo quitar todos los impuestos.
 - Operaciones del artículo: controlar inventario, precio abierto, venta solo en enteros, inventario negativo, producto pesado, etiquetas, edad, exclusión de promociones/puntos, lotes/vencimientos y números de serie.
 - Precios particulares por tarifa: precio, margen, activación y eliminación. Cada tarifa se sincroniza de forma independiente; editar la tarifa base no genera una segunda mutación de precio duplicada.
 - Datos generales de artículos existentes: nombre, descripción, SKU, referencia, tres códigos de barra, costo, tipo, unidades de inventario/compra y estado activo. Los códigos de barra se envían como un único cambio para no dejar combinaciones parciales.
-- No incluye altas/bajas ni cambios de jerarquía entre clasificaciones. El mantenimiento global de definiciones de impuestos conserva su contrato separado; este alcance cubre la asignación de impuestos a cada artículo.
+- No incluye altas/bajas. El mantenimiento global de definiciones de impuestos conserva su contrato separado; este alcance cubre la asignación de impuestos a cada artículo.
 
 ## Guardado y envío
 
