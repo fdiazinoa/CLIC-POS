@@ -1535,13 +1535,11 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          <div className="flex-1 h-full min-h-0 min-w-0 flex flex-col overflow-hidden">
             {/* TOP BAR / Header */}
             {!isLargeCatalogLayout ? (
-               <div className="bg-white px-4 pt-4 pb-0 border-b border-gray-200 shrink-0">
-                  <div className="flex flex-col gap-4 w-full">
+               <div className="bg-white px-4 pt-2 pb-0 border-b border-gray-200 shrink-0">
+                  <div className="flex flex-col gap-2 w-full">
                      <div className="flex justify-between items-center w-full">
-                        <div className="flex items-center gap-3">
-                           <button onClick={onClose} className="p-2 bg-gray-100 rounded-full text-gray-600"><ArrowLeft size={20} /></button>
-                           <h1 className="text-xl font-black text-gray-800">Catálogo</h1>
-                        </div>
+                        <h1 className="text-xl font-black text-gray-800">Catálogo</h1>
+                        <button type="button" onClick={onClose} className="flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:text-gray-900" aria-label="Cerrar catálogo" title="Cerrar"><X size={20} /></button>
                      </div>
                      <div className="mobile-tab-scroller no-scrollbar -mx-4 px-4 overflow-x-auto whitespace-nowrap bg-white">
                         <div className="inline-flex items-center gap-2 min-w-max pb-1">
@@ -1558,14 +1556,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                   </div>
                </div>
             ) : isTablet ? (
-               <div className="bg-white p-8 border-b border-gray-100 flex items-center justify-between gap-8 shrink-0">
+               <div className="bg-white px-6 py-3 border-b border-gray-100 flex items-center justify-between gap-4 shrink-0">
                   <div className="flex items-center gap-4 flex-1 max-w-2xl">
-                     <button
-                        onClick={onClose}
-                        className="h-16 px-6 bg-white border border-gray-200 text-gray-700 rounded-[1.75rem] font-black shadow-sm hover:bg-gray-50 transition-all flex items-center gap-3 shrink-0"
-                     >
-                        <ArrowLeft size={22} strokeWidth={2.8} /> Salir
-                     </button>
                      {viewMode !== 'PRODUCTS' && <div className="flex-1 relative shadow-2xl shadow-gray-100">
                         <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-400" size={24} />
                         <input
@@ -1589,30 +1581,32 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                         <Plus size={28} strokeWidth={4} className="group-hover:rotate-90 transition-transform duration-300" /> Nuevo Artículo
                      </button>
                   )}
+                  <button type="button" onClick={onClose} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-gray-200 bg-white text-gray-600 transition hover:border-gray-300 hover:text-gray-900" aria-label="Cerrar catálogo" title="Cerrar"><X size={24} /></button>
                </div>
             ) : (
                <div className="bg-white border-b border-gray-100 shrink-0">
-                  <div className="px-8 py-6 flex items-center gap-4">
-                     <button
-                        onClick={onClose}
-                        className="h-16 px-6 shrink-0 bg-white border border-gray-200 text-gray-700 rounded-2xl font-black shadow-sm hover:bg-gray-50 transition-all flex items-center gap-3"
-                     >
-                        <ArrowLeft size={22} strokeWidth={2.8} /> Salir
-                     </button>
-                     {false && canManage && viewMode === 'PRODUCTS' && (
-                        <button
-                           onClick={toggleAllSelection}
-                           className={`h-16 w-16 shrink-0 rounded-2xl border flex items-center justify-center transition-all shadow-sm ${
-                              selectedIds.size > 0
-                                 ? 'bg-blue-600 border-blue-600 text-white'
-                                 : 'bg-white border-gray-200 text-blue-600 hover:border-blue-200'
-                           }`}
-                           aria-label={selectedIds.size === filteredProducts.length && filteredProducts.length > 0 ? 'Quitar seleccion masiva' : 'Seleccionar articulos'}
-                        >
-                           <CheckSquare size={24} strokeWidth={2.5} />
-                        </button>
-                     )}
-                     {viewMode !== 'PRODUCTS' && <div className="relative flex-1 max-w-3xl">
+                  <div data-catalog-navigation className="flex items-center gap-3 px-6 py-3">
+                     <div className="min-w-0 flex-1 overflow-x-auto no-scrollbar">
+                        <div className="inline-flex min-w-max items-center gap-3">
+                           {CATALOG_DESKTOP_VIEWS.map((item) => (
+                              <button
+                                 key={item.id}
+                                 onClick={() => setViewMode(item.id)}
+                                 className={`whitespace-nowrap rounded-2xl px-5 py-3 text-sm font-black transition-all ${
+                                    viewMode === item.id
+                                       ? 'bg-blue-600 text-white shadow-[0_10px_22px_rgba(37,99,235,0.16)]'
+                                       : 'border border-gray-200 bg-white text-gray-500 hover:border-blue-200 hover:text-blue-600'
+                                 }`}
+                              >
+                                 {item.label}
+                              </button>
+                           ))}
+                        </div>
+                     </div>
+                     <button type="button" onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 transition hover:border-gray-300 hover:text-gray-900" aria-label="Cerrar catálogo" title="Cerrar"><X size={22} /></button>
+                  </div>
+                  {viewMode !== 'PRODUCTS' && <div className="flex items-center gap-4 px-6 pb-3">
+                     <div className="relative flex-1 max-w-3xl">
                         <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-300" size={22} />
                         <input
                            type="text"
@@ -1621,8 +1615,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                            onChange={(e) => setSearchTerm(e.target.value)}
                            className="h-16 w-full rounded-3xl border border-gray-200 bg-white pl-14 pr-5 text-base font-semibold text-gray-700 outline-none transition-all focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
                         />
-                     </div>}
-                     {canManage && viewMode !== 'PRODUCTS' && (
+                     </div>
+                     {canManage && (
                         <button
                            onClick={() => {
                               if (viewMode === 'TARIFFS') setEditingTariff('NEW');
@@ -1634,24 +1628,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                            <Plus size={22} strokeWidth={3} /> Nuevo
                         </button>
                      )}
-                  </div>
-                  <div className="px-8 pb-4 overflow-x-auto no-scrollbar">
-                     <div className="inline-flex items-center gap-3 min-w-max">
-                        {CATALOG_DESKTOP_VIEWS.map((item) => (
-                           <button
-                              key={item.id}
-                              onClick={() => setViewMode(item.id)}
-                              className={`px-5 py-3 rounded-2xl text-sm font-black transition-all whitespace-nowrap ${
-                                 viewMode === item.id
-                                    ? 'bg-blue-600 text-white shadow-[0_15px_30px_rgba(37,99,235,0.2)]'
-                                    : 'bg-white text-gray-500 border border-gray-200 hover:border-blue-200 hover:text-blue-600'
-                              }`}
-                           >
-                              {item.label}
-                           </button>
-                        ))}
-                     </div>
-                  </div>
+                  </div>}
                </div>
             )}
 
@@ -2196,9 +2173,9 @@ interface ProductRowActionsProps {
 const ProductRowActions: React.FC<ProductRowActionsProps> = ({ product, canManage, isOpen, onToggle, onPrice, onEdit, onStock, onDelete }) => {
    if (!canManage) return null;
    return <div className="catalog-product-actions relative flex justify-end gap-2">
-      <button type="button" onClick={onPrice} className="flex h-11 min-w-11 flex-col items-center justify-center rounded-xl border border-gray-200 px-2 text-blue-600 hover:bg-blue-50" aria-label={`Tarifas de ${product.name}`} title="Tarifas"><DollarSign size={18} /><span className="hidden text-[10px] font-bold xl:block">Tarifas</span></button>
-      <button type="button" onClick={onEdit} className="flex h-11 min-w-11 flex-col items-center justify-center rounded-xl border border-gray-200 px-2 text-blue-600 hover:bg-blue-50" aria-label={`Editar ${product.name}`} title="Editar"><Edit2 size={17} /><span className="hidden text-[10px] font-bold xl:block">Editar</span></button>
-      <button type="button" onClick={onToggle} className="flex h-11 min-w-11 flex-col items-center justify-center rounded-xl border border-gray-200 px-2 text-gray-700 hover:bg-gray-50" aria-label={`Más acciones para ${product.name}`} aria-expanded={isOpen} title="Más acciones"><MoreHorizontal size={19} /><span className="hidden text-[10px] font-bold xl:block">Más</span></button>
+      <button type="button" onClick={onPrice} className="flex h-11 min-w-11 flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-blue-600 shadow-none hover:bg-blue-50" aria-label={`Tarifas de ${product.name}`} title="Tarifas"><DollarSign size={18} /><span className="hidden text-[10px] font-bold xl:block">Tarifas</span></button>
+      <button type="button" onClick={onEdit} className="flex h-11 min-w-11 flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-blue-600 shadow-none hover:bg-blue-50" aria-label={`Editar ${product.name}`} title="Editar"><Edit2 size={17} /><span className="hidden text-[10px] font-bold xl:block">Editar</span></button>
+      <button type="button" onClick={onToggle} className="flex h-11 min-w-11 flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-gray-700 shadow-none hover:bg-gray-50" aria-label={`Más acciones para ${product.name}`} aria-expanded={isOpen} title="Más acciones"><MoreHorizontal size={19} /><span className="hidden text-[10px] font-bold xl:block">Más</span></button>
       {isOpen && <div className="absolute right-0 top-12 z-30 w-52 overflow-hidden rounded-xl border border-gray-200 bg-white p-1.5 text-sm font-bold shadow-xl">
          <button type="button" onClick={onEdit} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-gray-700 hover:bg-gray-50"><Eye size={16} /> Ver detalle / editar</button>
          <button type="button" onClick={onStock} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-gray-700 hover:bg-gray-50"><Archive size={16} /> Existencias</button>

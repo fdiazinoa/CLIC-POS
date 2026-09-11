@@ -18,3 +18,9 @@ test('organiza cada artículo en ocho bloques sin sombra de tarjeta', () => {
   assert.match(catalog, /rounded-2xl border border-gray-200 bg-white divide-y/);
   assert.doesNotMatch(catalog, /rounded-2xl border border-gray-200 bg-white shadow-sm divide-y/);
 });
+
+test('sube la navegación y sustituye Salir por una X a la derecha', () => {
+  assert.match(catalog, /data-catalog-navigation[^>]+flex items-center[^>]+px-6 py-3/);
+  assert.match(catalog, /data-catalog-navigation[\s\S]*aria-label="Cerrar catálogo"[\s\S]*<X size=\{22\}/);
+  assert.doesNotMatch(catalog, /<ArrowLeft size=\{22\} strokeWidth=\{2\.8\} \/> Salir/);
+});
