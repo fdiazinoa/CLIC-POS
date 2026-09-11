@@ -1371,8 +1371,12 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
                                                 const isRetryingThisDocument = retryingDocumentKey === rowKey;
                                                 const rowRetryFeedback = retryFeedback?.key === rowKey ? retryFeedback : null;
                                                 const isCatalogDocument = item.collection === 'catalogEdits';
-                                                const isCatalogConflict = isCatalogDocument && ['CONFLICT', 'REJECTED'].includes(String(item.raw?.status || '').toUpperCase())
+                                                const isCatalogConflict = isCatalogDocument
+                                                    && ['CONFLICT', 'REJECTED'].includes(String(item.raw?.status || '').toUpperCase())
                                                     && !item.raw?.resolution;
+                                                const isDiscardableCatalogFailure = isCatalogDocument
+                                                    && String(item.raw?.status || '').toUpperCase() === 'PENDING'
+                                                    && Boolean(item.error);
 
                                                 return (
                                                 <tr key={rowKey} className="hover:bg-gray-50/50 transition-colors">
@@ -1469,7 +1473,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
                                                                     Reintentar
                                                                 </button>
                                                             )}
-                                                            {isCatalogConflict && canDiscardCatalogConflicts && (
+                                                            {(isCatalogConflict || isDiscardableCatalogFailure) && canDiscardCatalogConflicts && (
                                                                 <button onClick={() => void handleCatalogConflictAction(item, 'DISCARD')} disabled={retryingDocumentKey !== null}
                                                                     className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-700 hover:bg-slate-100 disabled:opacity-50">
                                                                     Descartar
