@@ -4854,6 +4854,13 @@ const AppContent: React.FC = () => {
   const handleOpenZReport = async () => {
     try {
       const terminal = getCurrentTerminal();
+      const terminalRole = terminal?.config?.deviceRole?.role
+        || terminal?.config?.terminalType
+        || terminal?.config?.terminal_type;
+      if (terminalRole === DeviceRole.ORDER_TAKER) {
+        console.warn('[ORDER_TAKER_FINANCIAL_CLOSING_BLOCKED]', 'Z_REPORT');
+        return;
+      }
       const terminalIds = Array.from(getTerminalReferenceKeys(terminal?.id || 'T1'));
       const reconciliation = await reconcileTransactionsForZPreview(transactions, {
         loadHistory: async () => ((await db.get('transactionHistory')) as Transaction[]) || [],
@@ -4874,6 +4881,18 @@ const AppContent: React.FC = () => {
       console.error('Z_PREVIEW_MEMBERSHIP_FAILED', error);
       alert('No se pudo comprobar la pertenencia de las ventas a cierres anteriores. No se abrió el cierre Z.');
     }
+  };
+
+  const handleOpenFinanceFromPos = (initialCashMovementType?: 'IN' | 'OUT' | 'X_REPORT') => {
+    const terminal = getCurrentTerminal();
+    const terminalRole = terminal?.config?.deviceRole?.role
+      || terminal?.config?.terminalType
+      || terminal?.config?.terminal_type;
+    if (initialCashMovementType === 'X_REPORT' && terminalRole === DeviceRole.ORDER_TAKER) {
+      console.warn('[ORDER_TAKER_FINANCIAL_CLOSING_BLOCKED]', 'X_REPORT');
+      return;
+    }
+    handleViewChange('FINANCE', { initialCashMovementType });
   };
 
   const belongsToCurrentCashier = useCallback((record?: { userId?: string | null; userName?: string | null }) => {
@@ -11540,7 +11559,7 @@ const AppContent: React.FC = () => {
             onOpenAttendance={() => setCurrentView('ATTENDANCE')}
             onOpenCustomers={() => setCurrentView('CUSTOMERS')}
             onOpenHistory={() => setCurrentView('HISTORY')}
-            onOpenFinance={(initialCashMovementType) => handleViewChange('FINANCE', { initialCashMovementType })}
+            onOpenFinance={handleOpenFinanceFromPos}
             onRegisterCashMovement={handleRegisterMovement}
             onOpenZReport={() => { void handleOpenZReport(); }}
             onOpenInventoryTracking={(productId) => handleViewChange('TRACKING', { productId })}
@@ -11794,7 +11813,7 @@ const AppContent: React.FC = () => {
               const freshStocks = await db.get('productStocks') as ProductStock[] || [];
               setProductStocks(freshStocks);
             }}
-            onOpenFinance={(initialCashMovementType) => handleViewChange('FINANCE', { initialCashMovementType })}
+            onOpenFinance={handleOpenFinanceFromPos}
             onOpenZReport={() => { void handleOpenZReport(); }}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
@@ -11866,7 +11885,7 @@ const AppContent: React.FC = () => {
               const freshStocks = await db.get('productStocks') as ProductStock[] || [];
               setProductStocks(freshStocks);
             }}
-            onOpenFinance={(initialCashMovementType) => handleViewChange('FINANCE', { initialCashMovementType })}
+            onOpenFinance={handleOpenFinanceFromPos}
             onOpenZReport={() => { void handleOpenZReport(); }}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}

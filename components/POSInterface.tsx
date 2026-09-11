@@ -57,6 +57,7 @@ import { couponService } from '../utils/couponService';
 import { resolveScannedCouponCode } from '../utils/couponScan';
 import { calculateInventoryDeductions, resolveInventoryConsumptionMode, transferStockToCommitted } from '../utils/inventoryEngine';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
+import { calculateSalesCommission } from '../utils/userSalesPolicy';
 import SupervisorModal from './SupervisorModal';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useBottomSafeOffset } from '../hooks/useBottomSafeOffset';
@@ -3927,7 +3928,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const checkFiscalStatus = async () => {
          const type = requiredSaleFiscalType;
-         if (isFiscalModeDisabled) {
+         if (isOrderTakerMode || isFiscalModeDisabled) {
             setStatus(null);
             setFiscalStatus({
                type,
@@ -4039,13 +4040,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return () => {
          cancelled = true;
       };
-   }, [isFiscalModeDisabled, requiredSaleFiscalType, terminalId]);
+   }, [isFiscalModeDisabled, isOrderTakerMode, requiredSaleFiscalType, terminalId]);
 
    const fiscalReserveAlert = useMemo(() => {
-      if (isFiscalModeDisabled) return null;
+      if (isOrderTakerMode || isFiscalModeDisabled) return null;
       if (!fiscalStatus.hasNCF) return null;
       return getFiscalReserveAlert(fiscalStatus.remaining || 0, fiscalStatus.total || 0, fiscalCompliance);
-   }, [fiscalCompliance, fiscalStatus.hasNCF, fiscalStatus.remaining, fiscalStatus.total, isFiscalModeDisabled]);
+   }, [fiscalCompliance, fiscalStatus.hasNCF, fiscalStatus.remaining, fiscalStatus.total, isFiscalModeDisabled, isOrderTakerMode]);
 
    const shouldShowFiscalReserveAlert = Boolean(
       fiscalReserveAlert &&
@@ -4843,6 +4844,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             const diff = updatedItem.quantity - originalItem.quantity;
             if (!canAddItemToCart(updatedItem, diff)) return;
          }
+         const requestedLineDiscountPercent = updatedItem.adjustmentSource === 'MANUAL_DISCOUNT'
+            ? Math.max(0, Number(updatedItem.discountRate || 0) * 100)
+            : 0;
+         const previousLineDiscountPercent = originalItem.adjustmentSource === 'MANUAL_DISCOUNT'
+            ? Math.max(0, Number(originalItem.discountRate || 0) * 100)
+            : 0;
+         if (requestedLineDiscountPercent > previousLineDiscountPercent + 0.0001) {
+            const authorized = await requestApproval({
+               permission: 'POS_DISCOUNT',
+               actionDescription: `Aplicar ${requestedLineDiscountPercent.toFixed(2)}% de descuento a ${updatedItem.name}`,
+               context: {
+                  itemId: updatedItem.cartId,
+                  originalValue: previousLineDiscountPercent,
+                  newValue: requestedLineDiscountPercent,
+               },
+            });
+            if (!authorized) return;
+         }
          newCart = cart.map(item => item.cartId === updatedItem.cartId ? updatedItem : item);
       }
 
@@ -5508,6 +5527,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const documentConsignmentFields = getConsignmentTicketFields(documentItems);
                const payableTotal = documentTotal + (voluntaryTip || 0);
                const transactionSettlement = buildTransactionSettlementFields(paymentsForTransaction, payableTotal, baseCurrency.code);
+               const salesCommission = !isRefundOnly
+                  ? calculateSalesCommission(documentTotal, currentUser)
+                  : {};
 
                const txn = await withTimeout(transactionService.createTransaction({
                   documentType: hasReturns ? 'REFUND' : 'TICKET',
@@ -5523,6 +5545,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ...transactionSettlement,
                   userId: currentUser.id,
                   userName: currentUser.name,
+                  ...salesCommission,
                   terminalId: terminalId,
                   status: !isRefundOnly && creditAmount > 0 ? 'PENDING' : 'COMPLETED',
                   customerId: customerForCheckout?.id,
@@ -7661,20 +7684,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <Settings size={16} />
                            <span>Ajustes</span>
                         </button>
-                        <button
+                        {canCloseXReport && <button
                            type="button"
                            onClick={() => {
-                              if (!canCloseXReport) {
-                                 alert('No tienes permiso para realizar Cierre X.');
-                                 return;
-                              }
                               onOpenFinance('X_REPORT');
                            }}
                            className="flex h-12 items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-600/25 transition-all hover:bg-emerald-700 active:scale-95"
                         >
                            <ClipboardCheck size={16} />
                            <span>Cierre X</span>
-                        </button>
+                        </button>}
                         </div>
                      </div>
                   </div>
@@ -8116,7 +8135,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                )}
 
-               {!isFiscalModeDisabled && (
+               {!isOrderTakerMode && !isFiscalModeDisabled && (
                   <div className={`mt-1 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase ${canCheckoutWithFiscalPolicy ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100 animate-pulse'}`}>
                      <Landmark size={12} />
                      <span>Status Fiscal: {`${fiscalStatus.type} ${fiscalStatus.hasNCF ? (fiscalStatus.isTerminalBlock ? 'Bloque Terminal' : (fiscalStatus.isUsingPool ? 'Reservado en Pool' : 'Lote Global Activo')) : 'Agotado'}`}</span>
@@ -8725,7 +8744,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             isMobile && mobileView === 'TICKET' && rightSidebarTab === 'CART' && (
                <div
                   ref={mobileFooterRef}
-                  className="fixed left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5"
+                  data-testid="portrait-ticket-actions"
+                  className="pos-portrait-ticket-actions fixed left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5"
                   style={mobileFooterStyle}
                >
                   {activeTable && activeTableAccounts.length > 1 && (
@@ -8879,14 +8899,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const numVal = parseFloat(val) || 0;
                const isSubtotalizedMutation = hasSubtotalizedCart;
                if (!(await authorizeSubtotalizedEdit('Modificar descuento de ticket subtotalizado'))) return;
-               if (!isSubtotalizedMutation) {
-                  const authorized = await requestApproval({
-                     permission: 'POS_DISCOUNT',
-                     actionDescription: 'Aplicar Descuento Global',
-                     context: { newValue: type === 'PERCENT' ? numVal : undefined, originalValue: cartSubtotal }
-                  });
-                  if (!authorized) return;
-               }
+               const authorized = await requestApproval({
+                  permission: 'POS_DISCOUNT',
+                  actionDescription: 'Aplicar Descuento Global',
+                  context: {
+                     newValue: type === 'PERCENT'
+                        ? numVal
+                        : (cartSubtotal > 0 ? (numVal / cartSubtotal) * 100 : 0),
+                     originalValue: cartSubtotal,
+                  }
+               });
+               if (!authorized) return;
 
                if (isSubtotalizedMutation) onUpdateCart(current => clearCartSubtotalization(current));
                setGlobalDiscount({ value: numVal, type });
@@ -9424,8 +9447,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                <div className="bg-white rounded-[2.5rem] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95">
                   <div className="p-6 border-b bg-gray-50 flex justify-between items-center">
                      <div>
-                        <h3 className="font-black text-xl text-gray-800">Guardar En Espera</h3>
-                        <p className="text-sm text-gray-500 mt-1">Agrega un alias para ubicar esta factura más rápido.</p>
+                        <h3 className="font-black text-xl text-gray-800">{activeTable ? 'Nombre temporal de mesa' : 'Guardar En Espera'}</h3>
+                        <p className="text-sm text-gray-500 mt-1">{activeTable ? 'Agrega o modifica el nombre visible mientras esta mesa tenga una cuenta activa.' : 'Agrega un alias para ubicar esta factura más rápido.'}</p>
                      </div>
                      <button onClick={closeParkAliasModal} className="p-2 hover:bg-gray-200 rounded-full">
                         <X size={20} />
@@ -9434,7 +9457,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <div className="p-6 space-y-4">
                      <div>
                         <label htmlFor="park-ticket-alias" className="block text-sm font-bold text-gray-700 mb-2">
-                           Alias de la factura
+                           {activeTable ? 'Nombre temporal' : 'Alias de la factura'}
                         </label>
                         <input
                            id="park-ticket-alias"
@@ -9446,7 +9469,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  void handleParkCurrentTicket(parkTicketAlias);
                               }
                            }}
-                           placeholder="Ej. Cliente VIP, Pedido oficina, Recoger luego"
+                           placeholder={activeTable ? 'Ej. Cumpleaños Ana, Terraza VIP' : 'Ej. Cliente VIP, Pedido oficina, Recoger luego'}
                            maxLength={80}
                            className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-base font-medium text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         />
@@ -9467,7 +9490,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         onClick={() => void handleParkCurrentTicket(parkTicketAlias)}
                         className="flex-1 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-black uppercase tracking-[0.12em] text-white hover:bg-blue-700 transition-colors"
                      >
-                        Guardar En Espera
+                        {activeTable ? 'Actualizar mesa' : 'Guardar En Espera'}
                      </button>
                   </div>
                </div>

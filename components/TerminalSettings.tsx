@@ -273,6 +273,13 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
       terminals.find(t => t.id === selectedTerminalId),
       [terminals, selectedTerminalId]);
 
+   const masterTerminalOptions = useMemo(() => terminals.filter((terminal) => {
+      if (terminal.id === selectedTerminalId) return false;
+      const role = terminal.config.deviceRole?.role || terminal.config.terminalType || terminal.config.terminal_type;
+      return role !== DeviceRole.ORDER_TAKER
+         && Boolean(terminal.config.isPrimaryNode || !terminal.config.governedByMaster);
+   }), [selectedTerminalId, terminals]);
+
    const isReadOnly = useMemo(() => {
       if (!activeTerminal) return false;
       return activeTerminal.config.governedByMaster &&
@@ -356,7 +363,37 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
          }
       };
 
-      handleUpdateActiveConfig('', 'deviceRole', nextRoleConfig);
+      setTerminals(prev => prev.map((terminal) => {
+         if (terminal.id !== selectedTerminalId) return terminal;
+         const selectedMaster = role === DeviceRole.ORDER_TAKER
+            ? (terminal.config.masterTerminalId || terminal.config.master_terminal_id)
+            : undefined;
+         return {
+            ...terminal,
+            config: {
+               ...terminal.config,
+               deviceRole: nextRoleConfig,
+               terminalType: role,
+               terminal_type: role,
+               masterTerminalId: selectedMaster,
+               master_terminal_id: selectedMaster,
+            },
+         };
+      }));
+   };
+
+   const handleAssignOrderTakerMaster = (masterTerminalId: string) => {
+      if (!activeTerminal || isReadOnly) return;
+      setTerminals(prev => prev.map((terminal) => terminal.id === selectedTerminalId
+         ? {
+            ...terminal,
+            config: {
+               ...terminal.config,
+               masterTerminalId: masterTerminalId || undefined,
+               master_terminal_id: masterTerminalId || undefined,
+            },
+         }
+         : terminal));
    };
 
    const handleUpdateDeviceProfile = (
@@ -472,6 +509,17 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
    }, [activeTerminal]);
 
    const handleSave = () => {
+      const invalidOrderTaker = terminals.find((terminal) => {
+         const role = terminal.config.deviceRole?.role || terminal.config.terminalType || terminal.config.terminal_type;
+         return role === DeviceRole.ORDER_TAKER
+            && !String(terminal.config.masterTerminalId || terminal.config.master_terminal_id || '').trim();
+      });
+      if (invalidOrderTaker) {
+         setSelectedTerminalId(invalidOrderTaker.id);
+         setActiveTab('OPERATIONAL');
+         alert(`Selecciona la terminal Master para ${resolveTerminalDisplayName(invalidOrderTaker)}.`);
+         return;
+      }
       const cleanedTerminals = dedupeConfiguredTerminals(terminals).map((t) => {
          if (isPartialXReportAllowed(t.config)) return t;
          const da = { ...(t.config.documentAssignments || {}) };
@@ -640,6 +688,27 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                        );
                                     })}
                                  </div>
+                                 {(activeTerminal.config.deviceRole?.role || activeTerminal.config.terminalType || activeTerminal.config.terminal_type) === DeviceRole.ORDER_TAKER && (
+                                    <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
+                                       <label className="text-[10px] font-black uppercase tracking-[0.18em] text-blue-700">Terminal Master vinculada</label>
+                                       <p className="mt-1 text-xs font-medium text-blue-700/80">Esta tableta enviará pedidos y consultará mesas únicamente en la Master seleccionada.</p>
+                                       <select
+                                          value={activeTerminal.config.masterTerminalId || activeTerminal.config.master_terminal_id || ''}
+                                          onChange={(event) => handleAssignOrderTakerMaster(event.target.value)}
+                                          disabled={isReadOnly}
+                                          className="mt-3 w-full rounded-xl border border-blue-200 bg-white p-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
+                                       >
+                                          <option value="">Seleccionar terminal Master…</option>
+                                          {masterTerminalOptions.map((terminal) => {
+                                             const value = resolveTerminalErpIdentity(terminal) || terminal.id;
+                                             return <option key={terminal.id} value={value}>{resolveTerminalDisplayName(terminal)}</option>;
+                                          })}
+                                       </select>
+                                       {masterTerminalOptions.length === 0 && (
+                                          <p className="mt-2 text-xs font-bold text-amber-700">No hay otra terminal Master disponible en esta configuración.</p>
+                                       )}
+                                    </div>
+                                 )}
                               </div>
                               <div className="p-6 bg-slate-50 rounded-[2rem] border border-slate-100 space-y-5">
                                  <div className="flex items-start gap-4">
