@@ -122,7 +122,7 @@ test('catalog cards use browser rendering virtualization and lazy image decode',
 });
 
 test('table state is applied before deferred persistence and reconciliation', () => {
-  assert.match(appSource, /writeCriticalCollectionsMirror\(validTickets, cashMovements\);\s*setParkedTickets\(validTickets\)/);
+  assert.match(appSource, /if \(!changedTicketId\) writeCriticalCollectionsMirror\(validTickets, cashMovements\);\s*setParkedTickets\(validTickets\)/);
   assert.match(appSource, /const persistMasterTickets = async/);
   assert.match(appSource, /setCurrentView\('TABLE_MAP'\);[\s\S]*window\.setTimeout\(\(\) =>/);
   assert.match(posSource, /handleDispatchCommand\('table_exit', \{ backgroundTableExit: true \}\)/);
@@ -131,6 +131,24 @@ test('table state is applied before deferred persistence and reconciliation', ()
     posSource.indexOf('await Promise.resolve(onOpenTableMap())')
       < posSource.indexOf("handleDispatchCommand('table_exit', { backgroundTableExit: true })"),
   );
+});
+
+test('active table autosave persists one ticket and sends only that table snapshot', () => {
+  assert.match(posSource, /changedTicketId: orderId/);
+  assert.match(appSource, /db\.saveDocument\('parkedTickets', changedTicket\)/);
+  assert.match(appSource, /scopeTicketsForTableSync\(validTickets, editLock\?\.tableId\)/);
+  assert.match(appSource, /parkedTickets: tableSyncTickets/);
+});
+
+test('sync maintenance and inventory polling defer during active ticket input', () => {
+  const backgroundSource = readFileSync(new URL('../services/sync/BackgroundSyncManager.ts', import.meta.url), 'utf8');
+  const inventorySource = readFileSync(new URL('../services/sync/InventorySyncService.ts', import.meta.url), 'utf8');
+  assert.match(backgroundSource, /PRUNE_INTERVAL_MS = 24 \* 60 \* 60 \* 1000/);
+  assert.match(backgroundSource, /if \(!isPosSaleActive\(\)\) await this\.pruneSyncedItems\(\)/);
+  assert.match(backgroundSource, /await db\.deleteDocument\(colName as any, toPruneIds\[index\]\)/);
+  assert.doesNotMatch(backgroundSource, /await db\.save\(colName as any, toKeep\)/);
+  assert.match(inventorySource, /if \(this\.pollInFlight \|\| isPosSaleActive\(\)\) return/);
+  assert.match(inventorySource, /movements\.length > 0 && !isPosSaleActive\(\)/);
 });
 
 test('settings interaction uses the same background-work pause as sales screens', () => {

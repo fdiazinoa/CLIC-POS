@@ -12,7 +12,8 @@ test('la terminal cliente persiste cada cambio localmente y agrupa el envío rem
   assert.match(appSource, /PENDING_CLIENT_TABLE_SYNC_STORAGE_KEY/);
   assert.match(appSource, /persistPendingClientTableSync\(pendingSync\)/);
   assert.match(appSource, /await readPendingClientTableSync\(\)/);
-  assert.match(appSource, /db\.save\('parkedTickets', validTickets\)/);
+  assert.match(appSource, /db\.saveDocument\('parkedTickets', changedTicket\)/);
+  assert.match(appSource, /scopeTicketsForTableSync\(validTickets, editLock\?\.tableId\)/);
   assert.match(appSource, /pendingClientTableSyncRef\.current = pendingSync/);
   assert.match(appSource, /setParkedTickets\(validTickets\)/);
   assert.match(appSource, /mergePendingClientTableTickets\(responseParkedTickets, pendingTableSync\)/);
@@ -77,7 +78,7 @@ test('la cola pendiente solo se limpia después de una confirmación exitosa de 
     appSource.indexOf('const handleUpdateParkedTickets'),
     appSource.indexOf('const handleParkedOrderSplitFromMap'),
   );
-  assert.match(updateHandler, /writeCriticalCollectionsMirror\(validTickets, cashMovements\);\s*setParkedTickets\(validTickets\);/);
+  assert.match(updateHandler, /if \(!changedTicketId\) writeCriticalCollectionsMirror\(validTickets, cashMovements\);\s*setParkedTickets\(validTickets\);/);
   assert.match(updateHandler, /if \(options\.deferRemote\) \{\s*window\.setTimeout\(\(\) => void persistLocal\(\), 0\);\s*return;/);
   assert.match(updateHandler, /requestAnimationFrame\(\(\) => window\.setTimeout\(resolve, 0\)\)/);
   assert.match(updateHandler, /if \(!response\.ok \|\| result\?\.success === false\)/);
