@@ -6,6 +6,8 @@ const posSource = readFileSync(new URL('../components/POSInterface.tsx', import.
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 const syncSource = readFileSync(new URL('../services/sync/SyncManager.ts', import.meta.url), 'utf8');
 const apiSyncSource = readFileSync(new URL('../services/sync/ApiSyncAdapter.ts', import.meta.url), 'utf8');
+const backgroundSyncSource = readFileSync(new URL('../services/sync/BackgroundSyncManager.ts', import.meta.url), 'utf8');
+const syncSettingsSource = readFileSync(new URL('../components/SyncSettings.tsx', import.meta.url), 'utf8');
 
 test('the input paints immediately and catalog filtering is debounced independently', () => {
   assert.doesNotMatch(posSource, /useDeferredValue\(searchTerm\)/);
@@ -141,14 +143,33 @@ test('active table autosave persists one ticket and sends only that table snapsh
 });
 
 test('sync maintenance and inventory polling defer during active ticket input', () => {
-  const backgroundSource = readFileSync(new URL('../services/sync/BackgroundSyncManager.ts', import.meta.url), 'utf8');
   const inventorySource = readFileSync(new URL('../services/sync/InventorySyncService.ts', import.meta.url), 'utf8');
-  assert.match(backgroundSource, /PRUNE_INTERVAL_MS = 24 \* 60 \* 60 \* 1000/);
-  assert.match(backgroundSource, /if \(!isPosSaleActive\(\)\) await this\.pruneSyncedItems\(\)/);
-  assert.match(backgroundSource, /await db\.deleteDocument\(colName as any, toPruneIds\[index\]\)/);
-  assert.doesNotMatch(backgroundSource, /await db\.save\(colName as any, toKeep\)/);
+  assert.match(backgroundSyncSource, /PRUNE_INTERVAL_MS = 24 \* 60 \* 60 \* 1000/);
+  assert.match(backgroundSyncSource, /if \(!isPosSaleActive\(\)\) await this\.pruneSyncedItems\(\)/);
+  assert.match(backgroundSyncSource, /await db\.deleteDocument\(colName as any, toPruneIds\[index\]\)/);
+  assert.doesNotMatch(backgroundSyncSource, /await db\.save\(colName as any, toKeep\)/);
   assert.match(inventorySource, /if \(this\.pollInFlight \|\| isPosSaleActive\(\)\) return/);
   assert.match(inventorySource, /movements\.length > 0 && !isPosSaleActive\(\)/);
+});
+
+test('pending catalog edits honor their scheduled retry instead of waking sync every five seconds', () => {
+  assert.match(backgroundSyncSource, /collectionName === 'catalogEdits' && status === 'PENDING'/);
+  assert.match(backgroundSyncSource, /nextAttemptAt - Date\.now\(\)/);
+  assert.match(backgroundSyncSource, /this\.nextRetryDelayMs = this\.nextRetryDelayMs === null/);
+});
+
+test('catalog classifications accept explicit empty levels without scanning product rows', () => {
+  assert.match(syncSource, /const hasPersistedCatalogClassifications = \[/);
+  assert.match(syncSource, /\.some\(rows => rows\.length > 0\)/);
+  assert.match(syncSource, /if \(Array\.isArray\(value\)\) continue/);
+  assert.match(syncSource, /values\.find\(\(value\): value is unknown\[\] => Array\.isArray\(value\)\)/);
+  assert.doesNotMatch(syncSource, /const missingCommercialClassifications/);
+});
+
+test('sync center derives the master label from the effective runtime profile', () => {
+  assert.match(syncSettingsSource, /profile\.posRuntime === 'MASTER'/);
+  assert.match(syncSettingsSource, /String\(connStatus\?\.mode \|\| ''\)\.toUpperCase\(\) === 'MASTER'/);
+  assert.match(syncSettingsSource, /if \(effectiveIsMaster\) \{/);
 });
 
 test('settings interaction uses the same background-work pause as sales screens', () => {

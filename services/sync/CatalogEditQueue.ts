@@ -42,6 +42,7 @@ const resultMatchesRequestedValue = (current: unknown, requested: CatalogMutatio
 // A single worker prevents duplicate concurrent sends. The server also deduplicates
 // by immutable mutation id, including when its commit succeeds but the ACK is lost.
 export class CatalogEditQueue {
+    private static readonly SCOPE_RECHECK_DELAY_MS = 5 * 60 * 1000;
     private running: Promise<void> | null = null;
     constructor(private deps: CatalogQueueDependencies) {}
     process(): Promise<void> {
@@ -53,7 +54,22 @@ export class CatalogEditQueue {
         const rows = (await this.deps.read()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
         const outcomes = new Map(rows.map(edit => [edit.id, edit.status]));
         for (const edit of rows) {
-            if (edit.status !== 'PENDING' || edit.nextAttemptAt > this.deps.now() || !this.deps.matchesScope(edit.scope)) continue;
+            if (edit.status !== 'PENDING') continue;
+            const now = this.deps.now();
+            if (!this.deps.matchesScope(edit.scope)) {
+                const scopeError = 'CATALOG_EDIT_SCOPE_MISMATCH';
+                if (edit.syncStatus !== 'ERROR' || edit.syncError !== scopeError || edit.nextAttemptAt <= now) {
+                    await this.deps.save({
+                        ...edit,
+                        syncStatus: 'ERROR',
+                        syncError: scopeError,
+                        nextAttemptAt: now + CatalogEditQueue.SCOPE_RECHECK_DELAY_MS,
+                        message: 'El cambio pertenece a otra vinculacion de terminal y no se envio. Se reintentara si la vinculacion vuelve a coincidir.',
+                    });
+                }
+                continue;
+            }
+            if (edit.nextAttemptAt > now) continue;
             if (edit.dependsOn && outcomes.get(edit.dependsOn) !== 'APPLIED') {
                 if (['CONFLICT', 'REJECTED'].includes(outcomes.get(edit.dependsOn) || '')) {
                     outcomes.set(edit.id, 'CONFLICT');

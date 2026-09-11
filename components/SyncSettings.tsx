@@ -26,7 +26,9 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
     const [status, setStatus] = useState<any[]>([]);
     const [isSyncing, setIsSyncing] = useState(false);
     const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
-    const [isMaster, setIsMaster] = useState(false);
+    const [isMaster, setIsMaster] = useState(
+        () => permissionService.isMasterTerminal() || loadSyncProfile().posRuntime === 'MASTER'
+    );
     const [connectionStatus, setConnectionStatus] = useState<any>(null);
     const [masterUrl, setMasterUrl] = useState('');
     const [isTestingConnection, setIsTestingConnection] = useState(false);
@@ -365,7 +367,6 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
         try {
             const statuses = await syncManager.getSyncStatus();
             setStatus(statuses);
-            setIsMaster(permissionService.isMasterTerminal());
             const profile = loadSyncProfile();
             const target = resolveSyncTarget(profile);
             setSyncProfile(profile);
@@ -394,10 +395,14 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
             // Get connection status
             const connStatus = syncManager.getSyncConnectionStatus();
             setConnectionStatus(connStatus);
+            const effectiveIsMaster = permissionService.isMasterTerminal()
+                || profile.posRuntime === 'MASTER'
+                || String(connStatus?.mode || '').toUpperCase() === 'MASTER';
+            setIsMaster(effectiveIsMaster);
 
             // Load connected terminals if Master
             let opStatus: any = null;
-            if (permissionService.isMasterTerminal()) {
+            if (effectiveIsMaster) {
                 const terminals = await syncManager.getConnectedTerminals();
                 opStatus = await syncManager.getOperationalStatus();
                 setErpForwardStatus(opStatus?.erpForward || null);
