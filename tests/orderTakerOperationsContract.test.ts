@@ -34,6 +34,28 @@ test('ORDER_TAKER oculta y bloquea cierres financieros', () => {
   assert.match(posSource, /case 'Z_REPORT':\s*if \(isOrderTakerMode\) return;/);
   assert.match(posSource, /hideFinancialClosings=\{isOrderTakerMode\}/);
   assert.match(actionGridSource, /!hideFinancialClosings && renderButton\('Z_REPORT'/);
+  assert.match(posSource, /\{canCloseXReport && <button[\s\S]*?<span>Cierre X<\/span>[\s\S]*?<\/button>\}/);
+  assert.match(appSource, /\[ORDER_TAKER_FINANCIAL_CLOSING_BLOCKED\]/);
+  assert.match(appSource, /initialCashMovementType === 'X_REPORT' && terminalRole === DeviceRole\.ORDER_TAKER/);
+  assert.match(appSource, /terminalRole === DeviceRole\.ORDER_TAKER[\s\S]*?Z_REPORT/);
+});
+
+test('ORDER_TAKER no consulta ni muestra estado fiscal', () => {
+  assert.match(posSource, /if \(isOrderTakerMode \|\| isFiscalModeDisabled\)/);
+  assert.match(posSource, /\{!isOrderTakerMode && !isFiscalModeDisabled && \(/);
+});
+
+test('la vista vertical mantiene acciones y Guardar pedido en el ticket', () => {
+  assert.match(posSource, /data-testid="portrait-ticket-actions"/);
+  assert.match(posSource, /isOrderTakerMode \? 'GUARDAR PEDIDO'/);
+});
+
+test('el ERP exige seleccionar la Master al configurar una terminal de pedidos', () => {
+  const terminalSettingsSource = readFileSync(new URL('../components/TerminalSettings.tsx', import.meta.url), 'utf8');
+  assert.match(terminalSettingsSource, /Terminal Master vinculada/);
+  assert.match(terminalSettingsSource, /handleAssignOrderTakerMaster/);
+  assert.match(terminalSettingsSource, /Selecciona la terminal Master/);
+  assert.match(terminalSettingsSource, /master_terminal_id: masterTerminalId \|\| undefined/);
 });
 
 test('la configuración de ORDER_TAKER queda limitada a operación local', () => {

@@ -205,7 +205,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
     name: 'Supervisor',
     permissions: [
       'POS_VOID_ITEM', 'POS_DISCOUNT', 'POS_OPEN_DRAWER',
-      'POS_RETURNS', 'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHECKOUT', 'POS_CHANGE_TARIFF', 'POS_VIEW_X_REPORT', 'POS_CLOSE_X', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'TABLE_CONTROL_CENTER'
+      'POS_RETURNS', 'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHECKOUT', 'POS_CHANGE_TARIFF', 'POS_VIEW_X_REPORT', 'POS_CLOSE_X', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'POS_ACCESS_OTHER_SELLER_TABLES', 'TABLE_CONTROL_CENTER'
     ],
     isSystem: true,
     maxDiscountPercent: 20
@@ -414,6 +414,7 @@ export const AVAILABLE_PERMISSIONS = [
   { key: 'POS_VOID_PAID_TICKET', label: 'Anular Factura Pagada', description: 'Revertir una venta finalizada', category: 'SALES' },
   { key: 'POS_RETURNS', label: 'Autorizar Devoluciones y Notas de Crédito', description: 'Permite activar el modo de devolución en el POS y procesar notas de crédito', category: 'SALES' },
   { key: 'POS_MANAGE_PARKED', label: 'Gestionar Cuentas', description: 'Ver y recuperar cuentas de otros', category: 'SALES' },
+  { key: 'POS_ACCESS_OTHER_SELLER_TABLES', label: 'Acceder a mesas de otros vendedores', description: 'Permite abrir mesas ocupadas por otro vendedor sin habilitarlo para todo el terminal', category: 'SALES' },
   { key: 'POS_NEW_SALE', label: 'Nueva Venta sin Imprimir', description: 'Permite cerrar la pantalla de venta exitosa sin forzar ticket o email', category: 'SALES' },
   { key: 'POS_CHANGE_TARIFF', label: 'Cambiar Tarifa de Venta', description: 'Permite seleccionar la tarifa activa desde la pantalla de ventas', category: 'SALES' },
   { key: 'POS_RESEND_INVOICE_EMAIL', label: 'Reenviar Factura por Email', description: 'Enviar nuevamente una factura histórica por correo', category: 'SALES' },

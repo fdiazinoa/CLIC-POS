@@ -1343,6 +1343,10 @@ export interface User {
   syncSource?: 'LOCAL' | 'LOCAL_SEED' | 'ERP_SNAPSHOT';
   isActive?: boolean;
   version?: number;
+  /** Límite individual de descuento. Si falta, hereda el límite del rol. */
+  maxDiscountPercent?: number;
+  /** Porcentaje de comisión capturado en cada venta finalizada. */
+  commissionPercent?: number;
 }
 
 export interface UserBiometrics {
@@ -1806,6 +1810,9 @@ export interface Transaction {
   // User & Terminal
   userId: string;
   userName: string;
+  /** Snapshot inmutable de la comisión vigente al completar la venta. */
+  salesCommissionPercent?: number;
+  salesCommissionAmount?: number;
   terminalId?: string;
   terminalName?: string;
 
@@ -2678,6 +2685,7 @@ export type Permission =
   | 'POS_REPEAT_Z_REPORT'
   | 'POS_VIEW_ACTIVE_CASH'
   | 'POS_MANAGE_PARKED'
+  | 'POS_ACCESS_OTHER_SELLER_TABLES'
   | 'TABLE_CONTROL_CENTER'
 
   // --- CATALOG ---

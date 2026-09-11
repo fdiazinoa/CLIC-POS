@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ShieldCheck, X, Delete, Lock } from 'lucide-react';
 import { User, BusinessConfig, Permission, RoleDefinition } from '../types';
+import { canGrantDiscountPercent, resolveUserMaxDiscountPercent } from '../utils/userSalesPolicy';
 
 interface SupervisorModalProps {
     isOpen: boolean;
@@ -11,6 +12,7 @@ interface SupervisorModalProps {
     config: BusinessConfig;
     roles: RoleDefinition[];
     users: User[];
+    requestedDiscountPercent?: number;
 }
 
 const SupervisorModal: React.FC<SupervisorModalProps> = ({
@@ -21,7 +23,8 @@ const SupervisorModal: React.FC<SupervisorModalProps> = ({
     actionDescription,
     config,
     roles,
-    users
+    users,
+    requestedDiscountPercent
 }) => {
     const [pin, setPin] = useState('');
     const [error, setError] = useState<string | null>(null);
@@ -65,6 +68,14 @@ const SupervisorModal: React.FC<SupervisorModalProps> = ({
 
         // Check if role has the required permission or is Admin (ALL)
         const hasPermission = effectiveRole.permissions.includes('ALL') || effectiveRole.permissions.includes(requiredPermission);
+
+        if (hasPermission && requiredPermission === 'POS_DISCOUNT' && requestedDiscountPercent !== undefined
+            && !canGrantDiscountPercent(user, roles, requestedDiscountPercent)) {
+            const limit = resolveUserMaxDiscountPercent(user, roles);
+            setError(`Este usuario solo puede autorizar hasta ${limit ?? 0}%`);
+            setPin('');
+            return;
+        }
 
         if (hasPermission) {
             onAuthorize(user);

@@ -1,4 +1,5 @@
 import type { Permission, RoleDefinition, User } from '../types';
+import { normalizeSalesPercent } from './userSalesPolicy';
 
 type SnapshotRow = Record<string, unknown>;
 
@@ -79,7 +80,7 @@ export const normalizeErpRole = (raw: unknown): RoleDefinition | null => {
   );
   if (!id || permissions === null) return null;
 
-  const maxDiscountPercent = Number(row.maxDiscountPercent ?? row.max_discount_percent);
+  const maxDiscountPercent = normalizeSalesPercent(row.maxDiscountPercent ?? row.max_discount_percent);
   const roleVersion = version(row.version);
   return {
     id,
@@ -87,7 +88,7 @@ export const normalizeErpRole = (raw: unknown): RoleDefinition | null => {
     permissions,
     isSystem: bool(row.isSystem ?? row.is_system) ?? false,
     isActive: bool(row.isActive ?? row.is_active ?? row.active) ?? true,
-    ...(Number.isFinite(maxDiscountPercent) ? { maxDiscountPercent } : {}),
+    ...(maxDiscountPercent !== undefined ? { maxDiscountPercent } : {}),
     ...(roleVersion !== undefined ? { version: roleVersion } : {}),
     syncSource: 'ERP_SNAPSHOT',
   };
@@ -160,7 +161,20 @@ export const buildAuthoritativeErpSecuritySnapshot = ({
     const userVersion = version(row.version);
     const photo = text(row.photo ?? row.avatar ?? row.image ?? row.image_url ?? row.imageUrl
       ?? row.photo_url ?? row.photoUrl) || previous?.photo;
-    return [{
+    const hasMaxDiscountPercent = Object.prototype.hasOwnProperty.call(row, 'max_discount_percent')
+      || Object.prototype.hasOwnProperty.call(row, 'maxDiscountPercent');
+    const hasCommissionPercent = Object.prototype.hasOwnProperty.call(row, 'commission_percent')
+      || Object.prototype.hasOwnProperty.call(row, 'commissionPercent')
+      || Object.prototype.hasOwnProperty.call(row, 'sales_commission_percent')
+      || Object.prototype.hasOwnProperty.call(row, 'salesCommissionPercent');
+    const maxDiscountPercent = hasMaxDiscountPercent
+      ? normalizeSalesPercent(row.max_discount_percent ?? row.maxDiscountPercent)
+      : previous?.maxDiscountPercent;
+    const commissionPercent = hasCommissionPercent
+      ? normalizeSalesPercent(row.commission_percent ?? row.commissionPercent
+        ?? row.sales_commission_percent ?? row.salesCommissionPercent)
+      : previous?.commissionPercent;
+    const normalizedUser: User = {
       ...(previous || {}),
       id,
       name,
@@ -168,10 +182,15 @@ export const buildAuthoritativeErpSecuritySnapshot = ({
       role: roleId,
       roleId,
       ...(photo ? { photo } : {}),
+      ...(maxDiscountPercent !== undefined ? { maxDiscountPercent } : {}),
+      ...(commissionPercent !== undefined ? { commissionPercent } : {}),
       isActive,
       ...(userVersion !== undefined ? { version: userVersion } : {}),
       syncSource: 'ERP_SNAPSHOT' as const,
-    }];
+    };
+    if (hasMaxDiscountPercent && maxDiscountPercent === undefined) delete normalizedUser.maxDiscountPercent;
+    if (hasCommissionPercent && commissionPercent === undefined) delete normalizedUser.commissionPercent;
+    return [normalizedUser];
   });
 
   const userIds = new Set<string>();

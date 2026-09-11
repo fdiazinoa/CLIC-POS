@@ -32,6 +32,7 @@ import { getRenderableFloorTables } from '../utils/tableLayout';
 import { hasPendingKdsDispatch } from '../utils/kdsPresentation';
 import { resolveOperationalApiUrl } from '../utils/masterOperationalApi';
 import { requestJson } from '../services/network/httpClient';
+import { canAccessOtherSellerTables, isTableLockedForUser } from '../utils/tableAccessPolicy';
 import {
     beginPosInteraction,
     expectInteractionRender,
@@ -99,6 +100,7 @@ interface SmartTableModel {
     lastOrderHint: string;
     firstCustomerName?: string;
     joinedPrimaryLabel?: string;
+    temporaryAlias?: string;
 }
 
 interface TooltipState {
@@ -578,6 +580,7 @@ const TableMap: React.FC<TableMapProps> = ({
         currentRolePermissions.includes('ALL') ||
         currentRolePermissions.includes(TABLE_CONTROL_CENTER_PERMISSION)
     );
+    const hasOtherSellerTableAccess = canAccessOtherSellerTables(currentRolePermissions, Boolean(isAdmin));
     const roomTables = useMemo(
         () => safeTables.filter(table => table.roomId === activeRoomId),
         [safeTables, activeRoomId]
@@ -862,13 +865,14 @@ const TableMap: React.FC<TableMapProps> = ({
                 displayTable.editingLock
                 && String(displayTable.editingLock.ownerId || '') !== String(localTableLockOwnerId || '')
             );
-            const isLocked = isBeingEdited || (
-                isOccupiedLike &&
-                Boolean(bloqueoMeseros) &&
-                Boolean(displayTable.waiterId) &&
-                displayTable.waiterId !== currentUser.id &&
-                !isAdmin
-            );
+            const isLocked = isTableLockedForUser({
+                isBeingEdited,
+                isOccupiedLike,
+                waiterLockEnabled: Boolean(bloqueoMeseros),
+                waiterId: displayTable.waiterId,
+                currentUserId: currentUser.id,
+                canAccessOtherSeller: hasOtherSellerTableAccess,
+            });
 
             const progress = isOccupiedLike ? clamp(elapsedMinutes / Math.max(1, expectedStayMinutes), 0, 1) : 0;
             const serviceStage = getServiceStage(progress);
@@ -876,6 +880,9 @@ const TableMap: React.FC<TableMapProps> = ({
             const hasPendingKitchenDispatch = getTableTickets(displayTable).some(hasPendingKdsDispatch);
             const firstCustomerName = getTableTickets(displayTable)
                 .map(ticket => String(ticket.customerSnapshot?.name || ticket.customerName || '').trim())
+                .find(Boolean);
+            const temporaryAlias = getTableTickets(displayTable)
+                .map(ticket => String(ticket.alias || '').trim())
                 .find(Boolean);
 
             const baseModel: SmartTableModel = {
@@ -899,6 +906,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 hasPendingKitchenDispatch,
                 lastOrderHint: '',
                 firstCustomerName,
+                temporaryAlias,
                 joinedPrimaryLabel: isJoinedSecondary
                     ? String(table.joinedSourceTableName || '').trim() || undefined
                     : undefined
@@ -909,7 +917,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 lastOrderHint: computeLastOrderHint(baseModel)
             };
         });
-    }, [serviceTables, bloqueoMeseros, currentUser.id, isAdmin, localTableLockOwnerId, expectedStayMinutes, highRevenueThreshold, getParkedSummaryForTable, enrichTableWithParkedTicket, getTableTickets, getVisualTableState]);
+    }, [serviceTables, bloqueoMeseros, currentUser.id, hasOtherSellerTableAccess, localTableLockOwnerId, expectedStayMinutes, highRevenueThreshold, getParkedSummaryForTable, enrichTableWithParkedTicket, getTableTickets, getVisualTableState]);
 
     const createTableAccount = useCallback(async (table: Table, requestedName?: string) => {
         const existingTickets = getTableTickets(table);
@@ -2632,8 +2640,13 @@ const SmartTableNode = React.memo(({
                             <p className="flex items-center justify-center gap-1 text-base font-black tracking-tight drop-shadow-[0_2px_6px_rgba(2,6,23,0.5)] truncate">
                                 {model.joinedPrimaryLabel ? (
                                     <><Link2 size={15} strokeWidth={3} className="shrink-0" /> {model.joinedPrimaryLabel}</>
-                                ) : (model.table.nombre || model.table.name)}
+                                ) : (model.temporaryAlias || model.table.nombre || model.table.name)}
                             </p>
+                            {model.temporaryAlias && !model.joinedPrimaryLabel && (
+                                <p className="mt-1 truncate text-[9px] font-bold uppercase tracking-wide text-white/70">
+                                    {model.table.nombre || model.table.name}
+                                </p>
+                            )}
                         </div>
 
                         <div className="flex items-center justify-between text-[11px] font-semibold">

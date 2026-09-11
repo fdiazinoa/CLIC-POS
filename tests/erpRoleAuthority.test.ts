@@ -41,9 +41,28 @@ test('los roles base locales conservan el contrato canónico', () => {
   assert.deepEqual(supervisor?.permissions, [
     'POS_VOID_ITEM', 'POS_DISCOUNT', 'POS_OPEN_DRAWER', 'POS_RETURNS',
     'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHECKOUT', 'POS_CHANGE_TARIFF',
-    'POS_VIEW_X_REPORT', 'POS_CLOSE_X', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'TABLE_CONTROL_CENTER',
+    'POS_VIEW_X_REPORT', 'POS_CLOSE_X', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'POS_ACCESS_OTHER_SELLER_TABLES', 'TABLE_CONTROL_CENTER',
   ]);
   assert.equal(cashier?.permissions.includes('POS_CLOSE_Z'), false);
+});
+
+test('el snapshot ERP conserva límites y comisión individuales del usuario', () => {
+  const snapshot = build([customRole()], [{
+    ...martha(),
+    max_discount_percent: 7.5,
+    commission_percent: 3,
+  }]);
+  assert.equal(snapshot.users[0].maxDiscountPercent, 7.5);
+  assert.equal(snapshot.users[0].commissionPercent, 3);
+
+  const cleared = buildAuthoritativeErpSecuritySnapshot({
+    roleRows: null,
+    userRows: [{ ...martha(), max_discount_percent: null, commission_percent: null }],
+    existingRoles: snapshot.roles,
+    existingUsers: snapshot.users,
+  });
+  assert.equal(cleared.users[0].maxDiscountPercent, undefined);
+  assert.equal(cleared.users[0].commissionPercent, undefined);
 });
 
 test('Martha recibe POS_CLOSE_Z por ID de rol y CASHIER no lo recibe', () => {
