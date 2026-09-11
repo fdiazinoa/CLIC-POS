@@ -17,6 +17,15 @@ test('only modified fields are included and new local records are excluded', () 
     assert.equal(changes.length, 1); assert.equal(changes[0].field, 'nombre');
     assert.deepEqual(changedCatalogFields([], [{ id, price: 10 }], 'prices'), []);
 });
+test('classification hierarchy emits only a real parent move', () => {
+    const parentA = '00000000-0000-4000-8000-000000000010';
+    const parentB = '00000000-0000-4000-8000-000000000011';
+    assert.deepEqual(changedCatalogFields([{ id, parentId: parentA }], [{ id, parentId: parentA, parent_id: parentA }], 'classification_hierarchy'), []);
+    assert.deepEqual(changedCatalogFields([{ id, parentId: parentA }], [{ id, parentId: parentB }], 'classification_hierarchy').map(change => [change.field, change.before, change.after]), [
+        ['parent_id', parentA, parentB],
+    ]);
+    assert.equal(changedCatalogFields([{ id, parentId: parentA }], [{ id, parentId: '' }], 'classification_hierarchy')[0].after, null);
+});
 test('item taxes compare as a canonical set and emit only a real assignment change', () => {
     assert.deepEqual(changedCatalogFields(
         [{ id, appliedTaxIds: ['tax-b', 'tax-a'] }],

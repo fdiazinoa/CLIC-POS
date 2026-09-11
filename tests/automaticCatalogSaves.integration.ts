@@ -60,6 +60,22 @@ test('saving the existing classification automatically captures name and code wi
     assert.equal(store.get('config').departments[0].name, 'Bebidas');
     assert.deepEqual(store.get('catalogEdits').map((e: any) => e.mutation.field), ['nombre', 'codigo']);
 });
+test('moving a classification queues its parent and preserves it against an older snapshot', async () => {
+    store.clear(); sends = 0;
+    const parentA = '00000000-0000-4000-8000-000000000010';
+    const parentB = '00000000-0000-4000-8000-000000000011';
+    const old = { sections: [{ id: product.id, name: 'Bebidas', parentId: parentA }] };
+    store.set('config', old);
+    await saveLocalClassifications({ sections: [{ id: product.id, name: 'Bebidas', parentId: parentB }] } as any, 'operator');
+    const queue = store.get('catalogEdits');
+    assert.deepEqual(queue.map((entry: any) => [entry.mutation.domain, entry.mutation.field, entry.mutation.after]), [
+        ['classification_hierarchy', 'parent_id', parentB],
+    ]);
+    const { preserveLocalCatalog } = await import('../services/sync/preserveLocalCatalog');
+    const merged = await preserveLocalCatalog('config', old) as any;
+    assert.equal(merged.sections[0].parentId, parentB);
+    assert.equal(merged.sections[0].parent_id, parentB);
+});
 test('reclassifying an existing item queues only changed ERP assignment fields', async () => {
     store.clear(); sends = 0;
     store.set('products', [{ ...product, departmentId: departmentA, brandId: null }]);
