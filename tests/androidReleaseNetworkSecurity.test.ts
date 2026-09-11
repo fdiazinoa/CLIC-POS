@@ -53,3 +53,12 @@ test('canonical release aborts when the binary manifest does not match the reque
         'la política debe validarse antes de publicar el APK canónico',
     );
 });
+
+test('canonical output keeps only the APK produced by the current release', () => {
+    assert.match(releaseScript, /sync_release_artifacts "\$\{RELEASE_OUTPUT_DIR\}" "\$\{RELEASE_HISTORY_DIR\}"/);
+    assert.match(releaseScript, /sync_release_artifacts "\$\{DEST_DIR\}" "\$\{RELEASE_HISTORY_DIR\}"/);
+    assert.doesNotMatch(
+        releaseScript,
+        /sync_release_artifacts "\$\{RELEASE_HISTORY_DIR\}" "\$\{RELEASE_OUTPUT_DIR\}"/,
+    );
+});

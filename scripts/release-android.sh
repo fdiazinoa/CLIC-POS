@@ -222,7 +222,6 @@ fi
 RELEASE_OUTPUT_DIR="${CANONICAL_BUILD_WORKTREE}/android/app/build/outputs/apk/release"
 RELEASE_HISTORY_DIR="${WORKSPACE_ROOT}/_releases/CLIC-POS"
 sync_release_artifacts "${RELEASE_OUTPUT_DIR}" "${RELEASE_HISTORY_DIR}"
-trap 'sync_release_artifacts "${RELEASE_HISTORY_DIR}" "${RELEASE_OUTPUT_DIR}"' EXIT
 
 KEY_PROPERTIES="${CANONICAL_BUILD_WORKTREE}/android/key.properties"
 KEYSTORE_FILE="${CANONICAL_BUILD_WORKTREE}/android/keys/clic-pos-release.keystore"
@@ -309,7 +308,8 @@ fs.writeFileSync(report, JSON.stringify({ sourceCommit, assetsVerified: true, ha
 console.log(`Assets verificados: ${Object.keys(hashes).length}`);
 NODE
 
-# Keep versioned APKs and reports from earlier releases in the canonical output directory.
+# Gradle owns the canonical output directory. Historical deliverables remain in
+# RELEASE_HISTORY_DIR; only the APK produced by this run stays in app/build.
 info "Ejecutando ./gradlew assembleRelease"
 (cd "${BUILD_WORKTREE}/android" && ./gradlew assembleRelease \
   "-PclicPosAllowReleaseCleartext=${LAN_HTTP_ENABLED}")
