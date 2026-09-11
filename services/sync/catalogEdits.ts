@@ -44,12 +44,20 @@ async function persistConflictResolution(edits: CatalogEdit[]) {
     await Promise.all(edits.map(edit => db.saveDocument('catalogEdits', edit)));
 }
 
+export const canResolveCatalogEdit = (
+    edit: Pick<CatalogEdit, 'status' | 'syncError'>,
+    action: 'RETRY' | 'DISCARD' | 'ACCEPT_ERP' | 'FORCE',
+): boolean => (
+    ['CONFLICT', 'REJECTED'].includes(edit.status)
+    || (action === 'DISCARD' && edit.status === 'PENDING' && Boolean(edit.syncError))
+);
+
 export async function resolveCatalogConflict(
     edit: CatalogEdit,
     action: 'RETRY' | 'DISCARD' | 'ACCEPT_ERP' | 'FORCE',
     actorId: string,
 ): Promise<CatalogEdit | null> {
-    if (!actorId?.trim() || !['CONFLICT', 'REJECTED'].includes(edit.status)) {
+    if (!actorId?.trim() || !canResolveCatalogEdit(edit, action)) {
         throw new Error('El cambio ya no tiene un conflicto pendiente de resolución.');
     }
     if (action === 'FORCE' && edit.conflictCurrent === undefined) {
@@ -57,7 +65,7 @@ export async function resolveCatalogConflict(
     }
     const all = await readCatalogEdits();
     const current = all.find(candidate => candidate.id === edit.id);
-    if (!current || !['CONFLICT', 'REJECTED'].includes(current.status)) {
+    if (!current || !canResolveCatalogEdit(current, action)) {
         throw new Error('El conflicto cambió. Refresca la lista antes de continuar.');
     }
     const resolvedAt = new Date().toISOString();
