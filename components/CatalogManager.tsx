@@ -1412,7 +1412,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    );
 
    const renderProductCatalog = () => (
-      <div className="min-h-full w-full max-w-[1800px] mx-auto p-4 md:p-6 xl:p-8">
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-[1800px] flex-col overflow-hidden bg-white">
+         <div data-catalog-controls className="shrink-0 border-b border-gray-100 bg-white px-4 pb-4 pt-4 md:px-6 md:pt-6 xl:px-8">
          <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
             <div className="shrink-0">
                <h1 className="text-3xl font-black tracking-tight text-gray-900">Productos</h1>
@@ -1426,7 +1427,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                <button type="button" onClick={() => document.querySelector<HTMLInputElement>('[data-barcode-scanner-target=\"true\"]')?.focus({ preventScroll: true })} className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 hover:bg-blue-100 focus-visible:ring-4 focus-visible:ring-blue-100" aria-label="Escanear código de barras" title="Escanear código de barras"><ScanBarcode size={22} /></button>
                <button type="button" onClick={() => setShowAdvancedFilters((value) => !value)} className={`flex h-12 items-center gap-2 rounded-2xl border px-4 text-sm font-black transition ${showAdvancedFilters ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-700 hover:border-blue-200'}`}><SlidersHorizontal size={18} /> Filtros</button>
                <select value={warehouseFilter} onChange={(event) => setWarehouseFilter(event.target.value)} className="h-12 max-w-[220px] rounded-2xl border border-gray-200 bg-white px-4 text-sm font-bold text-gray-700 outline-none focus:border-blue-400" aria-label="Filtrar por almacén"><option value="ALL">Todos los almacenes</option>{runtimeWarehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}</select>
-               {canManage && <button type="button" onClick={() => setEditingProduct('NEW')} className="flex h-12 items-center gap-2 rounded-2xl bg-blue-600 px-5 text-sm font-black text-white shadow-lg shadow-blue-100 transition hover:bg-blue-700 active:scale-95"><Plus size={20} /> Nuevo producto</button>}
+               {canManage && <button type="button" onClick={() => setEditingProduct('NEW')} className="flex h-12 items-center gap-2 rounded-2xl bg-blue-600 px-5 text-sm font-black text-white transition hover:bg-blue-700 active:scale-95"><Plus size={20} /> Nuevo producto</button>}
             </div>
          </div>
 
@@ -1439,7 +1440,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             <div className="flex items-end"><button type="button" onClick={clearProductFilters} className="h-11 w-full rounded-xl border border-gray-200 bg-white px-4 text-sm font-black text-gray-600 hover:text-blue-600">Limpiar filtros</button></div>
          </div>}
 
-         <div className="mb-3 flex gap-2 overflow-x-auto pb-1 no-scrollbar">{categories.map((category) => <button key={category} type="button" onClick={() => setCategoryFilter(category)} className={`whitespace-nowrap rounded-full px-4 py-2 text-sm font-black transition ${categoryFilter === category ? 'bg-blue-600 text-white shadow-md shadow-blue-100' : 'border border-gray-200 bg-gray-50 text-gray-600 hover:border-blue-200'}`}>{category === 'ALL' ? 'Todos' : category} <span className={categoryFilter === category ? 'text-blue-100' : 'text-gray-400'}>({categoryCounts.get(category) || 0})</span></button>)}</div>
+         <div className="mb-3 flex gap-2 overflow-x-auto pb-1 no-scrollbar">{categories.map((category) => <button key={category} type="button" onClick={() => setCategoryFilter(category)} className={`whitespace-nowrap rounded-full border px-4 py-2 text-sm font-black transition ${categoryFilter === category ? 'border-blue-600 bg-blue-600 text-white' : 'border-gray-200 bg-white text-gray-600 hover:border-blue-200'}`}>{category === 'ALL' ? 'Todos' : category} <span className={categoryFilter === category ? 'text-blue-100' : 'text-gray-400'}>({categoryCounts.get(category) || 0})</span></button>)}</div>
 
          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 pb-4">
             <div className="flex flex-wrap gap-2">{([
@@ -1453,21 +1454,34 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             <label className="ml-auto flex items-center gap-2 text-sm font-bold text-gray-500">Ordenar por:<select value={productSort} onChange={(event) => setProductSort(event.target.value as ProductSortMode)} className="h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm font-bold text-gray-700 outline-none"><option value="NAME_ASC">Nombre A-Z</option><option value="NAME_DESC">Nombre Z-A</option><option value="PRICE_ASC">Precio menor-mayor</option><option value="PRICE_DESC">Precio mayor-menor</option><option value="STOCK_ASC">Stock menor-mayor</option><option value="STOCK_DESC">Stock mayor-menor</option><option value="RECENT">Más recientes</option></select></label>
          </div>
 
+         </div>
+
+         <div data-catalog-scroll className="custom-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4 pt-4 md:px-6 xl:px-8">
          {copyFeedback && <div className="fixed right-6 top-6 z-[150] rounded-xl bg-gray-900 px-4 py-3 text-sm font-bold text-white shadow-xl" role="status">{copyFeedback}</div>}
 
          {isCatalogLoading && products.length === 0 ? <div className="space-y-2" aria-label="Cargando productos">{Array.from({ length: 6 }).map((_, index) => <div key={index} className="h-28 animate-pulse rounded-2xl border border-gray-100 bg-gray-50" />)}</div>
          : catalogLoadError && products.length === 0 ? <div className="rounded-2xl border border-red-100 bg-red-50 p-8 text-center"><h3 className="text-xl font-black text-gray-900">No pudimos cargar los productos</h3><button type="button" onClick={() => window.location.reload()} className="mt-4 rounded-xl bg-blue-600 px-5 py-3 font-black text-white">Reintentar</button></div>
          : sortedProducts.length === 0 ? <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-10 text-center"><Package className="mx-auto mb-3 text-gray-300" size={36} /><h3 className="text-xl font-black text-gray-900">{products.length === 0 ? 'No hay productos registrados' : 'No encontramos productos para estos filtros'}</h3><p className="mt-2 text-sm font-semibold text-gray-500">{products.length === 0 ? 'Crea el primer artículo para comenzar tu catálogo.' : 'Prueba otra búsqueda o limpia los filtros activos.'}</p><button type="button" onClick={products.length === 0 ? () => setEditingProduct('NEW') : clearProductFilters} className="mt-5 rounded-xl bg-blue-600 px-5 py-3 text-sm font-black text-white">{products.length === 0 ? '+ Nuevo producto' : 'Limpiar filtros'}</button></div>
-         : productDisplayMode === 'TABLE' && isLargeCatalogLayout ? <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white"><table className="w-full min-w-[1050px] text-left text-sm"><thead className="sticky top-0 z-10 bg-gray-50 text-[11px] font-black uppercase tracking-wider text-gray-500"><tr><th className="p-3"><span className="sr-only">Seleccionar</span></th><th className="p-3">Producto</th><th className="p-3">Referencia / SKU</th><th className="p-3">Código de barras</th><th className="p-3">Categoría</th><th className="p-3">Stock</th><th className="p-3">Precio</th><th className="p-3">Estado</th><th className="p-3 text-right">Acciones</th></tr></thead><tbody className="divide-y divide-gray-100">{pagedProducts.map((product) => {
+         : productDisplayMode === 'TABLE' && isLargeCatalogLayout ? <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white"><table className="w-full min-w-[1050px] select-none text-left text-sm"><thead className="sticky top-0 z-10 border-b border-gray-100 bg-white text-[11px] font-black uppercase tracking-wider text-gray-500"><tr><th className="p-4"><span className="sr-only">Seleccionar</span></th><th className="p-4">Producto</th><th className="p-4">Referencia / SKU</th><th className="p-4">Código de barras</th><th className="p-4">Categoría</th><th className="p-4">Stock</th><th className="p-4">Precio</th><th className="p-4">Estado</th><th className="p-4 text-right">Acciones</th></tr></thead><tbody className="divide-y divide-gray-100">{pagedProducts.map((product) => {
             const sku = productSkuValues(product)[0] || product.id; const barcode = productBarcodeValues(product)[0] || ''; const stock = productStockForWarehouse(product, warehouseFilter); const status = productStockStatus(product, warehouseFilter);
-            return <tr key={product.id} className={`hover:bg-blue-50/30 ${selectedIds.has(product.id) ? 'bg-blue-50/60' : ''}`}><td className="p-3"><button type="button" onClick={() => toggleSelection(product.id)} className="flex h-10 w-10 items-center justify-center" aria-label={`Seleccionar ${product.name}`}>{selectedIds.has(product.id) ? <CheckSquare className="text-blue-600" size={20} /> : <Square className="text-gray-300" size={20} />}</button></td><td className="p-3"><div className="flex min-w-[230px] items-center gap-3"><ProductThumbnail product={product} /><div className="min-w-0"><button type="button" onClick={() => setEditingProduct(product)} className="block max-w-[260px] truncate font-black text-gray-900 hover:text-blue-600">{product.name}</button><p className="max-w-[260px] truncate text-xs font-semibold text-gray-400">{product.description || formatProductType(product) || 'Artículo de catálogo'}</p></div></div></td><td className="p-3"><CopyableCode value={sku} label="referencia" onCopy={copyProductValue} /></td><td className="p-3"><CopyableCode value={barcode} label="código de barras" onCopy={copyProductValue} /></td><td className="p-3 font-bold text-gray-600">{product.category || 'Sin categoría'}</td><td className="p-3"><StockIndicator value={stock} status={status} onClick={() => setViewMode('STOCKS')} /></td><td className="p-3"><ProductPriceBlock product={product} currency={config.currencySymbol} /></td><td className="p-3"><ActiveBadge active={productIsActive(product)} sellable={product.is_sellable !== false} /></td><td className="p-3">{renderProductActions(product)}</td></tr>;
+            return <tr key={product.id} className={selectedIds.has(product.id) ? 'bg-blue-50/60' : 'bg-white hover:bg-blue-50/20'}><td className="p-4"><button type="button" onClick={() => toggleSelection(product.id)} className="flex h-10 w-10 items-center justify-center bg-transparent shadow-none" aria-label={`Seleccionar ${product.name}`}>{selectedIds.has(product.id) ? <CheckSquare className="text-blue-600" size={20} /> : <Square className="text-gray-300" size={20} />}</button></td><td className="p-4"><div className="flex min-w-[230px] items-center gap-4"><ProductThumbnail product={product} /><div className="min-w-0"><button type="button" onClick={() => setEditingProduct(product)} className="block max-w-[260px] truncate bg-transparent text-left font-black text-gray-900 shadow-none hover:text-blue-600">{product.name}</button><p className="mt-1 max-w-[260px] truncate text-xs font-semibold text-gray-400">{product.description || formatProductType(product) || 'Artículo de catálogo'}</p></div></div></td><td className="p-4"><CopyableCode value={sku} label="referencia" onCopy={copyProductValue} /></td><td className="p-4"><CopyableCode value={barcode} label="código de barras" onCopy={copyProductValue} /></td><td className="p-4 font-bold text-gray-600">{product.category || 'Sin categoría'}</td><td className="p-4"><StockIndicator value={stock} status={status} onClick={() => setViewMode('STOCKS')} /></td><td className="p-4"><ProductPriceBlock product={product} currency={config.currencySymbol} /></td><td className="p-4"><ActiveBadge active={productIsActive(product)} sellable={product.is_sellable !== false} /></td><td className="p-4">{renderProductActions(product)}</td></tr>;
          })}</tbody></table></div>
-         : <div className="overflow-visible rounded-2xl border border-gray-200 bg-white shadow-sm divide-y divide-gray-100">{pagedProducts.map((product) => {
+         : <div className="overflow-visible rounded-2xl border border-gray-200 bg-white divide-y divide-gray-100">{pagedProducts.map((product) => {
             const sku = productSkuValues(product)[0] || product.id; const barcode = productBarcodeValues(product)[0] || ''; const stock = productStockForWarehouse(product, warehouseFilter); const status = productStockStatus(product, warehouseFilter);
-            return <article key={product.id} className={`relative grid gap-3 p-3 transition md:grid-cols-[auto_minmax(250px,1.7fr)_minmax(140px,.9fr)_100px_145px_95px_auto] md:items-center ${selectedIds.has(product.id) ? 'bg-blue-50/60' : 'hover:bg-gray-50/70'}`}>{canManage && <button type="button" onClick={() => toggleSelection(product.id)} className="flex h-11 w-11 items-center justify-center rounded-xl" aria-label={`${selectedIds.has(product.id) ? 'Quitar selección de' : 'Seleccionar'} ${product.name}`}>{selectedIds.has(product.id) ? <CheckSquare className="text-blue-600" size={21} /> : <Square className="text-gray-300" size={21} />}</button>}<div className="flex min-w-0 items-center gap-3"><ProductThumbnail product={product} /><div className="min-w-0"><button type="button" onClick={() => setEditingProduct(product)} className="block max-w-full truncate text-left text-base font-black text-gray-900 hover:text-blue-600">{product.name}</button><p className="mt-0.5 line-clamp-1 text-xs font-semibold text-gray-500">{product.description || formatProductType(product) || 'Artículo de catálogo'}</p><div className="mt-1.5 flex flex-wrap gap-1.5"><span className="rounded-lg bg-blue-50 px-2 py-1 text-[11px] font-black text-blue-700">{product.category || 'Sin categoría'}</span><ActiveBadge active={productIsActive(product)} sellable={product.is_sellable !== false} compact /></div></div></div><div className="space-y-1 border-gray-100 md:border-l md:pl-4"><CopyableCode value={sku} label="referencia" onCopy={copyProductValue} strong /><CopyableCode value={barcode} label="código de barras" onCopy={copyProductValue} /></div><div className="border-gray-100 md:border-l md:pl-4"><StockIndicator value={stock} status={status} onClick={() => setViewMode('STOCKS')} /></div><div className="border-gray-100 md:border-l md:pl-4"><ProductPriceBlock product={product} currency={config.currencySymbol} /></div><div className="hidden md:block"><ActiveBadge active={productIsActive(product)} sellable={product.is_sellable !== false} /></div>{renderProductActions(product)}</article>;
+            return <article key={product.id} className={`catalog-product-row relative select-none bg-white px-3 py-4 transition-colors md:px-4 ${selectedIds.has(product.id) ? 'bg-blue-50/60' : 'hover:bg-blue-50/20'}`}>
+               <div className="flex items-center justify-center">{canManage && <button type="button" onClick={() => toggleSelection(product.id)} className="flex h-11 w-11 items-center justify-center rounded-xl bg-transparent shadow-none" aria-label={`${selectedIds.has(product.id) ? 'Quitar selección de' : 'Seleccionar'} ${product.name}`}>{selectedIds.has(product.id) ? <CheckSquare className="text-blue-600" size={21} /> : <Square className="text-gray-300" size={21} />}</button>}</div>
+               <ProductThumbnail product={product} />
+               <div className="min-w-0"><button type="button" onClick={() => setEditingProduct(product)} className="block max-w-full truncate bg-transparent text-left text-base font-black text-gray-900 shadow-none hover:text-blue-600">{product.name}</button><p className="mt-1 line-clamp-1 text-xs font-semibold text-gray-500">{product.description || formatProductType(product) || 'Artículo de catálogo'}</p><div className="mt-2 flex flex-wrap gap-1.5"><span className="rounded-lg bg-blue-50 px-2 py-1 text-[11px] font-black text-blue-700">{product.category || 'Sin categoría'}</span><ActiveBadge active={productIsActive(product)} sellable={product.is_sellable !== false} compact /></div></div>
+               <div className="catalog-product-block space-y-2"><CopyableCode value={sku} label="referencia" onCopy={copyProductValue} strong /><CopyableCode value={barcode} label="código de barras" onCopy={copyProductValue} /></div>
+               <div className="catalog-product-block"><StockIndicator value={stock} status={status} onClick={() => setViewMode('STOCKS')} /></div>
+               <div className="catalog-product-block"><ProductPriceBlock product={product} currency={config.currencySymbol} /></div>
+               <div className="catalog-product-status"><ActiveBadge active={productIsActive(product)} sellable={product.is_sellable !== false} /></div>
+               {renderProductActions(product)}
+            </article>;
          })}</div>}
 
-         {sortedProducts.length > 0 && <div className="mt-5 flex flex-col items-center justify-between gap-3 pb-28 text-sm font-semibold text-gray-500 sm:flex-row"><span>Mostrando {(currentPage - 1) * pageSize + 1}-{Math.min(currentPage * pageSize, sortedProducts.length)} de {sortedProducts.length.toLocaleString()} productos</span><div className="flex items-center gap-2"><button type="button" disabled={currentPage === 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} className="flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 disabled:opacity-40" aria-label="Página anterior"><ChevronLeft size={18} /></button><span className="rounded-xl bg-blue-600 px-4 py-2.5 font-black text-white">{currentPage}</span><span>de {totalPages}</span><button type="button" disabled={currentPage === totalPages} onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} className="flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 disabled:opacity-40" aria-label="Página siguiente"><ChevronRight size={18} /></button><select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))} className="h-10 rounded-xl border border-gray-200 bg-white px-3 font-bold"><option value={25}>25 por página</option><option value={50}>50 por página</option><option value={100}>100 por página</option></select></div></div>}
+         {sortedProducts.length > 0 && <div className="mt-5 flex flex-col items-center justify-between gap-3 pb-6 text-sm font-semibold text-gray-500 sm:flex-row"><span>Mostrando {(currentPage - 1) * pageSize + 1}-{Math.min(currentPage * pageSize, sortedProducts.length)} de {sortedProducts.length.toLocaleString()} productos</span><div className="flex items-center gap-2"><button type="button" disabled={currentPage === 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} className="flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 disabled:opacity-40" aria-label="Página anterior"><ChevronLeft size={18} /></button><span className="rounded-xl bg-blue-600 px-4 py-2.5 font-black text-white">{currentPage}</span><span>de {totalPages}</span><button type="button" disabled={currentPage === totalPages} onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} className="flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 disabled:opacity-40" aria-label="Página siguiente"><ChevronRight size={18} /></button><select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))} className="h-10 rounded-xl border border-gray-200 bg-white px-3 font-bold"><option value={25}>25 por página</option><option value={50}>50 por página</option><option value={100}>100 por página</option></select></div></div>}
+         </div>
       </div>
    );
 
@@ -1521,13 +1535,11 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          <div className="flex-1 h-full min-h-0 min-w-0 flex flex-col overflow-hidden">
             {/* TOP BAR / Header */}
             {!isLargeCatalogLayout ? (
-               <div className="bg-white px-4 pt-4 pb-0 border-b border-gray-200 shrink-0">
-                  <div className="flex flex-col gap-4 w-full">
+               <div className="bg-white px-4 pt-2 pb-0 border-b border-gray-200 shrink-0">
+                  <div className="flex flex-col gap-2 w-full">
                      <div className="flex justify-between items-center w-full">
-                        <div className="flex items-center gap-3">
-                           <button onClick={onClose} className="p-2 bg-gray-100 rounded-full text-gray-600"><ArrowLeft size={20} /></button>
-                           <h1 className="text-xl font-black text-gray-800">Catálogo</h1>
-                        </div>
+                        <h1 className="text-xl font-black text-gray-800">Catálogo</h1>
+                        <button type="button" onClick={onClose} className="flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:text-gray-900" aria-label="Cerrar catálogo" title="Cerrar"><X size={20} /></button>
                      </div>
                      <div className="mobile-tab-scroller no-scrollbar -mx-4 px-4 overflow-x-auto whitespace-nowrap bg-white">
                         <div className="inline-flex items-center gap-2 min-w-max pb-1">
@@ -1544,14 +1556,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                   </div>
                </div>
             ) : isTablet ? (
-               <div className="bg-white p-8 border-b border-gray-100 flex items-center justify-between gap-8 shrink-0">
+               <div className="bg-white px-6 py-3 border-b border-gray-100 flex items-center justify-between gap-4 shrink-0">
                   <div className="flex items-center gap-4 flex-1 max-w-2xl">
-                     <button
-                        onClick={onClose}
-                        className="h-16 px-6 bg-white border border-gray-200 text-gray-700 rounded-[1.75rem] font-black shadow-sm hover:bg-gray-50 transition-all flex items-center gap-3 shrink-0"
-                     >
-                        <ArrowLeft size={22} strokeWidth={2.8} /> Salir
-                     </button>
                      {viewMode !== 'PRODUCTS' && <div className="flex-1 relative shadow-2xl shadow-gray-100">
                         <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-400" size={24} />
                         <input
@@ -1575,30 +1581,32 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                         <Plus size={28} strokeWidth={4} className="group-hover:rotate-90 transition-transform duration-300" /> Nuevo Artículo
                      </button>
                   )}
+                  <button type="button" onClick={onClose} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-gray-200 bg-white text-gray-600 transition hover:border-gray-300 hover:text-gray-900" aria-label="Cerrar catálogo" title="Cerrar"><X size={24} /></button>
                </div>
             ) : (
                <div className="bg-white border-b border-gray-100 shrink-0">
-                  <div className="px-8 py-6 flex items-center gap-4">
-                     <button
-                        onClick={onClose}
-                        className="h-16 px-6 shrink-0 bg-white border border-gray-200 text-gray-700 rounded-2xl font-black shadow-sm hover:bg-gray-50 transition-all flex items-center gap-3"
-                     >
-                        <ArrowLeft size={22} strokeWidth={2.8} /> Salir
-                     </button>
-                     {false && canManage && viewMode === 'PRODUCTS' && (
-                        <button
-                           onClick={toggleAllSelection}
-                           className={`h-16 w-16 shrink-0 rounded-2xl border flex items-center justify-center transition-all shadow-sm ${
-                              selectedIds.size > 0
-                                 ? 'bg-blue-600 border-blue-600 text-white'
-                                 : 'bg-white border-gray-200 text-blue-600 hover:border-blue-200'
-                           }`}
-                           aria-label={selectedIds.size === filteredProducts.length && filteredProducts.length > 0 ? 'Quitar seleccion masiva' : 'Seleccionar articulos'}
-                        >
-                           <CheckSquare size={24} strokeWidth={2.5} />
-                        </button>
-                     )}
-                     {viewMode !== 'PRODUCTS' && <div className="relative flex-1 max-w-3xl">
+                  <div data-catalog-navigation className="flex items-center gap-3 px-6 py-3">
+                     <div className="min-w-0 flex-1 overflow-x-auto no-scrollbar">
+                        <div className="inline-flex min-w-max items-center gap-3">
+                           {CATALOG_DESKTOP_VIEWS.map((item) => (
+                              <button
+                                 key={item.id}
+                                 onClick={() => setViewMode(item.id)}
+                                 className={`whitespace-nowrap rounded-2xl px-5 py-3 text-sm font-black transition-all ${
+                                    viewMode === item.id
+                                       ? 'bg-blue-600 text-white shadow-[0_10px_22px_rgba(37,99,235,0.16)]'
+                                       : 'border border-gray-200 bg-white text-gray-500 hover:border-blue-200 hover:text-blue-600'
+                                 }`}
+                              >
+                                 {item.label}
+                              </button>
+                           ))}
+                        </div>
+                     </div>
+                     <button type="button" onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 transition hover:border-gray-300 hover:text-gray-900" aria-label="Cerrar catálogo" title="Cerrar"><X size={22} /></button>
+                  </div>
+                  {viewMode !== 'PRODUCTS' && <div className="flex items-center gap-4 px-6 pb-3">
+                     <div className="relative flex-1 max-w-3xl">
                         <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-300" size={22} />
                         <input
                            type="text"
@@ -1607,8 +1615,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                            onChange={(e) => setSearchTerm(e.target.value)}
                            className="h-16 w-full rounded-3xl border border-gray-200 bg-white pl-14 pr-5 text-base font-semibold text-gray-700 outline-none transition-all focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
                         />
-                     </div>}
-                     {canManage && viewMode !== 'PRODUCTS' && (
+                     </div>
+                     {canManage && (
                         <button
                            onClick={() => {
                               if (viewMode === 'TARIFFS') setEditingTariff('NEW');
@@ -1620,24 +1628,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                            <Plus size={22} strokeWidth={3} /> Nuevo
                         </button>
                      )}
-                  </div>
-                  <div className="px-8 pb-4 overflow-x-auto no-scrollbar">
-                     <div className="inline-flex items-center gap-3 min-w-max">
-                        {CATALOG_DESKTOP_VIEWS.map((item) => (
-                           <button
-                              key={item.id}
-                              onClick={() => setViewMode(item.id)}
-                              className={`px-5 py-3 rounded-2xl text-sm font-black transition-all whitespace-nowrap ${
-                                 viewMode === item.id
-                                    ? 'bg-blue-600 text-white shadow-[0_15px_30px_rgba(37,99,235,0.2)]'
-                                    : 'bg-white text-gray-500 border border-gray-200 hover:border-blue-200 hover:text-blue-600'
-                              }`}
-                           >
-                              {item.label}
-                           </button>
-                        ))}
-                     </div>
-                  </div>
+                  </div>}
                </div>
             )}
 
@@ -1671,7 +1662,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
             <div className="responsive-content flex-1 min-h-0 overflow-hidden bg-white">
                <ErrorBoundary componentName="CatalogManager Content">
-                  <div className="h-full overflow-y-auto custom-scrollbar">
+                  <div className={`h-full min-h-0 ${viewMode === 'PRODUCTS' ? 'overflow-hidden' : 'overflow-y-auto custom-scrollbar'}`}>
                {viewMode === 'PRODUCTS' && renderProductCatalog()}
                {false && viewMode === 'PRODUCTS' && (
                   <div className="min-h-full p-10 md:p-16 max-w-[1600px] mx-auto w-full">
@@ -2128,20 +2119,20 @@ const SidebarItem: React.FC<SidebarItemProps> = ({ label, icon, active, onClick 
 
 const ProductThumbnail: React.FC<{ product: Product }> = React.memo(({ product }) => {
    const image = resolveProductImageSrc(product);
-   return <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-gray-100 bg-gray-50 p-1.5">
+   return <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-gray-100 bg-white p-1.5 shadow-none">
       {image ? <img src={image} alt="" loading="lazy" className="h-full w-full object-contain" /> : <ImageIcon size={26} className="text-gray-300" aria-hidden="true" />}
    </div>;
 });
 
 const CopyableCode: React.FC<{ value: string; label: string; strong?: boolean; onCopy: (value: string, label: string) => void }> = ({ value, label, strong, onCopy }) => (
-   <button type="button" disabled={!value} onClick={() => onCopy(value, label)} title={`Copiar ${label}`} className={`flex min-h-6 max-w-full items-center gap-1.5 text-left font-mono text-xs hover:text-blue-600 disabled:text-gray-300 ${strong ? 'font-black text-gray-800' : 'font-semibold text-gray-500'}`}>
+   <button type="button" disabled={!value} onClick={() => onCopy(value, label)} title={`Copiar ${label}`} className={`flex min-h-6 max-w-full items-center gap-1.5 bg-transparent text-left font-mono text-xs shadow-none hover:text-blue-600 disabled:text-gray-300 ${strong ? 'font-black text-gray-800' : 'font-semibold text-gray-500'}`}>
       <span className="truncate">{value || '—'}</span>{value && <Copy size={14} className="shrink-0" aria-hidden="true" />}
    </button>
 );
 
 const StockIndicator: React.FC<{ value: number; status: ReturnType<typeof productStockStatus>; onClick: () => void }> = ({ value, status, onClick }) => {
    const tone = status.tone === 'red' ? 'text-red-600' : status.tone === 'amber' ? 'text-amber-600' : 'text-emerald-600';
-   return <button type="button" onClick={onClick} className="min-h-11 text-left" title="Abrir existencias">
+   return <button type="button" onClick={onClick} className="min-h-11 bg-transparent text-left shadow-none" title="Abrir existencias">
       <span className="block text-[11px] font-semibold text-gray-400">Stock</span>
       <strong className="block text-lg leading-5 text-gray-900">{value.toLocaleString()}</strong>
       <span className={`text-xs font-bold ${tone}`}>{status.label}</span>
@@ -2181,10 +2172,10 @@ interface ProductRowActionsProps {
 
 const ProductRowActions: React.FC<ProductRowActionsProps> = ({ product, canManage, isOpen, onToggle, onPrice, onEdit, onStock, onDelete }) => {
    if (!canManage) return null;
-   return <div className="relative flex justify-end gap-1.5">
-      <button type="button" onClick={onPrice} className="flex h-11 min-w-11 flex-col items-center justify-center rounded-xl border border-gray-200 px-2 text-blue-600 hover:bg-blue-50" aria-label={`Tarifas de ${product.name}`} title="Tarifas"><DollarSign size={18} /><span className="hidden text-[10px] font-bold xl:block">Tarifas</span></button>
-      <button type="button" onClick={onEdit} className="flex h-11 min-w-11 flex-col items-center justify-center rounded-xl border border-gray-200 px-2 text-blue-600 hover:bg-blue-50" aria-label={`Editar ${product.name}`} title="Editar"><Edit2 size={17} /><span className="hidden text-[10px] font-bold xl:block">Editar</span></button>
-      <button type="button" onClick={onToggle} className="flex h-11 min-w-11 flex-col items-center justify-center rounded-xl border border-gray-200 px-2 text-gray-700 hover:bg-gray-50" aria-label={`Más acciones para ${product.name}`} aria-expanded={isOpen} title="Más acciones"><MoreHorizontal size={19} /><span className="hidden text-[10px] font-bold xl:block">Más</span></button>
+   return <div className="catalog-product-actions relative flex justify-end gap-2">
+      <button type="button" onClick={onPrice} className="flex h-11 min-w-11 flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-blue-600 shadow-none hover:bg-blue-50" aria-label={`Tarifas de ${product.name}`} title="Tarifas"><DollarSign size={18} /><span className="hidden text-[10px] font-bold xl:block">Tarifas</span></button>
+      <button type="button" onClick={onEdit} className="flex h-11 min-w-11 flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-blue-600 shadow-none hover:bg-blue-50" aria-label={`Editar ${product.name}`} title="Editar"><Edit2 size={17} /><span className="hidden text-[10px] font-bold xl:block">Editar</span></button>
+      <button type="button" onClick={onToggle} className="flex h-11 min-w-11 flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-gray-700 shadow-none hover:bg-gray-50" aria-label={`Más acciones para ${product.name}`} aria-expanded={isOpen} title="Más acciones"><MoreHorizontal size={19} /><span className="hidden text-[10px] font-bold xl:block">Más</span></button>
       {isOpen && <div className="absolute right-0 top-12 z-30 w-52 overflow-hidden rounded-xl border border-gray-200 bg-white p-1.5 text-sm font-bold shadow-xl">
          <button type="button" onClick={onEdit} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-gray-700 hover:bg-gray-50"><Eye size={16} /> Ver detalle / editar</button>
          <button type="button" onClick={onStock} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-gray-700 hover:bg-gray-50"><Archive size={16} /> Existencias</button>
