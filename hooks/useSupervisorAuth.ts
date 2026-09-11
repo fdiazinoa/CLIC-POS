@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { BusinessConfig, User, Permission, AuditLogEntry, RoleDefinition } from '../types';
+import { canGrantDiscountPercent } from '../utils/userSalesPolicy';
 
 interface UseSupervisorAuthProps {
     config: BusinessConfig;
@@ -39,9 +40,9 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig }
 
                 // Check limits (e.g., max discount)
                 let withinLimits = true;
-                if (params.permission === 'POS_DISCOUNT' && params.context?.newValue) {
+                if (params.permission === 'POS_DISCOUNT' && params.context?.newValue !== undefined) {
                     const discountPercent = params.context.newValue;
-                    if (userRole.maxDiscountPercent !== undefined && discountPercent > userRole.maxDiscountPercent) {
+                    if (!canGrantDiscountPercent(currentUser, roles, discountPercent)) {
                         withinLimits = false;
                     }
                 }
@@ -115,7 +116,10 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig }
             requiredPermission: pendingRequest?.params.permission || 'SETTINGS_ACCESS',
             actionDescription: pendingRequest?.params.actionDescription || '',
             config,
-            roles // Pass roles to modal
+            roles,
+            requestedDiscountPercent: pendingRequest?.params.permission === 'POS_DISCOUNT'
+                ? pendingRequest.params.context?.newValue
+                : undefined
         }
     };
 };
