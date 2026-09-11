@@ -590,6 +590,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
         return (
           <SyncSettings
             config={props.config}
+            currentUser={props.currentUser}
+            roles={props.roles}
             onClose={() => setCurrentView('HOME')}
           />
         );

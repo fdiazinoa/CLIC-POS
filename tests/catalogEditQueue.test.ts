@@ -31,6 +31,7 @@ test('conflicts remain visible and are not automatically overwritten or retried'
     let sent = 0; const h = harness(async () => { sent++; return { id: 'mutation-1', status: 'CONFLICT', current: 99 }; });
     await h.queue.process(); h.advance(); await h.queue.process();
     assert.equal(sent, 1); assert.equal(h.get().status, 'CONFLICT'); assert.match(h.get().message!, /99/);
+    assert.equal(h.get().conflictCurrent, 99);
 });
 test('concurrent workers share one send', async () => {
     let sent = 0; const h = harness(async () => { sent++; return { id: 'mutation-1', status: 'APPLIED' }; });
