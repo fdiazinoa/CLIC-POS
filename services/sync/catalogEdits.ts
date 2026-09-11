@@ -1,8 +1,11 @@
 import { db } from '../../utils/db';
+import { dbAdapter } from '../db';
 import { apiSyncAdapter } from './ApiSyncAdapter';
 import { readTerminalCredentialsSync } from './TerminalCredentialStore';
 import { loadSyncProfile } from './SyncProfile';
 import { CatalogEditQueue, type CatalogEdit, type CatalogScope } from './CatalogEditQueue';
+import type { Permission, RoleDefinition, User } from '../../types';
+import { v4 as uuid } from 'uuid';
 export const catalogEditsEnabled = () => import.meta.env.VITE_POS_CATALOG_EDITS_ENABLED === 'true';
 export function catalogScopeMatches(scope: CatalogScope) {
     const profile = loadSyncProfile();
@@ -17,6 +20,88 @@ export function catalogScopeMatches(scope: CatalogScope) {
         && (profile.erpBaseUrl || profile.cloudBaseUrl || '').replace(/\/$/, '') === scope.baseUrl.replace(/\/$/, '');
 }
 export const readCatalogEdits = async (): Promise<CatalogEdit[]> => ((await db.get('catalogEdits')) || []) as CatalogEdit[];
+
+export const CATALOG_CONFLICT_PERMISSIONS = {
+    view: 'POS_CATALOG_CONFLICT_VIEW',
+    retry: 'POS_CATALOG_CONFLICT_RETRY',
+    discard: 'POS_CATALOG_CONFLICT_DISCARD',
+    acceptErp: 'POS_CATALOG_CONFLICT_ACCEPT_ERP',
+    force: 'POS_CATALOG_CONFLICT_FORCE',
+} as const satisfies Record<string, Permission>;
+
+export function hasCatalogConflictPermission(user: User | null | undefined, roles: RoleDefinition[], permission: Permission): boolean {
+    if (!user) return false;
+    const roleId = String(user.roleId || user.role || '').trim().toUpperCase();
+    const role = roles.find(candidate => String(candidate.id || '').trim().toUpperCase() === roleId);
+    return Boolean(role?.permissions.includes('ALL') || role?.permissions.includes(permission));
+}
+
+async function persistConflictResolution(edits: CatalogEdit[]) {
+    if (dbAdapter.saveDocumentsAtomically) {
+        await dbAdapter.saveDocumentsAtomically(edits.map(document => ({ collectionName: 'catalogEdits', document })), false);
+        return;
+    }
+    await Promise.all(edits.map(edit => db.saveDocument('catalogEdits', edit)));
+}
+
+export async function resolveCatalogConflict(
+    edit: CatalogEdit,
+    action: 'RETRY' | 'DISCARD' | 'ACCEPT_ERP' | 'FORCE',
+    actorId: string,
+): Promise<CatalogEdit | null> {
+    if (!actorId?.trim() || !['CONFLICT', 'REJECTED'].includes(edit.status)) {
+        throw new Error('El cambio ya no tiene un conflicto pendiente de resolución.');
+    }
+    if (action === 'FORCE' && edit.conflictCurrent === undefined) {
+        throw new Error('Actualiza el conflicto para obtener el valor vigente del ERP antes de forzar.');
+    }
+    const all = await readCatalogEdits();
+    const current = all.find(candidate => candidate.id === edit.id);
+    if (!current || !['CONFLICT', 'REJECTED'].includes(current.status)) {
+        throw new Error('El conflicto cambió. Refresca la lista antes de continuar.');
+    }
+    const resolvedAt = new Date().toISOString();
+    const resolution = action === 'ACCEPT_ERP' ? 'ERP_ACCEPTED' : action === 'DISCARD' ? 'DISCARDED' : action === 'FORCE' ? 'FORCED' : 'RETRIED';
+    const resolved: CatalogEdit = {
+        ...current, status: 'REJECTED', syncStatus: 'SYNCED', syncError: undefined,
+        resolution, resolvedBy: actorId, resolvedAt,
+        message: action === 'ACCEPT_ERP' ? 'Se aceptó el valor vigente del ERP.'
+            : action === 'DISCARD' ? 'El cambio local fue descartado.'
+            : action === 'FORCE' ? 'Se creó una actualización forzada autorizada.'
+            : 'Se creó un nuevo intento autorizado.',
+    };
+    if (action === 'DISCARD' || action === 'ACCEPT_ERP') {
+        const children = all.filter(candidate => candidate.dependsOn === current.id).map(candidate => ({
+            ...candidate, dependsOn: undefined, status: 'PENDING' as const, syncStatus: 'PENDING' as const,
+            syncError: undefined, nextAttemptAt: 0, message: 'Cambio desbloqueado tras resolver el conflicto anterior.',
+        }));
+        await persistConflictResolution([resolved, ...children]);
+        return null;
+    }
+    const id = uuid();
+    const followUp: CatalogEdit = {
+        ...current,
+        id,
+        mutation: {
+            ...current.mutation,
+            id,
+            actorId,
+            before: action === 'FORCE' ? current.conflictCurrent! : current.mutation.before,
+            conflictAction: action,
+            resolvesMutationId: current.id,
+        },
+        status: 'PENDING', syncStatus: 'PENDING', syncError: undefined, message: undefined,
+        conflictCurrent: undefined, resolution: undefined, resolvedBy: undefined, resolvedAt: undefined,
+        attempts: 0, nextAttemptAt: 0, createdAt: resolvedAt, dependsOn: undefined,
+    };
+    const children = all.filter(candidate => candidate.dependsOn === current.id).map(candidate => ({
+        ...candidate, dependsOn: id, status: 'PENDING' as const, syncStatus: 'PENDING' as const,
+        syncError: undefined, nextAttemptAt: 0, message: 'Cambio desbloqueado y enlazado a la resolución anterior.',
+    }));
+    await persistConflictResolution([resolved, followUp, ...children]);
+    void catalogEditQueue.process().catch(error => console.warn('Resolución guardada; envío pendiente:', error));
+    return followUp;
+}
 export const catalogEditQueue = new CatalogEditQueue({
     read: readCatalogEdits, save: edit => db.saveDocument('catalogEdits', edit),
     matchesScope: catalogScopeMatches, now: Date.now,

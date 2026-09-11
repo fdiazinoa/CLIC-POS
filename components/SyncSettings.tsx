@@ -4,7 +4,7 @@ import { RefreshCw, CheckCircle2, AlertCircle, Clock, UploadCloud, DownloadCloud
 import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
 import { backgroundSyncManager } from '../services/sync/BackgroundSyncManager';
-import { BusinessConfig } from '../types';
+import { BusinessConfig, RoleDefinition, User } from '../types';
 import SyncProgressModal from './SyncProgressModal';
 import { db } from '../utils/db';
 import { dbAdapter } from '../services/db';
@@ -13,13 +13,16 @@ import { posCloudStagingService } from '../services/sync/PosCloudStagingService'
 import { resetDeviceIdentityBySupport } from '../utils/deviceRevocation';
 import { getConfigPushV2Diagnostics, triggerErpSyncOutbox } from '../utils/erpSyncLifecycle';
 import { syncTriggerCoordinator } from '../services/sync/SyncTriggerCoordinator';
+import { CATALOG_CONFLICT_PERMISSIONS, catalogEditQueue, hasCatalogConflictPermission, resolveCatalogConflict } from '../services/sync/catalogEdits';
 
 interface SyncSettingsProps {
     config: BusinessConfig;
+    currentUser: User | null;
+    roles: RoleDefinition[];
     onClose: () => void;
 }
 
-const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
+const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles, onClose }) => {
     const [status, setStatus] = useState<any[]>([]);
     const [isSyncing, setIsSyncing] = useState(false);
     const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
@@ -72,6 +75,11 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const latestAuditQuery = React.useRef(auditQueryKey);
     latestAuditQuery.current = auditQueryKey;
     const localBlockedCount = nativePagination ? auditTotals.blocked : auditData.filter((item) => item.status === 'ERROR').length;
+    const canViewCatalogConflicts = hasCatalogConflictPermission(currentUser, roles, CATALOG_CONFLICT_PERMISSIONS.view);
+    const canRetryCatalogConflicts = canViewCatalogConflicts && hasCatalogConflictPermission(currentUser, roles, CATALOG_CONFLICT_PERMISSIONS.retry);
+    const canDiscardCatalogConflicts = canViewCatalogConflicts && hasCatalogConflictPermission(currentUser, roles, CATALOG_CONFLICT_PERMISSIONS.discard);
+    const canAcceptErpCatalogConflicts = canViewCatalogConflicts && hasCatalogConflictPermission(currentUser, roles, CATALOG_CONFLICT_PERMISSIONS.acceptErp);
+    const canForceCatalogConflicts = canViewCatalogConflicts && hasCatalogConflictPermission(currentUser, roles, CATALOG_CONFLICT_PERMISSIONS.force);
 
     const resolveDocumentStatus = (raw: any): 'SYNCED' | 'PENDING' | 'ERROR' => {
         const status = String(raw?.syncStatus || raw?.cloudSyncStatus || '').toUpperCase();
@@ -323,7 +331,9 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     ...formatOperationalDocuments('cashMovements', 'EFECTIVO', cashMovements),
                     ...formatOperationalDocuments('customerMutations', 'CLIENTE', customerMutations),
                     ...formatOperationalDocuments('posUserMutations', 'USUARIO', posUserMutations),
-                    ...formatOperationalDocuments('catalogEdits', 'CATÁLOGO', catalogEdits),
+                    ...formatOperationalDocuments('catalogEdits', 'CATÁLOGO', (catalogEdits as any[] || []).filter(edit =>
+                        canViewCatalogConflicts || !['CONFLICT', 'REJECTED'].includes(String(edit?.status || '').toUpperCase())
+                    )),
                     ...formatOperationalDocuments('wallet_transactions', 'WALLET', walletTransactions),
                     ...formatOperationalDocuments('loyalty_events', 'LEALTAD', loyaltyEvents),
                 ];
@@ -642,7 +652,14 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
             setRetryingDocumentKey(feedbackKey);
             setRetryFeedback({ key: feedbackKey, type: 'pending', message: 'Reintentando envio...' });
 
-            if (item.collection === 'zReports') {
+            if (item.collection === 'catalogEdits') {
+                if (!canRetryCatalogConflicts) throw new Error('Tu rol no permite reintentar cambios de catálogo.');
+                await db.saveDocument('catalogEdits', {
+                    ...item.raw, status: 'PENDING', syncStatus: 'PENDING', syncError: undefined,
+                    nextAttemptAt: 0, message: 'Reintento solicitado por un usuario autorizado.',
+                });
+                await catalogEditQueue.process();
+            } else if (item.collection === 'zReports') {
                 await backgroundSyncManager.retryZReport(item.raw.id);
             } else {
                 if (item.collection === 'inventoryLedger' && Array.isArray(item.raw.movements)) {
@@ -720,6 +737,42 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
             await loadAuditData();
         } finally {
             retryInFlight.current = false;
+            setRetryingDocumentKey(null);
+        }
+    };
+
+    const handleCatalogConflictAction = async (item: any, action: 'RETRY' | 'DISCARD' | 'ACCEPT_ERP' | 'FORCE') => {
+        const permissions = {
+            RETRY: canRetryCatalogConflicts,
+            DISCARD: canDiscardCatalogConflicts,
+            ACCEPT_ERP: canAcceptErpCatalogConflicts,
+            FORCE: canForceCatalogConflicts,
+        };
+        if (!permissions[action] || !currentUser?.id) {
+            setRetryFeedback({ key: item.key, type: 'error', message: 'Tu rol no permite ejecutar esta acción.' });
+            return;
+        }
+        const warning = action === 'FORCE'
+            ? 'Se intentará reemplazar el valor actual del ERP con el valor local. ¿Continuar?'
+            : action === 'ACCEPT_ERP'
+                ? 'Se abandonará el cambio local y se descargará el valor vigente del ERP. ¿Continuar?'
+                : action === 'DISCARD'
+                    ? 'Se descartará este cambio local pendiente. ¿Continuar?'
+                    : null;
+        if (warning && !window.confirm(warning)) return;
+        setRetryingDocumentKey(item.key);
+        setRetryFeedback({ key: item.key, type: 'pending', message: 'Resolviendo conflicto...' });
+        try {
+            await resolveCatalogConflict(item.raw, action, currentUser.id);
+            if (action === 'ACCEPT_ERP') await triggerErpSyncOutbox('manual_sync');
+            await loadAuditData();
+            setRetryFeedback({ key: item.key, type: 'success', message: action === 'ACCEPT_ERP'
+                ? 'Valor del ERP aceptado y actualización solicitada.'
+                : action === 'DISCARD' ? 'Cambio local descartado.' : 'Nuevo intento guardado en la cola durable.' });
+        } catch (error) {
+            setRetryFeedback({ key: item.key, type: 'error', message: error instanceof Error ? error.message : 'No se pudo resolver el conflicto.' });
+            await loadAuditData();
+        } finally {
             setRetryingDocumentKey(null);
         }
     };
@@ -1312,6 +1365,9 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                 const rowKey = item.key || item.raw.id || `${item.collection}-${idx}`;
                                                 const isRetryingThisDocument = retryingDocumentKey === rowKey;
                                                 const rowRetryFeedback = retryFeedback?.key === rowKey ? retryFeedback : null;
+                                                const isCatalogDocument = item.collection === 'catalogEdits';
+                                                const isCatalogConflict = isCatalogDocument && ['CONFLICT', 'REJECTED'].includes(String(item.raw?.status || '').toUpperCase())
+                                                    && !item.raw?.resolution;
 
                                                 return (
                                                 <tr key={rowKey} className="hover:bg-gray-50/50 transition-colors">
@@ -1385,7 +1441,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                             >
                                                                 <Code size={14} /> JSON
                                                             </button>
-                                                            {item.status !== 'SYNCED' && (
+                                                            {item.status !== 'SYNCED' && (!isCatalogDocument || (!isCatalogConflict && canRetryCatalogConflicts)) && (
                                                                 <button
                                                                     onClick={() => handleRetryDocument(item)}
                                                                     disabled={retryingDocumentKey !== null}
@@ -1400,6 +1456,31 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                                 >
                                                                     <RotateCcw size={14} className={isRetryingThisDocument ? 'animate-spin' : ''} />
                                                                     {isRetryingThisDocument ? 'Enviando...' : 'Reenviar'}
+                                                                </button>
+                                                            )}
+                                                            {isCatalogConflict && canRetryCatalogConflicts && (
+                                                                <button onClick={() => void handleCatalogConflictAction(item, 'RETRY')} disabled={retryingDocumentKey !== null}
+                                                                    className="inline-flex items-center justify-center rounded-lg border border-amber-600 bg-amber-500 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white hover:bg-amber-600 disabled:opacity-50">
+                                                                    Reintentar
+                                                                </button>
+                                                            )}
+                                                            {isCatalogConflict && canDiscardCatalogConflicts && (
+                                                                <button onClick={() => void handleCatalogConflictAction(item, 'DISCARD')} disabled={retryingDocumentKey !== null}
+                                                                    className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-700 hover:bg-slate-100 disabled:opacity-50">
+                                                                    Descartar
+                                                                </button>
+                                                            )}
+                                                            {isCatalogConflict && canAcceptErpCatalogConflicts && (
+                                                                <button onClick={() => void handleCatalogConflictAction(item, 'ACCEPT_ERP')} disabled={retryingDocumentKey !== null}
+                                                                    className="inline-flex items-center justify-center rounded-lg border border-blue-700 bg-blue-600 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white hover:bg-blue-700 disabled:opacity-50">
+                                                                    Aceptar ERP
+                                                                </button>
+                                                            )}
+                                                            {isCatalogConflict && canForceCatalogConflicts && (
+                                                                <button onClick={() => void handleCatalogConflictAction(item, 'FORCE')} disabled={retryingDocumentKey !== null || item.raw?.conflictCurrent === undefined}
+                                                                    className="inline-flex items-center justify-center rounded-lg border border-red-800 bg-red-700 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white hover:bg-red-800 disabled:opacity-40"
+                                                                    title={item.raw?.conflictCurrent === undefined ? 'Refresca el conflicto para obtener el valor vigente del ERP.' : 'Forzar el valor local'}>
+                                                                    Forzar
                                                                 </button>
                                                             )}
                                                         </div>

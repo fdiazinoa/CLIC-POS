@@ -5,7 +5,10 @@ export type CatalogMutationValue = string | number | boolean | string[] | Catalo
 export type CatalogMutation = {
     id: string; recordId: string; domain: CatalogDomain; field: string;
     before: CatalogMutationValue; after: CatalogMutationValue; actorId: string;
+    conflictAction?: 'RETRY' | 'FORCE';
+    resolvesMutationId?: string;
 };
+export type CatalogConflictResolution = 'RETRIED' | 'DISCARDED' | 'ERP_ACCEPTED' | 'FORCED';
 export type CatalogEdit = {
     id: string; scope: CatalogScope; mutation: CatalogMutation; label: string;
     status: 'PENDING' | 'APPLIED' | 'CONFLICT' | 'REJECTED';
@@ -14,6 +17,10 @@ export type CatalogEdit = {
     terminalId?: string;
     dependsOn?: string;
     attempts: number; nextAttemptAt: number; createdAt: string; message?: string;
+    conflictCurrent?: CatalogMutationValue;
+    resolution?: CatalogConflictResolution;
+    resolvedBy?: string;
+    resolvedAt?: string;
 };
 export type CatalogResult = { id: string; status: 'APPLIED' | 'CONFLICT' | 'REJECTED'; code?: string; current?: unknown };
 export interface CatalogQueueDependencies {
@@ -53,7 +60,9 @@ export class CatalogEditQueue {
                 }
                 outcomes.set(edit.id, result.status);
                 await this.deps.save({ ...edit, status: result.status, syncStatus: result.status === 'APPLIED' ? 'SYNCED' : 'ERROR',
-                    syncError: result.code, message: result.status === 'CONFLICT'
+                    syncError: result.code,
+                    ...(result.status === 'CONFLICT' ? { conflictCurrent: result.current as CatalogMutationValue } : {}),
+                    message: result.status === 'CONFLICT'
                     ? `El valor cambió en ERP: ${JSON.stringify(result.current)}. Revisa la configuración recibida del ERP antes de editar de nuevo.`
                     : result.code });
             } catch (error) {
