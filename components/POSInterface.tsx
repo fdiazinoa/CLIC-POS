@@ -195,6 +195,7 @@ export interface POSInterfaceProps {
       options?: {
          deferRemote?: boolean;
          reason?: 'cart_changed' | 'debounced' | 'explicit' | 'customer_assigned';
+         changedTicketId?: string;
       },
    ) => void | Promise<void>;
    onTableOrderSaved?: (table: Table, ticket: ParkedTicket) => void | Promise<void>;
@@ -4567,6 +4568,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          void Promise.resolve(onUpdateParkedTicketsRef.current(nextTickets, {
             deferRemote: true,
             reason: 'cart_changed',
+            changedTicketId: orderId,
          })).catch((error) => {
             console.error('[TABLE_SYNC] No se pudo persistir la cola local de la mesa:', error);
          });
@@ -4581,6 +4583,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          try {
             await Promise.resolve(onUpdateParkedTicketsRef.current(nextTickets, {
                reason: batchClientSync ? 'debounced' : 'explicit',
+               changedTicketId: orderId,
             }));
             if (closedTableOrderIdsRef.current.has(String(orderId))) {
                return;
