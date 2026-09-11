@@ -13,7 +13,10 @@ El usuario edita y guarda en las pantallas actuales del POS. No existe una panta
 - Operaciones del artículo: controlar inventario, precio abierto, venta solo en enteros, inventario negativo, producto pesado, etiquetas, edad, exclusión de promociones/puntos, lotes/vencimientos y números de serie.
 - Precios particulares por tarifa: precio, margen, activación y eliminación. Cada tarifa se sincroniza de forma independiente; editar la tarifa base no genera una segunda mutación de precio duplicada.
 - Datos generales de artículos existentes: nombre, descripción, SKU, referencia, tres códigos de barra, costo, tipo, unidades de inventario/compra y estado activo. Los códigos de barra se envían como un único cambio para no dejar combinaciones parciales.
-- No incluye altas/bajas. El mantenimiento global de definiciones de impuestos conserva su contrato separado; este alcance cubre la asignación de impuestos a cada artículo.
+- Altas de artículos con UUID y numeración del rango offline asignado a la terminal; sus campos restantes esperan la confirmación de la creación antes de enviarse.
+- Altas, activación/desactivación y bajas de clasificaciones. Las nuevas clasificaciones usan UUID y respetan la jerarquía padre/hijo.
+- Bajas seguras de artículos y clasificaciones: la eliminación local y su mutación se guardan juntas; un snapshot anterior no reaparece el registro mientras esté pendiente. El ERP rechaza registros en uso y el snapshot siguiente los restaura.
+- El mantenimiento global de definiciones de impuestos conserva su contrato separado; este alcance cubre la asignación de impuestos a cada artículo.
 
 ## Guardado y envío
 
@@ -21,7 +24,7 @@ El usuario edita y guarda en las pantallas actuales del POS. No existe una panta
 
 Los cambios reales se envían automáticamente tras guardar y mediante el proceso de sincronización en segundo plano. Impuestos, operaciones, precios particulares y datos generales se comparan por campo: no se envía el artículo completo ni se crea una mutación al guardar sin cambios. Sin red sobreviven al reinicio. Se conservan identidad, tenant, compañía, dispositivo, terminal y URL; las ediciones sucesivas del mismo campo esperan confirmación de su predecesora. Un conflicto no provoca sobrescrituras ni envío de dependientes.
 
-Los snapshots CONFIG_PUSH_V2 preservan campos locales con cambios pendientes y no generan mensajes de retorno. Los estados se muestran en el monitor de sincronización que ya existe. No hay otro paso requerido para un guardado normal.
+Los snapshots CONFIG_PUSH_V2 preservan campos, altas y bajas locales con cambios pendientes y no generan mensajes de retorno. Los estados se muestran en el monitor de sincronización que ya existe. No hay otro paso requerido para un guardado normal. Una alta de artículo confirmada registra también el consumo de su número para el reporte de progreso del rango.
 
 IndexedDB usa versión 23 y colección `catalogEdits`; SQLite utiliza documentos existentes. Configuración: los builds de producción definen `VITE_POS_CATALOG_EDITS_ENABLED=true`; ERP mantiene la autorización por terminal mediante `posCatalogEdits.enabled`. La vinculación debe estar completa antes de aceptar cambios.
 
