@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { changedCatalogFields } from '../services/sync/catalogLocalChanges';
+import { changedCatalogFields, changedCatalogLifecycle } from '../services/sync/catalogLocalChanges';
 const id = '00000000-0000-4000-8000-000000000005';
 test('edit then save without changes sends no price or classification mutation', () => {
     for (const row of [{ id, name: 'Bebidas' }, { id, name: 'Bebidas', code: '' }, { id, name: 'Bebidas', code: 'B' }]) {
@@ -16,6 +16,17 @@ test('only modified fields are included and new local records are excluded', () 
     const changes = changedCatalogFields([{ id, name: 'Bebida', code: 'B' }], [{ id, name: 'Bebidas', code: 'B' }], 'classifications');
     assert.equal(changes.length, 1); assert.equal(changes[0].field, 'nombre');
     assert.deepEqual(changedCatalogFields([], [{ id, price: 10 }], 'prices'), []);
+});
+test('catalog lifecycle emits validated creates, deletes, and classification status changes', () => {
+    const created = changedCatalogLifecycle([], [{ id, name: 'Café', sku: 'ART-000001', master_number_range_id: id, master_number_value: 1 }], 'item_lifecycle');
+    assert.deepEqual(created.map(change => [change.domain, change.field, change.before]), [['item_lifecycle', 'create', null]]);
+    assert.equal((created[0].after as any).sku, 'ART-000001');
+    assert.equal(changedCatalogLifecycle([{ id, name: 'Café', sku: 'ART-000001' }], [], 'item_lifecycle')[0].field, 'delete');
+    const classification = changedCatalogLifecycle(
+        [{ id, name: 'Bebidas', isActive: true }], [{ id, name: 'Bebidas', isActive: false }],
+        'classification_lifecycle', { kind: 'DEPARTMENTS', collection: 'departments' },
+    );
+    assert.deepEqual(classification.map(change => [change.field, change.before, change.after]), [['is_active', true, false]]);
 });
 test('classification hierarchy emits only a real parent move', () => {
     const parentA = '00000000-0000-4000-8000-000000000010';

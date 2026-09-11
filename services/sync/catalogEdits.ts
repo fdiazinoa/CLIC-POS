@@ -20,7 +20,15 @@ export const readCatalogEdits = async (): Promise<CatalogEdit[]> => ((await db.g
 export const catalogEditQueue = new CatalogEditQueue({
     read: readCatalogEdits, save: edit => db.saveDocument('catalogEdits', edit),
     matchesScope: catalogScopeMatches, now: Date.now,
-    send: edit => apiSyncAdapter.sendCatalogEdit(edit),
+    send: async edit => {
+        const result = await apiSyncAdapter.sendCatalogEdit(edit);
+        if (result.status === 'APPLIED' && edit.mutation.domain === 'item_lifecycle' && edit.mutation.field === 'create'
+            && edit.mutation.after && typeof edit.mutation.after === 'object' && !Array.isArray(edit.mutation.after)) {
+            const { markNumberedMasterSynced } = await import('./MasterNumberRangeService');
+            await markNumberedMasterSynced({ id: edit.mutation.recordId, ...edit.mutation.after });
+        }
+        return result;
+    },
 });
 export function currentCatalogScope(): CatalogScope | null {
     const profile = loadSyncProfile();

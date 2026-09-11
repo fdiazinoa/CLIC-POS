@@ -17,6 +17,8 @@ type Row = {
     subfamilyId?: string; subfamily_id?: string;
     brandId?: string; brand_id?: string;
     categoryId?: string; category_id?: string; posCategoryId?: string; pos_category_id?: string;
+    color?: string; sortOrder?: number; isActive?: boolean;
+    master_number_range_id?: string; master_number_value?: number; source_terminal_id?: string;
 };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const itemClassificationFields = [
@@ -197,6 +199,55 @@ export function changedCatalogFields(previous: Row[], next: Row[], domain: Catal
             }
             changes.push({ recordId: row.id, domain, field: remote, before, after, label: row.name || row.id });
         }
+    }
+    return changes;
+}
+
+const itemLifecycleRecord = (row: Row) => ({
+    kind: 'ITEM', name: String(row.name || '').trim(), sku: normalizeOptionalText(row.sku),
+    description: normalizeOptionalText(row.description), externalCode: normalizeOptionalText(firstValue(row, ['reference', 'referenceCode', 'reference_code', 'external_code', 'externalCode'])),
+    barcodes: normalizeBarcodes(row), price: Number(row.price || 0), cost: Number(row.cost || 0),
+    type: normalizeOptionalText(row.type) || 'PRODUCT', measurementUnit: normalizeOptionalText(row.measurementUnit) || 'Unidad',
+    purchaseUnit: normalizeOptionalText(row.purchaseUnit) || 'Unidad', isActive: row.is_active !== false,
+    departmentId: firstValue(row, ['departmentId', 'department_id']), sectionId: firstValue(row, ['sectionId', 'section_id']),
+    familyId: firstValue(row, ['familyId', 'family_id']), subfamilyId: firstValue(row, ['subfamilyId', 'subfamily_id']),
+    brandId: firstValue(row, ['brandId', 'brand_id']), posCategoryId: firstValue(row, ['posCategoryId', 'pos_category_id', 'categoryId', 'category_id']),
+    appliedTaxIds: normalizeTaxIds(row.appliedTaxIds), operationalFlags: { ...itemOperationalFlagDefaults, ...(row.operationalFlags || {}) },
+    tariffs: Array.from(normalizeTariffPrices(row.tariffs), ([tariffId, value]) => ({ tariffId, ...value })),
+    master_number_range_id: normalizeOptionalText(row.master_number_range_id), master_number_value: row.master_number_value ?? null,
+    source_terminal_id: normalizeOptionalText(row.source_terminal_id),
+});
+
+const classificationLifecycleRecord = (row: Row, kind: string, collection: string) => ({
+    kind, collection, name: String(row.name || '').trim(), code: normalizeOptionalText(row.code) || '',
+    parentId: firstValue(row, ['parentId', 'parent_id']), color: normalizeOptionalText(row.color),
+    sortOrder: Number.isInteger(row.sortOrder) ? row.sortOrder : null, isActive: row.isActive !== false,
+});
+
+export function changedCatalogLifecycle(
+    previous: Row[], next: Row[], domain: 'item_lifecycle' | 'classification_lifecycle',
+    classification?: { kind: string; collection: string },
+): LocalCatalogChange[] {
+    const oldRows = new Map(previous.map(row => [row.id, row]));
+    const nextRows = new Map(next.map(row => [row.id, row]));
+    const payload = (row: Row) => domain === 'item_lifecycle'
+        ? itemLifecycleRecord(row)
+        : classificationLifecycleRecord(row, classification?.kind || '', classification?.collection || '');
+    const changes: LocalCatalogChange[] = [];
+    for (const row of next) {
+        const old = oldRows.get(row.id);
+        if (!old) {
+            if (!uuid.test(row.id)) throw new Error(`El registro ${row.name || row.id} no tiene una identidad ERP válida.`);
+            const value = payload(row);
+            if (!String(value.name || '').trim()) throw new Error('El nombre del nuevo registro es obligatorio.');
+            changes.push({ recordId: row.id, domain, field: 'create', before: null, after: value, label: row.name || row.id });
+        } else if (domain === 'classification_lifecycle' && (old.isActive !== false) !== (row.isActive !== false)) {
+            changes.push({ recordId: row.id, domain, field: 'is_active', before: old.isActive !== false, after: row.isActive !== false, label: row.name || row.id });
+        }
+    }
+    for (const row of previous) if (!nextRows.has(row.id)) {
+        if (!uuid.test(row.id)) throw new Error(`El registro ${row.name || row.id} no tiene una identidad ERP válida.`);
+        changes.push({ recordId: row.id, domain, field: 'delete', before: payload(row), after: null, label: row.name || row.id });
     }
     return changes;
 }

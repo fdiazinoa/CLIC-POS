@@ -12,6 +12,20 @@ export async function preserveLocalCatalog(collection: string, payload: unknown)
     const result = structuredClone(payload) as any;
     for (const edit of pending) {
         const { mutation } = edit;
+        if (collection === 'products' && mutation.domain === 'item_lifecycle' && Array.isArray(result)) {
+            const index = result.findIndex(row => row.id === mutation.recordId);
+            if (mutation.field === 'create' && mutation.after && typeof mutation.after === 'object' && !Array.isArray(mutation.after)) {
+                const lifecycle = mutation.after as Record<string, any>;
+                const [barcode = '', barcode_2 = '', barcode_3 = ''] = Array.isArray(lifecycle.barcodes) ? lifecycle.barcodes : [];
+                const local = {
+                    id: mutation.recordId, ...lifecycle,
+                    reference: lifecycle.externalCode ?? '', is_active: lifecycle.isActive !== false,
+                    barcode, barcode_2, barcode_3,
+                };
+                if (index >= 0) result[index] = { ...result[index], ...local };
+                else result.push(local);
+            } else if (mutation.field === 'delete' && index >= 0) result.splice(index, 1);
+        }
         if (collection === 'products' && mutation.domain === 'prices' && Array.isArray(result)) {
             const product = result.find(row => row.id === mutation.recordId);
             if (product) product.price = mutation.after;
@@ -88,6 +102,24 @@ export async function preserveLocalCatalog(collection: string, payload: unknown)
                 } else {
                     for (const field of localFields[mutation.field] || []) product[field] = mutation.after;
                 }
+            }
+        }
+        if (mutation.domain === 'classification_lifecycle') {
+            const collectionKey = mutation.after && typeof mutation.after === 'object' && !Array.isArray(mutation.after)
+                ? String((mutation.after as Record<string, any>).collection || '')
+                : mutation.before && typeof mutation.before === 'object' && !Array.isArray(mutation.before)
+                    ? String((mutation.before as Record<string, any>).collection || '') : '';
+            const rows = collection === 'config' && classificationKeys.includes(collectionKey as any)
+                ? (Array.isArray(result?.[collectionKey]) ? result[collectionKey] : (result[collectionKey] = []))
+                : collection === 'categories' && collectionKey === 'posCategories' && Array.isArray(result) ? result : null;
+            if (rows) {
+                const index = rows.findIndex((row: any) => row.id === mutation.recordId);
+                if (mutation.field === 'create' && mutation.after && typeof mutation.after === 'object' && !Array.isArray(mutation.after)) {
+                    const local = { id: mutation.recordId, ...mutation.after };
+                    if (index >= 0) rows[index] = { ...rows[index], ...local };
+                    else rows.push(local);
+                } else if (mutation.field === 'delete' && index >= 0) rows.splice(index, 1);
+                else if (mutation.field === 'is_active' && index >= 0) rows[index].isActive = mutation.after;
             }
         }
         if (mutation.domain === 'classifications' || mutation.domain === 'classification_hierarchy') {

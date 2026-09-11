@@ -234,7 +234,7 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
         if (isCreating) {
             newItems.push({
                 ...editingItem,
-                id: editingItem.id || `${activeType.toLowerCase().substring(0, 3)}_${Date.now()}`,
+                id: editingItem.id || crypto.randomUUID(),
                 sortOrder: supportsPosPresentation
                     ? Math.max(-1, ...newItems.map((item, index) => resolveClassificationSortOrder(item, index))) + 1
                     : editingItem.sortOrder,
@@ -252,9 +252,9 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
     };
 
     const handleDelete = async (id: string) => {
-        if (!await clicConfirm("¿Está seguro de eliminar este elemento?")) return;
+        if (!await clicConfirm("¿Eliminar esta clasificación? El ERP impedirá la baja si tiene hijos o artículos asociados.")) return;
         const newItems = items.filter(i => i.id !== id);
-        persistItems(newItems);
+        await persistItems(newItems);
     };
 
     const handleMoveClassification = (id: string, direction: -1 | 1) => {
