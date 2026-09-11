@@ -6,6 +6,7 @@ const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 const tableMapSource = readFileSync(new URL('../components/TableMap.tsx', import.meta.url), 'utf8');
 const posSource = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
 const performanceSource = readFileSync(new URL('../utils/interactionPerformance.ts', import.meta.url), 'utf8');
+const tableAccessPolicySource = readFileSync(new URL('../utils/tableAccessPolicy.ts', import.meta.url), 'utf8');
 
 const releaseStart = appSource.indexOf('const releaseActiveTableEditLock');
 const acquireStart = appSource.indexOf('const acquireTableEditLock', releaseStart);
@@ -48,7 +49,8 @@ test('un lock propio no bloquea localmente pero el lock de otra terminal sí', (
   assert.match(tableMapSource, /displayTable\.editingLock\.ownerId/);
   assert.match(tableMapSource, /localTableLockOwnerId/);
   assert.match(tableMapSource, /const isBeingEdited = Boolean/);
-  assert.match(tableMapSource, /const isLocked = isBeingEdited \|\|/);
+  assert.match(tableMapSource, /const isLocked = isTableLockedForUser\(\{/);
+  assert.match(tableAccessPolicySource, /\}\): boolean => isBeingEdited \|\| \(/);
   assert.match(appSource, /localTableLockOwnerId=\{String\(deviceId/);
 });
 
