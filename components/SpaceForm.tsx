@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { X, Save, Building2, Users, DollarSign, Palette, Box } from 'lucide-react';
 import { Room, Warehouse } from '../types';
+import { createUuid } from '../utils/uuid';
 
 interface SpaceFormProps {
     initialData: Room | null;
@@ -12,7 +13,7 @@ interface SpaceFormProps {
 
 const SpaceForm: React.FC<SpaceFormProps> = ({ initialData, warehouses, onSave, onClose }) => {
     const [formData, setFormData] = useState<Room>(initialData || {
-        id: crypto.randomUUID(),
+        id: createUuid(),
         nombre: '',
         name: '',
         capacidad_pax: 0,

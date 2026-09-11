@@ -3,6 +3,7 @@ import { Plus, Trash2, AlertTriangle, Calculator, Package, ChefHat, Search, Info
 import { Product, RecipeDetail, ProductType } from '../types';
 import { UNITS, calculateCost, UnitType } from '../utils/units';
 import { calculatePriceFromMargin } from '../utils/pricing';
+import { createUuid } from '../utils/uuid';
 
 const formatCurrency = (amount: number, symbol: string = '$'): string => {
     return new Intl.NumberFormat('es-DO', {
@@ -42,7 +43,7 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
         const purchaseUnit = ingredient.purchaseUnit || ingredient.attributes?.find(a => a.name === 'Unidad')?.options[0] || 'un';
 
         const newDetail: RecipeDetail = {
-            id: crypto.randomUUID(), // Temp ID
+            id: createUuid(), // Temp ID
             parentItemId: product.id,
             childItemId: ingredient.id,
             childItemName: ingredient.name,
@@ -417,4 +418,3 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
 };
 
 export default RecipeManager;
-

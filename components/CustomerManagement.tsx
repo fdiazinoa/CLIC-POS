@@ -27,6 +27,7 @@ import {
    mapLegacyFiscalCodeToElectronic
 } from '../utils/fiscal/fiscalHelpers';
 import { resolveCustomerImageSrc } from '../utils/entityImage';
+import { createUuid } from '../utils/uuid';
 import {
    buildPaymentSettlementSummary,
    resolveCurrencySymbol,
@@ -429,7 +430,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
          } else {
             const newCustomer: Customer = {
                ...customerPayload as Customer,
-               id: formData.id || crypto.randomUUID(),
+               id: formData.id || createUuid(),
                createdAt: new Date().toISOString(),
                totalSpent: 0,
                lastVisit: new Date().toISOString()

@@ -20,6 +20,7 @@ import { formatSafeDate } from '../utils/dateUtils';
 import { db } from '../utils/db';
 import { syncManager } from '../services/sync/SyncManager';
 import { resolveSupplierImageSrc } from '../utils/entityImage';
+import { createUuid } from '../utils/uuid';
 
 interface SupplyChainManagerProps {
    products: Product[];
@@ -1395,7 +1396,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
             <button
                onClick={() => {
                   const newSup: Supplier = {
-                     id: crypto.randomUUID(),
+                     id: createUuid(),
                      name: '',
                      taxId: '',
                      email: '',
