@@ -1980,8 +1980,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const canChangeTariff = hasPermission('POS_CHANGE_TARIFF');
    const canCheckout = hasPermission('POS_CHECKOUT');
    const canSellWithOpenZ = hasPermission('POS_ALLOW_SALES_WITH_OPEN_Z');
-   const canCloseXReport = hasPermission('POS_CLOSE_X');
-   const canCloseZReport = hasPermission('POS_CLOSE_Z');
+   const canCloseXReport = !isOrderTakerMode && hasPermission('POS_CLOSE_X');
+   const canCloseZReport = !isOrderTakerMode && hasPermission('POS_CLOSE_Z');
    const canRegisterCashMovement = hasPermission('CASH_IN_OUT' as Permission);
    const cartItemEditCapabilities = useMemo(
       () => resolveCartItemEditCapabilities(userPermissions),
@@ -2130,6 +2130,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [activeTerminalConfig, transactions, terminalId, zReports]);
 
    const canProceedWithOperationalSession = useCallback(async (): Promise<boolean> => {
+      // Una terminal de toma de pedidos no factura ni administra jornadas fiscales.
+      // Guardar debe limitarse a enviar/aparcar el pedido en la Master.
+      if (isOrderTakerMode) return true;
       if (!activeTerminalConfig || terminalTransactions.length === 0) return true;
 
       const sessionStartDate = terminalTransactions[0]?.date;
@@ -2143,7 +2146,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          "¿Desea continuar facturando de todos modos?\n" +
          "(Seleccione 'Aceptar' para continuar, 'Cancelar' para ir a Cierre Z)"
       );
-   }, [activeTerminalConfig, terminalTransactions]);
+   }, [activeTerminalConfig, isOrderTakerMode, terminalTransactions]);
 
    const [showTariffSelector, setShowTariffSelector] = useState(false);
    const [productForModifiers, setProductForModifiers] = useState<Product | null>(null);
@@ -5806,7 +5809,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       checkoutTraceRef.current = trace;
       expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
       if (isOrderTakerMode) {
-         await handleSendAndExit();
+         try {
+            await handleSendAndExit();
+         } catch (error) {
+            console.error('[ORDER_TAKER_SAVE_FAILED]', error);
+            setErrorToast('No se pudo guardar el pedido en la terminal principal. La mesa permanece abierta.');
+            window.setTimeout(() => setErrorToast(null), 3500);
+         }
          return;
       }
       const invalidQuantityItem = cart.find(item => !isValidCartQuantity(item.quantity));
@@ -6871,6 +6880,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             setIsReturnMode(!isReturnMode);
             break;
          case 'Z_REPORT':
+            if (isOrderTakerMode) return;
             if (!canCloseZReport) {
                alert('No tienes permiso para realizar Cierre Z.');
                return;
@@ -7005,6 +7015,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             globalDiscountValue={globalDiscount.value}
             showLogout={false}
             allowWaitList={!activeTable}
+            hideFinancialClosings={isOrderTakerMode}
          />
       </div>
    );
@@ -8491,6 +8502,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               globalDiscountValue={globalDiscount.value}
                               showLogout={false}
                               allowWaitList={!activeTable}
+                              hideFinancialClosings={isOrderTakerMode}
                            />
                         </div>
                         <SupermarketTicketSummary
@@ -8514,6 +8526,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               globalDiscountValue={globalDiscount.value}
                               showLogout={false}
                               allowWaitList={!activeTable}
+                              hideFinancialClosings={isOrderTakerMode}
                            />
                            <div className="supermarket-checkout-buttons">
                               <button
@@ -8527,10 +8540,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  onClick={async () => {
                                     if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
                                        startCheckoutInteraction();
-                                       const validation = validateTerminalDocument(config, terminalId, 'TICKET');
-                                       if (!validation.isValid) {
-                                          alert(validation.error);
-                                          return;
+                                       if (!isOrderTakerMode) {
+                                          const validation = validateTerminalDocument(config, terminalId, 'TICKET');
+                                          if (!validation.isValid) {
+                                             alert(validation.error);
+                                             return;
+                                          }
                                        }
                                        if (!await canProceedWithOperationalSession()) return;
                                        proceedToCheckout();
@@ -8651,10 +8666,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           onClick={async () => {
                                              if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
                                                 startCheckoutInteraction();
-                                                const validation = validateTerminalDocument(config, terminalId, 'TICKET');
-                                                if (!validation.isValid) {
-                                                   alert(validation.error);
-                                                   return;
+                                                if (!isOrderTakerMode) {
+                                                   const validation = validateTerminalDocument(config, terminalId, 'TICKET');
+                                                   if (!validation.isValid) {
+                                                      alert(validation.error);
+                                                      return;
+                                                   }
                                                 }
                                                 if (!await canProceedWithOperationalSession()) return;
                                                 proceedToCheckout();
