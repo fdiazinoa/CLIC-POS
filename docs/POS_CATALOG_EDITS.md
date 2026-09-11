@@ -26,16 +26,18 @@ Los cambios reales se envían automáticamente tras guardar y mediante el proces
 
 Los snapshots CONFIG_PUSH_V2 preservan campos, altas y bajas locales con cambios pendientes y no generan mensajes de retorno. Los estados se muestran en el monitor de sincronización que ya existe. No hay otro paso requerido para un guardado normal. Una alta de artículo confirmada registra también el consumo de su número para el reporte de progreso del rango.
 
+Los conflictos se controlan con permisos independientes del rol: ver, reintentar, descartar, aceptar el valor ERP y forzar. Aceptar ERP solicita inmediatamente un snapshot; forzar crea una mutación nueva con el valor vigente recibido del ERP como base. Reintentar y forzar incluyen la mutación original y el actor, y el ERP vuelve a validar usuario, terminal y permiso. Las resoluciones permanecen en la auditoría local.
+
 IndexedDB usa versión 23 y colección `catalogEdits`; SQLite utiliza documentos existentes. Configuración: los builds de producción definen `VITE_POS_CATALOG_EDITS_ENABLED=true`; ERP mantiene la autorización por terminal mediante `posCatalogEdits.enabled`. La vinculación debe estar completa antes de aceptar cambios.
 
-## Backend e integración pendientes
+## Backend e integración
 
-Backend compañero: CLIC-ERP PRs #2043, #2045 y #2046. La mutación compara el valor anterior y persiste el resultado atómicamente. `APPLIED` confirma escritura ERP, no recepción en otros POS. Las migraciones y endpoints están desplegados para la terminal piloto; CONFIG_PUSH_V2 continúa distribuyendo los cambios confirmados a los demás POS.
+La mutación compara el valor anterior y persiste el resultado atómicamente. `APPLIED` confirma escritura ERP; CONFIG_PUSH_V2 distribuye después el valor canónico a las demás terminales.
 
-Smoke: habilitar una terminal de prueba, guardar sin cambiar nada y comprobar cola vacía; modificar precio base y nombre/código, comprobar envío automático y recepción ERP; repetir sin red, tras reinicio, con ediciones sucesivas y con conflicto. Verificar publicación a dos POS.
+La prueba automática `catalogMultiTerminalRoundTrip.test.ts` cubre POS A → ERP → POS B, pérdida de ACK, replay idempotente, reinicio de la cola, modo sin conexión y cambios sucesivos. La aceptación final en hardware sigue requiriendo dos terminales vinculadas al mismo tenant/compañía para comprobar WebView, SQLite, red real y tiempos de propagación, sin generar un APK nuevo si ya existe un release instalable.
 
 ## Validación
 
-- `npm run test:catalog-sync`: pruebas de guardados automáticos, no-op, cola, persistencia y recepción ERP. El runner compila la integración con el flag Vite habilitado, sin credenciales ni llamadas externas.
+- `npm run test:catalog-sync`: pruebas de guardados automáticos, no-op, cola, persistencia, permisos y circuito multi-terminal. El runner compila la integración con el flag Vite habilitado, sin credenciales ni llamadas externas.
 - `npm run build`.
 - Lint TypeScript focalizado. El lint global preexistente carece de configuración plana ESLint 9.
