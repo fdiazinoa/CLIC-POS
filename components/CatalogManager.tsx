@@ -1,4 +1,4 @@
-import { saveLocalProducts } from '../services/sync/saveLocalCatalog';
+import { deleteLocalProduct, saveLocalProducts } from '../services/sync/saveLocalCatalog';
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
@@ -1020,6 +1020,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
          if (!exists) {
             savedProduct = await createNumberedMaster('ITEM', 'products', savedProduct, terminalId);
+            await saveLocalProducts([savedProduct], currentUser?.id, []);
          }
 
          // 1. Persist ONLY the modified product
@@ -1153,11 +1154,11 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    async function handleDeleteProduct(product: Product) {
       if (!canManage || !product?.id) return;
       const label = product.name || product.id;
-      if (!await clicConfirm(`¿Eliminar el artículo "${label}" del catálogo local?`)) return;
+      if (!await clicConfirm(`¿Eliminar el artículo "${label}"? El ERP impedirá la baja si tiene ventas, movimientos, existencias o recetas asociadas.`)) return;
 
       try {
-         await db.deleteDocument('products' as any, product.id);
          const updatedProductsList = products.filter((entry) => entry.id !== product.id);
+         await deleteLocalProduct(product, updatedProductsList, currentUser?.id);
          setCatalogProducts(updatedProductsList);
          onUpdateProducts(updatedProductsList);
          setSelectedIds((previous) => {

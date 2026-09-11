@@ -17,14 +17,15 @@ localStorage.setItem('CLIC_POS_DEVICE_ID', 'device-1');
 const { dbAdapter } = await import('../services/db');
 const { db } = await import('../utils/db');
 const { catalogEditQueue } = await import('../services/sync/catalogEdits');
-const { saveLocalProducts, saveLocalClassifications } = await import('../services/sync/saveLocalCatalog');
+const { deleteLocalProduct, saveLocalProducts, saveLocalClassifications } = await import('../services/sync/saveLocalCatalog');
 const store = new Map<string, any>();
 let sends = 0;
 let failSave = false;
 (db as any).get = async (key: string) => structuredClone(store.get(key) ?? []);
 (dbAdapter as any).getCollection = async (key: string) => structuredClone(store.get(key) ?? []);
-(dbAdapter as any).saveDocumentsAtomically = async (documents: any[]) => {
+(dbAdapter as any).saveDocumentsAtomically = async (documents: any[], _requireAbsent = false, replaceCollections: string[] = []) => {
     if (failSave) throw new Error('Disk full');
+    for (const collection of replaceCollections) store.set(collection, collection === 'config' ? {} : []);
     for (const { collectionName, document } of documents) {
         if (collectionName === 'config') { store.set(collectionName, document); continue; }
         const rows = (store.get(collectionName) || []).filter((row: any) => row.id !== document.id);
@@ -52,6 +53,39 @@ test('saving the existing product writes local value and automatically schedules
     assert.equal(queue[1].dependsOn, queue[0].id);
     await saveLocalProducts([{ ...product, price: 15 } as any], 'operator');
     assert.equal(store.get('catalogEdits').length, 2);
+});
+test('creating and deleting an item use the durable lifecycle and preserve optimistic state across snapshots', async () => {
+    store.clear(); sends = 0;
+    const created = { ...product, type: 'PRODUCT', sku: 'ART-000001', master_number_range_id: departmentA, master_number_value: 1, source_terminal_id: terminalId };
+    await saveLocalProducts([created] as any, 'operator', []);
+    let queue = store.get('catalogEdits');
+    assert.equal(queue[0].mutation.domain, 'item_lifecycle');
+    assert.equal(queue[0].mutation.field, 'create');
+    assert.ok(queue.slice(1).every((entry: any) => entry.dependsOn === queue[0].id));
+    const { preserveLocalCatalog } = await import('../services/sync/preserveLocalCatalog');
+    assert.equal((await preserveLocalCatalog('products', []) as any[])[0].sku, 'ART-000001');
+
+    store.set('catalogEdits', []);
+    store.set('products', [created]);
+    await deleteLocalProduct(created as any, [], 'operator');
+    queue = store.get('catalogEdits');
+    assert.equal(queue[0].mutation.field, 'delete');
+    assert.deepEqual(await preserveLocalCatalog('products', [created]), []);
+    assert.deepEqual(store.get('products'), []);
+});
+test('classification create, visibility, and delete operations are durable', async () => {
+    store.clear(); sends = 0;
+    store.set('config', { departments: [] });
+    const row = { id: departmentA, name: 'Bebidas', code: 'BEB', isActive: true };
+    await saveLocalClassifications({ departments: [row] } as any, 'operator');
+    await saveLocalClassifications({ departments: [{ ...row, isActive: false }] } as any, 'operator');
+    await saveLocalClassifications({ departments: [] } as any, 'operator');
+    const queue = store.get('catalogEdits');
+    assert.deepEqual(queue.map((entry: any) => [entry.mutation.domain, entry.mutation.field]), [
+        ['classification_lifecycle', 'create'], ['classification_lifecycle', 'is_active'], ['classification_lifecycle', 'delete'],
+    ]);
+    assert.equal(queue[1].dependsOn, queue[0].id);
+    assert.equal(queue[2].dependsOn, queue[1].id);
 });
 test('saving the existing classification automatically captures name and code without ERP lookup', async () => {
     store.clear(); const old = { departments: [{ id: product.id, name: 'Bebida', code: 'B' }] };
