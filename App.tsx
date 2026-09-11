@@ -85,6 +85,7 @@ import { buildPaymentPostedPayload, buildSalePostedPayload } from './services/sy
 import { paymentIntentService } from './services/payments/PaymentIntentService';
 import { syncTriggerCoordinator, type SyncTriggerReason } from './services/sync/SyncTriggerCoordinator';
 import { queueCustomerMutation } from './services/sync/CustomerSyncQueue';
+import { selectCustomersCreatedByClients } from './services/sync/masterCustomerReconciliation';
 import { withCustomerNumberSnapshot } from './services/sync/customerIdentityContract';
 import { createNumberedMaster } from './services/sync/MasterNumberRangeService';
 import {
@@ -4166,6 +4167,10 @@ const AppContent: React.FC = () => {
       const nativeBridge = (window as any).ClicPOSNativePrinter;
       if (typeof nativeBridge?.getMasterRestaurantState !== 'function') return;
       if (!isNativeStandaloneTerminalRuntime(getCurrentTerminal())) return;
+      // Never classify the native bootstrap snapshot against an empty React
+      // customer array. Wait until SQLite hydration is complete so only a
+      // customer genuinely created by a Client terminal is queued for ERP.
+      if (!isDataLoaded) return;
 
       masterRestaurantPollInFlightRef.current = true;
       try {
@@ -4245,9 +4250,11 @@ const AppContent: React.FC = () => {
         const selectedTables = floorPlanSelection?.tables || nextTables;
         const reconciledTables = reconcileTablesWithParkedTickets(selectedTables, nextParkedTickets);
         const nextCustomers = Array.isArray(state?.customers) ? state.customers : customers;
-        const knownCustomerIds = new Set(customers.map(customer => String(customer.id)));
-        const customersCreatedByClients = nextCustomers.filter(
-          (customer: Customer) => !knownCustomerIds.has(String(customer.id))
+        const persistedCustomers = await db.get('customers') as Customer[] | null;
+        const customersCreatedByClients = selectCustomersCreatedByClients(
+          nextCustomers,
+          customers,
+          Array.isArray(persistedCustomers) ? persistedCustomers : [],
         );
         const productRoutingUpdates = Array.isArray(state?.productRoutingUpdates)
           ? state.productRoutingUpdates
