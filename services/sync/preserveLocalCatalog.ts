@@ -44,10 +44,14 @@ export async function preserveLocalCatalog(collection: string, payload: unknown)
             if (product) {
                 const tariffs = Array.isArray(product.tariffs) ? [...product.tariffs] : [];
                 const index = tariffs.findIndex(entry => String(entry?.tariffId || entry?.tariff_id || '').trim() === mutation.field);
+                const replacesBasePrice = index >= 0
+                    && Number.isFinite(Number(product.price))
+                    && Number(product.price) === Number(tariffs[index]?.price);
                 if (mutation.after && typeof mutation.after === 'object' && !Array.isArray(mutation.after)) {
                     const next = { ...(index >= 0 ? tariffs[index] : {}), tariffId: mutation.field, ...mutation.after };
                     if (index >= 0) tariffs[index] = next;
                     else tariffs.push(next);
+                    if (replacesBasePrice) product.price = mutation.after.price;
                 } else if (index >= 0) {
                     tariffs.splice(index, 1);
                 }

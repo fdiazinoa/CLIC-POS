@@ -86,6 +86,7 @@ import {
 } from './ErpMasterSyncStrategy';
 import { mergePosCategoryPresentation } from '../../utils/posCatalogPresentation';
 import { persistMasterNumberRangesFromSnapshot } from './MasterNumberRangeService';
+import { preserveLocalCatalog } from './preserveLocalCatalog';
 
 export type SyncableCollection =
     | 'products' | 'items' | 'taxes' | 'customers' | 'suppliers' | 'warehouses'
@@ -2816,7 +2817,8 @@ class SyncManager {
         const configTariffs = Array.isArray(businessConfig?.tariffs) ? businessConfig.tariffs : [];
 
         if (normalizedPrices.length === 0) {
-            await db.save('productPrices' as any, []);
+            const preservedPrices = await preserveLocalCatalog('productPrices', []) as ProductPrice[];
+            await db.save('productPrices' as any, preservedPrices);
             window.dispatchEvent(new CustomEvent('productPricesUpdated'));
             return 0;
         }
@@ -2898,7 +2900,11 @@ class SyncManager {
             nextTariffsByProduct.set(productId, canonicalizeTariffEntries(currentTariffs, configTariffs));
         }
 
-        await db.save('productPrices' as any, Array.from(nextPriceDocs.values()));
+        const preservedPrices = await preserveLocalCatalog(
+            'productPrices',
+            Array.from(nextPriceDocs.values()),
+        ) as ProductPrice[];
+        await db.save('productPrices' as any, preservedPrices);
 
         const activeTerminalId =
             localStorage.getItem('active_terminal_id') ||
@@ -2929,7 +2935,11 @@ class SyncManager {
         }
 
         if (updatedProducts > 0) {
-            await db.save('products' as any, Array.from(localById.values()));
+            const preservedProducts = await preserveLocalCatalog(
+                'products',
+                Array.from(localById.values()),
+            ) as Product[];
+            await db.save('products' as any, preservedProducts);
             window.dispatchEvent(new CustomEvent('productsUpdated'));
         }
         window.dispatchEvent(new CustomEvent('productPricesUpdated'));
@@ -3811,7 +3821,11 @@ class SyncManager {
         }
 
         if (updatedCount > 0 || duplicateIdsToRemove.size > 0) {
-            await db.save('products' as any, Array.from(localProductsById.values()));
+            const preservedProducts = await preserveLocalCatalog(
+                'products',
+                Array.from(localProductsById.values()),
+            ) as Product[];
+            await db.save('products' as any, preservedProducts);
         }
 
         this.scheduleImageSyncWorker('products', rawItems as any[], 'applySnapshotProducts');
