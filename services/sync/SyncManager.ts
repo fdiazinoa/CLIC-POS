@@ -4748,7 +4748,8 @@ class SyncManager {
                 const name = normalizeName(record.name || record.nombre || record.label || record.description || record.descripcion || record.code || entry);
                 if (!name) continue;
                 const id = normalizeName(record.id || record.uuid || record.code || `${fallbackPrefix}-${index + 1}`);
-                const hasExplicitCode = Object.hasOwn(record, 'code') || Object.hasOwn(record, 'codigo');
+                const hasExplicitCode = Object.prototype.hasOwnProperty.call(record, 'code')
+                    || Object.prototype.hasOwnProperty.call(record, 'codigo');
                 const code = hasExplicitCode
                     ? normalizeName(record.code ?? record.codigo)
                     : normalizeName(id || name);
@@ -4858,7 +4859,8 @@ class SyncManager {
                 : {};
             const name = normalizeName(record.name || record.nombre || record.label || record.description || record.descripcion || entry);
             if (!name) continue;
-            const hasExplicitCode = Object.hasOwn(record, 'code') || Object.hasOwn(record, 'codigo');
+            const hasExplicitCode = Object.prototype.hasOwnProperty.call(record, 'code')
+                || Object.prototype.hasOwnProperty.call(record, 'codigo');
             const code = hasExplicitCode
                 ? normalizeName(record.code ?? record.codigo)
                 : normalizeName(record.id || name);
