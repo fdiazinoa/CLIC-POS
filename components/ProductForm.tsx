@@ -37,6 +37,7 @@ import {
   resolveWarehouseId,
   tariffMatchesIdentifier,
 } from '../utils/masterIdentity';
+import { buildProductEditorSyncMarker } from '../utils/productEditorSync';
 import {
   extractWarehouseStockBalances,
   productIdMatchesInventoryReference,
@@ -903,17 +904,6 @@ const VARIANT_TEMPLATES = [
   { name: 'Capacidad', attr: 'Memoria', opts: ['64GB', '128GB', '256GB'] }
 ];
 
-const buildStockSyncMarker = (product?: Partial<Product> | null): string => {
-  if (!product) return 'NO_STOCK';
-
-  const balances = Object.entries(product.stockBalances || {})
-    .map(([warehouseId, quantity]) => `${warehouseId}:${Number(quantity || 0)}`)
-    .sort()
-    .join('|');
-
-  return balances || 'NO_STOCK';
-};
-
 const readNumericBalance = (record: Record<string, unknown> | null | undefined, key: string): number | undefined => {
   const value = record && key ? record[key] : undefined;
   const numeric = Number(value);
@@ -983,6 +973,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const inventoryDebugTextareaRef = useRef<HTMLTextAreaElement>(null);
   const lastInitialSyncRef = useRef<string>('');
   const stockSyncRequestIdRef = useRef(0);
+  const initialDataSyncMarker = useMemo(
+    () => buildProductEditorSyncMarker(initialData),
+    [initialData]
+  );
 
   // --- STATE ---
   const [showProfitCalc, setShowProfitCalc] = useState<string | null>(null);
@@ -1348,9 +1342,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   useEffect(() => {
     if (!initialData) return;
 
-    const initialTimestamp = initialData.updatedAt || (initialData as any).createdAt || (initialData as any).created_at || 'NO_TS';
-    const stockMarker = buildStockSyncMarker(initialData);
-    const syncMarker = `${initialData.id || 'NO_ID'}::${initialTimestamp}::${stockMarker}`;
+    const syncMarker = `${initialData.id || 'NO_ID'}::${initialDataSyncMarker}`;
     if (lastInitialSyncRef.current === syncMarker) {
       return;
     }
@@ -1365,7 +1357,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     })));
     setWarehouseSettings(canonicalizeWarehouseRecord(initialData.warehouseSettings || {}, warehouses));
     lastInitialSyncRef.current = syncMarker;
-  }, [initialData?.id, initialData?.updatedAt, (initialData as any)?.createdAt, (initialData as any)?.created_at, initialData?.stockBalances]);
+  }, [initialData?.id, initialDataSyncMarker]);
 
   useEffect(() => {
     setFormData(prev => normalizeProductActivationState(prev));
