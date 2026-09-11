@@ -19,9 +19,34 @@ test('lost ACK retries the same immutable mutation after backoff, then applies',
     assert.deepEqual(sent[0].mutation, sent[1].mutation);
     await h.queue.process(); assert.equal(sent.length, 2);
 });
-test('a different tenant/terminal/base URL never sends pending mutations', async () => {
-    let sent = 0; const h = harness(async () => { sent++; return { id: 'mutation-1', status: 'APPLIED' }; }, false);
-    await h.queue.process(); assert.equal(sent, 0); assert.equal(h.get().status, 'PENDING');
+test('a different tenant/terminal/base URL is diagnosed without entering a hot retry loop', async () => {
+    let sent = 0;
+    let matchesScope = false;
+    let edit = makeEdit();
+    let now = 1000;
+    const queue = new CatalogEditQueue({
+        read: async () => [structuredClone(edit)],
+        save: async next => { edit = next; },
+        matchesScope: () => matchesScope,
+        now: () => now,
+        send: async () => { sent++; return { id: 'mutation-1', status: 'APPLIED' }; },
+    });
+
+    await queue.process();
+    assert.equal(sent, 0);
+    assert.equal(edit.status, 'PENDING');
+    assert.equal(edit.syncStatus, 'ERROR');
+    assert.equal(edit.syncError, 'CATALOG_EDIT_SCOPE_MISMATCH');
+    assert.equal(edit.nextAttemptAt, 301000);
+
+    await queue.process();
+    assert.equal(sent, 0, 'the same mismatch is not rewritten or sent before its recheck');
+
+    matchesScope = true;
+    now = edit.nextAttemptAt;
+    await queue.process();
+    assert.equal(sent, 1);
+    assert.equal(edit.status, 'APPLIED');
 });
 test('an unrelated or missing ACK is never marked applied', async () => {
     const h = harness(async () => ({ id: 'other-id', status: 'APPLIED' }));

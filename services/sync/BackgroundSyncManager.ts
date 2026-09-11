@@ -221,6 +221,15 @@ class BackgroundSyncManager {
         }
 
         const status = item?.syncStatus;
+        if (collectionName === 'catalogEdits' && status === 'PENDING') {
+            const nextAttemptAt = Number(item?.nextAttemptAt);
+            if (Number.isFinite(nextAttemptAt) && nextAttemptAt > Date.now()) {
+                const delay = Math.max(1000, nextAttemptAt - Date.now());
+                this.nextRetryDelayMs = this.nextRetryDelayMs === null
+                    ? delay
+                    : Math.min(this.nextRetryDelayMs, delay);
+            }
+        }
         if (status === 'PENDING') return true;
         if (status === 'RETRY_WAIT') return true;
         if (status === 'SYNCING') {

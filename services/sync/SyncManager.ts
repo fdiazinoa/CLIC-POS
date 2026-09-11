@@ -2277,18 +2277,20 @@ class SyncManager {
             const persistedFamilies = Array.isArray(baseConfig?.families) ? baseConfig.families : [];
             const persistedSubfamilies = Array.isArray(baseConfig?.subfamilies) ? baseConfig.subfamilies : [];
             const persistedBrands = Array.isArray(baseConfig?.brands) ? baseConfig.brands : [];
-            const missingCommercialClassifications =
-                persistedDepartments.length === 0 ||
-                persistedSections.length === 0 ||
-                persistedFamilies.length === 0 ||
-                persistedSubfamilies.length === 0 ||
-                persistedBrands.length === 0;
+            // Some classification levels are optional. Treating every empty list as
+            // missing forced a full catalog config pull on every manifest cycle.
+            const hasPersistedCatalogClassifications = [
+                persistedProductGroups,
+                persistedTerminalAllowedCategories,
+                persistedDepartments,
+                persistedSections,
+                persistedFamilies,
+                persistedSubfamilies,
+                persistedBrands,
+            ].some(rows => rows.length > 0);
             const requiresCatalogConfigFetch = Boolean(
                 apiSyncAdapter.isErpActiveOperationalTarget() &&
-                (
-                    (persistedProductGroups.length === 0 && persistedTerminalAllowedCategories.length === 0) ||
-                    missingCommercialClassifications
-                )
+                !hasPersistedCatalogClassifications
             );
             if (requiresDocumentSeriesConfigFetch) {
                 console.warn('POS_DOCUMENT_SERIES_CONFIG_FETCH_REQUIRED', {
@@ -4708,10 +4710,10 @@ class SyncManager {
                 if (!value || typeof value !== 'object' || visited.has(value) || depth > maxDepth) continue;
                 visited.add(value);
 
-                if (Array.isArray(value)) {
-                    for (const item of value) queue.push({ value: item, depth: depth + 1 });
-                    continue;
-                }
+                // Catalog row arrays can contain thousands of products. Their rows
+                // cannot own sibling classification collections, so descending into
+                // every item only creates allocations and long GC pauses.
+                if (Array.isArray(value)) continue;
 
                 const record = value as Record<string, unknown>;
                 for (const [key, child] of Object.entries(record)) {
@@ -4729,8 +4731,10 @@ class SyncManager {
             return [];
         };
         const pickRowsDeep = (keyNames: string[], ...values: unknown[]): unknown[] => {
-            const direct = pickRows(...values);
-            if (direct.length > 0) return direct;
+            // An explicit empty array is authoritative: that classification level is
+            // valid but empty. Do not fall back to scanning the complete snapshot.
+            const direct = values.find((value): value is unknown[] => Array.isArray(value));
+            if (direct) return direct;
             return findFirstRowsByKey(root, keyNames);
         };
 
