@@ -32,6 +32,10 @@ let failSave = false;
         store.set(collectionName, [...rows, structuredClone(document)]);
     }
 };
+(dbAdapter as any).saveDocument = async (collectionName: string, document: any) => {
+    const rows = (store.get(collectionName) || []).filter((row: any) => row.id !== document.id);
+    store.set(collectionName, [...rows, structuredClone(document)]);
+};
 (catalogEditQueue as any).process = async () => { sends++; };
 const product = { id: '00000000-0000-4000-8000-000000000005', name: 'Café', price: 10 };
 const departmentA = '00000000-0000-4000-8000-000000000010';
@@ -147,6 +151,25 @@ test('incoming ERP snapshot preserves pending local fields without creating an o
     const merged = await preserveLocalCatalog('products', incoming) as any[];
     assert.equal(merged[0].price, 19); assert.equal(incoming[0].price, 10);
     assert.equal(store.get('catalogEdits').length, 1);
+});
+test('an applied edit blocks stale snapshots until ERP confirms it, then accepts later ERP changes', async () => {
+    store.clear(); store.set('products', [product]);
+    await saveLocalProducts([{ ...product, price: 19 } as any], 'operator');
+    store.set('catalogEdits', store.get('catalogEdits').map((edit: any) => ({
+        ...edit, status: 'APPLIED', syncStatus: 'SYNCED',
+    })));
+    const { preserveLocalCatalog } = await import('../services/sync/preserveLocalCatalog');
+
+    const stale = await preserveLocalCatalog('products', [{ ...product, price: 10 }]) as any[];
+    assert.equal(stale[0].price, 19);
+    assert.equal(store.get('catalogEdits')[0].snapshotConfirmedAt, undefined);
+
+    const confirmed = await preserveLocalCatalog('products', [{ ...product, price: 19 }]) as any[];
+    assert.equal(confirmed[0].price, 19);
+    assert.ok(store.get('catalogEdits')[0].snapshotConfirmedAt);
+
+    const laterErp = await preserveLocalCatalog('products', [{ ...product, price: 21 }]) as any[];
+    assert.equal(laterErp[0].price, 21);
 });
 test('incoming ERP snapshot preserves a pending item reclassification', async () => {
     store.clear();
