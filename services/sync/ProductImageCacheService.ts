@@ -117,13 +117,18 @@ export const resolveIncomingTaxIds = (item: IncomingProduct, localProduct?: Prod
     [metadata, 'taxes'],
   ];
 
+  let hasExplicitRemoteTaxValue = false;
   for (const [owner, key] of remoteCandidates) {
-    if (Object.prototype.hasOwnProperty.call(owner, key) && owner[key] !== undefined) {
-      return normalizeTaxIdList(owner[key]);
-    }
+    if (!Object.prototype.hasOwnProperty.call(owner, key) || owner[key] === undefined) continue;
+    hasExplicitRemoteTaxValue = true;
+    const normalized = normalizeTaxIdList(owner[key]);
+    // Some legacy projections contain an empty camelCase alias together with
+    // a populated canonical tax_ids field. A populated explicit alias wins;
+    // an explicit clear is honored only when every remote alias is empty.
+    if (normalized.length > 0) return normalized;
   }
 
-  return normalizeTaxIdList(localProduct?.appliedTaxIds);
+  return hasExplicitRemoteTaxValue ? [] : normalizeTaxIdList(localProduct?.appliedTaxIds);
 };
 
 export const resolveIncomingTariffs = (

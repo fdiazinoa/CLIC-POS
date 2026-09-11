@@ -170,6 +170,18 @@ const buildStockSyncMarker = (product?: Partial<Product> | null): string => {
       .join('|') || 'NO_STOCK';
 };
 
+const buildCatalogSyncMarker = (product?: Partial<Product> | null): string => {
+   if (!product) return 'NO_CATALOG';
+   const taxIds = [...(product.appliedTaxIds || [])].map(String).sort();
+   const operationalFlags = product.operationalFlags || {};
+   return JSON.stringify({
+      updatedAt: product.updatedAt || (product as any).updated_at || null,
+      taxIds,
+      operationalFlags,
+      stock: buildStockSyncMarker(product),
+   });
+};
+
 const productTimestamp = (product?: Product | null): number => {
    const raw = (product as any)?.updatedAt || (product as any)?.updated_at || (product as any)?.createdAt || (product as any)?.created_at || '';
    const parsed = new Date(raw).getTime();
@@ -657,8 +669,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       );
       if (!refreshedProduct) return;
 
-      const currentMarker = `${editingProduct.id || 'NO_ID'}::${editingProduct.updatedAt || (editingProduct as any).createdAt || 'NO_TS'}::${buildStockSyncMarker(editingProduct)}`;
-      const nextMarker = `${refreshedProduct.id || 'NO_ID'}::${refreshedProduct.updatedAt || (refreshedProduct as any).createdAt || 'NO_TS'}::${buildStockSyncMarker(refreshedProduct)}`;
+      const currentMarker = `${editingProduct.id || 'NO_ID'}::${buildCatalogSyncMarker(editingProduct)}`;
+      const nextMarker = `${refreshedProduct.id || 'NO_ID'}::${buildCatalogSyncMarker(refreshedProduct)}`;
       if (currentMarker !== nextMarker) {
          setEditingProduct(refreshedProduct);
       }
@@ -995,7 +1007,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    };
 
    if (viewMode === 'VARIANTS') return <VariantManager onClose={() => setViewMode('PRODUCTS')} />;
-   if (editingProduct) return <ProductForm key={editingProduct === 'NEW' ? 'NEW' : editingProduct.id} initialData={editingProduct === 'NEW' ? null : editingProduct} config={config} warehouses={runtimeWarehouses} availableTariffs={tariffs} hasHistory={runtimeTransactions?.some(t => t.items?.some(item => item.id === (editingProduct as any).id)) ?? false} currentUser={currentUser} roles={roles} onSave={handleSaveProduct} onClose={() => setEditingProduct(null)} transfers={transfers} purchaseOrders={purchaseOrders} suppliers={suppliers} seasons={config.seasons || []} initialTab={initialTab} allProducts={products} />
+   if (editingProduct) return <ProductForm key={editingProduct === 'NEW' ? 'NEW' : `${editingProduct.id}:${buildCatalogSyncMarker(editingProduct)}`} initialData={editingProduct === 'NEW' ? null : editingProduct} config={config} warehouses={runtimeWarehouses} availableTariffs={tariffs} hasHistory={runtimeTransactions?.some(t => t.items?.some(item => item.id === (editingProduct as any).id)) ?? false} currentUser={currentUser} roles={roles} onSave={handleSaveProduct} onClose={() => setEditingProduct(null)} transfers={transfers} purchaseOrders={purchaseOrders} suppliers={suppliers} seasons={config.seasons || []} initialTab={initialTab} allProducts={products} />
    if (editingTariff) return <TariffForm initialData={editingTariff === 'NEW' ? null : editingTariff} products={products} config={config} availableTariffs={tariffs} actorId={currentUser?.id} onSave={handleSaveTariff} onUpdateProducts={onUpdateProducts} onClose={() => setEditingTariff(null)} />;
    if (editingGroup) return <GroupForm initialData={editingGroup === 'NEW' ? null : editingGroup} products={products} onSave={handleSaveGroup} onClose={() => setEditingGroup(null)} />;
    if (editingSeason) return <SeasonForm initialData={editingSeason === 'NEW' ? null : editingSeason} products={products} onSave={handleSaveSeason} onClose={() => setEditingSeason(null)} />;

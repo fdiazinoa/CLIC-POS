@@ -30,6 +30,15 @@ export interface CatalogQueueDependencies {
     send(edit: CatalogEdit): Promise<CatalogResult>;
     now(): number;
 }
+const resultMatchesRequestedValue = (current: unknown, requested: CatalogMutationValue): boolean => {
+    if (Array.isArray(current) && Array.isArray(requested)) {
+        return current.length === requested.length && current.every((value, index) => value === requested[index]);
+    }
+    if (current && requested && typeof current === 'object' && typeof requested === 'object') {
+        return JSON.stringify(current) === JSON.stringify(requested);
+    }
+    return current === requested;
+};
 // A single worker prevents duplicate concurrent sends. The server also deduplicates
 // by immutable mutation id, including when its commit succeeds but the ACK is lost.
 export class CatalogEditQueue {
@@ -58,13 +67,17 @@ export class CatalogEditQueue {
                 if (result?.id !== edit.id || !['APPLIED', 'CONFLICT', 'REJECTED'].includes(result.status)) {
                     throw new Error('El ERP no confirmó este cambio.');
                 }
-                outcomes.set(edit.id, result.status);
-                await this.deps.save({ ...edit, status: result.status, syncStatus: result.status === 'APPLIED' ? 'SYNCED' : 'ERROR',
-                    syncError: result.code,
-                    ...(result.status === 'CONFLICT' ? { conflictCurrent: result.current as CatalogMutationValue } : {}),
-                    message: result.status === 'CONFLICT'
+                const effectiveStatus = result.status === 'CONFLICT'
+                    && resultMatchesRequestedValue(result.current, edit.mutation.after)
+                    ? 'APPLIED'
+                    : result.status;
+                outcomes.set(edit.id, effectiveStatus);
+                await this.deps.save({ ...edit, status: effectiveStatus, syncStatus: effectiveStatus === 'APPLIED' ? 'SYNCED' : 'ERROR',
+                    syncError: effectiveStatus === 'APPLIED' ? undefined : result.code,
+                    ...(effectiveStatus === 'CONFLICT' ? { conflictCurrent: result.current as CatalogMutationValue } : {}),
+                    message: effectiveStatus === 'CONFLICT'
                     ? `El valor cambió en ERP: ${JSON.stringify(result.current)}. Revisa la configuración recibida del ERP antes de editar de nuevo.`
-                    : result.code });
+                    : effectiveStatus === 'APPLIED' ? undefined : result.code });
             } catch (error) {
                 const attempts = edit.attempts + 1;
                 await this.deps.save({ ...edit, attempts, syncStatus: 'PENDING',
