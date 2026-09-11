@@ -16,6 +16,7 @@ import {
   Product, ProductAttribute, ProductVariant, ProductFractionRule, ModifierGroup, ComboGroup, BusinessConfig, Tariff, TariffPrice, TaxDefinition, Warehouse, ProductOperationalFlags, InventoryLedgerEntry, ProductStock, StockTransfer, Season, Supplier
 } from '../types';
 import { isValidRemoteMediaUrl } from '../utils/media';
+import { createUuid } from '../utils/uuid';
 import ProfitCalculator from './ProfitCalculator';
 import RecipeManager from './RecipeManager';
 import ProductionAreaManager from './ProductionAreaManager';
@@ -1044,7 +1045,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
   const [formData, setFormData] = useState<Product>(() => {
     const base = initialData || {
-      id: crypto.randomUUID(),
+      id: createUuid(),
       name: '',
       type: 'PRODUCT',
       category: 'General',

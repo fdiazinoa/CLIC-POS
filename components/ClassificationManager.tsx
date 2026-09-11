@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { BusinessConfig, ClassificationItem, Product } from '../types';
 import { db } from '../utils/db';
+import { createUuid } from '../utils/uuid';
 import { syncManager } from '../services/sync/SyncManager';
 import {
     categoryAliases,
@@ -235,7 +236,7 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
         if (isCreating) {
             newItems.push({
                 ...editingItem,
-                id: editingItem.id || crypto.randomUUID(),
+                id: editingItem.id || createUuid(),
                 sortOrder: supportsPosPresentation
                     ? Math.max(-1, ...newItems.map((item, index) => resolveClassificationSortOrder(item, index))) + 1
                     : editingItem.sortOrder,

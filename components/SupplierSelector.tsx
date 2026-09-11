@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Search, Plus, User, Phone, Landmark, X, Check, Mail } from 'lucide-react';
 import { Supplier } from '../types';
+import { createUuid } from '../utils/uuid';
 
 interface SupplierSelectorProps {
     selectedSupplierId: string;
@@ -69,7 +70,7 @@ const SupplierSelector: React.FC<SupplierSelectorProps> = ({
         try {
             const supplier: Supplier = {
                 ...quickAddForm,
-                id: crypto.randomUUID(),
+                id: createUuid(),
                 email: '',
                 contactPerson: '',
                 paymentMethod: 'CASH',

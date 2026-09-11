@@ -1,4 +1,5 @@
 import { BusinessConfig, Campaign, Coupon } from '../types';
+import { createUuid } from './uuid';
 
 export interface RedemptionResult {
     success: boolean;
@@ -20,7 +21,7 @@ export const couponService = {
         const newCoupons: Coupon[] = [];
         for (let i = 0; i < quantity; i++) {
             newCoupons.push({
-                id: crypto.randomUUID(),
+                id: createUuid(),
                 campaignId: campaign.id,
                 code: `${campaign.name.substring(0, 3).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
                 status: 'GENERATED',
