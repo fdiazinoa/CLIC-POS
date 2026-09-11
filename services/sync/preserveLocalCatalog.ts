@@ -2,6 +2,15 @@ import { dbAdapter } from '../db';
 import { catalogScopeMatches } from './catalogEdits';
 import { classificationKeys } from './catalogLocalChanges';
 import type { CatalogEdit } from './CatalogEditQueue';
+
+export function cloneCatalogPayload<T>(payload: T): T {
+    if (typeof globalThis.structuredClone === 'function') {
+        return globalThis.structuredClone(payload);
+    }
+    if (payload === undefined || payload === null) return payload;
+    return JSON.parse(JSON.stringify(payload)) as T;
+}
+
 // Snapshot writes must not undo edits waiting for ERP acknowledgement. These
 // writes never create outgoing mutations; capture exists only in user handlers.
 export async function preserveLocalCatalog(collection: string, payload: unknown): Promise<unknown> {
@@ -9,7 +18,7 @@ export async function preserveLocalCatalog(collection: string, payload: unknown)
         .filter(edit => edit.status === 'PENDING' && catalogScopeMatches(edit.scope))
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     if (!pending.length) return payload;
-    const result = structuredClone(payload) as any;
+    const result = cloneCatalogPayload(payload) as any;
     for (const edit of pending) {
         const { mutation } = edit;
         if (collection === 'products' && mutation.domain === 'item_lifecycle' && Array.isArray(result)) {
