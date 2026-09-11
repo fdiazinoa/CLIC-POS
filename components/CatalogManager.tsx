@@ -1,12 +1,13 @@
 import { deleteLocalProduct, saveLocalProducts } from '../services/sync/saveLocalCatalog';
 
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
    Package, Search, Plus, Edit2, Trash2, ArrowLeft,
    Filter, Tag, Image as ImageIcon, DollarSign,
    Calendar, CheckCircle2, XCircle, Layers, ClipboardList,
-   ChevronDown, ChevronRight, Box, AlertCircle, MapPin, Grid, Sun,
-   CheckSquare, Square, MoreHorizontal, Settings2, Activity, RefreshCw
+   ChevronDown, ChevronRight, ChevronLeft, Box, AlertCircle, MapPin, Grid, Sun,
+   CheckSquare, Square, MoreHorizontal, Settings2, Activity, RefreshCw,
+   List, ScanBarcode, Copy, SlidersHorizontal, X, Archive, Eye
 } from 'lucide-react';
 import { Product, BusinessConfig, Tariff, Transaction, ProductVariant, Warehouse, ProductGroup, Season, Watchlist, ProductStock, StockTransfer, Supplier, Room, ProductPrice } from '../types';
 import { calculateOptimalInventoryLevels } from '../utils/inventoryEngine';
@@ -30,6 +31,7 @@ import {
    resolveInventoryProductStockRow,
 } from '../utils/productReferences';
 import { resolveProductImageSrc } from '../utils/entityImage';
+import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import { createNumberedMaster } from '../services/sync/MasterNumberRangeService';
 import { buildProductEditorSyncMarker } from '../utils/productEditorSync';
 
@@ -55,6 +57,11 @@ interface CatalogManagerProps {
 }
 
 type CatalogViewMode = 'PRODUCTS' | 'TARIFFS' | 'VARIANTS' | 'STOCKS' | 'GROUPS' | 'SEASONS' | 'BI_MONITOR' | 'CLASSIFICATIONS' | 'SPACES';
+type ProductDisplayMode = 'CARDS' | 'TABLE';
+type ProductSortMode = 'NAME_ASC' | 'NAME_DESC' | 'PRICE_ASC' | 'PRICE_DESC' | 'STOCK_ASC' | 'STOCK_DESC' | 'RECENT';
+type ProductQuickFilter = 'OUT_OF_STOCK' | 'LOW_STOCK' | 'NO_PRICE' | 'NO_IMAGE' | 'INACTIVE';
+
+const PRODUCT_VIEW_STORAGE_KEY = 'clic-pos.catalog.product-view';
 
 const CATALOG_DESKTOP_VIEWS: Array<{ id: CatalogViewMode; label: string }> = [
    { id: 'PRODUCTS', label: 'Productos' },
@@ -63,7 +70,7 @@ const CATALOG_DESKTOP_VIEWS: Array<{ id: CatalogViewMode; label: string }> = [
    { id: 'CLASSIFICATIONS', label: 'Clasificaciones' },
    { id: 'GROUPS', label: 'Grupos' },
    { id: 'SEASONS', label: 'Temporadas' },
-   { id: 'STOCKS', label: 'Stocks' },
+   { id: 'STOCKS', label: 'Existencias' },
    { id: 'TARIFFS', label: 'Tarifas' },
 ];
 
@@ -367,14 +374,40 @@ const productSkuValues = (product?: Product | null): string[] => {
       (product as any).sku,
       (product as any).item_code,
       (product as any).code,
+      product.reference,
+      product.referenceCode,
+      product.reference_code,
    ]
       .map((value) => (value == null ? '' : String(value).trim()))
       .filter(Boolean);
 };
 
+const productIsActive = (product: Product) => product.is_active !== false;
+
 const productStockTotal = (product?: Product | null): number => {
    if (!product?.stockBalances) return Number(product?.stock || 0);
    return Object.values(product.stockBalances).reduce((total, quantity) => total + Number(quantity || 0), 0);
+};
+
+const productStockForWarehouse = (product: Product, warehouseId: string) => {
+   if (warehouseId !== 'ALL') return Number(product.stockBalances?.[warehouseId] || 0);
+   return productStockTotal(product);
+};
+
+const productStockStatus = (product: Product, warehouseId: string) => {
+   const stock = productStockForWarehouse(product, warehouseId);
+   const minimum = warehouseId !== 'ALL'
+      ? Number(product.warehouseSettings?.[warehouseId]?.min ?? product.minStock)
+      : Number(product.minStock);
+   if (stock <= 0) return { label: 'Sin stock', tone: 'red' as const };
+   if (Number.isFinite(minimum) && minimum > 0 && stock <= minimum) return { label: 'Stock bajo', tone: 'amber' as const };
+   return { label: 'En stock', tone: 'green' as const };
+};
+
+const formatProductType = (product: Product) => {
+   const value = String(product.product_type || product.type || '').trim();
+   if (!value) return '';
+   return ({ PRODUCT: 'Producto', SIMPLE: 'Producto', SERVICE: 'Servicio', COMBO: 'Combo', FRACTIONABLE: 'Fraccionable' } as Record<string, string>)[value.toUpperCase()] || value;
 };
 
 // --- SUB-COMPONENT: STOCK ROW ---
@@ -549,7 +582,23 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    const [catalogTransactions, setCatalogTransactions] = useState<Transaction[]>(Array.isArray(transactions) ? transactions : []);
    const [viewMode, setViewMode] = useState<CatalogViewMode>('PRODUCTS');
    const [searchTerm, setSearchTerm] = useState('');
+   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
    const [categoryFilter, setCategoryFilter] = useState('ALL');
+   const [warehouseFilter, setWarehouseFilter] = useState('ALL');
+   const [quickFilters, setQuickFilters] = useState<Set<ProductQuickFilter>>(new Set());
+   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+   const [productSort, setProductSort] = useState<ProductSortMode>('NAME_ASC');
+   const [pageSize, setPageSize] = useState(25);
+   const [currentPage, setCurrentPage] = useState(1);
+   const [productDisplayMode, setProductDisplayMode] = useState<ProductDisplayMode>(() => {
+      if (typeof window === 'undefined') return 'CARDS';
+      return window.localStorage.getItem(PRODUCT_VIEW_STORAGE_KEY) === 'TABLE' ? 'TABLE' : 'CARDS';
+   });
+   const [openActionsId, setOpenActionsId] = useState<string | null>(null);
+   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+   const [scannerFeedback, setScannerFeedback] = useState<string | null>(null);
+   const [catalogLoadError, setCatalogLoadError] = useState<string | null>(null);
+   const [isCatalogLoading, setIsCatalogLoading] = useState((productsProp || []).length === 0);
    const [editingProduct, setEditingProduct] = useState<Product | null | 'NEW'>(null);
    const [quickPriceProduct, setQuickPriceProduct] = useState<Product | null>(null);
    const [quickPriceValue, setQuickPriceValue] = useState('');
@@ -609,6 +658,37 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    const isTablet = viewportWidth >= 1024 && viewportWidth < 1280;
    const isDesktop = viewportWidth >= 1280;
    const isLargeCatalogLayout = isTablet || isDesktop;
+
+   useEffect(() => {
+      const timer = window.setTimeout(() => setDebouncedSearchTerm(searchTerm), 300);
+      return () => window.clearTimeout(timer);
+   }, [searchTerm]);
+
+   useEffect(() => {
+      window.localStorage.setItem(PRODUCT_VIEW_STORAGE_KEY, productDisplayMode);
+   }, [productDisplayMode]);
+
+   const handleCatalogScan = useCallback((rawCode: string) => {
+      const code = rawCode.trim();
+      if (!code) return;
+      const normalized = normalizeCatalogIdentityValue(code);
+      const match = products.find((product) => [
+         ...productBarcodeValues(product),
+         ...productSkuValues(product),
+      ].some((value) => normalizeCatalogIdentityValue(value) === normalized));
+      setCategoryFilter('ALL');
+      setQuickFilters(new Set());
+      setCurrentPage(1);
+      setSearchTerm(code);
+      setDebouncedSearchTerm(code);
+      setScannerFeedback(match ? `Producto encontrado: ${match.name}` : 'No se encontró un producto con este código');
+      window.setTimeout(() => setScannerFeedback(null), 3000);
+   }, [products]);
+
+   useBarcodeScanner({
+      onScan: handleCatalogScan,
+      enabled: viewMode === 'PRODUCTS' && !editingProduct && !quickPriceProduct && !showBulkModal,
+   });
 
    useEffect(() => {
       setCatalogProducts((previous) => {
@@ -696,7 +776,13 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          }
       };
       loadWatchlists();
-      loadCatalogRuntime().catch((error) => console.warn('[CatalogManager] loadCatalogRuntime', error));
+      loadCatalogRuntime()
+         .then(() => setCatalogLoadError(null))
+         .catch((error) => {
+            console.warn('[CatalogManager] loadCatalogRuntime', error);
+            setCatalogLoadError('No pudimos cargar los productos');
+         })
+         .finally(() => setIsCatalogLoading(false));
 
       const handleConfigUpdate = async () => {
          const rawConfig = await db.get('config');
@@ -810,6 +896,15 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       [config, erpCategoryOptions, products]
    );
 
+   const categoryCounts = useMemo(() => {
+      const counts = new Map<string, number>([['ALL', products.length]]);
+      for (const product of products) {
+         const category = typeof product.category === 'string' && product.category.trim() ? product.category : 'Sin categoría';
+         counts.set(category, (counts.get(category) || 0) + 1);
+      }
+      return counts;
+   }, [products]);
+
    useEffect(() => {
       let cancelled = false;
       const loadCategories = async () => {
@@ -845,11 +940,31 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          window.removeEventListener('categoriesUpdated', handleCategoriesUpdated);
       };
    }, []);
+   const quickFilterCounts = useMemo(() => {
+      const counts: Record<ProductQuickFilter, number> = {
+         OUT_OF_STOCK: 0,
+         LOW_STOCK: 0,
+         NO_PRICE: 0,
+         NO_IMAGE: 0,
+         INACTIVE: 0,
+      };
+      for (const product of products) {
+         const stockStatus = productStockStatus(product, warehouseFilter);
+         if (stockStatus.tone === 'red') counts.OUT_OF_STOCK++;
+         if (stockStatus.tone === 'amber') counts.LOW_STOCK++;
+         if (!(Number(product.price) > 0)) counts.NO_PRICE++;
+         if (!resolveProductImageSrc(product)) counts.NO_IMAGE++;
+         if (!productIsActive(product)) counts.INACTIVE++;
+      }
+      return counts;
+   }, [products, warehouseFilter]);
+
    const filteredProducts = useMemo(() => {
       return products.filter(p => {
-         const normalizedSearch = searchTerm.trim().toLowerCase();
+         const normalizedSearch = debouncedSearchTerm.trim().toLowerCase();
          const searchableText = [
             p.name,
+            p.description,
             p.category,
             ...productBarcodeValues(p),
             ...productSkuValues(p),
@@ -860,9 +975,47 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          const normalizedCategory = typeof p.category === 'string' ? p.category : 'Sin categoría';
          const matchesSearch = !normalizedSearch || searchableText.includes(normalizedSearch);
          const matchesCategory = categoryFilter === 'ALL' || normalizedCategory === categoryFilter;
-         return matchesSearch && matchesCategory;
+         const matchesWarehouse = warehouseFilter === 'ALL' || isProductWarehouseActive(p, warehouseFilter, runtimeWarehouses);
+         const stockStatus = productStockStatus(p, warehouseFilter);
+         const matchesQuickFilters = Array.from(quickFilters).every((filter) => {
+            if (filter === 'OUT_OF_STOCK') return stockStatus.tone === 'red';
+            if (filter === 'LOW_STOCK') return stockStatus.tone === 'amber';
+            if (filter === 'NO_PRICE') return !(Number(p.price) > 0);
+            if (filter === 'NO_IMAGE') return !resolveProductImageSrc(p);
+            if (filter === 'INACTIVE') return !productIsActive(p);
+            return true;
+         });
+         return matchesSearch && matchesCategory && matchesWarehouse && matchesQuickFilters;
       });
-   }, [products, searchTerm, categoryFilter]);
+   }, [products, debouncedSearchTerm, categoryFilter, warehouseFilter, runtimeWarehouses, quickFilters]);
+
+   const sortedProducts = useMemo(() => {
+      const next = [...filteredProducts];
+      next.sort((left, right) => {
+         if (productSort === 'NAME_ASC') return left.name.localeCompare(right.name);
+         if (productSort === 'NAME_DESC') return right.name.localeCompare(left.name);
+         if (productSort === 'PRICE_ASC') return Number(left.price || 0) - Number(right.price || 0);
+         if (productSort === 'PRICE_DESC') return Number(right.price || 0) - Number(left.price || 0);
+         if (productSort === 'STOCK_ASC') return productStockForWarehouse(left, warehouseFilter) - productStockForWarehouse(right, warehouseFilter);
+         if (productSort === 'STOCK_DESC') return productStockForWarehouse(right, warehouseFilter) - productStockForWarehouse(left, warehouseFilter);
+         return productTimestamp(right) - productTimestamp(left);
+      });
+      return next;
+   }, [filteredProducts, productSort, warehouseFilter]);
+
+   const totalPages = Math.max(1, Math.ceil(sortedProducts.length / pageSize));
+   const pagedProducts = useMemo(
+      () => sortedProducts.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+      [sortedProducts, currentPage, pageSize]
+   );
+
+   useEffect(() => {
+      setCurrentPage(1);
+   }, [debouncedSearchTerm, categoryFilter, warehouseFilter, quickFilters, pageSize, productSort]);
+
+   useEffect(() => {
+      if (currentPage > totalPages) setCurrentPage(totalPages);
+   }, [currentPage, totalPages]);
 
    const emptyStateByView: Record<'PRODUCTS' | 'BI_MONITOR' | 'STOCKS' | 'TARIFFS' | 'GROUPS' | 'SEASONS', { title: string; description: string }> = {
       PRODUCTS: {
@@ -906,10 +1059,40 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    };
 
    const toggleAllSelection = () => {
-      if (selectedIds.size === filteredProducts.length) {
-         setSelectedIds(new Set());
-      } else {
-         setSelectedIds(new Set(filteredProducts.map(p => p.id)));
+      const visibleIds = pagedProducts.map((product) => product.id);
+      const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+      setSelectedIds((previous) => {
+         const next = new Set(previous);
+         visibleIds.forEach((id) => allVisibleSelected ? next.delete(id) : next.add(id));
+         return next;
+      });
+   };
+
+   const toggleQuickFilter = (filter: ProductQuickFilter) => {
+      setQuickFilters((previous) => {
+         const next = new Set(previous);
+         if (next.has(filter)) next.delete(filter);
+         else next.add(filter);
+         return next;
+      });
+   };
+
+   const clearProductFilters = () => {
+      setSearchTerm('');
+      setDebouncedSearchTerm('');
+      setCategoryFilter('ALL');
+      setWarehouseFilter('ALL');
+      setQuickFilters(new Set());
+   };
+
+   const copyProductValue = async (value: string, label: string) => {
+      if (!value) return;
+      try {
+         await navigator.clipboard.writeText(value);
+         setCopyFeedback(`${label} copiado`);
+         window.setTimeout(() => setCopyFeedback(null), 1800);
+      } catch {
+         setCopyFeedback('No se pudo copiar');
       }
    };
 
@@ -1215,6 +1398,79 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       onUpdateConfig(nextConfig);
    }
 
+   const renderProductActions = (product: Product) => (
+      <ProductRowActions
+         product={product}
+         canManage={canManage}
+         isOpen={openActionsId === product.id}
+         onToggle={() => setOpenActionsId((id) => id === product.id ? null : product.id)}
+         onPrice={() => openQuickPriceEditor(product)}
+         onEdit={() => setEditingProduct(product)}
+         onStock={() => setViewMode('STOCKS')}
+         onDelete={() => void handleDeleteProduct(product)}
+      />
+   );
+
+   const renderProductCatalog = () => (
+      <div className="min-h-full w-full max-w-[1800px] mx-auto p-4 md:p-6 xl:p-8">
+         <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+            <div className="shrink-0">
+               <h1 className="text-3xl font-black tracking-tight text-gray-900">Productos</h1>
+               <p className="mt-1 text-sm font-semibold text-gray-500">Administra tu catálogo de artículos</p>
+            </div>
+            <div className="flex flex-1 flex-wrap items-center gap-2 xl:justify-end">
+               <div className="relative min-w-[250px] flex-1 xl:max-w-2xl">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={19} />
+                  <input type="search" data-barcode-scanner-target="true" placeholder="Buscar por nombre, SKU, referencia o código de barras..." value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} className="h-12 w-full rounded-2xl border border-gray-200 bg-white pl-11 pr-4 text-sm font-semibold text-gray-800 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-100" />
+               </div>
+               <button type="button" onClick={() => document.querySelector<HTMLInputElement>('[data-barcode-scanner-target=\"true\"]')?.focus({ preventScroll: true })} className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 hover:bg-blue-100 focus-visible:ring-4 focus-visible:ring-blue-100" aria-label="Escanear código de barras" title="Escanear código de barras"><ScanBarcode size={22} /></button>
+               <button type="button" onClick={() => setShowAdvancedFilters((value) => !value)} className={`flex h-12 items-center gap-2 rounded-2xl border px-4 text-sm font-black transition ${showAdvancedFilters ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-700 hover:border-blue-200'}`}><SlidersHorizontal size={18} /> Filtros</button>
+               <select value={warehouseFilter} onChange={(event) => setWarehouseFilter(event.target.value)} className="h-12 max-w-[220px] rounded-2xl border border-gray-200 bg-white px-4 text-sm font-bold text-gray-700 outline-none focus:border-blue-400" aria-label="Filtrar por almacén"><option value="ALL">Todos los almacenes</option>{runtimeWarehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}</select>
+               {canManage && <button type="button" onClick={() => setEditingProduct('NEW')} className="flex h-12 items-center gap-2 rounded-2xl bg-blue-600 px-5 text-sm font-black text-white shadow-lg shadow-blue-100 transition hover:bg-blue-700 active:scale-95"><Plus size={20} /> Nuevo producto</button>}
+            </div>
+         </div>
+
+         {scannerFeedback && <div className={`mb-4 rounded-xl border px-4 py-3 text-sm font-bold ${scannerFeedback.startsWith('Producto encontrado') ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`} role="status">{scannerFeedback}</div>}
+
+         {showAdvancedFilters && <div className="mb-4 grid gap-3 rounded-2xl border border-gray-200 bg-gray-50 p-4 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="text-xs font-black uppercase tracking-wide text-gray-500">Estado<select value={quickFilters.has('INACTIVE') ? 'INACTIVE' : 'ALL'} onChange={(event) => setQuickFilters((previous) => { const next = new Set(previous); event.target.value === 'INACTIVE' ? next.add('INACTIVE') : next.delete('INACTIVE'); return next; })} className="mt-1 h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm font-bold normal-case tracking-normal text-gray-700"><option value="ALL">Todos</option><option value="INACTIVE">Inactivos</option></select></label>
+            <label className="text-xs font-black uppercase tracking-wide text-gray-500">Categoría<select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm font-bold normal-case tracking-normal text-gray-700">{categories.map((category) => <option key={category} value={category}>{category === 'ALL' ? 'Todas' : category}</option>)}</select></label>
+            <label className="text-xs font-black uppercase tracking-wide text-gray-500">Existencia<select value={quickFilters.has('OUT_OF_STOCK') ? 'OUT_OF_STOCK' : quickFilters.has('LOW_STOCK') ? 'LOW_STOCK' : 'ALL'} onChange={(event) => setQuickFilters((previous) => { const next = new Set(previous); next.delete('OUT_OF_STOCK'); next.delete('LOW_STOCK'); if (event.target.value !== 'ALL') next.add(event.target.value as ProductQuickFilter); return next; })} className="mt-1 h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm font-bold normal-case tracking-normal text-gray-700"><option value="ALL">Todas</option><option value="OUT_OF_STOCK">Sin stock</option><option value="LOW_STOCK">Stock bajo</option></select></label>
+            <div className="flex items-end"><button type="button" onClick={clearProductFilters} className="h-11 w-full rounded-xl border border-gray-200 bg-white px-4 text-sm font-black text-gray-600 hover:text-blue-600">Limpiar filtros</button></div>
+         </div>}
+
+         <div className="mb-3 flex gap-2 overflow-x-auto pb-1 no-scrollbar">{categories.map((category) => <button key={category} type="button" onClick={() => setCategoryFilter(category)} className={`whitespace-nowrap rounded-full px-4 py-2 text-sm font-black transition ${categoryFilter === category ? 'bg-blue-600 text-white shadow-md shadow-blue-100' : 'border border-gray-200 bg-gray-50 text-gray-600 hover:border-blue-200'}`}>{category === 'ALL' ? 'Todos' : category} <span className={categoryFilter === category ? 'text-blue-100' : 'text-gray-400'}>({categoryCounts.get(category) || 0})</span></button>)}</div>
+
+         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 pb-4">
+            <div className="flex flex-wrap gap-2">{([
+               ['OUT_OF_STOCK', 'Sin stock', 'bg-red-500'], ['LOW_STOCK', 'Stock bajo', 'bg-amber-500'], ['NO_PRICE', 'Sin precio', 'bg-slate-400'], ['NO_IMAGE', 'Sin imagen', 'bg-slate-400'], ['INACTIVE', 'Inactivos', 'bg-slate-400'],
+            ] as Array<[ProductQuickFilter, string, string]>).map(([id, label, dot]) => <button key={id} type="button" onClick={() => toggleQuickFilter(id)} className={`flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-black transition ${quickFilters.has(id) ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-600'}`}><span className={`h-2 w-2 rounded-full ${dot}`} />{label} ({quickFilterCounts[id]})</button>)}</div>
+            <div className="flex items-center gap-2 text-sm font-bold text-gray-500"><span>Vista:</span><button type="button" onClick={() => setProductDisplayMode('CARDS')} className={`flex h-10 items-center gap-2 rounded-xl px-3 ${productDisplayMode === 'CARDS' ? 'bg-blue-600 text-white' : 'border border-gray-200 bg-white'}`}><Grid size={17} /> Tarjetas</button><button type="button" onClick={() => setProductDisplayMode('TABLE')} className={`flex h-10 items-center gap-2 rounded-xl px-3 ${productDisplayMode === 'TABLE' ? 'bg-blue-600 text-white' : 'border border-gray-200 bg-white'}`}><List size={17} /> Tabla</button></div>
+         </div>
+
+         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            {canManage && <button type="button" onClick={toggleAllSelection} className="flex h-11 items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 text-sm font-black text-gray-700"><CheckSquare size={18} className="text-blue-600" /> Seleccionar página</button>}
+            <label className="ml-auto flex items-center gap-2 text-sm font-bold text-gray-500">Ordenar por:<select value={productSort} onChange={(event) => setProductSort(event.target.value as ProductSortMode)} className="h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm font-bold text-gray-700 outline-none"><option value="NAME_ASC">Nombre A-Z</option><option value="NAME_DESC">Nombre Z-A</option><option value="PRICE_ASC">Precio menor-mayor</option><option value="PRICE_DESC">Precio mayor-menor</option><option value="STOCK_ASC">Stock menor-mayor</option><option value="STOCK_DESC">Stock mayor-menor</option><option value="RECENT">Más recientes</option></select></label>
+         </div>
+
+         {copyFeedback && <div className="fixed right-6 top-6 z-[150] rounded-xl bg-gray-900 px-4 py-3 text-sm font-bold text-white shadow-xl" role="status">{copyFeedback}</div>}
+
+         {isCatalogLoading && products.length === 0 ? <div className="space-y-2" aria-label="Cargando productos">{Array.from({ length: 6 }).map((_, index) => <div key={index} className="h-28 animate-pulse rounded-2xl border border-gray-100 bg-gray-50" />)}</div>
+         : catalogLoadError && products.length === 0 ? <div className="rounded-2xl border border-red-100 bg-red-50 p-8 text-center"><h3 className="text-xl font-black text-gray-900">No pudimos cargar los productos</h3><button type="button" onClick={() => window.location.reload()} className="mt-4 rounded-xl bg-blue-600 px-5 py-3 font-black text-white">Reintentar</button></div>
+         : sortedProducts.length === 0 ? <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-10 text-center"><Package className="mx-auto mb-3 text-gray-300" size={36} /><h3 className="text-xl font-black text-gray-900">{products.length === 0 ? 'No hay productos registrados' : 'No encontramos productos para estos filtros'}</h3><p className="mt-2 text-sm font-semibold text-gray-500">{products.length === 0 ? 'Crea el primer artículo para comenzar tu catálogo.' : 'Prueba otra búsqueda o limpia los filtros activos.'}</p><button type="button" onClick={products.length === 0 ? () => setEditingProduct('NEW') : clearProductFilters} className="mt-5 rounded-xl bg-blue-600 px-5 py-3 text-sm font-black text-white">{products.length === 0 ? '+ Nuevo producto' : 'Limpiar filtros'}</button></div>
+         : productDisplayMode === 'TABLE' && isLargeCatalogLayout ? <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white"><table className="w-full min-w-[1050px] text-left text-sm"><thead className="sticky top-0 z-10 bg-gray-50 text-[11px] font-black uppercase tracking-wider text-gray-500"><tr><th className="p-3"><span className="sr-only">Seleccionar</span></th><th className="p-3">Producto</th><th className="p-3">Referencia / SKU</th><th className="p-3">Código de barras</th><th className="p-3">Categoría</th><th className="p-3">Stock</th><th className="p-3">Precio</th><th className="p-3">Estado</th><th className="p-3 text-right">Acciones</th></tr></thead><tbody className="divide-y divide-gray-100">{pagedProducts.map((product) => {
+            const sku = productSkuValues(product)[0] || product.id; const barcode = productBarcodeValues(product)[0] || ''; const stock = productStockForWarehouse(product, warehouseFilter); const status = productStockStatus(product, warehouseFilter);
+            return <tr key={product.id} className={`hover:bg-blue-50/30 ${selectedIds.has(product.id) ? 'bg-blue-50/60' : ''}`}><td className="p-3"><button type="button" onClick={() => toggleSelection(product.id)} className="flex h-10 w-10 items-center justify-center" aria-label={`Seleccionar ${product.name}`}>{selectedIds.has(product.id) ? <CheckSquare className="text-blue-600" size={20} /> : <Square className="text-gray-300" size={20} />}</button></td><td className="p-3"><div className="flex min-w-[230px] items-center gap-3"><ProductThumbnail product={product} /><div className="min-w-0"><button type="button" onClick={() => setEditingProduct(product)} className="block max-w-[260px] truncate font-black text-gray-900 hover:text-blue-600">{product.name}</button><p className="max-w-[260px] truncate text-xs font-semibold text-gray-400">{product.description || formatProductType(product) || 'Artículo de catálogo'}</p></div></div></td><td className="p-3"><CopyableCode value={sku} label="referencia" onCopy={copyProductValue} /></td><td className="p-3"><CopyableCode value={barcode} label="código de barras" onCopy={copyProductValue} /></td><td className="p-3 font-bold text-gray-600">{product.category || 'Sin categoría'}</td><td className="p-3"><StockIndicator value={stock} status={status} onClick={() => setViewMode('STOCKS')} /></td><td className="p-3"><ProductPriceBlock product={product} currency={config.currencySymbol} /></td><td className="p-3"><ActiveBadge active={productIsActive(product)} sellable={product.is_sellable !== false} /></td><td className="p-3">{renderProductActions(product)}</td></tr>;
+         })}</tbody></table></div>
+         : <div className="overflow-visible rounded-2xl border border-gray-200 bg-white shadow-sm divide-y divide-gray-100">{pagedProducts.map((product) => {
+            const sku = productSkuValues(product)[0] || product.id; const barcode = productBarcodeValues(product)[0] || ''; const stock = productStockForWarehouse(product, warehouseFilter); const status = productStockStatus(product, warehouseFilter);
+            return <article key={product.id} className={`relative grid gap-3 p-3 transition md:grid-cols-[auto_minmax(250px,1.7fr)_minmax(140px,.9fr)_100px_145px_95px_auto] md:items-center ${selectedIds.has(product.id) ? 'bg-blue-50/60' : 'hover:bg-gray-50/70'}`}>{canManage && <button type="button" onClick={() => toggleSelection(product.id)} className="flex h-11 w-11 items-center justify-center rounded-xl" aria-label={`${selectedIds.has(product.id) ? 'Quitar selección de' : 'Seleccionar'} ${product.name}`}>{selectedIds.has(product.id) ? <CheckSquare className="text-blue-600" size={21} /> : <Square className="text-gray-300" size={21} />}</button>}<div className="flex min-w-0 items-center gap-3"><ProductThumbnail product={product} /><div className="min-w-0"><button type="button" onClick={() => setEditingProduct(product)} className="block max-w-full truncate text-left text-base font-black text-gray-900 hover:text-blue-600">{product.name}</button><p className="mt-0.5 line-clamp-1 text-xs font-semibold text-gray-500">{product.description || formatProductType(product) || 'Artículo de catálogo'}</p><div className="mt-1.5 flex flex-wrap gap-1.5"><span className="rounded-lg bg-blue-50 px-2 py-1 text-[11px] font-black text-blue-700">{product.category || 'Sin categoría'}</span><ActiveBadge active={productIsActive(product)} sellable={product.is_sellable !== false} compact /></div></div></div><div className="space-y-1 border-gray-100 md:border-l md:pl-4"><CopyableCode value={sku} label="referencia" onCopy={copyProductValue} strong /><CopyableCode value={barcode} label="código de barras" onCopy={copyProductValue} /></div><div className="border-gray-100 md:border-l md:pl-4"><StockIndicator value={stock} status={status} onClick={() => setViewMode('STOCKS')} /></div><div className="border-gray-100 md:border-l md:pl-4"><ProductPriceBlock product={product} currency={config.currencySymbol} /></div><div className="hidden md:block"><ActiveBadge active={productIsActive(product)} sellable={product.is_sellable !== false} /></div>{renderProductActions(product)}</article>;
+         })}</div>}
+
+         {sortedProducts.length > 0 && <div className="mt-5 flex flex-col items-center justify-between gap-3 pb-28 text-sm font-semibold text-gray-500 sm:flex-row"><span>Mostrando {(currentPage - 1) * pageSize + 1}-{Math.min(currentPage * pageSize, sortedProducts.length)} de {sortedProducts.length.toLocaleString()} productos</span><div className="flex items-center gap-2"><button type="button" disabled={currentPage === 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} className="flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 disabled:opacity-40" aria-label="Página anterior"><ChevronLeft size={18} /></button><span className="rounded-xl bg-blue-600 px-4 py-2.5 font-black text-white">{currentPage}</span><span>de {totalPages}</span><button type="button" disabled={currentPage === totalPages} onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} className="flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 disabled:opacity-40" aria-label="Página siguiente"><ChevronRight size={18} /></button><select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))} className="h-10 rounded-xl border border-gray-200 bg-white px-3 font-bold"><option value={25}>25 por página</option><option value={50}>50 por página</option><option value={100}>100 por página</option></select></div></div>}
+      </div>
+   );
+
    return (
       <div className={`responsive-shell flex min-h-0 h-full bg-white animate-in fade-in slide-in-from-right-10 duration-300 relative ${isTablet ? 'flex-row' : 'flex-col'}`}>
 
@@ -1237,7 +1493,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                   <SidebarItem label="Clasificaciones" icon={<Grid size={22} />} active={(viewMode as string) === 'CLASSIFICATIONS'} onClick={() => setViewMode('CLASSIFICATIONS')} />
                   <SidebarItem label="Grupos" icon={<Grid size={22} />} active={viewMode === 'GROUPS'} onClick={() => setViewMode('GROUPS')} />
                   <SidebarItem label="Temporadas" icon={<Sun size={22} />} active={viewMode === 'SEASONS'} onClick={() => setViewMode('SEASONS')} />
-                  <SidebarItem label="Stocks" icon={<ClipboardList size={22} />} active={viewMode === 'STOCKS'} onClick={() => setViewMode('STOCKS')} />
+                  <SidebarItem label="Existencias" icon={<ClipboardList size={22} />} active={viewMode === 'STOCKS'} onClick={() => setViewMode('STOCKS')} />
                   <SidebarItem label="Tarifas" icon={<Tag size={22} />} active={viewMode === 'TARIFFS'} onClick={() => setViewMode('TARIFFS')} />
                </nav>
 
@@ -1281,7 +1537,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                            <button onClick={() => setViewMode('CLASSIFICATIONS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${(viewMode as string) === 'CLASSIFICATIONS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Clasificaciones</button>
                            <button onClick={() => setViewMode('GROUPS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${viewMode === 'GROUPS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Grupos</button>
                            <button onClick={() => setViewMode('SEASONS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${viewMode === 'SEASONS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Temporadas</button>
-                           <button onClick={() => setViewMode('STOCKS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${viewMode === 'STOCKS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Stocks</button>
+                           <button onClick={() => setViewMode('STOCKS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${viewMode === 'STOCKS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Existencias</button>
                            <button onClick={() => setViewMode('TARIFFS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${viewMode === 'TARIFFS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Tarifas</button>
                         </div>
                      </div>
@@ -1296,7 +1552,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                      >
                         <ArrowLeft size={22} strokeWidth={2.8} /> Salir
                      </button>
-                     <div className="flex-1 relative shadow-2xl shadow-gray-100">
+                     {viewMode !== 'PRODUCTS' && <div className="flex-1 relative shadow-2xl shadow-gray-100">
                         <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-400" size={24} />
                         <input
                            type="text"
@@ -1305,13 +1561,12 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                            onChange={(e) => setSearchTerm(e.target.value)}
                            className="w-full pl-16 pr-6 py-5 bg-[#f2f4f7] border-none rounded-3xl outline-none focus:ring-4 focus:ring-blue-500/10 transition-all font-bold text-lg text-gray-700 placeholder:text-gray-300"
                         />
-                     </div>
+                     </div>}
                   </div>
-                  {canManage && (
+                  {canManage && viewMode !== 'PRODUCTS' && (
                      <button
                         onClick={() => {
-                           if (viewMode === 'PRODUCTS') setEditingProduct('NEW');
-                           else if (viewMode === 'TARIFFS') setEditingTariff('NEW');
+                           if (viewMode === 'TARIFFS') setEditingTariff('NEW');
                            else if (viewMode === 'GROUPS') setEditingGroup('NEW');
                            else if (viewMode === 'SEASONS') setEditingSeason('NEW');
                         }}
@@ -1330,7 +1585,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                      >
                         <ArrowLeft size={22} strokeWidth={2.8} /> Salir
                      </button>
-                     {canManage && viewMode === 'PRODUCTS' && (
+                     {false && canManage && viewMode === 'PRODUCTS' && (
                         <button
                            onClick={toggleAllSelection}
                            className={`h-16 w-16 shrink-0 rounded-2xl border flex items-center justify-center transition-all shadow-sm ${
@@ -1343,7 +1598,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                            <CheckSquare size={24} strokeWidth={2.5} />
                         </button>
                      )}
-                     <div className="relative flex-1 max-w-3xl">
+                     {viewMode !== 'PRODUCTS' && <div className="relative flex-1 max-w-3xl">
                         <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-300" size={22} />
                         <input
                            type="text"
@@ -1352,12 +1607,11 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                            onChange={(e) => setSearchTerm(e.target.value)}
                            className="h-16 w-full rounded-3xl border border-gray-200 bg-white pl-14 pr-5 text-base font-semibold text-gray-700 outline-none transition-all focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
                         />
-                     </div>
-                     {canManage && (
+                     </div>}
+                     {canManage && viewMode !== 'PRODUCTS' && (
                         <button
                            onClick={() => {
-                              if (viewMode === 'PRODUCTS') setEditingProduct('NEW');
-                              else if (viewMode === 'TARIFFS') setEditingTariff('NEW');
+                              if (viewMode === 'TARIFFS') setEditingTariff('NEW');
                               else if (viewMode === 'GROUPS') setEditingGroup('NEW');
                               else if (viewMode === 'SEASONS') setEditingSeason('NEW');
                            }}
@@ -1389,24 +1643,24 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
             {/* BULK ACTION BAR */}
             {selectedIds.size > 0 && viewMode === 'PRODUCTS' && (
-               <div className="fixed inset-x-3 bottom-6 md:inset-x-auto md:bottom-12 md:left-1/2 md:-translate-x-1/2 z-[100] animate-in slide-in-from-bottom-10 fade-in duration-500">
-                  <div className="mx-auto w-full bg-gray-900/98 text-white px-10 py-6 rounded-[3rem] shadow-[0_40px_80px_rgba(0,0,0,0.5)] flex items-center gap-10 border border-white/10 backdrop-blur-3xl">
-                     <div className="flex items-center gap-5 border-r border-white/10 pr-10">
-                        <div className="bg-blue-600 px-5 py-2 rounded-2xl text-lg font-black shadow-lg shadow-blue-500/40">{selectedIds.size}</div>
-                        <span className="text-sm font-black uppercase tracking-[0.2em] text-gray-400">Seleccionados</span>
+               <div className="fixed inset-x-3 bottom-4 z-[100] animate-in slide-in-from-bottom-6 fade-in duration-300 md:inset-x-auto md:bottom-8 md:left-1/2 md:-translate-x-1/2">
+                  <div className="mx-auto flex w-full items-center gap-4 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-gray-900 shadow-2xl">
+                     <div className="flex items-center gap-3 border-r border-gray-200 pr-4">
+                        <div className="rounded-xl bg-blue-600 px-3 py-1.5 text-sm font-black text-white">{selectedIds.size}</div>
+                        <span className="whitespace-nowrap text-sm font-black">seleccionados</span>
                      </div>
-                     <div className="flex gap-6 items-center">
+                     <div className="flex items-center gap-2">
                         {canManage && (
                            <button
                               onClick={() => setShowBulkModal(true)}
-                              className="px-8 py-3 bg-blue-600 hover:bg-blue-500 rounded-[1.5rem] font-black text-sm uppercase tracking-widest transition-all flex items-center gap-3 shadow-xl shadow-blue-500/20 active:scale-95"
+                              className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-black text-white transition hover:bg-blue-700 active:scale-95"
                            >
-                              <Settings2 size={20} /> Editar Propiedades
+                              <Settings2 size={18} /> Editar propiedades
                            </button>
                         )}
                         <button
                            onClick={() => setSelectedIds(new Set())}
-                           className="px-6 py-3 hover:bg-white/10 rounded-[1.5rem] font-black text-sm uppercase tracking-widest text-gray-400 transition-all"
+                           className="rounded-xl px-3 py-2.5 text-sm font-black text-gray-500 transition hover:bg-gray-100"
                         >
                            Cancelar
                         </button>
@@ -1418,7 +1672,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             <div className="responsive-content flex-1 min-h-0 overflow-hidden bg-white">
                <ErrorBoundary componentName="CatalogManager Content">
                   <div className="h-full overflow-y-auto custom-scrollbar">
-               {viewMode === 'PRODUCTS' && (
+               {viewMode === 'PRODUCTS' && renderProductCatalog()}
+               {false && viewMode === 'PRODUCTS' && (
                   <div className="min-h-full p-10 md:p-16 max-w-[1600px] mx-auto w-full">
                      {isTablet && (
                         <div className="flex justify-between items-start mb-14">
@@ -1810,16 +2065,6 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             </div>
          </div>
 
-         {/* Floating Action Button for Mobile */}
-         {!isLargeCatalogLayout && canManage && viewMode === 'PRODUCTS' && (
-            <button
-               onClick={() => setEditingProduct('NEW')}
-               className="fixed bottom-8 right-8 w-20 h-20 bg-blue-600 text-white rounded-[2rem] shadow-[0_25px_50px_rgba(37,99,235,0.4)] flex items-center justify-center z-50 active:scale-90 transition-all"
-            >
-               <Plus size={40} strokeWidth={4} />
-            </button>
-         )}
-
          {showBulkModal && (
             <BulkEditModal
                config={config}
@@ -1880,5 +2125,74 @@ const SidebarItem: React.FC<SidebarItemProps> = ({ label, icon, active, onClick 
       {active && <div className="ml-auto w-1.5 h-6 bg-blue-600 rounded-full"></div>}
    </button>
 );
+
+const ProductThumbnail: React.FC<{ product: Product }> = React.memo(({ product }) => {
+   const image = resolveProductImageSrc(product);
+   return <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-gray-100 bg-gray-50 p-1.5">
+      {image ? <img src={image} alt="" loading="lazy" className="h-full w-full object-contain" /> : <ImageIcon size={26} className="text-gray-300" aria-hidden="true" />}
+   </div>;
+});
+
+const CopyableCode: React.FC<{ value: string; label: string; strong?: boolean; onCopy: (value: string, label: string) => void }> = ({ value, label, strong, onCopy }) => (
+   <button type="button" disabled={!value} onClick={() => onCopy(value, label)} title={`Copiar ${label}`} className={`flex min-h-6 max-w-full items-center gap-1.5 text-left font-mono text-xs hover:text-blue-600 disabled:text-gray-300 ${strong ? 'font-black text-gray-800' : 'font-semibold text-gray-500'}`}>
+      <span className="truncate">{value || '—'}</span>{value && <Copy size={14} className="shrink-0" aria-hidden="true" />}
+   </button>
+);
+
+const StockIndicator: React.FC<{ value: number; status: ReturnType<typeof productStockStatus>; onClick: () => void }> = ({ value, status, onClick }) => {
+   const tone = status.tone === 'red' ? 'text-red-600' : status.tone === 'amber' ? 'text-amber-600' : 'text-emerald-600';
+   return <button type="button" onClick={onClick} className="min-h-11 text-left" title="Abrir existencias">
+      <span className="block text-[11px] font-semibold text-gray-400">Stock</span>
+      <strong className="block text-lg leading-5 text-gray-900">{value.toLocaleString()}</strong>
+      <span className={`text-xs font-bold ${tone}`}>{status.label}</span>
+   </button>;
+};
+
+const ProductPriceBlock: React.FC<{ product: Product; currency: string }> = ({ product, currency }) => {
+   const price = Number(product.price);
+   const cost = Number(product.cost);
+   const validPrice = Number.isFinite(price) && price >= 0;
+   const validCost = Number.isFinite(cost) && cost >= 0;
+   const margin = validPrice && price > 0 && validCost ? ((price - cost) / price) * 100 : null;
+   return <div>
+      <strong className="block whitespace-nowrap text-base font-black text-gray-900">{currency}{(validPrice ? price : 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+      {validCost && <span className="block whitespace-nowrap text-xs font-semibold text-gray-500">Costo: {currency}{cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
+      {margin !== null && Number.isFinite(margin) && <span className="block text-xs font-semibold text-gray-500">Margen: <b className={margin >= 0 ? 'text-emerald-600' : 'text-red-600'}>{margin.toFixed(1)}%</b></span>}
+   </div>;
+};
+
+const ActiveBadge: React.FC<{ active: boolean; sellable?: boolean; compact?: boolean }> = ({ active, sellable = true, compact }) => (
+   <span className="inline-flex flex-wrap gap-1">
+      <span className={`inline-flex items-center gap-1.5 rounded-lg font-black ${compact ? 'px-2 py-1 text-[11px]' : 'px-3 py-2 text-xs'} ${active ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}><span className={`h-2 w-2 rounded-full ${active ? 'bg-emerald-500' : 'bg-gray-400'}`} />{active ? 'Activo' : 'Inactivo'}</span>
+      {!sellable && <span className={`rounded-lg bg-amber-50 font-black text-amber-700 ${compact ? 'px-2 py-1 text-[11px]' : 'px-3 py-2 text-xs'}`}>No vendible</span>}
+   </span>
+);
+
+interface ProductRowActionsProps {
+   product: Product;
+   canManage: boolean;
+   isOpen: boolean;
+   onToggle: () => void;
+   onPrice: () => void;
+   onEdit: () => void;
+   onStock: () => void;
+   onDelete: () => void;
+}
+
+const ProductRowActions: React.FC<ProductRowActionsProps> = ({ product, canManage, isOpen, onToggle, onPrice, onEdit, onStock, onDelete }) => {
+   if (!canManage) return null;
+   return <div className="relative flex justify-end gap-1.5">
+      <button type="button" onClick={onPrice} className="flex h-11 min-w-11 flex-col items-center justify-center rounded-xl border border-gray-200 px-2 text-blue-600 hover:bg-blue-50" aria-label={`Tarifas de ${product.name}`} title="Tarifas"><DollarSign size={18} /><span className="hidden text-[10px] font-bold xl:block">Tarifas</span></button>
+      <button type="button" onClick={onEdit} className="flex h-11 min-w-11 flex-col items-center justify-center rounded-xl border border-gray-200 px-2 text-blue-600 hover:bg-blue-50" aria-label={`Editar ${product.name}`} title="Editar"><Edit2 size={17} /><span className="hidden text-[10px] font-bold xl:block">Editar</span></button>
+      <button type="button" onClick={onToggle} className="flex h-11 min-w-11 flex-col items-center justify-center rounded-xl border border-gray-200 px-2 text-gray-700 hover:bg-gray-50" aria-label={`Más acciones para ${product.name}`} aria-expanded={isOpen} title="Más acciones"><MoreHorizontal size={19} /><span className="hidden text-[10px] font-bold xl:block">Más</span></button>
+      {isOpen && <div className="absolute right-0 top-12 z-30 w-52 overflow-hidden rounded-xl border border-gray-200 bg-white p-1.5 text-sm font-bold shadow-xl">
+         <button type="button" onClick={onEdit} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-gray-700 hover:bg-gray-50"><Eye size={16} /> Ver detalle / editar</button>
+         <button type="button" onClick={onStock} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-gray-700 hover:bg-gray-50"><Archive size={16} /> Existencias</button>
+         <button type="button" onClick={onPrice} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-gray-700 hover:bg-gray-50"><DollarSign size={16} /> Tarifas</button>
+         <div className="my-1 border-t border-gray-100" />
+         <button type="button" onClick={onDelete} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-red-600 hover:bg-red-50"><Trash2 size={16} /> Eliminar</button>
+      </div>}
+   </div>;
+};
 
 export default CatalogManager;
