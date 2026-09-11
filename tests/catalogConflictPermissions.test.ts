@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CATALOG_CONFLICT_PERMISSIONS, canResolveCatalogEdit, hasCatalogConflictPermission } from '../services/sync/catalogEdits';
+import { CATALOG_CONFLICT_PERMISSIONS, canResolveCatalogEdit, hasCatalogConflictPermission, shouldShowCatalogEditInSyncMonitor } from '../services/sync/catalogEdits';
 import type { RoleDefinition, User } from '../types';
 
 const user = { id: 'user-1', name: 'Operador', pin: '1234', role: 'LIMITED', roleId: 'LIMITED' } satisfies User;
@@ -24,4 +24,11 @@ test('a failed pending catalog edit can be discarded but not retried as a confli
     assert.equal(canResolveCatalogEdit(failedPending, 'DISCARD'), true);
     assert.equal(canResolveCatalogEdit(failedPending, 'RETRY'), false);
     assert.equal(canResolveCatalogEdit({ status: 'PENDING', syncError: undefined }, 'DISCARD'), false);
+});
+
+test('resolved catalog edits leave the operational monitor but remain available for durable audit', () => {
+    assert.equal(shouldShowCatalogEditInSyncMonitor({ status: 'REJECTED', resolution: 'DISCARDED' }, true), false);
+    assert.equal(shouldShowCatalogEditInSyncMonitor({ status: 'REJECTED', resolution: undefined }, true), true);
+    assert.equal(shouldShowCatalogEditInSyncMonitor({ status: 'REJECTED', resolution: undefined }, false), false);
+    assert.equal(shouldShowCatalogEditInSyncMonitor({ status: 'PENDING', resolution: undefined }, false), true);
 });
