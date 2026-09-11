@@ -431,6 +431,7 @@ const FLOOR_PLAN_STORAGE_KEY = 'clic_pos_floor_plan_mirror_v1';
 const ACTIVE_USER_SESSION_STORAGE_KEY = 'clic_pos_active_user_session_v1';
 const FORCE_LOGIN_AFTER_EXIT_STORAGE_KEY = 'clic_pos_force_login_after_exit_v1';
 const PENDING_CLIENT_TABLE_SYNC_STORAGE_KEY = 'clic_pos_pending_client_table_sync_v1';
+const CLIENT_TABLE_POLL_INTERVAL_MS = 1000;
 // Un operador puede encadenar mesa → artículo → mesa en menos de un segundo.
 // El journal local ya está escrito; SQLite/Outbox esperan esta ventana para no
 // competir con la siguiente pintura, pero conservan orden FIFO después de ella.
@@ -5304,7 +5305,11 @@ const AppContent: React.FC = () => {
   }, [getCurrentTerminal]);
 
   const releaseActiveTableEditLock = useCallback(async (
-    options: { deferRemote?: boolean; trace?: ReturnType<typeof getLatestPosInteraction> } = {},
+    options: {
+      deferRemote?: boolean;
+      waitForPersistence?: boolean;
+      trace?: ReturnType<typeof getLatestPosInteraction>;
+    } = {},
   ): Promise<boolean> => {
     const lock = activeTableEditLockRef.current;
     if (!lock) {
@@ -5343,7 +5348,7 @@ const AppContent: React.FC = () => {
     } as PendingTableLockRelease;
 
     const releaseOperation = (async (): Promise<boolean> => {
-      await persistenceBarrier;
+      if (options.waitForPersistence !== false) await persistenceBarrier;
       if (pendingTableLockReleasesRef.current.get(tableId) !== pendingRelease) return true;
       pendingRelease.phase = 'RELEASING';
       for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -5394,6 +5399,20 @@ const AppContent: React.FC = () => {
       const released = await releaseActiveTableEditLock({ deferRemote: true });
       if (!released) {
         alert('No se pudo liberar la mesa anterior. Reintente antes de abrir otra mesa.');
+        return false;
+      }
+    }
+
+    // No permitir que una misma terminal acumule locks remotos al recorrer mesas.
+    // Antes de tomar otra, confirmar todas las liberaciones anteriores.
+    const priorReleases = Array.from(pendingTableLockReleasesRef.current.entries())
+      .filter(([pendingTableId]) => pendingTableId !== tableId)
+      .map(([, pendingRelease]) => pendingRelease.promise);
+    if (priorReleases.length > 0) {
+      const releaseResults = await Promise.all(priorReleases);
+      if (releaseResults.some(released => !released)) {
+        alert('No se pudo liberar la mesa anterior en la Caja Master. Reintente antes de abrir otra mesa.');
+        await fetchTables();
         return false;
       }
     }
@@ -7046,10 +7065,26 @@ const AppContent: React.FC = () => {
       const interval = setInterval(() => {
         if (isPosSaleActive()) return;
         void fetchTables();
-      }, isClientTerminalMode() ? 3000 : 10000);
+      }, isClientTerminalMode() ? CLIENT_TABLE_POLL_INTERVAL_MS : 10000);
       return () => clearInterval(interval);
     }
   }, [config.vertical, config.terminals, deviceId, currentView]);
+
+  useEffect(() => {
+    if (!isClientTerminalMode() || currentView === 'TABLE_DESIGNER') return;
+
+    const refreshVisibleTables = () => {
+      if (document.visibilityState !== 'visible' || isPosSaleActive()) return;
+      void fetchTables();
+    };
+
+    window.addEventListener('focus', refreshVisibleTables);
+    document.addEventListener('visibilitychange', refreshVisibleTables);
+    return () => {
+      window.removeEventListener('focus', refreshVisibleTables);
+      document.removeEventListener('visibilitychange', refreshVisibleTables);
+    };
+  }, [currentView]);
 
   useEffect(() => {
     // --- SYNC EVENT LISTENERS (For Slave Terminals) ---
@@ -11400,7 +11435,7 @@ const AppContent: React.FC = () => {
                       await handleUpdateParkedTickets(nextTickets, { reason: 'explicit' });
                     }
                   } finally {
-                    if (temporaryLockAcquired) await releaseActiveTableEditLock();
+                    if (temporaryLockAcquired) await releaseActiveTableEditLock({ waitForPersistence: false });
                   }
                 }}
                 onParkedOrderSplitResult={handleParkedOrderSplitFromMap}
@@ -11651,7 +11686,11 @@ const AppContent: React.FC = () => {
               // liberación remota conservan su orden, pero nunca bloquean volver
               // al mapa ni la siguiente interacción del operador.
               setTables(reconciled);
-              void releaseActiveTableEditLock({ deferRemote: true });
+              if (closedOrderId) {
+                void releaseActiveTableEditLock({ deferRemote: true });
+              } else {
+                void releaseActiveTableEditLock({ deferRemote: true, waitForPersistence: false });
+              }
               window.setTimeout(() => {
                 void (async () => {
                   await clearActiveCartDraftStorage().catch((error) => console.warn('No se pudo limpiar borrador activo tras cerrar mesa:', error));

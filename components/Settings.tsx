@@ -29,8 +29,10 @@ import {
   CashMovement,
   ZReport,
   Collection,
-  Room
+  Room,
+  DeviceRole
 } from '../types';
+import { resolveDeviceRoleValue } from '../utils/deviceRoleHelpers';
 
 import { getInventorySnapshotAtDate, getLeadTimePerformance, getABCRanking, getHRPerformance } from './AnalyticsLogic';
 import {
@@ -140,6 +142,14 @@ interface SettingsProps {
 
 type SettingsView = 'CHECKOUT_TRACKING' | 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'MASTER_NUMBER_RANGES' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
 
+const ORDER_TAKER_SETTINGS_VIEWS = new Set<SettingsView>([
+  'HOME',
+  'HARDWARE',
+  'PRODUCTION_AREAS',
+  'SYNC',
+  'CHECKOUT_TRACKING',
+]);
+
 type ReceivableRepairSummary = {
   scannedTransactions: number;
   scannedWalletMovements: number;
@@ -171,7 +181,26 @@ const Settings: React.FC<SettingsProps> = (props) => {
   const [fiscalReceptions, setFiscalReceptions] = useState<Reception[]>(props.receptions || []);
   const [fiscalSuppliers, setFiscalSuppliers] = useState<Supplier[]>(props.suppliers || []);
   const [isCheckingApkUpdate, setIsCheckingApkUpdate] = useState(false);
+  const activeTerminal = (props.config.terminals || []).find(terminal => (
+    terminal.id === props.terminalId
+    || terminal.config?.currentDeviceId === props.currentDeviceId
+  ));
+  const activeTerminalConfig = activeTerminal?.config as Record<string, any> | undefined;
+  const isOrderTakerMode = resolveDeviceRoleValue([
+    activeTerminalConfig?.deviceRole,
+    activeTerminalConfig?.terminalType,
+    activeTerminalConfig?.terminal_type,
+    activeTerminalConfig?.role,
+    activeTerminalConfig?.roleCode,
+    activeTerminalConfig?.role_code,
+  ], DeviceRole.STANDARD_POS) === DeviceRole.ORDER_TAKER;
   const usesPageScroll = currentView === 'HOME' || currentView === 'TERMINALS' || currentView === 'TAXES' || currentView === 'SERVICE_TYPES' || currentView === 'PRODUCTION_AREAS' || currentView === 'LAYOUT';
+
+  useEffect(() => {
+    if (isOrderTakerMode && !ORDER_TAKER_SETTINGS_VIEWS.has(currentView)) {
+      setCurrentView('HOME');
+    }
+  }, [currentView, isOrderTakerMode]);
 
   useEffect(() => {
     const previousBodyOverflow = document.body.style.overflow;
@@ -314,6 +343,71 @@ const Settings: React.FC<SettingsProps> = (props) => {
   };
 
   const renderContent = () => {
+    if (isOrderTakerMode && (currentView === 'HOME' || !ORDER_TAKER_SETTINGS_VIEWS.has(currentView))) {
+      return (
+        <div
+          className="max-w-7xl mx-auto w-full p-4 md:p-8 pb-24 md:pb-16 animate-in fade-in"
+          style={{ flex: '1 1 auto', minHeight: '100%' }}
+        >
+          <div className="flex flex-col gap-4 md:flex-row md:justify-between md:items-center mb-8">
+            <div>
+              <h1 className="text-3xl font-black text-gray-800">Configuración de esta tableta</h1>
+              <p className="text-gray-500 mt-1">Solo se muestran opciones necesarias para tomar y enviar pedidos.</p>
+            </div>
+            <button onClick={props.onClose} className="self-end md:self-auto p-3 bg-gray-100 rounded-full hover:bg-gray-200 transition-colors">
+              <X size={24} className="text-gray-600" />
+            </button>
+          </div>
+
+          <section>
+            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Operación local</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <SettingsCard
+                icon={Printer}
+                label="Hardware"
+                description="Impresoras de comandas y dispositivos"
+                color="bg-gray-700"
+                onClick={() => setCurrentView('HARDWARE')}
+                locked={!hasPermission('SETTINGS_HARDWARE')}
+              />
+              <SettingsCard
+                icon={ChefHat}
+                label="Centros de Producción"
+                description="Ruteo de cocina, barra y monitores"
+                color="bg-orange-600"
+                onClick={() => setCurrentView('PRODUCTION_AREAS')}
+                locked={!hasPermission('SETTINGS_ACCESS')}
+              />
+              <SettingsCard
+                icon={RefreshCw}
+                label="Sincronización"
+                description="Conexión y estado de la Caja Master"
+                color="bg-indigo-600"
+                onClick={() => setCurrentView('SYNC')}
+                locked={!hasPermission('SETTINGS_ACCESS')}
+              />
+              <SettingsCard
+                icon={Cloud}
+                label={isCheckingApkUpdate ? 'Buscando APK...' : 'Actualizar APK'}
+                description="Buscar y descargar la versión del POS"
+                color="bg-sky-700"
+                onClick={handleManualApkUpdateCheck}
+                locked={!hasPermission('SETTINGS_ACCESS') || isCheckingApkUpdate}
+              />
+              <SettingsCard
+                icon={ListChecks}
+                label="Diagnóstico operativo"
+                description="Seguimiento temporal de mesas y pedidos"
+                color="bg-slate-700"
+                onClick={() => setCurrentView('CHECKOUT_TRACKING')}
+                locked={!hasPermission('SETTINGS_ACCESS')}
+              />
+            </div>
+          </section>
+        </div>
+      );
+    }
+
     switch (currentView) {
       case 'IMPORT_EXPORT':
         return (

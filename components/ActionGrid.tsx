@@ -20,6 +20,7 @@ interface ActionGridProps {
     isTakeout?: boolean;
     serviceType?: OrderServiceType;
     actionRegion?: 'all' | 'ticket' | 'other';
+    hideFinancialClosings?: boolean;
 }
 
 const ActionGrid: React.FC<ActionGridProps> = ({
@@ -36,6 +37,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
     isTakeout = false,
     serviceType = isTakeout ? 'TAKEOUT' : 'DINE_IN',
     actionRegion = 'all',
+    hideFinancialClosings = false,
 }) => {
     const isHorizontal = orientation === 'horizontal';
     const shouldRenderLogout = showLogout && isHorizontal;
@@ -135,7 +137,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
                 {renderButton('AGENDA', 'Agenda', <Calendar />, 'utility')}
 
                 {/* CLOSING GROUP (Red) */}
-                {renderButton('Z_REPORT', 'Cierre Z', <Lock />, 'closing')}
+                {!hideFinancialClosings && renderButton('Z_REPORT', 'Cierre Z', <Lock />, 'closing')}
                 {shouldRenderLogout && renderButton('LOGOUT', 'Salir', <LogOut />, 'closing')}
                 {renderButton('EXIT_APP', 'Cerrar App', <Power />, 'closing')}
             </div>
