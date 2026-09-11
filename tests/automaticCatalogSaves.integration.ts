@@ -207,6 +207,36 @@ test('tariff overrides persist durably and pending activation or removal survive
     assert.equal(mergedPrices.find(row => row.tariffId === tariffB)?.price, 8);
     assert.equal(sends, 1);
 });
+test('the latest pending tariff value wins while an older ERP price snapshot arrives', async () => {
+    store.clear(); sends = 0;
+    const tariffId = '00000000-0000-4000-8000-000000000020';
+    const baseEdit = {
+        scope: {
+            terminalId,
+            tenantId,
+            companyId: '00000000-0000-4000-8000-000000000003',
+            deviceId: 'device-1',
+            baseUrl: 'https://erp.example.test',
+        },
+        label: 'Café', status: 'PENDING', syncStatus: 'PENDING', terminalId,
+        attempts: 0, nextAttemptAt: 0,
+    };
+    store.set('catalogEdits', [
+        { ...baseEdit, id: 'edit-1', createdAt: '2026-09-11T19:20:00.000Z', mutation: { id: 'edit-1', recordId: product.id, domain: 'tariff_prices', field: tariffId, before: { price: 6500, margin: 0 }, after: { price: 7000, margin: 0 }, actorId: 'operator' } },
+        { ...baseEdit, id: 'edit-2', createdAt: '2026-09-11T19:21:00.000Z', dependsOn: 'edit-1', mutation: { id: 'edit-2', recordId: product.id, domain: 'tariff_prices', field: tariffId, before: { price: 7000, margin: 0 }, after: { price: 6500, margin: 0 }, actorId: 'operator' } },
+        { ...baseEdit, id: 'edit-3', createdAt: '2026-09-11T19:22:00.000Z', dependsOn: 'edit-2', mutation: { id: 'edit-3', recordId: product.id, domain: 'tariff_prices', field: tariffId, before: { price: 6500, margin: 0 }, after: { price: 7500, margin: 0 }, actorId: 'operator' } },
+    ]);
+    const { preserveLocalCatalog } = await import('../services/sync/preserveLocalCatalog');
+    const incomingProducts = [{ ...product, price: 6000, tariffs: [{ tariffId, price: 6000, margin: 0 }] }];
+    const incomingPrices = [{ id: `${product.id}_${tariffId}`, productId: product.id, tariffId, price: 6000 }];
+
+    const preservedProducts = await preserveLocalCatalog('products', incomingProducts) as any[];
+    const preservedPrices = await preserveLocalCatalog('productPrices', incomingPrices) as any[];
+
+    assert.equal(preservedProducts[0].price, 7500);
+    assert.equal(preservedProducts[0].tariffs[0].price, 7500);
+    assert.equal(preservedPrices[0].price, 7500);
+});
 test('editing the default tariff does not enqueue a conflicting duplicate base-price mutation', async () => {
     store.clear(); sends = 0;
     const tariffId = '00000000-0000-4000-8000-000000000020';
