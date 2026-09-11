@@ -13,6 +13,11 @@ test('local item taxes are kept only when an older snapshot omits the field', ()
   assert.deepEqual(resolveIncomingTaxIds({} as any, local as any), ['tax-18']);
 });
 
+test('a populated canonical tax alias wins over an empty legacy alias', () => {
+  const local = { appliedTaxIds: [] };
+  assert.deepEqual(resolveIncomingTaxIds({ appliedTaxIds: [], tax_ids: ['tax-18'] } as any, local as any), ['tax-18']);
+});
+
 test('an explicit empty ERP tariff list clears stale local particular prices', () => {
   const local = { tariffs: [{ tariffId: 'tariff-1', price: 15 }] };
   assert.deepEqual(resolveIncomingTariffs({ tariffs: [] } as any, local as any), []);
