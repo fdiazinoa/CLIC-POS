@@ -2095,7 +2095,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       role="switch"
       aria-checked={Boolean(checked)}
       onClick={() => onChange(!checked)}
-      className="flex min-h-14 w-full cursor-pointer items-center justify-between gap-3 px-1 py-3 text-left transition-colors"
+      className="flex min-h-14 w-full cursor-pointer appearance-none items-center justify-between gap-3 bg-white px-1 py-3 text-left transition-colors"
     >
       <div className="flex items-center gap-3">
         <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${checked ? 'bg-blue-50 text-blue-700' : 'bg-slate-50 text-slate-400'}`}>
@@ -2606,7 +2606,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
         <ProductEditorTabs tabs={primaryTabs} activeId={activePrimaryTab} onSelect={selectPrimaryTab} />
 
         {/* Content Area */}
-        <main className="min-h-0 flex-1 overflow-y-auto bg-slate-50/60 p-3 sm:p-5 lg:p-6">
+        <main className="min-h-0 flex-1 overflow-y-auto bg-white p-3 sm:p-5 lg:p-6">
 
           {activePrimaryTab === 'INVENTORY' && (
             <div className="mx-auto mb-4 max-w-7xl">
@@ -2998,55 +2998,18 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       <textarea rows={3} maxLength={2000} value={formData.description || ''} onChange={e => setFormData({ ...formData, description: e.target.value })} onPaste={(e) => e.stopPropagation()} className="w-full resize-y rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-700 outline-none transition-colors focus:border-blue-400" />
                       <p className="mt-1 text-right text-[11px] text-slate-400">{(formData.description || '').length}/2000</p>
                     </div>
-                    <div className="border-t border-slate-100 pt-4">
-                      <h3 className="mb-3 text-sm font-black text-slate-800">Códigos y referencias</h3>
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold text-slate-700">Código de barras principal</label>
-                        <div className="flex min-h-11 items-center rounded-xl border border-slate-200 bg-white pr-1 focus-within:border-blue-400">
-                          <input type="text" value={formData.barcode || ''} onChange={e => setFormData({ ...formData, barcode: e.target.value })} onPaste={(e) => e.stopPropagation()} className="min-w-0 flex-1 bg-transparent px-3 font-mono text-sm outline-none" />
-                          <button type="button" onClick={() => void copyBarcode(formData.barcode || '')} className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-50 hover:text-blue-600" aria-label="Copiar código de barras"><Copy size={16} /></button>
-                        </div>
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold text-slate-700">SKU</label>
-                        <input type="text" value={(formData as any).sku || ''} onChange={e => setFormData({ ...formData, sku: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-mono text-sm outline-none focus:border-blue-400" />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold text-slate-700">Referencia</label>
-                        <input type="text" value={(formData as any).reference || (formData as any).referenceCode || (formData as any).reference_code || ''} onChange={e => setFormData({ ...formData, reference: e.target.value, referenceCode: e.target.value, reference_code: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-mono text-sm outline-none focus:border-blue-400" />
-                      </div>
-                      {Array.from({ length: visibleAdditionalBarcodes }).map((_, index) => {
-                        const value = index === 0 ? (formData.barcode_2 || formData.barcode2 || '') : (formData.barcode_3 || formData.barcode3 || '');
-                        return (
-                          <div key={index}>
-                            <label className="mb-1 block text-xs font-semibold text-slate-700">Código adicional {index + 1}</label>
-                            <div className="flex min-h-11 items-center rounded-xl border border-slate-200 bg-white pr-1 focus-within:border-blue-400">
-                              <input type="text" value={value} onChange={event => updateAdditionalBarcode(index, event.target.value)} className="min-w-0 flex-1 bg-transparent px-3 font-mono text-sm outline-none" />
-                              <button type="button" onClick={() => removeAdditionalBarcode(index)} className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500" aria-label={`Eliminar código adicional ${index + 1}`}><X size={16} /></button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    {visibleAdditionalBarcodes < 2 && (
-                      <button type="button" onClick={() => setVisibleAdditionalBarcodes(count => Math.min(2, count + 1))} className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-xl border border-blue-200 px-4 text-xs font-bold text-blue-700 hover:bg-blue-50">
-                        <Plus size={16} /> Agregar código
-                      </button>
-                    )}
-                    </div>
                   </section>
 
-                  {/* UOM Configuration */}
-                  <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
-                    <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2">
+                  <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+                  <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
+                    <h3 className="flex items-center gap-2 text-sm font-black text-slate-800">
                       <Scale size={16} className="text-blue-600" />
-                      Unidades y Medidas
+                      Unidades de medida
                     </h3>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
                       <div>
                         <UnitSelector
-                          label="Unidad de Compra"
+                          label="Unidad de compra"
                           value={formData.purchaseUnit || ''}
                           onChange={val => setFormData({ ...formData, purchaseUnit: val })}
                           config={config}
@@ -3060,7 +3023,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       </div>
                       <div>
                         <UnitSelector
-                          label="Unidad de Inventario (Base)"
+                          label="Unidad de inventario"
                           value={formData.measurementUnit || ''}
                           onChange={val => setFormData({ ...formData, measurementUnit: val })}
                           config={config}
@@ -3071,9 +3034,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
                       <div>
-                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Factor de Conversión</label>
+                        <label className="mb-1 ml-1 block text-[10px] font-black uppercase text-slate-500">Factor de conversión</label>
                         <div className="flex gap-2 items-center">
                           <div className="relative flex-1">
                             <input
@@ -3081,7 +3044,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                               placeholder="1"
                               value={formData.conversionFactor || ''}
                               onChange={e => setFormData({ ...formData, conversionFactor: parseFloat(e.target.value) })}
-                              className="w-full p-3 bg-gray-50 border-2 border-transparent rounded-xl text-sm font-medium focus:bg-white focus:border-blue-200"
+                              className="w-full rounded-xl border border-slate-200 bg-white p-3 text-sm font-medium focus:border-blue-300"
                             />
                             <div className="absolute right-3 top-3 text-xs text-gray-400 font-bold">Base / Compra</div>
                           </div>
@@ -3093,7 +3056,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                               e.stopPropagation();
                               setShowConversionHelper(true);
                             }}
-                            className="p-3 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded-xl transition-colors cursor-pointer shadow-sm border border-blue-200 h-full aspect-square flex items-center justify-center"
+                            className="flex h-full aspect-square cursor-pointer items-center justify-center rounded-xl border border-blue-200 bg-white p-3 text-blue-600 transition-colors hover:bg-blue-50"
                             title="Calculadora de Conversión"
                           >
                             <Calculator size={18} />
@@ -3115,7 +3078,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                             placeholder="1"
                             value={formData.batchYield || ''}
                             onChange={e => setFormData({ ...formData, batchYield: parseFloat(e.target.value) })}
-                            className="w-full p-3 bg-blue-50 border-2 border-blue-100 rounded-xl text-sm font-bold text-blue-800 focus:border-blue-300"
+                            className="w-full rounded-xl border border-blue-200 bg-white p-3 text-sm font-bold text-blue-800 focus:border-blue-300"
                           />
                           <p className="text-[10px] text-gray-400 mt-1 pl-1">Unidades producidas por esta receta</p>
                         </div>
@@ -3123,9 +3086,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                     </div>
                   </section>
 
-                  <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
-                    <h3 className="text-sm font-black text-slate-800">Clasificación comercial</h3>
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
+                    <h3 className="flex items-center gap-2 text-sm font-black text-slate-800"><ListTree size={16} className="text-blue-600" /> Clasificación comercial</h3>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
                       <div>
                         <label className="mb-1 block text-xs font-semibold text-slate-700">Departamento</label>
                         <select value={formData.departmentId || ''} onChange={event => setFormData({ ...formData, departmentId: event.target.value })} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400">
@@ -3163,6 +3126,45 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                         </select>
                       </div>
                     </div>
+                  </section>
+                  </div>
+
+                  <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                    <h3 className="mb-3 text-sm font-black text-slate-800">Códigos y referencias</h3>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">Código de barras principal</label>
+                        <div className="flex min-h-11 items-center rounded-xl border border-slate-200 bg-white pr-1 focus-within:border-blue-400">
+                          <input type="text" value={formData.barcode || ''} onChange={e => setFormData({ ...formData, barcode: e.target.value })} onPaste={(e) => e.stopPropagation()} className="min-w-0 flex-1 bg-transparent px-3 font-mono text-sm outline-none" />
+                          <button type="button" onClick={() => void copyBarcode(formData.barcode || '')} className="flex h-10 w-10 appearance-none items-center justify-center rounded-lg bg-white text-slate-400 hover:text-blue-600" aria-label="Copiar código de barras"><Copy size={16} /></button>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">SKU</label>
+                        <input type="text" value={(formData as any).sku || ''} onChange={e => setFormData({ ...formData, sku: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-mono text-sm outline-none focus:border-blue-400" />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">Referencia</label>
+                        <input type="text" value={(formData as any).reference || (formData as any).referenceCode || (formData as any).reference_code || ''} onChange={e => setFormData({ ...formData, reference: e.target.value, referenceCode: e.target.value, reference_code: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-mono text-sm outline-none focus:border-blue-400" />
+                      </div>
+                      {Array.from({ length: visibleAdditionalBarcodes }).map((_, index) => {
+                        const value = index === 0 ? (formData.barcode_2 || formData.barcode2 || '') : (formData.barcode_3 || formData.barcode3 || '');
+                        return (
+                          <div key={index}>
+                            <label className="mb-1 block text-xs font-semibold text-slate-700">Código adicional {index + 1}</label>
+                            <div className="flex min-h-11 items-center rounded-xl border border-slate-200 bg-white pr-1 focus-within:border-blue-400">
+                              <input type="text" value={value} onChange={event => updateAdditionalBarcode(index, event.target.value)} className="min-w-0 flex-1 bg-transparent px-3 font-mono text-sm outline-none" />
+                              <button type="button" onClick={() => removeAdditionalBarcode(index)} className="flex h-10 w-10 appearance-none items-center justify-center rounded-lg bg-white text-slate-400 hover:text-red-500" aria-label={`Eliminar código adicional ${index + 1}`}><X size={16} /></button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {visibleAdditionalBarcodes < 2 && (
+                      <button type="button" onClick={() => setVisibleAdditionalBarcodes(count => Math.min(2, count + 1))} className="mt-3 inline-flex min-h-11 appearance-none items-center gap-2 rounded-xl border border-blue-200 bg-white px-4 text-xs font-bold text-blue-700 hover:bg-blue-50">
+                        <Plus size={16} /> Agregar código
+                      </button>
+                    )}
                   </section>
                 </div>
 

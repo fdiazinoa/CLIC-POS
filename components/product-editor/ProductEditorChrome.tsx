@@ -106,7 +106,7 @@ export const ProductEditorTabs: React.FC<ProductEditorTabsProps> = ({ tabs, acti
             type="button"
             onClick={() => onSelect(tab.id)}
             aria-current={selected ? 'page' : undefined}
-            className={`flex min-h-11 shrink-0 items-center gap-2 border-b-2 px-3 text-xs font-bold transition-colors sm:text-sm ${selected ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}
+            className={`flex min-h-11 shrink-0 appearance-none items-center gap-2 border-b-2 bg-white px-3 text-xs font-bold transition-colors sm:text-sm ${selected ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}
           >
             <Icon size={17} />
             {tab.label}
