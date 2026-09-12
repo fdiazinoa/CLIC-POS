@@ -15,6 +15,35 @@ import { getConfigPushV2Diagnostics, triggerErpSyncOutbox } from '../utils/erpSy
 import { syncTriggerCoordinator } from '../services/sync/SyncTriggerCoordinator';
 import { CATALOG_CONFLICT_PERMISSIONS, catalogEditQueue, hasCatalogConflictPermission, resolveCatalogConflict, shouldShowCatalogEditInSyncMonitor } from '../services/sync/catalogEdits';
 
+const catalogFieldLabels: Record<string, string> = {
+    tax_ids: 'Impuestos',
+    measurement_unit: 'Unidad de inventario',
+    purchase_unit: 'Unidad de compra',
+    department_id: 'Departamento',
+    section_id: 'Sección',
+    family_id: 'Familia',
+    subfamily_id: 'Subfamilia',
+    brand_id: 'Marca',
+    pos_category_id: 'Categoría POS',
+    precio_venta: 'Precio',
+};
+
+export const resolveSyncDocumentDisplayId = (collection: string, document: any): string => {
+    if (collection === 'catalogEdits') {
+        const label = String(document?.label || '').trim();
+        const field = catalogFieldLabels[String(document?.mutation?.field || '')]
+            || String(document?.mutation?.field || '').trim();
+        if (label && field) return `${label} · ${field}`;
+        if (label) return label;
+    }
+    return document?.sequenceNumber
+        || document?.displayId
+        || document?.code
+        || document?.documentRef
+        || document?.reference
+        || document?.id;
+};
+
 interface SyncSettingsProps {
     config: BusinessConfig;
     currentUser: User | null;
@@ -309,12 +338,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
                 ) => (Array.isArray(documents) ? documents : []).map((document: any) => ({
                     key: `${collection}:${document.id}`,
                     collection,
-                    id: document.sequenceNumber
-                        || document.displayId
-                        || document.code
-                        || document.documentRef
-                        || document.reference
-                        || document.id,
+                    id: resolveSyncDocumentDisplayId(collection, document),
                     terminalId: document.terminalId || document.source_terminal_id || '-',
                     terminalLabel: resolveTerminalDisplayName(document.terminalId || document.source_terminal_id || '-'),
                     type,

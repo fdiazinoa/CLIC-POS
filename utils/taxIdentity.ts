@@ -55,3 +55,30 @@ export const normalizeTaxIdentifiersForSelection = (
 
   return current.filter((identifier) => !taxMatchesIdentifier(tax, identifier));
 };
+
+export const canonicalizeTaxMutationValues = (
+  before: unknown[] | undefined,
+  after: unknown[] | undefined,
+  taxes: Array<Pick<TaxDefinition, 'id'> & Partial<Pick<TaxDefinition, 'code'>>> | undefined
+): { before: string[]; after: string[]; repaired: boolean } => {
+  const originalBefore = Array.isArray(before)
+    ? before.filter((value): value is string => typeof value === 'string' && Boolean(value.trim())).map(value => value.trim())
+    : [];
+  const originalAfter = Array.isArray(after)
+    ? after.filter((value): value is string => typeof value === 'string' && Boolean(value.trim())).map(value => value.trim())
+    : [];
+  const canonicalBefore = canonicalizeTaxIdentifiers(originalBefore, taxes);
+  const canonicalAfter = canonicalizeTaxIdentifiers(originalAfter, taxes);
+
+  // Never turn an unknown non-empty selection into an unintended tax removal.
+  if (originalAfter.length > 0 && canonicalAfter.length === 0) {
+    return { before: originalBefore, after: originalAfter, repaired: false };
+  }
+
+  return {
+    before: canonicalBefore,
+    after: canonicalAfter,
+    repaired: JSON.stringify(originalBefore) !== JSON.stringify(canonicalBefore)
+      || JSON.stringify(originalAfter) !== JSON.stringify(canonicalAfter),
+  };
+};

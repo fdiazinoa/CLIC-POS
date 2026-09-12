@@ -4,8 +4,9 @@ import { apiSyncAdapter } from './ApiSyncAdapter';
 import { readTerminalCredentialsSync } from './TerminalCredentialStore';
 import { loadSyncProfile } from './SyncProfile';
 import { CatalogEditQueue, type CatalogEdit, type CatalogScope } from './CatalogEditQueue';
-import type { Permission, RoleDefinition, User } from '../../types';
+import type { BusinessConfig, Permission, RoleDefinition, User } from '../../types';
 import { v4 as uuid } from 'uuid';
+import { canonicalizeTaxMutationValues } from '../../utils/taxIdentity';
 export const catalogEditsEnabled = () => import.meta.env.VITE_POS_CATALOG_EDITS_ENABLED === 'true';
 export function catalogScopeMatches(scope: CatalogScope) {
     const profile = loadSyncProfile();
@@ -124,7 +125,23 @@ export const catalogEditQueue = new CatalogEditQueue({
     read: readCatalogEdits, save: edit => db.saveDocument('catalogEdits', edit),
     matchesScope: catalogScopeMatches, now: Date.now,
     send: async edit => {
-        const result = await apiSyncAdapter.sendCatalogEdit(edit);
+        let outboundEdit = edit;
+        if (edit.mutation.domain === 'item_taxes' && edit.mutation.field === 'tax_ids') {
+            const storedConfig = await db.get('config');
+            const currentConfig = (Array.isArray(storedConfig) ? storedConfig[0] : storedConfig) as BusinessConfig | undefined;
+            const repaired = canonicalizeTaxMutationValues(
+                Array.isArray(edit.mutation.before) ? edit.mutation.before : [],
+                Array.isArray(edit.mutation.after) ? edit.mutation.after : [],
+                currentConfig?.taxes,
+            );
+            if (repaired.repaired) {
+                outboundEdit = {
+                    ...edit,
+                    mutation: { ...edit.mutation, before: repaired.before, after: repaired.after },
+                };
+            }
+        }
+        const result = await apiSyncAdapter.sendCatalogEdit(outboundEdit);
         if (result.status === 'APPLIED' && edit.mutation.domain === 'item_lifecycle' && edit.mutation.field === 'create'
             && edit.mutation.after && typeof edit.mutation.after === 'object' && !Array.isArray(edit.mutation.after)) {
             const { markNumberedMasterSynced } = await import('./MasterNumberRangeService');
