@@ -8,7 +8,7 @@ const source = await readFile(
 );
 
 test('interrupted and legacy error states return to a consumable retry state', () => {
-    const recovery = source.match(/private async recoverStuckSyncItems\(\)[\s\S]*?private async recoverCompletedTransactionsForReplay/)?.[0] || '';
+    const recovery = source.match(/private async recoverStuckSyncItems\(\)[\s\S]*?private async pruneSyncedItems/)?.[0] || '';
     assert.match(recovery, /syncStatus === 'SYNCING' \|\| item\?\.syncStatus === 'ERROR'/);
     assert.match(recovery, /item\.syncStatus = 'RETRY_WAIT'/);
     assert.doesNotMatch(recovery, /item\.syncStatus = 'ERROR'/);
