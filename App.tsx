@@ -1864,6 +1864,7 @@ const AppContent: React.FC = () => {
     }
     return isVisorMode ? 'VISOR' : 'LOGIN';
   });
+  const [tableMapExitPending, setTableMapExitPending] = useState(false);
   const currentViewRef = useRef<ViewState>(currentView);
   const currentUserRef = useRef<User | null>(null);
   const [scanTargetTicketId, setScanTargetTicketId] = useState<string | null>(null); // NEW: Auto-select ticket from scan
@@ -1875,6 +1876,7 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     currentViewRef.current = currentView;
+    if (currentView !== 'TABLE_MAP') setTableMapExitPending(false);
   }, [currentView]);
 
   useEffect(() => {
@@ -2097,6 +2099,11 @@ const AppContent: React.FC = () => {
 
       let asyncRequestSequence = 0;
       const asyncMethods = new Set([
+        'printEscPos',
+        'printEscpos',
+        'printRaw',
+        'printHtml',
+        'print',
         'startMasterServer',
         'updateMasterServerConfig',
         'stopMasterServer',
@@ -11314,10 +11321,19 @@ const AppContent: React.FC = () => {
           <div className="h-screen bg-slate-950 overflow-hidden relative">
             <button
               type="button"
-              onClick={() => setCurrentView('POS')}
+              onClick={() => {
+                if (tableMapExitPending) return;
+                // Paint acknowledgement before mounting the heavier sales
+                // catalog. The transition lets React yield to input on slower
+                // restaurant terminals instead of presenting a frozen map.
+                setTableMapExitPending(true);
+                window.requestAnimationFrame(() => handleViewChange('POS'));
+              }}
+              disabled={tableMapExitPending}
+              aria-busy={tableMapExitPending}
               className="absolute left-4 top-4 z-50 rounded-2xl border border-white/15 bg-slate-950/60 px-4 py-2.5 text-sm font-black text-slate-100 shadow-[0_16px_40px_rgba(2,6,23,0.55)] backdrop-blur-xl hover:bg-white/[0.14] active:scale-[0.98]"
             >
-              Cerrar
+              {tableMapExitPending ? 'Abriendo venta…' : 'Cerrar'}
             </button>
             <div className="h-full overflow-hidden relative">
               <TableMap

@@ -39,6 +39,14 @@ test('background config and print retries defer while POS input is active', () =
   assert.match(appSource, /addEventListener\(POS_SALE_ACTIVITY_EVENT, wakeQueue as EventListener\)/);
 });
 
+test('background queues yield cooperatively between operational jobs', () => {
+  const printQueueSource = readFileSync(new URL('../services/printer/OfflinePrintQueueService.ts', import.meta.url), 'utf8');
+  assert.match(backgroundSyncSource, /yieldToOperatorUi\(\): Promise<void>/);
+  assert.match(backgroundSyncSource, /await this\.yieldToOperatorUi\(\)/);
+  assert.match(printQueueSource, /if \(isPosSaleActive\(\)\) break/);
+  assert.match(printQueueSource, /await yieldToOperatorUi\(\)/);
+});
+
 test('terminal config snapshots are serialized to avoid overlapping heavy applies', () => {
   assert.match(syncSource, /terminalConfigRefreshQueue: Promise<void> = Promise\.resolve\(\)/);
   assert.match(syncSource, /await previousRefresh\.catch\(\(\) => undefined\)/);

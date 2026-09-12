@@ -122,6 +122,27 @@ test('la WebView entrega el snapshot operativo al servidor nativo sin sobreescri
   assert.match(appSource, /No se pudo confirmar la orden local/);
 });
 
+test('la impresión Android no bloquea ventas ni el bridge operativo de mesas', () => {
+  for (const method of ['printEscPos', 'printEscpos', 'printRaw', 'printHtml', 'print']) {
+    assert.match(appSource, new RegExp(`'${method}'`));
+    assert.match(bridgeSource, new RegExp(`${method}: true`));
+    assert.match(bridgeSource, new RegExp(`"${method}" ->`));
+  }
+  assert.match(bridgeSource, /private val printBridgeExecutor = Executors\.newSingleThreadExecutor\(\)/);
+  assert.match(bridgeSource, /"printEscPos", "printEscpos", "printRaw", "printHtml", "print" -> printBridgeExecutor/);
+});
+
+test('cerrar el mapa confirma el toque antes de montar ventas de forma concurrente', () => {
+  const tableMapStart = appSource.indexOf("case 'TABLE_MAP':");
+  const tableDesignerStart = appSource.indexOf("case 'TABLE_DESIGNER':", tableMapStart);
+  const tableMapSource = appSource.slice(tableMapStart, tableDesignerStart);
+
+  assert.match(tableMapSource, /setTableMapExitPending\(true\)/);
+  assert.match(tableMapSource, /requestAnimationFrame\(\(\) => handleViewChange\('POS'\)\)/);
+  assert.match(tableMapSource, /Abriendo venta…/);
+  assert.doesNotMatch(tableMapSource, /onClick=\{\(\) => setCurrentView\('POS'\)\}/);
+});
+
 test('el puente Android publica reconciliación, locks y sincronización serializada al frontend', () => {
   assert.match(bridgeSource, /fun getMasterRestaurantState/);
   assert.match(bridgeSource, /fun acquireMasterTableLock/);

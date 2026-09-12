@@ -73,6 +73,11 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
                   var asyncInFlight = window.__CLIC_NATIVE_ASYNC_IN_FLIGHT__ || new Map();
                   window.__CLIC_NATIVE_ASYNC_IN_FLIGHT__ = asyncInFlight;
                   var asyncMethods = {
+                    printEscPos: true,
+                    printEscpos: true,
+                    printRaw: true,
+                    printHtml: true,
+                    print: true,
                     startMasterServer: true,
                     updateMasterServerConfig: true,
                     stopMasterServer: true,
@@ -212,6 +217,10 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
     private val appContext = context.applicationContext
     private val webViewRef = WeakReference(webView)
     private val asyncBridgeExecutor = Executors.newSingleThreadExecutor()
+    // Printer sockets may spend seconds connecting or flushing. Keep that I/O
+    // away from both the WebView thread and the operational Master bridge so a
+    // slow printer cannot freeze sales or delay table lock/revision traffic.
+    private val printBridgeExecutor = Executors.newSingleThreadExecutor()
     private val fingerprintVerificationInFlight = AtomicBoolean(false)
     private val clipboardManager = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
 
@@ -785,9 +794,18 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
     @JavascriptInterface
     fun callAsync(requestID: String?, method: String?, payloadJson: String?) {
         if (requestID.isNullOrBlank() || method.isNullOrBlank()) return
-        asyncBridgeExecutor.execute {
+        val executor = when (method) {
+            "printEscPos", "printEscpos", "printRaw", "printHtml", "print" -> printBridgeExecutor
+            else -> asyncBridgeExecutor
+        }
+        executor.execute {
             val raw = runCatching {
                 when (method) {
+                    "printEscPos" -> printEscPos(payloadJson)
+                    "printEscpos" -> printEscpos(payloadJson)
+                    "printRaw" -> printRaw(payloadJson)
+                    "printHtml" -> printHtml(payloadJson)
+                    "print" -> print(payloadJson)
                     "startMasterServer" -> startMasterServer(payloadJson)
                     "updateMasterServerConfig" -> updateMasterServerConfig(payloadJson)
                     "stopMasterServer" -> stopMasterServer(payloadJson)

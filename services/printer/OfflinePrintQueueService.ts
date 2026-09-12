@@ -1,6 +1,7 @@
 import { BusinessConfig } from '../../types';
 import { db } from '../../utils/db';
 import { PrinterRole, PrintRouterService } from './PrintRouterService';
+import { isPosSaleActive } from '../../utils/posSaleActivity';
 
 export interface OfflinePrintQueueItem {
   id: string;
@@ -35,6 +36,9 @@ interface EnqueuePrintJobPayload {
 const queueCollection = 'offline_print_queue';
 let processing = false;
 let lastDbNotReadyLogAt = 0;
+
+const yieldToOperatorUi = (): Promise<void> =>
+  new Promise(resolve => window.setTimeout(resolve, 0));
 
 const isDbNotReadyError = (error: unknown): boolean => {
   const message = String((error as any)?.message || error || '').toLowerCase();
@@ -130,6 +134,7 @@ export const offlinePrintQueueService = {
       const queue = sortByCreatedAt(await getQueue());
 
       for (const item of queue) {
+        if (isPosSaleActive()) break;
         if (!(item.status === 'PENDING' || item.status === 'ERROR' || item.status === 'SYNCING')) continue;
 
         const workingItem: OfflinePrintQueueItem = {
@@ -189,6 +194,8 @@ export const offlinePrintQueueService = {
           await db.saveDocument(queueCollection as any, failedItem as any);
           failed += 1;
         }
+
+        await yieldToOperatorUi();
       }
     } catch (error) {
       if (isDbNotReadyError(error)) {
