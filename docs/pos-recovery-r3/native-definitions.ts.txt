@@ -1,0 +1,644 @@
+// Verbatim excerpts of types.ts, source hash bc0f77f5ad904edd9a00d72184d9388b992bd39e023fea70f4858115f0072e0b
+// Referenced auxiliary types retain their native names; this is evidence, not a standalone compilation unit.
+
+
+export type SyncStatus =
+  | 'PENDING'
+  | 'SYNCING'
+  | 'COMPLETED'
+  | 'ERROR'
+  | 'SYNCED_CLOUD'
+  | 'SYNCED_ACTIVE'
+  | 'SYNCED_MASTER'
+  | 'APPLIED_ERP'
+  | 'RETRY_WAIT'
+  | 'BLOCKED_FUNCTIONAL'
+  | 'FAILED_FINAL';
+
+export type CloudSyncStatus = 'PENDING' | 'SYNCED' | 'ERROR';
+
+
+export interface FiscalRangeDGII {
+  id: string;
+  type: FiscalDocumentCode;
+  prefix: string;
+  startNumber: number;
+  endNumber: number;
+  currentGlobal: number; // Último entregado a cualquier terminal
+  expiryDate: string;
+  isActive: boolean;
+}
+
+
+export interface FiscalAllocation {
+  id: string;
+  terminalId: string;
+  fiscalRangeId: string;
+  ncfType: FiscalDocumentCode;
+  reservedStart: number;
+  reservedEnd: number;
+  nextNumber: number;
+  status: 'ACTIVE' | 'PAUSED' | 'EXHAUSTED' | 'RELEASED' | 'CONFLICTED' | 'LEGACY';
+  releasedAt: string | null;
+  prefix?: string;
+  metadata?: Record<string, any>;
+}
+
+
+export interface LocalFiscalBuffer {
+  id: string;
+  type: FiscalDocumentCode;
+  prefix: string;
+  currentNumber: number; // El que se usará en la próxima factura
+  endNumber: number;     // Límite de este lote
+  expiryDate: string;
+  startNumber?: number;
+  terminalId?: string;
+  fiscalRangeId?: string;
+  allocationId?: string;
+}
+
+
+// Document Types for all transaction categories
+export type DocumentType =
+  // Sales
+  | 'TICKET'           // Regular sale
+  | 'REFUND'           // Refund/Return
+  | 'VOID'             // Voided transaction
+  | 'COMPLIMENTARY'    // Invitation/courtesy with inventory impact and no fiscal emission
+
+  // Inventory
+  | 'TRANSFER'         // Transfer between warehouses
+  | 'ADJUSTMENT_IN'    // Positive inventory adjustment
+  | 'ADJUSTMENT_OUT'   // Negative inventory adjustment
+  | 'PURCHASE'         // Purchase from supplier
+  | 'PRODUCTION'       // Production/Assembly
+
+  // Cash
+  | 'CASH_IN'          // Cash in
+  | 'CASH_OUT'         // Cash out
+  | 'CASH_DEPOSIT'     // Bank deposit
+  | 'CASH_WITHDRAWAL'  // Cash withdrawal
+
+  // Closures
+  | 'Z_REPORT'         // Cash register closure
+  | 'X_REPORT'         // Partial report
+
+  // Accounts
+  | 'RECEIVABLE'       // Accounts receivable
+  | 'PAYABLE'          // Accounts payable
+  | 'PAYMENT_IN'       // Payment received
+  | 'PAYMENT_OUT';
+     // Payment made
+
+export interface DocumentSeries {
+  id: string;
+  code?: string;
+  documentType: DocumentType;  // Functional type
+  name: string;
+  description: string;
+  prefix: string;
+  nextNumber: number;
+  padding: number;
+  enabled?: boolean;
+  source?: string;
+  icon: string;
+  color: string;
+  businessUnit?: string;  // Optional: "Tienda Norte", "Caja Express"
+}
+
+
+export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'WALLET' | 'ADVANCE' | 'OTHER' | 'CREDIT' | 'STORE_CREDIT' | 'UBER_EATS';
+
+
+export interface Product {
+  id: string;
+  sku?: string;
+  external_code?: string;
+  externalCode?: string;
+  created_source?: 'POS' | string;
+  source_terminal_id?: string;
+  master_number_range_id?: string;
+  master_number_value?: number;
+  name: string;
+  price: number;
+  category: string;
+  /** Orden visual del artículo dentro de su categoría en el POS. */
+  posSortOrder?: number;
+  stock?: number;
+  qty_committed?: number; // Committed for events/bookings
+  image?: string;
+  imageUrl?: string;
+  imageVersion?: string;
+  imageLocalPath?: string | null;
+  barcode?: string;
+  cost?: number;
+  is_sellable?: boolean;
+  theoreticalCost?: number; // New calculated cost
+  type?: ProductType;
+  isInventoriable?: boolean;
+  kitInventoryMode?: KitInventoryMode;
+  recipeDetails?: RecipeDetail[]; // The BOM
+  images: string[];
+  media?: MediaAsset[];
+  attributes: ProductAttribute[];
+  variants: ProductVariant[];
+  tariffs: TariffPrice[];
+  stockBalances?: Record<string, number>;
+  activeInWarehouses?: string[];
+  appliedTaxIds: string[];
+  minStock?: number;
+  warehouseSettings?: Record<string, { min: number, max: number }>;
+  availableModifiers?: Modifier[];
+  modifier_groups?: ModifierGroup[];
+  modifierGroups?: ModifierGroup[];
+  fraction_rule?: ProductFractionRule;
+  fractionRule?: ProductFractionRule;
+  combo_groups?: ComboGroup[];
+  comboGroups?: ComboGroup[];
+  note_presets?: string[];
+  notePresets?: string[];
+  product_type?: 'SIMPLE' | 'COMBO' | 'FRACTIONABLE' | 'SERVICE' | string;
+  restaurant?: {
+    product_type?: 'SIMPLE' | 'COMBO' | 'FRACTIONABLE' | 'SERVICE' | string;
+    production_area_id?: string;
+    productType?: string;
+    productionAreaId?: string;
+    modifier_groups?: ModifierGroup[];
+    modifierGroups?: ModifierGroup[];
+    fraction_rule?: ProductFractionRule;
+    fractionRule?: ProductFractionRule;
+    combo_groups?: ComboGroup[];
+    comboGroups?: ComboGroup[];
+    note_presets?: string[];
+    notePresets?: string[];
+    [key: string]: any;
+  };
+  description?: string;
+  departmentId?: string;
+  sectionId?: string;
+  familyId?: string;
+  subfamilyId?: string;
+  brandId?: string;
+  operationalFlags?: ProductOperationalFlags;
+  requires_verification?: boolean;
+  updatedAt?: string;
+  hasActivePromotion?: boolean; // UI Flag for badges
+  returnReason?: string; // For items with qty < 0
+  subtotalizedAt?: string;
+  subtotalizedBy?: string;
+  primarySupplierId?: string; // NEW: Preferred supplier for lead time calculation
+  production_area_id?: string; // NEW: For command routing
+
+  // UOM & Yield
+  measurementUnit?: string; // e.g. 'gr', 'ml', 'oz'
+  purchaseUnit?: string;    // e.g. 'Saco', 'Caja', 'Botella'
+  conversionFactor?: number; // e.g. 1 Saco = 50,000 gr. Default: 1
+  batchYield?: number;      // e.g. Recipe produces 50 units. Default: 1
+}
+
+
+/**
+ * Cart Item
+ *
+ * IMPORTANT - PRICE SNAPSHOT PROTECTION:
+ * When a product is added to cart, its `price` field becomes a SNAPSHOT
+ * and is FROZEN for the duration of that sale. Subsequent catalog updates
+ * (price changes, bulk updates, etc.) WILL NOT affect items already in cart.
+ *
+ * This prevents the following scenario:
+ * - Customer adds item @ $2.50
+ * - Admin changes price to $3.00 on master terminal
+ * - Catalog syncs to slave
+ * - Customer would suddenly owe $3.00 instead of $2.50
+ *
+ * With snapshot protection:
+ * - Price at time of adding to cart is preserved
+ * - Customer pays what they saw when they added item
+ * - Next sale will use new price
+ */
+export interface CartItem extends Product {
+  quantity: number;
+  cartId: string;
+  isReturnLine?: boolean;
+  createdAt?: string;
+  modifiers?: string[];
+  restaurantConfig?: {
+    modifierGroups?: Record<string, string[]>;
+    comboGroups?: Record<string, string[]>;
+    fractions?: Array<{ id: string; name: string; price: number; ratio: number }>;
+    selected_modifiers?: any[];
+    selected_fraction_parts?: any[];
+    selected_combo_items?: any[];
+    product_type?: string;
+    production_area_id?: string;
+    note?: string;
+  };
+  selected_modifiers?: any[];
+  selected_fraction_parts?: any[];
+  selected_combo_items?: any[];
+  note?: string;
+  originalPrice?: number; // Optional: track original product price for auditing
+  discountAmount?: number;
+  discountRate?: number;
+  netAmount?: number;
+  taxAmount?: number;
+  totalAmount?: number;
+  taxRate?: number;
+  adjustmentSource?: 'PROMOTION' | 'MANUAL_DISCOUNT' | 'MANUAL_PRICE_OVERRIDE' | 'TARIFF';
+  appliedPromotionCode?: string;
+  appliedPromotionName?: string;
+  promotionTrace?: PromotionApplicationTrace;
+  salespersonId?: string;
+  ncf?: string; // NCF asignado a esta línea o al ticket
+  appliedPromotionId?: string;
+  trackingId?: string; // NEW: Assigned lot/serial ID
+  trackingCode?: string; // NEW: Assigned lot/serial code
+  trackingData?: any[]; // NEW: Detailed tracking records selected
+  variantInfo?: string; // NEW: Human readable variant detail
+  variantSku?: string; // NEW: Variant SKU for inventory/receipts
+  variantId?: string;
+  variantBarcodes?: string[];
+  dispatched?: boolean; // NEW: Track if item was sent to kitchen
+  restaurantCommittedAt?: string; // Línea guardada al salir de la mesa; cualquier reducción requiere autorización
+  orderNumber?: string;
+  tableDisplayLabel?: string;
+  tableRoomLabel?: string;
+  kdsStatus?: 'ENVIADO' | 'DEVUELTO' | 'RETURN_PENDING' | string;
+  kdsOrderId?: string;
+  kdsAreaId?: string;
+  kdsItemIds?: string[];
+  kdsReturnedAt?: string;
+  kdsOriginalPrice?: number;
+  voidedByKdsReturn?: boolean;
+  consignmentId?: string;
+  consignmentDocumentNo?: string;
+  consignmentLineId?: string;
+}
+
+
+export interface Transaction {
+  // Identifiers
+  id: string;
+  globalSequence?: number;          // Global unique sequence number
+  displayId?: string;               // User-visible ID (e.g., "TCK01-000123")
+  source_channel?: 'POS';
+  source_transaction_id?: string;
+  source_display_id?: string;
+  source_terminal_id?: string;
+  device_id?: string;
+  source_credit_note_id?: string;
+  original_transaction_id?: string;
+  original_display_id?: string;
+
+  // Document Classification
+  documentType?: DocumentType;      // Type of transaction
+  seriesId?: string;                // Reference to DocumentSeries
+  seriesNumber?: number;            // Number within the series
+
+  // Transaction Data
+  date: string;
+  updatedAt?: string;
+  items: CartItem[];
+  total: number;
+  payments: any[];
+
+  // User & Terminal
+  userId: string;
+  userName: string;
+  terminalId?: string;
+  terminalName?: string;
+
+  // Status
+  status: 'PENDING' | 'COMPLETED' | 'REFUNDED' | 'PARTIAL_REFUND';
+
+  // Audit (RBAC)
+  authorizedById?: string;
+  authorizedByName?: string;
+
+  // Customer
+  customerId?: string;
+  customerName?: string;
+  customerSnapshot?: {
+    name: string;
+    customer_code?: string;
+    master_number_range_id?: string;
+    master_number_value?: number;
+    source_terminal_id?: string;
+    created_source?: string;
+    taxId?: string;
+    address?: string;
+    phone?: string;
+    email?: string;
+    isTaxExempt?: boolean;
+  };
+
+  // Accounting
+  taxAmount?: number;               // Total tax amount
+  netAmount?: number;               // Net amount (before tax)
+  taxBreakdown?: any[];             // Fiscal tax lines persisted for provider retries
+  discountAmount?: number;
+  discountType?: 'PERCENT' | 'FIXED';
+  discountValue?: number;
+  isTaxIncluded?: boolean;
+  couponCode?: string;
+  coupons?: RedeemedCouponRef[];
+
+  // Fiscal
+  ncf?: string;                     // NCF final del documento
+  ncfType?: FiscalDocumentCode;
+  legacyNcf?: string;
+  electronicNcf?: string;
+  fiscalMode?: FiscalMode;
+  fiscalProvider?: FiscalProviderId;
+  fiscalSyncStatus?: CloudSyncStatus;
+  fiscalSyncError?: string;
+  fiscalSyncedAt?: string;
+  fiscalReferenceId?: string;
+  fiscalResponseMessage?: string;
+  fiscalCorrectionAudit?: FiscalCorrectionAuditEntry[];
+  affectedNCF?: string;             // NCF de la factura afectada (para Notas de Crédito B04)
+  affectedInvoiceNumber?: string;   // No. de factura afectada (displayId para búsquedas)
+  affectedInvoiceDate?: string;
+  observations?: string;
+  cloudSyncStatus?: CloudSyncStatus;
+  cloudSyncError?: string;
+  cloudSyncedAt?: string;
+  reservationId?: string;
+  reservationCode?: string;
+  priorAdvancePaid?: number;
+  balanceDueAtSale?: number;
+
+  // Accounts Receivable (CxC)
+  dueDate?: string;         // ISO Date
+  pendingBalance?: number;  // Amount still owed on this transaction
+
+  // Settlement Summary
+  settlementCurrencyCode?: string;
+  settlementExchangeRate?: number;
+  settlementReceivedOriginal?: number;
+  settlementReceivedBase?: number;
+  settlementAppliedBase?: number;
+  settlementChangeBase?: number;
+  settlementChangeCurrencyCode?: string;
+  settlement_currency_code?: string;
+  settlement_exchange_rate?: number;
+  settlement_received_original?: number;
+  settlement_received_base?: number;
+  settlement_applied_base?: number;
+  settlement_change_base?: number;
+  settlement_change_currency_code?: string;
+
+  // Relationships
+  relatedTransactions?: string[];   // Related transaction IDs
+  originalTransactionId?: string;   // For refunds/voids
+  refundReason?: string;
+  syncStatus?: SyncStatus;
+  syncError?: string;
+  syncResponse?: any;
+  syncedAt?: string;
+  erpSyncStatus?: 'APPLIED' | 'SKIPPED_ALREADY_APPLIED' | 'ERROR';
+  erpSyncResponse?: any;
+  erpSyncedAt?: string;
+  zReportId?: string; // ID of the Z-Report that closed this transaction
+  zReportSequence?: string; // Human readable sequence number of the Z-Report (e.g. "Z-000123")
+
+  // Wallet Interaction
+  walletDepositAmount?: number;     // Amount sent to customer wallet (advance/refund)
+  walletPaymentAmount?: number;     // Amount paid using customer wallet balance
+
+  // Restaurant fields
+  serviceType?: OrderServiceType;
+  service_type?: OrderServiceType;
+  serviceTaxPolicySnapshot?: AppliedServiceTaxPolicySnapshot;
+  service_tax_policy_snapshot?: AppliedServiceTaxPolicySnapshot;
+  serviceChargeAmount?: number;     // Propina Legal (10%)
+  voluntaryTipAmount?: number;      // Propina Voluntaria
+  orderNumber?: string;
+  tableDisplayLabel?: string;
+  tableRoomLabel?: string;
+  marketplaceSourceChannel?: 'UBER_EATS';
+  marketplaceSourceOrderId?: string;
+  marketplaceSourceStoreId?: string;
+  marketplaceTenantId?: string;
+  marketplaceCompanyId?: string;
+  marketplaceStoreId?: string;
+  skipErpSaleSync?: boolean;
+  erpConfirmationStatus?: 'PENDING' | 'SYNCED' | 'ERROR';
+  erpConfirmationError?: string;
+  erpConfirmedAt?: string;
+  consignmentId?: string;
+  consignmentDocumentNo?: string;
+  consignmentLineId?: string;
+  consignmentSyncStatus?: 'PENDING' | 'SYNCED' | 'ERROR';
+  consignmentSyncError?: string;
+  consignmentSyncedAt?: string;
+  consignmentSyncResponse?: any;
+}
+
+
+export interface CashMovement {
+  id: string;
+  type: 'IN' | 'OUT';
+  amount: number;
+  reason: string;
+  timestamp: string;
+  userId: string;
+  userName: string;
+  currencyCode?: string; // For multi-currency support, defaults to base currency
+  terminalId?: string; // ID of the terminal where the movement was recorded
+  syncStatus?: SyncStatus;
+  syncError?: string;
+  source_channel?: 'POS';
+  source_cash_movement_id?: string;
+  source_terminal_id?: string;
+  device_id?: string;
+  created_at?: string;
+}
+
+
+export interface PaymentEntry {
+  id: string;
+  method: PaymentMethod;
+  methodId?: string;
+  methodLabel?: string;
+  methodIcon?: string;
+  creditOverrideApproved?: boolean;
+  amount: number;
+  timestamp: Date;
+  currencyCode?: string;
+  amountOriginal?: number;
+  exchangeRate?: number;
+  appliedAmount?: number;
+  changeAmount?: number;
+  changeCurrencyCode?: string;
+  amountApplied?: number;
+  payment_method?: PaymentMethod | string;
+  currency_code?: string;
+  exchange_rate?: number;
+  applied_amount?: number;
+  change_amount?: number;
+  change_currency_code?: string;
+  source_channel?: 'POS';
+  source_payment_id?: string;
+  source_transaction_id?: string;
+  source_display_id?: string;
+  source_terminal_id?: string;
+  device_id?: string;
+  gatewayProvider?: PaymentIntegrationProvider;
+  gatewayIntegrationId?: string;
+  paymentIntentId?: string;
+  gatewayIdempotencyKey?: string;
+  gatewayTransactionType?: 'SALE' | 'VOID' | 'REFUND' | 'GET_LAST_TRX';
+  gatewayStatus?: string;
+  gatewayResponseCode?: string;
+  gatewayResponseMessage?: string;
+  gatewayAuthorizationCode?: string;
+  gatewayReference?: string;
+  gatewaySequenceNumber?: string;
+  gatewayInvoiceNumber?: string;
+  gatewayBatchNumber?: string;
+  gatewayMerchantId?: string;
+  gatewayTerminalId?: string;
+  gatewayOrderNumber?: string;
+  gatewayProcessedAmount?: number;
+  gatewayProcessedTaxAmount?: number;
+  gatewayMaskedPan?: string;
+  gatewayCardBrand?: string;
+  gatewayEntryMode?: string;
+  gatewayReceiptMerchant?: string;
+  gatewayReceiptClient?: string;
+  gatewaySignatureData?: string;
+  gatewayRequireSignature?: boolean;
+  gatewayRawResponse?: Record<string, any>;
+}
+
+
+// --- LOYALTY & WALLET TYPES ---
+
+export type WalletTransactionType = 'DEPOSIT' | 'PAYMENT' | 'REFUND' | 'CASHBACK';
+
+
+export interface WalletTransaction {
+  id: string;
+  walletId: string;
+  type: WalletTransactionType;
+  amount: number;
+  referenceId?: string; // Ticket ID or External Ref
+  timestamp: string;
+}
+
+
+export interface Wallet {
+  id: string;
+  customerId: string;
+  balance: number;
+  currency: string;
+  status: 'ACTIVE' | 'BLOCKED';
+  lastActivity: string;
+  transactions: WalletTransaction[];
+  pushToken?: string;
+}
+
+
+export interface ZReport {
+  id: string;
+  terminalId: string;
+  sequenceNumber: string; // e.g., Z-0001
+  seriesId?: string;
+  seriesNumber?: number;
+  source_channel?: 'POS';
+  source_z_report_id?: string;
+  source_terminal_id?: string;
+  device_id?: string;
+  openedAt: string; // Timestamp of first transaction/movement since last Z
+  closedAt: string;
+  closedByUserId: string;
+  closedByUserName: string;
+
+  // Financials
+  baseCurrency: string;
+  totalsByMethod: Record<string, number>; // CASH, CARD, etc.
+  /** Desglose con el nombre configurado y el monto aplicado a los tickets. */
+  paymentMethodSummary?: ZReportPaymentMethodLine[];
+  /** Medios que el usuario declaró manualmente en este cierre. */
+  paymentMethodDeclarations?: ZReportPaymentMethodDeclaration[];
+
+  // Cash Details (Multi-currency)
+  cashExpected: Record<string, number>;
+  cashCounted: Record<string, number>;
+  cashDiscrepancy: Record<string, number>;
+  denominationBreakdown?: ZReportDenominationBreakdown;
+  denomination_breakdown?: ZReportDenominationBreakdown;
+
+  // Movements
+  cashSales: number;
+  cashIn: number;
+  cashOut: number;
+  cashMovementDetails?: ZReportCashMovementLine[];
+  requireCashFundOnZ?: boolean;
+  fixedCashFundAmount?: number;
+  cashToLeaveInDrawer?: number;
+  cashToWithdraw?: number;
+
+  // Metadata
+  transactionCount: number;
+  notes: string;
+  declared_totals?: ZReportDeclaredTotals;
+  system_totals?: ZReportSystemTotals;
+  sync_audit?: ZReportSyncAudit;
+
+  // Analytics
+  stats?: ZReportStats;
+  serviceTypeSummary?: ServiceTypeSummaryLine[];
+  serviceTypeTransactions?: ServiceTypeTransactionLine[];
+  // Immutable print summary of recorded amounts, independent of current tax settings.
+  closeTaxSummary?: Array<{ name: string; rate?: number; amount: number }>;
+  enabledSections?: CloseReportSection[];
+  reportDetails?: CloseReportDetails;
+  syncStatus?: SyncStatus;
+  syncError?: string;
+}
+
+
+// --- ACCOUNTS RECEIVABLE (CxC) & COLLECTIONS ---
+export type CollectionMethod = 'CASH' | 'CARD' | 'TRANSFER' | 'CHECK' | 'WALLET';
+
+
+export interface CollectionAllocation {
+  id: string;
+  collectionId: string;
+  transactionId: string;
+  amount: number;
+  timestamp: string;
+}
+
+
+export interface Collection {
+  id: string;
+  displayId: string; // RC-000001
+  seriesId?: string;
+  seriesNumber?: number;
+  customerId: string;
+  customerName: string;
+  date: string;
+  totalAmount: number;
+  method: CollectionMethod;
+  currencyCode?: string;
+  exchangeRate?: number;
+  receivedAmountOriginal?: number;
+  receivedAmountBase?: number;
+  appliedAmountBase?: number;
+  unappliedAmountBase?: number;
+  reference?: string;
+  userId: string;
+  userName: string;
+  terminalId: string;
+  bookingActivityId?: string;
+  opportunityId?: string;
+  allocations: CollectionAllocation[];
+  notes?: string;
+  syncStatus?: SyncStatus;
+  zReportId?: string;
+  zReportSequence?: string;
+}
