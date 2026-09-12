@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { getTableChairSlots, resolveVisibleTableChairCount } from '../utils/tableChairs';
+import { getTableChairSlots } from '../utils/tableChairs';
 
-test('muestra cuatro sillas cuando la mesa no tiene capacidad configurada', () => {
-  assert.equal(resolveVisibleTableChairCount(undefined), 4);
-  assert.deepEqual(getTableChairSlots(undefined), [
+test('el layout con sillas siempre muestra una silla por cada lado', () => {
+  assert.deepEqual(getTableChairSlots(), [
     'TOP_CENTER',
     'BOTTOM_CENTER',
     'LEFT_CENTER',
@@ -13,15 +12,8 @@ test('muestra cuatro sillas cuando la mesa no tiene capacidad configurada', () =
   ]);
 });
 
-test('representa la capacidad sin saturar el plano', () => {
-  assert.equal(getTableChairSlots(2).length, 2);
-  assert.deepEqual(getTableChairSlots(6), [
-    'TOP_LEFT',
-    'TOP_RIGHT',
-    'BOTTOM_LEFT',
-    'BOTTOM_RIGHT',
-    'LEFT_CENTER',
-    'RIGHT_CENTER'
-  ]);
-  assert.equal(getTableChairSlots(20).length, 8);
+test('cada lectura devuelve una colección independiente', () => {
+  const first = getTableChairSlots();
+  first.pop();
+  assert.equal(getTableChairSlots().length, 4);
 });

@@ -1652,6 +1652,7 @@ export interface Room {
     gridConfig?: any;
     backgroundImage?: string;
     backgroundStyle?: 'DARK' | 'WHITE';
+    tableLayoutStyle?: 'NORMAL' | 'CHAIRS';
   };
 }
 

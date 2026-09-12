@@ -608,6 +608,7 @@ const TableMap: React.FC<TableMapProps> = ({
 
     const activeRoom = useMemo(() => rooms.find(r => r.id === activeRoomId), [rooms, activeRoomId]);
     const usesWhiteBackground = activeRoom?.data?.backgroundStyle === 'WHITE';
+    const showsTableChairs = activeRoom?.data?.tableLayoutStyle !== 'NORMAL';
     const roomLabelById = useMemo(() => {
         return new Map(rooms.map(room => [room.id, getRoomLabel(room)]));
     }, [rooms]);
@@ -2058,6 +2059,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                         currencySymbol={currencySymbol}
                                         reduceMotion={Boolean(reduceMotion)}
                                         lightBackground={usesWhiteBackground}
+                                        showChairs={showsTableChairs}
                                         onSelect={handleNodeSelect}
                                         onTooltipOpen={openTooltip}
                                         onTooltipMove={moveTooltip}
@@ -2487,30 +2489,26 @@ const TableMap: React.FC<TableMapProps> = ({
 };
 
 const TABLE_CHAIR_POSITION_CLASS: Record<TableChairSlot, string> = {
-    TOP_CENTER: '-top-8 left-1/2 -translate-x-1/2',
-    BOTTOM_CENTER: '-bottom-8 left-1/2 -translate-x-1/2 rotate-180',
-    LEFT_CENTER: '-left-8 top-1/2 -translate-y-1/2 -rotate-90',
-    RIGHT_CENTER: '-right-8 top-1/2 -translate-y-1/2 rotate-90',
-    TOP_LEFT: '-top-8 left-[15%]',
-    TOP_RIGHT: '-top-8 right-[15%]',
-    BOTTOM_LEFT: '-bottom-8 left-[15%] rotate-180',
-    BOTTOM_RIGHT: '-bottom-8 right-[15%] rotate-180'
+    TOP_CENTER: '-top-7 left-1/2 -translate-x-1/2',
+    BOTTOM_CENTER: '-bottom-7 left-1/2 -translate-x-1/2 rotate-180',
+    LEFT_CENTER: '-left-7 top-1/2 -translate-y-1/2 -rotate-90',
+    RIGHT_CENTER: '-right-7 top-1/2 -translate-y-1/2 rotate-90'
 };
 
-const TableChairMarkers = React.memo(({ model }: { model: SmartTableModel }) => {
-    if (model.archetype === 'BAR' || model.archetype === 'BOOTH' || model.archetype === 'CHAISE_LONGUE') {
+const TableChairMarkers = React.memo(({ model, visible }: { model: SmartTableModel; visible: boolean }) => {
+    if (!visible || model.archetype === 'BAR' || model.archetype === 'BOOTH' || model.archetype === 'CHAISE_LONGUE') {
         return null;
     }
 
     return (
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0">
-            {getTableChairSlots(model.table.capacity).map(slot => (
+            {getTableChairSlots().map(slot => (
                 <span
                     key={slot}
-                    className={`absolute h-6 w-8 ${TABLE_CHAIR_POSITION_CLASS[slot]}`}
+                    className={`absolute h-5 w-7 ${TABLE_CHAIR_POSITION_CLASS[slot]}`}
                 >
-                    <span className="absolute inset-x-0 bottom-0 h-[1.15rem] rounded-[0.55rem] border border-slate-300/80 bg-gradient-to-br from-slate-200 via-slate-300 to-slate-400 shadow-[0_3px_8px_rgba(15,23,42,0.38)]" />
-                    <span className="absolute left-1/2 top-0 h-2 w-7 -translate-x-1/2 rounded-[0.4rem] border border-slate-200/80 bg-gradient-to-b from-slate-100 to-slate-400 shadow-[0_2px_5px_rgba(15,23,42,0.32)]" />
+                    <span className="absolute inset-x-0 bottom-0 h-4 rounded-[0.5rem] border border-slate-300/80 bg-gradient-to-br from-slate-200 via-slate-300 to-slate-400 shadow-[0_3px_8px_rgba(15,23,42,0.34)]" />
+                    <span className="absolute left-1/2 top-0 h-1.5 w-6 -translate-x-1/2 rounded-[0.35rem] border border-slate-200/80 bg-gradient-to-b from-slate-100 to-slate-400 shadow-[0_2px_5px_rgba(15,23,42,0.28)]" />
                 </span>
             ))}
         </div>
@@ -2524,6 +2522,7 @@ const SmartTableNode = React.memo(({
     currencySymbol,
     reduceMotion,
     lightBackground,
+    showChairs,
     onSelect,
     onTooltipOpen,
     onTooltipMove,
@@ -2533,6 +2532,7 @@ const SmartTableNode = React.memo(({
     currencySymbol: string;
     reduceMotion: boolean;
     lightBackground: boolean;
+    showChairs: boolean;
     onSelect: (model: SmartTableModel) => void;
     onTooltipOpen: (model: SmartTableModel, x: number, y: number) => void;
     onTooltipMove: (modelId: string, x: number, y: number) => void;
@@ -2598,7 +2598,7 @@ const SmartTableNode = React.memo(({
                 willChange: 'transform, opacity'
             }}
         >
-            <TableChairMarkers model={model} />
+            <TableChairMarkers model={model} visible={showChairs} />
 
             {model.needsRevenueGlow && (
                 <m.div
