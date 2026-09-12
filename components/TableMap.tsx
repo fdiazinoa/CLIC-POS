@@ -28,6 +28,7 @@ import TableOptionsModal from './TableOptionsModal';
 import SplitTicketModal from './SplitTicketModal';
 import TableMoveConfirmationModal from './TableMoveConfirmationModal';
 import { createPaymentFractionPlan } from '../utils/paymentFractions';
+import { getTableChairSlots, TableChairSlot } from '../utils/tableChairs';
 import {
     buildTableAccountDisplayEntries,
     renameTableAccountTicket,
@@ -167,9 +168,9 @@ const BarTabsModal: React.FC<{
     const openSummary = useMemo(() => summarizeOpenTableAccounts(accountEntries), [accountEntries]);
 
     return (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-            <div className="w-full max-w-2xl rounded-[2rem] bg-white shadow-2xl overflow-hidden">
-                <div className="flex items-start justify-between gap-4 border-b border-slate-100 p-6">
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/55 p-4 backdrop-blur-sm">
+            <div className="w-full max-w-2xl overflow-hidden rounded-[2rem] border border-sky-100 bg-gradient-to-br from-sky-50 via-white to-indigo-50 shadow-2xl">
+                <div className="flex items-start justify-between gap-4 border-b border-sky-100 bg-white/85 p-6">
                     <div>
                             <p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-500">{titleLabel}</p>
                         <h2 className="mt-1 text-3xl font-black text-slate-900">{table.nombre || table.name || 'Barra'}</h2>
@@ -182,8 +183,8 @@ const BarTabsModal: React.FC<{
                     </button>
                 </div>
 
-                <div className="grid gap-4 p-6 md:grid-cols-[1fr_280px]">
-                    <div className="space-y-3 max-h-[52vh] overflow-y-auto pr-1">
+                <div className="grid gap-4 bg-sky-50/45 p-6 md:grid-cols-[1fr_280px]">
+                    <div className="max-h-[52vh] space-y-3 overflow-y-auto rounded-[1.75rem] border border-sky-100 bg-white/60 p-3 pr-2">
                         {accountEntries.length === 0 ? (
                             <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center">
                                 <ReceiptText size={38} className="mx-auto mb-3 text-slate-300" />
@@ -197,13 +198,13 @@ const BarTabsModal: React.FC<{
                                 const canRename = Boolean(accountMode && onRenameTab && (!entry.fractionIndex || entry.fractionIndex === 1));
                                 const isPaid = entry.status === 'PAID';
                                 return (
-                                    <div key={entry.key} className={`rounded-3xl border shadow-sm transition-all ${isPaid ? 'border-emerald-200 bg-emerald-50/70' : subtotalState.isSubtotalized ? 'border-violet-300 bg-violet-50' : 'border-slate-100 bg-white'}`}>
+                                    <div key={entry.key} className={`rounded-3xl border shadow-sm transition-all ${isPaid ? 'border-emerald-200 bg-emerald-50/70' : subtotalState.isSubtotalized ? 'border-violet-300 bg-violet-50' : 'border-sky-100 bg-white'}`}>
                                         <div className="flex items-stretch gap-2 p-2">
                                             <button
                                                 type="button"
                                                 onClick={() => !isPaid && onOpenTab(ticket)}
                                                 disabled={isPaid}
-                                                className="flex min-w-0 flex-1 items-center justify-between gap-4 rounded-2xl p-2 text-left transition-colors hover:bg-blue-50 disabled:cursor-default disabled:hover:bg-transparent"
+                                                className="flex min-w-0 flex-1 select-none items-center justify-between gap-4 rounded-2xl p-2 text-left transition-colors [-webkit-tap-highlight-color:transparent] hover:bg-sky-50 disabled:cursor-default disabled:hover:bg-transparent"
                                             >
                                                 <div className="min-w-0">
                                                     <div className="flex flex-wrap items-center gap-2">
@@ -2485,6 +2486,36 @@ const TableMap: React.FC<TableMapProps> = ({
     );
 };
 
+const TABLE_CHAIR_POSITION_CLASS: Record<TableChairSlot, string> = {
+    TOP_CENTER: '-top-2 left-1/2 h-3 w-8 -translate-x-1/2',
+    BOTTOM_CENTER: '-bottom-2 left-1/2 h-3 w-8 -translate-x-1/2',
+    LEFT_CENTER: 'left-[-0.5rem] top-1/2 h-8 w-3 -translate-y-1/2',
+    RIGHT_CENTER: 'right-[-0.5rem] top-1/2 h-8 w-3 -translate-y-1/2',
+    TOP_LEFT: '-top-2 left-[20%] h-3 w-7',
+    TOP_RIGHT: '-top-2 right-[20%] h-3 w-7',
+    BOTTOM_LEFT: '-bottom-2 left-[20%] h-3 w-7',
+    BOTTOM_RIGHT: '-bottom-2 right-[20%] h-3 w-7'
+};
+
+const TableChairMarkers = React.memo(({ model }: { model: SmartTableModel }) => {
+    if (model.archetype === 'BAR' || model.archetype === 'BOOTH' || model.archetype === 'CHAISE_LONGUE') {
+        return null;
+    }
+
+    return (
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0">
+            {getTableChairSlots(model.table.capacity).map(slot => (
+                <span
+                    key={slot}
+                    className={`absolute rounded-[0.35rem] border border-amber-950/25 bg-gradient-to-br from-amber-100 via-amber-200 to-amber-400 shadow-[0_2px_5px_rgba(69,26,3,0.32)] ${TABLE_CHAIR_POSITION_CLASS[slot]}`}
+                />
+            ))}
+        </div>
+    );
+});
+
+TableChairMarkers.displayName = 'TableChairMarkers';
+
 const SmartTableNode = React.memo(({
     model,
     currencySymbol,
@@ -2554,7 +2585,7 @@ const SmartTableNode = React.memo(({
             }}
             onPointerUp={() => clearLongPress()}
             onPointerCancel={() => clearLongPress()}
-            className={`absolute isolate overflow-hidden border text-left transition-[box-shadow,border-color,background-color] duration-300 ${shapeClass} ${lightBackground && isFree ? 'border-emerald-500/50 bg-white text-slate-900 shadow-lg shadow-slate-200/70' : statusPalette[model.smartStatus].shell}`}
+            className={`absolute isolate overflow-visible border text-left transition-[box-shadow,border-color,background-color] duration-300 ${shapeClass} ${lightBackground && isFree ? 'border-emerald-500/50 bg-white text-slate-900 shadow-lg shadow-slate-200/70' : statusPalette[model.smartStatus].shell}`}
             style={{
                 left: model.table.posX,
                 top: model.table.posY,
@@ -2564,6 +2595,8 @@ const SmartTableNode = React.memo(({
                 willChange: 'transform, opacity'
             }}
         >
+            <TableChairMarkers model={model} />
+
             {model.needsRevenueGlow && (
                 <m.div
                     className="pointer-events-none absolute -inset-2 rounded-[inherit]"

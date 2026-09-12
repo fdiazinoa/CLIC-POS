@@ -109,7 +109,7 @@ import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from
 import { resolveCustomerImageSrc, resolveProductImageSrc } from '../utils/entityImage';
 import { getWarehouseScopedNumber, resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
-import { isPaymentFractionPlanCurrent } from '../utils/paymentFractions';
+import { isPaymentFractionPlanCurrent, retainCurrentPaymentFractionPlan } from '../utils/paymentFractions';
 import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
 import { productIdentityCandidates, productReferenceCandidates, resolveOperationalProductId } from '../utils/productReferences';
@@ -4549,6 +4549,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          barTabId: existing?.barTabId || activeBarTabId || undefined,
          barTabName: existing?.barTabName || activeBarTabName || undefined,
          serviceType: effectiveOrderServiceType,
+         paymentFraction: retainCurrentPaymentFractionPlan(existing?.paymentFraction, cartTotal),
       };
 
       const nextTickets = [
@@ -6565,12 +6566,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          ? existingParked?.alias
          : (aliasInput.trim() || undefined);
       const ticketTotal = ticketItems.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
+      const resolvedTicketTotal = cartOverride ? Math.max(0, ticketTotal - discountAmount) : cartTotal;
       const newParked: ParkedTicket = {
          id: parkedTicketId,
          name: buildParkedTicketName(),
          alias: normalizedAlias,
          items: [...ticketItems],
-         total: cartOverride ? Math.max(0, ticketTotal - discountAmount) : cartTotal,
+         total: resolvedTicketTotal,
          discountAmount,
          discountType: globalDiscount.type,
          discountValue: globalDiscount.value,
@@ -6595,6 +6597,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          barTabId: existingParked?.barTabId || activeBarTabId || undefined,
          barTabName: existingParked?.barTabName || activeBarTabName || undefined,
          serviceType: effectiveOrderServiceType,
+         paymentFraction: retainCurrentPaymentFractionPlan(existingParked?.paymentFraction, resolvedTicketTotal),
       };
 
       // Remove existing if updating same ID
@@ -6662,6 +6665,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          barTabId: existingParked?.barTabId || activeBarTabId || undefined,
          barTabName: existingParked?.barTabName || activeBarTabName || undefined,
          serviceType: effectiveOrderServiceType,
+         paymentFraction: retainCurrentPaymentFractionPlan(existingParked?.paymentFraction, cartTotal),
       };
 
       const updatedTickets = [

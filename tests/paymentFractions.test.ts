@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   createPaymentFractionPlan,
   isPaymentFractionPlanCurrent,
+  retainCurrentPaymentFractionPlan,
   splitAmountIntoEqualParts
 } from '../utils/paymentFractions';
 
@@ -29,4 +30,12 @@ test('detecta cuando el total cambió después de crear el plan', () => {
   assert.equal(isPaymentFractionPlanCurrent(plan, 4000), true);
   assert.equal(isPaymentFractionPlanCurrent(plan, 4000.01), false);
   assert.equal(plan.parts.every(part => part.status === 'PENDING'), true);
+});
+
+test('el autoguardado conserva las cuotas al salir y volver a la mesa', () => {
+  const plan = createPaymentFractionPlan(23050, 3, '2026-09-12T12:41:00.000Z');
+
+  assert.equal(retainCurrentPaymentFractionPlan(plan, 23050), plan);
+  assert.equal(retainCurrentPaymentFractionPlan(plan, 23050.02), undefined);
+  assert.equal(retainCurrentPaymentFractionPlan(undefined, 23050), undefined);
 });
