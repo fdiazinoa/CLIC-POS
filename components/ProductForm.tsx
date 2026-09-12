@@ -27,7 +27,7 @@ import { UnitSelector } from './UnitSelector';
 import { ConversionHelper } from './ConversionHelper';
 import { calculateCost, UNITS } from '../utils/units';
 import LabelPrintModal from './LabelPrintModal';
-import { normalizeTaxIdentifiersForSelection, taxIdentifierSetMatches } from '../utils/taxIdentity';
+import { canonicalizeTaxIdentifiers, normalizeTaxIdentifiersForSelection, taxIdentifierSetMatches } from '../utils/taxIdentity';
 import {
   canonicalizeTariffEntries,
   canonicalizeWarehouseIds,
@@ -2023,6 +2023,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
     const updatedProduct = normalizeRestaurantProductConfig({
       ...formData,
+      appliedTaxIds: canonicalizeTaxIdentifiers(formData.appliedTaxIds, config.taxes),
       price: resolvedBasePrice,
       production_area_id: productionAreaId || undefined,
       tariffs: normalizedTariffsForSave,
@@ -4022,7 +4023,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                         <div
                           key={tax.id}
                           onClick={() => {
-                            const current = formData.appliedTaxIds || [];
+                            const current = canonicalizeTaxIdentifiers(formData.appliedTaxIds, config.taxes);
                             const normalizedCurrent = normalizeTaxIdentifiersForSelection(current, tax);
                             setFormData({
                               ...formData,
