@@ -270,6 +270,14 @@ info "Instalando dependencias del commit fuente"
 (cd "${BUILD_WORKTREE}" && npm ci)
 # Selective JS diagnostics deliberately do not patch Capacitor or SQLite sources.
 
+RELEASE_GATE_REPORT="$(mktemp /private/tmp/clicpos-release-gate-XXXXXX)"
+info "Ejecutando puerta antirregresión prebuild contra baseline 1.1.363"
+(cd "${BUILD_WORKTREE}" && node scripts/qa/apk-release-gate.mjs \
+  --stage prebuild \
+  --source-commit "${SOURCE_COMMIT}" \
+  --require-clean \
+  --report "${RELEASE_GATE_REPORT}")
+
 BUILD_GRADLE_FILE="${BUILD_WORKTREE}/android/app/build.gradle"
 update_gradle_version "${BUILD_GRADLE_FILE}" "${NEXT_VERSION_CODE}" "${VERSION_NAME}"
 
@@ -333,11 +341,14 @@ APK_DEST="${DEST_DIR}/Clic-Pos-${VERSION_NAME}-release.apk"
 METADATA_DEST="${DEST_DIR}/output-metadata-${VERSION_NAME}.json"
 REPORT_DEST="${DEST_DIR}/release-report-${VERSION_NAME}.txt"
 ASSET_REPORT_DEST="${DEST_DIR}/packaged-assets-${VERSION_NAME}.json"
+RELEASE_GATE_REPORT_DEST="${DEST_DIR}/release-gate-${VERSION_NAME}.json"
 
 [[ "${APK_SRC}" == "${APK_DEST}" ]] || cp "${APK_SRC}" "${APK_DEST}"
 cp "${METADATA_SRC}" "${METADATA_DEST}"
 cp "${ASSET_REPORT}" "${ASSET_REPORT_DEST}"
 rm "${ASSET_REPORT}"
+cp "${RELEASE_GATE_REPORT}" "${RELEASE_GATE_REPORT_DEST}"
+rm "${RELEASE_GATE_REPORT}"
 
 cat > "${REPORT_DEST}" <<EOF
 versionCode=${NEXT_VERSION_CODE}
@@ -350,6 +361,9 @@ lanHttpEnabled=${LAN_HTTP_ENABLED}
 manifestNetworkPolicyVerified=true
 packagedAssetsVerified=true
 packagedAssetsReport=${ASSET_REPORT_DEST}
+releaseGatePrebuildPassed=true
+releaseGateReport=${RELEASE_GATE_REPORT_DEST}
+promotionGatePassed=false
 canonicalBuildWorktree=${CANONICAL_BUILD_WORKTREE}
 artifact=${APK_DEST}
 metadata=${METADATA_DEST}
