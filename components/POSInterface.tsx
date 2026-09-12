@@ -7578,117 +7578,108 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </button>
                   </nav>
                   <div className="pos-full-action-grid mx-auto grid max-w-[1180px] grid-cols-3 gap-3">
-                     <div className="rounded-2xl border border-blue-200 bg-blue-50/50 p-2 shadow-sm">
-                        <div className="mb-2 rounded-xl bg-blue-600 py-2 text-center text-[10px] font-black uppercase tracking-[0.22em] text-white shadow-sm shadow-blue-600/25">
-                           Venta
-                        </div>
+                     <div role="group" aria-label="Venta" className="rounded-2xl border border-blue-200 bg-blue-50/50 p-2 shadow-sm">
                         <div className="grid grid-cols-2 gap-2">
                         <button
                            type="button"
                            onClick={() => handleGridAction('DISCOUNT')}
-                           className={`flex h-12 items-center justify-center gap-2 rounded-xl border px-3 text-xs font-black uppercase tracking-wide shadow-sm transition-all active:scale-95 ${globalDiscount.value > 0 ? 'border-rose-500 bg-rose-600 text-white shadow-rose-600/25 hover:bg-rose-700' : 'border-blue-500 bg-blue-600 text-white shadow-blue-600/25 hover:bg-blue-700'}`}
+                           className={`flex h-16 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-black uppercase tracking-wide shadow-sm transition-all active:scale-95 ${globalDiscount.value > 0 ? 'border-rose-500 bg-rose-600 text-white shadow-rose-600/25 hover:bg-rose-700' : 'border-blue-500 bg-blue-600 text-white shadow-blue-600/25 hover:bg-blue-700'}`}
                         >
-                           <Percent size={16} />
+                           <Percent size={20} />
                            <span>Desc %</span>
                         </button>
                         <button
                            type="button"
                            onClick={() => handleGridAction('COUPON')}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-blue-500 bg-blue-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-blue-600/25 transition-all hover:bg-blue-700 active:scale-95"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-blue-500 bg-blue-600 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-blue-600/25 transition-all hover:bg-blue-700 active:scale-95"
                         >
-                           <Tag size={16} />
+                           <Tag size={20} />
                            <span>Cupones</span>
                         </button>
                         <button
                            type="button"
                            onClick={() => handleGridAction('loyalty_card')}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-blue-500 bg-blue-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-blue-600/25 transition-all hover:bg-blue-700 active:scale-95"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-blue-500 bg-blue-600 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-blue-600/25 transition-all hover:bg-blue-700 active:scale-95"
                         >
-                           <CreditCard size={16} />
+                           <CreditCard size={20} />
                            <span>Tarjeta</span>
                         </button>
                         <button
                            type="button"
                            onClick={() => handleGridAction('SAVE')}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
                         >
-                           <Save size={16} />
+                           <Save size={20} />
                            <span>Guardar</span>
                         </button>
                         </div>
                      </div>
 
-                     <div className="rounded-2xl border border-orange-200 bg-orange-50/60 p-2 shadow-sm">
-                        <div className="mb-2 rounded-xl bg-orange-500 py-2 text-center text-[10px] font-black uppercase tracking-[0.22em] text-white shadow-sm shadow-orange-500/25">
-                           Comanda
-                        </div>
+                     <div role="group" aria-label="Comanda" className="rounded-2xl border border-orange-200 bg-orange-50/60 p-2 shadow-sm">
                         <div className="grid grid-cols-2 gap-2">
                         <button
                            type="button"
                            onClick={() => { void handleBackToMap(); }}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
                         >
-                           <Layout size={16} />
+                           <Layout size={20} />
                            <span>Mesas</span>
                         </button>
                         <button
                            type="button"
                            onClick={handlePrintPrecuenta}
                            disabled={cart.length === 0}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
                         >
-                           <Printer size={16} />
+                           <Printer size={20} />
                            <span>Sub-total</span>
                         </button>
                         <button
                            type="button"
                            onClick={() => { void handleDispatchCommand(); }}
                            disabled={cart.length === 0}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
                         >
-                           <ChefHat size={16} />
+                           <ChefHat size={20} />
                            <span>Cocina</span>
                         </button>
                         <button
                            type="button"
                            onClick={onOpenHistory}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
                         >
-                           <History size={16} />
+                           <History size={20} />
                            <span>Tickets</span>
                         </button>
                         </div>
                      </div>
 
-                     <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-2 shadow-sm">
-                        <div className="mb-2 rounded-xl bg-emerald-600 py-2 text-center text-[10px] font-black uppercase tracking-[0.22em] text-white shadow-sm shadow-emerald-600/25">
-                           Caja
-                        </div>
+                     <div role="group" aria-label="Caja" className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-2 shadow-sm">
                         <div className="grid grid-cols-2 gap-2">
                         <button
                            type="button"
                            onClick={() => handleGridAction('DRAWER')}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-600/25 transition-all hover:bg-emerald-700 active:scale-95"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-600/25 transition-all hover:bg-emerald-700 active:scale-95"
                         >
-                           <Box size={16} />
+                           <Box size={20} />
                            <span>Cajón</span>
                         </button>
                         {canCloseZReport && (
                            <button
                               type="button"
                               onClick={() => handleGridAction('Z_REPORT')}
-                              className="flex h-12 items-center justify-center gap-2 rounded-xl border border-red-500 bg-red-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-red-600/25 transition-all hover:bg-red-700 active:scale-95"
+                              className="flex h-16 items-center justify-center gap-2 rounded-xl border border-red-500 bg-red-600 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-red-600/25 transition-all hover:bg-red-700 active:scale-95"
                            >
-                              <Lock size={16} />
+                              <Lock size={20} />
                               <span>Cierre Z</span>
                            </button>
                         )}
                         <button
                            type="button"
                            onClick={() => onOpenSettings()}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-600/25 transition-all hover:bg-emerald-700 active:scale-95"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-600/25 transition-all hover:bg-emerald-700 active:scale-95"
                         >
-                           <Settings size={16} />
+                           <Settings size={20} />
                            <span>Ajustes</span>
                         </button>
                         {canCloseXReport && <button
@@ -7696,9 +7687,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            onClick={() => {
                               onOpenFinance('X_REPORT');
                            }}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-600/25 transition-all hover:bg-emerald-700 active:scale-95"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-600/25 transition-all hover:bg-emerald-700 active:scale-95"
                         >
-                           <ClipboardCheck size={16} />
+                           <ClipboardCheck size={20} />
                            <span>Cierre X</span>
                         </button>}
                         </div>
