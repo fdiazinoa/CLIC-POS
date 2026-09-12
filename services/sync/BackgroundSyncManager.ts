@@ -57,6 +57,15 @@ class BackgroundSyncManager {
     private readonly PRUNE_STORAGE_KEY = 'clic_pos_last_sync_prune_at_v1';
 
     /**
+     * Yield to the browser task queue between sync batches. Awaiting native
+     * SQLite can resume through microtasks repeatedly; an explicit task yield
+     * guarantees that a pending sale/table input gets a chance to run first.
+     */
+    private yieldToOperatorUi(): Promise<void> {
+        return new Promise(resolve => window.setTimeout(resolve, 0));
+    }
+
+    /**
      * Initialize the background sync manager
      */
     async initialize() {
@@ -373,6 +382,8 @@ class BackgroundSyncManager {
                 });
             }
 
+            await this.yieldToOperatorUi();
+
             if (isPosSaleActive()) {
                 pausedForSaleActivity = true;
                 console.log('⏸️ BackgroundSyncManager: Heavy sync paused while sale cart is active.');
@@ -386,6 +397,8 @@ class BackgroundSyncManager {
             }).catch((error: any) => {
                 collectionErrors.push(`customerMutations: ${error?.message || 'unknown error'}`);
             });
+
+            await this.yieldToOperatorUi();
 
             if (isPosSaleActive()) {
                 pausedForSaleActivity = true;
@@ -408,6 +421,8 @@ class BackgroundSyncManager {
             }).catch((error: any) => {
                 collectionErrors.push(`posUserMutations: ${error?.message || 'unknown error'}`);
             });
+
+            await this.yieldToOperatorUi();
 
             // The SALE_COMMITTED durable event owns its inventory movements.
             // Sending the legacy ledger as well would duplicate the operation.
@@ -582,6 +597,7 @@ class BackgroundSyncManager {
                         `[SYNC_BSM] marked COMPLETED collection=transactions id=${transaction.id} source_transaction_id=${transaction.source_transaction_id || 'n/a'}`
                     );
                 }
+                await this.yieldToOperatorUi();
             } catch (error: any) {
                 if (collectionName === 'transactions' && this.isRecoverableTransactionSyncError(error)) {
                     console.warn(
