@@ -24,11 +24,13 @@ import {
     X
 } from 'lucide-react';
 import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from 'framer-motion';
+import { Capacitor } from '@capacitor/core';
 import TableOptionsModal from './TableOptionsModal';
 import SplitTicketModal from './SplitTicketModal';
 import TableMoveConfirmationModal from './TableMoveConfirmationModal';
 import { createPaymentFractionPlan } from '../utils/paymentFractions';
 import { getTableChairSlots, TableChairSlot } from '../utils/tableChairs';
+import { shouldReduceTableMotion } from '../utils/tableMotionPolicy';
 import {
     buildTableAccountDisplayEntries,
     renameTableAccountTicket,
@@ -550,7 +552,12 @@ const TableMap: React.FC<TableMapProps> = ({
     const [isControlCenterOpen, setIsControlCenterOpen] = useState(false);
     const [tableNotice, setTableNotice] = useState<TableNoticeState | null>(null);
     const [openingTableId, setOpeningTableId] = useState<string | null>(null);
-    const reduceMotion = useReducedMotion();
+    const prefersReducedMotion = useReducedMotion();
+    const reduceMotion = shouldReduceTableMotion({
+        prefersReducedMotion: Boolean(prefersReducedMotion),
+        isNativePlatform: Capacitor.isNativePlatform(),
+        platform: Capacitor.getPlatform()
+    });
 
     const closeTablePreview = useCallback((table: Table, close: () => void) => {
         close();
@@ -2604,19 +2611,21 @@ const SmartTableNode = React.memo(({
                 <m.div
                     className="pointer-events-none absolute -inset-2 rounded-[inherit]"
                     style={{
-                        background: 'radial-gradient(circle, rgba(251,191,36,0.42) 0%, rgba(245,158,11,0.24) 40%, rgba(245,158,11,0) 74%)'
+                        background: 'radial-gradient(circle, rgba(251,191,36,0.42) 0%, rgba(245,158,11,0.24) 40%, rgba(245,158,11,0) 74%)',
+                        opacity: reduceMotion ? 0.35 : undefined
                     }}
-                    animate={reduceMotion ? { opacity: 0.35 } : { opacity: [0.3, 0.65, 0.3], scale: [0.98, 1.04, 0.98] }}
-                    transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+                    animate={reduceMotion ? undefined : { opacity: [0.3, 0.65, 0.3], scale: [0.98, 1.04, 0.98] }}
+                    transition={reduceMotion ? undefined : { duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
                 />
             )}
 
             {model.smartStatus === 'ATTENTION' && (
                 <m.div
                     className="pointer-events-none absolute inset-0 rounded-[inherit] border border-amber-300/80"
+                    style={{ opacity: reduceMotion ? 0.8 : undefined }}
                     animate={
                         reduceMotion
-                            ? { opacity: 0.8 }
+                            ? undefined
                             : {
                                 opacity: [0.36, 1, 0.36],
                                 boxShadow: [
@@ -2626,16 +2635,17 @@ const SmartTableNode = React.memo(({
                                 ]
                             }
                     }
-                    transition={{ duration: 1.65, repeat: Infinity, ease: 'easeInOut' }}
+                    transition={reduceMotion ? undefined : { duration: 1.65, repeat: Infinity, ease: 'easeInOut' }}
                 />
             )}
 
             {model.smartStatus === 'CHECK_REQUESTED' && (
                 <m.div
                     className="pointer-events-none absolute -inset-[1px] rounded-[inherit] border border-fuchsia-300/80"
+                    style={{ opacity: reduceMotion ? 0.9 : undefined }}
                     animate={
                         reduceMotion
-                            ? { opacity: 0.9 }
+                            ? undefined
                             : {
                                 opacity: [0.5, 0.95, 0.5],
                                 boxShadow: [
@@ -2645,7 +2655,7 @@ const SmartTableNode = React.memo(({
                                 ]
                             }
                     }
-                    transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
+                    transition={reduceMotion ? undefined : { duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
                 />
             )}
 
