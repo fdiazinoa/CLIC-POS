@@ -10,6 +10,7 @@ export interface TableAccountDisplayEntry {
   status: PaymentFractionPart['status'];
   fractionIndex?: number;
   fractionCount?: number;
+  editName: string;
 }
 
 const ticketTotal = (ticket: ParkedTicket): number => Number(
@@ -33,16 +34,21 @@ export const buildTableAccountDisplayEntries = (
   const plan = ticket.paymentFraction;
 
   if (plan && isPaymentFractionPlanCurrent(plan, total) && plan.parts.length > 1) {
-    return plan.parts.map((part) => ({
-      key: `${ticket.id}-fraction-${part.index}`,
-      ticket,
-      accountLabel,
-      displayLabel: `${accountLabel} · Cuota ${part.index} de ${plan.count}`,
-      amount: Number(part.amount || 0),
-      status: part.status,
-      fractionIndex: part.index,
-      fractionCount: plan.count,
-    }));
+    return plan.parts.map((part) => {
+      const fractionName = String(part.name || '').trim();
+      const effectiveName = fractionName || accountLabel;
+      return {
+        key: `${ticket.id}-fraction-${part.index}`,
+        ticket,
+        accountLabel: effectiveName,
+        displayLabel: `${effectiveName} · Cuota ${part.index} de ${plan.count}`,
+        amount: Number(part.amount || 0),
+        status: part.status,
+        fractionIndex: part.index,
+        fractionCount: plan.count,
+        editName: fractionName || accountLabel,
+      };
+    });
   }
 
   return [{
@@ -52,6 +58,7 @@ export const buildTableAccountDisplayEntries = (
     displayLabel: accountLabel,
     amount: total,
     status: 'PENDING' as const,
+    editName: accountLabel,
   }];
 });
 
@@ -67,9 +74,24 @@ export const renameTableAccountTicket = (
   ticket: ParkedTicket,
   tableLabel: string,
   requestedName: string,
+  fractionIndex?: number,
 ): ParkedTicket => {
   const accountName = requestedName.trim();
   if (!accountName) return ticket;
+
+  if (fractionIndex && ticket.paymentFraction) {
+    const partExists = ticket.paymentFraction.parts.some(part => part.index === fractionIndex);
+    if (!partExists) return ticket;
+    return {
+      ...ticket,
+      paymentFraction: {
+        ...ticket.paymentFraction,
+        parts: ticket.paymentFraction.parts.map(part => (
+          part.index === fractionIndex ? { ...part, name: accountName } : part
+        )),
+      },
+    };
+  }
 
   return {
     ...ticket,

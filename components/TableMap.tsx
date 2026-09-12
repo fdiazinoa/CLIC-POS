@@ -155,13 +155,13 @@ const BarTabsModal: React.FC<{
     onClose: () => void;
     onOpenTab: (ticket: ParkedTicket) => void;
     onCreateTab: (name: string) => void;
-    onRenameTab?: (ticket: ParkedTicket, name: string) => void | Promise<void>;
+    onRenameTab?: (ticket: ParkedTicket, name: string, fractionIndex?: number) => void | Promise<void>;
     allowCreate?: boolean;
     titleLabel?: string;
     accountMode?: boolean;
 }> = ({ table, tickets, currencySymbol, onClose, onOpenTab, onCreateTab, onRenameTab, allowCreate = true, titleLabel = 'Barra / Minutas', accountMode = false }) => {
     const [tabName, setTabName] = useState('');
-    const [editingTicketId, setEditingTicketId] = useState<string | null>(null);
+    const [editingEntryKey, setEditingEntryKey] = useState<string | null>(null);
     const [editingName, setEditingName] = useState('');
     const nextName = `${accountMode ? 'Cuenta' : 'Minuta'} ${tickets.length + 1}`;
     const accountEntries = useMemo(() => buildTableAccountDisplayEntries(tickets), [tickets]);
@@ -195,7 +195,7 @@ const BarTabsModal: React.FC<{
                             accountEntries.map((entry) => {
                                 const ticket = entry.ticket;
                                 const subtotalState = getTicketSubtotalization(ticket);
-                                const canRename = Boolean(accountMode && onRenameTab && (!entry.fractionIndex || entry.fractionIndex === 1));
+                                const canRename = Boolean(accountMode && onRenameTab);
                                 const isPaid = entry.status === 'PAID';
                                 return (
                                     <div key={entry.key} className={`rounded-3xl border shadow-sm transition-all ${isPaid ? 'border-emerald-200 bg-emerald-50/70' : subtotalState.isSubtotalized ? 'border-violet-300 bg-violet-50' : 'border-sky-100 bg-white'}`}>
@@ -204,7 +204,7 @@ const BarTabsModal: React.FC<{
                                                 type="button"
                                                 onClick={() => !isPaid && onOpenTab(ticket)}
                                                 disabled={isPaid}
-                                                className="flex min-w-0 flex-1 select-none items-center justify-between gap-4 rounded-2xl p-2 text-left transition-colors [-webkit-tap-highlight-color:transparent] hover:bg-sky-50 disabled:cursor-default disabled:hover:bg-transparent"
+                                                className="table-account-action flex min-w-0 flex-1 select-none appearance-none items-center justify-between gap-4 rounded-2xl border-0 bg-white p-2 text-left transition-colors [-webkit-tap-highlight-color:transparent] hover:bg-sky-50 disabled:cursor-default"
                                             >
                                                 <div className="min-w-0">
                                                     <div className="flex flex-wrap items-center gap-2">
@@ -238,10 +238,10 @@ const BarTabsModal: React.FC<{
                                                 <button
                                                     type="button"
                                                     onClick={() => {
-                                                        setEditingTicketId(String(ticket.id));
-                                                        setEditingName(entry.accountLabel);
+                                                        setEditingEntryKey(entry.key);
+                                                        setEditingName(entry.editName);
                                                     }}
-                                                    className="flex w-12 shrink-0 items-center justify-center rounded-2xl text-slate-400 hover:bg-slate-100 hover:text-blue-600"
+                                                    className="table-account-rename flex w-12 shrink-0 appearance-none items-center justify-center rounded-2xl border-0 bg-sky-50 text-slate-400 hover:bg-sky-100 hover:text-blue-600"
                                                     aria-label={`Renombrar ${entry.accountLabel}`}
                                                     title="Renombrar cuenta"
                                                 >
@@ -249,14 +249,14 @@ const BarTabsModal: React.FC<{
                                                 </button>
                                             )}
                                         </div>
-                                        {canRename && editingTicketId === String(ticket.id) && (
+                                        {canRename && editingEntryKey === entry.key && (
                                             <form
                                                 className="flex gap-2 border-t border-slate-100 p-3"
                                                 onSubmit={(event) => {
                                                     event.preventDefault();
                                                     const nextValue = editingName.trim();
                                                     if (!nextValue) return;
-                                                    void Promise.resolve(onRenameTab?.(ticket, nextValue)).then(() => setEditingTicketId(null));
+                                                    void Promise.resolve(onRenameTab?.(ticket, nextValue, entry.fractionIndex)).then(() => setEditingEntryKey(null));
                                                 }}
                                             >
                                                 <input
@@ -269,7 +269,7 @@ const BarTabsModal: React.FC<{
                                                 <button type="submit" disabled={!editingName.trim()} className="rounded-xl bg-blue-600 px-4 text-white disabled:opacity-40" aria-label="Guardar nombre de cuenta">
                                                     <Check size={18} />
                                                 </button>
-                                                <button type="button" onClick={() => setEditingTicketId(null)} className="rounded-xl bg-slate-100 px-4 text-slate-500" aria-label="Cancelar edición de cuenta">
+                                                <button type="button" onClick={() => setEditingEntryKey(null)} className="rounded-xl bg-slate-100 px-4 text-slate-500" aria-label="Cancelar edición de cuenta">
                                                     <X size={18} />
                                                 </button>
                                             </form>
@@ -1008,8 +1008,8 @@ const TableMap: React.FC<TableMapProps> = ({
         return ticket;
     }, [currentUser.id, currentUser.name, getTableTickets, onUpdateParkedTickets, onUpdateTables, parkedTickets, roomLabelById, tables]);
 
-    const renameTableAccount = useCallback(async (table: Table, ticket: ParkedTicket, requestedName: string) => {
-        const nextTicket = renameTableAccountTicket(ticket, getTableLabel(table), requestedName);
+    const renameTableAccount = useCallback(async (table: Table, ticket: ParkedTicket, requestedName: string, fractionIndex?: number) => {
+        const nextTicket = renameTableAccountTicket(ticket, getTableLabel(table), requestedName, fractionIndex);
         if (nextTicket === ticket) return;
         const nextTickets = (parkedTickets || []).map(candidate => candidate.id === ticket.id ? nextTicket : candidate);
         await Promise.resolve(onUpdateParkedTickets?.(nextTickets));
@@ -2222,7 +2222,7 @@ const TableMap: React.FC<TableMapProps> = ({
                         onCreateTab={(name) => {
                             void createTableAccount(selectedAccountTable, name);
                         }}
-                        onRenameTab={(ticket, name) => renameTableAccount(selectedAccountTable, ticket, name)}
+                        onRenameTab={(ticket, name, fractionIndex) => renameTableAccount(selectedAccountTable, ticket, name, fractionIndex)}
                     />
                 )}
 
@@ -2487,14 +2487,14 @@ const TableMap: React.FC<TableMapProps> = ({
 };
 
 const TABLE_CHAIR_POSITION_CLASS: Record<TableChairSlot, string> = {
-    TOP_CENTER: '-top-2 left-1/2 h-3 w-8 -translate-x-1/2',
-    BOTTOM_CENTER: '-bottom-2 left-1/2 h-3 w-8 -translate-x-1/2',
-    LEFT_CENTER: 'left-[-0.5rem] top-1/2 h-8 w-3 -translate-y-1/2',
-    RIGHT_CENTER: 'right-[-0.5rem] top-1/2 h-8 w-3 -translate-y-1/2',
-    TOP_LEFT: '-top-2 left-[20%] h-3 w-7',
-    TOP_RIGHT: '-top-2 right-[20%] h-3 w-7',
-    BOTTOM_LEFT: '-bottom-2 left-[20%] h-3 w-7',
-    BOTTOM_RIGHT: '-bottom-2 right-[20%] h-3 w-7'
+    TOP_CENTER: '-top-8 left-1/2 -translate-x-1/2',
+    BOTTOM_CENTER: '-bottom-8 left-1/2 -translate-x-1/2 rotate-180',
+    LEFT_CENTER: '-left-8 top-1/2 -translate-y-1/2 -rotate-90',
+    RIGHT_CENTER: '-right-8 top-1/2 -translate-y-1/2 rotate-90',
+    TOP_LEFT: '-top-8 left-[15%]',
+    TOP_RIGHT: '-top-8 right-[15%]',
+    BOTTOM_LEFT: '-bottom-8 left-[15%] rotate-180',
+    BOTTOM_RIGHT: '-bottom-8 right-[15%] rotate-180'
 };
 
 const TableChairMarkers = React.memo(({ model }: { model: SmartTableModel }) => {
@@ -2507,8 +2507,11 @@ const TableChairMarkers = React.memo(({ model }: { model: SmartTableModel }) => 
             {getTableChairSlots(model.table.capacity).map(slot => (
                 <span
                     key={slot}
-                    className={`absolute rounded-[0.35rem] border border-amber-950/25 bg-gradient-to-br from-amber-100 via-amber-200 to-amber-400 shadow-[0_2px_5px_rgba(69,26,3,0.32)] ${TABLE_CHAIR_POSITION_CLASS[slot]}`}
-                />
+                    className={`absolute h-6 w-8 ${TABLE_CHAIR_POSITION_CLASS[slot]}`}
+                >
+                    <span className="absolute inset-x-0 bottom-0 h-[1.15rem] rounded-[0.55rem] border border-slate-300/80 bg-gradient-to-br from-slate-200 via-slate-300 to-slate-400 shadow-[0_3px_8px_rgba(15,23,42,0.38)]" />
+                    <span className="absolute left-1/2 top-0 h-2 w-7 -translate-x-1/2 rounded-[0.4rem] border border-slate-200/80 bg-gradient-to-b from-slate-100 to-slate-400 shadow-[0_2px_5px_rgba(15,23,42,0.32)]" />
+                </span>
             ))}
         </div>
     );
