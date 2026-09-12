@@ -148,6 +148,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
     };
     const currentRoom = rooms.find(r => r.id === currentRoomId);
     const usesWhiteBackground = currentRoom?.data?.backgroundStyle === 'WHITE';
+    const showsTableChairs = currentRoom?.data?.tableLayoutStyle !== 'NORMAL';
     const renderableTables = useMemo(() => getRenderableFloorTables(tables), [tables]);
     const currentRoomTables = useMemo(
         () => renderableTables.filter(t => t.roomId === currentRoomId),
@@ -631,6 +632,33 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                                         Blanco
                                     </button>
                                 </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Estilo de las mesas</label>
+                                <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => currentRoom && onUpdateRoom?.({
+                                            ...currentRoom,
+                                            data: { ...(currentRoom.data || {}), tableLayoutStyle: 'NORMAL' }
+                                        })}
+                                        className={`rounded-lg px-3 py-2 text-sm font-bold ${!showsTableChairs ? 'bg-white text-slate-900 shadow' : 'text-slate-500 hover:bg-white'}`}
+                                    >
+                                        Normal
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => currentRoom && onUpdateRoom?.({
+                                            ...currentRoom,
+                                            data: { ...(currentRoom.data || {}), tableLayoutStyle: 'CHAIRS' }
+                                        })}
+                                        className={`rounded-lg px-3 py-2 text-sm font-bold ${showsTableChairs ? 'bg-blue-600 text-white shadow' : 'text-slate-500 hover:bg-white'}`}
+                                    >
+                                        4 sillas
+                                    </button>
+                                </div>
+                                <p className="mt-2 text-xs text-slate-400">Agrega una silla gráfica a cada lado sin cambiar la capacidad de la mesa.</p>
                             </div>
 
                             <button

@@ -17,3 +17,9 @@ test('ediciones y eliminaciones tampoco sobrescriben actualizaciones concurrente
   assert.match(designerSource, /onUpdateTables\(currentTables => \([\s\S]*?currentTables\.map/);
   assert.match(designerSource, /onUpdateTables\(currentTables => currentTables\.filter/);
 });
+
+test('el estilo normal o con cuatro sillas se persiste dentro del salón', () => {
+  assert.match(designerSource, /tableLayoutStyle: 'NORMAL'/);
+  assert.match(designerSource, /tableLayoutStyle: 'CHAIRS'/);
+  assert.match(designerSource, /data: \{ \.+\(currentRoom\.data \|\| \{\}\), tableLayoutStyle:/);
+});
