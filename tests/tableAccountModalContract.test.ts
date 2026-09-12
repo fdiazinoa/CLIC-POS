@@ -28,7 +28,7 @@ test('el modal neutraliza el fondo gris nativo de Android', () => {
 });
 
 test('las sillas usan asiento y respaldo separados como la opción C', () => {
-  assert.match(source, /absolute inset-x-0 bottom-0 h-\[1\.15rem\]/);
-  assert.match(source, /absolute left-1\/2 top-0 h-2 w-7/);
+  assert.match(source, /absolute inset-x-0 bottom-0 h-4/);
+  assert.match(source, /absolute left-1\/2 top-0 h-1\.5 w-6/);
   assert.match(source, /from-slate-100 to-slate-400/);
 });
