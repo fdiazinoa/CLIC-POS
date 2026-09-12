@@ -56,6 +56,29 @@ test('customer mutation sends the persistent event ID and the same range code on
     assert.deepEqual(buildCustomerMutationEnvelope(mutation), payload);
 });
 
+test('customer mutation reuses the original POS identity after an ERP snapshot changes its id', () => {
+    const payload = buildCustomerMutationEnvelope({
+        id: 'mutation-2', customerId: 'erp-customer-uuid', terminalId: 'terminal-1', operation: 'UPSERT',
+        createdAt: '2026-09-12T12:00:00.000Z',
+        customer: { id: 'erp-customer-uuid', source_customer_id: 'original-pos-uuid', name: 'Caridad Olivo' },
+    });
+    assert.equal(payload.source_customer_id, 'original-pos-uuid');
+});
+
+test('number acknowledgement follows the original POS identity after a snapshot', () => {
+    const snapshotCustomer = {
+        ...customer,
+        id: 'erp-customer-uuid',
+        source_customer_id: 'customer-local-uuid',
+    };
+    assert.doesNotThrow(() => assertCustomerNumberAcknowledgement({ results: [{
+        status: 'APPLIED',
+        source_customer_id: 'customer-local-uuid',
+        erp_customer_id: 'erp-customer-uuid',
+        customer_code: 'CLI-040000',
+    }] }, snapshotCustomer));
+});
+
 test('range progress requires a successful ACK with the exact customer code', () => {
     const result = { status: 'APPLIED', source_customer_id: customer.id, erp_customer_id: 'erp-uuid', customer_code: 'CLI-040000' };
     assert.doesNotThrow(() => assertCustomerNumberAcknowledgement({ results: [result] }, customer));

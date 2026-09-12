@@ -25,6 +25,7 @@ WITH base AS (
  WHEN 'reservations' THEN COALESCE(NULLIF(json_extract(data,'$.code'),''),doc_id)
  WHEN 'zReports' THEN COALESCE(NULLIF(json_extract(data,'$.sequenceNumber'),''),doc_id)
  WHEN 'inventoryLedger' THEN COALESCE(NULLIF(json_extract(data,'$.documentRef'),''),NULLIF(json_extract(data,'$.reference'),''),NULLIF(json_extract(data,'$.source_display_id'),''),doc_id)
+ WHEN 'catalogEdits' THEN COALESCE(NULLIF(json_extract(data,'$.label'),''),doc_id)
  ELSE COALESCE(NULLIF(json_extract(data,'$.sequenceNumber'),''),NULLIF(json_extract(data,'$.displayId'),''),NULLIF(json_extract(data,'$.code'),''),NULLIF(json_extract(data,'$.documentRef'),''),NULLIF(json_extract(data,'$.reference'),''),doc_id) END AS display_id,
  COALESCE(NULLIF(json_extract(data,'$.terminalId'),''),CASE WHEN collection_name IN ('cashMovements','customerMutations','posUserMutations','catalogEdits','wallet_transactions','loyalty_events') THEN NULLIF(json_extract(data,'$.source_terminal_id'),'') END,'-') AS terminal,
  CASE upper(COALESCE(NULLIF(json_extract(data,'$.syncStatus'),''),json_extract(data,'$.cloudSyncStatus'),''))

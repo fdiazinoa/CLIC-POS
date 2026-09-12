@@ -50,3 +50,12 @@ test('legacy classifications, taxes and multimedia are rehomed instead of expose
   assert.equal(source.slice(kardexStart, generalStart).includes('Video del producto'), false);
   assert.match(source.slice(generalStart), />Multimedia</);
 });
+
+test('general surfaces commercial organization before secondary codes on a white canvas', () => {
+  const generalStart = source.indexOf("activeTab === 'GENERAL'");
+  const general = source.slice(generalStart, source.indexOf("activeTab === 'VARIANTS'", generalStart));
+  assert.ok(general.indexOf('Unidades de medida') < general.indexOf('Códigos y referencias'));
+  assert.ok(general.indexOf('Clasificación comercial') < general.indexOf('Códigos y referencias'));
+  assert.match(source, /overflow-y-auto bg-white p-3/);
+  assert.match(source, /cursor-pointer appearance-none[\s\S]*bg-white/);
+});

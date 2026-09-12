@@ -69,3 +69,12 @@ test('sorting accepts timestamps and timezone offsets without repeating page ent
         assert.equal(page({ pageSize: 1, page: 2 }).collections.transactions[0].id, 'old');
     } finally { db.close(); }
 });
+
+test('catalog edits are searchable by their descriptive label instead of their UUID', () => {
+    const { db, add, page } = fixture();
+    try {
+        add('catalogEdits', { id: 'catalog-uuid', label: 'CAMISA A', createdAt: '2026-01-01', syncStatus: 'PENDING' });
+        assert.equal(page({ search: 'CAMISA A' }).total, 1);
+        assert.equal(page({ search: 'catalog-uuid' }).total, 0);
+    } finally { db.close(); }
+});
