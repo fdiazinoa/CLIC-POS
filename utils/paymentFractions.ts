@@ -30,3 +30,16 @@ export const isPaymentFractionPlanCurrent = (
   plan: PaymentFractionPlan | undefined,
   currentTotal: number
 ): boolean => Boolean(plan && Math.abs(plan.originalTotal - currentTotal) < 0.01);
+
+/**
+ * Keeps an existing installment plan only while it still describes the current
+ * ticket total. This is used by every table autosave path so reopening a table
+ * does not collapse valid installments, without reviving a stale plan after an
+ * item, discount or tax change.
+ */
+export const retainCurrentPaymentFractionPlan = (
+  plan: PaymentFractionPlan | undefined,
+  currentTotal: number
+): PaymentFractionPlan | undefined => (
+  isPaymentFractionPlanCurrent(plan, currentTotal) ? plan : undefined
+);
