@@ -28,6 +28,11 @@ import TableOptionsModal from './TableOptionsModal';
 import SplitTicketModal from './SplitTicketModal';
 import TableMoveConfirmationModal from './TableMoveConfirmationModal';
 import { createPaymentFractionPlan } from '../utils/paymentFractions';
+import {
+    buildTableAccountDisplayEntries,
+    renameTableAccountTicket,
+    summarizeOpenTableAccounts
+} from '../utils/tableAccountPresentation';
 import { getRenderableFloorTables } from '../utils/tableLayout';
 import { hasPendingKdsDispatch } from '../utils/kdsPresentation';
 import { resolveOperationalApiUrl } from '../utils/masterOperationalApi';
@@ -149,16 +154,17 @@ const BarTabsModal: React.FC<{
     onClose: () => void;
     onOpenTab: (ticket: ParkedTicket) => void;
     onCreateTab: (name: string) => void;
+    onRenameTab?: (ticket: ParkedTicket, name: string) => void | Promise<void>;
     allowCreate?: boolean;
     titleLabel?: string;
     accountMode?: boolean;
-}> = ({ table, tickets, currencySymbol, onClose, onOpenTab, onCreateTab, allowCreate = true, titleLabel = 'Barra / Minutas', accountMode = false }) => {
+}> = ({ table, tickets, currencySymbol, onClose, onOpenTab, onCreateTab, onRenameTab, allowCreate = true, titleLabel = 'Barra / Minutas', accountMode = false }) => {
     const [tabName, setTabName] = useState('');
+    const [editingTicketId, setEditingTicketId] = useState<string | null>(null);
+    const [editingName, setEditingName] = useState('');
     const nextName = `${accountMode ? 'Cuenta' : 'Minuta'} ${tickets.length + 1}`;
-    const total = tickets.reduce((sum, ticket) => {
-        const itemsTotal = (ticket.items || []).reduce((acc, item) => acc + Number(item.price || 0) * Number(item.quantity || 0), 0);
-        return sum + Number(ticket.total ?? itemsTotal ?? 0);
-    }, 0);
+    const accountEntries = useMemo(() => buildTableAccountDisplayEntries(tickets), [tickets]);
+    const openSummary = useMemo(() => summarizeOpenTableAccounts(accountEntries), [accountEntries]);
 
     return (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
@@ -168,7 +174,7 @@ const BarTabsModal: React.FC<{
                             <p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-500">{titleLabel}</p>
                         <h2 className="mt-1 text-3xl font-black text-slate-900">{table.nombre || table.name || 'Barra'}</h2>
                             <p className="mt-1 text-sm font-bold text-slate-500">
-                            {tickets.length} cuenta(s) abierta(s) · {currencySymbol}{total.toLocaleString()}
+                            {openSummary.count} cuenta(s) abierta(s) · {currencySymbol}{openSummary.total.toLocaleString()}
                         </p>
                     </div>
                     <button onClick={onClose} className="rounded-full bg-slate-100 p-3 text-slate-500 hover:bg-slate-200">
@@ -178,50 +184,96 @@ const BarTabsModal: React.FC<{
 
                 <div className="grid gap-4 p-6 md:grid-cols-[1fr_280px]">
                     <div className="space-y-3 max-h-[52vh] overflow-y-auto pr-1">
-                        {tickets.length === 0 ? (
+                        {accountEntries.length === 0 ? (
                             <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center">
                                 <ReceiptText size={38} className="mx-auto mb-3 text-slate-300" />
                                 <p className="font-black text-slate-700">No hay cuentas abiertas</p>
                                 <p className="mt-1 text-sm font-semibold text-slate-400">No hay artículos pendientes en esta mesa.</p>
                             </div>
                         ) : (
-                            tickets.map((ticket, index) => {
-                                const ticketTotal = Number(ticket.total ?? (ticket.items || []).reduce((acc, item) => acc + Number(item.price || 0) * Number(item.quantity || 0), 0));
-                                const label = ticket.barTabName || ticket.alias || ticket.name || `Cuenta ${index + 1}`;
+                            accountEntries.map((entry) => {
+                                const ticket = entry.ticket;
                                 const subtotalState = getTicketSubtotalization(ticket);
+                                const canRename = Boolean(accountMode && onRenameTab && (!entry.fractionIndex || entry.fractionIndex === 1));
+                                const isPaid = entry.status === 'PAID';
                                 return (
-                                    <button
-                                        key={ticket.id}
-                                        type="button"
-                                        onClick={() => onOpenTab(ticket)}
-                                        className={`flex w-full items-center justify-between gap-4 rounded-3xl border p-4 text-left shadow-sm transition-all ${subtotalState.isSubtotalized
-                                            ? 'border-violet-300 bg-violet-50 hover:border-violet-400 hover:bg-violet-100'
-                                            : 'border-slate-100 bg-white hover:border-blue-300 hover:bg-blue-50'
-                                        }`}
-                                    >
-                                        <div className="min-w-0">
-                                            <div className="flex flex-wrap items-center gap-2">
-                                                <p className="truncate text-lg font-black text-slate-900">{label}</p>
-                                                {subtotalState.isSubtotalized && (
-                                                    <span className="rounded-full bg-violet-600 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-white">
-                                                        Subtotalizado
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <p className="mt-1 text-xs font-bold uppercase tracking-wide text-slate-400">
-                                                {(ticket.items || []).length} línea(s) · {new Date(ticket.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                            </p>
-                                            {subtotalState.isSubtotalized && subtotalState.subtotalizedAt && (
-                                                <p className="mt-1 text-[10px] font-black text-violet-600">
-                                                    Pre-cuenta {new Date(subtotalState.subtotalizedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                                    {subtotalState.subtotalizedBy ? ` · ${subtotalState.subtotalizedBy}` : ''}
-                                                </p>
+                                    <div key={entry.key} className={`rounded-3xl border shadow-sm transition-all ${isPaid ? 'border-emerald-200 bg-emerald-50/70' : subtotalState.isSubtotalized ? 'border-violet-300 bg-violet-50' : 'border-slate-100 bg-white'}`}>
+                                        <div className="flex items-stretch gap-2 p-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => !isPaid && onOpenTab(ticket)}
+                                                disabled={isPaid}
+                                                className="flex min-w-0 flex-1 items-center justify-between gap-4 rounded-2xl p-2 text-left transition-colors hover:bg-blue-50 disabled:cursor-default disabled:hover:bg-transparent"
+                                            >
+                                                <div className="min-w-0">
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        <p className="truncate text-lg font-black text-slate-900">{entry.displayLabel}</p>
+                                                        {entry.fractionIndex && (
+                                                            <span className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] ${isPaid ? 'bg-emerald-600 text-white' : 'bg-sky-100 text-sky-700'}`}>
+                                                                {isPaid ? 'Cobrada' : 'Pendiente'}
+                                                            </span>
+                                                        )}
+                                                        {subtotalState.isSubtotalized && (
+                                                            <span className="rounded-full bg-violet-600 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-white">
+                                                                Subtotalizado
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <p className="mt-1 text-xs font-bold uppercase tracking-wide text-slate-400">
+                                                        {(ticket.items || []).length} línea(s) · {new Date(ticket.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                    </p>
+                                                    {subtotalState.isSubtotalized && subtotalState.subtotalizedAt && (
+                                                        <p className="mt-1 text-[10px] font-black text-violet-600">
+                                                            Pre-cuenta {new Date(subtotalState.subtotalizedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                            {subtotalState.subtotalizedBy ? ` · ${subtotalState.subtotalizedBy}` : ''}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                                <span className={`shrink-0 text-xl font-black ${isPaid ? 'text-emerald-700' : subtotalState.isSubtotalized ? 'text-violet-700' : 'text-emerald-600'}`}>
+                                                    {currencySymbol}{entry.amount.toLocaleString()}
+                                                </span>
+                                            </button>
+                                            {canRename && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setEditingTicketId(String(ticket.id));
+                                                        setEditingName(entry.accountLabel);
+                                                    }}
+                                                    className="flex w-12 shrink-0 items-center justify-center rounded-2xl text-slate-400 hover:bg-slate-100 hover:text-blue-600"
+                                                    aria-label={`Renombrar ${entry.accountLabel}`}
+                                                    title="Renombrar cuenta"
+                                                >
+                                                    <Pencil size={18} />
+                                                </button>
                                             )}
                                         </div>
-                                        <span className={`shrink-0 text-xl font-black ${subtotalState.isSubtotalized ? 'text-violet-700' : 'text-emerald-600'}`}>
-                                            {currencySymbol}{ticketTotal.toLocaleString()}
-                                        </span>
-                                    </button>
+                                        {canRename && editingTicketId === String(ticket.id) && (
+                                            <form
+                                                className="flex gap-2 border-t border-slate-100 p-3"
+                                                onSubmit={(event) => {
+                                                    event.preventDefault();
+                                                    const nextValue = editingName.trim();
+                                                    if (!nextValue) return;
+                                                    void Promise.resolve(onRenameTab?.(ticket, nextValue)).then(() => setEditingTicketId(null));
+                                                }}
+                                            >
+                                                <input
+                                                    autoFocus
+                                                    value={editingName}
+                                                    onChange={event => setEditingName(event.target.value)}
+                                                    aria-label="Nombre de la cuenta"
+                                                    className="min-w-0 flex-1 rounded-xl border border-blue-200 bg-white px-3 py-2 font-bold text-slate-900 outline-none focus:border-blue-500"
+                                                />
+                                                <button type="submit" disabled={!editingName.trim()} className="rounded-xl bg-blue-600 px-4 text-white disabled:opacity-40" aria-label="Guardar nombre de cuenta">
+                                                    <Check size={18} />
+                                                </button>
+                                                <button type="button" onClick={() => setEditingTicketId(null)} className="rounded-xl bg-slate-100 px-4 text-slate-500" aria-label="Cancelar edición de cuenta">
+                                                    <X size={18} />
+                                                </button>
+                                            </form>
+                                        )}
+                                    </div>
                                 );
                             })
                         )}
@@ -954,6 +1006,13 @@ const TableMap: React.FC<TableMapProps> = ({
         setSelectedAccountTable(nextTable);
         return ticket;
     }, [currentUser.id, currentUser.name, getTableTickets, onUpdateParkedTickets, onUpdateTables, parkedTickets, roomLabelById, tables]);
+
+    const renameTableAccount = useCallback(async (table: Table, ticket: ParkedTicket, requestedName: string) => {
+        const nextTicket = renameTableAccountTicket(ticket, getTableLabel(table), requestedName);
+        if (nextTicket === ticket) return;
+        const nextTickets = (parkedTickets || []).map(candidate => candidate.id === ticket.id ? nextTicket : candidate);
+        await Promise.resolve(onUpdateParkedTickets?.(nextTickets));
+    }, [onUpdateParkedTickets, parkedTickets]);
 
     const stats = useMemo(() => {
         const total = smartTables.length;
@@ -2162,6 +2221,7 @@ const TableMap: React.FC<TableMapProps> = ({
                         onCreateTab={(name) => {
                             void createTableAccount(selectedAccountTable, name);
                         }}
+                        onRenameTab={(ticket, name) => renameTableAccount(selectedAccountTable, ticket, name)}
                     />
                 )}
 
