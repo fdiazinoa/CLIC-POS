@@ -2325,6 +2325,8 @@ export interface PaymentFractionPart {
   index: number;
   amount: number;
   status: 'PENDING' | 'PAID';
+  /** Nombre operativo independiente para identificar esta cuota en la mesa. */
+  name?: string;
   payments?: PaymentEntry[];
   voluntaryTip?: number;
   paidAt?: string;

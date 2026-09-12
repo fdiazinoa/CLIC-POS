@@ -54,7 +54,28 @@ test('permite nombrar la primera cuenta sin perder sus datos operativos', () => 
   assert.equal(renamed.items, original.items);
 });
 
+test('permite nombrar cada cuota de forma independiente', () => {
+  const original = ticket({ alias: 'Felix', paymentFraction: createPaymentFractionPlan(23050, 3) });
+  const renamedSecond = renameTableAccountTicket(original, 'Mesa 4', 'Ana', 2);
+  const renamedThird = renameTableAccountTicket(renamedSecond, 'Mesa 4', 'Luis', 3);
+  const entries = buildTableAccountDisplayEntries([renamedThird]);
+
+  assert.equal(renamedThird.alias, 'Felix');
+  assert.deepEqual(renamedThird.paymentFraction?.parts.map(part => part.name), [undefined, 'Ana', 'Luis']);
+  assert.deepEqual(entries.map(entry => entry.displayLabel), [
+    'Felix · Cuota 1 de 3',
+    'Ana · Cuota 2 de 3',
+    'Luis · Cuota 3 de 3',
+  ]);
+  assert.deepEqual(entries.map(entry => entry.editName), ['Felix', 'Ana', 'Luis']);
+});
+
 test('ignora nombres vacíos y conserva el ticket original', () => {
   const original = ticket();
   assert.equal(renameTableAccountTicket(original, 'Mesa 4', '   '), original);
+});
+
+test('ignora un índice de cuota inexistente', () => {
+  const original = ticket({ paymentFraction: createPaymentFractionPlan(23050, 3) });
+  assert.equal(renameTableAccountTicket(original, 'Mesa 4', 'Fuera de rango', 9), original);
 });
