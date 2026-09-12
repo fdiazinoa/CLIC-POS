@@ -31,7 +31,11 @@ export const buildCustomerMutationEnvelope = (mutation: {
 }) => ({
     event_id: mutation.id,
     source_customer_mutation_id: mutation.id,
-    source_customer_id: mutation.customerId,
+    source_customer_id: firstText(
+        mutation.customer?.source_customer_id,
+        mutation.customer?.sourceCustomerId,
+        mutation.customerId,
+    ),
     source_terminal_id: mutation.terminalId,
     operation: mutation.operation,
     occurred_at: mutation.createdAt,
@@ -49,7 +53,12 @@ export const buildCustomerMutationEnvelope = (mutation: {
 export const assertCustomerNumberAcknowledgement = (response: { results?: Record<string, unknown>[] } | null, customer?: Customer) => {
     const expected = customerNumberIdentity(customer);
     if (!expected.master_number_range_id || !expected.customer_code) return;
-    const result = response?.results?.find(row => row.source_customer_id === customer?.id);
+    const expectedSourceCustomerId = firstText(
+        customer?.source_customer_id,
+        customer?.sourceCustomerId,
+        customer?.id,
+    );
+    const result = response?.results?.find(row => row.source_customer_id === expectedSourceCustomerId);
     if (!result || !['APPLIED', 'DUPLICATE'].includes(String(result.status))
         || result.error_code || result.customer_code !== expected.customer_code || !result.erp_customer_id) {
         throw new Error('CUSTOMER_CODE_ACK_MISMATCH: ERP no confirmó el consecutivo asignado por el POS.');
