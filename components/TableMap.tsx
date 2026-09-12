@@ -1,7 +1,6 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 import { Room, Table, User as UserType, ParkedTicket, CartItem, RoleDefinition, Permission } from '../types';
 import {
-    Clock,
     User,
     Lock,
     Plus,
@@ -98,12 +97,6 @@ interface SmartTableModel {
     isPartiallySubtotalized: boolean;
     subtotalizedTicketCount: number;
     ticketCount: number;
-    progress: number;
-    serviceStage: {
-        icon: string;
-        label: string;
-    };
-    needsRevenueGlow: boolean;
     hasPendingKitchenDispatch: boolean;
     lastOrderHint: string;
     firstCustomerName?: string;
@@ -415,12 +408,6 @@ const summarizeParkedTicket = (ticket: ParkedTicket): ParkedOrderSummary | null 
     };
 };
 
-const getServiceStage = (progress: number): { icon: string; label: string } => {
-    if (progress < 0.34) return { icon: '🥗', label: 'Entradas' };
-    if (progress < 0.67) return { icon: '🥩', label: 'Plato fuerte' };
-    return { icon: '🍰', label: 'Postre' };
-};
-
 const inferArchetype = (table: Table): TableArchetype => {
     if (table.shape === 'BAR') return 'BAR';
     if (table.shape === 'BOOTH') return 'BOOTH';
@@ -458,11 +445,11 @@ const getSmartStatus = (table: Table, elapsedMinutes: number, hasDigitizedItems:
     return 'FREE';
 };
 
-const computeLastOrderHint = (model: Pick<SmartTableModel, 'smartStatus' | 'serviceStage' | 'hasDigitizedItems'>): string => {
+const computeLastOrderHint = (model: Pick<SmartTableModel, 'smartStatus' | 'hasDigitizedItems'>): string => {
     if (model.smartStatus === 'SUBTOTALIZED') return 'Pre-cuenta impresa';
     if (model.smartStatus === 'ATTENTION') return 'Sin pedido reciente (+10m)';
     if (!model.hasDigitizedItems) return 'Aun sin pedidos cargados';
-    return `${model.serviceStage.label} en curso`;
+    return 'Pedido registrado';
 };
 
 const statusPalette: Record<
@@ -865,22 +852,6 @@ const TableMap: React.FC<TableMapProps> = ({
         [serviceTables, getVisualTableState, isTableOccupiedFromTicket]
     );
 
-    const averageTicket = useMemo(() => {
-        if (occupiedLikeTables.length === 0) return 0;
-        const total = occupiedLikeTables.reduce((acc, table) => {
-            const persistedTotal = Number(table.currentOrderTotal || 0);
-            const parkedSummary = getParkedSummaryForTable(table);
-            const parkedTotal = parkedSummary
-                ? (parkedSummary.hasExplicitTotal
-                    ? parkedSummary.finalTotal
-                    : (persistedTotal > NO_ORDER_TOTAL_THRESHOLD ? persistedTotal : parkedSummary.calculatedTotal))
-                : 0;
-            const resolvedTotal = parkedTotal > NO_ORDER_TOTAL_THRESHOLD ? parkedTotal : persistedTotal;
-            return acc + resolvedTotal;
-        }, 0);
-        return total / occupiedLikeTables.length;
-    }, [occupiedLikeTables, getParkedSummaryForTable]);
-
     const expectedStayMinutes = useMemo(() => {
         const elapsed = occupiedLikeTables
             .map(table => getElapsedMinutes(table.timeSeated))
@@ -891,8 +862,6 @@ const TableMap: React.FC<TableMapProps> = ({
         const averageElapsed = elapsed.reduce((acc, value) => acc + value, 0) / elapsed.length;
         return clamp(Math.round(averageElapsed * 1.18), 45, 130);
     }, [occupiedLikeTables]);
-
-    const highRevenueThreshold = useMemo(() => averageTicket * 1.5, [averageTicket]);
 
     const smartTables = useMemo<SmartTableModel[]>(() => {
         return serviceTables.map((rawTable, index) => {
@@ -935,9 +904,6 @@ const TableMap: React.FC<TableMapProps> = ({
                 canAccessOtherSeller: hasOtherSellerTableAccess,
             });
 
-            const progress = isOccupiedLike ? clamp(elapsedMinutes / Math.max(1, expectedStayMinutes), 0, 1) : 0;
-            const serviceStage = getServiceStage(progress);
-            const needsRevenueGlow = isOccupiedLike && highRevenueThreshold > 0 && total >= highRevenueThreshold;
             const hasPendingKitchenDispatch = getTableTickets(displayTable).some(hasPendingKdsDispatch);
             const firstCustomerName = getTableTickets(displayTable)
                 .map(ticket => String(ticket.customerSnapshot?.name || ticket.customerName || '').trim())
@@ -961,9 +927,6 @@ const TableMap: React.FC<TableMapProps> = ({
                 isPartiallySubtotalized,
                 subtotalizedTicketCount,
                 ticketCount,
-                progress,
-                serviceStage,
-                needsRevenueGlow,
                 hasPendingKitchenDispatch,
                 lastOrderHint: '',
                 firstCustomerName,
@@ -978,7 +941,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 lastOrderHint: computeLastOrderHint(baseModel)
             };
         });
-    }, [serviceTables, bloqueoMeseros, currentUser.id, hasOtherSellerTableAccess, localTableLockOwnerId, expectedStayMinutes, highRevenueThreshold, getParkedSummaryForTable, enrichTableWithParkedTicket, getTableTickets, getVisualTableState]);
+    }, [serviceTables, bloqueoMeseros, currentUser.id, hasOtherSellerTableAccess, localTableLockOwnerId, getParkedSummaryForTable, enrichTableWithParkedTicket, getTableTickets, getVisualTableState]);
 
     const createTableAccount = useCallback(async (table: Table, requestedName?: string) => {
         const existingTickets = getTableTickets(table);
@@ -2063,7 +2026,6 @@ const TableMap: React.FC<TableMapProps> = ({
                                     <SmartTableNode
                                         key={model.table.id}
                                         model={model}
-                                        currencySymbol={currencySymbol}
                                         reduceMotion={Boolean(reduceMotion)}
                                         lightBackground={usesWhiteBackground}
                                         showChairs={showsTableChairs}
@@ -2526,7 +2488,6 @@ TableChairMarkers.displayName = 'TableChairMarkers';
 
 const SmartTableNode = React.memo(({
     model,
-    currencySymbol,
     reduceMotion,
     lightBackground,
     showChairs,
@@ -2536,7 +2497,6 @@ const SmartTableNode = React.memo(({
     onTooltipClose
 }: {
     model: SmartTableModel;
-    currencySymbol: string;
     reduceMotion: boolean;
     lightBackground: boolean;
     showChairs: boolean;
@@ -2556,9 +2516,6 @@ const SmartTableNode = React.memo(({
 
     useEffect(() => () => clearLongPress(), [clearLongPress]);
 
-    const ringRadius = 12;
-    const ringCircumference = 2 * Math.PI * ringRadius;
-    const ringOffset = ringCircumference * (1 - model.progress);
     const shapeClass =
         model.archetype === 'CIRCLE' || model.archetype === 'BAR'
             ? 'rounded-full'
@@ -2606,18 +2563,6 @@ const SmartTableNode = React.memo(({
             }}
         >
             <TableChairMarkers model={model} visible={showChairs} />
-
-            {model.needsRevenueGlow && (
-                <m.div
-                    className="pointer-events-none absolute -inset-2 rounded-[inherit]"
-                    style={{
-                        background: 'radial-gradient(circle, rgba(251,191,36,0.42) 0%, rgba(245,158,11,0.24) 40%, rgba(245,158,11,0) 74%)',
-                        opacity: reduceMotion ? 0.35 : undefined
-                    }}
-                    animate={reduceMotion ? undefined : { opacity: [0.3, 0.65, 0.3], scale: [0.98, 1.04, 0.98] }}
-                    transition={reduceMotion ? undefined : { duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
-                />
-            )}
 
             {model.smartStatus === 'ATTENTION' && (
                 <m.div
@@ -2715,30 +2660,14 @@ const SmartTableNode = React.memo(({
                                     >
                                         {model.subtotalizedTicketCount}/{model.ticketCount}
                                     </div>
-                                ) : (
-                                    <>
-                                        <svg className="h-8 w-8 -rotate-90" viewBox="0 0 32 32">
-                                            <circle cx="16" cy="16" r={ringRadius} stroke="rgba(255,255,255,0.25)" strokeWidth="3" fill="none" />
-                                            <circle
-                                                cx="16"
-                                                cy="16"
-                                                r={ringRadius}
-                                                stroke="rgba(56,189,248,0.95)"
-                                                strokeWidth="3"
-                                                fill="none"
-                                                strokeLinecap="round"
-                                                strokeDasharray={ringCircumference}
-                                                strokeDashoffset={ringOffset}
-                                            />
-                                        </svg>
-                                        <span
-                                            className={`absolute inset-0 flex items-center justify-center text-[10px] ${model.hasPendingKitchenDispatch ? 'rounded-full bg-amber-400 text-amber-950 shadow-[0_0_18px_rgba(251,191,36,0.8)]' : ''}`}
-                                            title={model.hasPendingKitchenDispatch ? 'Pedido pendiente de recepción en cocina' : model.serviceStage.label}
-                                        >
-                                            {model.hasPendingKitchenDispatch ? <CircleHelp size={19} strokeWidth={3} /> : model.serviceStage.icon}
-                                        </span>
-                                    </>
-                                )}
+                                ) : model.hasPendingKitchenDispatch ? (
+                                    <span
+                                        className="absolute inset-0 flex items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-[0_0_18px_rgba(251,191,36,0.8)]"
+                                        title="Pedido pendiente de recepción en cocina"
+                                    >
+                                        <CircleHelp size={19} strokeWidth={3} />
+                                    </span>
+                                ) : null}
                             </div>
                         </div>
 
@@ -2755,15 +2684,7 @@ const SmartTableNode = React.memo(({
                             )}
                         </div>
 
-                        <div className="flex items-center justify-between text-[11px] font-semibold">
-                            <span className="inline-flex items-center gap-1">
-                                <Clock size={11} />
-                                {model.elapsedLabel}
-                            </span>
-                            {!model.joinedPrimaryLabel && (
-                                <span className="font-black">{currencySymbol}{model.total.toLocaleString()}</span>
-                            )}
-                        </div>
+                        <div aria-hidden="true" className="h-8" />
                     </>
                 )}
             </div>
