@@ -155,16 +155,18 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
                         </div>
                     )}
 
-                    <div className="flex bg-white p-1 rounded-xl border border-slate-200 h-fit">
+                    <div className="flex h-fit rounded-xl border border-slate-200 bg-white p-1">
                         <button
+                            type="button"
                             onClick={() => onUpdate({ type: 'RECETA' })}
-                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${product.type === 'RECETA' ? 'bg-orange-100 text-orange-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                            className={`flex appearance-none items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-black transition-colors ${product.type === 'RECETA' ? 'border border-orange-300 text-orange-700' : 'border border-transparent text-slate-700 hover:text-slate-950'}`}
                         >
                             <ChefHat size={16} /> Receta
                         </button>
                         <button
+                            type="button"
                             onClick={() => onUpdate({ type: 'KIT' })}
-                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${product.type === 'KIT' ? 'bg-blue-100 text-blue-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                            className={`flex appearance-none items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-black transition-colors ${product.type === 'KIT' ? 'border border-blue-300 text-blue-700' : 'border border-transparent text-slate-700 hover:text-slate-950'}`}
                         >
                             <Package size={16} /> Kit
                         </button>

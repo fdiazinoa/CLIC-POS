@@ -1008,6 +1008,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [pendingOption, setPendingOption] = useState<Record<string, string>>({});
   const [inventoryDebugCopyStatus, setInventoryDebugCopyStatus] = useState<'IDLE' | 'COPIED' | 'ERROR'>('IDLE');
   const [erpCategoryOptions, setErpCategoryOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [editorViewport, setEditorViewport] = useState<{ height: number; offsetTop: number } | null>(null);
   const [visibleAdditionalBarcodes, setVisibleAdditionalBarcodes] = useState(() => {
     if (initialData?.barcode_3 || initialData?.barcode3) return 2;
     if (initialData?.barcode_2 || initialData?.barcode2) return 1;
@@ -1016,6 +1017,22 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
   // Kardex Filter State
   const [kardexTerminal, setKardexTerminal] = useState<string>('ALL');
+
+  useEffect(() => {
+    if (!isNativeAndroidRuntime || !window.visualViewport) return;
+    const viewport = window.visualViewport;
+    const syncViewport = () => setEditorViewport({
+      height: Math.round(viewport.height),
+      offsetTop: Math.round(viewport.offsetTop),
+    });
+    syncViewport();
+    viewport.addEventListener('resize', syncViewport);
+    viewport.addEventListener('scroll', syncViewport);
+    return () => {
+      viewport.removeEventListener('resize', syncViewport);
+      viewport.removeEventListener('scroll', syncViewport);
+    };
+  }, [isNativeAndroidRuntime]);
 
   // Transit Popover state (warehouseId or null)
   const [openTransitPopover, setOpenTransitPopover] = useState<string | null>(null);
@@ -2591,8 +2608,11 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   }, [activePrimaryTab, supportsInventory, supportsProduction, supportsVariants]);
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-0 backdrop-blur-sm sm:p-3">
-      <div className="relative flex h-full w-full flex-col overflow-hidden bg-white sm:h-[96vh] sm:max-w-[1500px] sm:rounded-2xl sm:border sm:border-slate-200 sm:shadow-xl">
+    <div
+      className="fixed inset-x-0 top-0 z-[80] flex h-dvh items-center justify-center bg-black/50 p-0 backdrop-blur-sm sm:p-3"
+      style={editorViewport ? { height: `${editorViewport.height}px`, top: `${editorViewport.offsetTop}px` } : undefined}
+    >
+      <div className="relative flex h-full max-h-full w-full flex-col overflow-hidden bg-white sm:max-w-[1500px] sm:rounded-2xl sm:border sm:border-slate-200 sm:shadow-xl">
 
         <ProductEditorHeader
           isNew={!initialData}
@@ -2963,14 +2983,70 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                   </div>
                   </section>
 
-                  <section className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <h3 className="text-sm font-black text-slate-800">Multimedia</h3>
-                    <p className="mb-3 mt-1 text-xs text-slate-500">Video remoto opcional. Se guarda la referencia URL.</p>
-                    <div className="space-y-2">
-                      <input type="url" value={productVideo?.url || ''} onChange={event => updateProductVideo('url', event.target.value)} placeholder="URL del video" className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400" />
-                      <input type="url" value={productVideo?.posterUrl || ''} onChange={event => updateProductVideo('posterUrl', event.target.value)} placeholder="URL de portada" className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400" />
+                  <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
+                    <h3 className="flex items-center gap-2 text-sm font-black text-slate-800">
+                      <Scale size={16} className="text-blue-600" />
+                      Unidades de medida
+                    </h3>
+                    <UnitSelector
+                      label="Unidad de compra"
+                      value={formData.purchaseUnit || ''}
+                      onChange={val => setFormData({ ...formData, purchaseUnit: val })}
+                      config={config}
+                      onConfigUpdate={newConfig => console.log('Config updated with new unit:', newConfig.units)}
+                    />
+                    <UnitSelector
+                      label="Unidad de inventario"
+                      value={formData.measurementUnit || ''}
+                      onChange={val => setFormData({ ...formData, measurementUnit: val })}
+                      config={config}
+                      onConfigUpdate={newConfig => console.log('Config updated with new unit:', newConfig.units)}
+                    />
+                    <div>
+                      <label className="mb-1 ml-1 block text-[10px] font-black uppercase text-slate-500">Factor de conversión</label>
+                      <div className="flex items-center gap-2">
+                        <div className="relative min-w-0 flex-1">
+                          <input
+                            type="number"
+                            placeholder="1"
+                            value={formData.conversionFactor || ''}
+                            onChange={e => setFormData({ ...formData, conversionFactor: parseFloat(e.target.value) })}
+                            className="w-full rounded-xl border border-slate-200 bg-white p-3 pr-24 text-sm font-medium focus:border-blue-300"
+                          />
+                          <div className="absolute right-3 top-3 text-xs font-bold text-gray-400">Base / Compra</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setShowConversionHelper(true);
+                          }}
+                          className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-blue-200 bg-white text-blue-600 transition-colors hover:bg-blue-50"
+                          title="Calculadora de Conversión"
+                        >
+                          <Calculator size={18} />
+                        </button>
+                      </div>
+                      {formData.purchaseUnit && formData.measurementUnit && formData.conversionFactor && formData.conversionFactor > 1 && (
+                        <p className="mt-1 pl-1 text-[10px] text-blue-600">
+                          1 {formData.purchaseUnit} = {formData.conversionFactor} {formData.measurementUnit}
+                        </p>
+                      )}
                     </div>
-                    {productVideo?.url && isValidRemoteMediaUrl(productVideo.url) && <video src={productVideo.url} poster={productVideo.posterUrl} controls playsInline className="mt-3 aspect-video w-full rounded-xl bg-black object-contain" />}
+                    {formData.type === 'RECETA' && (
+                      <div>
+                        <label className="mb-1 ml-1 block text-[10px] font-black uppercase text-gray-500">Rendimiento de Bachada</label>
+                        <input
+                          type="number"
+                          placeholder="1"
+                          value={formData.batchYield || ''}
+                          onChange={e => setFormData({ ...formData, batchYield: parseFloat(e.target.value) })}
+                          className="w-full rounded-xl border border-blue-200 bg-white p-3 text-sm font-bold text-blue-800 focus:border-blue-300"
+                        />
+                        <p className="mt-1 pl-1 text-[10px] text-gray-400">Unidades producidas por esta receta</p>
+                      </div>
+                    )}
                   </section>
                 </aside>
                 <div className="space-y-5 lg:col-span-2">
@@ -3000,90 +3076,42 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                     </div>
                   </section>
 
-                  <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-                  <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
-                    <h3 className="flex items-center gap-2 text-sm font-black text-slate-800">
-                      <Scale size={16} className="text-blue-600" />
-                      Unidades de medida
-                    </h3>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                  <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                    <h3 className="mb-3 text-sm font-black text-slate-800">Códigos y referencias</h3>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                       <div>
-                        <UnitSelector
-                          label="Unidad de compra"
-                          value={formData.purchaseUnit || ''}
-                          onChange={val => setFormData({ ...formData, purchaseUnit: val })}
-                          config={config}
-                          onConfigUpdate={newConfig => {
-                            // In a real app we might want to lift this state up or save globally immediately
-                            // But since ProductForm receives config as prop, we can verify if we need to call a parent handler.
-                            // For now, we trust UnitSelector's internal fetch, but we should ideally update the local config context if possible.
-                            console.log('Config updated with new unit:', newConfig.units);
-                          }}
-                        />
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">Código de barras principal</label>
+                        <div className="flex min-h-11 items-center rounded-xl border border-slate-200 bg-white pr-1 focus-within:border-blue-400">
+                          <input type="text" value={formData.barcode || ''} onChange={e => setFormData({ ...formData, barcode: e.target.value })} onPaste={(e) => e.stopPropagation()} className="min-w-0 flex-1 bg-transparent px-3 font-mono text-sm outline-none" />
+                          <button type="button" onClick={() => void copyBarcode(formData.barcode || '')} className="flex h-10 w-10 appearance-none items-center justify-center rounded-lg bg-white text-slate-400 hover:text-blue-600" aria-label="Copiar código de barras"><Copy size={16} /></button>
+                        </div>
                       </div>
                       <div>
-                        <UnitSelector
-                          label="Unidad de inventario"
-                          value={formData.measurementUnit || ''}
-                          onChange={val => setFormData({ ...formData, measurementUnit: val })}
-                          config={config}
-                          onConfigUpdate={newConfig => {
-                            console.log('Config updated with new unit:', newConfig.units);
-                          }}
-                        />
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">SKU</label>
+                        <input type="text" value={(formData as any).sku || ''} onChange={e => setFormData({ ...formData, sku: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-mono text-sm outline-none focus:border-blue-400" />
                       </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
                       <div>
-                        <label className="mb-1 ml-1 block text-[10px] font-black uppercase text-slate-500">Factor de conversión</label>
-                        <div className="flex gap-2 items-center">
-                          <div className="relative flex-1">
-                            <input
-                              type="number"
-                              placeholder="1"
-                              value={formData.conversionFactor || ''}
-                              onChange={e => setFormData({ ...formData, conversionFactor: parseFloat(e.target.value) })}
-                              className="w-full rounded-xl border border-slate-200 bg-white p-3 text-sm font-medium focus:border-blue-300"
-                            />
-                            <div className="absolute right-3 top-3 text-xs text-gray-400 font-bold">Base / Compra</div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">Referencia</label>
+                        <input type="text" value={(formData as any).reference || (formData as any).referenceCode || (formData as any).reference_code || ''} onChange={e => setFormData({ ...formData, reference: e.target.value, referenceCode: e.target.value, reference_code: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-mono text-sm outline-none focus:border-blue-400" />
+                      </div>
+                      {Array.from({ length: visibleAdditionalBarcodes }).map((_, index) => {
+                        const value = index === 0 ? (formData.barcode_2 || formData.barcode2 || '') : (formData.barcode_3 || formData.barcode3 || '');
+                        return (
+                          <div key={index}>
+                            <label className="mb-1 block text-xs font-semibold text-slate-700">Código adicional {index + 1}</label>
+                            <div className="flex min-h-11 items-center rounded-xl border border-slate-200 bg-white pr-1 focus-within:border-blue-400">
+                              <input type="text" value={value} onChange={event => updateAdditionalBarcode(index, event.target.value)} className="min-w-0 flex-1 bg-transparent px-3 font-mono text-sm outline-none" />
+                              <button type="button" onClick={() => removeAdditionalBarcode(index)} className="flex h-10 w-10 appearance-none items-center justify-center rounded-lg bg-white text-slate-400 hover:text-red-500" aria-label={`Eliminar código adicional ${index + 1}`}><X size={16} /></button>
+                            </div>
                           </div>
-
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setShowConversionHelper(true);
-                            }}
-                            className="flex h-full aspect-square cursor-pointer items-center justify-center rounded-xl border border-blue-200 bg-white p-3 text-blue-600 transition-colors hover:bg-blue-50"
-                            title="Calculadora de Conversión"
-                          >
-                            <Calculator size={18} />
-                          </button>
-                        </div>
-                        {formData.purchaseUnit && formData.measurementUnit && formData.conversionFactor && (formData.conversionFactor > 1) && (
-                          <p className="text-[10px] text-blue-600 mt-1 pl-1">
-                            1 {formData.purchaseUnit} = {formData.conversionFactor} {formData.measurementUnit}
-                          </p>
-                        )}
-                      </div>
-
-                      {/* Yield Field for Recipes */}
-                      {formData.type === 'RECETA' && (
-                        <div>
-                          <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Rendimiento de Bachada</label>
-                          <input
-                            type="number"
-                            placeholder="1"
-                            value={formData.batchYield || ''}
-                            onChange={e => setFormData({ ...formData, batchYield: parseFloat(e.target.value) })}
-                            className="w-full rounded-xl border border-blue-200 bg-white p-3 text-sm font-bold text-blue-800 focus:border-blue-300"
-                          />
-                          <p className="text-[10px] text-gray-400 mt-1 pl-1">Unidades producidas por esta receta</p>
-                        </div>
-                      )}
+                        );
+                      })}
                     </div>
+                    {visibleAdditionalBarcodes < 2 && (
+                      <button type="button" onClick={() => setVisibleAdditionalBarcodes(count => Math.min(2, count + 1))} className="mt-3 inline-flex min-h-11 appearance-none items-center gap-2 rounded-xl border border-blue-200 bg-white px-4 text-xs font-bold text-blue-700 hover:bg-blue-50">
+                        <Plus size={16} /> Agregar código
+                      </button>
+                    )}
                   </section>
 
                   <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
@@ -3127,44 +3155,15 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       </div>
                     </div>
                   </section>
-                  </div>
 
                   <section className="rounded-2xl border border-slate-200 bg-white p-5">
-                    <h3 className="mb-3 text-sm font-black text-slate-800">Códigos y referencias</h3>
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold text-slate-700">Código de barras principal</label>
-                        <div className="flex min-h-11 items-center rounded-xl border border-slate-200 bg-white pr-1 focus-within:border-blue-400">
-                          <input type="text" value={formData.barcode || ''} onChange={e => setFormData({ ...formData, barcode: e.target.value })} onPaste={(e) => e.stopPropagation()} className="min-w-0 flex-1 bg-transparent px-3 font-mono text-sm outline-none" />
-                          <button type="button" onClick={() => void copyBarcode(formData.barcode || '')} className="flex h-10 w-10 appearance-none items-center justify-center rounded-lg bg-white text-slate-400 hover:text-blue-600" aria-label="Copiar código de barras"><Copy size={16} /></button>
-                        </div>
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold text-slate-700">SKU</label>
-                        <input type="text" value={(formData as any).sku || ''} onChange={e => setFormData({ ...formData, sku: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-mono text-sm outline-none focus:border-blue-400" />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold text-slate-700">Referencia</label>
-                        <input type="text" value={(formData as any).reference || (formData as any).referenceCode || (formData as any).reference_code || ''} onChange={e => setFormData({ ...formData, reference: e.target.value, referenceCode: e.target.value, reference_code: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-mono text-sm outline-none focus:border-blue-400" />
-                      </div>
-                      {Array.from({ length: visibleAdditionalBarcodes }).map((_, index) => {
-                        const value = index === 0 ? (formData.barcode_2 || formData.barcode2 || '') : (formData.barcode_3 || formData.barcode3 || '');
-                        return (
-                          <div key={index}>
-                            <label className="mb-1 block text-xs font-semibold text-slate-700">Código adicional {index + 1}</label>
-                            <div className="flex min-h-11 items-center rounded-xl border border-slate-200 bg-white pr-1 focus-within:border-blue-400">
-                              <input type="text" value={value} onChange={event => updateAdditionalBarcode(index, event.target.value)} className="min-w-0 flex-1 bg-transparent px-3 font-mono text-sm outline-none" />
-                              <button type="button" onClick={() => removeAdditionalBarcode(index)} className="flex h-10 w-10 appearance-none items-center justify-center rounded-lg bg-white text-slate-400 hover:text-red-500" aria-label={`Eliminar código adicional ${index + 1}`}><X size={16} /></button>
-                            </div>
-                          </div>
-                        );
-                      })}
+                    <h3 className="text-sm font-black text-slate-800">Multimedia</h3>
+                    <p className="mb-3 mt-1 text-xs text-slate-500">Video remoto opcional. Se guarda la referencia URL.</p>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <input type="url" value={productVideo?.url || ''} onChange={event => updateProductVideo('url', event.target.value)} placeholder="URL del video" className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400" />
+                      <input type="url" value={productVideo?.posterUrl || ''} onChange={event => updateProductVideo('posterUrl', event.target.value)} placeholder="URL de portada" className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400" />
                     </div>
-                    {visibleAdditionalBarcodes < 2 && (
-                      <button type="button" onClick={() => setVisibleAdditionalBarcodes(count => Math.min(2, count + 1))} className="mt-3 inline-flex min-h-11 appearance-none items-center gap-2 rounded-xl border border-blue-200 bg-white px-4 text-xs font-bold text-blue-700 hover:bg-blue-50">
-                        <Plus size={16} /> Agregar código
-                      </button>
-                    )}
+                    {productVideo?.url && isValidRemoteMediaUrl(productVideo.url) && <video src={productVideo.url} poster={productVideo.posterUrl} controls playsInline className="mt-3 aspect-video w-full rounded-xl bg-black object-contain" />}
                   </section>
                 </div>
 
