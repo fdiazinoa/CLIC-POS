@@ -5,6 +5,7 @@ import type { BusinessConfig } from '../types';
 import { setCheckoutCaptureContext, getCheckoutTrackingSession, readCheckoutDiagnostics, readCheckoutDeliveryStatus, setCheckoutTrackingEnabled } from '../services/CheckoutDiagnostics';
 import { readInstalledPosApkVersion } from '../services/version/posApkUpdateService';
 import { readTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
+import { collectCheckoutDiagnosticEnvironment } from '../services/CheckoutPerformanceDiagnostics';
 import { ExportUtils } from '../utils/ExportUtils';
 
 export default function CheckoutTrackingSettings({ config, currentDeviceId, onClose }: { config: BusinessConfig; currentDeviceId?: string; onClose: () => void }) {
@@ -26,10 +27,12 @@ export default function CheckoutTrackingSettings({ config, currentDeviceId, onCl
             const version = enabled ? null : await readInstalledPosApkVersion();
             const terminal = config.terminals?.find(candidate => currentDeviceId && candidate.config?.currentDeviceId === currentDeviceId);
             const credentials = readTerminalCredentialsSync();
+            const environment = enabled ? undefined : await collectCheckoutDiagnosticEnvironment(config, terminal).catch(() => undefined);
             if (version) setCheckoutCaptureContext({versionName:version.versionName,versionCode:version.versionCode,mode:config.vertical === 'RESTAURANT' ? 'RESTAURANT' : 'RETAIL'});
             setSession(setCheckoutTrackingEnabled(!enabled, {
                 versionName: version?.versionName ?? null, versionCode: version?.versionCode ?? null,
                 terminalId: credentials.erpTerminalId ?? terminal?.id ?? null, deviceId: credentials.deviceId ?? currentDeviceId ?? null,
+                environment,
             }));
         } catch { setMessage('No se pudo cambiar el seguimiento. Las ventas continúan normalmente.'); }
         finally { setBusy(false); }
@@ -54,7 +57,7 @@ export default function CheckoutTrackingSettings({ config, currentDeviceId, onCl
     return <section className="max-w-2xl mx-auto p-6 space-y-5">
         <button onClick={onClose} className="text-blue-700 font-semibold">Volver a Configuración</button>
         <h2 className="text-2xl font-bold">Log de seguimiento</h2>
-        <p className="text-gray-600">Registra temporalmente el recorrido de mesas, artículos, cobros e impresión para investigar incidencias.</p>
+        <p className="text-gray-600">Registra el flujo de venta, cobro, persistencia, envío e impresión, junto con contexto seguro del POS y métricas ligeras de rendimiento.</p>
         <label className="flex items-center justify-between gap-4 rounded-xl border p-4">
             <span className="font-semibold">Activar log de seguimiento</span>
             <input type="checkbox" checked={enabled} disabled={busy} onChange={() => void toggle()} className="h-6 w-6" />

@@ -39,11 +39,17 @@ export function diagnosticEvent(record: CheckoutDiagnosticRecord, sequence: numb
         counters: { expected_items: scalar(d.expectedItemCount), summary_items: scalar(d.summaryItemCount), payments_count: scalar(d.paymentCount) },
         details: { operating_mode:record.capture?.mode ?? null, captured_apk_version:record.capture?.versionName ?? null, captured_apk_code:record.capture?.versionCode ?? null, phase:record.stage, total_recorded:hasTotal, items_recorded:d.itemCount != null, source_stage: record.stage.slice(0,100), checkout_id: record.checkoutId, reason: scalar(d.reason), status: scalar(d.status),
             aggregate_id: scalar(d.aggregateId), lines_truncated: Boolean(d.linesTruncated) || Number(d.itemCount) > 50,
-            payments: (Array.isArray(d.payments) ? d.payments.slice(0,20) : []).map(p => ({ id: scalar(p.id), method: scalar(p.method), amount: scalar(p.amount), applied: scalar(p.applied), change: scalar(p.change) })) },
+            payments: (Array.isArray(d.payments) ? d.payments.slice(0,20) : []).map(p => ({ id: scalar(p.id), method: scalar(p.method), amount: scalar(p.amount), applied: scalar(p.applied), change: scalar(p.change) })),
+            ...(d.performance && typeof d.performance === 'object' ? { performance: d.performance } : {}),
+            ...(record.stage === 'TRACKING_ENABLED' && d.environment && typeof d.environment === 'object' ? { environment: d.environment } : {}),
+        },
     };
     // Truncate detail only; retain actual counts and totals. Leave room for a growing sequence.
     while (diagnosticBytes(event) > 7900 && event.commercial.lines.length) { event.commercial.lines.pop(); event.details.lines_truncated = true; }
     while (diagnosticBytes(event) > 7900 && event.details.payments.length) event.details.payments.pop();
+    const boundedDetails = event.details as Record<string, unknown>;
+    if (diagnosticBytes(event) > 7900) delete boundedDetails.performance;
+    if (diagnosticBytes(event) > 7900) delete boundedDetails.environment;
     return event;
 }
 export type DeliveryRow = { sequence?: number; session: TrackingSession; event: ReturnType<typeof diagnosticEvent> };
@@ -96,7 +102,8 @@ export class DiagnosticDeliveryWorker {
             if (!current.opened) {
                 const response = await this.deps.post(context,'/diagnostics/sessions', {
                     session_id:session.id, device_id:session.deviceId, apk_version:session.versionName,
-                    started_at:session.startedAt, expires_at:session.expiresAt, metadata:{reason:'CHECKOUT_TRACKING'},
+                    started_at:session.startedAt, expires_at:session.expiresAt,
+                    metadata:{reason:'CHECKOUT_TRACKING', ...(session.environment ? { environment: session.environment } : {})},
                 });
                 if (![200,201].includes(response.status)) return await handleFailure(response);
                 if (response.data?.session_id !== session.id) throw new Error('INVALID_SESSION_ACK');

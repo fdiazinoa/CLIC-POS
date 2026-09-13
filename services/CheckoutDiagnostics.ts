@@ -1,5 +1,11 @@
 import { v4 as uuidv4 } from 'uuid';
 import { diagnosticEvent } from './CheckoutDiagnosticDelivery';
+import {
+    captureCheckoutPerformance,
+    startCheckoutPerformanceCapture,
+    stopCheckoutPerformanceCapture,
+    type CheckoutDiagnosticEnvironment,
+} from './CheckoutPerformanceDiagnostics';
 /** Diagnostic-only recorder: never changes checkout data, validates a sale or awaits I/O. */
 export type CheckoutDiagnosticInput = {
     items?: unknown; payments?: unknown; total?: unknown;
@@ -7,7 +13,7 @@ export type CheckoutDiagnosticInput = {
     tableId?: unknown; orderId?: unknown; terminalId?: unknown; deviceId?: unknown;
     status?: unknown; reason?: unknown; summaryItemCount?: unknown; expectedItemCount?: unknown;
 };
-export interface TrackingSession { id: string; startedAt: string; expiresAt: string; versionName: string | null; versionCode: number | null; terminalId: string | null; deviceId: string | null }
+export interface TrackingSession { id: string; startedAt: string; expiresAt: string; versionName: string | null; versionCode: number | null; terminalId: string | null; deviceId: string | null; environment?: CheckoutDiagnosticEnvironment }
 export type CaptureContext = { mode: 'RETAIL' | 'RESTAURANT' | null; versionName: string | null; versionCode: number | null };
 let captureContext: CaptureContext = { mode:null, versionName:null, versionCode:null };
 export const setCheckoutCaptureContext = (patch: Partial<CaptureContext>) => { captureContext = {...captureContext,...patch}; };
@@ -79,6 +85,11 @@ export class CheckoutDiagnosticRecorder {
                     return { id: text(payment.id), method: text(payment.method), amount: number(payment.amount),
                         applied: number(payment.appliedAmount ?? payment.amountApplied), change: number(payment.changeAmount) };
                 });
+            }
+            const performanceSnapshot = captureCheckoutPerformance(stage, input as Record<string, unknown>);
+            if (performanceSnapshot) data.performance = performanceSnapshot;
+            if (stage === 'TRACKING_ENABLED' && this.session?.environment) {
+                data.environment = this.session.environment;
             }
             const transactionId = text(input.transactionId);
             if (transactionId && ['TRANSACTION_CREATED', 'FINANCIAL_COMMIT_START'].includes(stage) && this.checkoutId) {
@@ -220,6 +231,7 @@ let activeSession: TrackingSession | null = (() => {
 })();
 let activeUntil = activeSession ? Date.parse(activeSession.expiresAt) : 0;
 checkoutDiagnostics.setSession(activeSession);
+if (activeSession) startCheckoutPerformanceCapture();
 export const getCheckoutTrackingSession = (): TrackingSession | null =>
     activeSession && Date.parse(activeSession.expiresAt) > Date.now() ? { ...activeSession } : null;
 export const setCheckoutTrackingEnabled = (enabled: boolean, metadata: Partial<TrackingSession> = {}): TrackingSession | null => {
@@ -227,6 +239,7 @@ export const setCheckoutTrackingEnabled = (enabled: boolean, metadata: Partial<T
         id: uuidv4(), startedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
         versionName: text(metadata.versionName), versionCode: number(metadata.versionCode),
         terminalId: text(metadata.terminalId), deviceId: text(metadata.deviceId),
+        ...(metadata.environment ? { environment: metadata.environment } : {}),
     } : null;
     // This write is performed only by the Settings action, never by checkout.
     if (typeof window !== 'undefined') {
@@ -234,6 +247,8 @@ export const setCheckoutTrackingEnabled = (enabled: boolean, metadata: Partial<T
         else window.localStorage.removeItem(SESSION_KEY);
     }
     if (!enabled && activeSession) checkoutDiagnostics.record('TRACKING_DISABLED');
+    if (enabled) startCheckoutPerformanceCapture();
+    else stopCheckoutPerformanceCapture();
     activeSession = session;
     activeUntil = session ? Date.parse(session.expiresAt) : 0;
     checkoutDiagnostics.setSession(session);
@@ -242,7 +257,14 @@ export const setCheckoutTrackingEnabled = (enabled: boolean, metadata: Partial<T
 };
 export const recordCheckoutDiagnostic = (stage: string, input?: CheckoutDiagnosticInput): void => {
     // Disabled path: no projection, storage, timers, logging or network.
-    if (!activeSession || Date.now() >= activeUntil) return;
+    if (!activeSession) return;
+    if (Date.now() >= activeUntil) {
+        activeSession = null;
+        activeUntil = 0;
+        checkoutDiagnostics.setSession(null);
+        stopCheckoutPerformanceCapture();
+        return;
+    }
     checkoutDiagnostics.record(stage, input);
 };
 export const readCheckoutDiagnostics = async () => {
