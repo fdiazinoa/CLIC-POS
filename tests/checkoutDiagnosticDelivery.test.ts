@@ -20,6 +20,16 @@ test('maps stages and trims large unicode details to ERP byte and line limits wi
  const r=record();r.data={...r.data,itemCount:100,lines:Array.from({length:100},()=>({id:'😀'.repeat(160),cartId:'😀'.repeat(160),price:30,quantity:1})),secret:'forbidden'};
  const e=diagnosticEvent(r,99);assert.equal(e.stage,'CHECKOUT_OPENED');assert.equal(e.local_sequence,99);assert.equal(e.commercial.item_count,100);assert.ok(e.commercial.lines.length<=50);assert.ok(diagnosticBytes(e)<8192);assert.equal(e.details.lines_truncated,true);assert.doesNotMatch(JSON.stringify(e),/forbidden/);
 });
+test('includes safe environment and performance metrics in ERP diagnostic details',()=>{
+ const r=record();r.stage='TRACKING_ENABLED';r.data={
+   environment:{device:{model:'POS-10'},posConfig:{configHash:'fnv1a-12345678'}},
+   performance:{source:'android_native',memory:{appPssKb:12000},cpu:{processCpuPercent:23.5},responsiveness:{longTaskCount:2}},
+ };
+ const e=diagnosticEvent(r,1);
+ assert.equal((e.details.environment as any).device.model,'POS-10');
+ assert.equal((e.details.performance as any).memory.appPssKb,12000);
+ assert.ok(diagnosticBytes(e)<8192);
+});
 test('opens original session then ACKs only confirmed records',async()=>{
  const f=fixture();f.rows.push({sequence:2,session,event:diagnosticEvent(record('second'),2)});
  const post=f.deps.post;f.deps.post=async(c,p,b)=>p.endsWith('/events')?{status:202,data:{session_id:'session',acked_record_ids:['record','unknown']}}:post(c,p,b);
