@@ -5,6 +5,7 @@ import { resolveProductEditorCapabilities } from '../utils/productEditorTabs';
 import { normalizeProductTaxRate, resolveProductSummaryStock } from '../utils/productEditorSummary';
 
 const source = fs.readFileSync(new URL('../components/ProductForm.tsx', import.meta.url), 'utf8');
+const recipeManagerSource = fs.readFileSync(new URL('../components/RecipeManager.tsx', import.meta.url), 'utf8');
 
 test('product editor capabilities keep tabs contextual to the real article type', () => {
   assert.deepEqual(resolveProductEditorCapabilities('SERVICE', false), {
@@ -51,11 +52,24 @@ test('legacy classifications, taxes and multimedia are rehomed instead of expose
   assert.match(source.slice(generalStart), />Multimedia</);
 });
 
-test('general surfaces commercial organization before secondary codes on a white canvas', () => {
+test('general surfaces units in the image rail and codes before commercial classification', () => {
   const generalStart = source.indexOf("activeTab === 'GENERAL'");
   const general = source.slice(generalStart, source.indexOf("activeTab === 'VARIANTS'", generalStart));
-  assert.ok(general.indexOf('Unidades de medida') < general.indexOf('Códigos y referencias'));
-  assert.ok(general.indexOf('Clasificación comercial') < general.indexOf('Códigos y referencias'));
+  const imageRailEnd = general.indexOf('</aside>');
+  assert.ok(general.indexOf('Unidades de medida') > 0 && general.indexOf('Unidades de medida') < imageRailEnd);
+  assert.ok(general.indexOf('Códigos y referencias') < general.indexOf('Clasificación comercial'));
+  assert.ok(general.indexOf('Clasificación comercial') < general.indexOf('Multimedia'));
   assert.match(source, /overflow-y-auto bg-white p-3/);
   assert.match(source, /cursor-pointer appearance-none[\s\S]*bg-white/);
+});
+
+test('android editor follows the visual viewport when the software keyboard opens', () => {
+  assert.match(source, /window\.visualViewport/);
+  assert.match(source, /height: `\$\{editorViewport\.height\}px`/);
+  assert.match(source, /className="relative flex h-full max-h-full/);
+});
+
+test('recipe and kit selectors keep a white surface with legible labels', () => {
+  assert.match(recipeManagerSource, /appearance-none[\s\S]*bg-white[\s\S]*font-black/);
+  assert.match(recipeManagerSource, /text-slate-700 hover:text-slate-950/);
 });

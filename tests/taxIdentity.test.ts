@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildStaleTaxConflictRebase,
   canonicalizeTaxIdentifiers,
   canonicalizeTaxMutationValues,
   normalizeTaxIdentifiersForSelection,
@@ -19,6 +20,35 @@ test('item tax identifiers are canonicalized against the current company catalog
       currentTax.id,
     ], [currentTax]),
     [currentTax.id],
+  );
+});
+
+test('a conflict containing only a retired ERP tax id can be safely rebased to the current tax', () => {
+  assert.deepEqual(
+    buildStaleTaxConflictRebase(
+      ['d8f830e8-cf99-48db-8a46-f6508f8e146a'],
+      [currentTax.id],
+      [currentTax],
+    ),
+    {
+      before: ['d8f830e8-cf99-48db-8a46-f6508f8e146a'],
+      after: [currentTax.id],
+    },
+  );
+});
+
+test('a conflict with any current ERP tax remains a manual conflict', () => {
+  assert.equal(buildStaleTaxConflictRebase([currentTax.id], [], [currentTax]), null);
+});
+
+test('an unknown requested tax is never auto-rebased', () => {
+  assert.equal(
+    buildStaleTaxConflictRebase(
+      ['d8f830e8-cf99-48db-8a46-f6508f8e146a'],
+      ['unknown-tax'],
+      [currentTax],
+    ),
+    null,
   );
 });
 

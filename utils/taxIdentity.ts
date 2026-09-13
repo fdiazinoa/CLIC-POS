@@ -82,3 +82,24 @@ export const canonicalizeTaxMutationValues = (
       || JSON.stringify(originalAfter) !== JSON.stringify(canonicalAfter),
   };
 };
+
+export const buildStaleTaxConflictRebase = (
+  conflictCurrent: unknown,
+  requested: unknown,
+  taxes: Array<Pick<TaxDefinition, 'id'> & Partial<Pick<TaxDefinition, 'code'>>> | undefined
+): { before: string[]; after: string[] } | null => {
+  if (!Array.isArray(conflictCurrent) || conflictCurrent.length === 0 || !Array.isArray(requested)) return null;
+  const current = conflictCurrent
+    .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+    .map(value => value.trim());
+  if (current.length !== conflictCurrent.length || canonicalizeTaxIdentifiers(current, taxes).length > 0) return null;
+
+  const requestedValues = requested
+    .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+    .map(value => value.trim());
+  if (requestedValues.length !== requested.length) return null;
+  const canonicalRequested = canonicalizeTaxIdentifiers(requestedValues, taxes);
+  if (requestedValues.length > 0 && canonicalRequested.length !== requestedValues.length) return null;
+
+  return { before: current, after: canonicalRequested };
+};

@@ -6,7 +6,7 @@ import { loadSyncProfile } from './SyncProfile';
 import { CatalogEditQueue, type CatalogEdit, type CatalogScope } from './CatalogEditQueue';
 import type { BusinessConfig, Permission, RoleDefinition, User } from '../../types';
 import { v4 as uuid } from 'uuid';
-import { canonicalizeTaxMutationValues } from '../../utils/taxIdentity';
+import { buildStaleTaxConflictRebase, canonicalizeTaxMutationValues } from '../../utils/taxIdentity';
 export const catalogEditsEnabled = () => import.meta.env.VITE_POS_CATALOG_EDITS_ENABLED === 'true';
 export function catalogScopeMatches(scope: CatalogScope) {
     const profile = loadSyncProfile();
@@ -126,13 +126,15 @@ export const catalogEditQueue = new CatalogEditQueue({
     matchesScope: catalogScopeMatches, now: Date.now,
     send: async edit => {
         let outboundEdit = edit;
+        let currentTaxes: BusinessConfig['taxes'] | undefined;
         if (edit.mutation.domain === 'item_taxes' && edit.mutation.field === 'tax_ids') {
             const storedConfig = await db.get('config');
             const currentConfig = (Array.isArray(storedConfig) ? storedConfig[0] : storedConfig) as BusinessConfig | undefined;
+            currentTaxes = currentConfig?.taxes;
             const repaired = canonicalizeTaxMutationValues(
                 Array.isArray(edit.mutation.before) ? edit.mutation.before : [],
                 Array.isArray(edit.mutation.after) ? edit.mutation.after : [],
-                currentConfig?.taxes,
+                currentTaxes,
             );
             if (repaired.repaired) {
                 outboundEdit = {
@@ -141,7 +143,29 @@ export const catalogEditQueue = new CatalogEditQueue({
                 };
             }
         }
-        const result = await apiSyncAdapter.sendCatalogEdit(outboundEdit);
+        let result = await apiSyncAdapter.sendCatalogEdit(outboundEdit);
+        const staleTaxRebase = (
+            result.status === 'CONFLICT'
+            && result.code === 'VALUE_CHANGED'
+            && edit.mutation.domain === 'item_taxes'
+            && edit.mutation.field === 'tax_ids'
+        ) ? buildStaleTaxConflictRebase(result.current, outboundEdit.mutation.after, currentTaxes) : null;
+        if (staleTaxRebase) {
+            const recoveryId = uuid();
+            const recovered = await apiSyncAdapter.sendCatalogEdit({
+                ...outboundEdit,
+                id: recoveryId,
+                mutation: {
+                    ...outboundEdit.mutation,
+                    id: recoveryId,
+                    before: staleTaxRebase.before,
+                    after: staleTaxRebase.after,
+                    conflictAction: 'RETRY',
+                    resolvesMutationId: edit.id,
+                },
+            });
+            result = { ...recovered, id: edit.id };
+        }
         if (result.status === 'APPLIED' && edit.mutation.domain === 'item_lifecycle' && edit.mutation.field === 'create'
             && edit.mutation.after && typeof edit.mutation.after === 'object' && !Array.isArray(edit.mutation.after)) {
             const { markNumberedMasterSynced } = await import('./MasterNumberRangeService');
