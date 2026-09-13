@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CheckoutDiagnosticRecorder, checkoutDiagnostics, recordCheckoutDiagnostic, setCheckoutTrackingEnabled, getCheckoutTrackingSession } from '../services/CheckoutDiagnostics';
+import { collectCheckoutDiagnosticEnvironment } from '../services/CheckoutPerformanceDiagnostics';
 const line = { id: 'product-1', cartId: 'line-1', name: 'Producto', price: 30, quantity: 1 };
 
 test('disabled diagnostic path schedules nothing and does not inspect sale data', () => {
@@ -56,6 +57,29 @@ test('projection excludes credentials, card data, customer PII and image/catalog
     recorder.record('CHECKOUT_OPEN', { items: [{ ...line, image: 'secret-image', token: 'secret-token', customer: { email: 'secret-email' } }],
         payments: [{ id: 'p-1', method: 'CARD', amount: 30, pan: 'secret-pan', cvv: 'secret-cvv', authorization: 'secret-auth' }] });
     assert.doesNotMatch(JSON.stringify(recorder.snapshot()), /secret-/);
+});
+
+test('environment summary keeps useful POS configuration without binding secrets', async () => {
+    const environment = await collectCheckoutDiagnosticEnvironment({
+        vertical: 'RESTAURANT', subVertical: 'FOOD_SERVICE',
+        currencies: [{ code: 'DOP', isEnabled: true }],
+        paymentMethods: [{ id: 'cash', isEnabled: true }],
+        taxes: [{ id: 'tax-18' }], tariffs: [{ id: 'general', active: true }],
+        terminals: [],
+    } as any, {
+        id: 'terminal-1',
+        config: {
+            deviceBindingToken: 'secret-binding-token',
+            deviceRole: { role: 'STANDARD_POS', authLevel: 'USER_REQUIRED', allowedModules: ['SALES'] },
+            workflow: { inventory: { realTimeValidation: true }, offline: { mode: 'OPTIMISTIC', maxOfflineTransactionLimit: 500 } },
+            catalog: { allowedCategories: ['food'] },
+        },
+    });
+    const serialized = JSON.stringify(environment);
+    assert.match(serialized, /RESTAURANT/);
+    assert.match(serialized, /STANDARD_POS/);
+    assert.match(serialized, /fnv1a-[0-9a-f]{8}/);
+    assert.doesNotMatch(serialized, /secret-binding-token/);
 });
 
 test('malformed data or storage failure never throws into checkout; queue remains bounded and retryable', async () => {
